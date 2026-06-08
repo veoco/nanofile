@@ -1,22 +1,15 @@
 /// build.rs — Nanofile build script
 ///
-/// Integrates Tailwind CSS generation into the `cargo build` workflow:
-/// - If `tailwindcss` CLI is found in PATH or project root, generates CSS
-/// - If not found, emits a warning and continues (graceful degradation)
-/// - **Always runs** on every build (no `rerun-if-changed` directives) so
-///   that newly added template classes are never missed by Tailwind's JIT.
+/// Generates `static/css/app.css` from `static/css/input.css` via Tailwind.
+/// Tries, in order:
+///   1. Standalone `tailwindcss` binary (project root or PATH)
+///   2. `npx @tailwindcss/cli` (Node.js npx, available on most systems)
+///   3. Writes a minimal placeholder (app compiles but UI is unstyled)
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
 fn main() {
-    // NOTE: Intentionally omitting rerun-if-changed directives.
-    // Without them Cargo always re-runs the build script, which guarantees
-    // Tailwind JIT picks up any classes added in new or modified templates.
-    // The cost is ~60ms per build — well worth the correctness.
-
-    // Emit a build timestamp so the app can use it for cache busting.
-    // Use CARGO_PKG_VERSION as a fallback; the timestamp changes every build.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -25,54 +18,53 @@ fn main() {
 
     let project_root = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let output_path = Path::new(&project_root).join("static/css/app.css");
+    let input_path = Path::new(&project_root).join("static/css/input.css");
 
-    // Try to locate the Tailwind standalone CLI binary
-    let tailwind = which_tailwind();
+    let args: [&str; 0] = [];
 
-    match tailwind {
-        Some(bin) => {
-            let input = Path::new(&project_root).join("static/css/input.css");
-            let status = Command::new(&bin)
-                .args([
-                    "-i",
-                    &input.to_string_lossy(),
-                    "-o",
-                    &output_path.to_string_lossy(),
-                    "--minify",
-                ])
-                .status();
+    // Try standalone binary, then npx, then placeholder
+    if let Some(bin) = which_tailwind()
+        && run_tailwind(&bin, &args, &input_path, &output_path)
+    {
+        return;
+    }
 
-            match status {
-                Ok(s) if s.success() => {
-                    println!(
-                        "cargo:info=✓ Tailwind CSS generated ({})",
-                        output_path.display()
-                    );
-                }
-                Ok(s) => {
-                    println!(
-                        "cargo:warning=⚠ Tailwind CSS failed (exit: {}). Using placeholder.",
-                        s
-                    );
-                    write_placeholder(&output_path);
-                }
-                Err(e) => {
-                    println!(
-                        "cargo:warning=⚠ Failed to execute tailwind CLI: {}. Using placeholder.",
-                        e
-                    );
-                    write_placeholder(&output_path);
-                }
-            }
+    if let Some((npx_bin, npx_args)) = which_npx()
+        && run_tailwind(npx_bin, &npx_args, &input_path, &output_path)
+    {
+        return;
+    }
+
+    println!("cargo:warning=⚠ No Tailwind CLI found. Using placeholder CSS.");
+    write_placeholder(&output_path);
+}
+
+fn run_tailwind(cmd: &str, extra_args: &[&str], input: &Path, output: &Path) -> bool {
+    let input_s = input.to_string_lossy().to_string();
+    let output_s = output.to_string_lossy().to_string();
+    let mut args: Vec<&str> = extra_args.to_vec();
+    args.push("-i");
+    args.push(&input_s);
+    args.push("-o");
+    args.push(&output_s);
+    args.push("--minify");
+
+    match Command::new(cmd).args(&args).status() {
+        Ok(s) if s.success() => {
+            println!("cargo:info=✓ Tailwind CSS generated ({})", output.display());
+            true
         }
-        None => {
-            println!("cargo:warning=⚠ Tailwind CLI not found. Using placeholder CSS.");
-            write_placeholder(&output_path);
+        Ok(s) => {
+            println!("cargo:warning=⚠ Tailwind CSS failed (exit: {}).", s);
+            false
+        }
+        Err(e) => {
+            println!("cargo:warning=⚠ Failed to execute Tailwind: {}.", e);
+            false
         }
     }
 }
 
-/// Write a minimal placeholder CSS so `rust-embed` always finds the file.
 fn write_placeholder(path: &Path) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -87,36 +79,24 @@ fn write_placeholder(path: &Path) {
     let _ = f.write_all(b"/* placeholder - install Tailwind CLI for full styles */\n");
 }
 
-/// Look for `tailwindcss` in PATH, then in the project root directory.
-///
-/// NOTE: During `cargo build`, `std::env::current_dir()` returns the build
-/// script's temporary directory (e.g. `target/debug/build/nanofile-xxx/`),
-/// NOT the project root.  Use `CARGO_MANIFEST_DIR` instead, which Cargo
-/// always sets to the directory containing `Cargo.toml`.
+/// Try standalone `tailwindcss` binary (project root or PATH).
 fn which_tailwind() -> Option<String> {
     let project_root = std::env::var("CARGO_MANIFEST_DIR").ok()?;
     let project_root_path = std::path::Path::new(&project_root);
 
-    // Check project root first (allows project-local installation)
-    let local = project_root_path.join("tailwindcss").exists().then(|| {
-        project_root_path
-            .join("tailwindcss")
-            .to_string_lossy()
-            .to_string()
-    });
-
-    if local.is_some() {
-        return local;
+    // Check project root first
+    let local = project_root_path.join("tailwindcss");
+    if local.exists() {
+        return Some(local.to_string_lossy().to_string());
     }
 
-    // Check PATH via `which tailwindcss`
+    // Check PATH
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
             let full = dir.join("tailwindcss");
             if full.exists() {
                 Some(full.to_string_lossy().to_string())
             } else {
-                // On Windows, also check for tailwindcss.exe
                 let full_exe = dir.join("tailwindcss.exe");
                 if full_exe.exists() {
                     Some(full_exe.to_string_lossy().to_string())
@@ -126,4 +106,18 @@ fn which_tailwind() -> Option<String> {
             }
         })
     })
+}
+
+/// Try `npx @tailwindcss/cli` (Node.js package).
+fn which_npx() -> Option<(&'static str, Vec<&'static str>)> {
+    let npx = if cfg!(windows) { "npx.cmd" } else { "npx" };
+
+    // Check if npx is on PATH
+    let has_npx = std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(npx).exists()));
+    if !has_npx {
+        return None;
+    }
+
+    Some(("npx", vec!["--yes", "@tailwindcss/cli"]))
 }

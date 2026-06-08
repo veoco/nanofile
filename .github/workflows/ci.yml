@@ -42,11 +42,6 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Tailwind CLI
-        run: |
-          curl -sL --retry 3 --retry-delay 2 https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.0/tailwindcss-linux-x64 \
-            -o tailwindcss && chmod +x tailwindcss
-
       - uses: Swatinem/rust-cache@v2
 
       - name: Run tests
@@ -128,17 +123,11 @@ jobs:
           tar xf /tmp/zig.tar.xz -C /tmp
           echo "/tmp/zig-linux-x86_64-0.14.0" >> $GITHUB_PATH
 
-      - name: Install Tailwind CLI
-        run: |
-          curl -sL --retry 3 --retry-delay 2 https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.0/tailwindcss-${{ matrix.tw_name }} \
-            -o tailwindcss${{ matrix.ext }} && chmod +x tailwindcss${{ matrix.ext }}
-        shell: bash
-
-      - uses: Swatinem/rust-cache@v2
-
       - name: Install cargo-zigbuild
         if: matrix.cross
         run: cargo install cargo-zigbuild
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Build release
         run: >-
