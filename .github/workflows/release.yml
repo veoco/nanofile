@@ -33,21 +33,37 @@ jobs:
             ext: ""
             asset_suffix: linux-amd64
             tw_name: linux-x64
+            cross: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             ext: ""
             asset_suffix: linux-arm64
             tw_name: linux-arm64
+            cross: true
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            ext: ""
+            asset_suffix: linux-amd64-musl
+            tw_name: linux-x64
+            cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            ext: ""
+            asset_suffix: linux-arm64-musl
+            tw_name: linux-arm64
+            cross: true
           - os: macos-latest
             target: aarch64-apple-darwin
             ext: ""
             asset_suffix: macos-arm64
             tw_name: macos-arm64
+            cross: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: ".exe"
             asset_suffix: windows-amd64
             tw_name: windows-x64.exe
+            cross: false
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -68,6 +84,10 @@ jobs:
           git tag "$RELEASE_TAG"
           git push origin "$RELEASE_TAG"
 
+      - name: Install zig (cross-compilation)
+        if: matrix.cross
+        uses: taiki-e/setup-zig@v1
+
       - name: Install Tailwind CLI
         run: |
           curl -sL https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-${{ matrix.tw_name }} \
@@ -76,23 +96,24 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - run: cargo test
-      - run: cargo build --release
+      - run: cargo test ${{ matrix.cross && format('--target {0}', matrix.target) || '' }}
+      - run: cargo build --release ${{ matrix.cross && format('--target {0}', matrix.target) || '' }}
 
       - name: Package archive
         shell: bash
         run: |
-          BIN="target/release/nanofile${{ matrix.ext }}"
+          BIN="${{ matrix.cross && format('target/{0}/release/nanofile{1}', matrix.target, matrix.ext) || format('target/release/nanofile{0}', matrix.ext) }}"
           ARCHIVE="nanofile-${{ env.RELEASE_TAG }}-${{ matrix.asset_suffix }}"
           mkdir -p "${ARCHIVE}"
-          cp "$BIN" "${ARCHIVE}/"
+          cp "$BIN" "${ARCHIVE}/nanofile${{ matrix.ext }}"
           cp README.md "${ARCHIVE}/" 2>/dev/null || true
           cp LICENSE "${ARCHIVE}/" 2>/dev/null || true
           cp config.toml "${ARCHIVE}/" 2>/dev/null || true
-          case "${{ matrix.os }}" in
-            windows-*) 7z a "${ARCHIVE}.zip" "./${ARCHIVE}/*" ;;
-            *) tar czf "${ARCHIVE}.tar.gz" "${ARCHIVE}/" ;;
-          esac
+          if [ "${{ matrix.ext }}" = ".exe" ]; then
+            7z a "${ARCHIVE}.zip" "./${ARCHIVE}/*"
+          else
+            tar czf "${ARCHIVE}.tar.gz" "${ARCHIVE}/"
+          fi
 
       - name: Upload archive
         uses: actions/upload-artifact@v4
@@ -132,8 +153,10 @@ jobs:
 
             | Platform | Archive |
             |---|---|
-            | Linux (amd64) | `nanofile-${{ env.RELEASE_TAG }}-linux-amd64.tar.gz` |
-            | Linux (arm64) | `nanofile-${{ env.RELEASE_TAG }}-linux-arm64.tar.gz` |
+            | Linux (amd64, glibc) | `nanofile-${{ env.RELEASE_TAG }}-linux-amd64.tar.gz` |
+            | Linux (arm64, glibc) | `nanofile-${{ env.RELEASE_TAG }}-linux-arm64.tar.gz` |
+            | Linux (amd64, musl) | `nanofile-${{ env.RELEASE_TAG }}-linux-amd64-musl.tar.gz` |
+            | Linux (arm64, musl) | `nanofile-${{ env.RELEASE_TAG }}-linux-arm64-musl.tar.gz` |
             | macOS (Apple Silicon) | `nanofile-${{ env.RELEASE_TAG }}-macos-arm64.tar.gz` |
             | Windows (amd64) | `nanofile-${{ env.RELEASE_TAG }}-windows-amd64.zip` |
           files: |
