@@ -85,7 +85,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          # workflow_dispatch: tag doesn't exist yet, checkout the triggering commit
+          # tag push: tag exists, checkout the tag
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || env.RELEASE_TAG }}
           fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
@@ -202,7 +204,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || env.RELEASE_TAG }}
           fetch-depth: 0
 
       - name: Download linux binaries
