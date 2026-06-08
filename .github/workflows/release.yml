@@ -94,14 +94,6 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Create tag (workflow_dispatch, once)
-        if: github.event_name == 'workflow_dispatch' && matrix.asset_suffix == 'linux-amd64'
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git tag "$RELEASE_TAG"
-          git push origin "$RELEASE_TAG"
-
       - name: Install zig (cross-compilation)
         if: matrix.cross
         run: |
