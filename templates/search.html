@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Search | Nanofile{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-gray-900">Search</h1>
+
+<form action="/search" method="GET" class="mt-4 max-w-lg">
+    <div class="flex gap-x-2">
+        <input type="text" name="q" value="{{ query }}"
+               placeholder="Search files..."
+               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue sm:text-sm border p-2">
+        <button type="submit"
+                class="rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600">
+            Search
+        </button>
+    </div>
+    <label class="mt-2 flex items-center gap-x-2 text-sm text-gray-600">
+        <input type="checkbox" name="search_filename_only" value="false"
+               {% if !search_filename_only %}checked{% endif %}
+               class="rounded border-gray-300 text-seafile-blue focus:ring-seafile-blue"
+               onchange="this.form.submit()">
+        Full-text search (search file contents too)
+    </label>
+</form>
+
+{% if !query.is_empty() %}
+<div class="mt-8">
+    <p class="text-sm text-gray-500">Search results for "{{ query }}" ({{ total }} found)</p>
+
+    {% if results.is_empty() %}
+    <p class="mt-4 text-sm text-gray-400">No results found.</p>
+    {% else %}
+    <ul class="mt-4 divide-y divide-gray-200 border rounded-md">
+        {% for item in results %}
+        <li class="px-4 py-3 flex items-center gap-x-3 hover:bg-gray-50">
+            <!-- Icon -->
+            <span class="flex-shrink-0 text-gray-400">
+                {% if item.is_dir %}
+                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                {% else %}
+                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                {% endif %}
+            </span>
+
+            <!-- File info -->
+            <div class="min-w-0 flex-1">
+                <a href="/ui/repos/{{ item.repo_id }}/"
+                   class="text-sm font-medium text-seafile-blue hover:text-blue-800 truncate block">
+                    {{ item.name }}
+                </a>
+                <p class="text-xs text-gray-500 truncate">
+                    {{ item.repo_name }} &middot; {{ item.fullpath }}
+                </p>
+            </div>
+
+            <!-- Size and date -->
+            <div class="flex-shrink-0 text-right text-xs text-gray-400">
+                {% if !item.is_dir %}
+                <div>{{ item.size_display }}</div>
+                {% endif %}
+                <div>{{ item.last_modified_readable }}</div>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+
+    <!-- Pagination -->
+    {% if has_more %}
+    <div class="mt-4 text-center">
+        <a href="/search?q={{ query }}{% if !search_filename_only %}&amp;search_filename_only=false{% endif %}"
+           class="text-sm text-seafile-blue hover:text-blue-800">
+            Load more results
+        </a>
+    </div>
+    {% endif %}
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}

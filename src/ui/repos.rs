@@ -1,0 +1,85 @@
+/// Web UI repo handlers — list, create, delete repos.
+use askama::Template;
+use axum::{extract::State, response::Html};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use std::sync::Arc;
+
+use crate::AppState;
+use crate::entity::{repo, repo_member};
+use crate::error::AppError;
+use crate::ui::files::format_size;
+
+use super::auth_extractor::WebUser;
+
+// ─── Templates ───────────────────────────────────────────────────────────────
+
+#[derive(Template)]
+#[template(path = "repos/list.html")]
+pub struct RepoListTemplate {
+    pub urls: &'static crate::static_assets::TemplateUrls,
+    pub user_email: String,
+    pub is_admin: bool,
+    pub repos: Vec<RepoInfo>,
+    pub active_page: &'static str,
+}
+
+// ─── Data types ──────────────────────────────────────────────────────────────
+
+pub struct RepoInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub size: i64,
+    pub size_display: String,
+    pub mtime: i64,
+    pub encrypted: bool,
+}
+
+// ─── Handlers ────────────────────────────────────────────────────────────────
+
+/// GET /libraries/ — list user's repos.
+pub async fn list_repos(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, AppError> {
+    let db = state.db.as_ref();
+
+    // Find repos where user is a member
+    let memberships = repo_member::Entity::find()
+        .filter(repo_member::Column::UserId.eq(user.user_id))
+        .all(db)
+        .await
+        .map_err(|e| AppError::internal(format!("db error: {e}")))?;
+
+    let mut repos = Vec::new();
+    for membership in memberships {
+        if let Some(r) = repo::Entity::find_by_id(membership.repo_id)
+            .one(db)
+            .await
+            .map_err(|e| AppError::internal(format!("db error: {e}")))?
+        {
+            repos.push(RepoInfo {
+                id: r.id,
+                name: r.name,
+                description: r.description,
+                size: r.size,
+                size_display: format_size(r.size),
+                mtime: r.updated_at,
+                encrypted: r.encrypted != 0,
+            });
+        }
+    }
+
+    let tpl = RepoListTemplate {
+        urls: crate::static_assets::template_urls(),
+        user_email: user.email,
+        is_admin: user.is_admin,
+        repos,
+        active_page: "repos",
+    };
+
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Html(html))
+}

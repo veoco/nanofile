@@ -1,0 +1,100 @@
+/// In-memory login attempt rate limiter.
+///
+/// Tracks failed login attempts by key (IP or "ip:username") and
+/// prevents further attempts after a configurable threshold within
+/// a configurable time window.
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub struct LoginRateLimiter {
+    attempts: Mutex<HashMap<String, Vec<i64>>>,
+    max_attempts: u32,
+    lockout_secs: i64,
+}
+
+impl LoginRateLimiter {
+    pub fn new(max_attempts: u32, lockout_secs: u64) -> Self {
+        Self {
+            attempts: Mutex::new(HashMap::new()),
+            max_attempts,
+            lockout_secs: lockout_secs as i64,
+        }
+    }
+
+    fn now() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+    }
+
+    /// Record a failed login attempt for the given key.
+    pub fn record_failure(&self, key: &str) {
+        let now = Self::now();
+        let mut map = self.attempts.lock().unwrap();
+        let timestamps = map.entry(key.to_string()).or_default();
+        timestamps.push(now);
+        // Trim entries older than the lockout window to bound memory.
+        let cutoff = now - self.lockout_secs;
+        timestamps.retain(|&t| t > cutoff);
+    }
+
+    /// Check if the given key is currently locked out.
+    pub fn is_locked(&self, key: &str) -> bool {
+        let now = Self::now();
+        let cutoff = now - self.lockout_secs;
+        let mut map = self.attempts.lock().unwrap();
+        if let Some(timestamps) = map.get_mut(key) {
+            timestamps.retain(|&t| t > cutoff);
+            timestamps.len() as u32 >= self.max_attempts
+        } else {
+            false
+        }
+    }
+
+    /// Clear all recorded attempts for a key (called on successful login).
+    pub fn clear(&self, key: &str) {
+        let mut map = self.attempts.lock().unwrap();
+        map.remove(key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_allows_first_attempt() {
+        let limiter = LoginRateLimiter::new(3, 60);
+        assert!(!limiter.is_locked("test-user"));
+    }
+
+    #[test]
+    fn test_locks_after_threshold() {
+        let limiter = LoginRateLimiter::new(3, 60);
+        limiter.record_failure("test-user");
+        limiter.record_failure("test-user");
+        limiter.record_failure("test-user");
+        assert!(limiter.is_locked("test-user"));
+    }
+
+    #[test]
+    fn test_clear_resets() {
+        let limiter = LoginRateLimiter::new(3, 60);
+        limiter.record_failure("test-user");
+        limiter.record_failure("test-user");
+        limiter.record_failure("test-user");
+        assert!(limiter.is_locked("test-user"));
+        limiter.clear("test-user");
+        assert!(!limiter.is_locked("test-user"));
+    }
+
+    #[test]
+    fn test_allows_below_threshold() {
+        let limiter = LoginRateLimiter::new(5, 60);
+        limiter.record_failure("test-user");
+        limiter.record_failure("test-user");
+        assert!(!limiter.is_locked("test-user"));
+    }
+}

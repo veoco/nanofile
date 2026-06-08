@@ -1,0 +1,14 @@
+/target
+/data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+.env
+config.local.toml
+migration/target
+static/css/app.css
+tailwindcss
+/CLAUDE.md
+/.claude

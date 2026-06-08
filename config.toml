@@ -1,0 +1,40 @@
+[server]
+addr = "0.0.0.0"
+port = 8082
+max_upload_size_mb = 512
+request_timeout_secs = 36000
+
+[database]
+url = "sqlite:data/nanofile.db?mode=rwc"
+
+[storage]
+block_dir = "data/blocks"
+temp_dir = "data/temp"
+max_storage_bytes = 0
+
+[auth]
+password_hash_iterations = 100000
+api_token_ttl_days = 180
+sync_token_ttl_days = 365
+max_login_attempts = 5
+lockout_duration_secs = 900
+enable_invitations = true
+enable_password_reset = true
+password_min_length = 8
+require_strong_password = false
+
+[logging]
+level = "debug"
+
+[gc]
+enabled = false
+interval_hours = 24
+keep_commits = 100
+
+[index]
+enabled = true
+index_dir = "data/index"
+
+[notification]
+enabled = true
+private_key = "nanofile-notification-secret"

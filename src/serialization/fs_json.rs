@@ -1,0 +1,77 @@
+use sha1::{Digest, Sha1};
+
+/// SeafMetadataType enum values matching seafile C definitions.
+/// SEAF_METADATA_TYPE_INVALID = 0
+pub const SEAF_METADATA_TYPE_FILE: i32 = 1;
+/// SEAF_METADATA_TYPE_LINK = 2
+pub const SEAF_METADATA_TYPE_DIR: i32 = 3;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DirEntryData {
+    pub id: String,
+    pub mode: i32,
+    /// Who last modified this entry. Only included for files in seafile's
+    /// format. May be missing in FS objects synced from seaf-daemon.
+    #[serde(default)]
+    pub modifier: String,
+    pub mtime: i64,
+    pub name: String,
+    /// Only included for files in seafile's format.
+    /// May be missing for directory entries from seaf-daemon.
+    #[serde(default)]
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FsDirData {
+    pub dirents: Vec<DirEntryData>,
+    #[serde(rename = "type")]
+    pub obj_type: i32,
+    pub version: i32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FsFileData {
+    pub block_ids: Vec<String>,
+    pub size: i64,
+    #[serde(rename = "type")]
+    pub obj_type: i32,
+    pub version: i32,
+}
+
+impl FsDirData {
+    pub fn to_compact_json(&self) -> String {
+        let obj = serde_json::json!({
+            "dirents": self.dirents,
+            "type": self.obj_type,
+            "version": self.version,
+        });
+        obj.to_string()
+    }
+
+    pub fn compute_fs_id(&self) -> String {
+        let json = self.to_compact_json();
+        let mut hasher = Sha1::new();
+        hasher.update(json.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+}
+
+impl FsFileData {
+    pub fn to_compact_json(&self) -> String {
+        let obj = serde_json::json!({
+            "block_ids": self.block_ids,
+            "size": self.size,
+            "type": self.obj_type,
+            "version": self.version,
+        });
+        obj.to_string()
+    }
+
+    pub fn compute_fs_id(&self) -> String {
+        let json = self.to_compact_json();
+        let mut hasher = Sha1::new();
+        hasher.update(json.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+}

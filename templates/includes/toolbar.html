@@ -1,0 +1,738 @@
+<style>
+/* Structural CSS only — visual styling via Tailwind classes */
+.upload-dialog:not(.hidden) {
+  display: flex;
+  flex-direction: column;
+}
+.upload-dialog--minimized {
+  max-height: 3.25rem;
+  overflow: hidden;
+}
+</style>
+
+<script>
+// ─── Upload state ───
+var uploadQueue = [];
+var uploadIdCounter = 0;
+var isUploadPaused = false;
+var isUploadDialogOpen = false;
+var dragCounter = 0;
+var isDialogMinimized = false;
+
+// Bitrate tracking
+var bitrateLoaded = 0;
+var bitrateTimestamp = null;
+var currentBitrate = 0;
+var bitrateInterval = 500;
+
+// ─── Toast notifications ───
+function showToast(msg, type) {
+    var el = document.createElement('div');
+    el.className = 'fixed top-4 right-4 z-[9999] px-4 py-2.5 rounded-lg shadow-lg text-sm text-white ' +
+        (type === 'error' ? 'bg-red-500' : 'bg-green-600');
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function () { if (el.parentNode) el.remove(); }, 3000);
+}
+
+// ─── Warn on page leave during active uploads ───
+window.addEventListener('beforeunload', function (e) {
+    if (uploadQueue.some(function (item) { return item.state === 'uploading' || item.state === 'pending'; })) {
+        e.preventDefault();
+        e.returnValue = '';
+    }
+});
+
+// ─── Standard upload (multi-file selection) ───
+function triggerUpload() {
+    document.getElementById('file-upload-input').click();
+}
+function onFileSelected(input) {
+    if (input.files && input.files.length > 0) {
+        if (input.hasAttribute('webkitdirectory')) {
+            uploadFilesFromFolderInput(input.files);
+        } else {
+            var items = [];
+            for (var i = 0; i < input.files.length; i++) {
+                items.push({ file: input.files[i], targetDir: '' });
+            }
+            addToQueue(items);
+        }
+        input.value = '';
+    }
+}
+
+// ─── Folder upload ───
+function triggerFolderUpload() {
+    document.getElementById('folder-upload-input').click();
+}
+function onFolderSelected(input) {
+    if (input.files && input.files.length > 0) {
+        uploadFilesFromFolderInput(input.files);
+        input.value = '';
+    }
+}
+function uploadFilesFromFolderInput(files) {
+    var items = [];
+    for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        var parts = file.webkitRelativePath.split('/');
+        var targetDir = parts.slice(0, -1).join('/');
+        // Extract just the basename from webkitRelativePath — file.name may
+        // include the full path in some browsers.
+        var fileName = parts[parts.length - 1];
+        items.push({ file: file, targetDir: targetDir || '', name: fileName });
+    }
+    addToQueue(items);
+}
+
+// ─── Drag and drop ───
+function onDragOver(e) { e.preventDefault(); }
+function onDragEnter(e) {
+    e.preventDefault();
+    dragCounter++;
+    var overlay = document.querySelector('[data-drop-zone] > .drop-overlay');
+    if (overlay && dragCounter === 1) overlay.classList.remove('hidden');
+}
+function onDragLeave(e) {
+    e.preventDefault();
+    dragCounter--;
+    if (dragCounter <= 0) {
+        dragCounter = 0;
+        var overlay = document.querySelector('[data-drop-zone] > .drop-overlay');
+        if (overlay) overlay.classList.add('hidden');
+    }
+}
+function onDrop(e) {
+    e.preventDefault();
+    dragCounter = 0;
+    var overlay = document.querySelector('[data-drop-zone] > .drop-overlay');
+    if (overlay) overlay.classList.add('hidden');
+
+    var entries = [];
+    for (var i = 0; i < e.dataTransfer.items.length; i++) {
+        var item = e.dataTransfer.items[i];
+        if (item.kind === 'file') {
+            entries.push(item.webkitGetAsEntry());
+        }
+    }
+    if (entries.length > 0) {
+        collectAndUploadEntries(entries);
+    }
+}
+
+async function collectAndUploadEntries(entries) {
+    var items = [];
+    for (var i = 0; i < entries.length; i++) {
+        var collected = await traverseEntry(entries[i], '');
+        items = items.concat(collected);
+    }
+    if (items.length > 0) addToQueue(items);
+}
+
+async function traverseEntry(entry, parentPath) {
+    var results = [];
+    if (!entry) return results;
+    if (entry.isFile) {
+        var file = await new Promise(function (resolve, reject) {
+            entry.file(resolve, reject);
+        });
+        // Use entry.name (always the basename) instead of file.name which
+        // may include the full path in some browsers.
+        results.push({ file: file, targetDir: parentPath || '', name: entry.name });
+    } else if (entry.isDirectory) {
+        var reader = entry.createReader();
+        var childEntries = await new Promise(function (resolve) {
+            reader.readEntries(function (r) { resolve(r); });
+        });
+        var childPath = parentPath ? parentPath + '/' + entry.name : entry.name;
+        for (var j = 0; j < childEntries.length; j++) {
+            var children = await traverseEntry(childEntries[j], childPath);
+            results = results.concat(children);
+        }
+    }
+    return results;
+}
+
+// ─── Queue management ───
+function addToQueue(items) {
+    if (items.length === 0) return;
+
+    // Reset bitrate tracking on fresh batch
+    bitrateLoaded = 0;
+    bitrateTimestamp = null;
+    currentBitrate = 0;
+
+    var currentDir = '{{ current_path }}';
+
+    items.forEach(function (item) {
+        var parentDir;
+        if (!item.targetDir) {
+            parentDir = currentDir;
+        } else if (currentDir === '/') {
+            parentDir = '/' + item.targetDir;
+        } else {
+            parentDir = currentDir + '/' + item.targetDir;
+        }
+
+        uploadQueue.push({
+            id: ++uploadIdCounter,
+            file: item.file,
+            name: item.name || item.file.name,
+            size: item.file.size,
+            parentDir: parentDir,
+            state: 'pending',
+            progress: 0,
+            error: null,
+            xhr: null,
+        });
+    });
+
+    showProgressDialog();
+    processQueue();
+}
+
+function processQueue() {
+    // Find the first pending item and upload it
+    for (var i = 0; i < uploadQueue.length; i++) {
+        var item = uploadQueue[i];
+        if (item.state === 'pending') {
+            if (!isUploadPaused) {
+                uploadItem(item);
+            }
+            return;
+        }
+    }
+
+    // No more pending items — check if everything is terminal
+    var allDone = uploadQueue.every(function (item) {
+        return item.state === 'completed' || item.state === 'cancelled';
+    });
+    if (allDone && uploadQueue.length > 0) {
+        refreshFileList();
+    }
+    updateProgressDialog();
+}
+
+function uploadItem(item) {
+    item.state = 'uploading';
+    updateProgressDialog();
+
+    var xhr = new XMLHttpRequest();
+    item.xhr = xhr;
+
+    var formData = new FormData();
+    formData.append('parent_dir', item.parentDir);
+    formData.append('repo_name', '{{ repo_name }}');
+    // Explicitly pass the correct filename as the third argument so the
+    // multipart Content-Disposition carries just the basename, not the
+    // full path that some browsers include in file.name for folder uploads.
+    formData.append('file', item.file, item.name);
+    formData.append('xhr', '1');
+
+    xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable) {
+            item.progress = e.total > 0 ? Math.round(e.loaded / e.total * 100) : 0;
+            updateBitrate(e.loaded);
+            updateProgressDialog();
+        }
+    };
+
+    xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) {
+            item.state = 'completed';
+            item.progress = 100;
+        } else {
+            item.state = 'error';
+            item.error = 'Upload failed (HTTP ' + xhr.status + ')';
+        }
+        item.xhr = null;
+        updateProgressDialog();
+        // Small delay to avoid spamming refresh on fast files
+        setTimeout(processQueue, 50);
+    };
+
+    xhr.onerror = function () {
+        item.state = 'error';
+        item.error = 'Network error';
+        item.xhr = null;
+        updateProgressDialog();
+        setTimeout(processQueue, 50);
+    };
+
+    xhr.onabort = function () {
+        item.xhr = null;
+    };
+
+    xhr.open('POST', '/library/{{ repo_id }}/upload');
+    xhr.send(formData);
+}
+
+// ─── Bitrate calculation ───
+function updateBitrate(loaded) {
+    var now = new Date().getTime();
+    if (bitrateTimestamp) {
+        var timeDiff = now - bitrateTimestamp;
+        if (timeDiff >= bitrateInterval) {
+            var diff = loaded - bitrateLoaded;
+            currentBitrate = diff / (timeDiff / 1000);
+            bitrateTimestamp = now;
+            bitrateLoaded = loaded;
+        }
+    } else {
+        bitrateTimestamp = now;
+        bitrateLoaded = loaded;
+    }
+}
+
+function formatBitrate(bytesPerSec) {
+    if (!bytesPerSec || bytesPerSec <= 0) return '';
+    if (bytesPerSec >= 1000 * 1000) return (bytesPerSec / (1000 * 1000)).toFixed(1) + ' MB/s';
+    if (bytesPerSec >= 1000) return (bytesPerSec / 1000).toFixed(1) + ' KB/s';
+    return Math.round(bytesPerSec) + ' B/s';
+}
+
+function formatFileSize(size) {
+    if (typeof size !== 'number') return '';
+    if (size >= 1000 * 1000 * 1000) return (size / (1000 * 1000 * 1000)).toFixed(1) + ' GB';
+    if (size >= 1000 * 1000) return (size / (1000 * 1000)).toFixed(1) + ' MB';
+    if (size >= 1000) return (size / 1000).toFixed(1) + ' KB';
+    return size + ' B';
+}
+
+// ─── Queue actions (per-file) ───
+
+/** Cancel a file — if uploading, abort XHR; mark as cancelled. */
+function cancelUploadItem(id) {
+    var item = uploadQueue.find(function (item) { return item.id === id; });
+    if (!item || item.state === 'completed' || item.state === 'cancelled') return;
+    if (item.state === 'uploading' && item.xhr) {
+        item.xhr.abort();
+    }
+    item.state = 'cancelled';
+    item.progress = 0;
+    item.error = null;
+    item.xhr = null;
+    updateProgressDialog();
+    processQueue();
+}
+
+/** Pause an actively uploading file. */
+function pauseUploadItem(id) {
+    var item = uploadQueue.find(function (item) { return item.id === id; });
+    if (!item || item.state !== 'uploading') return;
+    if (item.xhr) item.xhr.abort();
+    item.state = 'paused';
+    item.progress = 0;
+    item.xhr = null;
+    updateProgressDialog();
+    processQueue();
+}
+
+/** Resume a paused file. */
+function resumeUploadItem(id) {
+    var item = uploadQueue.find(function (item) { return item.id === id; });
+    if (!item || item.state !== 'paused') return;
+    item.state = 'pending';
+    item.progress = 0;
+    item.error = null;
+    updateProgressDialog();
+    processQueue();
+}
+
+/** Retry a failed or cancelled file. */
+function retryUploadItem(id) {
+    var item = uploadQueue.find(function (item) { return item.id === id; });
+    if (!item || (item.state !== 'error' && item.state !== 'cancelled')) return;
+    item.state = 'pending';
+    item.progress = 0;
+    item.error = null;
+    item.xhr = null;
+    updateProgressDialog();
+    processQueue();
+}
+
+// ─── Bulk queue actions ───
+
+function pauseAllUploads() {
+    isUploadPaused = true;
+    uploadQueue.forEach(function (item) {
+        if (item.state === 'uploading') {
+            if (item.xhr) item.xhr.abort();
+            item.state = 'paused';
+            item.xhr = null;
+        }
+    });
+    updateProgressDialog();
+}
+
+function resumeAllUploads() {
+    isUploadPaused = false;
+    // Resume all paused items
+    uploadQueue.forEach(function (item) {
+        if (item.state === 'paused') {
+            item.state = 'pending';
+        }
+    });
+    updateProgressDialog();
+    processQueue();
+}
+
+function cancelAllPending() {
+    uploadQueue.forEach(function (item) {
+        if (item.state === 'uploading') {
+            if (item.xhr) item.xhr.abort();
+            item.state = 'cancelled';
+            item.xhr = null;
+        } else if (item.state === 'pending' || item.state === 'paused') {
+            item.state = 'cancelled';
+        }
+    });
+    updateProgressDialog();
+    processQueue();
+}
+
+function retryAllFailed() {
+    uploadQueue.forEach(function (item) {
+        if (item.state === 'error' || item.state === 'cancelled') {
+            item.state = 'pending';
+            item.progress = 0;
+            item.error = null;
+            item.xhr = null;
+        }
+    });
+    updateProgressDialog();
+    processQueue();
+}
+
+// ─── Progress Dialog ───
+
+function showProgressDialog() {
+    isUploadDialogOpen = true;
+    var dialog = document.getElementById('upload-dialog');
+    dialog.classList.remove('hidden');
+    updateProgressDialog();
+}
+
+function closeProgressDialog() {
+    var hasActive = uploadQueue.some(function (item) {
+        return item.state === 'uploading' || item.state === 'pending' || item.state === 'paused';
+    });
+    if (hasActive) return;
+
+    isUploadDialogOpen = false;
+    isDialogMinimized = false;
+    var dialog = document.getElementById('upload-dialog');
+    dialog.classList.add('hidden');
+    dialog.classList.remove('upload-dialog--minimized');
+    uploadQueue = [];
+    uploadIdCounter = 0;
+}
+
+function toggleMinimize() {
+    isDialogMinimized = !isDialogMinimized;
+    var dialog = document.getElementById('upload-dialog');
+    dialog.classList.toggle('upload-dialog--minimized', isDialogMinimized);
+    var btn = document.getElementById('minimize-btn');
+    if (btn) btn.textContent = isDialogMinimized ? '□' : '−';
+}
+
+function updateProgressDialog() {
+    var dialog = document.getElementById('upload-dialog');
+    if (!dialog) return;
+
+    // Auto-close when queue becomes empty
+    if (uploadQueue.length === 0) {
+        dialog.classList.add('hidden');
+        return;
+    }
+
+    var total = uploadQueue.length;
+    var completed = 0, failed = 0, uploading = 0, pending = 0, paused = 0, cancelled = 0;
+    uploadQueue.forEach(function (item) {
+        if (item.state === 'completed') completed++;
+        else if (item.state === 'error') failed++;
+        else if (item.state === 'uploading') uploading++;
+        else if (item.state === 'pending') pending++;
+        else if (item.state === 'paused') paused++;
+        else if (item.state === 'cancelled') cancelled++;
+    });
+
+    var isActive = uploading > 0 || pending > 0 || paused > 0;
+    var hasFailed = failed > 0;
+
+    // Overall progress (by bytes)
+    var totalBytes = 0, uploadedBytes = 0;
+    uploadQueue.forEach(function (item) {
+        totalBytes += item.size;
+        if (item.state === 'completed') uploadedBytes += item.size;
+        else if (item.state === 'uploading') uploadedBytes += item.size * item.progress / 100;
+    });
+    var totalProgress = totalBytes > 0 ? Math.round(uploadedBytes / totalBytes * 100) : 0;
+
+    // ── Header: status + bitrate ──
+    var headerEl = dialog.querySelector('.upload-header-status');
+    var bitrateEl = dialog.querySelector('.upload-bitrate');
+
+    if (isActive) {
+        var statusText = uploading > 0 ? 'Uploading...' : (pending > 0 ? 'Waiting...' : 'Paused');
+        headerEl.textContent = statusText;
+        bitrateEl.textContent = uploading > 0 ? formatBitrate(currentBitrate) : '';
+    } else {
+        if (hasFailed) {
+            headerEl.innerHTML = '<span class="text-red-500">' + failed +
+                ' file' + (failed > 1 ? 's' : '') + ' failed to upload</span>';
+        } else {
+            headerEl.textContent = 'All files uploaded';
+        }
+        bitrateEl.textContent = '';
+    }
+
+    // ── Progress bar (inside header) ──
+    var progressBarContainer = dialog.querySelector('.upload-progress-bar-container');
+    var progressBar = dialog.querySelector('.upload-progress-bar');
+    if (isActive) {
+        progressBarContainer.classList.remove('hidden');
+        progressBar.style.width = totalProgress + '%';
+    } else {
+        progressBarContainer.classList.add('hidden');
+        progressBar.style.width = '100%';
+    }
+
+    // ── Close button visibility ──
+    var closeBtn = dialog.querySelector('.upload-dialog-header-right button[onclick*="closeProgressDialog"]');
+    if (closeBtn) {
+        closeBtn.classList.toggle('hidden', isActive);
+    }
+
+    // ── Content bar: count + bulk actions ──
+    var countEl = dialog.querySelector('.upload-count');
+    countEl.textContent = completed + ' / ' + total + ' File' + (total > 1 ? 's' : '');
+
+    var actionsEl = dialog.querySelector('.upload-content-actions');
+    if (isActive) {
+        var pauseBtnHtml = isUploadPaused
+            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="resumeAllUploads()">Resume All</button>'
+            : '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="pauseAllUploads()">Pause All</button>';
+        var retryAllBtn = hasFailed
+            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="retryAllFailed()">Retry All</button>'
+            : '';
+        var cancelAllBtn = '<button class="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-red-100 hover:border-red-300" onclick="cancelAllPending()">Cancel All</button>';
+        actionsEl.innerHTML = pauseBtnHtml + retryAllBtn + cancelAllBtn;
+    } else {
+        var retryAllBtn = hasFailed
+            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="retryAllFailed()">Retry All</button>'
+            : '';
+        actionsEl.innerHTML = retryAllBtn;
+    }
+
+    // ── File list ──
+    var bodyEl = dialog.querySelector('.upload-dialog-body');
+    var listHtml = '';
+    uploadQueue.forEach(function (item) {
+        var statusHtml, actionHtml;
+
+        if (item.state === 'uploading') {
+            var pct = Math.round(item.progress);
+            statusHtml =
+                '<div class="flex items-center gap-2">' +
+                  '<span class="inline-block w-28 h-2 bg-gray-200 rounded-full overflow-hidden">' +
+                    '<span class="block h-full bg-blue-500 rounded-full" style="width:' + pct + '%;transition:width 0.3s ease"></span>' +
+                  '</span>' +
+                  '<span class="text-xs text-gray-500 font-medium w-10 text-right">' + pct + '%</span>' +
+                '</div>';
+            actionHtml =
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-200 active:scale-90 transition-all" onclick="pauseUploadItem(' + item.id + ')" title="Pause">' +
+                  '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>' +
+                '</button>' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="Cancel">' +
+                  '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
+                '</button>';
+        } else if (item.state === 'pending') {
+            statusHtml = '<span class="text-xs text-gray-400 italic">Waiting...</span>';
+            actionHtml =
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="Cancel">' +
+                  '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
+                '</button>';
+        } else if (item.state === 'paused') {
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-amber-600 font-medium"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Paused</span>';
+            actionHtml =
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 active:scale-90 transition-all" onclick="resumeUploadItem(' + item.id + ')" title="Resume">' +
+                  '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>' +
+                '</button>' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="Cancel">' +
+                  '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
+                '</button>';
+        } else if (item.state === 'completed') {
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-green-600 font-medium"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Uploaded</span>';
+            actionHtml = '';
+        } else if (item.state === 'error') {
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-red-600 font-medium"><svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate max-w-[7rem]">' + escapeHtml(item.error || 'Error') + '</span></span>';
+            actionHtml =
+                '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" onclick="retryUploadItem(' + item.id + ')">' +
+                  '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
+                  'Retry</button>';
+        } else { // cancelled
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-gray-400"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>Cancelled</span>';
+            actionHtml =
+                '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" onclick="retryUploadItem(' + item.id + ')">' +
+                  '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
+                  'Retry</button>';
+        }
+
+        listHtml +=
+            '<div class="flex items-center gap-3 px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50/70 transition-colors">' +
+              '<div class="flex-1 min-w-0">' +
+                '<div class="flex items-center gap-2">' +
+                  '<svg class="w-4 h-4 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>' +
+                  '<span class="text-sm text-gray-800 font-medium truncate" title="' + escapeAttr(item.name) + '">' + escapeHtml(item.name) + '</span>' +
+                '</div>' +
+                '<div class="ml-6 text-xs text-gray-400 mt-0.5">' + formatFileSize(item.size) + '</div>' +
+              '</div>' +
+              '<div class="shrink-0">' + statusHtml + '</div>' +
+              '<div class="shrink-0 flex items-center gap-0.5">' + actionHtml + '</div>' +
+            '</div>';
+    });
+    bodyEl.innerHTML = listHtml;
+}
+
+// ─── New Folder Dialog ───
+function showNewFolderDialog() {
+    document.getElementById('new-folder-overlay').classList.remove('hidden');
+    document.getElementById('new-folder-input').focus();
+}
+function hideNewFolderDialog() {
+    document.getElementById('new-folder-overlay').classList.add('hidden');
+    document.getElementById('new-folder-input').value = '';
+}
+function submitNewFolder(form) {
+    var name = document.getElementById('new-folder-input').value.trim();
+    if (!name) return false;
+    var currentDir = form.querySelector('[name="current_dir"]').value;
+    var p = currentDir === '/' ? '/' + name : currentDir + '/' + name;
+    var pInput = document.createElement('input');
+    pInput.type = 'hidden'; pInput.name = 'p'; pInput.value = p;
+    form.appendChild(pInput);
+    hideNewFolderDialog();
+    return true;
+}
+
+// ─── Small helpers ───
+function escapeHtml(str) {
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+}
+function escapeAttr(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ─── Partial refresh ───
+async function refreshFileList() {
+    var url = window.location.pathname;
+    var sep = url.indexOf('?') !== -1 ? '&' : '?';
+    url = url + sep + 'partial=1';
+    try {
+        var resp = await fetch(url);
+        if (resp.ok) {
+            var html = await resp.text();
+            var container = document.querySelector('.file-list-container');
+            if (container) {
+                container.outerHTML = html;
+            } else {
+                window.location.reload();
+            }
+        } else {
+            window.location.reload();
+        }
+    } catch (_) {
+        window.location.reload();
+    }
+}
+</script>
+
+<div class="flex items-center gap-2">
+    <button onclick="showNewFolderDialog()"
+            class="inline-flex items-center rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 hover:text-gray-900 shadow-sm">
+        <svg class="mr-1.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m-5 4h10a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+        </svg>
+        New Folder
+    </button>
+    <button onclick="triggerUpload()"
+            class="inline-flex items-center rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 hover:text-gray-900 shadow-sm">
+        <svg class="mr-1.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+        </svg>
+        Upload
+    </button>
+    <button onclick="triggerFolderUpload()"
+            class="inline-flex items-center rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 hover:text-gray-900 shadow-sm">
+        <svg class="mr-1.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+        </svg>
+        Upload Folder
+    </button>
+
+    <!-- Hidden standard upload form (supports multiple file selection) -->
+    <form id="upload-form" action="/library/{{ repo_id }}/upload" method="POST" enctype="multipart/form-data" class="hidden">
+        <input type="hidden" name="parent_dir" value="{{ current_path }}">
+        <input type="hidden" name="repo_name" value="{{ repo_name }}">
+        <input id="file-upload-input" type="file" name="file" multiple onchange="onFileSelected(this)" class="hidden">
+    </form>
+
+    <!-- Hidden folder upload input (webkitdirectory preserves subdirectory structure) -->
+    <input id="folder-upload-input" type="file" webkitdirectory multiple onchange="onFolderSelected(this)" class="hidden">
+</div>
+
+<!-- Upload Progress Dialog -->
+<div id="upload-dialog" class="upload-dialog fixed right-4 bottom-4 w-[35rem] max-w-[calc(100vw-2rem)] max-h-96 rounded-lg shadow-lg bg-white z-[1050] border border-gray-200 transition-[max-height] duration-200 hidden">
+    <div class="shrink-0 flex flex-col bg-gray-50 border-b border-gray-200 cursor-pointer select-none rounded-t-lg" onclick="toggleMinimize()">
+        <div class="flex items-center justify-between px-3.5 pt-2.5 pb-1.5">
+            <div class="flex items-center gap-2.5 min-w-0">
+                <span class="upload-header-status text-sm font-semibold text-gray-700 whitespace-nowrap">Uploading...</span>
+                <span class="upload-bitrate text-xs text-gray-400 whitespace-nowrap"></span>
+            </div>
+            <div class="flex items-center gap-0.5 shrink-0" onclick="event.stopPropagation()">
+                <button id="minimize-btn" class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 hover:border-gray-300 hover:text-gray-600 active:bg-gray-300 active:scale-[0.88]" onclick="toggleMinimize()" title="Minimize">−</button>
+                <button class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 hover:border-gray-300 hover:text-gray-600 active:bg-gray-300 active:scale-[0.88]" onclick="closeProgressDialog()" title="Close">✕</button>
+            </div>
+        </div>
+        <div class="upload-progress-bar-container h-1 bg-gray-200 mx-3.5 mb-2.5">
+            <div class="upload-progress-bar h-full bg-blue-500 rounded" style="width:0%"></div>
+        </div>
+    </div>
+    <div class="flex-1 flex flex-col min-h-0">
+        <div class="upload-dialog-content-bar shrink-0 flex items-center justify-between px-3.5 py-2 border-b border-gray-200">
+            <span class="upload-count text-xs text-gray-400"></span>
+            <div class="upload-content-actions flex items-center gap-1.5"></div>
+        </div>
+        <div class="upload-dialog-body flex-1 overflow-y-auto px-2"></div>
+    </div>
+</div>
+
+<!-- New Folder dialog overlay -->
+<div id="new-folder-overlay" class="hidden fixed inset-0 z-[1060] flex items-center justify-center bg-black/30" onclick="if(event.target===this)hideNewFolderDialog()">
+    <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+        <h3 class="text-base font-semibold text-gray-900 mb-1">New Folder</h3>
+        <p class="text-sm text-gray-500 mb-4">Enter a name for the new folder.</p>
+        <form action="/library/{{ repo_id }}/new-dir" method="POST" onsubmit="return submitNewFolder(this)">
+            <input type="hidden" name="current_dir" value="{{ current_path }}">
+            <input type="hidden" name="repo_name" value="{{ repo_name }}">
+            <input id="new-folder-input" type="text" name="folder_name" placeholder="Folder name"
+                   class="block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue text-sm border p-2"
+                   onkeydown="if(event.key==='Escape'){event.preventDefault();hideNewFolderDialog();}if(event.key==='Enter'){event.preventDefault();this.form.querySelector('button[type=submit]').click();}"
+                   autofocus>
+            <div class="mt-4 flex justify-end gap-2">
+                <button type="button" onclick="hideNewFolderDialog()"
+                        class="rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50">
+                    Cancel
+                </button>
+                <button type="submit"
+                        class="rounded-md bg-seafile-blue px-4 py-2 text-sm font-medium text-white hover:bg-blue-600">
+                    Create
+                </button>
+            </div>
+        </form>
+    </div>
+</div>

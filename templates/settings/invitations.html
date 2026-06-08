@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}Invitations | Nanofile{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-gray-900">Invitations</h1>
+<p class="mt-1 text-sm text-gray-500">
+    Generate invitation codes to allow new users to create an account.
+</p>
+
+{% if let Some(error) = error %}
+{% include "includes/alert_error.html" %}
+{% endif %}
+
+{% if let Some(success) = success %}
+{% include "includes/alert_success.html" %}
+{% endif %}
+
+<div class="mt-6 max-w-lg">
+    <form action="/profile/invitations/" method="POST" class="mb-6">
+        <div class="flex items-end gap-3">
+            <div class="flex-1">
+                <label for="email" class="block text-sm font-medium text-gray-700 mb-1">
+                    Bound Email <span class="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <input id="email"
+                       name="email"
+                       type="email"
+                       placeholder="Leave empty for any email"
+                       class="block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue sm:text-sm border p-2">
+            </div>
+            <button type="submit"
+                    class="rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600 whitespace-nowrap">
+                + Generate Code
+            </button>
+        </div>
+        <p class="mt-1 text-xs text-gray-500">
+            If a bound email is set, only that email address can use this invitation code.
+        </p>
+    </form>
+
+    {% if invitations.is_empty() %}
+    <div class="rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div class="px-4 py-5 sm:px-6">
+            <p class="text-sm text-gray-500">
+                No invitation codes generated yet.
+                Click "Generate Code" above to create one.
+            </p>
+        </div>
+    </div>
+    {% endif %}
+
+    {% for inv in invitations %}
+    <div class="rounded-lg border border-gray-200 bg-white shadow-sm {% if !loop.first %}mt-4{% endif %}">
+        <div class="px-4 py-5 sm:px-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm font-mono font-semibold inline-block {% if inv.used_by_email.is_some() %}text-gray-400{% else %}text-gray-900{% endif %}"><span class="select-all">{{ inv.code }}</span></p>
+                    <p class="text-xs text-gray-500 mt-1">
+                        Created: <span class="select-all inline-block">{{- inv.created_at -}}</span>
+                    </p>
+                    {% if let Some(email) = inv.bound_email %}
+                    <p class="text-xs text-gray-500 mt-1">
+                        Bound to: <span class="font-mono">{{- email -}}</span>
+                    </p>
+                    {% else %}
+                    <p class="text-xs text-gray-500 mt-1">
+                        Unrestricted
+                    </p>
+                    {% endif %}
+                    {% if let Some(email) = inv.used_by_email %}
+                    <p class="text-xs text-gray-400 mt-1">
+                        Used by: {{ email }}
+                        {% if let Some(at) = inv.used_at %}
+                        at <span class="select-all inline-block">{{- at -}}</span>
+                        {% endif %}
+                    </p>
+                    {% else %}
+                    <p class="text-xs text-green-600 mt-1">
+                        Unused
+                    </p>
+                    {% endif %}
+                </div>
+                {% if inv.used_by_email.is_none() %}
+                <form action="/profile/invitations/{{ inv.id }}/delete" method="POST">
+                    <button type="submit"
+                            class="rounded-md bg-red-600 py-1.5 px-3 text-xs font-semibold text-white hover:bg-red-700"
+                            onclick="return confirm('Delete this invitation code?')">
+                        Delete
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    <div class="mt-6">
+        <a href="/profile/" class="text-sm text-seafile-blue hover:text-blue-700">
+            &larr; Back to Settings
+        </a>
+    </div>
+</div>
+{% endblock %}

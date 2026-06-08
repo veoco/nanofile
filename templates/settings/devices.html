@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Devices | Nanofile{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-gray-900">Devices</h1>
+<p class="mt-1 text-sm text-gray-500">Manage devices connected to your account.</p>
+
+{% if let Some(error) = error %}
+{% include "includes/alert_error.html" %}
+{% endif %}
+
+{% if let Some(success) = success %}
+{% include "includes/alert_success.html" %}
+{% endif %}
+
+<div class="mt-6 max-w-lg">
+    {% if devices.is_empty() %}
+    <div class="rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div class="px-4 py-5 sm:px-6">
+            <p class="text-sm text-gray-500">No connected devices found.</p>
+        </div>
+    </div>
+    {% endif %}
+
+    {% for device in devices %}
+    <div class="rounded-lg border border-gray-200 bg-white shadow-sm {% if !loop.first %}mt-4{% endif %}">
+        <div class="px-4 py-5 sm:px-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="flex-shrink-0">
+                        {% if device.is_desktop_client %}
+                        <svg class="h-8 w-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                        </svg>
+                        {% else %}
+                        <svg class="h-8 w-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                        </svg>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-gray-900">
+                            {% if !device.device_name.is_empty() %}
+                            {{ device.device_name }}
+                            {% else %}
+                            <span class="italic text-gray-400">Unnamed device</span>
+                            {% endif %}
+                        </p>
+                        <p class="text-xs text-gray-500">
+                            {{ device.platform }}
+                            {% if !device.client_version.is_empty() %}
+                            &middot; v{{ device.client_version }}
+                            {% endif %}
+                        </p>
+                        <p class="text-xs text-gray-400">
+                            Last accessed:
+                            <span class="select-all inline-block">{{- device.last_accessed -}}</span>
+                        </p>
+                    </div>
+                </div>
+                <form action="/profile/devices/" method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                    <input type="hidden" name="platform" value="{{ device.platform }}">
+                    <input type="hidden" name="device_id" value="{{ device.device_id }}">
+                    <button type="submit"
+                            class="rounded-md bg-red-600 py-1.5 px-3 text-xs font-semibold text-white hover:bg-red-700"
+                            onclick="return confirm('Unlink this device? It will be signed out and need to re-authenticate.')">
+                        Unlink
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    <div class="mt-6">
+        <a href="/profile/"
+           class="text-sm text-seafile-blue hover:text-blue-700">
+            &larr; Back to Settings
+        </a>
+    </div>
+</div>
+{% endblock %}

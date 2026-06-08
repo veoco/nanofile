@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Libraries | Nanofile{% endblock %}
+
+{% block content %}
+<div class="sm:flex sm:items-center sm:justify-between">
+    <div>
+        <h1 class="text-2xl font-semibold text-gray-900">Libraries</h1>
+        <p class="mt-1 text-sm text-gray-500">Browse and manage your file libraries.</p>
+    </div>
+</div>
+
+{% if repos.is_empty() %}
+<div class="mt-8 text-center">
+    <p class="text-gray-500">No libraries yet.</p>
+    <p class="mt-2 text-sm text-gray-400">Use seaf-cli or the API to create a library.</p>
+</div>
+{% else %}
+<div class="mt-6 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+    <ul role="list" class="divide-y divide-gray-200">
+        {% for r in repos %}
+        <li>
+            <a href="/library/{{ r.id }}/{{ r.name }}/" class="block px-4 py-4 hover:bg-gray-50">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center min-w-0">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-seafile-blue text-white">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                            </svg>
+                        </div>
+                        <div class="ml-4 min-w-0">
+                            <p class="truncate text-sm font-medium text-seafile-blue">{{ r.name }}</p>
+                            {% if !r.description.is_empty() %}
+                            <p class="truncate text-sm text-gray-500">{{ r.description }}</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="ml-4 flex-shrink-0 text-right text-sm text-gray-500">
+                        {{ r.size_display }}
+                    </div>
+                </div>
+            </a>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+{% endblock %}

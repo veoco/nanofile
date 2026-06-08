@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Shares | Nanofile{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-gray-900">Shares</h1>
+<p class="mt-1 text-sm text-gray-500">Manage shared links for your libraries.</p>
+
+{% if share_links.is_empty() %}
+<div class="mt-8 text-center">
+    <p class="text-gray-500">No shares yet.</p>
+    <p class="mt-2 text-sm text-gray-400">Use the API to create share or upload links.</p>
+</div>
+{% endif %}
+
+{% if !share_links.is_empty() %}
+<div class="mt-6">
+    <h2 class="text-lg font-medium text-gray-900">Share Links</h2>
+    <div class="mt-2 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Path</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Created</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for s in share_links %}
+                <tr class="hover:bg-gray-50">
+                    <td class="px-4 py-3 text-sm">{{ s.path }}</td>
+                    <td class="px-4 py-3 text-sm text-right text-gray-500">{{ s.created_at }}</td>
+                    <td class="px-4 py-3 text-sm text-right">
+                        <form action="/share/{{ s.token }}/delete" method="POST" class="inline">
+                            <button type="submit" class="text-red-600 hover:text-red-800">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

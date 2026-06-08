@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-50">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login | Nanofile</title>
+    <meta name="description" content="Nanofile - Seafile-compatible sync server">
+    <link rel="icon" type="image/svg+xml" href="{{ urls.favicon }}">
+    <link rel="stylesheet" href="{{ urls.css }}">
+</head>
+<body class="h-full">
+<div class="flex min-h-full items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+    <div class="w-full max-w-md space-y-8">
+        <div>
+            <h1 class="text-center text-3xl font-bold tracking-tight text-gray-900">
+                Nanofile
+            </h1>
+            <p class="mt-2 text-center text-sm text-gray-600">
+                Seafile-compatible sync server
+            </p>
+        </div>
+
+        {% if let Some(error) = error %}
+        {% include "includes/alert_error.html" %}
+        {% endif %}
+
+        <form class="mt-8 space-y-6" action="/accounts/login/" method="POST">
+            <div class="-space-y-px rounded-md shadow-sm">
+                <div>
+                    <label for="email" class="sr-only">Email address</label>
+                    <input id="email"
+                           name="email"
+                           type="email"
+                           autocomplete="email"
+                           required
+                           placeholder="Email address"
+                           class="relative block w-full rounded-t-md border-0 py-1.5 text-gray-900 ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:z-10 focus:ring-2 focus:ring-inset focus:ring-seafile-blue sm:text-sm sm:leading-6">
+                </div>
+                <div>
+                    <label for="password" class="sr-only">Password</label>
+                    <input id="password"
+                           name="password"
+                           type="password"
+                           autocomplete="current-password"
+                           required
+                           placeholder="Password"
+                           class="relative block w-full rounded-b-md border-0 py-1.5 text-gray-900 ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:z-10 focus:ring-2 focus:ring-inset focus:ring-seafile-blue sm:text-sm sm:leading-6">
+                </div>
+            </div>
+
+            <div class="flex items-center justify-between">
+                <div class="flex items-center">
+                    <input id="remember_me"
+                           name="remember_me"
+                           type="checkbox"
+                           value="1"
+                           checked
+                           class="h-4 w-4 rounded border-gray-300 text-seafile-blue focus:ring-seafile-blue">
+                    <label for="remember_me" class="ml-2 block text-sm text-gray-700">
+                        Remember me for {{ remember_days }} days
+                    </label>
+                </div>
+            </div>
+
+            <div>
+                <button type="submit"
+                        class="group relative flex w-full justify-center rounded-md bg-seafile-blue py-2 px-3 text-sm font-semibold text-white hover:bg-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-seafile-blue">
+                    Sign in
+                </button>
+            </div>
+        </form>
+
+        <p class="mt-4 text-center text-sm text-gray-500">
+            <a href="/accounts/register/" class="text-seafile-blue hover:text-blue-700">Create Account</a>
+            {% if enable_password_reset %}
+            <span class="mx-2 text-gray-300">|</span>
+            <a href="/accounts/password/reset/" class="text-seafile-blue hover:text-blue-700">Forgot password?</a>
+            {% endif %}
+        </p>
+    </div>
+</div>
+</body>
+</html>

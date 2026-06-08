@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+/* Custom theme extensions */
+@theme {
+    --color-seafile-blue: #2196f3;
+    --color-seafile-dark: #1a2634;
+    --color-seafile-sidebar: #1e2a3a;
+}
+

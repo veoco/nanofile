@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% block title %}Two-Factor Authentication | Nanofile{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-gray-900">Two-Factor Authentication</h1>
+<p class="mt-1 text-sm text-gray-500">Manage your two-factor authentication settings.</p>
+
+{% if let Some(error) = error %}
+{% include "includes/alert_error.html" %}
+{% endif %}
+
+{% if let Some(success) = success %}
+{% include "includes/alert_success.html" %}
+{% endif %}
+
+<div class="mt-6 max-w-lg">
+
+    {% if enabled %}
+    {# ── 2FA is active ── #}
+    <div class="rounded-lg border border-green-200 bg-green-50 shadow-sm">
+        <div class="px-4 py-5 sm:px-6">
+            <div class="flex items-center">
+                <svg class="mr-2 h-5 w-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                <h2 class="text-base font-semibold text-green-800">Status: Enabled</h2>
+            </div>
+        </div>
+    </div>
+
+    {# Backup codes — shown once immediately after enabling #}
+    {% if let Some(codes) = backup_codes %}
+    <div class="mt-4 rounded-lg border border-yellow-200 bg-yellow-50 shadow-sm">
+        <div class="px-4 py-5 sm:px-6">
+            <h3 class="text-sm font-semibold text-yellow-800">
+                Backup Codes
+            </h3>
+            <div class="mt-2 grid grid-cols-2 gap-1">
+                {% for code in codes %}
+                <code class="inline-block rounded bg-yellow-100 px-2 py-1 text-sm font-mono text-yellow-800">{{- code -}}</code>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div class="px-4 py-5 sm:px-6">
+            <h2 class="text-base font-semibold text-gray-900">Disable Two-Factor Authentication</h2>
+            <p class="mt-1 text-sm text-gray-500">
+                Enter your password to disable two-factor authentication.
+            </p>
+            <form action="/profile/two-factor/disable" method="POST" class="mt-4 space-y-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                    <input type="password" name="password" id="password" required
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue sm:text-sm border p-2">
+                </div>
+                <button type="submit"
+                        class="rounded-md bg-red-600 py-2 px-4 text-sm font-semibold text-white hover:bg-red-700">
+                    Disable
+                </button>
+            </form>
+        </div>
+    </div>
+
+    {% elif setup_pending %}
+    {# ── Setup in progress: show QR, secret, backup codes, verify form ──#}
+
+    <div class="rounded-lg border border-blue-200 bg-blue-50 shadow-sm">
+        <div class="px-4 py-5 sm:px-6">
+            <div class="flex items-center">
+                <svg class="mr-2 h-5 w-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                <h2 class="text-base font-semibold text-blue-800">Step 1: Scan QR Code</h2>
+            </div>
+            <p class="mt-2 text-sm text-blue-700">
+                Scan the QR code below with your authenticator app
+                (e.g. Google Authenticator, Authy, or 1Password).
+            </p>
+        </div>
+    </div>
+
+    {# QR Code #}
+    {% if let Some(url) = otpauth_url %}
+    <div class="mt-4 flex justify-center rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{ url }}"
+             alt="QR Code for TOTP"
+             class="h-48 w-48"
+             width="200"
+             height="200">
+    </div>
+    {% endif %}
+
+    {# Manual entry #}
+    {% if let Some(secret) = secret %}
+    <div class="mt-4 rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div class="px-4 py-5 sm:px-6">
+            <h3 class="text-sm font-medium text-gray-700">Or enter the key manually</h3>
+            <div class="mt-2">
+                <code class="inline-block rounded bg-gray-100 px-3 py-1.5 text-sm font-mono text-gray-800 break-all">{{- secret -}}</code>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# Backup codes #}
+    {% if let Some(codes) = backup_codes %}
+    <div class="mt-4 rounded-lg border border-yellow-200 bg-yellow-50 shadow-sm">
+        <div class="px-4 py-5 sm:px-6">
+            <h3 class="text-sm font-semibold text-yellow-800">
+                Backup Codes
+            </h3>
+            <div class="mt-2 grid grid-cols-2 gap-1">
+                {% for code in codes %}
+                <code class="inline-block rounded bg-yellow-100 px-2 py-1 text-sm font-mono text-yellow-800">{{- code -}}</code>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# Verify form #}
+    <div class="mt-4 rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div class="px-4 py-5 sm:px-6">
+            <h3 class="text-base font-semibold text-gray-900">Step 2: Verify</h3>
+            <p class="mt-1 text-sm text-gray-500">
+                Enter the 6-digit code from your authenticator app to enable two-factor authentication.
+            </p>
+            <form action="/profile/two-factor/verify" method="POST" class="mt-4 space-y-4">
+                <div>
+                    <label for="code" class="block text-sm font-medium text-gray-700">Verification Code</label>
+                    <input type="text" name="code" id="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code"
+                           required maxlength="6"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue sm:text-sm border p-2">
+                </div>
+                <button type="submit"
+                        class="rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600">
+                    Enable
+                </button>
+            </form>
+        </div>
+    </div>
+
+    {% endif %}
+
+    {# Back link #}
+    <div class="mt-6">
+        <a href="/profile/" class="text-sm font-medium text-seafile-blue hover:text-blue-700">
+            &larr; Back to Settings
+        </a>
+    </div>
+</div>
+{% endblock %}
