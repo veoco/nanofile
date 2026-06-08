@@ -130,10 +130,7 @@ pub async fn related_users(
         .all(state.db.as_ref())
         .await?;
 
-    let users: Vec<String> = members
-        .into_iter()
-        .map(|m| m.user_id.to_string())
-        .collect();
+    let users: Vec<String> = members.into_iter().map(|m| m.user_id.to_string()).collect();
 
     Ok(Json(serde_json::json!({"users": users})))
 }

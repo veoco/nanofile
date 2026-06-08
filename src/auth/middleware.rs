@@ -74,9 +74,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
                         .headers
                         .get("x-forwarded-for")
                         .and_then(|v| v.to_str().ok())
-                        .or_else(|| {
-                            parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok())
-                        })
+                        .or_else(|| parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok()))
                         .map(|s| s.to_string()),
                 );
                 active.last_sync_time = sea_orm::Set(Some(now));
