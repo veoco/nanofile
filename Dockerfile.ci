@@ -1,0 +1,6 @@
+# Dev Docker image — packages pre-built binary from CI matrix.
+# No Rust compilation; expects `nanofile` binary in the build context.
+FROM scratch
+COPY nanofile /nanofile
+EXPOSE 8082
+ENTRYPOINT ["/nanofile"]
