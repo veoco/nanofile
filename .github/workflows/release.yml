@@ -98,9 +98,11 @@ jobs:
 
       - name: Install zig (cross-compilation)
         if: matrix.cross
-        uses: taiki-e/install-action@v2
-        with:
-          tool: zig
+        run: |
+          curl -sL https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz \
+            -o /tmp/zig.tar.xz
+          tar xf /tmp/zig.tar.xz -C /tmp
+          echo "/tmp/zig-linux-x86_64-0.14.0" >> $GITHUB_PATH
 
       - name: Install Tailwind CLI
         run: |
