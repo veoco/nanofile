@@ -969,7 +969,7 @@ pub async fn preview_file(
         // Look up file size from the FS tree without downloading the full content.
         let size_display = get_file_size(db, &repo_id, &path)
             .await
-            .map(|size| format_size(size))
+            .map(format_size)
             .unwrap_or_else(|_| "?".to_string());
 
         let tpl = PreviewImageTemplate {

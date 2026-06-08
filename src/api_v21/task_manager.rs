@@ -31,6 +31,12 @@ pub struct TaskManager {
 
 const CLEANUP_TTL_SECS: i64 = 3600;
 
+impl Default for TaskManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskManager {
     /// Create a new empty TaskManager.
     pub fn new() -> Self {

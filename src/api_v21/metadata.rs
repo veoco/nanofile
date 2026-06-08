@@ -132,10 +132,7 @@ pub async fn related_users(
 
     let users: Vec<String> = members
         .into_iter()
-        .filter_map(|m| {
-            // Just return user IDs for now
-            Some(m.user_id.to_string())
-        })
+        .map(|m| m.user_id.to_string())
         .collect();
 
     Ok(Json(serde_json::json!({"users": users})))

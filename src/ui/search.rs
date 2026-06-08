@@ -258,6 +258,7 @@ async fn get_accessible_repo_ids(
     Ok(ids)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn search_fs_tree(
     db: &DatabaseConnection,
     repo_id: &str,

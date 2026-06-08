@@ -97,11 +97,11 @@ pub async fn login(
                 .one(state.db.as_ref())
                 .await?;
 
-            if let Some(stored) = stored {
-                if stored.expires_at > now {
-                    // Valid S2FA token — skip the entire 2FA challenge.
-                    skip_2fa = true;
-                }
+            if let Some(stored) = stored
+                && stored.expires_at > now
+            {
+                // Valid S2FA token — skip the entire 2FA challenge.
+                skip_2fa = true;
             }
             // Invalid or expired token: fall through to normal OTP check.
         }

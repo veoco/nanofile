@@ -46,10 +46,10 @@ pub async fn repo_file_download(
     State(state): State<Arc<AppState>>,
     Path((repo_id, path)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
-    let normalized = if path.is_empty() || path.starts_with('/') {
-        format!("/{}", path)
+    let normalized = if path.starts_with('/') {
+        path
     } else {
-        format!("/{}", path)
+        format!("/{path}")
     };
 
     let content =

@@ -8,6 +8,7 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Qu
 pub struct FileOps;
 
 impl FileOps {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_file(
         db: &DatabaseConnection,
         repo_id: &str,
@@ -355,6 +356,7 @@ impl FileOps {
     /// - `update_fn`: closure that modifies `&mut Vec<DirEntryData>` in-place
     /// - `description`: commit description
     ///
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn update_dir_tree_and_commit(
         db: &DatabaseConnection,
         repo_id: &str,

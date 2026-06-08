@@ -58,31 +58,29 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             // Capture client_id, client_name, client_ver from URL query params
             // and update the sync_token's peer info. This mirrors seafile-server's
             // RepoTokenPeerInfo table for device linking.
-            if let Some(query) = parts.uri.query() {
-                if let Ok(params) =
+            if let Some(query) = parts.uri.query()
+                && let Ok(params) =
                     serde_urlencoded::from_str::<std::collections::HashMap<String, String>>(query)
-                {
-                    if let Some(client_id) = params.get("client_id") {
-                        let now = chrono::Utc::now().timestamp();
-                        let mut active: sync_token::ActiveModel = record.into();
-                        active.peer_id = sea_orm::Set(Some(client_id.clone()));
-                        active.peer_name = sea_orm::Set(params.get("client_name").cloned());
-                        active.client_version = sea_orm::Set(params.get("client_ver").cloned());
-                        // Try to capture client IP from common proxy headers.
-                        active.peer_ip = sea_orm::Set(
-                            parts
-                                .headers
-                                .get("x-forwarded-for")
-                                .and_then(|v| v.to_str().ok())
-                                .or_else(|| {
-                                    parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok())
-                                })
-                                .map(|s| s.to_string()),
-                        );
-                        active.last_sync_time = sea_orm::Set(Some(now));
-                        let _ = active.update(db).await;
-                    }
-                }
+                && let Some(client_id) = params.get("client_id")
+            {
+                let now = chrono::Utc::now().timestamp();
+                let mut active: sync_token::ActiveModel = record.into();
+                active.peer_id = sea_orm::Set(Some(client_id.clone()));
+                active.peer_name = sea_orm::Set(params.get("client_name").cloned());
+                active.client_version = sea_orm::Set(params.get("client_ver").cloned());
+                // Try to capture client IP from common proxy headers.
+                active.peer_ip = sea_orm::Set(
+                    parts
+                        .headers
+                        .get("x-forwarded-for")
+                        .and_then(|v| v.to_str().ok())
+                        .or_else(|| {
+                            parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok())
+                        })
+                        .map(|s| s.to_string()),
+                );
+                active.last_sync_time = sea_orm::Set(Some(now));
+                let _ = active.update(db).await;
             }
 
             return Ok(SyncAuth { user_id, repo_id });

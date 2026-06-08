@@ -124,9 +124,9 @@ impl RabinState {
         self.pos = 0;
 
         if data.len() >= WINDOW_SIZE {
-            for i in 0..WINDOW_SIZE {
-                self.fingerprint = self.append8(self.fingerprint, data[i]) & 0xFFFF_FFFF;
-                self.window[i] = data[i];
+            for (i, &byte) in data.iter().enumerate().take(WINDOW_SIZE) {
+                self.fingerprint = self.append8(self.fingerprint, byte) & 0xFFFF_FFFF;
+                self.window[i] = byte;
             }
             self.count = WINDOW_SIZE;
             self.pos = WINDOW_SIZE % WINDOW_SIZE;

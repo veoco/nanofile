@@ -214,6 +214,7 @@ async fn get_accessible_repo_ids(
 ///
 /// Uses an iterative stack to avoid deep recursion, matching the behavior
 /// of seafile-server's `search_files_recursive` in common/fs-mgr.c.
+#[allow(clippy::too_many_arguments)]
 async fn search_fs_tree(
     db: &DatabaseConnection,
     repo_id: &str,
