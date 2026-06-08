@@ -184,8 +184,8 @@ jobs:
             | Platform | Archive |
             |---|---|
             | Linux (amd64, glibc) | `nanofile-${{ env.RELEASE_TAG }}-linux-amd64.tar.gz` |
-            | Linux (arm64, glibc) | `nanofile-${{ env.RELEASE_TAG }}-linux-arm64.tar.gz` |
             | Linux (amd64, musl) | `nanofile-${{ env.RELEASE_TAG }}-linux-amd64-musl.tar.gz` |
+            | Linux (arm64, glibc) | `nanofile-${{ env.RELEASE_TAG }}-linux-arm64.tar.gz` |
             | Linux (arm64, musl) | `nanofile-${{ env.RELEASE_TAG }}-linux-arm64-musl.tar.gz` |
             | Linux (LoongArch64, glibc) | `nanofile-${{ env.RELEASE_TAG }}-linux-loong64.tar.gz` |
             | Linux (LoongArch64, musl) | `nanofile-${{ env.RELEASE_TAG }}-linux-loong64-musl.tar.gz` |
