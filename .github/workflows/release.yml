@@ -104,6 +104,16 @@ jobs:
           tar xf /tmp/zig.tar.xz -C /tmp
           echo "/tmp/zig-linux-x86_64-0.14.0" >> $GITHUB_PATH
 
+      - name: Configure zig as cross-linker
+        if: matrix.cross
+        run: |
+          TARGET="${{ matrix.target }}"
+          SAFE=$(echo "$TARGET" | tr '-' '_')
+          UPPER=$(echo "$SAFE" | tr '[:lower:]' '[:upper:]')
+          echo "CC_${SAFE}=zig cc -target ${TARGET}" >> $GITHUB_ENV
+          echo "AR_${SAFE}=zig ar" >> $GITHUB_ENV
+          echo "CARGO_TARGET_${UPPER}_LINKER=zig cc" >> $GITHUB_ENV
+
       - name: Install Tailwind CLI
         run: |
           curl -sL https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-${{ matrix.tw_name }} \
