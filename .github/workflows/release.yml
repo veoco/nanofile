@@ -120,27 +120,11 @@ jobs:
           --release
           ${{ matrix.cross && format('--target {0}', matrix.target) || '' }}
 
-      - name: Package archive
-        shell: bash
-        run: |
-          BIN="${{ matrix.cross && format('target/{0}/release/nanofile{1}', matrix.target, matrix.ext) || format('target/release/nanofile{0}', matrix.ext) }}"
-          ARCHIVE="nanofile-${{ env.RELEASE_TAG }}-${{ matrix.asset_suffix }}"
-          mkdir -p "${ARCHIVE}"
-          cp "$BIN" "${ARCHIVE}/nanofile${{ matrix.ext }}"
-          cp README.md "${ARCHIVE}/" 2>/dev/null || true
-          cp LICENSE "${ARCHIVE}/" 2>/dev/null || true
-          cp config.toml "${ARCHIVE}/" 2>/dev/null || true
-          if [ "${{ matrix.ext }}" = ".exe" ]; then
-            7z a "${ARCHIVE}.zip" "./${ARCHIVE}/*"
-          else
-            tar czf "${ARCHIVE}.tar.gz" "${ARCHIVE}/"
-          fi
-
-      - name: Upload archive
+      - name: Upload binary
         uses: actions/upload-artifact@v7
         with:
           name: nanofile-${{ matrix.asset_suffix }}
-          path: nanofile-${{ env.RELEASE_TAG }}-${{ matrix.asset_suffix }}.*
+          path: ${{ matrix.cross && format('target/{0}/release/nanofile{1}', matrix.target, matrix.ext) || format('target/release/nanofile{0}', matrix.ext) }}
           retention-days: 5
 
   # ── Docker image ──────────────────────────────────────────────────
@@ -184,11 +168,6 @@ jobs:
                 ;;
               *) continue ;;
             esac
-            # Find the binary — raw (CI) or inside archive (Release)
-            if [ ! -f "$dir/nanofile" ]; then
-              archive=$(ls "$dir"/*.tar.gz 2>/dev/null | head -1)
-              [ -n "$archive" ] && tar xzf "$archive" --strip-components=1 -C "$dir/"
-            fi
             if [ -f "$dir/nanofile" ]; then
               chmod +x "$dir/nanofile"
               cp "$dir/nanofile" "docker-context/nanofile-linux-${docker_arch}"
@@ -238,14 +217,43 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
-      - name: Collect archives
+      - name: Package archives from binaries
         run: |
           mkdir release-assets
-          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release-assets/ \;
+          for dir in artifacts/nanofile-*; do
+            [ -d "$dir" ] || continue
+            suffix="$(basename "$dir")"
+            suffix="${suffix#nanofile-}"
+
+            # Detect platform and set binary name / archive format
+            if [ -f "$dir/nanofile.exe" ]; then
+              bin="nanofile.exe"
+              ext=".zip"
+            else
+              bin="nanofile"
+              ext=".tar.gz"
+            fi
+
+            archive_dir="nanofile-${RELEASE_TAG}-${suffix}"
+            mkdir -p "${archive_dir}"
+            cp "$dir/$bin" "${archive_dir}/$bin"
+            cp README.md "${archive_dir}/" 2>/dev/null || true
+            cp LICENSE "${archive_dir}/" 2>/dev/null || true
+            cp config.toml "${archive_dir}/" 2>/dev/null || true
+
+            if [ "$ext" = ".zip" ]; then
+              (cd "${archive_dir}" && 7z a "../release-assets/${archive_dir}.zip" ./* >/dev/null)
+            else
+              tar czf "release-assets/${archive_dir}${ext}" "${archive_dir}/"
+            fi
+            rm -rf "${archive_dir}"
+          done
           ls -la release-assets/
 
       - name: Create Release
