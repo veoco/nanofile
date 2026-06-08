@@ -73,10 +73,12 @@ fn which_tailwind() -> Option<String> {
     let project_root_path = std::path::Path::new(&project_root);
 
     // Check project root first (allows project-local installation)
-    let local = project_root_path
-        .join("tailwindcss")
-        .exists()
-        .then(|| project_root_path.join("tailwindcss").to_string_lossy().to_string());
+    let local = project_root_path.join("tailwindcss").exists().then(|| {
+        project_root_path
+            .join("tailwindcss")
+            .to_string_lossy()
+            .to_string()
+    });
 
     if local.is_some() {
         return local;

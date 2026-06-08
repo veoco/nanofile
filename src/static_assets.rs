@@ -55,20 +55,20 @@ fn http_date(unix_secs: u64) -> String {
 macro_rules! asset_data {
     ($hash:ident, $lm:ident, $etag:ident, $fp:ident, $path:expr) => {
         static $hash: LazyLock<String> = LazyLock::new(|| {
-            let file = Assets::get($path)
-                .unwrap_or_else(|| panic!("embedded asset not found: {}", $path));
+            let file =
+                Assets::get($path).unwrap_or_else(|| panic!("embedded asset not found: {}", $path));
             hex_prefix(&file.metadata.sha256_hash())
         });
 
         static $lm: LazyLock<String> = LazyLock::new(|| {
-            let file = Assets::get($path)
-                .unwrap_or_else(|| panic!("embedded asset not found: {}", $path));
+            let file =
+                Assets::get($path).unwrap_or_else(|| panic!("embedded asset not found: {}", $path));
             http_date(file.metadata.last_modified().unwrap_or(0))
         });
 
         static $etag: LazyLock<String> = LazyLock::new(|| {
-            let file = Assets::get($path)
-                .unwrap_or_else(|| panic!("embedded asset not found: {}", $path));
+            let file =
+                Assets::get($path).unwrap_or_else(|| panic!("embedded asset not found: {}", $path));
             format!("\"{}\"", hex_long(&file.metadata.sha256_hash()))
         });
 
@@ -83,7 +83,13 @@ macro_rules! asset_data {
 
 asset_data!(CSS_HASH, CSS_LM, ETAG_CSS, FP_CSS, "css/app.css");
 asset_data!(JS_HASH, JS_LM, ETAG_JS, FP_JS, "js/main.js");
-asset_data!(FAVICON_HASH, FAVICON_LM, ETAG_FAVICON, FP_FAVICON, "img/favicon.svg");
+asset_data!(
+    FAVICON_HASH,
+    FAVICON_LM,
+    ETAG_FAVICON,
+    FP_FAVICON,
+    "img/favicon.svg"
+);
 
 // ─── Template URLs (for Askama templates, fingerprinted filenames) ──────────
 
@@ -100,18 +106,10 @@ pub struct TemplateUrls {
 
 /// Return a reference to the lazily-initialised `TemplateUrls` singleton.
 pub fn template_urls() -> &'static TemplateUrls {
-    static URLS: LazyLock<TemplateUrls> = LazyLock::new(|| {
-        TemplateUrls {
-            css: Box::leak(
-                format!("/static/{}", *FP_CSS).into_boxed_str(),
-            ),
-            js: Box::leak(
-                format!("/static/{}", *FP_JS).into_boxed_str(),
-            ),
-            favicon: Box::leak(
-                format!("/static/{}", *FP_FAVICON).into_boxed_str(),
-            ),
-        }
+    static URLS: LazyLock<TemplateUrls> = LazyLock::new(|| TemplateUrls {
+        css: Box::leak(format!("/static/{}", *FP_CSS).into_boxed_str()),
+        js: Box::leak(format!("/static/{}", *FP_JS).into_boxed_str()),
+        favicon: Box::leak(format!("/static/{}", *FP_FAVICON).into_boxed_str()),
     });
     &URLS
 }
@@ -159,10 +157,7 @@ fn resolve_asset(path: &str) -> Option<(&'static str, &'static str, &'static str
 /// - `Cache-Control: public, max-age=31536000, immutable` (long-term caching)
 /// - `ETag` / `Last-Modified` headers for validation
 /// - Conditional `304 Not Modified` via `If-None-Match`
-pub async fn serve_static(
-    Path(path): Path<String>,
-    headers: HeaderMap,
-) -> Response {
+pub async fn serve_static(Path(path): Path<String>, headers: HeaderMap) -> Response {
     let path = path.trim_start_matches('/');
 
     let (original_path, etag, last_modified) = match resolve_asset(path) {
@@ -177,11 +172,14 @@ pub async fn serve_static(
     // Conditional request: If-None-Match → 304
     if headers
         .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok()) == Some(etag)
+        .and_then(|v| v.to_str().ok())
+        == Some(etag)
     {
-        return (StatusCode::NOT_MODIFIED, [
-            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-        ]).into_response();
+        return (
+            StatusCode::NOT_MODIFIED,
+            [(header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
+        )
+            .into_response();
     }
 
     // Normal response

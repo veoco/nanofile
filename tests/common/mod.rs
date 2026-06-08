@@ -114,7 +114,10 @@ impl TestServer {
             .merge(web_routes)
             .merge(ui_routes)
             .merge(notification_routes)
-            .route("/static/{*path}", axum::routing::get(nanofile::static_assets::serve_static))
+            .route(
+                "/static/{*path}",
+                axum::routing::get(nanofile::static_assets::serve_static),
+            )
             .layer(axum::extract::DefaultBodyLimit::max(512 * 1024 * 1024))
             .with_state(state.clone());
 

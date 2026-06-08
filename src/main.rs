@@ -97,7 +97,10 @@ async fn main() -> anyhow::Result<()> {
                 .merge(web_routes)
                 .merge(ui_routes)
                 .merge(notification_routes)
-                .route("/static/{*path}", get(nanofile::static_assets::serve_static))
+                .route(
+                    "/static/{*path}",
+                    get(nanofile::static_assets::serve_static),
+                )
                 .layer(NormalizePathLayer::trim_trailing_slash())
                 .layer(cors)
                 .layer(DefaultBodyLimit::max(
