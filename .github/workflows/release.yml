@@ -98,7 +98,9 @@ jobs:
 
       - name: Install zig (cross-compilation)
         if: matrix.cross
-        uses: taiki-e/setup-zig@v1
+        uses: taiki-e/install-action@v2
+        with:
+          tool: zig
 
       - name: Install Tailwind CLI
         run: |
