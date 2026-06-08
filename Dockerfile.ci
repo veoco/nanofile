@@ -4,6 +4,7 @@
 FROM scratch
 ARG TARGETOS
 ARG TARGETARCH
+LABEL org.opencontainers.image.description="nanofile - A Rust-based Seafile-compatible server"
 COPY nanofile-${TARGETOS}-${TARGETARCH} /nanofile
 EXPOSE 8082
 ENTRYPOINT ["/nanofile"]

@@ -176,4 +176,6 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:edge
             ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          annotations: |
+            org.opencontainers.image.description=nanofile - A Rust-based Seafile-compatible server
           push: true
