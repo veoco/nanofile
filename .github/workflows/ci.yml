@@ -192,11 +192,6 @@ jobs:
                 ;;
               *) continue ;;
             esac
-            # Find the binary — raw (CI) or inside archive (Release)
-            if [ ! -f "$dir/nanofile" ]; then
-              archive=$(ls "$dir"/*.tar.gz 2>/dev/null | head -1)
-              [ -n "$archive" ] && tar xzf "$archive" --strip-components=1 -C "$dir/"
-            fi
             if [ -f "$dir/nanofile" ]; then
               chmod +x "$dir/nanofile"
               cp "$dir/nanofile" "docker-context/nanofile-linux-${docker_arch}"

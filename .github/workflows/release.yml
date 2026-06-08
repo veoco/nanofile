@@ -136,13 +136,11 @@ jobs:
             tar czf "${ARCHIVE}.tar.gz" "${ARCHIVE}/"
           fi
 
-      - name: Upload artifact
+      - name: Upload archive
         uses: actions/upload-artifact@v7
         with:
           name: nanofile-${{ matrix.asset_suffix }}
-          path: |
-            nanofile-${{ env.RELEASE_TAG }}-${{ matrix.asset_suffix }}.*
-            ${{ matrix.cross && format('target/{0}/release/nanofile{1}', matrix.target, matrix.ext) || format('target/release/nanofile{0}', matrix.ext) }}
+          path: nanofile-${{ env.RELEASE_TAG }}-${{ matrix.asset_suffix }}.*
           retention-days: 5
 
   # ── Single release job ─────────────────────────────────────────────
