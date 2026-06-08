@@ -102,6 +102,7 @@ pub struct TemplateUrls {
     pub css: &'static str,
     pub js: &'static str,
     pub favicon: &'static str,
+    pub version: &'static str,
 }
 
 /// Return a reference to the lazily-initialised `TemplateUrls` singleton.
@@ -110,6 +111,7 @@ pub fn template_urls() -> &'static TemplateUrls {
         css: Box::leak(format!("/static/{}", *FP_CSS).into_boxed_str()),
         js: Box::leak(format!("/static/{}", *FP_JS).into_boxed_str()),
         favicon: Box::leak(format!("/static/{}", *FP_FAVICON).into_boxed_str()),
+        version: env!("CARGO_PKG_VERSION"),
     });
     &URLS
 }
