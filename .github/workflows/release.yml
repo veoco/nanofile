@@ -111,9 +111,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - run: cargo test
-        if: matrix.cross == false
-
       - name: Build release
         run: >-
           ${{ matrix.cross && 'cargo zigbuild' || 'cargo build' }}
@@ -257,25 +254,49 @@ jobs:
           ls -la release-assets/
 
       - name: Create Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: nanofile ${{ env.RELEASE_TAG }}
-          fail_on_unmatched_files: false
-          body: |
-            ## nanofile ${{ env.RELEASE_TAG }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # ── Generate changelog from git log ─────────────────────────
+          TAG_COUNT=$(git tag --list 'v*' --sort=-v:refname | wc -l)
+          if [ "$TAG_COUNT" -gt 1 ]; then
+            PREV_TAG=$(git tag --list 'v*' --sort=-v:refname | head -2 | tail -1)
+            CHANGELOG="$(git log --oneline --no-decorate "$PREV_TAG"..HEAD \
+              | sed 's/^/* /')"
+            COMPARE_LINK="https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${RELEASE_TAG}"
+          else
+            CHANGELOG="$(git log --oneline --no-decorate HEAD \
+              | sed 's/^/* /')"
+            COMPARE_LINK="https://github.com/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}"
+          fi
 
-            A Rust-based Seafile-compatible server.
+          # ── Write release notes ──────────────────────────────────────
+          cat > release-notes.md <<-EOF
+          ## nanofile $RELEASE_TAG
 
-            | Platform | Archive |
-            |---|---|
-            | Linux (amd64, glibc) | `nanofile-${{ env.RELEASE_TAG }}-linux-amd64.tar.gz` |
-            | Linux (amd64, musl) | `nanofile-${{ env.RELEASE_TAG }}-linux-amd64-musl.tar.gz` |
-            | Linux (arm64, glibc) | `nanofile-${{ env.RELEASE_TAG }}-linux-arm64.tar.gz` |
-            | Linux (arm64, musl) | `nanofile-${{ env.RELEASE_TAG }}-linux-arm64-musl.tar.gz` |
-            | Linux (LoongArch64, glibc) | `nanofile-${{ env.RELEASE_TAG }}-linux-loong64.tar.gz` |
-            | Linux (LoongArch64, musl) | `nanofile-${{ env.RELEASE_TAG }}-linux-loong64-musl.tar.gz` |
-            | macOS (Apple Silicon) | `nanofile-${{ env.RELEASE_TAG }}-macos-arm64.tar.gz` |
-            | Windows (amd64) | `nanofile-${{ env.RELEASE_TAG }}-windows-amd64.zip` |
-          files: |
+          A Rust-based Seafile-compatible server.
+
+          ### Changelog
+
+          $CHANGELOG
+
+          **[Full Changelog]($COMPARE_LINK)**
+
+          ### Downloads
+
+          | Platform | Archive |
+          |---|---|
+          | Linux (amd64, glibc) | \`nanofile-$RELEASE_TAG-linux-amd64.tar.gz\` |
+          | Linux (amd64, musl) | \`nanofile-$RELEASE_TAG-linux-amd64-musl.tar.gz\` |
+          | Linux (arm64, glibc) | \`nanofile-$RELEASE_TAG-linux-arm64.tar.gz\` |
+          | Linux (arm64, musl) | \`nanofile-$RELEASE_TAG-linux-arm64-musl.tar.gz\` |
+          | Linux (LoongArch64, glibc) | \`nanofile-$RELEASE_TAG-linux-loong64.tar.gz\` |
+          | Linux (LoongArch64, musl) | \`nanofile-$RELEASE_TAG-linux-loong64-musl.tar.gz\` |
+          | macOS (Apple Silicon) | \`nanofile-$RELEASE_TAG-macos-arm64.tar.gz\` |
+          | Windows (amd64) | \`nanofile-$RELEASE_TAG-windows-amd64.zip\` |
+          EOF
+
+          gh release create "$RELEASE_TAG" \
+            --title "nanofile $RELEASE_TAG" \
+            --notes-file release-notes.md \
             release-assets/*
