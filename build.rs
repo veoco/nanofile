@@ -5,9 +5,8 @@
 ///   1. Standalone `tailwindcss` binary (project root or PATH)
 ///   2. `npx @tailwindcss/cli` (Node.js npx, available on most systems)
 ///   3. Writes a minimal placeholder (app compiles but UI is unstyled)
-use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, exit};
 
 fn main() {
     let ts = std::time::SystemTime::now()
@@ -22,7 +21,7 @@ fn main() {
 
     let args: [&str; 0] = [];
 
-    // Try standalone binary, then npx, then placeholder
+    // Try standalone binary, then npx
     if let Some(bin) = which_tailwind()
         && run_tailwind(&bin, &args, &input_path, &output_path)
     {
@@ -35,8 +34,9 @@ fn main() {
         return;
     }
 
-    println!("cargo:warning=⚠ No Tailwind CLI found. Using placeholder CSS.");
-    write_placeholder(&output_path);
+    eprintln!("error: Tailwind CSS generation failed. Install it:");
+    eprintln!("  npx @tailwindcss/cli -i static/css/input.css -o static/css/app.css --minify");
+    exit(1);
 }
 
 fn run_tailwind(cmd: &str, extra_args: &[&str], input: &Path, output: &Path) -> bool {
@@ -63,20 +63,6 @@ fn run_tailwind(cmd: &str, extra_args: &[&str], input: &Path, output: &Path) -> 
             false
         }
     }
-}
-
-fn write_placeholder(path: &Path) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut f = match std::fs::File::create(path) {
-        Ok(f) => f,
-        Err(e) => {
-            println!("cargo:warning=⚠ Failed to create placeholder CSS: {e}");
-            return;
-        }
-    };
-    let _ = f.write_all(b"/* placeholder - install Tailwind CLI for full styles */\n");
 }
 
 /// Try standalone `tailwindcss` binary (project root or PATH).
