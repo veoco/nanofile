@@ -44,7 +44,7 @@ jobs:
 
       - name: Install Tailwind CLI
         run: |
-          curl -sL https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64 \
+          curl -sL --retry 3 --retry-delay 2 https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.0/tailwindcss-linux-x64 \
             -o tailwindcss && chmod +x tailwindcss
 
       - uses: Swatinem/rust-cache@v2
@@ -123,14 +123,14 @@ jobs:
       - name: Install zig (cross-compilation)
         if: matrix.cross
         run: |
-          curl -sL https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz \
+          curl -sL --retry 3 --retry-delay 2 https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz \
             -o /tmp/zig.tar.xz
           tar xf /tmp/zig.tar.xz -C /tmp
           echo "/tmp/zig-linux-x86_64-0.14.0" >> $GITHUB_PATH
 
       - name: Install Tailwind CLI
         run: |
-          curl -sL https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-${{ matrix.tw_name }} \
+          curl -sL --retry 3 --retry-delay 2 https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.0/tailwindcss-${{ matrix.tw_name }} \
             -o tailwindcss${{ matrix.ext }} && chmod +x tailwindcss${{ matrix.ext }}
         shell: bash
 
