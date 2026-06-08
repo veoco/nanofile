@@ -218,15 +218,18 @@ jobs:
           for dir in artifacts/nanofile-*; do
             [ -d "$dir" ] || continue
             name=$(basename "$dir")
-            suffix="${name#nanofile-}"
-            case "$suffix" in
-              linux-amd64)
-                docker_arch="amd64";   plat="linux/amd64" ;;
-              linux-arm64)
-                docker_arch="arm64";   plat="linux/arm64" ;;
-              linux-loong64)
-                docker_arch="loong64"; plat="linux/loong64" ;;
-              *-musl) continue ;;  # skip musl, use glibc for Docker
+            # Use musl binaries — they're statically linked, suitable for scratch
+            case "$name" in
+              *-musl)
+                base="${name%-musl}"
+                arch="${base##*-}"
+                case "$arch" in
+                  amd64)   docker_arch="amd64";   plat="linux/amd64" ;;
+                  arm64)   docker_arch="arm64";   plat="linux/arm64" ;;
+                  loong64) docker_arch="loong64"; plat="linux/loong64" ;;
+                  *) continue ;;
+                esac
+                ;;
               *) continue ;;
             esac
             if [ -f "$dir/nanofile" ]; then
@@ -265,7 +268,7 @@ jobs:
         with:
           context: docker-context
           file: Dockerfile.ci
-          platforms: linux/amd64,linux/arm64,linux/loong64
+          platforms: ${{ env.DOCKER_PLATFORMS }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
