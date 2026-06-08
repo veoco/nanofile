@@ -5,6 +5,8 @@
 /// - If not found, emits a warning and continues (graceful degradation)
 /// - **Always runs** on every build (no `rerun-if-changed` directives) so
 ///   that newly added template classes are never missed by Tailwind's JIT.
+use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 
 fn main() {
@@ -21,45 +23,68 @@ fn main() {
         .unwrap_or(0);
     println!("cargo:rustc-env=NANOFILE_BUILD_TS={}", ts);
 
+    let project_root = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let output_path = Path::new(&project_root).join("static/css/app.css");
+
     // Try to locate the Tailwind standalone CLI binary
     let tailwind = which_tailwind();
 
     match tailwind {
         Some(bin) => {
-            let input = "static/css/input.css";
-            let output = "static/css/app.css";
-
+            let input = Path::new(&project_root).join("static/css/input.css");
             let status = Command::new(&bin)
-                .args(["-i", input, "-o", output, "--minify"])
+                .args([
+                    "-i",
+                    &input.to_string_lossy(),
+                    "-o",
+                    &output_path.to_string_lossy(),
+                    "--minify",
+                ])
                 .status();
 
             match status {
                 Ok(s) if s.success() => {
-                    println!("cargo:info=✓ Tailwind CSS generated ({})", output);
+                    println!(
+                        "cargo:info=✓ Tailwind CSS generated ({})",
+                        output_path.display()
+                    );
                 }
                 Ok(s) => {
                     println!(
-                        "cargo:warning=⚠ Tailwind CSS generation failed (exit: {}). CSS may be stale.",
+                        "cargo:warning=⚠ Tailwind CSS failed (exit: {}). Using placeholder.",
                         s
                     );
+                    write_placeholder(&output_path);
                 }
                 Err(e) => {
                     println!(
-                        "cargo:warning=⚠ Failed to execute tailwind CLI: {}. CSS may be stale.",
+                        "cargo:warning=⚠ Failed to execute tailwind CLI: {}. Using placeholder.",
                         e
                     );
+                    write_placeholder(&output_path);
                 }
             }
         }
         None => {
-            println!(
-                "cargo:warning=⚠ Tailwind CLI not found. Install it or run manually:\n  \
-                 curl -sL https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-macos-arm64 \
-                 -o tailwindcss && chmod +x tailwindcss\n  \
-                 ./tailwindcss -i static/css/input.css -o static/css/app.css"
-            );
+            println!("cargo:warning=⚠ Tailwind CLI not found. Using placeholder CSS.");
+            write_placeholder(&output_path);
         }
     }
+}
+
+/// Write a minimal placeholder CSS so `rust-embed` always finds the file.
+fn write_placeholder(path: &Path) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut f = match std::fs::File::create(path) {
+        Ok(f) => f,
+        Err(e) => {
+            println!("cargo:warning=⚠ Failed to create placeholder CSS: {e}");
+            return;
+        }
+    };
+    let _ = f.write_all(b"/* placeholder - install Tailwind CLI for full styles */\n");
 }
 
 /// Look for `tailwindcss` in PATH, then in the project root directory.
