@@ -69,7 +69,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
             ext: ""
             asset_suffix: linux-arm64
-            tw_name: linux-arm64
+            tw_name: linux-x64
             cross: true
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
@@ -81,7 +81,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             ext: ""
             asset_suffix: linux-arm64-musl
-            tw_name: linux-arm64
+            tw_name: linux-x64
             cross: true
           - os: ubuntu-latest
             target: loongarch64-unknown-linux-gnu
