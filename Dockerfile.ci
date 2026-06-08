@@ -1,6 +1,9 @@
 # Dev Docker image — packages pre-built binary from CI matrix.
-# No Rust compilation; expects `nanofile` binary in the build context.
+# Expects binaries named `nanofile-linux-amd64`, `nanofile-linux-arm64`, etc.
+# in the build context. TARGETARCH is set automatically by buildx.
 FROM scratch
-COPY nanofile /nanofile
+ARG TARGETOS
+ARG TARGETARCH
+COPY nanofile-${TARGETOS}-${TARGETARCH} /nanofile
 EXPOSE 8082
 ENTRYPOINT ["/nanofile"]

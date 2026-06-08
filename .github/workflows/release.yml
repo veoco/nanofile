@@ -205,8 +205,40 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Download linux binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: nanofile-linux-*
+          path: artifacts
+
+      - name: Prepare binaries for multi-arch Docker build
+        run: |
+          mkdir -p docker-context
+          platforms=""
+          for dir in artifacts/nanofile-*; do
+            [ -d "$dir" ] || continue
+            name=$(basename "$dir")
+            suffix="${name#nanofile-}"
+            case "$suffix" in
+              linux-amd64)
+                docker_arch="amd64";   plat="linux/amd64" ;;
+              linux-arm64)
+                docker_arch="arm64";   plat="linux/arm64" ;;
+              linux-loong64)
+                docker_arch="loong64"; plat="linux/loong64" ;;
+              *-musl) continue ;;  # skip musl, use glibc for Docker
+              *) continue ;;
+            esac
+            if [ -f "$dir/nanofile" ]; then
+              chmod +x "$dir/nanofile"
+              cp "$dir/nanofile" "docker-context/nanofile-linux-${docker_arch}"
+              platforms="${platforms},${plat}"
+            fi
+          done
+          platforms="${platforms#,}"
+          echo "DOCKER_PLATFORMS=$platforms" >> $GITHUB_ENV
+          echo "Platforms: $platforms"
+          ls -la docker-context/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -228,10 +260,12 @@ jobs:
             type=semver,pattern=v{{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
+      - name: Build and push multi-arch image
         uses: docker/build-push-action@v6
         with:
-          platforms: linux/amd64,linux/arm64
+          context: docker-context
+          file: Dockerfile.ci
+          platforms: linux/amd64,linux/arm64,linux/loong64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true

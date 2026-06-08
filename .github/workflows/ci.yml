@@ -116,7 +116,6 @@ jobs:
     needs: [fmt, clippy]
     permissions:
       contents: write
-      packages: write
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -153,17 +152,57 @@ jobs:
           path: ${{ matrix.cross && format('target/{0}/release/nanofile{1}', matrix.target, matrix.ext) || format('target/release/nanofile{0}', matrix.ext) }}
           retention-days: 7
 
-      # ── Dev Docker image (linux-amd64 only, push to GHCR) ─────────
-      - name: Copy binary for Docker
-        if: github.event_name == 'push' && github.ref_name == 'main' && matrix.asset_suffix == 'linux-amd64'
-        run: cp target/release/nanofile .
+  # ── Dev Docker image (multi-arch from pre-built binaries) ─────────
+  docker-dev:
+    name: Docker (dev)
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref_name == 'main' && !cancelled()
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download linux binaries
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: nanofile-${{ github.sha }}-linux-*
+          path: artifacts
+
+      - name: Prepare binaries for multi-arch Docker build
+        run: |
+          mkdir -p docker-context
+          platforms=""
+          for dir in artifacts/nanofile-*; do
+            [ -d "$dir" ] || continue
+            name=$(basename "$dir")
+            arch="${name##*-}"
+            case "$arch" in
+              amd64)
+                docker_arch="amd64";   plat="linux/amd64" ;;
+              arm64)
+                docker_arch="arm64";   plat="linux/arm64" ;;
+              loong64)
+                docker_arch="loong64"; plat="linux/loong64" ;;
+              *) continue ;;
+            esac
+            if [ -f "$dir/nanofile" ]; then
+              chmod +x "$dir/nanofile"
+              cp "$dir/nanofile" "docker-context/nanofile-linux-${docker_arch}"
+              platforms="${platforms},${plat}"
+            fi
+          done
+          platforms="${platforms#,}"
+          echo "DOCKER_PLATFORMS=$platforms" >> $GITHUB_ENV
+          echo "Platforms: $platforms"
+          ls -la docker-context/
 
       - name: Set up Docker Buildx
-        if: github.event_name == 'push' && github.ref_name == 'main' && matrix.asset_suffix == 'linux-amd64'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name == 'push' && github.ref_name == 'main' && matrix.asset_suffix == 'linux-amd64'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -171,11 +210,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push dev Docker image
-        if: github.event_name == 'push' && github.ref_name == 'main' && matrix.asset_suffix == 'linux-amd64'
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: docker-context
           file: Dockerfile.ci
+          platforms: ${{ env.DOCKER_PLATFORMS }}
           tags: |
             ghcr.io/${{ github.repository }}:edge
             ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
