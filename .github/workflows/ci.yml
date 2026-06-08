@@ -31,6 +31,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install Tailwind CSS
+        run: npm install --silent tailwindcss @tailwindcss/cli
       - run: cargo clippy -- -D warnings
 
   # ── Tests (linux only, fastest) ─────────────────────────────────────
