@@ -34,8 +34,9 @@ fn main() {
         return;
     }
 
-    eprintln!("error: Tailwind CSS generation failed. Install it:");
-    eprintln!("  npx @tailwindcss/cli -i static/css/input.css -o static/css/app.css --minify");
+    eprintln!("error: Tailwind CSS generation failed.");
+    eprintln!("  Install:  npm install tailwindcss @tailwindcss/cli");
+    eprintln!("  Or use standalone: https://github.com/tailwindlabs/tailwindcss/releases");
     exit(1);
 }
 

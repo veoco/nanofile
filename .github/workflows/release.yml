@@ -108,6 +108,9 @@ jobs:
           tar xf /tmp/zig.tar.xz -C /tmp
           echo "/tmp/zig-linux-x86_64-0.14.0" >> $GITHUB_PATH
 
+      - name: Install Tailwind CSS
+        run: npm install --silent tailwindcss @tailwindcss/cli
+
       - name: Install cargo-zigbuild
         if: matrix.cross
         run: cargo install cargo-zigbuild

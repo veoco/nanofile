@@ -10,5 +10,8 @@ config.local.toml
 migration/target
 static/css/app.css
 tailwindcss
+node_modules/
+package-lock.json
+package.json
 /CLAUDE.md
 /.claude
