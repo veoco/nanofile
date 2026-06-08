@@ -95,16 +95,17 @@ fn which_tailwind() -> Option<String> {
     })
 }
 
-/// Try `npx @tailwindcss/cli` (Node.js package).
+/// Try `node_modules/.bin/tailwindcss` (installed via npm).
 fn which_npx() -> Option<(&'static str, Vec<&'static str>)> {
-    let npx = if cfg!(windows) { "npx.cmd" } else { "npx" };
-
-    // Check if npx is on PATH
-    let has_npx = std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(npx).exists()));
-    if !has_npx {
-        return None;
+    let project_root = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let bin = if cfg!(windows) {
+        Path::new(&project_root).join("node_modules/.bin/tailwindcss.cmd")
+    } else {
+        Path::new(&project_root).join("node_modules/.bin/tailwindcss")
+    };
+    if bin.exists() {
+        Some((bin.to_string_lossy().to_string().leak(), vec![]))
+    } else {
+        None
     }
-
-    Some(("npx", vec!["--yes", "@tailwindcss/cli"]))
 }
