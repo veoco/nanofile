@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{repo, repo_member};
+use crate::entity::{repo, repo_member, sync_token};
 use crate::error::AppError;
 
 #[derive(Serialize)]
@@ -98,12 +98,36 @@ pub async fn get_repo_v21(
 
 /// DELETE /api/v2.1/repos/{repo_id}/
 pub async fn delete_repo_v21(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    repo::Entity::delete_by_id(&repo_id)
-        .exec(state.db.as_ref())
+    let db = state.db.as_ref();
+
+    // Load repo
+    let r = repo::Entity::find_by_id(&repo_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    // Only owner can delete
+    if r.owner_id != auth.user_id {
+        return Err(AppError::Forbidden);
+    }
+
+    // Cascade-delete related records
+    repo_member::Entity::delete_many()
+        .filter(repo_member::Column::RepoId.eq(&repo_id))
+        .exec(db)
         .await?;
+
+    sync_token::Entity::delete_many()
+        .filter(sync_token::Column::RepoId.eq(&repo_id))
+        .exec(db)
+        .await?;
+
+    // Delete the repo itself
+    repo::Entity::delete_by_id(&repo_id).exec(db).await?;
+
     Ok(StatusCode::OK)
 }

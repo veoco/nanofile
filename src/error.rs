@@ -147,6 +147,13 @@ impl From<serde_json::Error> for AppError {
     }
 }
 
+impl From<serde_urlencoded::de::Error> for AppError {
+    fn from(err: serde_urlencoded::de::Error) -> Self {
+        tracing::error!(?err, "form deserialization error");
+        AppError::Internal(err.to_string())
+    }
+}
+
 /// Add error-level logging when Internal (500) errors are returned.
 /// This ensures all server-side failures are visible in the logs.
 impl AppError {

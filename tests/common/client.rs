@@ -346,6 +346,24 @@ impl TestClient {
             .unwrap()
     }
 
+    pub async fn rename_repo(
+        &self,
+        token: &str,
+        repo_id: &str,
+        new_name: &str,
+    ) -> reqwest::Response {
+        self.client
+            .post(format!(
+                "{}/api2/repos/{}/?op=rename",
+                self.base_url, repo_id
+            ))
+            .bearer_auth(token)
+            .form(&serde_json::json!({"repo_name": new_name}))
+            .send()
+            .await
+            .unwrap()
+    }
+
     pub async fn download_info(&self, token: &str, repo_id: &str) -> reqwest::Response {
         self.client
             .get(format!(

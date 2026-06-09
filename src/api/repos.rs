@@ -1,7 +1,8 @@
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Form, Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,11 @@ pub struct CreateRepoRequest {
     pub enc_version: Option<i32>,
     pub magic: Option<String>,
     pub random_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct RenameRepoRequest {
+    pub repo_name: String,
 }
 
 #[derive(Serialize)]
@@ -83,7 +89,9 @@ pub fn repo_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
             "/{repo_id}/",
-            axum::routing::get(get_repo).delete(delete_repo),
+            axum::routing::get(get_repo)
+                .post(rename_repo)
+                .delete(delete_repo),
         )
         .route(
             "/{repo_id}/download-info/",
@@ -144,26 +152,38 @@ pub async fn list_repos(
 pub async fn create_repo(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Form(req): Form<CreateRepoRequest>,
+    headers: HeaderMap,
+    bytes: Bytes,
 ) -> Result<(StatusCode, Json<RepoInfo>), AppError> {
-    let repo_id = req
+    // Support both JSON (web frontend) and form-encoded (desktop client) bodies.
+    let repo_req: CreateRepoRequest = if headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("json"))
+    {
+        serde_json::from_slice(&bytes)?
+    } else {
+        serde_urlencoded::from_bytes(&bytes)?
+    };
+
+    let repo_id = repo_req
         .repo_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let now = chrono::Utc::now().timestamp();
 
-    let desc = req.desc.unwrap_or_default();
-    let encrypted_val = req.encrypted.unwrap_or(0);
-    let enc_version_val = req.enc_version.unwrap_or(0);
+    let desc = repo_req.desc.unwrap_or_default();
+    let encrypted_val = repo_req.encrypted.unwrap_or(0);
+    let enc_version_val = repo_req.enc_version.unwrap_or(0);
 
     let model = repo::ActiveModel {
         id: sea_orm::Set(repo_id.clone()),
-        name: sea_orm::Set(req.name.clone()),
+        name: sea_orm::Set(repo_req.name.clone()),
         description: sea_orm::Set(desc.clone()),
         owner_id: sea_orm::Set(auth.user_id),
         encrypted: sea_orm::Set(encrypted_val as i8),
         enc_version: sea_orm::Set(enc_version_val as i8),
-        magic: sea_orm::Set(req.magic),
-        random_key: sea_orm::Set(req.random_key),
+        magic: sea_orm::Set(repo_req.magic),
+        random_key: sea_orm::Set(repo_req.random_key),
         salt: sea_orm::Set(String::new()),
         head_commit_id: sea_orm::NotSet,
         permission: sea_orm::Set("rw".to_string()),
@@ -209,7 +229,7 @@ pub async fn create_repo(
         StatusCode::CREATED,
         Json(RepoInfo {
             id: repo_id.clone(),
-            name: req.name.clone(),
+            name: repo_req.name.clone(),
             desc,
             owner: auth.email.clone(),
             encrypted: encrypted_val == 1,
@@ -225,7 +245,7 @@ pub async fn create_repo(
             repo_version: 1,
             // Extra fields for RepoDownloadInfo compatibility
             repo_id_dup: Some(repo_id),
-            repo_name_dup: Some(req.name.clone()),
+            repo_name_dup: Some(repo_req.name.clone()),
             token: Some(token_value),
             email: Some(auth.email),
         }),
@@ -265,15 +285,80 @@ pub async fn get_repo(
     }))
 }
 
+/// `POST /api2/repos/{repo_id}/?op=rename`
+pub async fn rename_repo(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    Form(req): Form<RenameRepoRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Verify op=rename
+    match params.get("op").map(|s| s.as_str()) {
+        Some("rename") => {}
+        _ => return Err(AppError::BadRequest("invalid operation".into())),
+    }
+
+    // Load repo
+    let r = repo::Entity::find_by_id(&repo_id)
+        .one(state.db.as_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    // Only owner can rename
+    if r.owner_id != auth.user_id {
+        return Err(AppError::Forbidden);
+    }
+
+    // Validate name
+    let new_name = req.repo_name.trim().to_string();
+    if new_name.is_empty() || new_name.contains('/') {
+        return Err(AppError::BadRequest("invalid repo name".into()));
+    }
+
+    // Update
+    let now = chrono::Utc::now().timestamp();
+    let mut active: repo::ActiveModel = r.into();
+    active.name = Set(new_name);
+    active.updated_at = Set(now);
+    active.update(state.db.as_ref()).await?;
+
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
 pub async fn delete_repo(
     _auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
-) -> Result<(), AppError> {
-    repo::Entity::delete_by_id(&repo_id)
-        .exec(state.db.as_ref())
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = state.db.as_ref();
+
+    // Load repo
+    let r = repo::Entity::find_by_id(&repo_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    // Only owner can delete
+    if r.owner_id != _auth.user_id {
+        return Err(AppError::Forbidden);
+    }
+
+    // Cascade-delete related records
+    repo_member::Entity::delete_many()
+        .filter(repo_member::Column::RepoId.eq(&repo_id))
+        .exec(db)
         .await?;
-    Ok(())
+
+    sync_token::Entity::delete_many()
+        .filter(sync_token::Column::RepoId.eq(&repo_id))
+        .exec(db)
+        .await?;
+
+    // Delete the repo itself
+    repo::Entity::delete_by_id(&repo_id).exec(db).await?;
+
+    Ok(Json(serde_json::json!({"success": true})))
 }
 
 pub async fn download_info(

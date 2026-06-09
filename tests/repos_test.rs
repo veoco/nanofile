@@ -1,6 +1,6 @@
 mod common;
 
-use common::{TestServer, create_test_user};
+use common::{TestFixture, TestServer, create_test_user};
 
 #[tokio::test]
 async fn test_create_repo() {
@@ -185,4 +185,134 @@ async fn test_delete_repo() {
 
     let resp = client.get_repo(token, &repo_id).await;
     assert_eq!(resp.status(), 404);
+}
+
+/// B.11.1 — POST /api2/repos/{repo_id}/?op=rename — rename repo.
+#[tokio::test]
+async fn test_rename_repo_success() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .rename_repo(&f.api_token, &f.repo_id, "NewName")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], true);
+
+    // Verify via GET.
+    let resp = f.client.get_repo(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["name"], "NewName");
+}
+
+/// B.11.2 — Non-owner cannot rename a repo.
+#[tokio::test]
+async fn test_rename_repo_non_owner() {
+    let f = TestFixture::new().await;
+
+    // Create a second user.
+    create_test_user(f.server.db.as_ref(), "other@test.com", "password").await;
+    let resp = f.client.login("other@test.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let other_token = body["token"].as_str().unwrap();
+
+    let resp = f
+        .client
+        .rename_repo(other_token, &f.repo_id, "Hacked")
+        .await;
+    assert_eq!(resp.status(), 403);
+}
+
+/// B.11.3 — Invalid name returns 400.
+#[tokio::test]
+async fn test_rename_repo_invalid_name() {
+    let f = TestFixture::new().await;
+
+    // Empty name.
+    let resp = f.client.rename_repo(&f.api_token, &f.repo_id, "").await;
+    assert_eq!(resp.status(), 400);
+
+    // Name with slash.
+    let resp = f
+        .client
+        .rename_repo(&f.api_token, &f.repo_id, "bad/name")
+        .await;
+    assert_eq!(resp.status(), 400);
+}
+
+/// B.11.4 — Non-owner cannot delete a repo.
+#[tokio::test]
+async fn test_delete_repo_non_owner() {
+    let f = TestFixture::new().await;
+
+    // Create a second user.
+    create_test_user(f.server.db.as_ref(), "other2@test.com", "password").await;
+    let resp = f.client.login("other2@test.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let other_token = body["token"].as_str().unwrap();
+
+    let resp = f.client.delete_repo(other_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 403);
+}
+
+/// B.11.5 — DELETE /api/v2.1/repos/{repo_id}/ — delete repo via v2.1 API.
+#[tokio::test]
+async fn test_delete_repo_v21_success() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .delete(
+            &format!("/api/v2.1/repos/{}/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // Verify it's gone.
+    let resp = f.client.get_repo(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 404);
+}
+
+/// B.11.6 — Non-owner cannot delete a repo via v2.1.
+#[tokio::test]
+async fn test_delete_repo_v21_non_owner() {
+    let f = TestFixture::new().await;
+
+    // Create a second user.
+    create_test_user(f.server.db.as_ref(), "other3@test.com", "password").await;
+    let resp = f.client.login("other3@test.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let other_token = body["token"].as_str().unwrap();
+
+    let resp = f
+        .client
+        .delete(
+            &format!("/api/v2.1/repos/{}/", f.repo_id),
+            Some(other_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+}
+
+/// B.11.7 — POST /api2/repos/ accepts JSON body (web frontend format).
+#[tokio::test]
+async fn test_create_repo_json_body() {
+    let f = TestFixture::new().await;
+
+    // Create a repo with JSON body (as the web frontend does).
+    let resp = f
+        .client
+        .post_json(
+            "/api2/repos/",
+            Some(&f.api_token),
+            &serde_json::json!({"name": "JSON Created Repo"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["name"], "JSON Created Repo");
+    assert!(body["id"].as_str().is_some());
 }
