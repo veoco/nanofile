@@ -61,7 +61,10 @@ async fn test_ping_at_api2_ping() {
     assert_eq!(resp.status(), 200);
 
     let body: String = resp.text().await.unwrap();
-    assert_eq!(body, "\"pong\"", "public ping should return the string \"pong\"");
+    assert_eq!(
+        body, "\"pong\"",
+        "public ping should return the string \"pong\""
+    );
 }
 
 #[tokio::test]

@@ -34,7 +34,9 @@ async fn test_login_wrong_password() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let errors = body["non_field_errors"].as_array().unwrap();
     assert!(
-        errors.iter().any(|e| e.as_str().unwrap().contains("Unable to login")),
+        errors
+            .iter()
+            .any(|e| e.as_str().unwrap().contains("Unable to login")),
         "expected 'Unable to login' error, got: {:?}",
         body
     );
@@ -51,7 +53,9 @@ async fn test_login_nonexistent_user() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let errors = body["non_field_errors"].as_array().unwrap();
     assert!(
-        errors.iter().any(|e| e.as_str().unwrap().contains("Unable to login")),
+        errors
+            .iter()
+            .any(|e| e.as_str().unwrap().contains("Unable to login")),
         "expected 'Unable to login' error, got: {:?}",
         body
     );
@@ -86,7 +90,9 @@ async fn test_login_wrong_password_json() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let errors = body["non_field_errors"].as_array().unwrap();
     assert!(
-        errors.iter().any(|e| e.as_str().unwrap().contains("Unable to login")),
+        errors
+            .iter()
+            .any(|e| e.as_str().unwrap().contains("Unable to login")),
         "expected 'Unable to login' error, got: {:?}",
         body
     );
