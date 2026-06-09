@@ -304,8 +304,42 @@ pub async fn update_branch(
             .ok_or_else(|| AppError::Internal("repo not found".into()))?
             .into();
 
+        // Capture the old HEAD root_id for size delta computation.
+        let current_repo = repo::Entity::find_by_id(&repo_id)
+            .one(state.db.as_ref())
+            .await?
+            .ok_or_else(|| AppError::Internal("repo not found".into()))?;
+        let old_head_root_id: Option<String> =
+            if let Some(cid) = current_repo.head_commit_id.clone() {
+                let old_commit = commit::Entity::find()
+                    .filter(commit::Column::RepoId.eq(&repo_id))
+                    .filter(commit::Column::CommitId.eq(&cid))
+                    .one(state.db.as_ref())
+                    .await?;
+                old_commit.map(|c| c.root_id)
+            } else {
+                None
+            };
+
         repo_active.head_commit_id = sea_orm::Set(Some(new_head.clone()));
         repo_active.update(state.db.as_ref()).await?;
+
+        // Compute repo size delta (new root size - old root size).
+        let new_root_size =
+            crate::storage::compute_tree_size(state.db.as_ref(), &repo_id, &new_commit.root_id)
+                .await?;
+        if let Some(ref old_root_id) = old_head_root_id {
+            let old_root_size =
+                crate::storage::compute_tree_size(state.db.as_ref(), &repo_id, old_root_id).await?;
+            crate::storage::adjust_repo_size(
+                state.db.as_ref(),
+                &repo_id,
+                new_root_size - old_root_size,
+            )
+            .await?;
+        } else if new_root_size > 0 {
+            crate::storage::adjust_repo_size(state.db.as_ref(), &repo_id, new_root_size).await?;
+        }
 
         // Success — invalidate cache and notify.
         state.path_cache.clear_repo(&repo_id);

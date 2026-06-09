@@ -281,6 +281,21 @@ async fn upload_file_inner(
         return Err(AppError::BadRequest("no file provided".into()));
     }
 
+    // Get old file size for incremental repo size adjustment.
+    let file_path = if parent_dir == "/" {
+        format!("/{}", file_name)
+    } else {
+        format!("{}/{}", parent_dir, file_name)
+    };
+    let old_size = if replace {
+        crate::storage::get_entry_total_size(state.db.as_ref(), &repo_id, &file_path)
+            .await
+            .ok()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
     FileOps::create_file(
         state.db.as_ref(),
         &repo_id,
@@ -294,6 +309,14 @@ async fn upload_file_inner(
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Adjust repo size (delta = new_size - old_size).
+    crate::storage::adjust_repo_size(
+        state.db.as_ref(),
+        &repo_id,
+        file_data.len() as i64 - old_size,
+    )
+    .await?;
 
     // Index text file content for full-text search.
     if let Some(indexer) = &state.indexer {
@@ -339,6 +362,12 @@ pub async fn delete_file(
     let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
     let parent_path = parent_path_from(&path);
 
+    // Get entry size before deletion (for repo size adjustment).
+    let deleted_size = crate::storage::get_entry_total_size(db, &repo_id, &path)
+        .await
+        .ok()
+        .unwrap_or(0);
+
     // Get root fs_id from head commit and resolve parent directory
     let head_root_id = get_head_root_id(db, &repo_id).await?;
     let parent_fs_id = crate::storage::resolve_fs_id(
@@ -374,6 +403,9 @@ pub async fn delete_file(
     {
         tracing::warn!("Failed to delete index for {path}: {e}");
     }
+
+    // Adjust repo size (subtract the deleted entry's size).
+    crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
 
     Ok(())
 }

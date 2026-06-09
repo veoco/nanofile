@@ -396,6 +396,12 @@ pub async fn delete_dir(
     let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
     let parent_path = parent_path_from(&path);
 
+    // Get directory total size before deletion (for repo size adjustment).
+    let deleted_size = crate::storage::get_entry_total_size(db, &repo_id, &path)
+        .await
+        .ok()
+        .unwrap_or(0);
+
     // Resolve parent's current fs_id via the FS tree
     let head_root_id = get_head_root_id(db, &repo_id).await?;
     let parent_fs_id = crate::storage::resolve_fs_id(
@@ -424,6 +430,9 @@ pub async fn delete_dir(
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Adjust repo size (subtract the deleted directory's total size).
+    crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
 
     Ok(())
 }

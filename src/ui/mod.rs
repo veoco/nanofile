@@ -56,6 +56,19 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             get(|| async { axum::response::Redirect::to("/libraries/") }),
         )
         .route("/libraries/", get(repos::list_repos))
+        // Library CRUD (web UI)
+        .route(
+            "/libraries/create/",
+            axum::routing::post(repos::create_repo),
+        )
+        .route(
+            "/libraries/{id}/rename",
+            axum::routing::post(repos::rename_repo),
+        )
+        .route(
+            "/libraries/{id}/delete",
+            axum::routing::post(repos::delete_repo),
+        )
         // Library file browser — /library/{repo_id}/{repo_name}/{*path}
         .route("/library/{id}/{*path}", get(files::file_browser_seahub))
         // Seahub-compatible file view — /lib/{repo_id}/file{*path}

@@ -377,6 +377,10 @@ pub async fn sync_batch_copy_item(
         }
     }
 
+    // Adjust repo size (add sizes of copied files).
+    let total_copied: i64 = new_entries.iter().map(|e| e.size).sum();
+    crate::storage::adjust_repo_size(db, repo_id, total_copied).await?;
+
     Ok(Json(serde_json::json!({"success": true})))
 }
 
@@ -416,6 +420,19 @@ pub async fn batch_delete_item(
 
     let names_to_delete = body.dirents.clone();
 
+    // Get total size of all items being deleted (for repo size adjustment).
+    let mut total_deleted: i64 = 0;
+    for name in &names_to_delete {
+        let fp = if parent_dir == "/" {
+            format!("/{name}")
+        } else {
+            format!("{parent_dir}/{name}")
+        };
+        if let Ok(sz) = crate::storage::get_entry_total_size(db, repo_id, &fp).await {
+            total_deleted += sz;
+        }
+    }
+
     FileOps::update_dir_tree_and_commit(
         db,
         repo_id,
@@ -445,6 +462,9 @@ pub async fn batch_delete_item(
             }
         }
     }
+
+    // Adjust repo size (subtract total deleted size).
+    crate::storage::adjust_repo_size(db, repo_id, -total_deleted).await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

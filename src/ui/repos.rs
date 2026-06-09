@@ -1,11 +1,12 @@
 /// Web UI repo handlers — list, create, delete repos.
 use askama::Template;
 use axum::{extract::State, response::Html};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::{repo, repo_member};
+use crate::entity::{repo, repo_member, sync_token};
 use crate::error::AppError;
 use crate::ui::files::format_size;
 
@@ -21,6 +22,7 @@ pub struct RepoListTemplate {
     pub is_admin: bool,
     pub repos: Vec<RepoInfo>,
     pub active_page: &'static str,
+    pub user_id: i32,
 }
 
 // ─── Data types ──────────────────────────────────────────────────────────────
@@ -33,6 +35,7 @@ pub struct RepoInfo {
     pub size_display: String,
     pub mtime: i64,
     pub encrypted: bool,
+    pub owner_id: i32,
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -66,6 +69,7 @@ pub async fn list_repos(
                 size_display: format_size(r.size),
                 mtime: r.updated_at,
                 encrypted: r.encrypted != 0,
+                owner_id: r.owner_id,
             });
         }
     }
@@ -76,10 +80,122 @@ pub async fn list_repos(
         is_admin: user.is_admin,
         repos,
         active_page: "repos",
+        user_id: user.user_id,
     };
 
     let html = tpl
         .render()
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Html(html))
+}
+
+/// POST /libraries/create/ — create a new library.
+pub async fn create_repo(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<HashMap<String, String>>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let name = form.get("name").map(|s| s.trim()).unwrap_or("");
+    if name.is_empty() || name.contains('/') {
+        return Err(AppError::BadRequest("invalid repo name".into()));
+    }
+
+    let db = state.db.as_ref();
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp();
+
+    let model = repo::ActiveModel {
+        id: Set(repo_id.clone()),
+        name: Set(name.to_string()),
+        description: Set(String::new()),
+        owner_id: Set(user.user_id),
+        encrypted: Set(0i8),
+        enc_version: Set(0i8),
+        magic: Set(None),
+        random_key: Set(None),
+        salt: Set(String::new()),
+        head_commit_id: Set(None),
+        permission: Set("rw".to_string()),
+        repo_version: Set(1),
+        size: Set(0),
+        created_at: Set(now),
+        updated_at: Set(now),
+    };
+    repo::Entity::insert(model).exec(db).await?;
+
+    repo_member::Entity::insert(repo_member::ActiveModel {
+        id: sea_orm::NotSet,
+        repo_id: Set(repo_id),
+        user_id: Set(user.user_id),
+        permission: Set("rw".to_string()),
+        created_at: Set(now),
+    })
+    .exec(db)
+    .await?;
+
+    Ok(axum::response::Redirect::to("/libraries/"))
+}
+
+/// POST /library/{id}/rename — rename a library.
+pub async fn rename_repo(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(repo_id): axum::extract::Path<String>,
+    axum::Form(form): axum::Form<HashMap<String, String>>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let db = state.db.as_ref();
+
+    let r = repo::Entity::find_by_id(&repo_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    if r.owner_id != user.user_id {
+        return Err(AppError::Forbidden);
+    }
+
+    let new_name = form.get("name").map(|s| s.trim()).unwrap_or("");
+    if new_name.is_empty() || new_name.contains('/') {
+        return Err(AppError::BadRequest("invalid repo name".into()));
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let mut active: repo::ActiveModel = r.into();
+    active.name = Set(new_name.to_string());
+    active.updated_at = Set(now);
+    active.update(db).await?;
+
+    Ok(axum::response::Redirect::to("/libraries/"))
+}
+
+/// POST /library/{id}/delete — delete a library.
+pub async fn delete_repo(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(repo_id): axum::extract::Path<String>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let db = state.db.as_ref();
+
+    let r = repo::Entity::find_by_id(&repo_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    if r.owner_id != user.user_id {
+        return Err(AppError::Forbidden);
+    }
+
+    repo_member::Entity::delete_many()
+        .filter(repo_member::Column::RepoId.eq(&repo_id))
+        .exec(db)
+        .await?;
+
+    sync_token::Entity::delete_many()
+        .filter(sync_token::Column::RepoId.eq(&repo_id))
+        .exec(db)
+        .await?;
+
+    repo::Entity::delete_by_id(&repo_id).exec(db).await?;
+
+    Ok(axum::response::Redirect::to("/libraries/"))
 }

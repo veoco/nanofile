@@ -76,6 +76,11 @@ pub async fn delete_dirent_v21(
     .await
     .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
+    // Get entry size before deletion (for repo size adjustment).
+    let deleted_size: i64 = crate::storage::get_entry_total_size(db, &repo_id, &normalized)
+        .await
+        .unwrap_or_default();
+
     // Update the FS tree and create a commit
     crate::storage::file_ops::FileOps::update_dir_tree_and_commit(
         db,
@@ -99,6 +104,9 @@ pub async fn delete_dirent_v21(
     {
         tracing::warn!("Failed to delete index for {normalized}: {e}");
     }
+
+    // Adjust repo size (subtract the deleted entry's size).
+    crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

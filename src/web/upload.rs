@@ -39,6 +39,21 @@ async fn upload_and_build_response(
     modifier: &str,
     replace: bool,
 ) -> Result<serde_json::Value, AppError> {
+    // Get old file size for incremental repo size adjustment when overwriting.
+    let old_size = if replace {
+        let fp = if target_dir == "/" {
+            format!("/{}", filename)
+        } else {
+            format!("{}/{}", target_dir.trim_end_matches('/'), filename)
+        };
+        crate::storage::get_entry_total_size(state.db.as_ref(), repo_id, &fp)
+            .await
+            .ok()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
     let fs_id = FileOps::create_file(
         state.db.as_ref(),
         repo_id,
@@ -52,6 +67,10 @@ async fn upload_and_build_response(
     )
     .await
     .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
+
+    // Adjust repo size (delta = new_size - old_size).
+    crate::storage::adjust_repo_size(state.db.as_ref(), repo_id, data.len() as i64 - old_size)
+        .await?;
 
     Ok(json!([{"id": fs_id, "name": filename, "size": data.len()}]))
 }
@@ -528,6 +547,18 @@ pub async fn update_api_handler(
             let target_dir = compute_target_dir(parent, &relative_path);
             let name = raw_name.to_string();
 
+            // Get old file size for incremental size adjustment.
+            let fp = if target_dir == "/" {
+                format!("/{}", name)
+            } else {
+                format!("{}/{}", target_dir.trim_end_matches('/'), name)
+            };
+            let old_size =
+                crate::storage::get_entry_total_size(state.db.as_ref(), &info.repo_id, &fp)
+                    .await
+                    .ok()
+                    .unwrap_or(0);
+
             let fs_id = FileOps::create_file(
                 state.db.as_ref(),
                 &info.repo_id,
@@ -541,6 +572,14 @@ pub async fn update_api_handler(
             )
             .await
             .map_err(|e| AppError::Internal(format!("update failed: {e}")))?;
+
+            // Adjust repo size.
+            crate::storage::adjust_repo_size(
+                state.db.as_ref(),
+                &info.repo_id,
+                data.len() as i64 - old_size,
+            )
+            .await?;
 
             return Ok(Json(
                 json!([{"id": fs_id, "name": name, "size": data.len()}]),
@@ -623,6 +662,17 @@ pub async fn update_aj_token(
         let name = target_file[slash_pos + 1..].to_string();
         let target_dir = compute_target_dir(raw_parent, &relative_path);
 
+        // Get old file size for incremental size adjustment.
+        let fp = if target_dir == "/" {
+            format!("/{}", name)
+        } else {
+            format!("{}/{}", target_dir.trim_end_matches('/'), name)
+        };
+        let old_size = crate::storage::get_entry_total_size(state.db.as_ref(), &info.repo_id, &fp)
+            .await
+            .ok()
+            .unwrap_or(0);
+
         let fs_id = FileOps::create_file(
             state.db.as_ref(),
             &info.repo_id,
@@ -636,6 +686,14 @@ pub async fn update_aj_token(
         )
         .await
         .map_err(|e| AppError::Internal(format!("update failed: {e}")))?;
+
+        // Adjust repo size.
+        crate::storage::adjust_repo_size(
+            state.db.as_ref(),
+            &info.repo_id,
+            file_data.len() as i64 - old_size,
+        )
+        .await?;
 
         return Ok(Json(
             json!([{"id": fs_id, "name": name, "size": file_data.len()}]),

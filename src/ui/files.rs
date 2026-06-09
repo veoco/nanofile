@@ -564,6 +564,17 @@ pub async fn upload_file(
         )
         .await?;
 
+        // Get old file size for incremental size adjustment (0 if new file).
+        let p = if parent_dir == "/" {
+            format!("/{}", file_name)
+        } else {
+            format!("{}/{}", parent_dir, file_name)
+        };
+        let old_size = crate::storage::get_entry_total_size(db, &repo_id, &p)
+            .await
+            .ok()
+            .unwrap_or(0);
+
         FileOps::create_file(
             db,
             &repo_id,
@@ -577,6 +588,11 @@ pub async fn upload_file(
         )
         .await
         .map_err(|e| AppError::internal(format!("upload failed: {e}")))?;
+
+        // Adjust repo size (delta = new_size - old_size).
+        let delta = data.len() as i64 - old_size;
+        crate::storage::adjust_repo_size(db, &repo_id, delta).await?;
+
         uploaded_count = 1;
     }
 
@@ -633,6 +649,12 @@ pub async fn delete_entry(
     // Derive the entry name from the path.
     let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
 
+    // Get the size of the entry being deleted (for repo size adjustment).
+    let deleted_size = crate::storage::get_entry_total_size(db, &repo_id, &path)
+        .await
+        .ok()
+        .unwrap_or(0);
+
     // Get root fs_id from the repo's head commit to resolve paths.
     let head_root_id = get_head_root_id(db, &repo_id).await?;
 
@@ -663,6 +685,9 @@ pub async fn delete_entry(
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Adjust repo size (subtract the deleted entry's size).
+    crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
 
     // Redirect back to the current directory.
     let repo_name = form.get("repo_name").map(|s| s.as_str()).unwrap_or("");
