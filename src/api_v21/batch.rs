@@ -38,6 +38,9 @@ pub async fn batch_move_items(
     let repo_id = &req.src_repo_id;
     let db = state.db.as_ref();
 
+    // Permission check
+    crate::storage::check_repo_write_permission(db, repo_id, auth.user_id).await?;
+
     // Early return for empty move request (no items to move)
     if req.src_dirents.is_empty() {
         return Ok(Json(serde_json::json!({"success": true})));
@@ -272,6 +275,9 @@ pub async fn sync_batch_copy_item(
     let repo_id = &body.src_repo_id;
     let db = state.db.as_ref();
 
+    // Permission check
+    crate::storage::check_repo_write_permission(db, repo_id, auth.user_id).await?;
+
     // Get head root fs_id
     let head_root_id = get_head_root_id(db, repo_id).await?;
 
@@ -396,6 +402,10 @@ pub async fn batch_delete_item(
 
     let db = state.db.as_ref();
     let repo_id = &body.repo_id;
+
+    // Permission check
+    crate::storage::check_repo_write_permission(db, repo_id, auth.user_id).await?;
+
     let parent_dir = normalize_path(&body.parent_dir);
 
     let head_root_id = get_head_root_id(db, repo_id).await?;

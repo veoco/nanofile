@@ -95,11 +95,14 @@ pub fn dir_routes() -> Router<Arc<AppState>> {
 }
 
 pub async fn list_dir(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Query(query): Query<DirQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    // Permission check
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = normalize_path(&query.p.unwrap_or_else(|| "/".to_string()));
     let db = state.db.as_ref();
 
@@ -191,6 +194,9 @@ pub async fn dir_post_handler(
     Query(query): Query<DirQuery>,
     req: Request<Body>,
 ) -> Result<impl IntoResponse, AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let (parts, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
         .await
@@ -324,7 +330,9 @@ pub(crate) async fn create_dir_by_path(
                     version: 1,
                 };
 
-                crate::storage::store_fs_dir_object(state.db.as_ref(), &repo_id, empty_root).await?
+                empty_root
+                    .compute_and_store(state.db.as_ref(), &repo_id)
+                    .await?
             }
         }
     } else {
@@ -375,6 +383,9 @@ pub async fn delete_dir(
     Path(repo_id): Path<String>,
     Query(query): Query<DirQuery>,
 ) -> Result<(), AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = normalize_path(
         &query
             .p
@@ -429,6 +440,10 @@ pub async fn move_dir(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MoveDirRequest>,
 ) -> Result<(), AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
+
     let db = state.db.as_ref();
 
     // Resolve head commit root for path lookups
@@ -552,6 +567,10 @@ pub async fn rename_dir(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RenameDirRequest>,
 ) -> Result<(), AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
+
     let path = normalize_path(&req.p);
     rename_dir_entry(
         state.db.as_ref(),
@@ -572,11 +591,13 @@ pub struct DirSharedItemsResponse {
 ///
 /// Returns sharing info for a directory.
 pub async fn dir_shared_items(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Query(query): Query<DirQuery>,
 ) -> Result<Json<DirSharedItemsResponse>, AppError> {
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = normalize_path(&query.p.unwrap_or_else(|| "/".to_string()));
 
     let links = share_link::Entity::find()
@@ -675,6 +696,9 @@ pub async fn create_sub_repo(
     Path(repo_id): Path<String>,
     Query(query): Query<DirQuery>,
 ) -> Result<Json<SubRepoResponse>, AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = normalize_path(
         &query
             .p

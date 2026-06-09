@@ -1,5 +1,3 @@
-use sha1::{Digest, Sha1};
-
 /// SeafMetadataType enum values matching seafile C definitions.
 /// SEAF_METADATA_TYPE_INVALID = 0
 pub const SEAF_METADATA_TYPE_FILE: i32 = 1;
@@ -48,13 +46,6 @@ impl FsDirData {
         });
         obj.to_string()
     }
-
-    pub fn compute_fs_id(&self) -> String {
-        let json = self.to_compact_json();
-        let mut hasher = Sha1::new();
-        hasher.update(json.as_bytes());
-        hex::encode(hasher.finalize())
-    }
 }
 
 impl FsFileData {
@@ -66,12 +57,5 @@ impl FsFileData {
             "version": self.version,
         });
         obj.to_string()
-    }
-
-    pub fn compute_fs_id(&self) -> String {
-        let json = self.to_compact_json();
-        let mut hasher = Sha1::new();
-        hasher.update(json.as_bytes());
-        hex::encode(hasher.finalize())
     }
 }

@@ -18,6 +18,10 @@ pub async fn async_batch_copy_item(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::batch::SyncBatchCopyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Permission check on source repo
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
+        .await?;
+
     let task_id = uuid::Uuid::new_v4().to_string();
     let description = if body.src_dirents.len() == 1 {
         format!("Copy \"{}\"", body.src_dirents[0])
@@ -182,6 +186,10 @@ pub async fn async_batch_move_item(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::batch::BatchMoveRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Permission check on source repo
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
+        .await?;
+
     let task_id = uuid::Uuid::new_v4().to_string();
     let description = if body.src_dirents.len() == 1 {
         format!("Move \"{}\"", body.src_dirents[0])
@@ -391,6 +399,10 @@ pub async fn copy_move_task(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CopyMoveTaskRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Permission check on source repo
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
+        .await?;
+
     let operation = body.operation.as_deref().unwrap_or("copy").to_string();
     let task_id = uuid::Uuid::new_v4().to_string();
     let description = format!(

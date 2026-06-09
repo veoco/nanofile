@@ -24,11 +24,14 @@ pub struct V21DirListResponse {
 
 /// DELETE /api/v2.1/repos/{repo_id}/{obj}/?p=path
 pub async fn delete_dirent_v21(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path((repo_id, _obj)): Path<(String, String)>,
     Query(query): Query<V21DirQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = query
         .p
         .as_deref()
@@ -79,7 +82,7 @@ pub async fn delete_dirent_v21(
         &repo_id,
         parent_path,
         &parent_fs_id,
-        &_auth.email,
+        &auth.email,
         &format!("Deleted {}", name),
         Some(state.path_cache.as_ref()),
         |dirents| {
@@ -102,11 +105,14 @@ pub async fn delete_dirent_v21(
 
 /// GET /api/v2.1/repos/{repo_id}/dir/?p=&with_thumbnail=true
 pub async fn list_dir_v21(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Query(query): Query<V21DirQuery>,
 ) -> Result<Json<V21DirListResponse>, AppError> {
+    // Permission check
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = query.p.as_deref().unwrap_or("/");
     let normalized = if path.starts_with('/') {
         path.to_string()
@@ -158,6 +164,9 @@ pub async fn create_dir_v21(
     Path(repo_id): Path<String>,
     Json(body): Json<CreateDirBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = body
         .p
         .ok_or_else(|| AppError::BadRequest("path (p) required".into()))?;

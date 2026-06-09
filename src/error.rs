@@ -48,6 +48,12 @@ pub enum AppError {
     #[error("blocks missing")]
     BlockMissing,
 
+    /// 403 — file is locked by another user (seafile wire protocol)
+    /// The daemon parses the body with regex "File (.+) is locked"
+    /// and emits SYNC_ERROR_ID_FILE_LOCKED.
+    #[error("file is locked: {0}")]
+    Locked(String),
+
     #[error("two factor auth token is missing")]
     TwoFactorRequired,
 
@@ -99,6 +105,10 @@ impl IntoResponse for AppError {
             AppError::BlockMissing => (
                 StatusCode::from_u16(446).unwrap(),
                 json!({ "error": "Blocks missing for uploaded files." }),
+            ),
+            AppError::Locked(path) => (
+                StatusCode::FORBIDDEN,
+                json!({ "error": format!("File {} is locked", path) }),
             ),
             // Seafile server wire format — sync client parses error_msg
             // to detect 2FA prompts; non_field_errors would be ignored.

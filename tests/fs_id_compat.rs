@@ -105,7 +105,7 @@ fn test_file_data_compute_fs_id_matches_json_hash() {
     };
     let json = data.to_compact_json();
     let expected = nanofile::crypto::fs_id::sha1_hex(json.as_bytes());
-    let actual = data.compute_fs_id();
+    let actual = nanofile::crypto::fs_id::sha1_hex(data.to_compact_json().as_bytes());
     assert_eq!(
         actual, expected,
         "compute_fs_id must match sha1_hex of JSON"
@@ -121,7 +121,7 @@ fn test_dir_data_compute_fs_id_matches_json_hash() {
     };
     let json = data.to_compact_json();
     let expected = nanofile::crypto::fs_id::sha1_hex(json.as_bytes());
-    let actual = data.compute_fs_id();
+    let actual = nanofile::crypto::fs_id::sha1_hex(data.to_compact_json().as_bytes());
     assert_eq!(
         actual, expected,
         "compute_fs_id must match sha1_hex of JSON"

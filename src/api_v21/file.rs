@@ -27,6 +27,9 @@ pub async fn create_file_v21(
     Path(repo_id): Path<String>,
     Json(req): Json<CreateFileRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = req
         .p
         .ok_or_else(|| AppError::BadRequest("path (p) required".into()))?;
@@ -56,7 +59,7 @@ pub async fn create_file_v21(
         obj_type: 1,
         version: 1,
     };
-    let file_fs_id = crate::storage::store_fs_file_object(db, &repo_id, file_fs_data).await?;
+    let file_fs_id = file_fs_data.compute_and_store(db, &repo_id).await?;
 
     // Resolve parent directory (handles empty repo)
     let parent_fs_id = if parent_path == "/" {
@@ -69,7 +72,7 @@ pub async fn create_file_v21(
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                crate::storage::store_fs_dir_object(db, &repo_id, empty_dir).await?
+                empty_dir.compute_and_store(db, &repo_id).await?
             }
         }
     } else {

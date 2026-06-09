@@ -6,15 +6,20 @@ pub mod gc;
 pub mod path_cache;
 pub mod versioning;
 
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
-use crate::entity::fs_object;
+use crate::entity::{file_lock_timestamp, fs_object, locked_file, repo, repo_member};
 use crate::error::AppError;
 use crate::serialization::fs_json::{
     FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE,
 };
 use crate::storage::path_cache::PathCache;
+
+/// SHA1 sentinel for empty directories (seafile convention).
+/// seafile-server's seaf_dir_new() forces this when entries are NULL;
+/// seaf_dir_save() skips persistence for this value.
+pub const EMPTY_SHA1: &str = "0000000000000000000000000000000000000000";
 
 /// Abstract backend for content-addressed block storage.
 ///
@@ -47,88 +52,292 @@ pub fn new_block_store(base_dir: &std::path::Path) -> DynBlockStorage {
 }
 
 // ====================================================================
-// Unified FS tree access functions
+// Compute-and-store methods on FS data structs
+// ====================================================================
+
+impl FsFileData {
+    /// Serialize to compact JSON, compute SHA1, check DB, insert if new.
+    /// Returns the computed fs_id.
+    ///
+    /// This is the async FS ID computation API matching the original design.
+    /// Callers should use this method instead of manually repeating the
+    /// serialize→hash→check→insert pattern.
+    ///
+    /// Matches seafile's write_seafile() flow:
+    ///   seafile_to_json() → calculate SHA1 → check exists → write.
+    pub async fn compute_and_store(
+        self,
+        db: &DatabaseConnection,
+        repo_id: &str,
+    ) -> Result<String, AppError> {
+        let json = self.to_compact_json();
+        let fs_id = crate::crypto::fs_id::sha1_hex(json.as_bytes());
+
+        let exists = fs_object::Entity::find()
+            .filter(fs_object::Column::RepoId.eq(repo_id))
+            .filter(fs_object::Column::FsId.eq(&fs_id))
+            .one(db)
+            .await?
+            .is_some();
+
+        if !exists {
+            fs_object::Entity::insert(fs_object::ActiveModel {
+                id: sea_orm::NotSet,
+                repo_id: Set(repo_id.to_string()),
+                fs_id: Set(fs_id.clone()),
+                obj_type: Set(SEAF_METADATA_TYPE_FILE as i8),
+                data: Set(json),
+            })
+            .exec(db)
+            .await?;
+        }
+
+        Ok(fs_id)
+    }
+}
+
+impl FsDirData {
+    /// Serialize to compact JSON, compute SHA1, check DB, insert if new.
+    /// Returns the computed fs_id.
+    ///
+    /// Empty directories use the EMPTY_SHA1 sentinel and are never stored,
+    /// matching seafile's seaf_dir_save() / seaf_dir_new() behavior:
+    ///   seaf_dir_new: entries==NULL → dir_id = EMPTY_SHA1
+    ///   seaf_dir_save: dir_id == EMPTY_SHA1 → skip
+    pub async fn compute_and_store(
+        self,
+        db: &DatabaseConnection,
+        repo_id: &str,
+    ) -> Result<String, AppError> {
+        // Empty dirs use the EMPTY_SHA1 sentinel per seafile convention.
+        if self.dirents.is_empty() {
+            return Ok(EMPTY_SHA1.to_string());
+        }
+
+        let json = self.to_compact_json();
+        let fs_id = crate::crypto::fs_id::sha1_hex(json.as_bytes());
+
+        let exists = fs_object::Entity::find()
+            .filter(fs_object::Column::RepoId.eq(repo_id))
+            .filter(fs_object::Column::FsId.eq(&fs_id))
+            .one(db)
+            .await?
+            .is_some();
+
+        if !exists {
+            fs_object::Entity::insert(fs_object::ActiveModel {
+                id: sea_orm::NotSet,
+                repo_id: Set(repo_id.to_string()),
+                fs_id: Set(fs_id.clone()),
+                obj_type: Set(SEAF_METADATA_TYPE_DIR as i8),
+                data: Set(json),
+            })
+            .exec(db)
+            .await?;
+        }
+
+        Ok(fs_id)
+    }
+}
+
+// ====================================================================
+// Wrapper free functions (backward compat, delegate to methods)
 // ====================================================================
 
 /// Serialize an FsFileData to JSON, compute its SHA1 ID, check the DB,
 /// and insert if the object does not already exist. Returns the fs_id.
 ///
-/// This matches seafile's write_seafile() flow:
-///   seafile_to_json() → calculate SHA1 → check exists → write.
+/// Prefer calling `file_data.compute_and_store(db, repo_id).await`
+/// directly instead.
 pub async fn store_fs_file_object(
     db: &DatabaseConnection,
     repo_id: &str,
     file_data: FsFileData,
 ) -> Result<String, AppError> {
-    let json = file_data.to_compact_json();
-    let fs_id = crate::crypto::fs_id::sha1_hex(json.as_bytes());
-
-    let exists = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(repo_id))
-        .filter(fs_object::Column::FsId.eq(&fs_id))
-        .one(db)
-        .await?
-        .is_some();
-
-    if !exists {
-        fs_object::Entity::insert(fs_object::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: sea_orm::Set(repo_id.to_string()),
-            fs_id: sea_orm::Set(fs_id.clone()),
-            obj_type: sea_orm::Set(SEAF_METADATA_TYPE_FILE as i8),
-            data: sea_orm::Set(json),
-        })
-        .exec(db)
-        .await?;
-    }
-
-    Ok(fs_id)
+    file_data.compute_and_store(db, repo_id).await
 }
 
 /// Serialize an FsDirData to JSON, compute its SHA1 ID, check the DB,
 /// and insert if the object does not already exist. Returns the fs_id.
 ///
-/// Empty directories use the EMPTY_SHA1 sentinel and are never stored,
-/// matching seafile's seaf_dir_save() / seaf_dir_new() behavior:
-///   seaf_dir_new: entries==NULL → dir_id = EMPTY_SHA1 (line 1455)
-///   seaf_dir_save: dir_id == EMPTY_SHA1 → skip (line 1861)
+/// Prefer calling `dir_data.compute_and_store(db, repo_id).await`
+/// directly instead.
 pub async fn store_fs_dir_object(
     db: &DatabaseConnection,
     repo_id: &str,
     dir_data: FsDirData,
 ) -> Result<String, AppError> {
-    // Empty dirs use the EMPTY_SHA1 sentinel per seafile convention.
-    // They are never persisted — the all-zero ID is recognized by both
-    // server and client as "empty directory". Storing a computed hash
-    // would break client sync (the client would not create the folder).
-    if dir_data.dirents.is_empty() {
-        return Ok("0000000000000000000000000000000000000000".to_string());
-    }
+    dir_data.compute_and_store(db, repo_id).await
+}
 
-    let json = dir_data.to_compact_json();
-    let fs_id = crate::crypto::fs_id::sha1_hex(json.as_bytes());
+// ====================================================================
+// Permission and lock helpers
+// ====================================================================
 
-    let exists = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(repo_id))
-        .filter(fs_object::Column::FsId.eq(&fs_id))
+/// Check if `user_id` has write (`rw`) permission on the repo.
+///
+/// The repo owner always has full access. Members are checked against
+/// `repo_member.permission`. Non-members and read-only members are
+/// rejected with `AppError::Forbidden`.
+///
+/// Matches seafile-server's `check_permission()` in repo-perm.c.
+pub async fn check_repo_write_permission(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    user_id: i32,
+) -> Result<(), AppError> {
+    let repo_model = repo::Entity::find_by_id(repo_id)
         .one(db)
         .await?
-        .is_some();
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-    if !exists {
-        fs_object::Entity::insert(fs_object::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: sea_orm::Set(repo_id.to_string()),
-            fs_id: sea_orm::Set(fs_id.clone()),
-            obj_type: sea_orm::Set(SEAF_METADATA_TYPE_DIR as i8),
-            data: sea_orm::Set(json),
-        })
-        .exec(db)
-        .await?;
+    // Owner always has write access
+    if repo_model.owner_id == user_id {
+        return Ok(());
     }
 
-    Ok(fs_id)
+    // Check repo_member permission
+    let member = repo_member::Entity::find()
+        .filter(repo_member::Column::RepoId.eq(repo_id))
+        .filter(repo_member::Column::UserId.eq(user_id))
+        .one(db)
+        .await?;
+
+    match member {
+        Some(m) if m.permission == "rw" => Ok(()),
+        _ => Err(AppError::Forbidden),
+    }
 }
+
+/// Check if `user_id` has read permission on the repo.
+///
+/// The repo owner always has access. Any member (r or rw) has access.
+/// Non-members are rejected with `AppError::Forbidden`.
+pub async fn check_repo_read_permission(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    user_id: i32,
+) -> Result<(), AppError> {
+    let repo_model = repo::Entity::find_by_id(repo_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    // Owner always has access
+    if repo_model.owner_id == user_id {
+        return Ok(());
+    }
+
+    let member = repo_member::Entity::find()
+        .filter(repo_member::Column::RepoId.eq(repo_id))
+        .filter(repo_member::Column::UserId.eq(user_id))
+        .one(db)
+        .await?;
+
+    match member {
+        Some(_) => Ok(()),
+        None => Err(AppError::Forbidden),
+    }
+}
+
+/// Walk the FS tree of a commit and check whether any file in the tree
+/// is locked by a different user. Returns `AppError::Locked(path)` with
+/// 403 if a lock conflict is found.
+///
+/// The seafile-daemon parses the 403 body with regex `"File (.+) is locked"`
+/// and emits `SYNC_ERROR_ID_FILE_LOCKED`.
+pub async fn check_commit_file_locks(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    root_id: &str,
+    user_id: i32,
+) -> Result<(), AppError> {
+    if root_id == EMPTY_SHA1 {
+        return Ok(());
+    }
+
+    let mut stack: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
+
+    while let Some((fs_id, path)) = stack.pop() {
+        if fs_id == EMPTY_SHA1 {
+            continue;
+        }
+
+        let obj = fs_object::Entity::find()
+            .filter(fs_object::Column::RepoId.eq(repo_id))
+            .filter(fs_object::Column::FsId.eq(&fs_id))
+            .one(db)
+            .await?;
+
+        let Some(obj) = obj else {
+            continue;
+        };
+
+        match obj.obj_type {
+            1 => {
+                // File — check if locked by another user
+                let lock = locked_file::Entity::find()
+                    .filter(locked_file::Column::RepoId.eq(repo_id))
+                    .filter(locked_file::Column::Path.eq(&path))
+                    .one(db)
+                    .await?;
+                if let Some(lock) = lock
+                    && lock.user_id != user_id
+                {
+                    return Err(AppError::Locked(path));
+                }
+            }
+            3 => {
+                let dir_data: FsDirData = serde_json::from_str(&obj.data)
+                    .map_err(|e| AppError::Internal(format!("invalid dir object: {e}")))?;
+                for entry in &dir_data.dirents {
+                    let child_path = if path.is_empty() {
+                        entry.name.clone()
+                    } else {
+                        format!("{}/{}", path, entry.name)
+                    };
+                    stack.push((entry.id.clone(), child_path));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+/// Upsert the file lock timestamp for a repo (used by clients for cache invalidation).
+/// Creates a new record if one doesn't exist, updates the timestamp if it does.
+pub async fn upsert_lock_timestamp(db: &DatabaseConnection, repo_id: &str) -> Result<(), AppError> {
+    let now = chrono::Utc::now().timestamp();
+    let existing = file_lock_timestamp::Entity::find()
+        .filter(file_lock_timestamp::Column::RepoId.eq(repo_id))
+        .one(db)
+        .await?;
+
+    match existing {
+        Some(record) => {
+            let mut active: file_lock_timestamp::ActiveModel = record.into();
+            active.update_time = Set(now);
+            active.update(db).await?;
+        }
+        None => {
+            file_lock_timestamp::Entity::insert(file_lock_timestamp::ActiveModel {
+                id: sea_orm::NotSet,
+                repo_id: Set(repo_id.to_string()),
+                update_time: Set(now),
+            })
+            .exec(db)
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+// ====================================================================
+// Unified FS tree access functions
+// ====================================================================
 
 /// Read and parse a directory fs_object (FsDirData) from the database.
 pub async fn read_fs_dir_data(
@@ -139,7 +348,7 @@ pub async fn read_fs_dir_data(
     // The zero hash (all zeros) is a sentinel in seafile's protocol,
     // used for empty/incomplete directories or when an fs_object
     // hasn't been fully committed yet. Treat it as an empty directory.
-    if fs_id == "0000000000000000000000000000000000000000" {
+    if fs_id == EMPTY_SHA1 {
         return Ok(FsDirData {
             dirents: vec![],
             obj_type: crate::serialization::fs_json::SEAF_METADATA_TYPE_DIR,

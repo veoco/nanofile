@@ -2,6 +2,7 @@ pub mod activity;
 pub mod api_token;
 pub mod client_login_token;
 pub mod commit;
+pub mod file_lock_timestamp;
 pub mod file_tag;
 pub mod fs_object;
 pub mod group;

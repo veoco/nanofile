@@ -12,7 +12,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::{commit, repo, repo_member};
+use crate::entity::{commit, repo};
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
@@ -243,13 +243,7 @@ async fn verify_repo_access(
     user_id: i32,
     repo_id: &str,
 ) -> Result<(), AppError> {
-    repo_member::Entity::find()
-        .filter(repo_member::Column::UserId.eq(user_id))
-        .filter(repo_member::Column::RepoId.eq(repo_id))
-        .one(db)
-        .await
-        .map_err(|e| AppError::internal(format!("db error: {e}")))?
-        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
+    crate::storage::check_repo_read_permission(db, repo_id, user_id).await?;
     Ok(())
 }
 
@@ -515,7 +509,7 @@ pub async fn upload_file(
     mut multipart: axum::extract::Multipart,
 ) -> Result<impl IntoResponse, AppError> {
     let db = state.db.as_ref();
-    verify_repo_access(db, user.user_id, &repo_id).await?;
+    crate::storage::check_repo_write_permission(db, &repo_id, user.user_id).await?;
 
     let mut parent_dir = String::from("/");
     let mut upload_repo_name = String::new();
@@ -630,7 +624,7 @@ pub async fn delete_entry(
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     let db = state.db.as_ref();
-    verify_repo_access(db, user.user_id, &repo_id).await?;
+    crate::storage::check_repo_write_permission(db, &repo_id, user.user_id).await?;
 
     let path = form.get("p").map(|s| s.as_str()).unwrap_or("/");
     let path = normalize_path(path);
@@ -695,7 +689,7 @@ pub async fn create_directory(
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     let db = state.db.as_ref();
-    verify_repo_access(db, user.user_id, &repo_id).await?;
+    crate::storage::check_repo_write_permission(db, &repo_id, user.user_id).await?;
 
     let path = form.get("p").map(|s| s.as_str()).unwrap_or("/new_folder");
     let path = normalize_path(path);
@@ -732,7 +726,8 @@ pub async fn create_directory(
                     version: 1,
                 };
 
-                crate::storage::store_fs_dir_object(db, &repo_id, root_dir)
+                root_dir
+                    .compute_and_store(db, &repo_id)
                     .await
                     .map_err(|e| AppError::Internal(e.to_string()))?
             }
@@ -801,7 +796,7 @@ pub async fn rename_entry(
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     let db = state.db.as_ref();
-    verify_repo_access(db, user.user_id, &repo_id).await?;
+    crate::storage::check_repo_write_permission(db, &repo_id, user.user_id).await?;
 
     let path = form.get("p").map(|s| s.as_str()).unwrap_or("");
     let new_name = form.get("new_name").map(|s| s.as_str()).unwrap_or("");

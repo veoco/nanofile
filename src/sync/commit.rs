@@ -197,9 +197,10 @@ pub async fn update_branch(
         return Err(AppError::BadRequest("invalid commit id".into()));
     }
 
-    // Permission check is handled by SyncAuth middleware for the token.
-    // Seafile server additionally checks repo-level write permission here
-    // (check_permission → EVHTP_RES_FORBIDDEN).
+    // Permission check: verify write access to the repo.
+    // SyncAuth confirms the token is valid; this checks repo-level
+    // write permission (seafile-server put_update_branch_cb line 1323-1328).
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, _auth.user_id).await?;
 
     // Read the new commit (checks existence + gets parent_id for conflict detection).
     let new_commit = commit::Entity::find()
@@ -222,6 +223,16 @@ pub async fn update_branch(
     if !missing.is_empty() {
         return Err(AppError::BlockMissing);
     }
+
+    // File lock check: verify no file in the commit is locked by another user.
+    // The daemon parses 403 + "File <path> is locked" as SYNC_ERROR_ID_FILE_LOCKED.
+    crate::storage::check_commit_file_locks(
+        state.db.as_ref(),
+        &repo_id,
+        &new_commit.root_id,
+        _auth.user_id,
+    )
+    .await?;
 
     // Verify the parent commit exists. Seafile requires the base commit
     // to be present on the server; a missing parent is a client error.

@@ -26,6 +26,7 @@ mod m20260607_000004_add_invited_by_to_users;
 mod m20260607_000005_create_password_reset_tokens;
 mod m20260607_000006_add_is_admin_to_users;
 mod m20260607_000007_add_email_to_invitation_codes;
+mod m20260609_000001_create_file_lock_timestamps;
 
 pub struct Migrator;
 
@@ -58,6 +59,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260607_000005_create_password_reset_tokens::Migration),
             Box::new(m20260607_000006_add_is_admin_to_users::Migration),
             Box::new(m20260607_000007_add_email_to_invitation_codes::Migration),
+            Box::new(m20260609_000001_create_file_lock_timestamps::Migration),
         ]
     }
 }

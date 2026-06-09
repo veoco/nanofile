@@ -79,11 +79,14 @@ pub fn file_routes() -> Router<Arc<AppState>> {
 }
 
 pub async fn download_file(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Query(query): Query<FileQuery>,
 ) -> Result<Vec<u8>, AppError> {
+    // Permission check
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = normalize_path(&query.p.unwrap_or_else(|| "/".to_string()));
 
     let content = crate::storage::download::Downloader::download_file(
@@ -109,6 +112,9 @@ pub async fn file_post_handler(
     Query(query): Query<FileQuery>,
     req: Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let (parts, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
         .await
@@ -319,6 +325,9 @@ pub async fn delete_file(
     Path(repo_id): Path<String>,
     Query(query): Query<FileQuery>,
 ) -> Result<(), AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = normalize_path(
         &query
             .p
@@ -380,6 +389,10 @@ pub async fn move_file(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MoveRequest>,
 ) -> Result<(), AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
+
     let path = normalize_path(&req.p);
     move_file_entry(
         state.db.as_ref(),
@@ -601,6 +614,10 @@ pub async fn rename_file(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RenameRequest>,
 ) -> Result<(), AppError> {
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
+
     let path = normalize_path(&req.p);
     rename_file_entry(
         state.db.as_ref(),
@@ -655,11 +672,14 @@ pub struct FileDetailResponse {
 ///
 /// Returns file metadata including size, modification time, and last modifier.
 pub async fn file_detail(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Query(query): Query<FileQuery>,
 ) -> Result<Json<FileDetailResponse>, AppError> {
+    // Permission check
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let path = normalize_path(
         &query
             .p
@@ -758,6 +778,9 @@ pub async fn lock_file_via_api_handler(
     let path = normalize_path(&query.p.unwrap_or_default());
 
     let db = state.db.as_ref();
+
+    // Permission check: only users with write access can lock/unlock files.
+    crate::storage::check_repo_write_permission(db, &repo_id, auth.user_id).await?;
 
     // Look up user ID from email
     let user_record = user::Entity::find()
