@@ -1,8 +1,9 @@
 use axum::{
-    Form, Json,
+    Json,
     extract::State,
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header, Request},
     response::{IntoResponse, Response},
+    body::Body,
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -42,29 +43,87 @@ pub fn auth_routes() -> axum::Router<Arc<AppState>> {
         .route("/logout-device/", axum::routing::post(logout_device))
 }
 
+/// Return a seahub-compatible login error response.
+fn login_error(msg: &str) -> Result<Response, AppError> {
+    Ok((
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"non_field_errors": [msg]})),
+    )
+        .into_response())
+}
+
 pub async fn login(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Form(form): Form<LoginForm>,
+    req: Request<Body>,
 ) -> Result<Response, AppError> {
-    let user = user::Entity::find()
+    // ── Parse body: accept both JSON and URL-encoded form data ──────────
+    let (parts, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Failed to read request body: {e}")))?;
+
+    let content_type = parts
+        .headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let form: LoginForm = if content_type.starts_with("application/json") {
+        serde_json::from_slice(&bytes)
+            .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {e}")))?
+    } else {
+        serde_urlencoded::from_bytes(&bytes)
+            .map_err(|e| AppError::BadRequest(format!("Invalid form body: {e}")))?
+    };
+
+    // ── Rate limiting ─────────────────────────────────────────────────
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let rate_limit_key = format!("login:{}", client_ip);
+
+    if state.login_rate_limiter.is_locked(&rate_limit_key) {
+        return login_error("Too many login attempts. Please try again later.");
+    }
+
+    // ── Authenticate ───────────────────────────────────────────────────
+    let user = match user::Entity::find()
         .filter(user::Column::Email.eq(&form.username))
         .one(state.db.as_ref())
         .await?
-        .ok_or(AppError::Unauthorized)?;
+    {
+        Some(u) => u,
+        None => {
+            state.login_rate_limiter.record_failure(&rate_limit_key);
+            return login_error("Unable to login with provided credentials.");
+        }
+    };
 
     if !verify_password(
         &form.password,
         &user.password_hash,
         state.config.auth.password_hash_iterations,
     ) {
-        return Err(AppError::Unauthorized);
+        state.login_rate_limiter.record_failure(&rate_limit_key);
+        return login_error("Unable to login with provided credentials.");
     }
 
     if !user.is_active {
-        return Err(AppError::Forbidden);
+        state.login_rate_limiter.record_failure(&rate_limit_key);
+        return login_error("User account is disabled.");
     }
 
+    // ── Two-factor authentication ──────────────────────────────────────
     let two_fa = crate::entity::user_2fa::Entity::find_by_id(user.id)
         .one(state.db.as_ref())
         .await?;
@@ -119,6 +178,7 @@ pub async fn login(
                     )
                     .map_err(|e| AppError::Internal(e.to_string()))?;
                     if !crate::auth::totp::TotpManager::verify_code(&totp, otp_code) {
+                        state.login_rate_limiter.record_failure(&rate_limit_key);
                         return Err(AppError::TwoFactorInvalid);
                     }
 
@@ -175,6 +235,9 @@ pub async fn login(
         }
     }
 
+    // ── Login succeeded — create API token ─────────────────────────────
+    state.login_rate_limiter.clear(&rate_limit_key);
+
     let token_value = generate_api_token();
     let now = chrono::Utc::now().timestamp();
 
@@ -208,6 +271,14 @@ pub async fn login(
     Ok(response)
 }
 
+/// Public ping — returns "pong" (no auth required).
+/// Matches the original seahub's GET /api2/ping/ behavior.
+pub async fn public_ping() -> impl IntoResponse {
+    (StatusCode::OK, Json("pong"))
+}
+
+/// Authenticated ping — returns the authenticated user's email.
+/// Serves GET /api2/auth/ping/.
 pub async fn ping(auth: AuthUser) -> Result<Json<PingResponse>, AppError> {
     Ok(Json(PingResponse { email: auth.email }))
 }

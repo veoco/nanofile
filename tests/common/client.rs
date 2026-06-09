@@ -229,6 +229,20 @@ impl TestClient {
             .unwrap()
     }
 
+    /// Login with JSON body (matching the JSON support added to the API).
+    pub async fn login_json(&self, username: &str, password: &str) -> reqwest::Response {
+        self.client
+            .post(format!("{}/api2/auth-token/", self.base_url))
+            .header("content-type", "application/json")
+            .json(&serde_json::json!({
+                "username": username,
+                "password": password,
+            }))
+            .send()
+            .await
+            .unwrap()
+    }
+
     pub async fn login_with_otp(
         &self,
         username: &str,

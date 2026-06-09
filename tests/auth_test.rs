@@ -29,7 +29,15 @@ async fn test_login_wrong_password() {
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
 
     let resp = client.login("test@example.com", "wrongpassword").await;
-    assert_eq!(resp.status(), 401);
+    assert_eq!(resp.status(), 400);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let errors = body["non_field_errors"].as_array().unwrap();
+    assert!(
+        errors.iter().any(|e| e.as_str().unwrap().contains("Unable to login")),
+        "expected 'Unable to login' error, got: {:?}",
+        body
+    );
 }
 
 #[tokio::test]
@@ -38,7 +46,50 @@ async fn test_login_nonexistent_user() {
     let client = server.client();
 
     let resp = client.login("nonexistent@example.com", "password123").await;
-    assert_eq!(resp.status(), 401);
+    assert_eq!(resp.status(), 400);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let errors = body["non_field_errors"].as_array().unwrap();
+    assert!(
+        errors.iter().any(|e| e.as_str().unwrap().contains("Unable to login")),
+        "expected 'Unable to login' error, got: {:?}",
+        body
+    );
+}
+
+#[tokio::test]
+async fn test_login_success_json() {
+    let server = TestServer::start().await;
+    let client = server.client();
+
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    // Login with JSON body
+    let resp = client.login_json("test@example.com", "password123").await;
+    assert_eq!(resp.status(), 200, "JSON login should succeed");
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap();
+    assert_eq!(token.len(), 40);
+}
+
+#[tokio::test]
+async fn test_login_wrong_password_json() {
+    let server = TestServer::start().await;
+    let client = server.client();
+
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    let resp = client.login_json("test@example.com", "wrongpassword").await;
+    assert_eq!(resp.status(), 400);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let errors = body["non_field_errors"].as_array().unwrap();
+    assert!(
+        errors.iter().any(|e| e.as_str().unwrap().contains("Unable to login")),
+        "expected 'Unable to login' error, got: {:?}",
+        body
+    );
 }
 
 #[tokio::test]

@@ -49,7 +49,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
             "/api2/server-info/",
             axum::routing::get(server_info::server_info),
         )
-        .route("/api2/ping/", axum::routing::get(auth::ping))
+        .route("/api2/ping/", axum::routing::get(auth::public_ping))
         .nest("/api2", starred::starred_routes())
         .nest("/api2", notifications::notifications_routes())
         .route("/api2/repo-tokens/", axum::routing::get(repos::repo_tokens))

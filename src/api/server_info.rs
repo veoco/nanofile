@@ -3,8 +3,6 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Serialize;
 
-use crate::auth::middleware::AuthUser;
-
 #[derive(Serialize)]
 pub struct ServerInfoResponse {
     pub version: String,
@@ -16,7 +14,8 @@ pub struct ServerInfoResponse {
 ///
 /// Returns server version, encryption version, and supported features.
 /// Used by all clients (desktop, mobile) on login to determine capabilities.
-pub async fn server_info(AuthUser { .. }: AuthUser) -> impl IntoResponse {
+/// Public endpoint — no authentication required (matches original seahub).
+pub async fn server_info() -> impl IntoResponse {
     let response = ServerInfoResponse {
         version: "8.0.0".to_string(),
         encrypted_library_version: 3,
