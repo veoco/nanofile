@@ -118,13 +118,17 @@ async fn test_login_2fa_required_no_otp() {
     user_2fa.insert(server.db.as_ref()).await.unwrap();
 
     let resp = client.login("test@example.com", "password123").await;
-    assert_eq!(resp.status(), 401);
+    assert_eq!(resp.status(), 400);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    let err_msg = body["error_msg"].as_str().unwrap();
+    let errors = body["non_field_errors"].as_array().unwrap();
     assert!(
-        err_msg.contains("Two factor auth token is missing"),
-        "expected 2FA error message, got: {err_msg}"
+        errors.iter().any(|e| e
+            .as_str()
+            .unwrap()
+            .contains("Two factor auth token is missing")),
+        "expected 2FA error message, got: {:?}",
+        body
     );
 }
 
@@ -152,7 +156,7 @@ async fn test_login_2fa_invalid_otp() {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     eprintln!("2FA INVALID OTP STATUS: {}, BODY: {}", status, body);
-    assert_eq!(status, 401, "body: {}", body);
+    assert_eq!(status, 400, "body: {}", body);
 }
 
 #[tokio::test]
@@ -258,7 +262,7 @@ async fn test_s2fa_trust_device_flow() {
 
     // Step 3: Plain login (no S2FA, no OTP) — should be challenged
     let resp3 = client.login("test@example.com", "password123").await;
-    assert_eq!(resp3.status(), 401, "no S2FA/OTP should be challenged");
+    assert_eq!(resp3.status(), 400, "no S2FA/OTP should be challenged");
     assert!(
         resp3.headers().get("X-SEAFILE-OTP").is_some(),
         "should include X-Seafile-OTP: required header"
@@ -291,7 +295,7 @@ async fn test_s2fa_expired_token() {
     let resp = client
         .login_with_s2fa("test@example.com", "password123", expired_token)
         .await;
-    assert_eq!(resp.status(), 401, "expired S2FA should not bypass 2FA");
+    assert_eq!(resp.status(), 400, "expired S2FA should not bypass 2FA");
     assert!(
         resp.headers().get("X-SEAFILE-OTP").is_some(),
         "should return OTP challenge"
@@ -319,7 +323,7 @@ async fn test_s2fa_invalid_token() {
     let resp = client
         .login_with_s2fa("test@example.com", "password123", fake_token)
         .await;
-    assert_eq!(resp.status(), 401, "invalid S2FA should not bypass 2FA");
+    assert_eq!(resp.status(), 400, "invalid S2FA should not bypass 2FA");
     assert!(
         resp.headers().get("X-SEAFILE-OTP").is_some(),
         "should return OTP challenge"

@@ -110,15 +110,16 @@ impl IntoResponse for AppError {
                 StatusCode::FORBIDDEN,
                 json!({ "error": format!("File {} is locked", path) }),
             ),
-            // Seafile server wire format — sync client parses error_msg
-            // to detect 2FA prompts; non_field_errors would be ignored.
+            // Seahub-compatible 2FA error format: 400 + non_field_errors.
+            // The login handler in auth.rs adds the X-Seafile-OTP header directly;
+            // these serve as fallbacks for other call sites (e.g. two_factor.rs).
             AppError::TwoFactorRequired => (
-                StatusCode::UNAUTHORIZED,
-                json!({ "error_msg": "Two factor auth token is missing.", "error_code": 401 }),
+                StatusCode::BAD_REQUEST,
+                json!({"non_field_errors": ["Two factor auth token is missing."]}),
             ),
             AppError::TwoFactorInvalid => (
-                StatusCode::UNAUTHORIZED,
-                json!({ "error_msg": "Invalid two factor auth token.", "error_code": 401 }),
+                StatusCode::BAD_REQUEST,
+                json!({"non_field_errors": ["Invalid two factor auth token."]}),
             ),
         };
 

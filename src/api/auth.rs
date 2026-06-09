@@ -2,7 +2,7 @@ use axum::{
     Json,
     body::Body,
     extract::State,
-    http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode},
     response::{IntoResponse, Response},
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
@@ -179,7 +179,19 @@ pub async fn login(
                     .map_err(|e| AppError::Internal(e.to_string()))?;
                     if !crate::auth::totp::TotpManager::verify_code(&totp, otp_code) {
                         state.login_rate_limiter.record_failure(&rate_limit_key);
-                        return Err(AppError::TwoFactorInvalid);
+                        // Return 400 + X-Seafile-OTP: required so the client knows
+                        // to retry with a new OTP code (matching seahub behavior).
+                        let mut resp_headers = HeaderMap::new();
+                        resp_headers.insert(
+                            HeaderName::from_bytes(b"X-Seafile-OTP").unwrap(),
+                            HeaderValue::from_static("required"),
+                        );
+                        let body = serde_json::json!({
+                            "non_field_errors": ["Two factor auth token is invalid."],
+                        });
+                        return Ok(
+                            (StatusCode::BAD_REQUEST, resp_headers, Json(body)).into_response()
+                        );
                     }
 
                     // If the client requested device trust ("remember this device"),
@@ -207,29 +219,18 @@ pub async fn login(
                     }
                 }
                 None => {
-                    // Return 401 with X-Seafile-OTP: required header so the desktop
-                    // client knows to prompt the user for a TOTP code.
+                    // Return 400 + X-Seafile-OTP: required header + non_field_errors
+                    // body, matching the seahub ObtainAuthToken behavior. The iOS
+                    // and desktop clients rely on status 400 to detect 2FA.
                     let mut resp_headers = HeaderMap::new();
-                    resp_headers.insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
                     resp_headers.insert(
                         HeaderName::from_bytes(b"X-Seafile-OTP").unwrap(),
                         HeaderValue::from_static("required"),
                     );
                     let body = serde_json::json!({
-                        "error_msg": "Two factor auth token is missing.",
-                        "error_code": 401,
+                        "non_field_errors": ["Two factor auth token is missing."],
                     });
-                    let mut resp =
-                        (StatusCode::UNAUTHORIZED, resp_headers, Json(body)).into_response();
-                    // Re-insert Content-Type after into_response in case it was overwritten.
-                    resp.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    return Ok(resp);
+                    return Ok((StatusCode::BAD_REQUEST, resp_headers, Json(body)).into_response());
                 }
             }
         }
