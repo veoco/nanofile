@@ -10,11 +10,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(InvitationCodes::Table)
-                    .add_column(
-                        ColumnDef::new(InvitationCodes::Email)
-                            .string()
-                            .null(),
-                    )
+                    .add_column(ColumnDef::new(InvitationCodes::Email).string().null())
                     .to_owned(),
             )
             .await

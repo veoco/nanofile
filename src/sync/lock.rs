@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::entity::{file_lock_timestamp, locked_file, sync_token};
+use crate::entity::{file_lock_timestamp, locked_file, sync_token, user};
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -68,6 +68,22 @@ pub async fn lock_file(
     // Update the lock timestamp for client cache invalidation.
     crate::storage::upsert_lock_timestamp(state.db.as_ref(), &repo_id).await?;
 
+    // Send file-lock-changed WebSocket notification to all subscribers.
+    if let Some(mgr) = &state.notification_manager {
+        let email = user::Entity::find_by_id(_auth.user_id)
+            .one(state.db.as_ref())
+            .await?
+            .map(|u| u.email)
+            .unwrap_or_default();
+        let event = crate::notification::events::FileLockEvent {
+            repo_id: repo_id.clone(),
+            path: path.to_string(),
+            change_event: "locked".to_string(),
+            lock_user: email,
+        };
+        mgr.notify(event).await;
+    }
+
     Ok(Json(LockResponse { success: true }))
 }
 
@@ -94,6 +110,22 @@ pub async fn unlock_file(
 
     // Update the lock timestamp for client cache invalidation.
     crate::storage::upsert_lock_timestamp(state.db.as_ref(), &repo_id).await?;
+
+    // Send file-lock-changed WebSocket notification to all subscribers.
+    if let Some(mgr) = &state.notification_manager {
+        let email = user::Entity::find_by_id(_auth.user_id)
+            .one(state.db.as_ref())
+            .await?
+            .map(|u| u.email)
+            .unwrap_or_default();
+        let event = crate::notification::events::FileLockEvent {
+            repo_id: repo_id.clone(),
+            path: path.to_string(),
+            change_event: "unlocked".to_string(),
+            lock_user: email,
+        };
+        mgr.notify(event).await;
+    }
 
     Ok(Json(LockResponse { success: true }))
 }

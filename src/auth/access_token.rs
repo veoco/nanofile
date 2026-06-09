@@ -158,10 +158,10 @@ mod tests {
     fn test_cleanup_expired() {
         let mgr = AccessTokenManager::new();
         let token = mgr.generate("repo1", 1, "u@t.com", "upload", "/");
-        if let Ok(mut guard) = mgr.tokens.write() {
-            if let Some(entry) = guard.get_mut(&token) {
-                entry.expires_at = 0;
-            }
+        if let Ok(mut guard) = mgr.tokens.write()
+            && let Some(entry) = guard.get_mut(&token)
+        {
+            entry.expires_at = 0;
         }
         assert!(mgr.validate(&token).is_none());
     }

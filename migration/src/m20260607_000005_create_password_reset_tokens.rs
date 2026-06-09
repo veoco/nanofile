@@ -48,10 +48,7 @@ impl MigrationTrait for Migration {
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_password_reset_tokens_user_id")
-                            .from(
-                                PasswordResetTokens::Table,
-                                PasswordResetTokens::UserId,
-                            )
+                            .from(PasswordResetTokens::Table, PasswordResetTokens::UserId)
                             .to(Users::Table, Users::Id)
                             .on_delete(ForeignKeyAction::Cascade),
                     )

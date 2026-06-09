@@ -343,7 +343,7 @@ mod tests {
         let mut sizeshift: u64 = 1;
         for _ in 1..48 {
             let idx = (sizeshift >> shift) as usize;
-            sizeshift = ((sizeshift << 8) | 0) ^ t_ref[idx];
+            sizeshift = (sizeshift << 8) ^ t_ref[idx];
         }
         let mut u_ref = [0u64; 256];
         for i in 0..256u64 {
@@ -504,7 +504,7 @@ mod tests {
         let mut sizeshift: u64 = 1;
         for _ in 1..WINDOW_SIZE {
             let idx = (sizeshift >> shift) as usize;
-            sizeshift = ((sizeshift << 8) | 0) ^ t_ref[idx];
+            sizeshift = (sizeshift << 8) ^ t_ref[idx];
         }
         let mut u_ref = [0u64; 256];
         for i in 0..256u64 {
@@ -541,15 +541,15 @@ mod tests {
         // Rolling: compare fingerprint at EVERY byte position
         let mut mismatch_count = 0;
         let mut first_mismatch = None;
-        for pos in WINDOW_SIZE..data.len() {
+        for (pos, &byte) in data.iter().enumerate().skip(WINDOW_SIZE) {
             // Reference: rolling update
             let out = ref_window[ref_pos];
-            ref_fp = append8_ref(ref_fp ^ u_ref[out as usize], data[pos]) & 0xFFFF_FFFF;
-            ref_window[ref_pos] = data[pos];
+            ref_fp = append8_ref(ref_fp ^ u_ref[out as usize], byte) & 0xFFFF_FFFF;
+            ref_window[ref_pos] = byte;
             ref_pos = (ref_pos + 1) % WINDOW_SIZE;
 
             // Production: rolling update
-            prod.update(data[pos]);
+            prod.update(byte);
 
             if prod.fingerprint != ref_fp {
                 mismatch_count += 1;

@@ -18,32 +18,12 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(Activities::RepoId)
-                            .char_len(36)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Activities::CommitId)
-                            .char_len(40)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Activities::OpType)
-                            .char_len(32)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Activities::ObjType)
-                            .char_len(16)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Activities::RepoId).char_len(36).not_null())
+                    .col(ColumnDef::new(Activities::CommitId).char_len(40).not_null())
+                    .col(ColumnDef::new(Activities::OpType).char_len(32).not_null())
+                    .col(ColumnDef::new(Activities::ObjType).char_len(16).not_null())
                     .col(ColumnDef::new(Activities::Path).text().not_null())
-                    .col(
-                        ColumnDef::new(Activities::UserId)
-                            .integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Activities::UserId).integer().not_null())
                     .col(
                         ColumnDef::new(Activities::CreatedAt)
                             .big_integer()

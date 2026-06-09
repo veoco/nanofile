@@ -13,7 +13,7 @@ async fn test_client_login_returns_token() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["token"].as_str().unwrap_or("").len() > 0);
+    assert!(!body["token"].as_str().unwrap_or("").is_empty());
 }
 
 #[tokio::test]
@@ -43,8 +43,8 @@ async fn test_client_sso_link() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["link"].as_str().unwrap_or("").len() > 0);
-    assert!(body["token"].as_str().unwrap_or("").len() > 0);
+    assert!(!body["link"].as_str().unwrap_or("").is_empty());
+    assert!(!body["token"].as_str().unwrap_or("").is_empty());
 }
 
 /// B.7.3 — GET /api2/client-sso-link/{token}/
@@ -153,8 +153,8 @@ async fn test_search_returns_results() {
     assert_eq!(results[0]["is_dir"], false);
     assert!(results[0]["last_modified"].as_i64().unwrap() > 0);
     assert!(results[0]["size"].as_i64().unwrap() > 0);
-    assert!(results[0]["oid"].as_str().unwrap().len() > 0);
-    assert!(results[0]["repo_name"].as_str().unwrap().len() > 0);
+    assert!(!results[0]["oid"].as_str().unwrap().is_empty());
+    assert!(!results[0]["repo_name"].as_str().unwrap().is_empty());
 }
 
 #[tokio::test]

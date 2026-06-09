@@ -9,7 +9,7 @@ async fn test_v21_repos_list() {
     let resp = f.client.get("/api/v2.1/repos/", Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["repos"].as_array().unwrap().len() >= 1);
+    assert!(!body["repos"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -205,7 +205,7 @@ async fn test_v21_share_links_create() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["token"].as_str().unwrap_or("").len() > 0);
+    assert!(!body["token"].as_str().unwrap_or("").is_empty());
 }
 
 #[tokio::test]

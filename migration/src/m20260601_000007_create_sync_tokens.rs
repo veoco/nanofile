@@ -24,16 +24,8 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .unique_key(),
                     )
-                    .col(
-                        ColumnDef::new(SyncTokens::RepoId)
-                            .char_len(36)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(SyncTokens::UserId)
-                            .integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(SyncTokens::RepoId).char_len(36).not_null())
+                    .col(ColumnDef::new(SyncTokens::UserId).integer().not_null())
                     .col(
                         ColumnDef::new(SyncTokens::CreatedAt)
                             .big_integer()

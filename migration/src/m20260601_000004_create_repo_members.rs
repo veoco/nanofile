@@ -18,16 +18,8 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(RepoMembers::RepoId)
-                            .char_len(36)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(RepoMembers::UserId)
-                            .integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(RepoMembers::RepoId).char_len(36).not_null())
+                    .col(ColumnDef::new(RepoMembers::UserId).integer().not_null())
                     .col(
                         ColumnDef::new(RepoMembers::Permission)
                             .char_len(2)

@@ -13,6 +13,7 @@ use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{commit, fs_object, locked_file, repo, user};
 use crate::error::AppError;
+use crate::notification::events::FileLockEvent;
 use crate::serialization::fs_json::{DirEntryData, SEAF_METADATA_TYPE_DIR};
 use crate::storage::file_ops::FileOps;
 use crate::storage::path_cache::PathCache;
@@ -803,7 +804,7 @@ pub async fn lock_file_via_api_handler(
                 locked_file::Entity::insert(locked_file::ActiveModel {
                     id: sea_orm::NotSet,
                     repo_id: Set(repo_id.clone()),
-                    path: Set(path),
+                    path: Set(path.clone()),
                     user_id: Set(user_record.id),
                     locked_at: Set(chrono::Utc::now().timestamp()),
                     lock_owner_name: Set(auth.email.clone()),
@@ -811,6 +812,18 @@ pub async fn lock_file_via_api_handler(
                 .exec(db)
                 .await?;
             }
+
+            // Send file-lock-changed notification to WebSocket subscribers.
+            if let Some(mgr) = &state.notification_manager {
+                let event = FileLockEvent {
+                    repo_id: repo_id.clone(),
+                    path: path.clone(),
+                    change_event: "locked".to_string(),
+                    lock_user: auth.email.clone(),
+                };
+                mgr.notify(event).await;
+            }
+
             Ok(Json(serde_json::json!({"success": true})))
         }
         "unlock" => {
@@ -819,6 +832,18 @@ pub async fn lock_file_via_api_handler(
                 .filter(locked_file::Column::Path.eq(&path))
                 .exec(db)
                 .await?;
+
+            // Send file-lock-changed notification to WebSocket subscribers.
+            if let Some(mgr) = &state.notification_manager {
+                let event = FileLockEvent {
+                    repo_id: repo_id.clone(),
+                    path: path.clone(),
+                    change_event: "unlocked".to_string(),
+                    lock_user: auth.email.clone(),
+                };
+                mgr.notify(event).await;
+            }
+
             Ok(Json(serde_json::json!({"success": true})))
         }
         _ => Err(AppError::BadRequest(format!(

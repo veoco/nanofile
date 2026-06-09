@@ -34,7 +34,7 @@ async fn test_upload_and_search_content() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=nanofile&search_filename_only=false".to_string(),
+            "/api2/search/?q=nanofile&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -71,7 +71,7 @@ async fn test_search_content_not_filename() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=installation&search_filename_only=false".to_string(),
+            "/api2/search/?q=installation&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -87,7 +87,7 @@ async fn test_search_content_not_filename() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=installation&search_filename_only=true".to_string(),
+            "/api2/search/?q=installation&search_filename_only=true",
             Some(token),
         )
         .await;
@@ -124,7 +124,7 @@ async fn test_binary_file_skipped() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=binary&search_filename_only=false".to_string(),
+            "/api2/search/?q=binary&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -159,7 +159,7 @@ async fn test_delete_cleans_index() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=delete&search_filename_only=false".to_string(),
+            "/api2/search/?q=delete&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -186,7 +186,7 @@ async fn test_delete_cleans_index() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=delete&search_filename_only=false".to_string(),
+            "/api2/search/?q=delete&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -234,7 +234,7 @@ async fn test_rename_updates_index() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=rename+content&search_filename_only=false".to_string(),
+            "/api2/search/?q=rename+content&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -285,7 +285,7 @@ async fn test_move_updates_index() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=move+content&search_filename_only=false".to_string(),
+            "/api2/search/?q=move+content&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -319,7 +319,7 @@ async fn test_batch_delete_cleans_index() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=batch&search_filename_only=false".to_string(),
+            "/api2/search/?q=batch&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -349,7 +349,7 @@ async fn test_batch_delete_cleans_index() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=batch+0&search_filename_only=false".to_string(),
+            "/api2/search/?q=batch+0&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -398,7 +398,7 @@ async fn test_content_search_multi_repo() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=xyz987&search_filename_only=false".to_string(),
+            "/api2/search/?q=xyz987&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -437,7 +437,7 @@ async fn test_reindex_endpoint() {
     let resp = f
         .client
         .get(
-            &"/api2/search/?q=reindexable&search_filename_only=false".to_string(),
+            "/api2/search/?q=reindexable&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -485,7 +485,7 @@ async fn test_index_file_text_for_binary() {
     let resp = f
         .client
         .get(
-            &format!("/api2/search/?q=vision+model&search_filename_only=false"),
+            "/api2/search/?q=vision+model&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -519,7 +519,7 @@ async fn test_index_file_text_for_binary() {
     let resp = f
         .client
         .get(
-            &format!("/api2/search/?q=vision+model+extracted&search_filename_only=false"),
+            "/api2/search/?q=vision+model+extracted&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -556,7 +556,7 @@ async fn test_index_file_text_for_binary() {
     let resp = f
         .client
         .get(
-            &format!("/api2/search/?q=login+page+username&search_filename_only=false"),
+            "/api2/search/?q=login+page+username&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -571,7 +571,7 @@ async fn test_index_file_text_for_binary() {
     let resp = f
         .client
         .get(
-            &format!("/api2/search/?q=different+vision+model&search_filename_only=false"),
+            "/api2/search/?q=different+vision+model&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -607,7 +607,7 @@ async fn test_prefix_matching_in_content() {
     let resp = f
         .client
         .get(
-            &format!("/api2/search/?q=Caseend&search_filename_only=false"),
+            "/api2/search/?q=Caseend&search_filename_only=false",
             Some(token),
         )
         .await;
@@ -621,7 +621,7 @@ async fn test_prefix_matching_in_content() {
     let resp = f
         .client
         .get(
-            &format!("/api2/search/?q=case&search_filename_only=false"),
+            "/api2/search/?q=case&search_filename_only=false",
             Some(token),
         )
         .await;

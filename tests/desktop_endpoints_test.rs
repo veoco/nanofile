@@ -73,7 +73,7 @@ async fn test_repo_tokens_single_repo() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(
-        body[&f.repo_id].as_str().unwrap().len() > 0,
+        !body[&f.repo_id].as_str().unwrap().is_empty(),
         "should have a token"
     );
 }
@@ -93,8 +93,8 @@ async fn test_repo_tokens_multiple_repos() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body[&f.repo_id].as_str().unwrap().len() > 0);
-    assert!(body[&repo2_id].as_str().unwrap().len() > 0);
+    assert!(!body[&f.repo_id].as_str().unwrap().is_empty());
+    assert!(!body[&repo2_id].as_str().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -188,10 +188,7 @@ async fn test_dir_shared_items_unauthorized() {
     let server = common::TestServer::start().await;
     let client = server.client();
     let resp = client
-        .get(
-            &format!("/api2/repos/some-repo/dir/shared_items/?p=/"),
-            None,
-        )
+        .get("/api2/repos/some-repo/dir/shared_items/?p=/", None)
         .await;
     assert_eq!(resp.status(), 401);
 }
@@ -343,7 +340,7 @@ async fn test_sub_repo_create() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(status, 200, "sub_repo failed: {:?}", body);
     assert!(
-        body["id"].as_str().unwrap_or("").len() > 0,
+        !body["id"].as_str().unwrap_or("").is_empty(),
         "no repo id: {:?}",
         body
     );

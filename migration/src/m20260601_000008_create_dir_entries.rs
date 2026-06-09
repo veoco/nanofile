@@ -18,57 +18,29 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(DirEntries::RepoId)
-                            .char_len(36)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(DirEntries::ParentId)
-                            .char_len(40)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(DirEntries::ChildId)
-                            .char_len(40)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(DirEntries::Name)
-                            .string_len(255)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(DirEntries::RepoId).char_len(36).not_null())
+                    .col(ColumnDef::new(DirEntries::ParentId).char_len(40).not_null())
+                    .col(ColumnDef::new(DirEntries::ChildId).char_len(40).not_null())
+                    .col(ColumnDef::new(DirEntries::Name).string_len(255).not_null())
                     .col(
                         ColumnDef::new(DirEntries::EntryType)
                             .tiny_integer()
                             .not_null(),
                     )
-                    .col(
-                        ColumnDef::new(DirEntries::Mode)
-                            .integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(DirEntries::Mode).integer().not_null())
                     .col(
                         ColumnDef::new(DirEntries::Size)
                             .big_integer()
                             .not_null()
                             .default(0),
                     )
-                    .col(
-                        ColumnDef::new(DirEntries::Mtime)
-                            .big_integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(DirEntries::Mtime).big_integer().not_null())
                     .col(
                         ColumnDef::new(DirEntries::Modifier)
                             .string_len(255)
                             .not_null(),
                     )
-                    .col(
-                        ColumnDef::new(DirEntries::Path)
-                            .string_len(4096)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(DirEntries::Path).string_len(4096).not_null())
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_dir_entries_repo_id")

@@ -84,6 +84,13 @@ pub struct NotificationJwtClaims {
     pub exp: i64,
 }
 
+/// A JWT-expired event — tells the client its notification token has expired
+/// and it needs to fetch a new one and resubscribe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JwtExpiredEvent {
+    pub repo_id: String,
+}
+
 impl RepoUpdateEvent {
     pub fn new(repo_id: impl Into<String>, commit_id: impl Into<String>) -> Self {
         Self {
@@ -124,6 +131,15 @@ impl From<CommentEvent> for NotificationMessage {
     fn from(event: CommentEvent) -> Self {
         NotificationMessage {
             msg_type: "comment-update".to_string(),
+            content: serde_json::to_value(event).unwrap_or_default(),
+        }
+    }
+}
+
+impl From<JwtExpiredEvent> for NotificationMessage {
+    fn from(event: JwtExpiredEvent) -> Self {
+        NotificationMessage {
+            msg_type: "jwt-expired".to_string(),
             content: serde_json::to_value(event).unwrap_or_default(),
         }
     }

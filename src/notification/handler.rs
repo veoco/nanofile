@@ -114,7 +114,7 @@ async fn process_client_message(
             };
 
             // Validate all JWT tokens first.
-            let mut valid_subs: Vec<super::events::RepoSubscription> = Vec::new();
+            let mut valid_subs: Vec<(String, i64)> = Vec::new();
             let mut username = String::new();
 
             for repo in &sub.repos {
@@ -124,7 +124,7 @@ async fn process_client_message(
                     if username.is_empty() {
                         username = claims.username;
                     }
-                    valid_subs.push(repo.clone());
+                    valid_subs.push((repo.id.clone(), claims.exp));
                 }
             }
 

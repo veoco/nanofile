@@ -18,21 +18,9 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(Commits::RepoId)
-                            .char_len(36)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Commits::CommitId)
-                            .char_len(40)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Commits::RootId)
-                            .char_len(40)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Commits::RepoId).char_len(36).not_null())
+                    .col(ColumnDef::new(Commits::CommitId).char_len(40).not_null())
+                    .col(ColumnDef::new(Commits::RootId).char_len(40).not_null())
                     .col(ColumnDef::new(Commits::ParentId).char_len(40))
                     .col(ColumnDef::new(Commits::SecondParentId).char_len(40))
                     .col(
@@ -46,11 +34,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(""),
                     )
-                    .col(
-                        ColumnDef::new(Commits::Ctime)
-                            .big_integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Commits::Ctime).big_integer().not_null())
                     .col(
                         ColumnDef::new(Commits::Version)
                             .tiny_integer()

@@ -92,7 +92,10 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/api2/beshared-repos/{repo_id}/",
-            axum::routing::post(share::beshare_repo),
+            axum::routing::get(share::list_share_members)
+                .post(share::beshare_repo)
+                .put(share::modify_share_permission)
+                .delete(share::delete_share),
         )
         .nest("/api2", repo_history::repo_history_routes())
         .nest("/api2", devices::devices_routes())

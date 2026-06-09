@@ -12,9 +12,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(SyncTokens::Table)
-                    .add_column_if_not_exists(
-                        ColumnDef::new(SyncTokens::PeerId).string_len(40),
-                    )
+                    .add_column_if_not_exists(ColumnDef::new(SyncTokens::PeerId).string_len(40))
                     .to_owned(),
             )
             .await?;
@@ -24,9 +22,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(SyncTokens::Table)
-                    .add_column_if_not_exists(
-                        ColumnDef::new(SyncTokens::PeerName).string_len(255),
-                    )
+                    .add_column_if_not_exists(ColumnDef::new(SyncTokens::PeerName).string_len(255))
                     .to_owned(),
             )
             .await?;
@@ -36,9 +32,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(SyncTokens::Table)
-                    .add_column_if_not_exists(
-                        ColumnDef::new(SyncTokens::PeerIp).string_len(50),
-                    )
+                    .add_column_if_not_exists(ColumnDef::new(SyncTokens::PeerIp).string_len(50))
                     .to_owned(),
             )
             .await?;

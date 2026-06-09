@@ -51,7 +51,7 @@ async fn test_folder_perm_returns_list() {
     let arr = body.as_array().unwrap();
     assert!(!arr.is_empty());
     assert_eq!(arr[0]["repo_id"].as_str().unwrap(), f.repo_id);
-    assert!(arr[0]["user_perms"].as_array().unwrap().len() >= 1);
+    assert!(!arr[0]["user_perms"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -99,7 +99,7 @@ async fn test_folder_perm_accepts_no_content_type() {
     let arr = body.as_array().unwrap();
     assert!(!arr.is_empty());
     assert_eq!(arr[0]["repo_id"].as_str().unwrap(), f.repo_id);
-    assert!(arr[0]["user_perms"].as_array().unwrap().len() >= 1);
+    assert!(!arr[0]["user_perms"].as_array().unwrap().is_empty());
 }
 
 /// C.2.3 — GET /seafhttp/accessible-repos
@@ -115,8 +115,8 @@ async fn test_accessible_repos_returns_list() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let repos = body.as_array().unwrap();
     assert!(!repos.is_empty(), "should have at least one repo");
-    assert!(repos[0]["repo_id"].as_str().unwrap_or("").len() > 0);
-    assert!(repos[0]["token"].as_str().unwrap_or("").len() > 0);
+    assert!(!repos[0]["repo_id"].as_str().unwrap_or("").is_empty());
+    assert!(!repos[0]["token"].as_str().unwrap_or("").is_empty());
 }
 
 #[tokio::test]

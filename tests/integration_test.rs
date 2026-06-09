@@ -1245,7 +1245,7 @@ async fn test_regression_cdc_chunk_size_bounds() {
     let file_size = file_data["size"].as_i64().unwrap() as usize;
 
     assert!(
-        block_ids.len() >= 1,
+        !block_ids.is_empty(),
         "1MB file should produce at least 1 chunk"
     );
     assert!(
@@ -1504,12 +1504,12 @@ async fn test_block_store_unified_across_api_and_sync() {
     for (_id, data) in &entries {
         let decompressed = pack_fs::decompress_fs_data(data).unwrap();
         let json_val: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
-        if json_val["type"].as_i64() == Some(1) {
-            if let Some(block_ids) = json_val["block_ids"].as_array() {
-                for bid in block_ids {
-                    if let Some(b) = bid.as_str() {
-                        found_block_ids.push(b.to_string());
-                    }
+        if json_val["type"].as_i64() == Some(1)
+            && let Some(block_ids) = json_val["block_ids"].as_array()
+        {
+            for bid in block_ids {
+                if let Some(b) = bid.as_str() {
+                    found_block_ids.push(b.to_string());
                 }
             }
         }
@@ -1545,7 +1545,7 @@ async fn test_block_store_unified_across_api_and_sync() {
             "block {block_id} must exist via get-block"
         );
         let block_data = resp.bytes().await.unwrap();
-        assert!(block_data.len() > 0, "block must have content");
+        assert!(!block_data.is_empty(), "block must have content");
     }
 }
 

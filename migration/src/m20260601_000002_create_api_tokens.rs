@@ -18,11 +18,7 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(ApiTokens::UserId)
-                            .integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(ApiTokens::UserId).integer().not_null())
                     .col(
                         ColumnDef::new(ApiTokens::Token)
                             .char_len(40)

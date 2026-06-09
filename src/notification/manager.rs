@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::sync::RwLock;
 use tokio::sync::mpsc;
 
-use super::events::{NotificationJwtClaims, NotificationMessage, RepoSubscription};
+use super::events::{JwtExpiredEvent, NotificationJwtClaims, NotificationMessage};
 use super::events_channel;
 
 /// Channel capacity for outgoing WebSocket messages per client.
@@ -19,6 +19,9 @@ pub struct ClientState {
     pub subscribed_repos: RwLock<HashSet<String>>,
     /// Channel to send outgoing messages to this client's write loop.
     pub sender: mpsc::UnboundedSender<Value>,
+    /// JWT token expiration timestamps per repo (repo_id → unix timestamp).
+    /// Used by the periodic expiry checker to evict expired subscriptions.
+    pub token_expirations: RwLock<HashMap<String, i64>>,
 }
 
 /// In-memory notification subscription manager.
@@ -51,6 +54,7 @@ impl NotificationManager {
             user: RwLock::new(String::new()),
             subscribed_repos: RwLock::new(HashSet::new()),
             sender,
+            token_expirations: RwLock::new(HashMap::new()),
         });
 
         {
@@ -93,7 +97,8 @@ impl NotificationManager {
 
     /// Subscribe a client to a set of repos.
     /// `username` is extracted from the validated JWT token.
-    pub async fn subscribe(&self, client_id: u64, username: &str, repos: &[RepoSubscription]) {
+    /// `repos` is a list of (repo_id, jwt_exp_timestamp) pairs.
+    pub async fn subscribe(&self, client_id: u64, username: &str, repos: &[(String, i64)]) {
         let clients = self.clients.read().unwrap();
         let client = match clients.get(&client_id) {
             Some(c) => c.clone(),
@@ -111,10 +116,12 @@ impl NotificationManager {
 
         let mut subs = self.subscriptions.write().unwrap();
         let mut subscribed = client.subscribed_repos.write().unwrap();
+        let mut expirations = client.token_expirations.write().unwrap();
 
-        for repo in repos {
-            subs.entry(repo.id.clone()).or_default().insert(client_id);
-            subscribed.insert(repo.id.clone());
+        for (repo_id, exp) in repos {
+            subs.entry(repo_id.clone()).or_default().insert(client_id);
+            subscribed.insert(repo_id.clone());
+            expirations.insert(repo_id.clone(), *exp);
         }
     }
 
@@ -214,9 +221,6 @@ impl NotificationManager {
                         mgr.notify(event).await;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        // Receiver fell behind — messages were dropped. This happens
-                        // when events are produced faster than they're forwarded.
-                        // Continue listening rather than crashing the listener task.
                         tracing::warn!("Notification listener lagged by {n} messages, resuming");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -226,6 +230,77 @@ impl NotificationManager {
                 }
             }
         });
+    }
+
+    /// Start a background task that checks for expired JWT tokens every hour
+    /// and sends `jwt-expired` notifications to affected clients.
+    pub async fn start_token_expiry_checker(&self) {
+        let mgr = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                mgr.check_expired_tokens().await;
+            }
+        });
+    }
+
+    /// Iterate all clients and check their JWT token expirations.
+    /// Expired tokens are removed and a `jwt-expired` message is sent to the client,
+    /// matching the seafile notification-server behavior so the seahub frontend
+    /// can fetch a new JWT and resubscribe.
+    async fn check_expired_tokens(&self) {
+        let now = chrono::Utc::now().timestamp();
+        let clients = self.clients.read().unwrap();
+        for (client_id, client) in clients.iter() {
+            // Collect expired repo_ids.
+            let expired: Vec<String> = {
+                let exps = client.token_expirations.read().unwrap();
+                exps.iter()
+                    .filter(|&(_, exp)| *exp <= now)
+                    .map(|(repo_id, _)| repo_id.clone())
+                    .collect()
+            };
+            if expired.is_empty() {
+                continue;
+            }
+            // Remove from token_expirations.
+            {
+                let mut exps = client.token_expirations.write().unwrap();
+                for repo_id in &expired {
+                    exps.remove(repo_id);
+                }
+            }
+            // Remove from subscribed_repos.
+            {
+                let mut subscribed = client.subscribed_repos.write().unwrap();
+                for repo_id in &expired {
+                    subscribed.remove(repo_id);
+                }
+            }
+            // Remove from global subscriptions map.
+            {
+                let mut subs = self.subscriptions.write().unwrap();
+                for repo_id in &expired {
+                    if let Some(ids) = subs.get_mut(repo_id) {
+                        ids.remove(client_id);
+                        if ids.is_empty() {
+                            subs.remove(repo_id);
+                        }
+                    }
+                }
+            }
+            // Send jwt-expired notification to the client.
+            for repo_id in &expired {
+                let event = JwtExpiredEvent {
+                    repo_id: repo_id.clone(),
+                };
+                let msg: NotificationMessage = event.into();
+                if let Ok(value) = serde_json::to_value(&msg) {
+                    let _ = client.sender.send(value);
+                }
+            }
+        }
     }
 }
 

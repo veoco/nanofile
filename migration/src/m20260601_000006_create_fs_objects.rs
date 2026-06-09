@@ -18,26 +18,10 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(FsObjects::RepoId)
-                            .char_len(36)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(FsObjects::FsId)
-                            .char_len(40)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(FsObjects::ObjType)
-                            .tiny_integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(FsObjects::Data)
-                            .binary()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(FsObjects::RepoId).char_len(36).not_null())
+                    .col(ColumnDef::new(FsObjects::FsId).char_len(40).not_null())
+                    .col(ColumnDef::new(FsObjects::ObjType).tiny_integer().not_null())
+                    .col(ColumnDef::new(FsObjects::Data).binary().not_null())
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_fs_objects_repo_id")

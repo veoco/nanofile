@@ -18,16 +18,8 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(UploadLinks::RepoId)
-                            .char_len(36)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(UploadLinks::CreatorId)
-                            .integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(UploadLinks::RepoId).char_len(36).not_null())
+                    .col(ColumnDef::new(UploadLinks::CreatorId).integer().not_null())
                     .col(
                         ColumnDef::new(UploadLinks::Path)
                             .string_len(4096)

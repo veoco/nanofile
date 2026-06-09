@@ -25,9 +25,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(UsersRef)
-                    .add_column_if_not_exists(
-                        ColumnDef::new(UsersRefCol::Name).string_len(255),
-                    )
+                    .add_column_if_not_exists(ColumnDef::new(UsersRefCol::Name).string_len(255))
                     .to_owned(),
             )
             .await?;
@@ -247,7 +245,11 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(StarredFiles::RepoId).char_len(36).not_null())
-                    .col(ColumnDef::new(StarredFiles::Path).string_len(4096).not_null())
+                    .col(
+                        ColumnDef::new(StarredFiles::Path)
+                            .string_len(4096)
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(StarredFiles::UserId).integer().not_null())
                     .col(
                         ColumnDef::new(StarredFiles::CreatedAt)
@@ -298,14 +300,23 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(LockedFiles::RepoId).char_len(36).not_null())
-                    .col(ColumnDef::new(LockedFiles::Path).string_len(4096).not_null())
+                    .col(
+                        ColumnDef::new(LockedFiles::Path)
+                            .string_len(4096)
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(LockedFiles::UserId).integer().not_null())
                     .col(
                         ColumnDef::new(LockedFiles::LockedAt)
                             .big_integer()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(LockedFiles::LockOwnerName).string_len(255).not_null().default(""))
+                    .col(
+                        ColumnDef::new(LockedFiles::LockOwnerName)
+                            .string_len(255)
+                            .not_null()
+                            .default(""),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_locked_files_repo_id")
@@ -350,11 +361,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(Groups::Name).string_len(255).not_null())
                     .col(ColumnDef::new(Groups::CreatorId).integer().not_null())
-                    .col(
-                        ColumnDef::new(Groups::CreatedAt)
-                            .big_integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Groups::CreatedAt).big_integer().not_null())
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_groups_creator_id")
@@ -439,10 +446,7 @@ impl MigrationTrait for Migration {
                             .string_len(255)
                             .not_null(),
                     )
-                    .col(
-                        ColumnDef::new(UserContacts::ContactName)
-                            .string_len(255),
-                    )
+                    .col(ColumnDef::new(UserContacts::ContactName).string_len(255))
                     .col(
                         ColumnDef::new(UserContacts::CreatedAt)
                             .big_integer()
@@ -477,18 +481,9 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .unique_key(),
                     )
-                    .col(
-                        ColumnDef::new(SsoLoginTokens::Platform)
-                            .string_len(64),
-                    )
-                    .col(
-                        ColumnDef::new(SsoLoginTokens::DeviceId)
-                            .string_len(255),
-                    )
-                    .col(
-                        ColumnDef::new(SsoLoginTokens::DeviceName)
-                            .string_len(255),
-                    )
+                    .col(ColumnDef::new(SsoLoginTokens::Platform).string_len(64))
+                    .col(ColumnDef::new(SsoLoginTokens::DeviceId).string_len(255))
+                    .col(ColumnDef::new(SsoLoginTokens::DeviceName).string_len(255))
                     .col(
                         ColumnDef::new(SsoLoginTokens::Status)
                             .char_len(16)
@@ -519,17 +514,14 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
+                    .col(ColumnDef::new(Thumbnails::RepoId).char_len(36).not_null())
+                    .col(ColumnDef::new(Thumbnails::Path).string_len(4096).not_null())
                     .col(
-                        ColumnDef::new(Thumbnails::RepoId)
-                            .char_len(36)
-                            .not_null(),
+                        ColumnDef::new(Thumbnails::Size)
+                            .integer()
+                            .not_null()
+                            .default(128),
                     )
-                    .col(
-                        ColumnDef::new(Thumbnails::Path)
-                            .string_len(4096)
-                            .not_null(),
-                    )
-                    .col(ColumnDef::new(Thumbnails::Size).integer().not_null().default(128))
                     .col(
                         ColumnDef::new(Thumbnails::FileModifiedAt)
                             .big_integer()

@@ -35,11 +35,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(true),
                     )
-                    .col(
-                        ColumnDef::new(Users::CreatedAt)
-                            .big_integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Users::CreatedAt).big_integer().not_null())
                     .col(ColumnDef::new(Users::LastLoginAt).big_integer())
                     .to_owned(),
             )

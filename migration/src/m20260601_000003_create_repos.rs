@@ -17,22 +17,14 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(Repos::Name)
-                            .string_len(255)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Repos::Name).string_len(255).not_null())
                     .col(
                         ColumnDef::new(Repos::Description)
                             .string_len(1024)
                             .not_null()
                             .default(""),
                     )
-                    .col(
-                        ColumnDef::new(Repos::OwnerId)
-                            .integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Repos::OwnerId).integer().not_null())
                     .col(
                         ColumnDef::new(Repos::Encrypted)
                             .tiny_integer()
@@ -60,16 +52,8 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default("rw"),
                     )
-                    .col(
-                        ColumnDef::new(Repos::CreatedAt)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Repos::UpdatedAt)
-                            .big_integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Repos::CreatedAt).big_integer().not_null())
+                    .col(ColumnDef::new(Repos::UpdatedAt).big_integer().not_null())
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_repos_owner_id")

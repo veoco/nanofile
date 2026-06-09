@@ -18,36 +18,16 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(Wikis::RepoId)
-                            .char_len(36)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Wikis::Name)
-                            .string_len(255)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Wikis::OwnerId)
-                            .integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Wikis::Published)
-                            .boolean()
-                            .default(false),
-                    )
+                    .col(ColumnDef::new(Wikis::RepoId).char_len(36).not_null())
+                    .col(ColumnDef::new(Wikis::Name).string_len(255).not_null())
+                    .col(ColumnDef::new(Wikis::OwnerId).integer().not_null())
+                    .col(ColumnDef::new(Wikis::Published).boolean().default(false))
                     .col(
                         ColumnDef::new(Wikis::Permission)
                             .string_len(10)
                             .default("private"),
                     )
-                    .col(
-                        ColumnDef::new(Wikis::CreatedAt)
-                            .big_integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Wikis::CreatedAt).big_integer().not_null())
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_wikis_repo_id")

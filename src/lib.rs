@@ -74,6 +74,14 @@ impl AppState {
                 mgr.start_event_listener().await;
             });
         }
+        // Start the background JWT token expiry checker that sends jwt-expired
+        // notifications when subscription tokens expire. Runs hourly.
+        if let Some(ref mgr) = notification_manager {
+            let mgr = mgr.clone();
+            tokio::spawn(async move {
+                mgr.start_token_expiry_checker().await;
+            });
+        }
         let indexer = if config.index.enabled {
             match TextIndexer::new(&config.index.index_dir) {
                 Ok(idx) => {

@@ -18,11 +18,7 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(S2faTokens::UserId)
-                            .integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(S2faTokens::UserId).integer().not_null())
                     .col(
                         ColumnDef::new(S2faTokens::Token)
                             .char_len(40)
