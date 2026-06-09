@@ -92,6 +92,7 @@ impl TestServer {
                 enabled: enable_index,
                 index_dir: std::env::temp_dir().join(format!("nf-test-{}-index", port)),
             },
+            admin_init: Default::default(),
         };
         // Ensure block directory exists
         std::fs::create_dir_all(&config.storage.block_dir).unwrap();

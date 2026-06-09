@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use clap::Parser;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
 use sea_orm_migration::MigratorTrait;
 use std::io::Write;
 use std::sync::Arc;
@@ -74,6 +74,41 @@ async fn main() -> anyhow::Result<()> {
             );
 
             let state = Arc::new(AppState::new(db, config.clone()));
+
+            // ── Auto-create admin user from config/env on first startup ──────
+            if let (Some(admin_email), Some(admin_password)) = (
+                &state.config.admin_init.email,
+                &state.config.admin_init.password,
+            ) {
+                let count = nanofile::entity::user::Entity::find()
+                    .count(state.db.as_ref())
+                    .await?;
+                if count == 0 {
+                    tracing::info!("No users found; creating initial admin user");
+                    let password_hash = nanofile::auth::password::hash_password(
+                        admin_password,
+                        state.config.auth.password_hash_iterations,
+                    );
+                    let now = chrono::Utc::now().timestamp();
+                    let model = nanofile::entity::user::ActiveModel {
+                        id: sea_orm::NotSet,
+                        email: Set(admin_email.clone()),
+                        password_hash: Set(password_hash),
+                        is_active: Set(true),
+                        is_admin: Set(true),
+                        created_at: Set(now),
+                        last_login_at: Set(None),
+                        invited_by: Set(None),
+                    };
+                    model.insert(state.db.as_ref()).await?;
+                    tracing::info!("Admin user '{}' created", admin_email);
+                } else {
+                    tracing::debug!(
+                        "Users already exist (count={}), skipping admin auto-creation",
+                        count,
+                    );
+                }
+            }
 
             let cors = CorsLayer::new()
                 .allow_origin(Any)

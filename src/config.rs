@@ -14,6 +14,8 @@ pub struct Config {
     pub index: IndexConfig,
     #[serde(default)]
     pub notification: NotificationConfig,
+    #[serde(default)]
+    pub admin_init: AdminInitConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -72,6 +74,12 @@ pub struct AuthConfig {
     /// Require at least one letter and one digit in passwords.
     #[serde(default)]
     pub require_strong_password: bool,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct AdminInitConfig {
+    pub email: Option<String>,
+    pub password: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -228,6 +236,12 @@ impl Config {
         }
         if let Ok(v) = std::env::var("NANOFILE_INDEX_INDEX_DIR") {
             self.index.index_dir = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_EMAIL") {
+            self.admin_init.email = Some(v);
+        }
+        if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_PASSWORD") {
+            self.admin_init.password = Some(v);
         }
     }
 }

@@ -23,6 +23,10 @@ enable_password_reset = true
 password_min_length = 8
 require_strong_password = false
 
+[admin_init]
+# email = "admin@example.com"
+# password = "secret123"
+
 [logging]
 level = "debug"
 
