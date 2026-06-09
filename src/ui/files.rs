@@ -731,10 +731,10 @@ pub async fn create_directory(
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                let root_fs_id = crate::storage::store_fs_dir_object(db, &repo_id, root_dir)
+
+                crate::storage::store_fs_dir_object(db, &repo_id, root_dir)
                     .await
-                    .map_err(|e| AppError::Internal(e.to_string()))?;
-                root_fs_id
+                    .map_err(|e| AppError::Internal(e.to_string()))?
             }
         }
     } else {

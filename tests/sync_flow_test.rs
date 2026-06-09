@@ -224,7 +224,9 @@ async fn test_incremental_upload() {
     // Upload a real block so the block integrity check passes.
     let block_data = b"block data for incremental upload test";
     let block_id = sha1_hex(block_data);
-    let resp = client.put_block(&sync_token, &repo_id, &block_id, block_data.to_vec()).await;
+    let resp = client
+        .put_block(&sync_token, &repo_id, &block_id, block_data.to_vec())
+        .await;
     assert_eq!(resp.status(), 200);
 
     let file_data = FsFileData {

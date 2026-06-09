@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use crate::entity::fs_object;
 use crate::error::AppError;
-use crate::serialization::fs_json::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE};
+use crate::serialization::fs_json::{
+    FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE,
+};
 use crate::storage::path_cache::PathCache;
 
 /// Abstract backend for content-addressed block storage.

@@ -150,7 +150,9 @@ async fn test_recv_fs_binary_format() {
     // Upload a real block so the block integrity check passes.
     let block_data = b"hello world this is test block data";
     let block_id = sha1_hex(block_data);
-    let resp = client.put_block(&sync_token, &repo_id, &block_id, block_data.to_vec()).await;
+    let resp = client
+        .put_block(&sync_token, &repo_id, &block_id, block_data.to_vec())
+        .await;
     assert_eq!(resp.status(), 200);
 
     // Create a file fs_object referencing the real block.
@@ -749,7 +751,9 @@ async fn test_resolve_fs_id_root_path() {
     // Upload a real block so the block integrity check passes.
     let block_data = b"block data for resolve_fs_id_root_path";
     let block_id = sha1_hex(block_data);
-    let resp = client.put_block(&sync_token, &repo_id, &block_id, block_data.to_vec()).await;
+    let resp = client
+        .put_block(&sync_token, &repo_id, &block_id, block_data.to_vec())
+        .await;
     assert_eq!(resp.status(), 200);
 
     // Upload a file to create a real FS tree
@@ -810,7 +814,9 @@ async fn test_resolve_fs_id_deep_path() {
     // Upload a real block so the block integrity check passes.
     let block_data = b"block data for resolve_fs_id_deep_path";
     let block_id = sha1_hex(block_data);
-    let resp = client.put_block(&sync_token, &repo_id, &block_id, block_data.to_vec()).await;
+    let resp = client
+        .put_block(&sync_token, &repo_id, &block_id, block_data.to_vec())
+        .await;
     assert_eq!(resp.status(), 200);
 
     // Build: root -> sub/ -> nested.txt

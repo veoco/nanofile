@@ -323,10 +323,8 @@ pub(crate) async fn create_dir_by_path(
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                let root_fs_id =
-                    crate::storage::store_fs_dir_object(state.db.as_ref(), &repo_id, empty_root)
-                        .await?;
-                root_fs_id
+
+                crate::storage::store_fs_dir_object(state.db.as_ref(), &repo_id, empty_root).await?
             }
         }
     } else {

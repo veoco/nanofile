@@ -193,9 +193,7 @@ pub async fn update_branch(
     // Validate commit_id format (40 hex characters, case-insensitive).
     // This matches seafile's is_object_id_valid() which uses
     // strspn(id, "0123456789abcdefABCDEF") == 40.
-    if new_head.len() != 40
-        || !new_head.chars().all(|c| c.is_ascii_hexdigit())
-    {
+    if new_head.len() != 40 || !new_head.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(AppError::BadRequest("invalid commit id".into()));
     }
 
@@ -227,17 +225,17 @@ pub async fn update_branch(
 
     // Verify the parent commit exists. Seafile requires the base commit
     // to be present on the server; a missing parent is a client error.
-    if let Some(ref parent_id) = new_commit.parent_id {
-        if parent_id != "0000000000000000000000000000000000000000" {
-            let parent_exists = commit::Entity::find()
-                .filter(commit::Column::RepoId.eq(&repo_id))
-                .filter(commit::Column::CommitId.eq(parent_id))
-                .one(state.db.as_ref())
-                .await?
-                .is_some();
-            if !parent_exists {
-                return Err(AppError::BadRequest("parent commit not found".into()));
-            }
+    if let Some(ref parent_id) = new_commit.parent_id
+        && parent_id != "0000000000000000000000000000000000000000"
+    {
+        let parent_exists = commit::Entity::find()
+            .filter(commit::Column::RepoId.eq(&repo_id))
+            .filter(commit::Column::CommitId.eq(parent_id))
+            .one(state.db.as_ref())
+            .await?
+            .is_some();
+        if !parent_exists {
+            return Err(AppError::BadRequest("parent commit not found".into()));
         }
     }
 
@@ -246,7 +244,8 @@ pub async fn update_branch(
     // SELECT ... FOR UPDATE. Since nanofile uses SQLite (serialized
     // writes), a loop with re-read + conditional update is sufficient.
     let mut attempt: u32 = 0;
-    let result = loop {
+
+    loop {
         attempt += 1;
 
         let current_head = repo::Entity::find_by_id(&repo_id)
@@ -308,9 +307,7 @@ pub async fn update_branch(
                 .await;
         }
         break Ok(StatusCode::OK);
-    };
-
-    result
+    }
 }
 
 /// Walk the FS tree starting from root_id, collecting file objects and

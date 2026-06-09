@@ -40,8 +40,7 @@ impl FileOps {
             obj_type: 1,
             version: 1,
         };
-        let file_fs_id =
-            crate::storage::store_fs_file_object(db, repo_id, file_fs_data).await?;
+        let file_fs_id = crate::storage::store_fs_file_object(db, repo_id, file_fs_data).await?;
 
         let parent_fs_id = if parent_path == "/" {
             // Find root via repo head commit, or create empty root fs_object for empty repo
@@ -88,8 +87,7 @@ impl FileOps {
             obj_type: SEAF_METADATA_TYPE_DIR,
             version: 1,
         };
-        let new_dir_fs_id =
-            crate::storage::store_fs_dir_object(db, repo_id, new_dir_data).await?;
+        let new_dir_fs_id = crate::storage::store_fs_dir_object(db, repo_id, new_dir_data).await?;
 
         // Walk up to root, updating all ancestor directories
         let root_fs_id = if parent_path == "/" {

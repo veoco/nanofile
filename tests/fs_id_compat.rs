@@ -21,10 +21,7 @@ fn test_fs_file_data_json_sorted_keys() {
         json.starts_with("{\"block_ids\":"),
         "expected keys sorted, got: {json}"
     );
-    assert!(
-        json.contains("\"size\":2048"),
-        "missing size field: {json}"
-    );
+    assert!(json.contains("\"size\":2048"), "missing size field: {json}");
     assert!(json.contains("\"type\":1"), "missing type field: {json}");
     assert!(
         json.contains("\"version\":1"),
@@ -90,8 +87,7 @@ fn test_store_fs_dir_object_empty_dir_returns_emty_sha1() {
     let json_hash = nanofile::crypto::fs_id::sha1_hex(json.as_bytes());
     // Proving the point: the hash of empty dir JSON is NOT all zeros
     assert_ne!(
-        json_hash,
-        "0000000000000000000000000000000000000000",
+        json_hash, "0000000000000000000000000000000000000000",
         "SHA1 of empty dir JSON is not all zeros — the sentinel is assigned by convention, not computed"
     );
 }
@@ -110,7 +106,10 @@ fn test_file_data_compute_fs_id_matches_json_hash() {
     let json = data.to_compact_json();
     let expected = nanofile::crypto::fs_id::sha1_hex(json.as_bytes());
     let actual = data.compute_fs_id();
-    assert_eq!(actual, expected, "compute_fs_id must match sha1_hex of JSON");
+    assert_eq!(
+        actual, expected,
+        "compute_fs_id must match sha1_hex of JSON"
+    );
 }
 
 #[test]
@@ -123,5 +122,8 @@ fn test_dir_data_compute_fs_id_matches_json_hash() {
     let json = data.to_compact_json();
     let expected = nanofile::crypto::fs_id::sha1_hex(json.as_bytes());
     let actual = data.compute_fs_id();
-    assert_eq!(actual, expected, "compute_fs_id must match sha1_hex of JSON");
+    assert_eq!(
+        actual, expected,
+        "compute_fs_id must match sha1_hex of JSON"
+    );
 }

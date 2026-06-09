@@ -56,8 +56,7 @@ pub async fn create_file_v21(
         obj_type: 1,
         version: 1,
     };
-    let file_fs_id =
-        crate::storage::store_fs_file_object(db, &repo_id, file_fs_data).await?;
+    let file_fs_id = crate::storage::store_fs_file_object(db, &repo_id, file_fs_data).await?;
 
     // Resolve parent directory (handles empty repo)
     let parent_fs_id = if parent_path == "/" {
