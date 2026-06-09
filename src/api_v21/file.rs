@@ -3,13 +3,12 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{EntityTrait, QueryFilter};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::fs_object;
 use crate::error::AppError;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use crate::storage::file_ops::FileOps;
@@ -57,28 +56,8 @@ pub async fn create_file_v21(
         obj_type: 1,
         version: 1,
     };
-    let file_json = file_fs_data.to_compact_json();
-    let file_fs_id = crate::crypto::fs_id::compute_fs_id(file_json.as_bytes());
-
-    // Skip insert if fs_object already exists
-    let existing = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(&repo_id))
-        .filter(fs_object::Column::FsId.eq(&file_fs_id))
-        .one(db)
-        .await?;
-
-    if existing.is_none() {
-        use sea_orm::Set;
-        fs_object::Entity::insert(fs_object::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: Set(repo_id.clone()),
-            fs_id: Set(file_fs_id.clone()),
-            obj_type: Set(1i8),
-            data: Set(file_json),
-        })
-        .exec(db)
-        .await?;
-    }
+    let file_fs_id =
+        crate::storage::store_fs_file_object(db, &repo_id, file_fs_data).await?;
 
     // Resolve parent directory (handles empty repo)
     let parent_fs_id = if parent_path == "/" {
@@ -91,29 +70,7 @@ pub async fn create_file_v21(
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                let root_json = empty_dir.to_compact_json();
-                let root_fs_id = crate::crypto::fs_id::compute_fs_id(root_json.as_bytes());
-
-                let root_exists = fs_object::Entity::find()
-                    .filter(fs_object::Column::RepoId.eq(&repo_id))
-                    .filter(fs_object::Column::FsId.eq(&root_fs_id))
-                    .one(db)
-                    .await?
-                    .is_some();
-                if !root_exists {
-                    use sea_orm::Set;
-                    fs_object::Entity::insert(fs_object::ActiveModel {
-                        id: sea_orm::NotSet,
-                        repo_id: Set(repo_id.clone()),
-                        fs_id: Set(root_fs_id.clone()),
-                        obj_type: Set(SEAF_METADATA_TYPE_DIR as i8),
-                        data: Set(root_json),
-                    })
-                    .exec(db)
-                    .await?;
-                }
-
-                root_fs_id
+                crate::storage::store_fs_dir_object(db, &repo_id, empty_dir).await?
             }
         }
     } else {

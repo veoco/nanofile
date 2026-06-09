@@ -375,5 +375,7 @@ async fn test_update_branch_verifies_commit() {
     let resp = client
         .update_branch(&sync_token, &repo_id, &fake_commit_id)
         .await;
-    assert_eq!(resp.status(), 400);
+    // Seafile returns 500 (EVHTP_RES_SERVERR) when the commit does not
+    // exist — matching put_update_branch_cb behavior.
+    assert_eq!(resp.status(), 500);
 }

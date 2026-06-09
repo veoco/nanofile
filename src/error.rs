@@ -40,6 +40,14 @@ pub enum AppError {
     #[error("repo corrupted")]
     RepoCorrupted,
 
+    /// 443 — storage quota exceeded (seafile wire protocol)
+    #[error("storage quota exceeded")]
+    QuotaExceeded,
+
+    /// 446 — content blocks missing (seafile wire protocol)
+    #[error("blocks missing")]
+    BlockMissing,
+
     #[error("two factor auth token is missing")]
     TwoFactorRequired,
 
@@ -83,6 +91,14 @@ impl IntoResponse for AppError {
             AppError::RepoCorrupted => (
                 StatusCode::from_u16(445).unwrap(),
                 json!({ "error": "repo was corrupted" }),
+            ),
+            AppError::QuotaExceeded => (
+                StatusCode::from_u16(443).unwrap(),
+                json!({ "error": "Storage quota exceeded." }),
+            ),
+            AppError::BlockMissing => (
+                StatusCode::from_u16(446).unwrap(),
+                json!({ "error": "Blocks missing for uploaded files." }),
             ),
             // Seafile server wire format — sync client parses error_msg
             // to detect 2FA prompts; non_field_errors would be ignored.

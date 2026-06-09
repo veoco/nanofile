@@ -356,7 +356,7 @@ async fn test_pack_fs_accepts_json_array() {
         version: 1,
     };
     let dir_json = empty_dir.to_compact_json();
-    let dir_fs_id = nanofile::crypto::fs_id::compute_fs_id(dir_json.as_bytes());
+    let dir_fs_id = nanofile::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
         nanofile::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
@@ -402,7 +402,7 @@ async fn test_pack_fs_accepts_form_encoded() {
         version: 1,
     };
     let dir_json = empty_dir.to_compact_json();
-    let dir_fs_id = nanofile::crypto::fs_id::compute_fs_id(dir_json.as_bytes());
+    let dir_fs_id = nanofile::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
         nanofile::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
@@ -544,7 +544,7 @@ async fn test_check_fs_accepts_form_encoded() {
         version: 1,
     };
     let dir_json = empty_dir.to_compact_json();
-    let dir_fs_id = nanofile::crypto::fs_id::compute_fs_id(dir_json.as_bytes());
+    let dir_fs_id = nanofile::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
         nanofile::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 

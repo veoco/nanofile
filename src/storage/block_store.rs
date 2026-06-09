@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
 
-use crate::crypto::fs_id::compute_block_id;
+use crate::crypto::fs_id::sha1_hex;
 use crate::crypto::random_key::{decrypt_block, encrypt_block};
 use crate::storage::BlockStorageBackend;
 
@@ -55,7 +55,7 @@ impl BlockStorageBackend for BlockStorage {
     }
 
     async fn write_block(&self, data: &[u8]) -> Result<String, std::io::Error> {
-        let block_id = compute_block_id(data);
+        let block_id = sha1_hex(data);
         let path = self.block_path(&block_id);
 
         if let Some(parent) = path.parent() {

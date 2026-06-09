@@ -25,7 +25,8 @@ async fn test_update_branch_invalid_commit() {
     let resp = client
         .update_branch(&sync_token, &repo_id, &random_hex_id())
         .await;
-    assert_eq!(resp.status(), 400);
+    // Seafile returns 500 (EVHTP_RES_SERVERR) when commit not found.
+    assert_eq!(resp.status(), 500);
 }
 
 #[tokio::test]

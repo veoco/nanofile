@@ -10,7 +10,8 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
 use crate::entity::fs_object;
-use crate::serialization::fs_json::{FsDirData, FsFileData};
+use crate::error::AppError;
+use crate::serialization::fs_json::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE};
 use crate::storage::path_cache::PathCache;
 
 /// Abstract backend for content-addressed block storage.
@@ -46,6 +47,86 @@ pub fn new_block_store(base_dir: &std::path::Path) -> DynBlockStorage {
 // ====================================================================
 // Unified FS tree access functions
 // ====================================================================
+
+/// Serialize an FsFileData to JSON, compute its SHA1 ID, check the DB,
+/// and insert if the object does not already exist. Returns the fs_id.
+///
+/// This matches seafile's write_seafile() flow:
+///   seafile_to_json() → calculate SHA1 → check exists → write.
+pub async fn store_fs_file_object(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    file_data: FsFileData,
+) -> Result<String, AppError> {
+    let json = file_data.to_compact_json();
+    let fs_id = crate::crypto::fs_id::sha1_hex(json.as_bytes());
+
+    let exists = fs_object::Entity::find()
+        .filter(fs_object::Column::RepoId.eq(repo_id))
+        .filter(fs_object::Column::FsId.eq(&fs_id))
+        .one(db)
+        .await?
+        .is_some();
+
+    if !exists {
+        fs_object::Entity::insert(fs_object::ActiveModel {
+            id: sea_orm::NotSet,
+            repo_id: sea_orm::Set(repo_id.to_string()),
+            fs_id: sea_orm::Set(fs_id.clone()),
+            obj_type: sea_orm::Set(SEAF_METADATA_TYPE_FILE as i8),
+            data: sea_orm::Set(json),
+        })
+        .exec(db)
+        .await?;
+    }
+
+    Ok(fs_id)
+}
+
+/// Serialize an FsDirData to JSON, compute its SHA1 ID, check the DB,
+/// and insert if the object does not already exist. Returns the fs_id.
+///
+/// Empty directories use the EMPTY_SHA1 sentinel and are never stored,
+/// matching seafile's seaf_dir_save() / seaf_dir_new() behavior:
+///   seaf_dir_new: entries==NULL → dir_id = EMPTY_SHA1 (line 1455)
+///   seaf_dir_save: dir_id == EMPTY_SHA1 → skip (line 1861)
+pub async fn store_fs_dir_object(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    dir_data: FsDirData,
+) -> Result<String, AppError> {
+    // Empty dirs use the EMPTY_SHA1 sentinel per seafile convention.
+    // They are never persisted — the all-zero ID is recognized by both
+    // server and client as "empty directory". Storing a computed hash
+    // would break client sync (the client would not create the folder).
+    if dir_data.dirents.is_empty() {
+        return Ok("0000000000000000000000000000000000000000".to_string());
+    }
+
+    let json = dir_data.to_compact_json();
+    let fs_id = crate::crypto::fs_id::sha1_hex(json.as_bytes());
+
+    let exists = fs_object::Entity::find()
+        .filter(fs_object::Column::RepoId.eq(repo_id))
+        .filter(fs_object::Column::FsId.eq(&fs_id))
+        .one(db)
+        .await?
+        .is_some();
+
+    if !exists {
+        fs_object::Entity::insert(fs_object::ActiveModel {
+            id: sea_orm::NotSet,
+            repo_id: sea_orm::Set(repo_id.to_string()),
+            fs_id: sea_orm::Set(fs_id.clone()),
+            obj_type: sea_orm::Set(SEAF_METADATA_TYPE_DIR as i8),
+            data: sea_orm::Set(json),
+        })
+        .exec(db)
+        .await?;
+    }
+
+    Ok(fs_id)
+}
 
 /// Read and parse a directory fs_object (FsDirData) from the database.
 pub async fn read_fs_dir_data(

@@ -28,6 +28,7 @@ async fn setup_repo() -> (TestServer, String, String, String) {
 async fn test_full_upload_flow() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
+    use nanofile::crypto::fs_id::sha1_hex;
 
     let resp = client
         .permission_check(&sync_token, &repo_id, "upload")
@@ -43,7 +44,14 @@ async fn test_full_upload_flow() {
         "0000000000000000000000000000000000000000"
     );
 
-    let file_block = random_hex_id();
+    // Upload the block first so the block integrity check passes.
+    let block_data = b"test block data content here!!!!!!";
+    let file_block = sha1_hex(block_data);
+    let resp = client
+        .put_block(&sync_token, &repo_id, &file_block, block_data.to_vec())
+        .await;
+    assert_eq!(resp.status(), 200);
+
     let file_data = FsFileData {
         block_ids: vec![file_block.clone()],
         size: 100,
@@ -89,13 +97,7 @@ async fn test_full_upload_flow() {
     let missing = body.as_array().unwrap();
     assert!(missing.is_empty());
 
-    let block_data = b"test block data content here!!!!!!";
-    let block_id = {
-        use sha1::{Digest, Sha1};
-        let mut hasher = Sha1::new();
-        hasher.update(block_data);
-        hex::encode(hasher.finalize())
-    };
+    let block_id = sha1_hex(block_data);
     let resp = client
         .put_block(&sync_token, &repo_id, &block_id, block_data.to_vec())
         .await;
@@ -217,9 +219,16 @@ async fn test_full_download_flow() {
 async fn test_incremental_upload() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
+    use nanofile::crypto::fs_id::sha1_hex;
+
+    // Upload a real block so the block integrity check passes.
+    let block_data = b"block data for incremental upload test";
+    let block_id = sha1_hex(block_data);
+    let resp = client.put_block(&sync_token, &repo_id, &block_id, block_data.to_vec()).await;
+    assert_eq!(resp.status(), 200);
 
     let file_data = FsFileData {
-        block_ids: vec![random_hex_id()],
+        block_ids: vec![block_id.clone()],
         size: 100,
         obj_type: 1,
         version: 1,

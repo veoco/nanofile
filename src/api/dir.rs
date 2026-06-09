@@ -6,7 +6,7 @@ use axum::{
     http::Request,
     response::IntoResponse,
 };
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -323,27 +323,9 @@ pub(crate) async fn create_dir_by_path(
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                let root_json = empty_root.to_compact_json();
-                let root_fs_id = crate::crypto::fs_id::compute_fs_id(root_json.as_bytes());
-
-                let root_exists = fs_object::Entity::find()
-                    .filter(fs_object::Column::RepoId.eq(&repo_id))
-                    .filter(fs_object::Column::FsId.eq(&root_fs_id))
-                    .one(state.db.as_ref())
-                    .await?
-                    .is_some();
-                if !root_exists {
-                    fs_object::Entity::insert(fs_object::ActiveModel {
-                        id: sea_orm::NotSet,
-                        repo_id: Set(repo_id.clone()),
-                        fs_id: Set(root_fs_id.clone()),
-                        obj_type: Set(SEAF_METADATA_TYPE_DIR as i8),
-                        data: Set(root_json),
-                    })
-                    .exec(state.db.as_ref())
-                    .await?;
-                }
-
+                let root_fs_id =
+                    crate::storage::store_fs_dir_object(state.db.as_ref(), &repo_id, empty_root)
+                        .await?;
                 root_fs_id
             }
         }

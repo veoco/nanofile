@@ -7,12 +7,12 @@ use axum::{
     response::{Html, IntoResponse},
 };
 use chrono::Utc;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::{commit, fs_object, repo, repo_member};
+use crate::entity::{commit, repo, repo_member};
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
@@ -731,29 +731,9 @@ pub async fn create_directory(
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                let root_json = root_dir.to_compact_json();
-                let root_fs_id = crate::crypto::fs_id::compute_fs_id(root_json.as_bytes());
-
-                let root_exists = fs_object::Entity::find()
-                    .filter(fs_object::Column::RepoId.eq(&repo_id))
-                    .filter(fs_object::Column::FsId.eq(&root_fs_id))
-                    .one(db)
-                    .await
-                    .map_err(|e| AppError::Internal(e.to_string()))?
-                    .is_some();
-                if !root_exists {
-                    fs_object::Entity::insert(fs_object::ActiveModel {
-                        id: sea_orm::NotSet,
-                        repo_id: Set(repo_id.clone()),
-                        fs_id: Set(root_fs_id.clone()),
-                        obj_type: Set(SEAF_METADATA_TYPE_DIR as i8),
-                        data: Set(root_json),
-                    })
-                    .exec(db)
+                let root_fs_id = crate::storage::store_fs_dir_object(db, &repo_id, root_dir)
                     .await
                     .map_err(|e| AppError::Internal(e.to_string()))?;
-                }
-
                 root_fs_id
             }
         }

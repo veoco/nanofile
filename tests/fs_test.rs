@@ -145,8 +145,16 @@ async fn test_fs_file_serialization_roundtrip() {
 async fn test_recv_fs_binary_format() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
+    use nanofile::crypto::fs_id::sha1_hex;
 
-    let file_data = make_file_fs_data(vec![random_hex_id()], 512);
+    // Upload a real block so the block integrity check passes.
+    let block_data = b"hello world this is test block data";
+    let block_id = sha1_hex(block_data);
+    let resp = client.put_block(&sync_token, &repo_id, &block_id, block_data.to_vec()).await;
+    assert_eq!(resp.status(), 200);
+
+    // Create a file fs_object referencing the real block.
+    let file_data = make_file_fs_data(vec![block_id.clone()], 512);
     let fs_id = file_data.compute_fs_id();
     let json = file_data.to_compact_json();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
@@ -736,9 +744,16 @@ async fn test_regression_check_endpoints_accept_json_array() {
 async fn test_resolve_fs_id_root_path() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
+    use nanofile::crypto::fs_id::sha1_hex;
+
+    // Upload a real block so the block integrity check passes.
+    let block_data = b"block data for resolve_fs_id_root_path";
+    let block_id = sha1_hex(block_data);
+    let resp = client.put_block(&sync_token, &repo_id, &block_id, block_data.to_vec()).await;
+    assert_eq!(resp.status(), 200);
 
     // Upload a file to create a real FS tree
-    let file_data = make_file_fs_data(vec![random_hex_id()], 64);
+    let file_data = make_file_fs_data(vec![block_id.clone()], 64);
     let file_fs_id = file_data.compute_fs_id();
     let file_json = file_data.to_compact_json();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
@@ -790,9 +805,16 @@ async fn test_resolve_fs_id_root_path() {
 async fn test_resolve_fs_id_deep_path() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
+    use nanofile::crypto::fs_id::sha1_hex;
+
+    // Upload a real block so the block integrity check passes.
+    let block_data = b"block data for resolve_fs_id_deep_path";
+    let block_id = sha1_hex(block_data);
+    let resp = client.put_block(&sync_token, &repo_id, &block_id, block_data.to_vec()).await;
+    assert_eq!(resp.status(), 200);
 
     // Build: root -> sub/ -> nested.txt
-    let file_data = make_file_fs_data(vec![random_hex_id()], 32);
+    let file_data = make_file_fs_data(vec![block_id.clone()], 32);
     let file_fs_id = file_data.compute_fs_id();
     let file_json = file_data.to_compact_json();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();

@@ -1,4 +1,4 @@
-use crate::entity::{commit, fs_object, repo};
+use crate::entity::{commit, repo};
 use crate::notification::events_channel;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use crate::storage::DynBlockStorage;
@@ -40,26 +40,8 @@ impl FileOps {
             obj_type: 1,
             version: 1,
         };
-        let file_json = file_fs_data.to_compact_json();
-        let file_fs_id = crate::crypto::fs_id::compute_fs_id(file_json.as_bytes());
-
-        // Skip insert if file fs_object already exists
-        let file_exists = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.eq(&file_fs_id))
-            .one(db)
-            .await?
-            .is_some();
-        if !file_exists {
-            let fs_obj = fs_object::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: sea_orm::Set(repo_id.to_string()),
-                fs_id: sea_orm::Set(file_fs_id.clone()),
-                obj_type: sea_orm::Set(1i8),
-                data: sea_orm::Set(file_json),
-            };
-            fs_object::Entity::insert(fs_obj).exec(db).await?;
-        }
+        let file_fs_id =
+            crate::storage::store_fs_file_object(db, repo_id, file_fs_data).await?;
 
         let parent_fs_id = if parent_path == "/" {
             // Find root via repo head commit, or create empty root fs_object for empty repo
@@ -77,27 +59,7 @@ impl FileOps {
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                let json = empty_dir.to_compact_json();
-                let fs_id = crate::crypto::fs_id::compute_fs_id(json.as_bytes());
-
-                let root_exists = fs_object::Entity::find()
-                    .filter(fs_object::Column::RepoId.eq(repo_id))
-                    .filter(fs_object::Column::FsId.eq(&fs_id))
-                    .one(db)
-                    .await?
-                    .is_some();
-                if !root_exists {
-                    let fs_obj = fs_object::ActiveModel {
-                        id: sea_orm::NotSet,
-                        repo_id: sea_orm::Set(repo_id.to_string()),
-                        fs_id: sea_orm::Set(fs_id.clone()),
-                        obj_type: sea_orm::Set(SEAF_METADATA_TYPE_DIR as i8),
-                        data: sea_orm::Set(json),
-                    };
-                    fs_object::Entity::insert(fs_obj).exec(db).await?;
-                }
-
-                fs_id
+                crate::storage::store_fs_dir_object(db, repo_id, empty_dir).await?
             }
         } else {
             Self::resolve_fs_id(db, repo_id, parent_path).await?
@@ -126,26 +88,8 @@ impl FileOps {
             obj_type: SEAF_METADATA_TYPE_DIR,
             version: 1,
         };
-        let new_dir_json = new_dir_data.to_compact_json();
-        let new_dir_fs_id = crate::crypto::fs_id::compute_fs_id(new_dir_json.as_bytes());
-
-        // Skip insert if updated dir fs_object already exists
-        let dir_exists = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.eq(&new_dir_fs_id))
-            .one(db)
-            .await?
-            .is_some();
-        if !dir_exists {
-            let dir_fs_obj = fs_object::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: sea_orm::Set(repo_id.to_string()),
-                fs_id: sea_orm::Set(new_dir_fs_id.clone()),
-                obj_type: sea_orm::Set(SEAF_METADATA_TYPE_DIR as i8),
-                data: sea_orm::Set(new_dir_json),
-            };
-            fs_object::Entity::insert(dir_fs_obj).exec(db).await?;
-        }
+        let new_dir_fs_id =
+            crate::storage::store_fs_dir_object(db, repo_id, new_dir_data).await?;
 
         // Walk up to root, updating all ancestor directories
         let root_fs_id = if parent_path == "/" {
@@ -267,26 +211,8 @@ impl FileOps {
             }
 
             // Create new fs_object for ancestor
-            let new_ancestor_json = ancestor_data.to_compact_json();
             let new_ancestor_fs_id =
-                crate::crypto::fs_id::compute_fs_id(new_ancestor_json.as_bytes());
-
-            let anc_exists = fs_object::Entity::find()
-                .filter(fs_object::Column::RepoId.eq(repo_id))
-                .filter(fs_object::Column::FsId.eq(&new_ancestor_fs_id))
-                .one(db)
-                .await?
-                .is_some();
-            if !anc_exists {
-                let anc_obj = fs_object::ActiveModel {
-                    id: sea_orm::NotSet,
-                    repo_id: sea_orm::Set(repo_id.to_string()),
-                    fs_id: sea_orm::Set(new_ancestor_fs_id.clone()),
-                    obj_type: sea_orm::Set(SEAF_METADATA_TYPE_DIR as i8),
-                    data: sea_orm::Set(new_ancestor_json),
-                };
-                fs_object::Entity::insert(anc_obj).exec(db).await?;
-            }
+                crate::storage::store_fs_dir_object(db, repo_id, ancestor_data).await?;
 
             // If we reached root, return
             if parent_path == "/" {
@@ -370,26 +296,8 @@ impl FileOps {
         let mut parent_data = Self::read_dir_fs_object(db, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
-        let new_json = parent_data.to_compact_json();
-        let new_parent_fs_id = crate::crypto::fs_id::compute_fs_id(new_json.as_bytes());
-
-        let exists = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.eq(&new_parent_fs_id))
-            .one(db)
-            .await?
-            .is_some();
-        if !exists {
-            fs_object::Entity::insert(fs_object::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: sea_orm::Set(repo_id.to_string()),
-                fs_id: sea_orm::Set(new_parent_fs_id.clone()),
-                obj_type: sea_orm::Set(SEAF_METADATA_TYPE_DIR as i8),
-                data: sea_orm::Set(new_json),
-            })
-            .exec(db)
-            .await?;
-        }
+        let new_parent_fs_id =
+            crate::storage::store_fs_dir_object(db, repo_id, parent_data).await?;
 
         let root_fs_id = if parent_path == "/" {
             new_parent_fs_id.clone()
@@ -419,26 +327,8 @@ impl FileOps {
         let mut parent_data = Self::read_dir_fs_object(db, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
-        let new_json = parent_data.to_compact_json();
-        let new_parent_fs_id = crate::crypto::fs_id::compute_fs_id(new_json.as_bytes());
-
-        let exists = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.eq(&new_parent_fs_id))
-            .one(db)
-            .await?
-            .is_some();
-        if !exists {
-            fs_object::Entity::insert(fs_object::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: sea_orm::Set(repo_id.to_string()),
-                fs_id: sea_orm::Set(new_parent_fs_id.clone()),
-                obj_type: sea_orm::Set(SEAF_METADATA_TYPE_DIR as i8),
-                data: sea_orm::Set(new_json),
-            })
-            .exec(db)
-            .await?;
-        }
+        let new_parent_fs_id =
+            crate::storage::store_fs_dir_object(db, repo_id, parent_data).await?;
 
         let root_fs_id = if parent_path == "/" {
             new_parent_fs_id.clone()
