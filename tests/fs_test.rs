@@ -707,6 +707,7 @@ async fn test_regression_pack_fs_binary_format() {
 async fn test_regression_check_endpoints_accept_json_array() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
+    use nanofile::crypto::fs_id::sha1_hex;
 
     // check-fs with JSON array
     let _existing = random_hex_id();
@@ -726,9 +727,10 @@ async fn test_regression_check_endpoints_accept_json_array() {
     assert_eq!(resp.status(), 200);
 
     // Test check-blocks accepts JSON array
-    let block_id = random_hex_id();
+    let block_data = vec![0u8; 16];
+    let block_id = sha1_hex(&block_data);
     let resp = client
-        .put_block(&sync_token, &repo_id, &block_id, vec![0u8; 16])
+        .put_block(&sync_token, &repo_id, &block_id, block_data)
         .await;
     assert_eq!(resp.status(), 200);
 

@@ -189,7 +189,7 @@ pub async fn list_locked_files_post(
 
 pub fn lock_routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/{repo_id}/lock-file", axum::routing::post(lock_file))
-        .route("/{repo_id}/unlock-file", axum::routing::post(unlock_file))
+        .route("/{repo_id}/lock-file", axum::routing::put(lock_file))
+        .route("/{repo_id}/unlock-file", axum::routing::put(unlock_file))
         .route("/locked-files", axum::routing::post(list_locked_files_post))
 }

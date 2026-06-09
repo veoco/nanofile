@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
+use crate::crypto::fs_id::sha1_hex;
 use crate::entity::fs_object;
 use crate::error::AppError;
 
@@ -82,15 +83,37 @@ pub async fn get_block(
 pub async fn put_block(
     State(state): State<Arc<AppState>>,
     _auth: SyncAuth,
-    Path((_repo_id, _block_id)): Path<(String, String)>,
+    Path((_repo_id, block_id)): Path<(String, String)>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
+    // Validate block_id format: exactly 40 lowercase hex chars.
+    // Matches seafile-server's is_object_id_valid() behavior.
+    if block_id.len() != 40
+        || !block_id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        return Err(AppError::BadRequest(format!(
+            "invalid block_id format: {}",
+            block_id
+        )));
+    }
+
     let data = axum::body::to_bytes(body, usize::MAX)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let block_store = state.block_store.clone();
+    // Verify the data hash matches the URL block_id.
+    // The seaf-daemon sends PUT with block_id = SHA1 of (encrypted) block data.
+    let computed = sha1_hex(&data);
+    if computed != block_id {
+        return Err(AppError::BadRequest(format!(
+            "block_id mismatch: expected {} got {}",
+            block_id, computed
+        )));
+    }
 
+    let block_store = state.block_store.clone();
     block_store
         .write_block(&data)
         .await

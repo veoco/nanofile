@@ -67,6 +67,8 @@ pub struct FsIdListQuery {
     pub server_head: Option<String>,
     #[serde(rename = "client-head")]
     pub client_head: Option<String>,
+    #[serde(rename = "dir-only")]
+    pub dir_only: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -92,6 +94,8 @@ pub async fn fs_id_list(
         .server_head
         .ok_or_else(|| AppError::BadRequest("missing server-head parameter".into()))?;
 
+    let dir_only = !query.dir_only.as_deref().unwrap_or("").is_empty();
+
     let empty_hash = "0000000000000000000000000000000000000000";
     if server_head == empty_hash {
         return Ok(Json(vec![]));
@@ -111,7 +115,7 @@ pub async fn fs_id_list(
             let mut collected = HashSet::new();
             collect_fs_ids_recursive(state.db.as_ref(), &repo_id, &server_root, &mut collected)
                 .await?;
-            let result: Vec<String> = collected.into_iter().collect();
+            let result = filter_collected(collected, dir_only, state.db.as_ref(), &repo_id).await?;
             return Ok(Json(result));
         }
 
@@ -129,14 +133,42 @@ pub async fn fs_id_list(
 
         let mut collected = HashSet::new();
         collect_fs_ids_recursive(state.db.as_ref(), &repo_id, &server_root, &mut collected).await?;
-        let result: Vec<String> = collected.into_iter().collect();
+        let result = filter_collected(collected, dir_only, state.db.as_ref(), &repo_id).await?;
         Ok(Json(result))
     } else {
         let mut collected = HashSet::new();
         collect_fs_ids_recursive(state.db.as_ref(), &repo_id, &server_root, &mut collected).await?;
-        let result: Vec<String> = collected.into_iter().collect();
+        let result = filter_collected(collected, dir_only, state.db.as_ref(), &repo_id).await?;
         Ok(Json(result))
     }
+}
+
+/// When dir_only is true, filter to only include directory object IDs
+/// (obj_type == SEAF_METADATA_TYPE_DIR). When false, return all IDs as-is.
+async fn filter_collected(
+    collected: HashSet<String>,
+    dir_only: bool,
+    db: &DatabaseConnection,
+    repo_id: &str,
+) -> Result<Vec<String>, AppError> {
+    if !dir_only {
+        let result: Vec<String> = collected.into_iter().collect();
+        return Ok(result);
+    }
+    let mut dir_ids = Vec::new();
+    for id in collected {
+        let obj = fs_object::Entity::find()
+            .filter(fs_object::Column::RepoId.eq(repo_id))
+            .filter(fs_object::Column::FsId.eq(&id))
+            .one(db)
+            .await?;
+        if let Some(obj) = obj
+            && obj.obj_type == SEAF_METADATA_TYPE_DIR as i8
+        {
+            dir_ids.push(id);
+        }
+    }
+    Ok(dir_ids)
 }
 
 async fn collect_fs_ids_recursive(

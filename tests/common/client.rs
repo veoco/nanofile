@@ -202,6 +202,17 @@ impl TestClient {
             .unwrap()
     }
 
+    /// PUT with body bytes, authenticated via Seafile-Repo-Token header.
+    pub async fn put_sync(&self, path: &str, sync_token: &str, body: Vec<u8>) -> reqwest::Response {
+        self.client
+            .put(self.url(path))
+            .header("Seafile-Repo-Token", sync_token)
+            .body(body)
+            .send()
+            .await
+            .unwrap()
+    }
+
     /// POST with raw bytes, authenticated via Seafile-Repo-Token header.
     pub async fn post_sync_bytes(
         &self,
@@ -584,6 +595,43 @@ impl TestClient {
             .get(format!(
                 "{}/seafhttp/repo/{}/fs-id-list/?server-head={}&client-head={}",
                 self.base_url, repo_id, server_head, client_head
+            ))
+            .header("Seafile-Repo-Token", token)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    pub async fn fs_id_list_with_dir_only(
+        &self,
+        token: &str,
+        repo_id: &str,
+        server_head: &str,
+        dir_only: &str,
+    ) -> reqwest::Response {
+        self.client
+            .get(format!(
+                "{}/seafhttp/repo/{}/fs-id-list/?server-head={}&dir-only={}",
+                self.base_url, repo_id, server_head, dir_only
+            ))
+            .header("Seafile-Repo-Token", token)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    pub async fn fs_id_list_with_client_and_dir_only(
+        &self,
+        token: &str,
+        repo_id: &str,
+        server_head: &str,
+        client_head: &str,
+        dir_only: &str,
+    ) -> reqwest::Response {
+        self.client
+            .get(format!(
+                "{}/seafhttp/repo/{}/fs-id-list/?server-head={}&client-head={}&dir-only={}",
+                self.base_url, repo_id, server_head, client_head, dir_only
             ))
             .header("Seafile-Repo-Token", token)
             .send()
