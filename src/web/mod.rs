@@ -20,6 +20,7 @@ pub fn web_routes() -> Router<Arc<AppState>> {
         .route("/upload-aj/", post(upload::upload_aj))
         .route("/upload-aj/{token}", post(upload::upload_aj_token))
         .route("/upload-api/{token}", post(upload::upload_api))
+        .route("/upload-blks-api/{token}", post(upload::upload_blks_api))
         .route("/update-aj/", post(upload::update_aj))
         .route("/update-aj/{token}", post(upload::update_aj_token))
         .route("/update-api/", post(upload::update_api))

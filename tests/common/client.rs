@@ -773,4 +773,149 @@ impl TestClient {
             .await
             .unwrap()
     }
+
+    // ========== Batch Operations ==========
+
+    /// POST /api2/repos/{repo_id}/fileops/delete/
+    pub async fn batch_delete(
+        &self,
+        token: &str,
+        repo_id: &str,
+        parent_dir: &str,
+        file_names: &[&str],
+    ) -> reqwest::Response {
+        let file_names_str = file_names.join(":");
+        self.client
+            .post(format!(
+                "{}/api2/repos/{}/fileops/delete/?p={}",
+                self.base_url, repo_id, parent_dir
+            ))
+            .bearer_auth(token)
+            .form(&[("file_names", file_names_str.as_str())])
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// POST /api2/repos/{repo_id}/fileops/delete/ with reloaddir=true
+    pub async fn batch_delete_with_dir(
+        &self,
+        token: &str,
+        repo_id: &str,
+        parent_dir: &str,
+        file_names: &[&str],
+    ) -> reqwest::Response {
+        let file_names_str = file_names.join(":");
+        self.client
+            .post(format!(
+                "{}/api2/repos/{}/fileops/delete/?p={}&reloaddir=true",
+                self.base_url, repo_id, parent_dir
+            ))
+            .bearer_auth(token)
+            .form(&[("file_names", file_names_str.as_str())])
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// POST /api2/repos/{repo_id}/fileops/copy/
+    pub async fn batch_copy(
+        &self,
+        token: &str,
+        repo_id: &str,
+        parent_dir: &str,
+        file_names: &[&str],
+        dst_repo: &str,
+        dst_dir: &str,
+    ) -> reqwest::Response {
+        let file_names_str = file_names.join(":");
+        self.client
+            .post(format!(
+                "{}/api2/repos/{}/fileops/copy/?p={}",
+                self.base_url, repo_id, parent_dir
+            ))
+            .bearer_auth(token)
+            .form(&[
+                ("file_names", file_names_str.as_str()),
+                ("dst_repo", dst_repo),
+                ("dst_dir", dst_dir),
+            ])
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// POST /api2/repos/{repo_id}/fileops/move/
+    pub async fn batch_move(
+        &self,
+        token: &str,
+        repo_id: &str,
+        parent_dir: &str,
+        file_names: &[&str],
+        dst_repo: &str,
+        dst_dir: &str,
+    ) -> reqwest::Response {
+        let file_names_str = file_names.join(":");
+        self.client
+            .post(format!(
+                "{}/api2/repos/{}/fileops/move/?p={}",
+                self.base_url, repo_id, parent_dir
+            ))
+            .bearer_auth(token)
+            .form(&[
+                ("file_names", file_names_str.as_str()),
+                ("dst_repo", dst_repo),
+                ("dst_dir", dst_dir),
+            ])
+            .send()
+            .await
+            .unwrap()
+    }
+
+    // ========== Chunked Upload ==========
+
+    /// GET /api2/repos/{repo_id}/upload-blks-link/
+    pub async fn upload_blks_link(&self, token: &str, repo_id: &str) -> reqwest::Response {
+        self.client
+            .get(format!(
+                "{}/api2/repos/{}/upload-blks-link/",
+                self.base_url, repo_id
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// GET /api2/repos/{repo_id}/update-blks-link/
+    pub async fn update_blks_link(&self, token: &str, repo_id: &str) -> reqwest::Response {
+        self.client
+            .get(format!(
+                "{}/api2/repos/{}/update-blks-link/",
+                self.base_url, repo_id
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/
+    pub async fn file_uploaded_bytes(
+        &self,
+        token: &str,
+        repo_id: &str,
+        file_name: &str,
+        parent_dir: &str,
+    ) -> reqwest::Response {
+        self.client
+            .get(format!(
+                "{}/api/v2.1/repos/{}/file-uploaded-bytes/?file_name={}&parent_dir={}",
+                self.base_url, repo_id, file_name, parent_dir
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+    }
 }

@@ -702,3 +702,207 @@ pub async fn update_aj_token(
 
     Ok(Json(json!({"success": true})))
 }
+
+/// POST /upload-blks-api/{token} — Token-based block upload and commit.
+///
+/// Two modes:
+///
+/// **Block upload mode** (no `commitonly` field):
+/// Accepts multipart with `file` parts (one per block, filename = block ID).
+/// Validates SHA1 matches the block ID, stores each block.
+///
+/// **Commit mode** (with `commitonly` field):
+/// Multipart fields:
+/// - `commitonly` — must be present (any value)
+/// - `parent_dir` — target directory
+/// - `file_name` — name of the assembled file
+/// - `blockids` — JSON array of block IDs: `["id1","id2"]`
+/// - `file_size` — total file size in bytes
+/// - `replace` — "1" to overwrite (optional)
+/// - `last_modify` — ISO timestamp (optional)
+///
+/// Response: `{"id": "<file_fs_id>"}` on success.
+pub async fn upload_blks_api(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let info = state
+        .token_manager
+        .validate(&token)
+        .ok_or_else(|| AppError::BadRequest("invalid or expired upload token".into()))?;
+
+    if info.op != "upload-blks" && info.op != "update-blks" {
+        return Err(AppError::BadRequest(
+            "token not valid for block upload".into(),
+        ));
+    }
+
+    let mut fields: HashMap<String, String> = HashMap::new();
+    let mut blocks: Vec<(String, Vec<u8>)> = Vec::new();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            let block_id = field.file_name().unwrap_or("").to_string();
+            let data = field.bytes().await.unwrap_or_default().to_vec();
+            if !block_id.is_empty() && !data.is_empty() {
+                blocks.push((block_id, data));
+            }
+        } else {
+            fields.insert(name, field.text().await.unwrap_or_default());
+        }
+    }
+
+    // Check if this is a commit request
+    if fields.contains_key("commitonly") {
+        let parent_dir = fields
+            .get("parent_dir")
+            .map(|s| s.as_str())
+            .unwrap_or(&info.parent_dir);
+        let file_name = fields
+            .get("file_name")
+            .ok_or_else(|| AppError::BadRequest("file_name required for commit".into()))?;
+        let blockids_str = fields
+            .get("blockids")
+            .ok_or_else(|| AppError::BadRequest("blockids required for commit".into()))?;
+        let file_size: i64 = fields
+            .get("file_size")
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| AppError::BadRequest("file_size required for commit".into()))?;
+        let replace = fields.get("replace").map(|s| s.as_str()) == Some("1");
+
+        // Parse blockids JSON array
+        let block_ids: Vec<String> = serde_json::from_str(blockids_str)
+            .map_err(|_| AppError::BadRequest("invalid blockids JSON array".into()))?;
+
+        if block_ids.is_empty() {
+            return Err(AppError::BadRequest("blockids cannot be empty".into()));
+        }
+
+        // Verify all blocks exist in block store
+        for bid in &block_ids {
+            if !state.block_store.has_block(bid).await {
+                return Err(AppError::BadRequest(format!("block not found: {bid}")));
+            }
+        }
+
+        // Create FsFileData from block IDs
+        let file_fs_data = crate::serialization::fs_json::FsFileData {
+            block_ids: block_ids.clone(),
+            size: file_size,
+            obj_type: 1,
+            version: 1,
+        };
+        let file_fs_id = file_fs_data
+            .compute_and_store(state.db.as_ref(), &info.repo_id)
+            .await?;
+
+        // Update directory tree and create commit
+        let target_dir = crate::api::fileops::normalize_path(parent_dir);
+        let now = chrono::Utc::now().timestamp();
+
+        // Get old file size for incremental size adjustment
+        let fp = if target_dir == "/" {
+            format!("/{}", file_name)
+        } else {
+            format!("{}/{}", target_dir.trim_end_matches('/'), file_name)
+        };
+        let old_size = if replace {
+            crate::storage::get_entry_total_size(state.db.as_ref(), &info.repo_id, &fp)
+                .await
+                .ok()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        // Get head root and resolve parent directory
+        let head_root_id =
+            crate::api::fileops::get_head_root_id(state.db.as_ref(), &info.repo_id).await?;
+
+        let parent_fs_id = crate::storage::resolve_fs_id(
+            state.db.as_ref(),
+            &info.repo_id,
+            &head_root_id,
+            &target_dir,
+            None,
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
+
+        // Add file entry to parent directory
+        let entry_name = file_name.clone();
+        let modifier_name = info.username.clone();
+        crate::storage::file_ops::FileOps::update_dir_tree_and_commit(
+            state.db.as_ref(),
+            &info.repo_id,
+            &target_dir,
+            &parent_fs_id,
+            &modifier_name,
+            &format!("Added {file_name}"),
+            Some(state.path_cache.as_ref()),
+            |dirents| {
+                if replace {
+                    dirents.retain(|d| d.name != entry_name);
+                }
+                // Handle name collision
+                if dirents.iter().any(|d| d.name == entry_name) {
+                    let unique_name =
+                        crate::api::fileops::generate_unique_filename(dirents, &entry_name);
+                    dirents.push(crate::serialization::fs_json::DirEntryData {
+                        id: file_fs_id.clone(),
+                        mode: crate::serialization::S_IFREG,
+                        modifier: modifier_name.clone(),
+                        mtime: now,
+                        name: unique_name,
+                        size: file_size,
+                    });
+                } else {
+                    dirents.push(crate::serialization::fs_json::DirEntryData {
+                        id: file_fs_id.clone(),
+                        mode: crate::serialization::S_IFREG,
+                        modifier: modifier_name.clone(),
+                        mtime: now,
+                        name: entry_name.clone(),
+                        size: file_size,
+                    });
+                }
+                Ok(())
+            },
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("commit blocks failed: {e}")))?;
+
+        // Adjust repo size
+        crate::storage::adjust_repo_size(state.db.as_ref(), &info.repo_id, file_size - old_size)
+            .await?;
+
+        return Ok(Json(json!({"id": file_fs_id})));
+    }
+
+    // Block upload mode: verify SHA1 and store each block
+    for (block_id, data) in &blocks {
+        // Compute SHA1 of the data and verify it matches the block_id
+        let computed_id = {
+            use sha1::{Digest, Sha1};
+            let mut hasher = Sha1::new();
+            hasher.update(data);
+            hex::encode(hasher.finalize())
+        };
+
+        if computed_id != *block_id {
+            return Err(AppError::BadRequest(format!(
+                "block ID mismatch: expected {block_id}, computed {computed_id}"
+            )));
+        }
+
+        state
+            .block_store
+            .write_block(data)
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to write block {block_id}: {e}")))?;
+    }
+
+    Ok(Json(json!({"success": true})))
+}

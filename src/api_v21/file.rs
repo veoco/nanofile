@@ -149,9 +149,13 @@ async fn get_head_root_id_no_err(
 /// Since nanofile handles uploads atomically (no partial upload state),
 /// we always return `{"uploadedBytes": 0}` with an `Accept-Ranges: bytes`
 /// header to signal that the client should send the entire file.
+///
+/// If `blockids` is provided (comma-separated), checks which blocks exist
+/// in the block store and returns the count.
 pub async fn file_uploaded_bytes(
-    _auth: AuthUser,
-    Path(_repo_id): Path<String>,
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
     Query(query): Query<UploadedBytesQuery>,
 ) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
     if query.file_name.is_none() || query.file_name.as_deref() == Some("") {
@@ -161,16 +165,36 @@ pub async fn file_uploaded_bytes(
         return Err(AppError::BadRequest("parent_dir invalid.".into()));
     }
 
+    // Permission check
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
+    let mut uploaded_bytes: i64 = 0;
+
+    // If blockids are provided, check which blocks exist in the store.
+    if let Some(blockids_str) = &query.blockids {
+        for bid in blockids_str.split(',') {
+            let bid = bid.trim();
+            if !bid.is_empty() && state.block_store.has_block(bid).await {
+                uploaded_bytes += 1;
+            }
+        }
+    }
+
     let mut headers = HeaderMap::new();
     headers.insert("Accept-Ranges", "bytes".parse().unwrap());
 
-    Ok((headers, Json(serde_json::json!({"uploadedBytes": 0}))))
+    Ok((
+        headers,
+        Json(serde_json::json!({"uploadedBytes": uploaded_bytes})),
+    ))
 }
 
 #[derive(Deserialize)]
 pub struct UploadedBytesQuery {
     pub file_name: Option<String>,
     pub parent_dir: Option<String>,
+    /// Optional comma-separated block IDs to check (for chunked upload).
+    pub blockids: Option<String>,
 }
 
 /// Wrapper for delete_dirent_v21 that works with Path(repo_id) instead of Path((repo_id, obj))

@@ -1,11 +1,13 @@
 pub mod account;
 pub mod auth;
 pub mod avatar;
+pub mod chunked_upload;
 pub mod client_login;
 pub mod device_wipe;
 pub mod devices;
 pub mod dir;
 pub mod file;
+pub mod fileops;
 pub mod groups;
 pub mod notifications;
 pub mod reindex;
@@ -37,6 +39,8 @@ pub fn api_routes() -> Router<Arc<AppState>> {
             axum::routing::get(repos::list_repos).post(repos::create_repo),
         )
         .nest("/api2/repos", repo_all)
+        .nest("/api2/repos", fileops::fileops_routes())
+        .nest("/api2/repos", chunked_upload::chunked_upload_routes())
         .nest("/api2/shared-links", share::share_routes())
         .nest("/api2/upload-links", upload_link::upload_link_routes())
         .nest("/api2/account", account::account_routes())
