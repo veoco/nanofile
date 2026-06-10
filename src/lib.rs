@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
+use tokio_util::sync::CancellationToken;
 
 use crate::api_v21::task_manager::TaskManager;
 use crate::auth::access_token::AccessTokenManager;
@@ -54,12 +55,16 @@ pub struct AppState {
     pub login_rate_limiter: Arc<LoginRateLimiter>,
     /// Server-wide secret for CSRF token generation.
     pub csrf_secret: Arc<Vec<u8>>,
+    /// Cancellation token for graceful shutdown.
+    /// Triggered from main.rs after axum drains in-flight requests.
+    pub shutdown_token: CancellationToken,
 }
 
 impl AppState {
     pub fn new(db: DatabaseConnection, config: Config) -> Self {
         let block_dir = Arc::new(PathBuf::from(&config.storage.block_dir));
         let block_store = crate::storage::new_block_store(&block_dir);
+        let shutdown_token = CancellationToken::new();
         let notification_manager =
             if config.notification.enabled && !config.notification.private_key.is_empty() {
                 Some(NotificationManager::new())
@@ -70,16 +75,18 @@ impl AppState {
         // from the global broadcast channel to WebSocket subscribers.
         if let Some(ref mgr) = notification_manager {
             let mgr = mgr.clone();
+            let token = shutdown_token.child_token();
             tokio::spawn(async move {
-                mgr.start_event_listener().await;
+                mgr.start_event_listener(token).await;
             });
         }
         // Start the background JWT token expiry checker that sends jwt-expired
         // notifications when subscription tokens expire. Runs hourly.
         if let Some(ref mgr) = notification_manager {
             let mgr = mgr.clone();
+            let token = shutdown_token.child_token();
             tokio::spawn(async move {
-                mgr.start_token_expiry_checker().await;
+                mgr.start_token_expiry_checker(token).await;
             });
         }
         let indexer = if config.index.enabled {
@@ -124,6 +131,7 @@ impl AppState {
             indexer,
             login_rate_limiter,
             csrf_secret,
+            shutdown_token,
         }
     }
 }

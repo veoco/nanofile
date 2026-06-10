@@ -149,13 +149,65 @@ async fn main() -> anyhow::Result<()> {
                     StatusCode::REQUEST_TIMEOUT,
                     std::time::Duration::from_secs(config.server.request_timeout_secs),
                 ))
-                .with_state(state);
+                .with_state(state.clone());
 
             let addr = format!("{}:{}", config.server.addr, config.server.port);
             tracing::info!("listening on {}", addr);
 
             let listener = tokio::net::TcpListener::bind(&addr).await?;
-            axum::serve(listener, app).await?;
+
+            // ── Shutdown signal (Ctrl+C or SIGTERM) ────────────────────────
+            let shutdown_signal = async {
+                let ctrl_c = tokio::signal::ctrl_c();
+                let terminate = async {
+                    #[cfg(unix)]
+                    {
+                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                            .expect("failed to install SIGTERM handler")
+                            .recv()
+                            .await;
+                    }
+                    #[cfg(not(unix))]
+                    std::future::pending::<()>().await;
+                };
+
+                tokio::select! {
+                    _ = ctrl_c => tracing::info!("Received SIGINT (Ctrl+C)"),
+                    _ = terminate => tracing::info!("Received SIGTERM"),
+                }
+
+                tracing::info!("Shutdown signal received, starting graceful shutdown...");
+            };
+
+            let serve_fut = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal);
+
+            // Bound the drain phase — don't wait forever for HTTP connections.
+            match tokio::time::timeout(std::time::Duration::from_secs(25), serve_fut).await {
+                Ok(Ok(())) => tracing::info!("Server finished normally"),
+                Ok(Err(e)) => tracing::error!("Server error: {e}"),
+                Err(_) => tracing::warn!("Drain timed out after 25s, proceeding with cleanup"),
+            }
+
+            // ── Graceful shutdown sequence ──────────────────────────────────
+            tracing::info!("Stopping background tasks...");
+            state.shutdown_token.cancel();
+
+            // Close WebSocket connections cleanly.
+            if let Some(ref mgr) = state.notification_manager {
+                mgr.shutdown().await;
+            }
+
+            // Commit Tantivy indexer.
+            if let Some(ref indexer) = state.indexer
+                && let Err(e) = indexer.commit()
+            {
+                tracing::error!("Failed to commit indexer during shutdown: {e}");
+            }
+
+            // DB connection is dropped when `state` goes out of scope;
+            // the OS handles final file descriptor cleanup.
+
+            tracing::info!("Server shutdown complete");
 
             Ok(())
         }

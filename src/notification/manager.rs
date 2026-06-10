@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::Value;
 use std::sync::RwLock;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use super::events::{JwtExpiredEvent, NotificationJwtClaims, NotificationMessage};
 use super::events_channel;
@@ -210,21 +211,30 @@ impl NotificationManager {
 impl NotificationManager {
     /// Start a background task that listens for repo-update events on the
     /// global broadcast channel and forwards them to WebSocket subscribers.
-    pub async fn start_event_listener(&self) {
+    /// Pass a `CancellationToken` to allow graceful shutdown.
+    pub async fn start_event_listener(&self, token: CancellationToken) {
         let mut rx = events_channel::subscribe_repo_updates();
         let mgr = self.clone();
         tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok((repo_id, commit_id)) => {
-                        let event = super::events::RepoUpdateEvent::new(repo_id, commit_id);
-                        mgr.notify(event).await;
+                tokio::select! {
+                    result = rx.recv() => {
+                        match result {
+                            Ok((repo_id, commit_id)) => {
+                                let event = super::events::RepoUpdateEvent::new(repo_id, commit_id);
+                                mgr.notify(event).await;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!("Notification listener lagged by {n} messages, resuming");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                tracing::error!("Notification broadcast channel closed");
+                                break;
+                            }
+                        }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("Notification listener lagged by {n} messages, resuming");
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        tracing::error!("Notification broadcast channel closed");
+                    _ = token.cancelled() => {
+                        tracing::info!("Notification listener shutting down");
                         break;
                     }
                 }
@@ -234,13 +244,20 @@ impl NotificationManager {
 
     /// Start a background task that checks for expired JWT tokens every hour
     /// and sends `jwt-expired` notifications to affected clients.
-    pub async fn start_token_expiry_checker(&self) {
+    /// Pass a `CancellationToken` to allow graceful shutdown.
+    pub async fn start_token_expiry_checker(&self, token: CancellationToken) {
         let mgr = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                interval.tick().await;
-                mgr.check_expired_tokens().await;
+                tokio::select! {
+                    _ = interval.tick() => mgr.check_expired_tokens().await,
+                    _ = token.cancelled() => {
+                        tracing::info!("Token expiry checker shutting down");
+                        break;
+                    }
+                }
             }
         });
     }
@@ -301,6 +318,16 @@ impl NotificationManager {
                 }
             }
         }
+    }
+
+    /// Gracefully shut down all WebSocket connections by clearing all client
+    /// and subscription state. Dropping the mpsc senders causes each write
+    /// task's `rx.recv()` to return `None`, which triggers `unregister_client`
+    /// and a clean exit.
+    pub async fn shutdown(&self) {
+        tracing::info!("Shutting down notification manager");
+        self.clients.write().unwrap().clear();
+        self.subscriptions.write().unwrap().clear();
     }
 }
 
