@@ -17,18 +17,29 @@ pub struct TestServer {
 
 impl TestServer {
     pub async fn start() -> Self {
-        Self::start_with_config(false, false).await
+        Self::start_with_config(false, false, 30, 90).await
     }
 
     pub async fn start_with_notification() -> Self {
-        Self::start_with_config(true, false).await
+        Self::start_with_config(true, false, 30, 90).await
     }
 
     pub async fn start_with_index() -> Self {
-        Self::start_with_config(false, true).await
+        Self::start_with_config(false, true, 30, 90).await
     }
 
-    async fn start_with_config(enable_notification: bool, enable_index: bool) -> Self {
+    /// Start a server with notification and custom keepalive intervals.
+    /// Useful for testing keepalive/ping-pong behavior with short timeouts.
+    pub async fn start_with_custom_keepalive(ping_interval: u64, client_timeout: u64) -> Self {
+        Self::start_with_config(true, false, ping_interval, client_timeout).await
+    }
+
+    async fn start_with_config(
+        enable_notification: bool,
+        enable_index: bool,
+        ping_interval: u64,
+        client_timeout: u64,
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base_url = format!("http://127.0.0.1:{}", port);
@@ -87,6 +98,8 @@ impl TestServer {
                 } else {
                     String::new()
                 },
+                ping_interval,
+                client_timeout,
             },
             index: nanofile::config::IndexConfig {
                 enabled: enable_index,

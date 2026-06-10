@@ -2,6 +2,8 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{Json, extract::State, response::IntoResponse};
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
 use super::events::{NotificationMessage, SubscribeRequest, UnsubscribeRequest};
@@ -28,6 +30,12 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
     };
 
     let private_key = state.config.notification.private_key.clone();
+    let ping_interval = state.config.notification.ping_interval;
+    let client_timeout = state.config.notification.client_timeout;
+    let keepalive_enabled = ping_interval > 0 && client_timeout > 0;
+
+    // Shared timestamp (nanos since UNIX epoch) of the last received Pong.
+    let last_pong = Arc::new(AtomicI64::new(now_nanos()));
 
     // We need to split the websocket into read/write halves.
     // Since axum's WebSocket doesn't implement futures::Stream/Sink directly,
@@ -38,36 +46,76 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
     // Use a mutex to serialize writes to the WebSocket
     // (not safe to call send from multiple tasks concurrently).
     let ws = Arc::new(tokio::sync::Mutex::new(socket));
-
-    // Clone the Arc for the write task
     let ws_write = ws.clone();
 
-    // Task: read messages from the WebSocket and process subscribe/unsubscribe.
+    // Task: read messages from the WebSocket.
+    // When keepalive is enabled, recv() is called with a timeout equal to
+    // ping_interval — on each tick we check the pong deadline and, if the
+    // client is still alive, send a Ping frame.  This avoids a separate
+    // keepalive task contending for the WebSocket mutex.
     let read_mgr = notif_mgr.clone();
     let read_id = client_id;
     let read_key = private_key.clone();
+    let read_pong = last_pong.clone();
 
     let read_task = tokio::spawn(async move {
-        loop {
-            let msg = {
-                let mut ws_lock = ws.lock().await;
-                ws_lock.recv().await
-            };
+        if keepalive_enabled {
+            let interval = std::time::Duration::from_secs(ping_interval);
+            let timeout = std::time::Duration::from_secs(client_timeout);
+            let timeout_ns = timeout.as_nanos() as i64;
 
-            match msg {
-                Some(Ok(Message::Text(text))) => {
-                    if let Ok(notif_msg) = serde_json::from_str::<NotificationMessage>(&text) {
-                        process_client_message(&read_mgr, read_id, &notif_msg, &read_key).await;
+            loop {
+                let mut ws_lock = ws.lock().await;
+                let timed_out = tokio::time::timeout(interval, ws_lock.recv()).await;
+                drop(ws_lock);
+
+                match timed_out {
+                    Ok(Some(Ok(msg))) => {
+                        if handle_read_msg(&read_mgr, read_id, &read_key, &read_pong, msg).await {
+                            break;
+                        }
+                    }
+                    Ok(Some(Err(_))) => break,
+                    Ok(None) => break,
+                    Err(_elapsed) => {
+                        // No message received within ping_interval: keepalive tick.
+                        let last = read_pong.load(Ordering::Acquire);
+                        let elapsed = now_nanos() - last;
+                        if elapsed > timeout_ns {
+                            tracing::debug!(
+                                "WebSocket client timed out after {}s without pong",
+                                elapsed / 1_000_000_000,
+                            );
+                            break;
+                        }
+
+                        let mut ws_lock = ws.lock().await;
+                        if ws_lock
+                            .send(Message::Ping(axum::body::Bytes::new()))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
-                Some(Ok(Message::Close(_))) => break,
-                Some(Ok(Message::Ping(_))) => {
-                    // axum handles pong responses automatically
+            }
+        } else {
+            // Keepalive disabled — simple blocking read loop.
+            loop {
+                let mut ws_lock = ws.lock().await;
+                let msg = ws_lock.recv().await;
+                drop(ws_lock);
+
+                match msg {
+                    Some(Ok(msg)) => {
+                        if handle_read_msg(&read_mgr, read_id, &read_key, &read_pong, msg).await {
+                            break;
+                        }
+                    }
+                    Some(Err(_)) => break,
+                    None => break,
                 }
-                Some(Ok(Message::Pong(_))) => {}
-                Some(Ok(Message::Binary(_))) => {}
-                Some(Err(_)) => break,
-                None => break,
             }
         }
 
@@ -98,6 +146,44 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // Final cleanup — unregister the client.
     notif_mgr.unregister_client(client_id).await;
+}
+
+/// Process a single WebSocket message received from the client.
+///
+/// Returns `true` if the connection should be closed (Close frame or error).
+async fn handle_read_msg(
+    mgr: &super::manager::NotificationManager,
+    client_id: u64,
+    private_key: &str,
+    last_pong: &AtomicI64,
+    msg: Message,
+) -> bool {
+    match msg {
+        Message::Text(text) => {
+            if let Ok(notif_msg) = serde_json::from_str::<NotificationMessage>(&text) {
+                process_client_message(mgr, client_id, &notif_msg, private_key).await;
+            }
+            false
+        }
+        Message::Close(_) => true,
+        Message::Ping(_) => {
+            // axum handles pong responses automatically
+            false
+        }
+        Message::Pong(_) => {
+            last_pong.store(now_nanos(), Ordering::Release);
+            false
+        }
+        Message::Binary(_) => false,
+    }
+}
+
+/// Returns the current time in nanoseconds since the UNIX epoch.
+fn now_nanos() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as i64
 }
 
 /// Process an incoming client message (subscribe or unsubscribe).

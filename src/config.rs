@@ -22,6 +22,19 @@ pub struct Config {
 pub struct NotificationConfig {
     pub enabled: bool,
     pub private_key: String,
+    /// Seconds between WebSocket Ping frames (0 = disable keepalive).
+    #[serde(default = "default_ping_interval")]
+    pub ping_interval: u64,
+    /// Seconds without a Pong after which the connection is dropped.
+    #[serde(default = "default_client_timeout")]
+    pub client_timeout: u64,
+}
+
+fn default_ping_interval() -> u64 {
+    30
+}
+fn default_client_timeout() -> u64 {
+    90
 }
 
 impl Default for NotificationConfig {
@@ -29,6 +42,8 @@ impl Default for NotificationConfig {
         Self {
             enabled: true,
             private_key: String::new(),
+            ping_interval: default_ping_interval(),
+            client_timeout: default_client_timeout(),
         }
     }
 }
@@ -228,6 +243,16 @@ impl Config {
         }
         if let Ok(v) = std::env::var("NANOFILE_NOTIFICATION_PRIVATE_KEY") {
             self.notification.private_key = v;
+        }
+        if let Ok(v) = std::env::var("NANOFILE_NOTIFICATION_PING_INTERVAL")
+            && let Ok(n) = v.parse()
+        {
+            self.notification.ping_interval = n;
+        }
+        if let Ok(v) = std::env::var("NANOFILE_NOTIFICATION_CLIENT_TIMEOUT")
+            && let Ok(n) = v.parse()
+        {
+            self.notification.client_timeout = n;
         }
         if let Ok(v) = std::env::var("NANOFILE_INDEX_ENABLED")
             && let Ok(b) = v.parse()

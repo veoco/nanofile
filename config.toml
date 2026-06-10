@@ -42,3 +42,5 @@ index_dir = "data/index"
 [notification]
 enabled = true
 private_key = "nanofile-notification-secret"
+ping_interval = 30
+client_timeout = 90
