@@ -2,7 +2,7 @@ name: Nightly Build
 
 on:
   schedule:
-    - cron: "0 12 * * *"   # 12:00 UTC = 20:00 CST
+    - cron: "0 10 * * *"   # 10:00 UTC
   workflow_dispatch:
 
 env:
