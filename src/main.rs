@@ -8,6 +8,7 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryF
 use sea_orm_migration::MigratorTrait;
 use std::io::Write;
 use std::sync::Arc;
+use tokio::sync::oneshot;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::normalize_path::NormalizePathLayer;
@@ -156,35 +157,43 @@ async fn main() -> anyhow::Result<()> {
 
             let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-            // ── Shutdown signal (Ctrl+C or SIGTERM) ────────────────────────
-            let shutdown_signal = async {
-                let ctrl_c = tokio::signal::ctrl_c();
-                let terminate = async {
-                    #[cfg(unix)]
-                    {
-                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                            .expect("failed to install SIGTERM handler")
-                            .recv()
-                            .await;
-                    }
-                    #[cfg(not(unix))]
-                    std::future::pending::<()>().await;
-                };
+            // ── Start server with graceful shutdown via oneshot ─────────────
+            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-                tokio::select! {
-                    _ = ctrl_c => tracing::info!("Received SIGINT (Ctrl+C)"),
-                    _ = terminate => tracing::info!("Received SIGTERM"),
+            let serve_fut = axum::serve(listener, app).with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            });
+
+            // Spawn the server in the background so it starts accepting immediately.
+            let server_handle = tokio::spawn(async move { serve_fut.await });
+
+            // ── Wait for Ctrl+C or SIGTERM ─────────────────────────────────
+            let ctrl_c = tokio::signal::ctrl_c();
+            let terminate = async {
+                #[cfg(unix)]
+                {
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("failed to install SIGTERM handler")
+                        .recv()
+                        .await;
                 }
-
-                tracing::info!("Shutdown signal received, starting graceful shutdown...");
+                #[cfg(not(unix))]
+                std::future::pending::<()>().await;
             };
 
-            let serve_fut = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal);
+            tokio::select! {
+                _ = ctrl_c => tracing::info!("Received SIGINT (Ctrl+C)"),
+                _ = terminate => tracing::info!("Received SIGTERM"),
+            }
 
-            // Bound the drain phase — don't wait forever for HTTP connections.
-            match tokio::time::timeout(std::time::Duration::from_secs(25), serve_fut).await {
-                Ok(Ok(())) => tracing::info!("Server finished normally"),
-                Ok(Err(e)) => tracing::error!("Server error: {e}"),
+            tracing::info!("Shutdown signal received, starting graceful shutdown...");
+
+            // ── Signal the server to drain, bounded to 25 seconds ──────────
+            let _ = shutdown_tx.send(());
+            match tokio::time::timeout(std::time::Duration::from_secs(25), server_handle).await {
+                Ok(Ok(Ok(()))) => tracing::info!("Server finished normally"),
+                Ok(Ok(Err(e))) => tracing::error!("Server error: {e}"),
+                Ok(Err(e)) => tracing::error!("Server task panicked: {e}"),
                 Err(_) => tracing::warn!("Drain timed out after 25s, proceeding with cleanup"),
             }
 
