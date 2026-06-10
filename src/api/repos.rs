@@ -131,9 +131,13 @@ pub async fn list_repos(
                 enc_version: r.enc_version as i32,
                 size: r.size,
                 mtime: r.updated_at,
-                permission: r.permission.clone(),
+                permission: m.permission.clone(),
                 head_commit_id: r.head_commit_id.clone(),
-                type_: "repo".to_string(),
+                type_: if r.owner_id == auth.user_id {
+                    "repo".to_string()
+                } else {
+                    "srepo".to_string()
+                },
                 virtual_: false,
                 root: None,
                 salt: None,
@@ -262,6 +266,16 @@ pub async fn get_repo(
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
+    // Look up membership to get the user's effective permission.
+    let membership = repo_member::Entity::find()
+        .filter(repo_member::Column::RepoId.eq(&repo_id))
+        .filter(repo_member::Column::UserId.eq(auth.user_id))
+        .one(state.db.as_ref())
+        .await?;
+    let permission = membership
+        .map(|m| m.permission)
+        .unwrap_or_else(|| "rw".to_string());
+
     Ok(Json(RepoInfo {
         id: r.id.clone(),
         name: r.name.clone(),
@@ -271,9 +285,13 @@ pub async fn get_repo(
         enc_version: r.enc_version as i32,
         size: r.size,
         mtime: r.updated_at,
-        permission: r.permission.clone(),
+        permission,
         head_commit_id: r.head_commit_id.clone(),
-        type_: "repo".to_string(),
+        type_: if r.owner_id == auth.user_id {
+            "repo".to_string()
+        } else {
+            "srepo".to_string()
+        },
         virtual_: false,
         root: None,
         salt: None,
@@ -584,9 +602,13 @@ pub async fn get_default_repo(
                     enc_version: r.enc_version as i32,
                     size: r.size,
                     mtime: r.updated_at,
-                    permission: r.permission.clone(),
+                    permission: m.permission.clone(),
                     head_commit_id: r.head_commit_id.clone(),
-                    type_: "repo".to_string(),
+                    type_: if r.owner_id == auth.user_id {
+                        "repo".to_string()
+                    } else {
+                        "srepo".to_string()
+                    },
                     virtual_: false,
                     root: None,
                     salt: None,

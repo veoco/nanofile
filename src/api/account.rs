@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::user;
+use crate::entity::{repo, user};
 use crate::error::AppError;
 
 #[derive(Serialize)]
@@ -18,6 +18,10 @@ pub struct AccountInfo {
     pub name: String,
     #[serde(rename = "id")]
     pub id: i32,
+    /// Space used in bytes (sum of owned repo sizes).
+    pub usage: i64,
+    /// Storage quota in bytes. 0 or -2 means unlimited.
+    pub total: i64,
 }
 
 #[derive(Deserialize)]
@@ -41,10 +45,25 @@ pub async fn get_account_info(
         .await?
         .ok_or(AppError::Unauthorized)?;
 
+    // Compute usage: sum of sizes for user-owned repos.
+    let owned_repos = repo::Entity::find()
+        .filter(repo::Column::OwnerId.eq(auth.user_id))
+        .all(state.db.as_ref())
+        .await?;
+    let usage: i64 = owned_repos.iter().map(|r| r.size).sum();
+
+    let total = if state.config.storage.max_storage_bytes > 0 {
+        state.config.storage.max_storage_bytes as i64
+    } else {
+        0 // unlimited
+    };
+
     Ok(Json(AccountInfo {
         email: user.email.clone(),
         name: user.email,
         id: user.id,
+        usage,
+        total,
     }))
 }
 

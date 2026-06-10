@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{repo, repo_member, sync_token};
+use crate::entity::{repo, repo_member, sync_token, user};
 use crate::error::AppError;
 
 #[derive(Serialize)]
@@ -26,6 +26,8 @@ pub struct V21RepoInfo {
     pub head_commit_id: String,
     pub version: i32,
     pub last_modified: i64,
+    pub owner_email: String,
+    pub owner_name: String,
 }
 
 /// GET /api/v2.1/repos/
@@ -44,18 +46,32 @@ pub async fn list_repos_v21(
             .one(state.db.as_ref())
             .await?
         {
+            let is_owner = r.owner_id == auth.user_id;
+            let repo_type = if is_owner { "mine" } else { "shared" };
+            let owner_email = if is_owner {
+                auth.email.clone()
+            } else {
+                user::Entity::find_by_id(r.owner_id)
+                    .one(state.db.as_ref())
+                    .await?
+                    .map(|u| u.email)
+                    .unwrap_or_default()
+            };
+
             repos_list.push(V21RepoInfo {
-                repo_id: r.id.clone(),
+                repo_id: r.id,
                 repo_name: r.name,
                 repo_desc: r.description,
                 permission: m.permission.clone(),
                 encrypted: r.encrypted != 0,
-                type_: "repo".to_string(),
+                type_: repo_type.to_string(),
                 size: r.size,
                 root: r.head_commit_id.clone().unwrap_or_default(),
                 head_commit_id: r.head_commit_id.unwrap_or_default(),
                 version: r.repo_version,
                 last_modified: r.updated_at,
+                owner_email: owner_email.clone(),
+                owner_name: owner_email,
             });
         }
     }
@@ -81,18 +97,32 @@ pub async fn get_repo_v21(
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
+    let is_owner = r.owner_id == auth.user_id;
+    let repo_type = if is_owner { "mine" } else { "shared" };
+    let owner_email = if is_owner {
+        auth.email.clone()
+    } else {
+        user::Entity::find_by_id(r.owner_id)
+            .one(state.db.as_ref())
+            .await?
+            .map(|u| u.email)
+            .unwrap_or_default()
+    };
+
     Ok(Json(V21RepoInfo {
         repo_id: r.id,
         repo_name: r.name,
         repo_desc: r.description,
         permission: membership.permission,
         encrypted: r.encrypted != 0,
-        type_: "repo".to_string(),
+        type_: repo_type.to_string(),
         size: r.size,
         root: r.head_commit_id.clone().unwrap_or_default(),
         head_commit_id: r.head_commit_id.unwrap_or_default(),
         version: r.repo_version,
         last_modified: r.updated_at,
+        owner_email: owner_email.clone(),
+        owner_name: owner_email,
     }))
 }
 
