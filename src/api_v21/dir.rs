@@ -1,6 +1,8 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
+    http::{HeaderMap, HeaderName, HeaderValue},
+    response::{IntoResponse, Response},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
@@ -112,7 +114,7 @@ pub async fn list_dir_v21(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Query(query): Query<V21DirQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Response, AppError> {
     // Permission check
     crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
@@ -137,24 +139,37 @@ pub async fn list_dir_v21(
         .map(|m| m.permission)
         .unwrap_or_else(|| "rw".to_string());
 
-    Ok(Json(serde_json::json!({
-        "user_perm": user_perm,
-        "dir_id": dir_id,
-        "dirent_list": entries
-            .into_iter()
-            .map(|e| {
-                serde_json::json!({
-                    "id": e.id,
-                    "type": e.entry_type,
-                    "name": e.name,
-                    "size": e.size,
-                    "mtime": e.mtime,
-                    "permission": e.permission,
-                    "parent_dir": normalized,
+    // Set the oid HTTP header matching the v2 API behavior (used by iOS client for caching).
+    let mut headers = HeaderMap::new();
+    if !dir_id.is_empty() {
+        headers.insert(
+            HeaderName::from_static("oid"),
+            HeaderValue::from_str(&dir_id).unwrap(),
+        );
+    }
+
+    Ok((
+        headers,
+        Json(serde_json::json!({
+            "user_perm": user_perm,
+            "dir_id": dir_id,
+            "dirent_list": entries
+                .into_iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "id": e.id,
+                        "type": e.entry_type,
+                        "name": e.name,
+                        "size": e.size,
+                        "mtime": e.mtime,
+                        "permission": e.permission,
+                        "parent_dir": normalized,
+                    })
                 })
-            })
-            .collect::<Vec<_>>(),
-    })))
+                .collect::<Vec<_>>(),
+        })),
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]

@@ -27,6 +27,7 @@ pub struct V21RepoInfo {
     pub head_commit_id: String,
     pub version: i32,
     pub last_modified: String,
+    pub mtime: i64,
     pub owner_email: String,
     pub owner_name: String,
 }
@@ -73,6 +74,7 @@ pub async fn list_repos_v21(
                 last_modified: chrono::DateTime::from_timestamp(r.updated_at, 0)
                     .map(|d| d.to_rfc3339())
                     .unwrap_or_default(),
+                mtime: r.updated_at,
                 owner_email: owner_email.clone(),
                 owner_name: owner_email,
             });
@@ -126,12 +128,11 @@ pub async fn get_repo_v21(
         last_modified: chrono::DateTime::from_timestamp(r.updated_at, 0)
             .map(|d| d.to_rfc3339())
             .unwrap_or_default(),
+        mtime: r.updated_at,
         owner_email: owner_email.clone(),
         owner_name: owner_email,
     }))
 }
-
-/// DELETE /api/v2.1/repos/{repo_id}/
 pub async fn delete_repo_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
