@@ -413,7 +413,10 @@ pub async fn rename_repo(
     active.updated_at = Set(now);
     active.update(state.db.as_ref()).await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    // Return a JSON string "success" instead of a JSON object so the
+    // Android client's SupportResponseConverter can parse it as String.
+    // Json("success".to_string()) serializes as the JSON string "success".
+    Ok(Json(serde_json::Value::String("success".to_string())))
 }
 
 /// Extract `repo_name` from POST body bytes, probing JSON, form-urlencoded,

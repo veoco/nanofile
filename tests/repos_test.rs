@@ -198,7 +198,11 @@ async fn test_rename_repo_success() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["success"], true);
+    assert_eq!(
+        body,
+        serde_json::Value::String("success".to_string()),
+        "rename must return the JSON string \"success\" (Android SupportResponseConverter)"
+    );
 
     // Verify via GET.
     let resp = f.client.get_repo(&f.api_token, &f.repo_id).await;
@@ -218,7 +222,11 @@ async fn test_rename_repo_multipart_body() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["success"], true);
+    assert_eq!(
+        body,
+        serde_json::Value::String("success".to_string()),
+        "rename must return the JSON string \"success\" (Android SupportResponseConverter)"
+    );
 
     // Verify via GET.
     let resp = f.client.get_repo(&f.api_token, &f.repo_id).await;
