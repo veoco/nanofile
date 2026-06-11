@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::auth::token::generate_sync_token;
-use crate::entity::{repo, repo_member, sync_token, user};
+use crate::entity::{commit, repo, repo_member, sync_token, user};
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -39,8 +39,8 @@ pub struct RepoInfo {
     #[serde(rename = "owner")]
     pub owner: String,
     pub encrypted: bool,
-    #[serde(rename = "enc_version")]
-    pub enc_version: i32,
+    #[serde(rename = "enc_version", skip_serializing_if = "Option::is_none")]
+    pub enc_version: Option<i32>,
     pub size: i64,
     pub mtime: i64,
     #[serde(rename = "permission")]
@@ -53,6 +53,10 @@ pub struct RepoInfo {
     pub virtual_: bool,
     pub root: Option<String>,
     pub salt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub magic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub random_key: Option<String>,
     pub repo_version: i32,
     /// Extra fields set only in create-repo responses.
     /// The Qt client parses POST /api2/repos/ response as RepoDownloadInfo,
@@ -122,13 +126,18 @@ pub async fn list_repos(
             .one(state.db.as_ref())
             .await?
         {
+            let encrypted = r.encrypted != 0;
             repos.push(RepoInfo {
                 id: r.id.clone(),
                 name: r.name.clone(),
                 desc: r.description.clone(),
                 owner: auth.email.clone(),
-                encrypted: r.encrypted != 0,
-                enc_version: r.enc_version as i32,
+                encrypted,
+                enc_version: if encrypted {
+                    Some(r.enc_version as i32)
+                } else {
+                    None
+                },
                 size: r.size,
                 mtime: r.updated_at,
                 permission: m.permission.clone(),
@@ -140,7 +149,17 @@ pub async fn list_repos(
                 },
                 virtual_: false,
                 root: None,
-                salt: None,
+                salt: if encrypted && r.enc_version >= 3 {
+                    Some(r.salt.clone())
+                } else {
+                    None
+                },
+                magic: if encrypted { r.magic.clone() } else { None },
+                random_key: if encrypted {
+                    r.random_key.clone()
+                } else {
+                    None
+                },
                 repo_version: r.repo_version,
                 repo_id_dup: None,
                 repo_name_dup: None,
@@ -178,6 +197,8 @@ pub async fn create_repo(
     let desc = repo_req.desc.unwrap_or_default();
     let encrypted_val = repo_req.encrypted.unwrap_or(0);
     let enc_version_val = repo_req.enc_version.unwrap_or(0);
+    let magic = repo_req.magic.clone();
+    let random_key = repo_req.random_key.clone();
 
     let model = repo::ActiveModel {
         id: sea_orm::Set(repo_id.clone()),
@@ -186,8 +207,8 @@ pub async fn create_repo(
         owner_id: sea_orm::Set(auth.user_id),
         encrypted: sea_orm::Set(encrypted_val as i8),
         enc_version: sea_orm::Set(enc_version_val as i8),
-        magic: sea_orm::Set(repo_req.magic),
-        random_key: sea_orm::Set(repo_req.random_key),
+        magic: sea_orm::Set(magic.clone()),
+        random_key: sea_orm::Set(random_key.clone()),
         salt: sea_orm::Set(String::new()),
         head_commit_id: sea_orm::NotSet,
         permission: sea_orm::Set("rw".to_string()),
@@ -229,6 +250,8 @@ pub async fn create_repo(
         .exec(state.db.as_ref())
         .await?;
 
+    let encrypted = encrypted_val == 1;
+
     Ok((
         StatusCode::CREATED,
         Json(RepoInfo {
@@ -236,8 +259,12 @@ pub async fn create_repo(
             name: repo_req.name.clone(),
             desc,
             owner: auth.email.clone(),
-            encrypted: encrypted_val == 1,
-            enc_version: enc_version_val,
+            encrypted,
+            enc_version: if encrypted {
+                Some(enc_version_val)
+            } else {
+                None
+            },
             size: 0,
             mtime: now,
             permission: "rw".to_string(),
@@ -246,6 +273,8 @@ pub async fn create_repo(
             virtual_: false,
             root: None,
             salt: None,
+            magic: if encrypted { magic } else { None },
+            random_key: if encrypted { random_key } else { None },
             repo_version: 1,
             // Extra fields for RepoDownloadInfo compatibility
             repo_id_dup: Some(repo_id),
@@ -276,13 +305,47 @@ pub async fn get_repo(
         .map(|m| m.permission)
         .unwrap_or_else(|| "rw".to_string());
 
+    // Load head commit to get the root fs_id (root directory's SHA-1), matching seahub.
+    let root = if let Some(ref cmmt_id) = r.head_commit_id {
+        commit::Entity::find()
+            .filter(commit::Column::RepoId.eq(&r.id))
+            .filter(commit::Column::CommitId.eq(cmmt_id))
+            .one(state.db.as_ref())
+            .await?
+            .map(|c| c.root_id)
+    } else {
+        None
+    };
+
+    // Follow original seahub: enc_version/salt/magic/random_key only for encrypted repos
+    let enc_version = if r.encrypted != 0 {
+        Some(r.enc_version as i32)
+    } else {
+        None
+    };
+    let salt = if r.encrypted != 0 && r.enc_version >= 3 {
+        Some(r.salt.clone())
+    } else {
+        None
+    };
+    let magic = if r.encrypted != 0 {
+        r.magic.clone()
+    } else {
+        None
+    };
+    let random_key = if r.encrypted != 0 {
+        r.random_key.clone()
+    } else {
+        None
+    };
+
     Ok(Json(RepoInfo {
         id: r.id.clone(),
         name: r.name.clone(),
         desc: r.description.clone(),
         owner: auth.email,
         encrypted: r.encrypted != 0,
-        enc_version: r.enc_version as i32,
+        enc_version,
         size: r.size,
         mtime: r.updated_at,
         permission,
@@ -293,8 +356,10 @@ pub async fn get_repo(
             "srepo".to_string()
         },
         virtual_: false,
-        root: None,
-        salt: None,
+        root,
+        salt,
+        magic,
+        random_key,
         repo_version: r.repo_version,
         repo_id_dup: None,
         repo_name_dup: None,
@@ -613,31 +678,48 @@ pub async fn get_default_repo(
                 .one(state.db.as_ref())
                 .await?;
             match r {
-                Some(r) => Ok(Json(RepoInfo {
-                    id: r.id.clone(),
-                    name: r.name.clone(),
-                    desc: r.description.clone(),
-                    owner: auth.email,
-                    encrypted: r.encrypted != 0,
-                    enc_version: r.enc_version as i32,
-                    size: r.size,
-                    mtime: r.updated_at,
-                    permission: m.permission.clone(),
-                    head_commit_id: r.head_commit_id.clone(),
-                    type_: if r.owner_id == auth.user_id {
-                        "repo".to_string()
-                    } else {
-                        "srepo".to_string()
-                    },
-                    virtual_: false,
-                    root: None,
-                    salt: None,
-                    repo_version: r.repo_version,
-                    repo_id_dup: None,
-                    repo_name_dup: None,
-                    token: None,
-                    email: None,
-                })),
+                Some(r) => {
+                    let encrypted = r.encrypted != 0;
+                    Ok(Json(RepoInfo {
+                        id: r.id.clone(),
+                        name: r.name.clone(),
+                        desc: r.description.clone(),
+                        owner: auth.email,
+                        encrypted,
+                        enc_version: if encrypted {
+                            Some(r.enc_version as i32)
+                        } else {
+                            None
+                        },
+                        size: r.size,
+                        mtime: r.updated_at,
+                        permission: m.permission.clone(),
+                        head_commit_id: r.head_commit_id.clone(),
+                        type_: if r.owner_id == auth.user_id {
+                            "repo".to_string()
+                        } else {
+                            "srepo".to_string()
+                        },
+                        virtual_: false,
+                        root: None,
+                        salt: if encrypted && r.enc_version >= 3 {
+                            Some(r.salt.clone())
+                        } else {
+                            None
+                        },
+                        magic: if encrypted { r.magic.clone() } else { None },
+                        random_key: if encrypted {
+                            r.random_key.clone()
+                        } else {
+                            None
+                        },
+                        repo_version: r.repo_version,
+                        repo_id_dup: None,
+                        repo_name_dup: None,
+                        token: None,
+                        email: None,
+                    }))
+                }
                 None => Err(AppError::NotFound("no default repo".into())),
             }
         }
@@ -663,6 +745,7 @@ pub async fn create_default_repo(
             .one(state.db.as_ref())
             .await?
         {
+            let encrypted = r.encrypted != 0;
             return Ok((
                 StatusCode::OK,
                 Json(RepoInfo {
@@ -670,8 +753,12 @@ pub async fn create_default_repo(
                     name: r.name.clone(),
                     desc: r.description.clone(),
                     owner: auth.email,
-                    encrypted: r.encrypted != 0,
-                    enc_version: r.enc_version as i32,
+                    encrypted,
+                    enc_version: if encrypted {
+                        Some(r.enc_version as i32)
+                    } else {
+                        None
+                    },
                     size: r.size,
                     mtime: r.updated_at,
                     permission: r.permission.clone(),
@@ -679,7 +766,17 @@ pub async fn create_default_repo(
                     type_: "repo".to_string(),
                     virtual_: false,
                     root: None,
-                    salt: None,
+                    salt: if encrypted && r.enc_version >= 3 {
+                        Some(r.salt.clone())
+                    } else {
+                        None
+                    },
+                    magic: if encrypted { r.magic.clone() } else { None },
+                    random_key: if encrypted {
+                        r.random_key.clone()
+                    } else {
+                        None
+                    },
                     repo_version: r.repo_version,
                     repo_id_dup: None,
                     repo_name_dup: None,
@@ -752,7 +849,7 @@ pub async fn create_default_repo(
             desc: String::new(),
             owner: auth.email.clone(),
             encrypted: false,
-            enc_version: 0,
+            enc_version: None,
             size: 0,
             mtime: now,
             permission: "rw".to_string(),
@@ -761,6 +858,8 @@ pub async fn create_default_repo(
             virtual_: false,
             root: None,
             salt: None,
+            magic: None,
+            random_key: None,
             repo_version: 1,
             repo_id_dup: Some(repo_id),
             repo_name_dup: Some("我的资料库".to_string()),

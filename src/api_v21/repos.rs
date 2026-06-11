@@ -23,9 +23,6 @@ pub struct V21RepoInfo {
     #[serde(rename = "type")]
     pub type_: String,
     pub size: i64,
-    pub root: String,
-    pub head_commit_id: String,
-    pub version: i32,
     pub last_modified: String,
     pub mtime: i64,
     pub owner_email: String,
@@ -68,9 +65,6 @@ pub async fn list_repos_v21(
                 encrypted: r.encrypted != 0,
                 type_: repo_type.to_string(),
                 size: r.size,
-                root: r.head_commit_id.clone().unwrap_or_default(),
-                head_commit_id: r.head_commit_id.unwrap_or_default(),
-                version: r.repo_version,
                 last_modified: chrono::DateTime::from_timestamp(r.updated_at, 0)
                     .map(|d| d.to_rfc3339())
                     .unwrap_or_default(),
@@ -122,9 +116,6 @@ pub async fn get_repo_v21(
         encrypted: r.encrypted != 0,
         type_: repo_type.to_string(),
         size: r.size,
-        root: r.head_commit_id.clone().unwrap_or_default(),
-        head_commit_id: r.head_commit_id.unwrap_or_default(),
-        version: r.repo_version,
         last_modified: chrono::DateTime::from_timestamp(r.updated_at, 0)
             .map(|d| d.to_rfc3339())
             .unwrap_or_default(),
