@@ -144,7 +144,7 @@ fn parse_multipart(data: &[u8], boundary: &str) -> MultipartResult {
 
             let field_name = hdr
                 .split(';')
-                .find_map(|s| s.trim().strip_prefix("name=\"")?.strip_suffix('"'))
+                .find_map(|s| s.trim().strip_prefix("name=\"")?.split('"').next())
                 .unwrap_or("");
 
             // Extract filename — handle both single-line and multi-line headers.
@@ -913,4 +913,89 @@ pub async fn upload_blks_api(
     }
 
     Ok(Json(json!({"success": true})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// parse_multipart must correctly extract field names even when extra
+    /// headers (e.g. Content-Length) follow the Content-Disposition line.
+    /// OkHttp (used by the Android client) adds Content-Length to each part:
+    ///
+    ///   Content-Disposition: form-data; name="parent_dir"\r\n
+    ///   Content-Length: 1\r\n
+    ///
+    /// The earlier field-name extraction used strip_suffix('"') which assumed
+    /// the Content-Disposition line is the only header and always ends with a
+    /// closing quote. When extra headers follow, strip_suffix('"') returned
+    /// None and the field name was silently lost, causing all uploads to go
+    /// to root regardless of parent_dir or relative_path.
+    #[test]
+    fn test_parse_multipart_with_content_length() {
+        let boundary = "testboundary";
+        let body = format!(
+            "\
+            --{boundary}\r\n\
+            Content-Disposition: form-data; name=\"parent_dir\"\r\n\
+            Content-Length: 1\r\n\
+            \r\n\
+            /\r\n\
+            --{boundary}\r\n\
+            Content-Disposition: form-data; name=\"relative_path\"\r\n\
+            Content-Length: 16\r\n\
+            \r\n\
+            My Photos/Camera/\r\n\
+            --{boundary}--\r\n"
+        );
+
+        let result = parse_multipart(body.as_bytes(), boundary);
+        assert_eq!(result.fields.get("parent_dir").map(|s| s.as_str()), Some("/"));
+        assert_eq!(
+            result.fields.get("relative_path").map(|s| s.as_str()),
+            Some("My Photos/Camera/")
+        );
+    }
+
+    /// parse_multipart must still work without extra headers (simple case).
+    #[test]
+    fn test_parse_multipart_simple() {
+        let boundary = "simple";
+        let body = format!(
+            "\
+            --{boundary}\r\n\
+            Content-Disposition: form-data; name=\"field1\"\r\n\
+            \r\n\
+            value1\r\n\
+            --{boundary}\r\n\
+            Content-Disposition: form-data; name=\"field2\"\r\n\
+            \r\n\
+            value2\r\n\
+            --{boundary}--\r\n"
+        );
+
+        let result = parse_multipart(body.as_bytes(), boundary);
+        assert_eq!(result.fields.get("field1").map(|s| s.as_str()), Some("value1"));
+        assert_eq!(result.fields.get("field2").map(|s| s.as_str()), Some("value2"));
+    }
+
+    /// parse_multipart must extract file parts with extra headers (Content-Type).
+    #[test]
+    fn test_parse_multipart_with_file_and_content_type() {
+        let boundary = "filebound";
+        let body = format!(
+            "\
+            --{boundary}\r\n\
+            Content-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n\
+            Content-Type: image/jpeg\r\n\
+            Content-Length: 10\r\n\
+            \r\n\
+            filedata\r\n\
+            --{boundary}--\r\n"
+        );
+
+        let result = parse_multipart(body.as_bytes(), boundary);
+        assert_eq!(result.file_name.as_deref(), Some("photo.jpg"));
+        assert_eq!(result.file_data.as_deref(), Some(&b"filedata"[..]));
+    }
 }
