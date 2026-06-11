@@ -188,15 +188,22 @@ async fn read_fs_dir_data(
         .map_err(|e| AppError::internal(format!("read fs_dir_data failed: {e}")))
 }
 
-/// Combined POST handler for `/api2/repos/{id}/dir/`:
-/// - JSON body `{"operation": "mkdir"}` → create directory (mobile clients, p from query)
-/// - JSON body `{"p": "/path", "operation": "mkdir"}` → create directory (web UI)
-/// - Form-urlencoded `operation=mkdir&create_parents=true` → create directory (Qt client)
-/// - Form-urlencoded `operation=rename&newname=xxx` → rename directory (Qt client)
+/// Combined POST handler for `/api2/repos/{id}/dir/`.
 ///
-/// For maximum compatibility, the handler **always tries JSON first** regardless
-/// of Content-Type header (which may have unexpected casing on some clients).
-/// Falls back to form-urlencoded parsing on JSON failure.
+/// Seafile clients send the directory path in the query parameter `p`
+/// and the operation (if any) in the request body — as JSON, form data,
+/// or even without a body at all.  To maximise compatibility the handler:
+///
+/// 1. Always tries JSON parsing first (Content-Type is not reliable).
+/// 2. Falls back to form-urlencoded parsing on JSON failure.
+/// 3. If neither yields an operation, defaults to `"mkdir"`.
+///
+/// | Format | Body | `p` source |
+/// |--------|------|------------|
+/// | JSON | `{"operation":"mkdir"}` | query (or body) |
+/// | JSON | `{"p":"/path"}` | body |
+/// | Form | `operation=mkdir` | query |
+/// | Empty | — | query (implicit mkdir) |
 pub async fn dir_post_handler(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -212,51 +219,47 @@ pub async fn dir_post_handler(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    // Always try JSON first (regardless of Content-Type), then fall back to form.
-    if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-        // JSON body — get p from body or fall back to query string.
-        let p = json_val
-            .get("p")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| query.p.clone());
+    let body_str = String::from_utf8_lossy(&bytes);
+    tracing::debug!(body = %body_str, "POST dir body");
 
-        match json_val.get("operation").and_then(|v| v.as_str()) {
-            Some("mkdir") | None => {
-                let path = p.ok_or_else(|| AppError::BadRequest("path required".into()))?;
-                let path = normalize_path(&path);
-                create_dir_by_path(auth, state, repo_id, path).await
-            }
-            Some("rename") => {
-                let path = p.ok_or_else(|| AppError::BadRequest("path required".into()))?;
-                let path = normalize_path(&path);
-                let newname = json_val
-                    .get("newname")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
-                rename_dir_entry(state.db.as_ref(), &repo_id, &path, newname, &auth.email).await
-            }
-            Some("revert") => {
-                // revert is handled by the v2.1 endpoint, not the v2 one.
-                Err(AppError::BadRequest("unknown operation".into()))
-            }
-            _ => Err(AppError::BadRequest("unknown operation".into())),
+    // Extract (operation, p, newname) from whatever the client sent.
+    // Try JSON first, then form-urlencoded.
+    let (op, p, newname): (Option<String>, Option<String>, Option<String>) =
+        if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            let op = json_val
+                .get("operation")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let p = json_val.get("p").and_then(|v| v.as_str()).map(String::from);
+            let newname = json_val
+                .get("newname")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            (op, p, newname)
+        } else if let Ok(form) = serde_urlencoded::from_bytes::<HashMap<String, String>>(&bytes) {
+            let op = form.get("operation").cloned();
+            let p = form.get("p").cloned();
+            let newname = form.get("newname").cloned();
+            (op, p, newname)
+        } else {
+            (None, None, None)
+        };
+
+    // p: body first, query second.
+    let path = p
+        .or_else(|| query.p.clone())
+        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    let path = normalize_path(&path);
+
+    // Operation defaults to "mkdir" when unspecified.
+    match op.as_deref() {
+        Some("rename") => {
+            let newname = newname.ok_or_else(|| AppError::BadRequest("newname required".into()))?;
+            rename_dir_entry(state.db.as_ref(), &repo_id, &path, &newname, &auth.email).await
         }
-    } else {
-        // Form-encoded operations
-        let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)
-            .map_err(|_| AppError::BadRequest("invalid form data".into()))?;
-        let path = normalize_path(&query.p.unwrap_or_else(|| "/".to_string()));
-
-        match form.get("operation").map(|s| s.as_str()) {
-            Some("mkdir") => create_dir_by_path(auth, state, repo_id, path).await,
-            Some("rename") => {
-                let newname = form
-                    .get("newname")
-                    .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
-                rename_dir_entry(state.db.as_ref(), &repo_id, &path, newname, &auth.email).await
-            }
-            _ => Err(AppError::BadRequest("unknown operation".into())),
+        _ => {
+            // mkdir (default when operation is missing, "mkdir", or unknown)
+            create_dir_by_path(auth, state, repo_id, path).await
         }
     }
 }
