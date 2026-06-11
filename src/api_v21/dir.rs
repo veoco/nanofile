@@ -3,23 +3,18 @@ use axum::{
     extract::{Path, Query, State},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{commit, repo};
+use crate::entity::{commit, repo, repo_member};
 use crate::error::AppError;
 
 #[derive(Deserialize)]
 pub struct V21DirQuery {
     pub p: Option<String>,
     pub with_thumbnail: Option<bool>,
-}
-
-#[derive(Serialize)]
-pub struct V21DirListResponse {
-    pub dirent_list: Vec<serde_json::Value>,
 }
 
 /// DELETE /api/v2.1/repos/{repo_id}/{obj}/?p=path
@@ -117,7 +112,7 @@ pub async fn list_dir_v21(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Query(query): Query<V21DirQuery>,
-) -> Result<Json<V21DirListResponse>, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     // Permission check
     crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
@@ -130,22 +125,36 @@ pub async fn list_dir_v21(
     let db = state.db.as_ref();
 
     // Always list from the FS object tree, which is the authoritative source.
-    let (_, entries) = crate::api::dir::list_dir_from_fs_tree(db, &repo_id, &normalized).await?;
+    let (dir_id, entries) =
+        crate::api::dir::list_dir_from_fs_tree(db, &repo_id, &normalized).await?;
 
-    Ok(Json(V21DirListResponse {
-        dirent_list: entries
+    // Get the user's permission for this repo.
+    let user_perm = repo_member::Entity::find()
+        .filter(repo_member::Column::RepoId.eq(&repo_id))
+        .filter(repo_member::Column::UserId.eq(auth.user_id))
+        .one(db)
+        .await?
+        .map(|m| m.permission)
+        .unwrap_or_else(|| "rw".to_string());
+
+    Ok(Json(serde_json::json!({
+        "user_perm": user_perm,
+        "dir_id": dir_id,
+        "dirent_list": entries
             .into_iter()
             .map(|e| {
                 serde_json::json!({
-                    "name": e.name,
-                    "type": e.entry_type,
-                    "size": e.size,
-                    "last_modified": e.mtime,
                     "id": e.id,
+                    "type": e.entry_type,
+                    "name": e.name,
+                    "size": e.size,
+                    "mtime": e.mtime,
+                    "permission": e.permission,
+                    "parent_dir": normalized,
                 })
             })
-            .collect(),
-    }))
+            .collect::<Vec<_>>(),
+    })))
 }
 
 #[derive(Deserialize)]
