@@ -153,7 +153,14 @@ pub async fn list_dir_v21(
     dir_list.sort_by_key(|a| a.name.to_lowercase());
     file_list.sort_by_key(|a| a.name.to_lowercase());
 
-    let parent_dir = &normalized;
+    // Match seahub's normalize_dir_path: non-root directories must have a
+    // trailing slash in parent_dir so clients (e.g. Android) can safely
+    // construct full_path = parent_dir + name without a missing separator.
+    let parent_dir = if normalized == "/" {
+        normalized.clone()
+    } else {
+        format!("{}/", normalized.trim_end_matches('/'))
+    };
     let mut dirent_list = Vec::with_capacity(dir_list.len() + file_list.len());
 
     // Directory entries — no size, no modifier fields.
@@ -169,14 +176,24 @@ pub async fn list_dir_v21(
         }));
     }
 
-    // File entries — include size and modifier info.
+    // File entries — include size, modifier info, and thumbnail info.
+    let with_thumbnail = query.with_thumbnail.unwrap_or(false);
     for e in &file_list {
         let modifier_email = e.modifier.as_str();
-        // Without a nickname database, use the email as both name and
-        // contact email, matching what seahub does when the lookup fails.
-        let modifier_name = modifier_email;
+        // Seahub's email2nickname() returns the local part of the email
+        // (the part before '@') when no nickname is configured, not the
+        // full email address and not an empty string.
+        let modifier_name = modifier_email.split('@').next().unwrap_or("");
+        // Seahub's email2contact_email() returns the profile's contact
+        // email, or the original login email if none is configured.
         let modifier_contact_email = modifier_email;
-        dirent_list.push(serde_json::json!({
+        // When with_thumbnail=true, include encoded_thumbnail_src (empty
+        // for non-image files) so clients that expect this field don't
+        // fail on its absence.  Seahub returns it conditionally for
+        // IMAGE/PDF/SVG only; the empty fallback is pragmatically safer
+        // for the HarmonyOS client which sends with_thumbnail=true on
+        // every directory listing.
+        let mut entry = serde_json::json!({
             "type": "file",
             "id": e.id,
             "name": e.name,
@@ -188,7 +205,11 @@ pub async fn list_dir_v21(
             "modifier_email": modifier_email,
             "modifier_name": modifier_name,
             "modifier_contact_email": modifier_contact_email,
-        }));
+        });
+        if with_thumbnail {
+            entry["encoded_thumbnail_src"] = serde_json::Value::String(String::new());
+        }
+        dirent_list.push(entry);
     }
 
     // Set the oid HTTP header matching the v2 API behavior (used by iOS client for caching).
@@ -200,15 +221,13 @@ pub async fn list_dir_v21(
         );
     }
 
-    Ok((
-        headers,
-        Json(serde_json::json!({
-            "user_perm": user_perm,
-            "dir_id": dir_id,
-            "dirent_list": dirent_list,
-        })),
-    )
-        .into_response())
+    let body = serde_json::json!({
+        "user_perm": user_perm,
+        "dir_id": dir_id,
+        "dirent_list": dirent_list,
+    });
+
+    Ok((headers, Json(body)).into_response())
 }
 
 #[derive(Deserialize)]

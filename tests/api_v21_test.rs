@@ -514,7 +514,8 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         "file mtime should be positive"
     );
     assert_eq!(file_entry["permission"], "rw");
-    assert_eq!(file_entry["parent_dir"], "/photos");
+    // parent_dir must have trailing slash for non-root (seahub protocol contract)
+    assert_eq!(file_entry["parent_dir"], "/photos/");
     assert_eq!(file_entry["starred"], false);
     // File must have modifier fields
     assert!(
