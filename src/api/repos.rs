@@ -486,7 +486,9 @@ pub async fn delete_repo(
     // Delete the repo itself
     repo::Entity::delete_by_id(&repo_id).exec(db).await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    // Return a JSON string "success" (not an object) so the Android
+    // client's SupportResponseConverter can parse it as String.
+    Ok(Json(serde_json::Value::String("success".to_string())))
 }
 
 pub async fn download_info(
