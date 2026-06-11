@@ -1,3 +1,4 @@
+use crate::api::repos::extract_multipart_field;
 use axum::{
     Json, Router,
     body::Body,
@@ -175,16 +176,40 @@ pub async fn file_post_handler(
         .headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_string();
 
     if content_type.starts_with("multipart/form-data") {
-        // File upload — reconstruct for Multipart extractor
-        let body = Body::from(bytes);
-        let req = Request::from_parts(parts, body);
-        let mut multipart = Multipart::from_request(req, &state)
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        upload_file_inner(auth, state, repo_id, &mut multipart).await
+        // Check if this is a rename operation from Android client (multipart
+        // with operation=rename+newname).  Scan the raw bytes to avoid
+        // consuming the stream before we know what to do.
+        if let Some(op) = extract_multipart_field(&bytes, "operation")
+            && op == "rename"
+        {
+            let newname = extract_multipart_field(&bytes, "newname")
+                .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
+            let path = normalize_path(&query.p.unwrap_or_default());
+            rename_file_entry(
+                state.db.as_ref(),
+                &repo_id,
+                &path,
+                &newname,
+                &auth.email,
+                Some(state.path_cache.as_ref()),
+            )
+            .await?;
+            // Return JSON string "success" (not a JSON object) so the Android
+            // client's SupportResponseConverter can parse it for Call<String>.
+            Ok(Json(serde_json::Value::String("success".to_string())))
+        } else {
+            // File upload — reconstruct for Multipart extractor
+            let body = Body::from(bytes);
+            let req = Request::from_parts(parts, body);
+            let mut multipart = Multipart::from_request(req, &state)
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+            upload_file_inner(auth, state, repo_id, &mut multipart).await
+        }
     } else {
         // Form-encoded operations: rename, move
         let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)

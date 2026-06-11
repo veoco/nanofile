@@ -64,51 +64,56 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, body) = match &self {
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, json!({ "error": msg })),
-            AppError::Unauthorized => {
-                (StatusCode::UNAUTHORIZED, json!({ "error": "Unauthorized" }))
-            }
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, json!({ "error_msg":msg })),
+            AppError::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                json!({ "error_msg":"Unauthorized" }),
+            ),
             AppError::Forbidden => (
                 StatusCode::FORBIDDEN,
-                json!({ "error": "Permission denied" }),
+                json!({ "error_msg":"Permission denied" }),
             ),
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, json!({ "error": msg })),
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, json!({ "error": msg })),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, json!({ "error_msg":msg })),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, json!({ "error_msg":msg })),
             AppError::TooManyRequests => (
                 StatusCode::TOO_MANY_REQUESTS,
-                json!({ "error": "Too many requests" }),
+                json!({ "error_msg":"Too many requests" }),
             ),
             AppError::RepoPasswdRequired => (
                 StatusCode::from_u16(440).unwrap(),
-                json!({ "error": "repo password is required" }),
+                json!({ "error_msg":"repo password is required" }),
             ),
             AppError::RepoPasswdMagicRequired => (
                 StatusCode::from_u16(441).unwrap(),
-                json!({ "error": "repo password magic is required" }),
+                json!({ "error_msg":"repo password magic is required" }),
             ),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": msg })),
-            AppError::OperationFailed(msg) => {
-                (StatusCode::from_u16(520).unwrap(), json!({ "error": msg }))
-            }
+            AppError::Internal(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error_msg":msg }),
+            ),
+            AppError::OperationFailed(msg) => (
+                StatusCode::from_u16(520).unwrap(),
+                json!({ "error_msg":msg }),
+            ),
             AppError::RepoDeleted => (
                 StatusCode::from_u16(444).unwrap(),
-                json!({ "error": "repo was deleted" }),
+                json!({ "error_msg":"repo was deleted" }),
             ),
             AppError::RepoCorrupted => (
                 StatusCode::from_u16(445).unwrap(),
-                json!({ "error": "repo was corrupted" }),
+                json!({ "error_msg":"repo was corrupted" }),
             ),
             AppError::QuotaExceeded => (
                 StatusCode::from_u16(443).unwrap(),
-                json!({ "error": "Storage quota exceeded." }),
+                json!({ "error_msg":"Storage quota exceeded." }),
             ),
             AppError::BlockMissing => (
                 StatusCode::from_u16(446).unwrap(),
-                json!({ "error": "Blocks missing for uploaded files." }),
+                json!({ "error_msg":"Blocks missing for uploaded files." }),
             ),
             AppError::Locked(path) => (
                 StatusCode::FORBIDDEN,
-                json!({ "error": format!("File {} is locked", path) }),
+                json!({ "error_msg":format!("File {} is locked", path) }),
             ),
             // Seahub-compatible 2FA error format: 400 + non_field_errors.
             // The login handler in auth.rs adds the X-Seafile-OTP header directly;

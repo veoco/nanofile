@@ -127,6 +127,10 @@ pub async fn create_upload_link_v21(
 }
 
 /// DELETE /api/v2.1/upload-links/{id}/
+///
+/// Returns bare `true` (not a JSON object) because the Android client's
+/// DialogService.deleteUploadLink() uses `Single<Boolean>` and the
+/// SupportResponseConverter's TypeAdapter<Boolean> cannot parse an object.
 pub async fn delete_upload_link_v21(
     _auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -135,7 +139,7 @@ pub async fn delete_upload_link_v21(
     upload_link::Entity::delete_by_id(id)
         .exec(state.db.as_ref())
         .await?;
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(Json(serde_json::Value::Bool(true)))
 }
 
 fn sha256_hash(s: &str) -> String {

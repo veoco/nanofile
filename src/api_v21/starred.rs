@@ -1,10 +1,13 @@
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::api::repos::extract_multipart_field;
 use crate::auth::middleware::AuthUser;
 use crate::entity::starred_file;
 use crate::error::AppError;
@@ -58,11 +61,31 @@ pub async fn get_starred_items(
 }
 
 /// `POST /api/v2.1/starred-items/`
+///
+/// Accepts JSON body (web/desktop) or multipart/form-data (Android client).
 pub async fn star_item(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(req): Json<StarOrUnstarRequest>,
+    headers: HeaderMap,
+    bytes: Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Try JSON first, then multipart/form-data raw-text fallback.
+    let req = if headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("json"))
+    {
+        serde_json::from_slice::<StarOrUnstarRequest>(&bytes)?
+    } else {
+        // Multipart/form-data (Android client uses @Multipart @PartMap).
+        StarOrUnstarRequest {
+            repo_id: extract_multipart_field(&bytes, "repo_id")
+                .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?,
+            path: extract_multipart_field(&bytes, "path")
+                .ok_or_else(|| AppError::BadRequest("path required".into()))?,
+        }
+    };
+
     let now = chrono::Utc::now().timestamp();
 
     starred_file::ActiveModel {

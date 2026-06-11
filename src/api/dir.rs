@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::api::repos::extract_multipart_field;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{commit, fs_object, repo, repo_member, share_link};
 use crate::error::AppError;
@@ -239,7 +240,12 @@ pub async fn dir_post_handler(
             let newname = form.get("newname").cloned();
             (op, p, newname)
         } else {
-            (None, None, None)
+            // Try multipart/form-data raw-text scan (Android client sends rename
+            // via @Multipart @PartMap with operation=rename, newname=xxx).
+            let op = extract_multipart_field(&bytes, "operation");
+            let p = extract_multipart_field(&bytes, "p");
+            let newname = extract_multipart_field(&bytes, "newname");
+            (op, p, newname)
         };
 
     // p: body first, query second.
@@ -253,7 +259,9 @@ pub async fn dir_post_handler(
         Some("rename") => {
             let newname = newname.ok_or_else(|| AppError::BadRequest("newname required".into()))?;
             rename_dir_entry(state.db.as_ref(), &repo_id, &path, &newname, &auth.email).await?;
-            Ok(Json(serde_json::json!({"success": true})))
+            // Return JSON string "success" (not a JSON object) so the Android
+            // client's SupportResponseConverter can parse it for Call<String>.
+            Ok(Json(serde_json::Value::String("success".to_string())))
         }
         _ => {
             // mkdir (default when operation is missing, "mkdir", or unknown).

@@ -437,7 +437,7 @@ pub async fn rename_repo(
 /// Extract a named field from a multipart/form-data body by scanning the
 /// raw body for `name="<field_name>"` and returning the value that follows
 /// the header-terminating `\r\n\r\n` boundary.
-fn extract_multipart_field(bytes: &[u8], field_name: &str) -> Option<String> {
+pub(crate) fn extract_multipart_field(bytes: &[u8], field_name: &str) -> Option<String> {
     let body_str = String::from_utf8_lossy(bytes);
     let pattern = format!("name=\"{}\"", field_name);
     let rest = body_str.split(&pattern).nth(1)?;
