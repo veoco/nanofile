@@ -950,7 +950,10 @@ mod tests {
         );
 
         let result = parse_multipart(body.as_bytes(), boundary);
-        assert_eq!(result.fields.get("parent_dir").map(|s| s.as_str()), Some("/"));
+        assert_eq!(
+            result.fields.get("parent_dir").map(|s| s.as_str()),
+            Some("/")
+        );
         assert_eq!(
             result.fields.get("relative_path").map(|s| s.as_str()),
             Some("My Photos/Camera/")
@@ -975,8 +978,14 @@ mod tests {
         );
 
         let result = parse_multipart(body.as_bytes(), boundary);
-        assert_eq!(result.fields.get("field1").map(|s| s.as_str()), Some("value1"));
-        assert_eq!(result.fields.get("field2").map(|s| s.as_str()), Some("value2"));
+        assert_eq!(
+            result.fields.get("field1").map(|s| s.as_str()),
+            Some("value1")
+        );
+        assert_eq!(
+            result.fields.get("field2").map(|s| s.as_str()),
+            Some("value2")
+        );
     }
 
     /// parse_multipart must extract file parts with extra headers (Content-Type).
