@@ -257,22 +257,14 @@ pub async fn dir_post_handler(
         }
         _ => {
             // mkdir (default when operation is missing, "mkdir", or unknown).
-            // Extract dir info before create_dir_by_path consumes the Strings.
-            let dir_name = path
-                .rsplit_once('/')
-                .map(|(_, n)| n)
-                .unwrap_or("")
-                .to_string();
-            let parent_path = parent_path_from(&path).to_string();
+            // NOTE: Return JSON string "success" (not a JSON object with dir
+            // info) because the Android client's SupportResponseConverter uses
+            // TypeAdapter<String>.fromJson() for ALL Call<String> and
+            // Single<String> responses, and TypeAdapter<String> throws on a
+            // JSON object. The full dir info is available via the v2.1
+            // create_dir_v21 endpoint for clients that need it.
             create_dir_by_path(auth, state, repo_id.clone(), path).await?;
-            Ok(Json(serde_json::json!({
-                "type": "dir",
-                "repo_id": repo_id,
-                "parent_dir": parent_path,
-                "obj_name": dir_name,
-                "obj_id": "0000000000000000000000000000000000000000",
-                "mtime": chrono::Utc::now().timestamp(),
-            })))
+            Ok(Json(serde_json::Value::String("success".to_string())))
         }
     }
 }

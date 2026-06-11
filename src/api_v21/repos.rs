@@ -1,4 +1,5 @@
-use axum::{Json, extract::Path, extract::State, http::StatusCode};
+use axum::Json;
+use axum::extract::{Path, State};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
 use std::sync::Arc;
@@ -128,7 +129,7 @@ pub async fn delete_repo_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
-) -> Result<StatusCode, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let db = state.db.as_ref();
 
     // Load repo
@@ -156,5 +157,5 @@ pub async fn delete_repo_v21(
     // Delete the repo itself
     repo::Entity::delete_by_id(&repo_id).exec(db).await?;
 
-    Ok(StatusCode::OK)
+    Ok(Json(serde_json::Value::String("success".to_string())))
 }

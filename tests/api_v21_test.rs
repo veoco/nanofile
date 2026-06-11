@@ -572,8 +572,10 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
     );
 }
 
-/// Regression: multipart mkdir via the v2 API must return JSON dir info
-/// matching seahub's DirView.post format (not an empty body).
+/// Regression: multipart mkdir via the v2 API must return the JSON string
+/// "success" because Android's SupportResponseConverter uses
+/// TypeAdapter<String>.fromJson() for Call<String> responses, which throws
+/// on a JSON object (it expects a JSON string literal like "\"success\"").
 #[tokio::test]
 async fn test_v21_mkdir_response_format() {
     let f = TestFixture::new().await;
@@ -593,21 +595,10 @@ async fn test_v21_mkdir_response_format() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["type"], "dir", "mkdir response must have type=dir");
-    assert_eq!(body["obj_name"], "resp_format_test");
-    assert_eq!(body["parent_dir"], "/");
-    assert_eq!(body["repo_id"], f.repo_id);
-    assert!(
-        body["obj_id"]
-            .as_str()
-            .map(|s| s.len() >= 40)
-            .unwrap_or(false),
-        "obj_id must be a 40-char SHA1, got: {:?}",
-        body["obj_id"]
-    );
-    assert!(
-        body.get("mtime").and_then(|v| v.as_i64()).unwrap_or(0) > 0,
-        "mtime must be a positive Unix timestamp"
+    assert_eq!(
+        body,
+        serde_json::Value::String("success".to_string()),
+        "mkdir must return the JSON string \"success\" (SupportResponseConverter)"
     );
 
     // Subdirectory (single level, parent already exists).
@@ -618,9 +609,11 @@ async fn test_v21_mkdir_response_format() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["type"], "dir");
-    assert_eq!(body["obj_name"], "child");
-    assert_eq!(body["parent_dir"], "/resp_format_test");
+    assert_eq!(
+        body,
+        serde_json::Value::String("success".to_string()),
+        "subdir mkdir must also return \"success\""
+    );
 }
 
 #[tokio::test]
