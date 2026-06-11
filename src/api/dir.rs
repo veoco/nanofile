@@ -210,7 +210,7 @@ pub async fn dir_post_handler(
     Path(repo_id): Path<String>,
     Query(query): Query<DirQuery>,
     req: Request<Body>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     // Permission check
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
@@ -255,11 +255,27 @@ pub async fn dir_post_handler(
     match op.as_deref() {
         Some("rename") => {
             let newname = newname.ok_or_else(|| AppError::BadRequest("newname required".into()))?;
-            rename_dir_entry(state.db.as_ref(), &repo_id, &path, &newname, &auth.email).await
+            rename_dir_entry(state.db.as_ref(), &repo_id, &path, &newname, &auth.email).await?;
+            Ok(Json(serde_json::json!({"success": true})))
         }
         _ => {
-            // mkdir (default when operation is missing, "mkdir", or unknown)
-            create_dir_by_path(auth, state, repo_id, path).await
+            // mkdir (default when operation is missing, "mkdir", or unknown).
+            // Extract dir info before create_dir_by_path consumes the Strings.
+            let dir_name = path
+                .rsplit_once('/')
+                .map(|(_, n)| n)
+                .unwrap_or("")
+                .to_string();
+            let parent_path = parent_path_from(&path).to_string();
+            create_dir_by_path(auth, state, repo_id.clone(), path).await?;
+            Ok(Json(serde_json::json!({
+                "type": "dir",
+                "repo_id": repo_id,
+                "parent_dir": parent_path,
+                "obj_name": dir_name,
+                "obj_id": "0000000000000000000000000000000000000000",
+                "mtime": chrono::Utc::now().timestamp(),
+            })))
         }
     }
 }
