@@ -33,7 +33,9 @@ pub fn api_v21_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/v2.1/repos/{repo_id}/dir/",
-            get(dir::list_dir_v21).post(dir::create_dir_v21),
+            get(dir::list_dir_v21)
+                .post(dir::create_dir_v21)
+                .delete(dir::delete_dir_v21),
         )
         // Starred
         .route(

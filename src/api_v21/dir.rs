@@ -108,6 +108,27 @@ pub async fn delete_dirent_v21(
     Ok(Json(serde_json::json!({"success": true})))
 }
 
+/// Wrapper for delete_dirent_v21 that works with Path(repo_id) instead of
+/// Path((repo_id, obj)).  Matches delete_file_v21 in `src/api_v21/file.rs`.
+///
+/// The Android client sends `DELETE /api/v2.1/repos/{repo_id}/dir/?p=path`,
+/// which Axum matches against the literal route `{repo_id}/dir/` (more
+/// specific than `{repo_id}/{obj}/`), so we need a dedicated DELETE handler.
+pub async fn delete_dir_v21(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    repo_id: axum::extract::Path<String>,
+    query: axum::extract::Query<V21DirQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    delete_dirent_v21(
+        auth,
+        axum::extract::State(state),
+        axum::extract::Path((repo_id.0, "dir".to_string())),
+        query,
+    )
+    .await
+}
+
 /// GET /api/v2.1/repos/{repo_id}/dir/?p=&with_thumbnail=true
 pub async fn list_dir_v21(
     auth: AuthUser,
