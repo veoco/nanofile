@@ -62,6 +62,46 @@ async fn test_v21_dir_delete_file() {
     assert_eq!(status, 200, "delete failed ({}): {}", status, text);
 }
 
+/// Regression: DELETE /api/v2.1/repos/{repo_id}/dir/?p=path must return 200
+/// (Android client sends this to delete a folder; a 405 would be a regression).
+#[tokio::test]
+async fn test_v21_dir_delete_directory() {
+    let f = TestFixture::new().await;
+
+    // Create a directory.
+    let resp = f
+        .client
+        .create_dir(&f.api_token, &f.repo_id, "/dir_to_delete")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // Delete via the v2.1 DELETE endpoint.
+    let resp = f
+        .client
+        .delete(
+            &format!("/api/v2.1/repos/{}/dir/?p=/dir_to_delete", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    assert_eq!(status, 200, "delete dir failed ({}): {}", status, text);
+
+    // Verify the directory no longer exists.
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/?p=/dir_to_delete", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert!(
+        !resp.status().is_success(),
+        "deleted dir listing should fail, got status {}",
+        resp.status()
+    );
+}
+
 #[tokio::test]
 async fn test_v21_dir_list_with_thumbnails() {
     let f = TestFixture::new().await;
@@ -530,6 +570,57 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         file_entry.get("modifier_contact_email").is_some(),
         "missing modifier_contact_email"
     );
+}
+
+/// Regression: multipart mkdir via the v2 API must return JSON dir info
+/// matching seahub's DirView.post format (not an empty body).
+#[tokio::test]
+async fn test_v21_mkdir_response_format() {
+    let f = TestFixture::new().await;
+
+    // Seed so the repo has a head commit.
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", ".seed_mkdir_resp", b".")
+        .await;
+    assert!(resp.status().is_success());
+
+    // Root-level dir.
+    let resp = f
+        .client
+        .create_dir_multipart(&f.api_token, &f.repo_id, "/resp_format_test")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["type"], "dir", "mkdir response must have type=dir");
+    assert_eq!(body["obj_name"], "resp_format_test");
+    assert_eq!(body["parent_dir"], "/");
+    assert_eq!(body["repo_id"], f.repo_id);
+    assert!(
+        body["obj_id"]
+            .as_str()
+            .map(|s| s.len() >= 40)
+            .unwrap_or(false),
+        "obj_id must be a 40-char SHA1, got: {:?}",
+        body["obj_id"]
+    );
+    assert!(
+        body.get("mtime").and_then(|v| v.as_i64()).unwrap_or(0) > 0,
+        "mtime must be a positive Unix timestamp"
+    );
+
+    // Subdirectory (single level, parent already exists).
+    let resp = f
+        .client
+        .create_dir_multipart(&f.api_token, &f.repo_id, "/resp_format_test/child")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["type"], "dir");
+    assert_eq!(body["obj_name"], "child");
+    assert_eq!(body["parent_dir"], "/resp_format_test");
 }
 
 #[tokio::test]

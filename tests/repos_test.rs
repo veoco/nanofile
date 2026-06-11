@@ -207,6 +207,26 @@ async fn test_rename_repo_success() {
     assert_eq!(body["name"], "NewName");
 }
 
+/// Regression: rename repo via multipart POST (Android client format).
+#[tokio::test]
+async fn test_rename_repo_multipart_body() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .rename_repo_multipart(&f.api_token, &f.repo_id, "MultipartName")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], true);
+
+    // Verify via GET.
+    let resp = f.client.get_repo(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["name"], "MultipartName");
+}
+
 /// B.11.2 — Non-owner cannot rename a repo.
 #[tokio::test]
 async fn test_rename_repo_non_owner() {

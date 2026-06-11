@@ -382,6 +382,27 @@ impl TestClient {
             .unwrap()
     }
 
+    /// POST /api2/repos/{repo_id}/?op=rename with multipart body (Android
+    /// client format — @Multipart + @PartMap with name="repo_name").
+    pub async fn rename_repo_multipart(
+        &self,
+        token: &str,
+        repo_id: &str,
+        new_name: &str,
+    ) -> reqwest::Response {
+        let form = reqwest::multipart::Form::new().text("repo_name", new_name.to_string());
+        self.client
+            .post(format!(
+                "{}/api2/repos/{}/?op=rename",
+                self.base_url, repo_id
+            ))
+            .bearer_auth(token)
+            .multipart(form)
+            .send()
+            .await
+            .unwrap()
+    }
+
     pub async fn download_info(&self, token: &str, repo_id: &str) -> reqwest::Response {
         self.client
             .get(format!(
