@@ -20,6 +20,7 @@ pub struct V21RepoInfo {
     pub repo_desc: String,
     pub permission: String,
     pub encrypted: bool,
+    #[serde(rename = "type")]
     pub type_: String,
     pub size: i64,
     pub root: String,
