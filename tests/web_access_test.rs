@@ -346,6 +346,83 @@ async fn test_upload_api_with_relative_path() {
     );
 }
 
+/// Regression: upload-blks commit with parent_dir=/ + relative_path (Android
+/// photo backup format) must place the file in the correct subdirectory.
+#[tokio::test]
+async fn test_upload_blks_commit_with_relative_path() {
+    let f = TestFixture::new().await;
+
+    // Seed and create target directory structure.
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", ".seed", b".")
+        .await;
+    assert!(resp.status().is_success());
+    let resp = f
+        .client
+        .create_dir(&f.api_token, &f.repo_id, "/My Photos")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let resp = f
+        .client
+        .create_dir(&f.api_token, &f.repo_id, "/My Photos/Camera")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // Get upload-blks link (defaults to parent_dir=/).
+    let link_resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(link_resp.status(), 200);
+    let upload_url: String = link_resp.json().await.unwrap();
+
+    // Upload a block.
+    let file_data = b"block upload relative_path test";
+    let block_id = {
+        use sha1::{Digest, Sha1};
+        let mut hasher = Sha1::new();
+        hasher.update(file_data);
+        hex::encode(hasher.finalize())
+    };
+    let block_part =
+        reqwest::multipart::Part::bytes(file_data.to_vec()).file_name(block_id.clone());
+    let form = reqwest::multipart::Form::new().part("file", block_part);
+    let resp = f.client.post_multipart_url(&upload_url, form).await;
+    assert_eq!(resp.status(), 200);
+
+    // Commit with parent_dir=/ and relative_path=My Photos/Camera.
+    let blockids_json = serde_json::to_string(&vec![block_id]).unwrap();
+    let commit_form = reqwest::multipart::Form::new()
+        .text("commitonly", "true")
+        .text("parent_dir", "/")
+        .text("relative_path", "My Photos/Camera")
+        .text("file_name", "IMG_002.jpg")
+        .text("blockids", blockids_json)
+        .text("file_size", file_data.len().to_string());
+    let resp = f.client.post_multipart_url(&upload_url, commit_form).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "upload-blks commit with relative_path failed: {:?}",
+        resp.text().await
+    );
+
+    // Verify file is in /My Photos/Camera/.
+    let detail = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/file/detail/?p=/My%20Photos/Camera/IMG_002.jpg",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(
+        detail.status(),
+        200,
+        "blks upload with relative_path must go to subdirectory"
+    );
+}
+
 /// F.6a — GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/ returns 0 and Accept-Ranges.
 #[tokio::test]
 async fn test_file_uploaded_bytes_returns_zero() {

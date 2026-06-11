@@ -799,7 +799,15 @@ pub async fn upload_blks_api(
             .await?;
 
         // Update directory tree and create commit
-        let target_dir = crate::api::fileops::normalize_path(parent_dir);
+        let relative_path = fields
+            .get("relative_path")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        let target_dir = if relative_path.is_empty() {
+            crate::api::fileops::normalize_path(parent_dir)
+        } else {
+            compute_target_dir(parent_dir, relative_path)
+        };
         let now = chrono::Utc::now().timestamp();
 
         // Get old file size for incremental size adjustment
