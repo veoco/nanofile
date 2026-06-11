@@ -189,7 +189,8 @@ async fn read_fs_dir_data(
 }
 
 /// Combined POST handler for `/api2/repos/{id}/dir/`:
-/// - JSON body `{"p": "/path"}` → create directory (web UI)
+/// - JSON body `{"operation": "mkdir"}` → create directory (mobile clients, p from query)
+/// - JSON body `{"p": "/path", "operation": "mkdir"}` → create directory (web UI)
 /// - Form-urlencoded `operation=mkdir&create_parents=true` → create directory (Qt client)
 /// - Form-urlencoded `operation=rename&newname=xxx` → rename directory (Qt client)
 pub async fn dir_post_handler(
@@ -214,14 +215,34 @@ pub async fn dir_post_handler(
         .unwrap_or("");
 
     if content_type.starts_with("application/json") {
-        // JSON body: create directory
-        #[derive(Deserialize)]
-        struct JsonBody {
-            p: String,
-        }
-        let req: JsonBody = serde_json::from_slice(&bytes)
+        // JSON body — get p from body or fall back to query string.
+        let json_val: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|_| AppError::BadRequest("invalid json".into()))?;
-        create_dir_by_path(auth, state, repo_id, req.p).await
+
+        let p = json_val
+            .get("p")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| query.p.clone());
+
+        match json_val.get("operation").and_then(|v| v.as_str()) {
+            Some("mkdir") | None => {
+                // mkdir: p from body or query
+                let path = p.ok_or_else(|| AppError::BadRequest("path required".into()))?;
+                let path = normalize_path(&path);
+                create_dir_by_path(auth, state, repo_id, path).await
+            }
+            Some("rename") => {
+                let path = p.ok_or_else(|| AppError::BadRequest("path required".into()))?;
+                let path = normalize_path(&path);
+                let newname = json_val
+                    .get("newname")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
+                rename_dir_entry(state.db.as_ref(), &repo_id, &path, newname, &auth.email).await
+            }
+            _ => Err(AppError::BadRequest("unknown operation".into())),
+        }
     } else {
         // Form-encoded operations
         let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)

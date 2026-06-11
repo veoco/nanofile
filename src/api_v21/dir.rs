@@ -225,21 +225,26 @@ pub struct CreateDirBody {
 /// ```json
 /// {"p": "/newdir", "operation": "mkdir"}
 /// ```
-/// Or just:
-/// ```json
-/// {"p": "/newdir"}
+/// Or with p in the query string:
+/// ```http
+/// POST /api/v2.1/repos/{repo_id}/dir/?p=/newdir
+/// Content-Type: application/json
+/// {"operation": "mkdir"}
 /// ```
 pub async fn create_dir_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
+    Query(query): Query<V21DirQuery>,
     Json(body): Json<CreateDirBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Permission check
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
+    // Prefer p from body, fall back to query string (matching seahub behavior).
     let path = body
         .p
+        .or(query.p)
         .ok_or_else(|| AppError::BadRequest("path (p) required".into()))?;
     let path = if path.starts_with('/') {
         path
