@@ -386,6 +386,122 @@ async fn test_v21_file_create() {
     assert_eq!(detail2.status(), 200, "child file should exist");
 }
 
+/// v2.1 file create via multipart/form-data (simulating Android client).
+#[tokio::test]
+async fn test_v21_file_create_multipart() {
+    let f = TestFixture::new().await;
+
+    // Upload a file first so the repo has a head commit
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "dummy.txt", b"seed")
+        .await;
+    assert!(up.status().is_success());
+
+    // Create an empty file using multipart body (Android client pattern:
+    // @Multipart + @PartMap).
+    use reqwest::multipart::Form;
+    let form = Form::new().text("operation", "mkfile");
+    let path = format!(
+        "{}/api/v2.1/repos/{}/file/?p=/multipart-created.txt",
+        f.server.base_url, f.repo_id
+    );
+    let resp = reqwest::Client::new()
+        .post(&path)
+        .bearer_auth(&f.api_token)
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "multipart file create failed");
+
+    // Verify file exists
+    let detail = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/file/detail/?p=/multipart-created.txt",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(
+        detail.status(),
+        200,
+        "file should exist after multipart create"
+    );
+}
+
+/// GET /api/v2.1/repos/{repo_id}/dir/detail/?path=...
+#[tokio::test]
+async fn test_v21_dir_detail_returns_metadata() {
+    let f = TestFixture::new().await;
+
+    // Seed: upload a file so the repo has a head commit
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", ".seed", b".")
+        .await;
+    assert!(resp.status().is_success());
+
+    // Create a subdirectory
+    let resp = f
+        .client
+        .create_dir(&f.api_token, &f.repo_id, "/mydir")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // Get directory detail
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/detail/?path=/mydir", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["repo_id"], f.repo_id);
+    assert_eq!(body["name"], "mydir");
+    assert_eq!(body["path"], "/mydir");
+    assert!(body["mtime"].as_i64().unwrap_or(0) > 0);
+    assert!(body["permission"].as_str().unwrap_or("") == "rw");
+
+    // Root path should return 400
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/detail/?path=/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "root path should be rejected");
+
+    // Missing path should return 400
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/detail/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "missing path should be rejected");
+
+    // Nonexistent path should return 404
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api/v2.1/repos/{}/dir/detail/?path=/nonexistent",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 404, "nonexistent path should 404");
+}
+
 /// Simulate the seadroid photo-backup flow and verify the v2.1 directory
 /// listing response contains all fields expected by the Seafile mobile clients.
 ///
@@ -667,4 +783,75 @@ async fn test_v21_seadoc_upload_image() {
         )
         .await;
     assert_eq!(resp.status(), 200);
+}
+
+/// Test block download link API endpoint (GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/).
+#[tokio::test]
+async fn test_v21_block_download_link() {
+    let f = TestFixture::new().await;
+
+    // Upload a file to create a block.
+    let data = b"hello block download test data";
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "test.txt", data)
+        .await;
+    assert!(resp.status().is_success());
+
+    // Get file detail to find the file's fs_id.
+    let detail = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/file/detail/?p=/test.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(detail.status(), 200);
+    let detail_body: serde_json::Value = detail.json().await.unwrap();
+    let file_id = detail_body["id"].as_str().unwrap().to_string();
+
+    // Compute the block ID (SHA1 of the data, matching test upload logic).
+    let block_id = {
+        use sha1::{Digest, Sha1};
+        let mut hasher = Sha1::new();
+        hasher.update(data);
+        hex::encode(hasher.finalize())
+    };
+
+    // Call the block download link API.
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/files/{}/blks/{}/download-link/",
+                f.repo_id, file_id, block_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "block download link should return 200");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let url = body.as_str().unwrap_or("");
+    assert!(
+        !url.is_empty(),
+        "block download link should be a non-empty URL"
+    );
+    assert!(url.contains(&block_id), "URL should contain block_id");
+
+    // Unauthorized access should fail.
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/files/{}/blks/{}/download-link/",
+                f.repo_id, file_id, block_id
+            ),
+            None,
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        401,
+        "block download link without auth should 401"
+    );
 }

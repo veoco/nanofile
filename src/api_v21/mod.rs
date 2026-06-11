@@ -32,6 +32,10 @@ pub fn api_v21_routes() -> Router<Arc<AppState>> {
             delete(dir::delete_dirent_v21),
         )
         .route(
+            "/api/v2.1/repos/{repo_id}/dir/detail/",
+            get(dir::dir_detail_v21),
+        )
+        .route(
             "/api/v2.1/repos/{repo_id}/dir/",
             get(dir::list_dir_v21)
                 .post(dir::create_dir_v21)

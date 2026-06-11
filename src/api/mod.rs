@@ -61,6 +61,10 @@ pub fn api_routes() -> Router<Arc<AppState>> {
             "/api2/default-repo/",
             axum::routing::get(repos::get_default_repo).post(repos::create_default_repo),
         )
+        .route(
+            "/api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/",
+            axum::routing::get(file::get_block_download_link),
+        )
         .nest("/api2/repos", thumbnail::thumbnail_routes())
         .nest("/api2", avatar::avatar_routes())
         .route("/api2/groups/", axum::routing::get(groups::list_groups))

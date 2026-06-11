@@ -21,6 +21,10 @@ pub fn web_routes() -> Router<Arc<AppState>> {
         .route("/upload-aj/{token}", post(upload::upload_aj_token))
         .route("/upload-api/{token}", post(upload::upload_api))
         .route("/download-api/{token}", get(download::download_api))
+        .route(
+            "/blks/{token}/{file_id}/{block_id}",
+            get(download::block_download),
+        )
         .route("/upload-blks-api/{token}", post(upload::upload_blks_api))
         .route("/update-aj/", post(upload::update_aj))
         .route("/update-aj/{token}", post(upload::update_aj_token))

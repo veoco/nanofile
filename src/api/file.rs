@@ -74,8 +74,78 @@ fn build_download_url(state: &AppState, token: &str, host_header: Option<&str>) 
     format!("http://{}:{}/download-api/{}", host, port, token)
 }
 
+/// Build a block download URL in `/blks/{token}/{file_id}/{block_id}` format.
+fn build_block_download_url(
+    state: &AppState,
+    token: &str,
+    file_id: &str,
+    block_id: &str,
+    host_header: Option<&str>,
+) -> String {
+    let (host, port) = if let Some(h) = host_header {
+        if let Some((h, p)) = h.split_once(':') {
+            (h.to_string(), p.to_string())
+        } else {
+            (h.to_string(), state.config.server.port.to_string())
+        }
+    } else if state.config.server.addr == "0.0.0.0"
+        || state.config.server.addr == "::"
+        || state.config.server.addr == "127.0.0.1"
+    {
+        (
+            "127.0.0.1".to_string(),
+            state.config.server.port.to_string(),
+        )
+    } else {
+        (
+            state.config.server.addr.clone(),
+            state.config.server.port.to_string(),
+        )
+    };
+    format!(
+        "http://{}:{}/blks/{}/{}/{}",
+        host, port, token, file_id, block_id
+    )
+}
+
+/// `GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/?p=/parent_dir`
+///
+/// Returns a JSON string URL pointing to the block content, matching seahub's
+/// `FileBlockDownloadLinkView`.  The returned URL goes through the `/blks/`
+/// handler (step B) which reads the block from the block store.
+///
+/// The `file_id` parameter is the file's fs_id (SHA1).  The `p` query parameter
+/// (optional, default `/`) is used for permission checking.
+pub async fn get_block_download_link(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((repo_id, file_id, block_id)): Path<(String, String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<String>, AppError> {
+    // Permission check using the parent_dir from query (p).
+    let parent_dir = query.get("p").map(|s| s.as_str()).unwrap_or("/");
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
+    // Generate a downloadblks token for auth validation.
+    let token = state.token_manager.generate(
+        &repo_id,
+        auth.user_id,
+        &auth.email,
+        "downloadblks",
+        parent_dir,
+    );
+
+    let host_header = headers.get("host").and_then(|v| v.to_str().ok());
+    let url = build_block_download_url(&state, &token, &file_id, &block_id, host_header);
+    Ok(Json(url))
+}
+
 /// Get the root_fs_id from the repo's head commit for path resolution.
-async fn get_head_root_id(db: &DatabaseConnection, repo_id: &str) -> Result<String, AppError> {
+pub(crate) async fn get_head_root_id(
+    db: &DatabaseConnection,
+    repo_id: &str,
+) -> Result<String, AppError> {
     let repo_record = repo::Entity::find_by_id(repo_id)
         .one(db)
         .await?
@@ -541,7 +611,7 @@ pub async fn move_file(
 }
 
 /// Shared file rename logic used by both form-encoded and JSON handlers.
-async fn rename_file_entry(
+pub(crate) async fn rename_file_entry(
     db: &DatabaseConnection,
     repo_id: &str,
     path: &str,

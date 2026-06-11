@@ -1,13 +1,16 @@
 use axum::{
     Json,
+    body::Body,
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, Request},
 };
 use sea_orm::{EntityTrait, QueryFilter};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::api::repos::extract_multipart_field;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
@@ -21,23 +24,68 @@ pub struct CreateFileRequest {
 /// POST /api/v2.1/repos/{repo_id}/file/
 ///
 /// Creates an empty file placeholder in the FS tree.
+/// Accepts JSON body (web/desktop) or multipart/form-data (Android client,
+/// which sends @Multipart @PartMap with operation=mkfile or
+/// operation=rename+newname).
 pub async fn create_file_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
-    Json(req): Json<CreateFileRequest>,
+    Query(query): Query<HashMap<String, String>>,
+    req: Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Permission check
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = req
-        .p
-        .ok_or_else(|| AppError::BadRequest("path (p) required".into()))?;
+    let (parts, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let content_type = parts
+        .headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    // Try JSON first, then multipart/form-data fallback.
+    let path: String = if content_type.contains("json") {
+        let r = serde_json::from_slice::<CreateFileRequest>(&bytes)?;
+        r.p.ok_or_else(|| AppError::BadRequest("path (p) required".into()))?
+    } else {
+        // Multipart/form-data — Android client sends p as @Query parameter,
+        // plus optional fields in @PartMap.  Prefer query p.
+        query
+            .get("p")
+            .cloned()
+            .or_else(|| extract_multipart_field(&bytes, "p"))
+            .ok_or_else(|| AppError::BadRequest("path (p) required".into()))?
+    };
     let path = if path.starts_with('/') {
         path
     } else {
         format!("/{}", path)
     };
+
+    // Check for rename operation in multipart body (DialogService.renameFile
+    // sends operation=rename + newname=xxx via @Multipart @PartMap on the
+    // same v2.1 file endpoint).
+    if let Some(op) = extract_multipart_field(&bytes, "operation")
+        && op == "rename"
+    {
+        let newname = extract_multipart_field(&bytes, "newname")
+            .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
+        crate::api::file::rename_file_entry(
+            state.db.as_ref(),
+            &repo_id,
+            &path,
+            &newname,
+            &auth.email,
+            Some(state.path_cache.as_ref()),
+        )
+        .await?;
+        return Ok(Json(serde_json::json!({"success": true})));
+    }
 
     let file_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or(&path);
     let parent_path = match path.rsplit_once('/') {

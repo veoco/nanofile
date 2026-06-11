@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::share_link;
+use crate::entity::{fs_object, share_link};
 use crate::error::AppError;
+use crate::serialization::fs_json::FsFileData;
 use crate::storage::download::Downloader;
 
 /// GET /f/{token} — download via shared link token.
@@ -107,4 +108,59 @@ pub async fn download_api(
     );
 
     Ok((StatusCode::OK, headers, content).into_response())
+}
+
+/// `GET /blks/{token}/{file_id}/{block_id}`
+///
+/// Step B of the block download flow.  Validates the token, looks up the file
+/// by `file_id`, verifies the block belongs to that file, and returns the raw
+/// block bytes (matching seafile-server's `access_blks_cb`).
+pub async fn block_download(
+    State(state): State<Arc<AppState>>,
+    Path((token, file_id, block_id)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    // Validate the downloadblks token.
+    let info = state
+        .token_manager
+        .validate(&token)
+        .ok_or_else(|| AppError::BadRequest("invalid or expired token".into()))?;
+
+    if info.op != "downloadblks" {
+        return Err(AppError::BadRequest(
+            "token not valid for block download".into(),
+        ));
+    }
+
+    let repo_id = &info.repo_id;
+
+    // Look up the file by its fs_id in the fs_objects table.
+    let file_obj = fs_object::Entity::find()
+        .filter(fs_object::Column::RepoId.eq(repo_id))
+        .filter(fs_object::Column::FsId.eq(&file_id))
+        .one(state.db.as_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound("file not found".into()))?;
+
+    // Parse the FsFileData to get the block list.
+    let file_data: FsFileData = serde_json::from_str(&file_obj.data)
+        .map_err(|e| AppError::Internal(format!("invalid file data: {e}")))?;
+
+    // Verify the requested block_id belongs to this file.
+    if !file_data.block_ids.contains(&block_id) {
+        return Err(AppError::NotFound("block not found".into()));
+    }
+
+    // Read the block from the block store.
+    let block_data = state
+        .block_store
+        .read_block(&block_id)
+        .await
+        .map_err(|_| AppError::NotFound("block data not found".into()))?;
+
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        block_data,
+    )
+        .into_response())
 }

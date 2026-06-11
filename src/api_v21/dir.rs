@@ -297,3 +297,143 @@ pub async fn create_dir_v21(
 
     Ok(Json(serde_json::json!({"success": true})))
 }
+
+/// `GET /api/v2.1/repos/{repo_id}/dir/detail/?path=...`
+///
+/// Returns metadata about a directory (not its contents).
+/// The `path` query parameter is required and must not be `/`.
+///
+/// Response matches seahub's `DirDetailView`:
+/// ```json
+/// {
+///   "repo_id": "...",
+///   "path": "...",
+///   "name": "...",
+///   "mtime": 1234567890,
+///   "permission": "rw"
+/// }
+/// ```
+/// Query parameters for dir detail endpoint.
+/// Seahub and seadroid send `path`, not `p`.
+#[derive(Deserialize)]
+pub struct DirDetailQuery {
+    pub path: Option<String>,
+}
+
+pub async fn dir_detail_v21(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
+    Query(query): Query<DirDetailQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Permission check — read access is sufficient.
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
+    // path is required and must not be "/"
+    let path = query
+        .path
+        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    if path == "/" || path.is_empty() {
+        return Err(AppError::BadRequest("path invalid.".into()));
+    }
+    let normalized = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{}", path)
+    };
+
+    // Resolve the directory's fs_id via the FS tree.
+    let db = state.db.as_ref();
+    let repo_record = crate::entity::repo::Entity::find_by_id(&repo_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Library not found".into()))?;
+    let head_commit_id = repo_record
+        .head_commit_id
+        .ok_or_else(|| AppError::NotFound("no commits".into()))?;
+    let head_commit = crate::entity::commit::Entity::find()
+        .filter(crate::entity::commit::Column::CommitId.eq(&head_commit_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
+
+    crate::storage::resolve_fs_id(
+        db,
+        &repo_id,
+        &head_commit.root_id,
+        &normalized,
+        Some(state.path_cache.as_ref()),
+    )
+    .await
+    .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
+
+    // Read the directory data to get entry metadata files in the parent listing.
+    // The dir name is the last component of the path.
+    let dir_name = normalized
+        .trim_end_matches('/')
+        .rsplit_once('/')
+        .map(|(_, n)| n)
+        .unwrap_or("");
+
+    // Look up the entry in the parent directory for its mtime.
+    let parent_path = match normalized.trim_end_matches('/').rsplit_once('/') {
+        Some(("", _)) => "/",
+        Some((parent, _)) => parent,
+        None => "/",
+    };
+    let mtime = if parent_path == "/" {
+        // Root children — resolve the root dir
+        let root_data = crate::storage::read_fs_dir_data(db, &repo_id, &head_commit.root_id)
+            .await
+            .unwrap_or_else(|_| crate::serialization::fs_json::FsDirData {
+                dirents: vec![],
+                obj_type: crate::serialization::fs_json::SEAF_METADATA_TYPE_DIR,
+                version: 1,
+            });
+        root_data
+            .dirents
+            .iter()
+            .find(|d| d.name == dir_name)
+            .map(|d| d.mtime)
+            .unwrap_or(0)
+    } else {
+        let parent_fs_id = match crate::storage::resolve_fs_id(
+            db,
+            &repo_id,
+            &head_commit.root_id,
+            parent_path,
+            Some(state.path_cache.as_ref()),
+        )
+        .await
+        {
+            Ok(id) => id,
+            Err(_) => return Err(AppError::NotFound("Folder not found.".into())),
+        };
+        let parent_data = crate::storage::read_fs_dir_data(db, &repo_id, &parent_fs_id)
+            .await
+            .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
+        parent_data
+            .dirents
+            .iter()
+            .find(|d| d.name == dir_name)
+            .map(|d| d.mtime)
+            .unwrap_or(0)
+    };
+
+    // Get user permission
+    let permission = crate::entity::repo_member::Entity::find()
+        .filter(crate::entity::repo_member::Column::RepoId.eq(&repo_id))
+        .filter(crate::entity::repo_member::Column::UserId.eq(auth.user_id))
+        .one(db)
+        .await?
+        .map(|m| m.permission)
+        .unwrap_or_else(|| "rw".to_string());
+
+    Ok(Json(serde_json::json!({
+        "repo_id": repo_id,
+        "path": normalized,
+        "name": dir_name,
+        "mtime": mtime,
+        "permission": permission,
+    })))
+}
