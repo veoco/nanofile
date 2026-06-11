@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
-    body::Bytes,
-    extract::{Form, Path, Query, State},
+    body::{Body, Bytes},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
@@ -24,11 +24,6 @@ pub struct CreateRepoRequest {
     pub enc_version: Option<i32>,
     pub magic: Option<String>,
     pub random_key: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct RenameRepoRequest {
-    pub repo_name: String,
 }
 
 #[derive(Serialize)]
@@ -369,18 +364,30 @@ pub async fn get_repo(
 }
 
 /// `POST /api2/repos/{repo_id}/?op=rename`
+///
+/// Accepts `repo_name` from JSON, form-urlencoded, or multipart/form-data
+/// (Android client sends multipart with part `name="repo_name"`).
 pub async fn rename_repo(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
-    Form(req): Form<RenameRepoRequest>,
+    req: axum::http::Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Verify op=rename
     match params.get("op").map(|s| s.as_str()) {
         Some("rename") => {}
         _ => return Err(AppError::BadRequest("invalid operation".into())),
     }
+
+    // Parse repo_name from body, trying JSON, form-urlencoded, then
+    // multipart/form-data (Android client).
+    let (_parts, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let repo_name = parse_repo_name(&bytes)?;
 
     // Load repo
     let r = repo::Entity::find_by_id(&repo_id)
@@ -394,7 +401,7 @@ pub async fn rename_repo(
     }
 
     // Validate name
-    let new_name = req.repo_name.trim().to_string();
+    let new_name = repo_name.trim().to_string();
     if new_name.is_empty() || new_name.contains('/') {
         return Err(AppError::BadRequest("invalid repo name".into()));
     }
@@ -407,6 +414,41 @@ pub async fn rename_repo(
     active.update(state.db.as_ref()).await?;
 
     Ok(Json(serde_json::json!({"success": true})))
+}
+
+/// Extract `repo_name` from POST body bytes, probing JSON, form-urlencoded,
+/// then multipart/form-data in order.
+fn parse_repo_name(bytes: &[u8]) -> Result<String, AppError> {
+    // Try JSON body
+    if let Ok(map) = serde_json::from_slice::<HashMap<String, String>>(bytes)
+        && let Some(name) = map.get("repo_name")
+    {
+        return Ok(name.clone());
+    }
+
+    // Try form-urlencoded body
+    if let Ok(map) = serde_urlencoded::from_bytes::<HashMap<String, String>>(bytes)
+        && let Some(name) = map.get("repo_name")
+    {
+        return Ok(name.clone());
+    }
+
+    // Fallback: multipart/form-data – scan for `name="repo_name"` in the
+    // raw body string.  The Android client sends the field as a single
+    // multipart part; the value sits after the headers block (\r\n\r\n).
+    let body_str = String::from_utf8_lossy(bytes);
+    let pattern = "name=\"repo_name\"";
+    if let Some(rest) = body_str.split(pattern).nth(1) {
+        // Skip past \r\n\r\n that terminates the part headers
+        if let Some(val_block) = rest.split("\r\n\r\n").nth(1) {
+            let value = val_block.split("\r\n").next().unwrap_or("").trim();
+            if !value.is_empty() {
+                return Ok(value.to_string());
+            }
+        }
+    }
+
+    Err(AppError::BadRequest("repo_name required".into()))
 }
 
 pub async fn delete_repo(
