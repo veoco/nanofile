@@ -193,6 +193,10 @@ async fn read_fs_dir_data(
 /// - JSON body `{"p": "/path", "operation": "mkdir"}` → create directory (web UI)
 /// - Form-urlencoded `operation=mkdir&create_parents=true` → create directory (Qt client)
 /// - Form-urlencoded `operation=rename&newname=xxx` → rename directory (Qt client)
+///
+/// For maximum compatibility, the handler **always tries JSON first** regardless
+/// of Content-Type header (which may have unexpected casing on some clients).
+/// Falls back to form-urlencoded parsing on JSON failure.
 pub async fn dir_post_handler(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -203,22 +207,14 @@ pub async fn dir_post_handler(
     // Permission check
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let (parts, body) = req.into_parts();
+    let (_parts, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let content_type = parts
-        .headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if content_type.starts_with("application/json") {
+    // Always try JSON first (regardless of Content-Type), then fall back to form.
+    if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
         // JSON body — get p from body or fall back to query string.
-        let json_val: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|_| AppError::BadRequest("invalid json".into()))?;
-
         let p = json_val
             .get("p")
             .and_then(|v| v.as_str())
@@ -227,7 +223,6 @@ pub async fn dir_post_handler(
 
         match json_val.get("operation").and_then(|v| v.as_str()) {
             Some("mkdir") | None => {
-                // mkdir: p from body or query
                 let path = p.ok_or_else(|| AppError::BadRequest("path required".into()))?;
                 let path = normalize_path(&path);
                 create_dir_by_path(auth, state, repo_id, path).await
@@ -240,6 +235,10 @@ pub async fn dir_post_handler(
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
                 rename_dir_entry(state.db.as_ref(), &repo_id, &path, newname, &auth.email).await
+            }
+            Some("revert") => {
+                // revert is handled by the v2.1 endpoint, not the v2 one.
+                Err(AppError::BadRequest("unknown operation".into()))
             }
             _ => Err(AppError::BadRequest("unknown operation".into())),
         }
