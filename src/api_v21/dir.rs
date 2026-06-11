@@ -139,6 +139,58 @@ pub async fn list_dir_v21(
         .map(|m| m.permission)
         .unwrap_or_else(|| "rw".to_string());
 
+    // Separate dirs and files, then sort alphabetically (case-insensitive),
+    // matching seahub's DirView behavior.
+    let mut dir_list: Vec<_> = Vec::new();
+    let mut file_list: Vec<_> = Vec::new();
+    for e in entries {
+        if e.entry_type == "dir" {
+            dir_list.push(e);
+        } else {
+            file_list.push(e);
+        }
+    }
+    dir_list.sort_by_key(|a| a.name.to_lowercase());
+    file_list.sort_by_key(|a| a.name.to_lowercase());
+
+    let parent_dir = &normalized;
+    let mut dirent_list = Vec::with_capacity(dir_list.len() + file_list.len());
+
+    // Directory entries — no size, no modifier fields.
+    for e in &dir_list {
+        dirent_list.push(serde_json::json!({
+            "type": "dir",
+            "id": e.id,
+            "name": e.name,
+            "mtime": e.mtime,
+            "permission": e.permission,
+            "parent_dir": parent_dir,
+            "starred": false,
+        }));
+    }
+
+    // File entries — include size and modifier info.
+    for e in &file_list {
+        let modifier_email = e.modifier.as_str();
+        // Without a nickname database, use the email as both name and
+        // contact email, matching what seahub does when the lookup fails.
+        let modifier_name = modifier_email;
+        let modifier_contact_email = modifier_email;
+        dirent_list.push(serde_json::json!({
+            "type": "file",
+            "id": e.id,
+            "name": e.name,
+            "size": e.size,
+            "mtime": e.mtime,
+            "permission": e.permission,
+            "parent_dir": parent_dir,
+            "starred": false,
+            "modifier_email": modifier_email,
+            "modifier_name": modifier_name,
+            "modifier_contact_email": modifier_contact_email,
+        }));
+    }
+
     // Set the oid HTTP header matching the v2 API behavior (used by iOS client for caching).
     let mut headers = HeaderMap::new();
     if !dir_id.is_empty() {
@@ -153,20 +205,7 @@ pub async fn list_dir_v21(
         Json(serde_json::json!({
             "user_perm": user_perm,
             "dir_id": dir_id,
-            "dirent_list": entries
-                .into_iter()
-                .map(|e| {
-                    serde_json::json!({
-                        "id": e.id,
-                        "type": e.entry_type,
-                        "name": e.name,
-                        "size": e.size,
-                        "mtime": e.mtime,
-                        "permission": e.permission,
-                        "parent_dir": normalized,
-                    })
-                })
-                .collect::<Vec<_>>(),
+            "dirent_list": dirent_list,
         })),
     )
         .into_response())

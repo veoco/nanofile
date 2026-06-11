@@ -53,6 +53,10 @@ pub struct DirEntry {
     pub size: i64,
     pub mtime: i64,
     pub permission: String,
+    /// Last modifier email (empty string if unknown). Files only in the
+    /// original seafile protocol, but we store it for all entry types.
+    #[serde(default)]
+    pub modifier: String,
 }
 
 /// Get the root_fs_id from the repo's head commit for path resolution.
@@ -167,6 +171,7 @@ pub(crate) async fn list_dir_from_fs_tree(
                 size: d.size,
                 mtime: d.mtime,
                 permission: "rw".to_string(),
+                modifier: d.modifier,
             })
             .collect(),
     ))
