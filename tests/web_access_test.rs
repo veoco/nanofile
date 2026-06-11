@@ -268,6 +268,84 @@ async fn test_upload_api_to_chinese_dir() {
     );
 }
 
+/// Regression: upload with parent_dir=/ + relative_path (Android photo backup
+/// format) must place the file in the correct subdirectory, not root.
+#[tokio::test]
+async fn test_upload_api_with_relative_path() {
+    let f = TestFixture::new().await;
+
+    // Create the target directory structure.
+    let resp = f
+        .client
+        .create_dir(&f.api_token, &f.repo_id, "/My Photos")
+        .await;
+    assert_eq!(resp.status(), 200, "create My Photos failed");
+    let resp = f
+        .client
+        .create_dir(&f.api_token, &f.repo_id, "/My Photos/Camera")
+        .await;
+    assert_eq!(resp.status(), 200, "create Camera failed");
+
+    // Get upload link for ROOT (as the Android client does).
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/upload-link/?p=/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let upload_url: String = resp.json().await.unwrap();
+
+    // Upload a file using parent_dir=/ and relative_path=My Photos/Camera.
+    let file_part = reqwest::multipart::Part::bytes(b"photo data".to_vec())
+        .file_name("IMG_001.jpg".to_string());
+    let form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("parent_dir", "/")
+        .text("relative_path", "My Photos/Camera");
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let resp = client
+        .post(&upload_url)
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "upload with relative_path failed");
+
+    // Verify file is in /My Photos/Camera/ (not root).
+    let detail = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/file/detail/?p=/My%20Photos/Camera/IMG_001.jpg",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(
+        detail.status(),
+        200,
+        "file should be at /My Photos/Camera/IMG_001.jpg, not root"
+    );
+
+    // Verify file is NOT at /IMG_001.jpg (root).
+    let detail_root = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/file/detail/?p=/IMG_001.jpg", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    // file/detail returns 404 for non-existent files
+    assert_ne!(
+        detail_root.status(),
+        200,
+        "file must NOT be at root when relative_path is given"
+    );
+}
+
 /// F.6a — GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/ returns 0 and Accept-Ranges.
 #[tokio::test]
 async fn test_file_uploaded_bytes_returns_zero() {
