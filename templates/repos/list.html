@@ -166,11 +166,11 @@
 <script>
 function showCreateDialog() {
     document.getElementById('create-overlay').classList.remove('hidden');
+    document.getElementById('create-input').value = '';
     setTimeout(function() { document.getElementById('create-input').focus(); }, 100);
 }
 function hideCreateDialog() {
     document.getElementById('create-overlay').classList.add('hidden');
-    document.getElementById('create-input').value = '';
 }
 function submitCreate(form) {
     var name = document.getElementById('create-input').value.trim();
