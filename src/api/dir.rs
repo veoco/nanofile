@@ -219,9 +219,6 @@ pub async fn dir_post_handler(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let body_str = String::from_utf8_lossy(&bytes);
-    tracing::debug!(body = %body_str, "POST dir body");
-
     // Extract (operation, p, newname) from whatever the client sent.
     // Try JSON first, then form-urlencoded.
     let (op, p, newname): (Option<String>, Option<String>, Option<String>) =
