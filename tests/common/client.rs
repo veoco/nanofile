@@ -337,6 +337,37 @@ impl TestClient {
             .unwrap()
     }
 
+    /// POST /api2/repos/ with multipart body (Android client format).
+    pub async fn create_repo_multipart(&self, token: &str, name: &str) -> reqwest::Response {
+        let form = reqwest::multipart::Form::new().text("name", name.to_string());
+        self.client
+            .post(format!("{}/api2/repos/", self.base_url))
+            .bearer_auth(token)
+            .multipart(form)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// POST /api2/repos/ with multipart body, including description (Android client format).
+    pub async fn create_repo_multipart_with_desc(
+        &self,
+        token: &str,
+        name: &str,
+        desc: &str,
+    ) -> reqwest::Response {
+        let form = reqwest::multipart::Form::new()
+            .text("name", name.to_string())
+            .text("desc", desc.to_string());
+        self.client
+            .post(format!("{}/api2/repos/", self.base_url))
+            .bearer_auth(token)
+            .multipart(form)
+            .send()
+            .await
+            .unwrap()
+    }
+
     pub async fn list_repos(&self, token: &str) -> reqwest::Response {
         self.client
             .get(format!("{}/api2/repos/", self.base_url))

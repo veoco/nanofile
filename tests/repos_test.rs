@@ -344,3 +344,39 @@ async fn test_create_repo_json_body() {
     assert_eq!(body["name"], "JSON Created Repo");
     assert!(body["id"].as_str().is_some());
 }
+
+/// Regression: POST /api2/repos/ accepts multipart body (Android client format).
+#[tokio::test]
+async fn test_create_repo_multipart_body() {
+    let f = TestFixture::new().await;
+
+    // Create a repo with multipart body (as the Android client does).
+    let resp = f
+        .client
+        .create_repo_multipart(&f.api_token, "Multipart Created Repo")
+        .await;
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["name"], "Multipart Created Repo");
+    assert_eq!(body["repo_name"], "Multipart Created Repo");
+    assert!(body["id"].as_str().is_some());
+    assert!(body["repo_id"].as_str().is_some());
+    assert!(body["token"].as_str().is_some());
+}
+
+/// Regression: POST /api2/repos/ accepts multipart body with description.
+#[tokio::test]
+async fn test_create_repo_multipart_with_desc() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .create_repo_multipart_with_desc(&f.api_token, "Repo With Desc", "A test repo")
+        .await;
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["name"], "Repo With Desc");
+    assert_eq!(body["repo_name"], "Repo With Desc");
+    assert_eq!(body["desc"], "A test repo");
+    assert!(body["id"].as_str().is_some());
+}

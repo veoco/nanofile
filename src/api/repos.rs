@@ -173,15 +173,30 @@ pub async fn create_repo(
     headers: HeaderMap,
     bytes: Bytes,
 ) -> Result<(StatusCode, Json<RepoInfo>), AppError> {
-    // Support both JSON (web frontend) and form-encoded (desktop client) bodies.
+    // Support JSON (web frontend), form-encoded (desktop client), and
+    // multipart/form-data (Android client) bodies.
     let repo_req: CreateRepoRequest = if headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|ct| ct.contains("json"))
     {
         serde_json::from_slice(&bytes)?
+    } else if let Ok(form) = serde_urlencoded::from_bytes::<CreateRepoRequest>(&bytes) {
+        form
     } else {
-        serde_urlencoded::from_bytes(&bytes)?
+        // multipart/form-data – scan for field names in the raw body string.
+        let name = extract_multipart_field(&bytes, "name")
+            .ok_or_else(|| AppError::BadRequest("name required".into()))?;
+        let desc = extract_multipart_field(&bytes, "desc");
+        CreateRepoRequest {
+            name,
+            desc,
+            repo_id: None,
+            encrypted: None,
+            enc_version: None,
+            magic: None,
+            random_key: None,
+        }
     };
 
     let repo_id = repo_req
@@ -417,6 +432,23 @@ pub async fn rename_repo(
     // Android client's SupportResponseConverter can parse it as String.
     // Json("success".to_string()) serializes as the JSON string "success".
     Ok(Json(serde_json::Value::String("success".to_string())))
+}
+
+/// Extract a named field from a multipart/form-data body by scanning the
+/// raw body for `name="<field_name>"` and returning the value that follows
+/// the header-terminating `\r\n\r\n` boundary.
+fn extract_multipart_field(bytes: &[u8], field_name: &str) -> Option<String> {
+    let body_str = String::from_utf8_lossy(bytes);
+    let pattern = format!("name=\"{}\"", field_name);
+    let rest = body_str.split(&pattern).nth(1)?;
+    // The value follows after the part headers which end with \r\n\r\n
+    let val_block = rest.split("\r\n\r\n").nth(1)?;
+    let value = val_block.split("\r\n").next().unwrap_or("").trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 /// Extract `repo_name` from POST body bytes, probing JSON, form-urlencoded,
