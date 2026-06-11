@@ -501,6 +501,29 @@ impl TestClient {
             .unwrap()
     }
 
+    /// POST /api2/repos/{repo_id}/dir/?p={path} with multipart body
+    /// `operation=mkdir` (mimicking seadroid AlbumScanHelper.mkdirRemote).
+    pub async fn create_dir_multipart(
+        &self,
+        token: &str,
+        repo_id: &str,
+        path: &str,
+    ) -> reqwest::Response {
+        let form = reqwest::multipart::Form::new()
+            .text("operation", "mkdir")
+            .text("create_parents", "true");
+        self.client
+            .post(format!(
+                "{}/api2/repos/{}/dir/?p={}",
+                self.base_url, repo_id, path
+            ))
+            .bearer_auth(token)
+            .multipart(form)
+            .send()
+            .await
+            .unwrap()
+    }
+
     // ========== Web UI Endpoints ==========
 
     /// GET a URL without any auth (for login page, etc.).
@@ -902,6 +925,15 @@ impl TestClient {
     }
 
     // ========== Chunked Upload ==========
+
+    /// POST a multipart form to an arbitrary URL (for upload-blks API calls).
+    pub async fn post_multipart_url(
+        &self,
+        url: &str,
+        form: reqwest::multipart::Form,
+    ) -> reqwest::Response {
+        self.client.post(url).multipart(form).send().await.unwrap()
+    }
 
     /// GET /api2/repos/{repo_id}/upload-blks-link/
     pub async fn upload_blks_link(&self, token: &str, repo_id: &str) -> reqwest::Response {

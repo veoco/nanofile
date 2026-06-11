@@ -346,6 +346,191 @@ async fn test_v21_file_create() {
     assert_eq!(detail2.status(), 200, "child file should exist");
 }
 
+/// Simulate the seadroid photo-backup flow and verify the v2.1 directory
+/// listing response contains all fields expected by the Seafile mobile clients.
+///
+/// Flow: multipart mkdir → upload-blks (block upload + commit) → v2.1 GET.
+#[tokio::test]
+async fn test_v21_dir_list_after_photo_backup_flow() {
+    let f = TestFixture::new().await;
+
+    // ── 1. Seed: upload a file so the repo has a valid head commit ──────
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", ".seed", b".")
+        .await;
+    assert!(resp.status().is_success(), "seed upload failed");
+
+    // ── 2. Create a directory via multipart POST (like seadroid mkdirRemote) ──
+    let resp = f
+        .client
+        .create_dir_multipart(&f.api_token, &f.repo_id, "/photos")
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "multipart mkdir failed: {:?}",
+        resp.text().await
+    );
+
+    // ── 3. Upload a block and commit it (simulating seadroid upload-blks) ──
+    let file_data = b"This is a test photo file content";
+    let file_size: i64 = file_data.len() as i64;
+
+    // Compute SHA1 block id
+    let block_id = {
+        use sha1::{Digest, Sha1};
+        let mut hasher = Sha1::new();
+        hasher.update(file_data);
+        hex::encode(hasher.finalize())
+    };
+
+    // Get upload-blks link
+    let link_resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(link_resp.status(), 200);
+    let upload_url: String = link_resp.json().await.unwrap();
+    assert!(!upload_url.is_empty(), "upload URL should not be empty");
+
+    // Upload block to the URL
+    let block_part =
+        reqwest::multipart::Part::bytes(file_data.to_vec()).file_name(block_id.clone());
+    let form = reqwest::multipart::Form::new().part("file", block_part);
+    let resp = f.client.post_multipart_url(&upload_url, form).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "block upload failed: {:?}",
+        resp.text().await
+    );
+
+    // Commit the file
+    let blockids_json = serde_json::to_string(&vec![block_id]).unwrap();
+    let commit_form = reqwest::multipart::Form::new()
+        .text("commitonly", "true")
+        .text("parent_dir", "/photos")
+        .text("file_name", "IMG_2024.jpg")
+        .text("blockids", blockids_json)
+        .text("file_size", file_size.to_string());
+    let resp = f.client.post_multipart_url(&upload_url, commit_form).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "upload-blks commit failed: {:?}",
+        resp.text().await
+    );
+
+    // ── 4. List the root directory via v2.1 GET ─────────────────────
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/?p=/&with_thumbnail=true", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let root_body: serde_json::Value = resp.json().await.unwrap();
+    let root_entries = root_body["dirent_list"].as_array().unwrap();
+
+    eprintln!(
+        "=== Root directory listing ===\n{}",
+        serde_json::to_string_pretty(&root_body).unwrap()
+    );
+
+    // ── 5. Verify root-level fields ──────────────────────────────────
+    assert!(root_body.get("user_perm").is_some(), "missing user_perm");
+    assert!(root_body.get("dir_id").is_some(), "missing dir_id");
+    assert!(
+        !root_entries.is_empty(),
+        "root dirent_list should not be empty"
+    );
+
+    // ── 6. Verify the "photos" directory entry in root ───────────────
+    let photos = root_entries.iter().find(|e| e["name"] == "photos").unwrap();
+    assert_eq!(photos["type"], "dir", "photos should be a directory");
+    assert!(
+        photos
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .len()
+            >= 40,
+        "dir id should be a SHA1"
+    );
+    assert!(
+        photos.get("mtime").and_then(|v| v.as_i64()).unwrap_or(0) > 0,
+        "dir mtime should be positive"
+    );
+    assert_eq!(photos["permission"], "rw");
+    assert_eq!(photos["parent_dir"], "/");
+    assert_eq!(photos["starred"], false);
+    // Directories must NOT have a "size" field (seahub compatibility)
+    assert!(
+        photos.get("size").is_none(),
+        "directory entry should NOT have size field"
+    );
+
+    // ── 7. List /photos/ directory to verify the uploaded file ─────
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api/v2.1/repos/{}/dir/?p=/photos&with_thumbnail=true",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let photos_body: serde_json::Value = resp.json().await.unwrap();
+    let photos_entries = photos_body["dirent_list"].as_array().unwrap();
+
+    eprintln!(
+        "=== /photos/ directory listing ===\n{}",
+        serde_json::to_string_pretty(&photos_body).unwrap()
+    );
+
+    // ── 8. Verify the file entry in /photos/ ────────────────────────
+    let file_entry = photos_entries
+        .iter()
+        .find(|e| e["name"] == "IMG_2024.jpg")
+        .expect("IMG_2024.jpg should be in /photos/ listing");
+    assert_eq!(file_entry["type"], "file");
+    assert!(
+        file_entry
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .len()
+            >= 40,
+        "file id should be a SHA1"
+    );
+    assert_eq!(file_entry["size"], file_size);
+    assert!(
+        file_entry
+            .get("mtime")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            > 0,
+        "file mtime should be positive"
+    );
+    assert_eq!(file_entry["permission"], "rw");
+    assert_eq!(file_entry["parent_dir"], "/photos");
+    assert_eq!(file_entry["starred"], false);
+    // File must have modifier fields
+    assert!(
+        file_entry.get("modifier_email").is_some(),
+        "missing modifier_email"
+    );
+    assert!(
+        file_entry.get("modifier_name").is_some(),
+        "missing modifier_name"
+    );
+    assert!(
+        file_entry.get("modifier_contact_email").is_some(),
+        "missing modifier_contact_email"
+    );
+}
+
 #[tokio::test]
 async fn test_v21_unauthorized() {
     let server = common::TestServer::start().await;
