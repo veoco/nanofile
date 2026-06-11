@@ -457,15 +457,26 @@ impl TestClient {
     }
 
     pub async fn download_file(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
-        self.client
+        // Step A: get the download URL (now returns a JSON-quoted URL string)
+        let link_resp = self
+            .client
             .get(format!(
-                "{}/api2/repos/{}/file/?p={}",
+                "{}/api2/repos/{}/file/?p={}&reuse=0",
                 self.base_url, repo_id, path
             ))
             .bearer_auth(token)
             .send()
             .await
-            .unwrap()
+            .unwrap();
+        assert!(link_resp.status().is_success(), "get download link failed");
+        let url_str: String = link_resp.json().await.unwrap_or_default();
+        assert!(
+            url_str.starts_with("http"),
+            "download URL should start with http, got: {url_str}"
+        );
+
+        // Step B: follow the download URL to get the raw file bytes
+        self.client.get(&url_str).send().await.unwrap()
     }
 
     pub async fn list_dir(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {

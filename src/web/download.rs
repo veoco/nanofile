@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -63,4 +63,48 @@ pub async fn repo_file_download(
         content,
     )
         .into_response())
+}
+
+/// GET /download-api/{token} — Token-authenticated file download.
+///
+/// Step B of the two-step download flow: the client first obtains a download
+/// URL from `GET /api2/repos/{id}/file/?op=download`, then GETs this endpoint
+/// to receive the raw file bytes.
+pub async fn download_api(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> Result<Response, AppError> {
+    let info = state
+        .token_manager
+        .validate(&token)
+        .ok_or_else(|| AppError::BadRequest("invalid or expired download token".into()))?;
+
+    if info.op != "download" {
+        return Err(AppError::BadRequest("token not valid for download".into()));
+    }
+
+    let repo_id = &info.repo_id;
+    let path = &info.parent_dir;
+    let filename = info.file_name.as_deref().unwrap_or("download");
+
+    let content = Downloader::download_file(state.db.as_ref(), repo_id, path, &state.block_store)
+        .await
+        .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+
+    let content_len = content.len();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("content-type"),
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    headers.insert(
+        HeaderName::from_static("content-disposition"),
+        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename)).unwrap(),
+    );
+    headers.insert(
+        HeaderName::from_static("content-length"),
+        HeaderValue::from_str(&content_len.to_string()).unwrap(),
+    );
+
+    Ok((StatusCode::OK, headers, content).into_response())
 }

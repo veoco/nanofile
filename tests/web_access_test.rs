@@ -351,13 +351,10 @@ async fn test_update_api_updates_file() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Download and verify new content
+    // Download and verify new content (uses two-step download flow)
     let dl = f
         .client
-        .get(
-            &format!("/api2/repos/{}/file/?p=/update.txt", f.repo_id),
-            Some(&f.api_token),
-        )
+        .download_file(&f.api_token, &f.repo_id, "/update.txt")
         .await;
     assert_eq!(dl.status(), 200);
     let body = dl.bytes().await.unwrap();

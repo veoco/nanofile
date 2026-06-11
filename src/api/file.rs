@@ -2,7 +2,8 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{FromRequest, Multipart, Path, Query, State},
-    http::Request,
+    http::{HeaderMap, HeaderName, HeaderValue, Request},
+    response::{IntoResponse, Response},
 };
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,7 @@ fn parent_path_from(path: &str) -> &str {
 #[derive(Deserialize)]
 pub struct FileQuery {
     pub p: Option<String>,
+    pub reuse: Option<i32>,
 }
 
 /// Ensure path starts with "/" for consistent DB lookups.
@@ -44,6 +46,31 @@ fn normalize_path(path: &str) -> String {
     } else {
         format!("/{}", path)
     }
+}
+
+/// Build a download API URL from the Host header (similar to build_op_url for uploads).
+fn build_download_url(state: &AppState, token: &str, host_header: Option<&str>) -> String {
+    let (host, port) = if let Some(h) = host_header {
+        if let Some((h, p)) = h.split_once(':') {
+            (h.to_string(), p.to_string())
+        } else {
+            (h.to_string(), state.config.server.port.to_string())
+        }
+    } else if state.config.server.addr == "0.0.0.0"
+        || state.config.server.addr == "::"
+        || state.config.server.addr == "127.0.0.1"
+    {
+        (
+            "127.0.0.1".to_string(),
+            state.config.server.port.to_string(),
+        )
+    } else {
+        (
+            state.config.server.addr.clone(),
+            state.config.server.port.to_string(),
+        )
+    };
+    format!("http://{}:{}/download-api/{}", host, port, token)
 }
 
 /// Get the root_fs_id from the repo's head commit for path resolution.
@@ -82,24 +109,47 @@ pub fn file_routes() -> Router<Arc<AppState>> {
 pub async fn download_file(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(repo_id): Path<String>,
     Query(query): Query<FileQuery>,
-) -> Result<Vec<u8>, AppError> {
+) -> Result<Response, AppError> {
     // Permission check
     crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let path = normalize_path(&query.p.unwrap_or_else(|| "/".to_string()));
+    let db = state.db.as_ref();
 
-    let content = crate::storage::download::Downloader::download_file(
-        state.db.as_ref(),
+    // Resolve the file's fs_id from the FS tree (same as file_detail handler).
+    let head_root_id = get_head_root_id(db, &repo_id).await?;
+    let file_fs_id = crate::storage::resolve_fs_id(db, &repo_id, &head_root_id, &path, None)
+        .await
+        .map_err(|_| AppError::NotFound("file not found".into()))?;
+
+    // Extract filename from path.
+    let filename = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("download");
+
+    // Generate a download token with file metadata.
+    let download_token = state.token_manager.generate_download(
         &repo_id,
+        auth.user_id,
+        &auth.email,
         &path,
-        &state.block_store,
-    )
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+        &file_fs_id,
+        filename,
+    );
 
-    Ok(content)
+    // Build the download URL using the Host header (same approach as upload-link).
+    let host_header = headers.get("host").and_then(|v| v.to_str().ok());
+    let url = build_download_url(&state, &download_token, host_header);
+
+    // Return oid header + JSON-quoted URL string matching the seadroid client's expectation.
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert(
+        HeaderName::from_static("oid"),
+        HeaderValue::from_str(&file_fs_id).unwrap(),
+    );
+
+    Ok((resp_headers, Json(url)).into_response())
 }
 
 /// Combined POST handler for `/api2/repos/{id}/file/`:

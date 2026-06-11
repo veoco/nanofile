@@ -7,7 +7,7 @@ use tracing::debug;
 
 const TOKEN_EXPIRE_SECS: i64 = 3600; // 1 hour, matching seafile
 
-/// An access token granting permission to upload or update a file.
+/// An access token granting permission to upload, update, or download a file.
 #[derive(Clone, Debug)]
 pub struct AccessToken {
     pub token: String,
@@ -15,19 +15,23 @@ pub struct AccessToken {
     pub user_id: i32,
     /// Email / username of the user.
     pub username: String,
-    /// "upload" or "update"
+    /// "upload", "update", or "download"
     pub op: String,
-    /// Parent directory for uploads (e.g. "/dir")
+    /// Parent directory for uploads (e.g. "/dir"), or file path for downloads.
     pub parent_dir: String,
+    /// File fs_id (set for download tokens, used for the oid response header).
+    pub file_fs_id: Option<String>,
+    /// File name (set for download tokens, used for Content-Disposition).
+    pub file_name: Option<String>,
     pub created_at: i64,
     pub expires_at: i64,
 }
 
 /// In-memory web access token manager.
 ///
-/// Generates tokens for the `/upload-api/{token}` and
-/// `/update-api/{token}` endpoints.  Tokens are stored in memory and
-/// expire after `TOKEN_EXPIRE_SECS` (3600 s).  Expired tokens are
+/// Generates tokens for the `/upload-api/{token}`, `/update-api/{token}`,
+/// and `/download-api/{token}` endpoints.  Tokens are stored in memory
+/// and expire after `TOKEN_EXPIRE_SECS` (3600 s).  Expired tokens are
 /// cleaned up lazily on access.
 pub struct AccessTokenManager {
     tokens: RwLock<HashMap<String, AccessToken>>,
@@ -67,6 +71,8 @@ impl AccessTokenManager {
             username: username.to_owned(),
             op: op.to_owned(),
             parent_dir: parent_dir.to_owned(),
+            file_fs_id: None,
+            file_name: None,
             created_at: now,
             expires_at: now + TOKEN_EXPIRE_SECS,
         };
@@ -85,6 +91,29 @@ impl AccessTokenManager {
             }
         }
 
+        token
+    }
+
+    /// Generate a download token with file metadata.
+    ///
+    /// Like `generate()` but also stores the file's fs_id and name so the
+    /// download-api handler can return the correct Content-Disposition and oid header.
+    pub fn generate_download(
+        &self,
+        repo_id: &str,
+        user_id: i32,
+        username: &str,
+        parent_dir: &str,
+        file_fs_id: &str,
+        file_name: &str,
+    ) -> String {
+        let token = self.generate(repo_id, user_id, username, "download", parent_dir);
+        if let Ok(mut guard) = self.tokens.write()
+            && let Some(entry) = guard.get_mut(&token)
+        {
+            entry.file_fs_id = Some(file_fs_id.to_string());
+            entry.file_name = Some(file_name.to_string());
+        }
         token
     }
 
