@@ -254,6 +254,24 @@ impl TestClient {
             .unwrap()
     }
 
+    /// Login with multipart/form-data body (matching seadroid's request format).
+    pub async fn login_multipart(&self, username: &str, password: &str) -> reqwest::Response {
+        let form = reqwest::multipart::Form::new()
+            .text("username", username.to_string())
+            .text("password", password.to_string())
+            .text("platform", "android")
+            .text("device_id", "test-device-123")
+            .text("device_name", "Test Device")
+            .text("client_version", "3.0.0");
+
+        self.client
+            .post(format!("{}/api2/auth-token/", self.base_url))
+            .multipart(form)
+            .send()
+            .await
+            .unwrap()
+    }
+
     pub async fn login_with_otp(
         &self,
         username: &str,

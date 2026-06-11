@@ -61,6 +61,8 @@ askama = { version = "0.13", features = ["serde_json"] }
 rust-embed = "8"
 serde_urlencoded = "0.7"
 jsonwebtoken = "9"
+multer = "3.1"
+bytes = "1"
 futures = "0.3"
 
 # Full-text search

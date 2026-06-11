@@ -5,6 +5,7 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode},
     response::{IntoResponse, Response},
 };
+use bytes::Bytes;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -52,6 +53,61 @@ fn login_error(msg: &str) -> Result<Response, AppError> {
         .into_response())
 }
 
+/// Parse a multipart/form-data login request body.
+///
+/// The seadroid client sends login credentials as multipart/form-data
+/// (via Retrofit's @Multipart + @PartMap), so we need to handle this
+/// in addition to JSON and URL-encoded form data.
+async fn parse_multipart_login(bytes: &[u8], content_type: &str) -> Result<LoginForm, String> {
+    let boundary =
+        multer::parse_boundary(content_type).map_err(|e| format!("invalid boundary: {e}"))?;
+
+    let mut form = LoginForm {
+        username: String::new(),
+        password: String::new(),
+        platform: None,
+        device_id: None,
+        device_name: None,
+        client_version: None,
+    };
+
+    let body_bytes = bytes.to_vec();
+    let stream = futures_util::stream::once(futures_util::future::ready(
+        Ok::<Bytes, multer::Error>(Bytes::from(body_bytes)),
+    ));
+
+    let mut mp = multer::Multipart::new(stream, boundary);
+
+    while let Some(field) = mp
+        .next_field()
+        .await
+        .map_err(|e| format!("read error: {e}"))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        let value = field
+            .text()
+            .await
+            .map_err(|e| format!("field text error: {e}"))?;
+
+        match name.as_str() {
+            "username" => form.username = value,
+            "password" => form.password = value,
+            "platform" => form.platform = Some(value),
+            "device_id" => form.device_id = Some(value),
+            "device_name" => form.device_name = Some(value),
+            "client_version" => form.client_version = Some(value),
+            // seadroid also sends "platform_version" — ignore it silently
+            _ => {}
+        }
+    }
+
+    if form.username.is_empty() || form.password.is_empty() {
+        return Err("username and password are required".to_string());
+    }
+
+    Ok(form)
+}
+
 pub async fn login(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -72,6 +128,10 @@ pub async fn login(
     let form: LoginForm = if content_type.starts_with("application/json") {
         serde_json::from_slice(&bytes)
             .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {e}")))?
+    } else if content_type.starts_with("multipart/form-data") {
+        parse_multipart_login(&bytes, content_type)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?
     } else {
         serde_urlencoded::from_bytes(&bytes)
             .map_err(|e| AppError::BadRequest(format!("Invalid form body: {e}")))?

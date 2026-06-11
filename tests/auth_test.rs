@@ -352,3 +352,21 @@ async fn test_s2fa_no_trust_device() {
         "should NOT return S2FA header without trust-device header"
     );
 }
+
+#[tokio::test]
+async fn test_login_multipart() {
+    let server = TestServer::start().await;
+    let client = server.client();
+
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    // Login with multipart/form-data (matching seadroid's request format)
+    let resp = client
+        .login_multipart("test@example.com", "password123")
+        .await;
+    assert_eq!(resp.status(), 200, "multipart login should succeed");
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap();
+    assert_eq!(token.len(), 40);
+}
