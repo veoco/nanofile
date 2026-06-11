@@ -433,24 +433,41 @@ pub struct LinkQuery {
 }
 
 /// Build a file-server URL for the given operation (e.g. "upload-aj", "upload-api").
-fn build_op_url(state: &AppState, op: &str, token: &str) -> String {
-    let host = if state.config.server.addr == "0.0.0.0"
+///
+/// Uses the request's `Host` header (when available) so the returned URL is
+/// reachable from the client's perspective, even when the server listens on
+/// `0.0.0.0` or `127.0.0.1` (which would otherwise produce an unreachable URL
+/// for remote or emulator-based clients).
+fn build_op_url(state: &AppState, op: &str, token: &str, host_header: Option<&str>) -> String {
+    let (host, port) = if let Some(h) = host_header {
+        // Use the Host header from the incoming request.
+        // Host may be "host:port" or just "host".
+        if let Some((h, p)) = h.split_once(':') {
+            (h.to_string(), p.to_string())
+        } else {
+            (h.to_string(), state.config.server.port.to_string())
+        }
+    } else if state.config.server.addr == "0.0.0.0"
         || state.config.server.addr == "::"
         || state.config.server.addr == "127.0.0.1"
     {
-        "127.0.0.1"
+        (
+            "127.0.0.1".to_string(),
+            state.config.server.port.to_string(),
+        )
     } else {
-        &state.config.server.addr
+        (
+            state.config.server.addr.clone(),
+            state.config.server.port.to_string(),
+        )
     };
-    format!(
-        "http://{}:{}/{}/{}",
-        host, state.config.server.port, op, token
-    )
+    format!("http://{}:{}/{}/{}", host, port, op, token)
 }
 
 pub async fn get_upload_link(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(repo_id): Path<String>,
     Query(query): Query<LinkQuery>,
 ) -> Result<Json<String>, AppError> {
@@ -471,7 +488,8 @@ pub async fn get_upload_link(
     // from=web → upload-aj (AJAX/web client), from=api (or absent) → upload-api.
     let is_web = query.from.as_deref() == Some("web");
     let op = if is_web { "upload-aj" } else { "upload-api" };
-    let mut url = build_op_url(&state, op, &token);
+    let host_header = headers.get("host").and_then(|v| v.to_str().ok());
+    let mut url = build_op_url(&state, op, &token, host_header);
 
     // When from=api, optionally append ?replace=1
     if !is_web && query.replace.as_deref() == Some("1") {
@@ -484,6 +502,7 @@ pub async fn get_upload_link(
 pub async fn get_update_link(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(repo_id): Path<String>,
     Query(query): Query<LinkQuery>,
 ) -> Result<Json<String>, AppError> {
@@ -506,7 +525,8 @@ pub async fn get_update_link(
     } else {
         "update-api"
     };
-    let url = build_op_url(&state, op, &token);
+    let host_header = headers.get("host").and_then(|v| v.to_str().ok());
+    let url = build_op_url(&state, op, &token, host_header);
 
     Ok(Json(url))
 }
