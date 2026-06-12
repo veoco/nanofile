@@ -115,8 +115,9 @@ async fn test_server_sends_ping() {
 
     let (mut ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
 
-    // Wait for up to 3 seconds to receive at least one Ping from the server.
-    let deadline = tokio::time::sleep(std::time::Duration::from_secs(3));
+    // Wait for up to 1.5 seconds to receive at least one Ping from the server.
+    // Server has 1s ping interval, so 1.5s is more than enough.
+    let deadline = tokio::time::sleep(std::time::Duration::from_millis(1500));
     tokio::pin!(deadline);
 
     loop {
@@ -153,10 +154,10 @@ async fn test_keepalive_keeps_connection_alive() {
 
     let (mut ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
 
-    // Read messages for 5 seconds — well past the 3s timeout.
+    // Read messages for 3.5 seconds — well past the 3s client_timeout.
     // The client auto-responds to pings, so the server should keep the
     // connection alive.
-    let deadline = tokio::time::sleep(std::time::Duration::from_secs(5));
+    let deadline = tokio::time::sleep(std::time::Duration::from_millis(3500));
     tokio::pin!(deadline);
 
     loop {

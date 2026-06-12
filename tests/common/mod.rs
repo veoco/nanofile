@@ -3,11 +3,27 @@
 pub mod client;
 
 use axum::Router;
+use nanofile::AppState;
 use sea_orm::{ActiveModelTrait, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 
-use nanofile::AppState;
+/// Cache PBKDF2 password hashes so each unique password is hashed only once
+/// across all test fixtures (~200+ calls → ~3-5 calls, saving ~2s).
+static PASSWORD_HASH_CACHE: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn cached_hash_password(password: &str) -> String {
+    let mut cache = PASSWORD_HASH_CACHE.lock().unwrap();
+    if let Some(h) = cache.get(password) {
+        return h.clone();
+    }
+    let h = nanofile::auth::password::hash_password_legacy(password);
+    cache.insert(password.to_string(), h.clone());
+    h
+}
 
 pub struct TestServer {
     pub base_url: String,
@@ -149,7 +165,15 @@ impl TestServer {
                 .expect("server failed");
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Poll until the server is actually ready (typically <1ms).
+        // A hard-coded sleep would waste ~100ms per TestFixture × dozens of fixtures.
+        let health_url = format!("{}/api2/ping/", base_url);
+        for _ in 0..50 {
+            if reqwest::get(&health_url).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
 
         Self {
             base_url,
@@ -177,7 +201,7 @@ impl Drop for TestServer {
 }
 
 pub async fn create_test_user(db: &DatabaseConnection, email: &str, password: &str) -> i32 {
-    let password_hash = nanofile::auth::password::hash_password_legacy(password);
+    let password_hash = cached_hash_password(password);
     let now = chrono::Utc::now().timestamp();
 
     let user = nanofile::entity::user::ActiveModel {
@@ -355,6 +379,109 @@ impl TestFixture {
             server,
             client,
             email: email.to_string(),
+            password: password.to_string(),
+            api_token,
+            repo_id: String::new(),
+            sync_token: String::new(),
+            user_id,
+        }
+    }
+}
+
+/// Lightweight environment returned by `SharedFixture::new_env()`.
+/// Does NOT own the server — the server is shared across all test_envs.
+pub struct TestEnv {
+    pub client: client::TestClient,
+    pub base_url: String,
+    pub db: Arc<DatabaseConnection>,
+    pub email: String,
+    pub password: String,
+    pub api_token: String,
+    pub repo_id: String,
+    pub sync_token: String,
+    pub user_id: i32,
+}
+
+/// Shared test fixture that starts a single server per test binary.
+///
+/// Use via `tokio::sync::OnceCell` for lazy initialization:
+///
+/// ```ignore
+/// static SHARED: tokio::sync::OnceCell<SharedFixture> = tokio::sync::OnceCell::const_new();
+///
+/// #[tokio::test]
+/// async fn my_test() {
+///     let shared = SHARED.get_or_init(|| async { SharedFixture::new().await }).await;
+///     let env = shared.new_env().await;
+///     // env.client, env.api_token, env.repo_id are ready
+/// }
+/// ```
+pub struct SharedFixture {
+    server: TestServer,
+    counter: AtomicU32,
+}
+
+impl SharedFixture {
+    /// Start a single server and prepare for multiple test environments.
+    pub async fn new() -> Self {
+        Self {
+            server: TestServer::start().await,
+            counter: AtomicU32::new(1),
+        }
+    }
+
+    /// Create an isolated (user, repo) pair on the shared server.
+    /// Each call returns a unique email to guarantee isolation.
+    pub async fn new_env(&self) -> TestEnv {
+        let uid = self.counter.fetch_add(1, Ordering::Relaxed);
+        let email = format!("test{}@example.com", uid);
+        let password = "password";
+        let repo_name = format!("test-repo-{}", uid);
+
+        let client = self.server.client();
+        let db = &*self.server.db;
+
+        let user_id = create_test_user(db, &email, password).await;
+        let resp = client.login(&email, password).await;
+        assert_eq!(resp.status(), 200, "login failed for {email}");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let api_token = body["token"].as_str().unwrap().to_string();
+        let repo_id = create_test_repo(&client, &api_token, &repo_name).await;
+        let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
+
+        TestEnv {
+            client,
+            base_url: self.server.base_url.clone(),
+            db: self.server.db.clone(),
+            email,
+            password: password.to_string(),
+            api_token,
+            repo_id,
+            sync_token,
+            user_id,
+        }
+    }
+
+    /// Create an isolated user (without a repo) on the shared server.
+    pub async fn new_user(&self) -> TestEnv {
+        let uid = self.counter.fetch_add(1, Ordering::Relaxed);
+        let email = format!("test{}@example.com", uid);
+        let password = "password";
+
+        let client = self.server.client();
+        let db = &*self.server.db;
+
+        let user_id = create_test_user(db, &email, password).await;
+        let resp = client.login(&email, password).await;
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let api_token = body["token"].as_str().unwrap().to_string();
+
+        TestEnv {
+            client,
+            base_url: self.server.base_url.clone(),
+            db: self.server.db.clone(),
+            email,
             password: password.to_string(),
             api_token,
             repo_id: String::new(),
