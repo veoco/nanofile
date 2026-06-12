@@ -166,10 +166,12 @@ impl TestServer {
         });
 
         // Poll until the server is actually ready (typically <1ms).
-        // A hard-coded sleep would waste ~100ms per TestFixture × dozens of fixtures.
+        // Use no_proxy() to avoid proxy resolution delays even when
+        // http_proxy is set in the environment.
         let health_url = format!("{}/api2/ping/", base_url);
+        let health_client = reqwest::Client::builder().no_proxy().build().unwrap();
         for _ in 0..50 {
-            if reqwest::get(&health_url).await.is_ok() {
+            if health_client.get(&health_url).send().await.is_ok() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
