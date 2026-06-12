@@ -855,3 +855,137 @@ async fn test_v21_block_download_link() {
         "block download link without auth should 401"
     );
 }
+
+// ── Recursive directory listing tests (v2.1) ──────────────────────
+
+/// v2.1 recursive listing returns all entries in dirent_list with parent_dir.
+#[tokio::test]
+async fn test_v21_dir_recursive_basic() {
+    let f = TestFixture::new().await;
+
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"aaa")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/subdir", "b.txt", b"bbb")
+        .await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/?p=/&recursive=1", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+
+    assert!(body.get("user_perm").is_some());
+    assert!(body.get("dir_id").is_some());
+    let entries = body["dirent_list"].as_array().unwrap();
+
+    // Should contain: a.txt(file), subdir(dir), b.txt(file)
+    assert_eq!(entries.len(), 3);
+
+    let a_txt = entries.iter().find(|e| e["name"] == "a.txt").unwrap();
+    assert_eq!(a_txt["type"], "file");
+    assert_eq!(a_txt["parent_dir"], "/");
+
+    let b_txt = entries.iter().find(|e| e["name"] == "b.txt").unwrap();
+    assert_eq!(b_txt["type"], "file");
+    assert_eq!(b_txt["parent_dir"], "/subdir");
+
+    let subdir = entries.iter().find(|e| e["name"] == "subdir").unwrap();
+    assert_eq!(subdir["type"], "dir");
+    assert_eq!(subdir["parent_dir"], "/");
+}
+
+/// v2.1 recursive with `t=f` returns only files.
+#[tokio::test]
+async fn test_v21_dir_recursive_type_filter_file() {
+    let f = TestFixture::new().await;
+
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"aaa")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/subdir", "b.txt", b"bbb")
+        .await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/?p=/&recursive=1&t=f", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let entries = body["dirent_list"].as_array().unwrap();
+
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().all(|e| e["type"] == "file"));
+}
+
+/// v2.1 recursive with `t=d` returns only dirs.
+#[tokio::test]
+async fn test_v21_dir_recursive_type_filter_dir() {
+    let f = TestFixture::new().await;
+
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"aaa")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/subdir", "b.txt", b"bbb")
+        .await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/?p=/&recursive=1&t=d", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let entries = body["dirent_list"].as_array().unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert!(entries.iter().all(|e| e["type"] == "dir"));
+    assert_eq!(entries[0]["name"], "subdir");
+}
+
+/// v2.1 invalid recursive / t values return 400.
+#[tokio::test]
+async fn test_v21_dir_recursive_invalid_params() {
+    let f = TestFixture::new().await;
+
+    // Invalid recursive
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/?p=/&recursive=invalid", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+
+    // Invalid t
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/?p=/&recursive=1&t=x", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+}

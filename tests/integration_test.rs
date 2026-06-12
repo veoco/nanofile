@@ -2241,3 +2241,273 @@ async fn test_empty_directory_uses_emtpysha1() {
         "nested empty dir must also use EMPTY_SHA1"
     );
 }
+
+// ── Recursive directory listing tests ─────────────────────────────
+
+/// Recursive listing with `recursive=1` returns all entries in a flat list
+/// with their `parent_dir`.
+#[tokio::test]
+async fn test_dir_recursive_basic() {
+    let f = TestFixture::new().await;
+
+    // Create nested structure: /a.txt, /subdir/b.txt, /subdir/nested/c.txt
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"aaa")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/subdir", "b.txt", b"bbb")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir/nested")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/subdir/nested", "c.txt", b"ccc")
+        .await;
+
+    // Recursive listing — no type filter
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", Some("1"), None)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // Extract headers before consuming body
+    let oid = resp
+        .headers()
+        .get("oid")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let dir_perm = resp
+        .headers()
+        .get("dir_perm")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+
+    // Should contain: a.txt(file), subdir(dir), b.txt(file), nested(dir), c.txt(file)
+    assert_eq!(entries.len(), 5, "recursive=1 should return all 5 entries");
+
+    // Check parent_dir for each entry
+    let a_txt = entries.iter().find(|e| e["name"] == "a.txt").unwrap();
+    assert_eq!(a_txt["type"], "file");
+    assert_eq!(a_txt["parent_dir"], "/");
+
+    let subdir = entries.iter().find(|e| e["name"] == "subdir").unwrap();
+    assert_eq!(subdir["type"], "dir");
+    assert_eq!(subdir["parent_dir"], "/");
+
+    let b_txt = entries.iter().find(|e| e["name"] == "b.txt").unwrap();
+    assert_eq!(b_txt["type"], "file");
+    assert_eq!(b_txt["parent_dir"], "/subdir");
+    assert!(b_txt["size"].as_i64().unwrap_or(0) > 0);
+
+    let nested = entries.iter().find(|e| e["name"] == "nested").unwrap();
+    assert_eq!(nested["type"], "dir");
+    assert_eq!(nested["parent_dir"], "/subdir");
+
+    let c_txt = entries.iter().find(|e| e["name"] == "c.txt").unwrap();
+    assert_eq!(c_txt["type"], "file");
+    assert_eq!(c_txt["parent_dir"], "/subdir/nested");
+
+    // Verify oid and dir_perm headers
+    assert!(oid.as_deref().is_some_and(|v| !v.is_empty()));
+    assert_eq!(dir_perm.as_deref(), Some("rw"));
+}
+
+/// Recursive listing with `t=f` returns only file entries.
+#[tokio::test]
+async fn test_dir_recursive_type_filter_file() {
+    let f = TestFixture::new().await;
+
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"aaa")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/subdir", "b.txt", b"bbb")
+        .await;
+
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", Some("1"), Some("f"))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+
+    // Only file entries (2 files, 0 dirs)
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().all(|e| e["type"] == "file"));
+    assert!(entries.iter().any(|e| e["name"] == "a.txt"));
+    assert!(entries.iter().any(|e| e["name"] == "b.txt"));
+    assert!(entries.iter().any(|e| e["parent_dir"] == "/"));
+    assert!(entries.iter().any(|e| e["parent_dir"] == "/subdir"));
+}
+
+/// Recursive listing with `t=d` returns only directory entries.
+#[tokio::test]
+async fn test_dir_recursive_type_filter_dir() {
+    let f = TestFixture::new().await;
+
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"aaa")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/subdir", "b.txt", b"bbb")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir/nested")
+        .await;
+
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", Some("1"), Some("d"))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+
+    // Only directory entries (2 dirs)
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().all(|e| e["type"] == "dir"));
+    assert!(entries.iter().any(|e| e["name"] == "subdir"));
+    assert!(entries.iter().any(|e| e["name"] == "nested"));
+}
+
+/// Invalid `recursive` value returns 400.
+#[tokio::test]
+async fn test_dir_recursive_invalid_recursive() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", Some("invalid"), None)
+        .await;
+    assert_eq!(resp.status(), 400);
+}
+
+/// Invalid `t` value returns 400.
+#[tokio::test]
+async fn test_dir_recursive_invalid_t() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", Some("1"), Some("x"))
+        .await;
+    assert_eq!(resp.status(), 400);
+}
+
+/// Non-recursive listing without `recursive` param is unchanged (single-level).
+#[tokio::test]
+async fn test_dir_recursive_non_recursive_unchanged() {
+    let f = TestFixture::new().await;
+
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"aaa")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/subdir", "b.txt", b"bbb")
+        .await;
+
+    // Without recursive=1 — only root-level entries
+    let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(entries.len(), 2); // a.txt + subdir
+    assert!(entries.iter().any(|e| e["name"] == "a.txt"));
+    assert!(entries.iter().any(|e| e["name"] == "subdir"));
+
+    // No parent_dir in non-recursive response
+    assert!(entries.iter().all(|e| e.get("parent_dir").is_none()));
+}
+
+/// Recursive listing from a subdirectory path works correctly.
+#[tokio::test]
+async fn test_dir_recursive_from_subdirectory() {
+    let f = TestFixture::new().await;
+
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"aaa")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/subdir", "b.txt", b"bbb")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/subdir/nested")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/subdir/nested", "c.txt", b"ccc")
+        .await;
+
+    // Recursive listing starting from /subdir
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/subdir", Some("1"), None)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+
+    // Should only contain entries under /subdir: b.txt, nested, c.txt
+    assert_eq!(entries.len(), 3);
+    assert!(entries.iter().any(|e| e["name"] == "b.txt"));
+    assert!(entries.iter().any(|e| e["name"] == "nested"));
+    assert!(entries.iter().any(|e| e["name"] == "c.txt"));
+    // Should NOT contain root-level entries
+    assert!(!entries.iter().any(|e| e["name"] == "a.txt"));
+}
+
+/// Empty repo returns empty list for recursive listing.
+#[tokio::test]
+async fn test_dir_recursive_empty_repo() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", Some("1"), None)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(entries.is_empty());
+}
+
+/// File entries in recursive listing include modifier_name and modifier_contact_email.
+#[tokio::test]
+async fn test_dir_recursive_file_has_modifier_fields() {
+    let f = TestFixture::new().await;
+
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"aaa")
+        .await;
+
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", Some("1"), Some("f"))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+
+    let a_txt = entries.iter().find(|e| e["name"] == "a.txt").unwrap();
+    assert_eq!(a_txt["type"], "file");
+    assert!(
+        a_txt.get("modifier_name").is_some(),
+        "file entry should have modifier_name"
+    );
+    assert!(
+        a_txt.get("modifier_contact_email").is_some(),
+        "file entry should have modifier_contact_email"
+    );
+}

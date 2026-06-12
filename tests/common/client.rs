@@ -532,11 +532,31 @@ impl TestClient {
     }
 
     pub async fn list_dir(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
+        self.list_dir_with_params(token, repo_id, path, None, None)
+            .await
+    }
+
+    /// List directory with optional `recursive` and `t` query parameters.
+    ///
+    /// `recursive`: Some("1") for recursive listing, None otherwise.
+    /// `t`: Some("f") for files only, Some("d") for dirs only, None for all.
+    pub async fn list_dir_with_params(
+        &self,
+        token: &str,
+        repo_id: &str,
+        path: &str,
+        recursive: Option<&str>,
+        t: Option<&str>,
+    ) -> reqwest::Response {
+        let mut url = format!("{}/api2/repos/{}/dir/?p={}", self.base_url, repo_id, path);
+        if let Some(r) = recursive {
+            url.push_str(&format!("&recursive={}", r));
+        }
+        if let Some(ty) = t {
+            url.push_str(&format!("&t={}", ty));
+        }
         self.client
-            .get(format!(
-                "{}/api2/repos/{}/dir/?p={}",
-                self.base_url, repo_id, path
-            ))
+            .get(&url)
             .bearer_auth(token)
             .send()
             .await
