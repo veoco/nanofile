@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::api::dir::DirEntry;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{commit, repo, repo_member};
 use crate::error::AppError;
@@ -16,6 +17,8 @@ use crate::error::AppError;
 #[derive(Deserialize)]
 pub struct V21DirQuery {
     pub p: Option<String>,
+    pub t: Option<String>,
+    pub recursive: Option<String>,
     pub with_thumbnail: Option<bool>,
 }
 
@@ -129,7 +132,7 @@ pub async fn delete_dir_v21(
     .await
 }
 
-/// GET /api/v2.1/repos/{repo_id}/dir/?p=&with_thumbnail=true
+/// GET /api/v2.1/repos/{repo_id}/dir/?p=&t=&recursive=&with_thumbnail=true
 pub async fn list_dir_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -147,7 +150,67 @@ pub async fn list_dir_v21(
     };
     let db = state.db.as_ref();
 
-    // Always list from the FS object tree, which is the authoritative source.
+    // Validate recursive param
+    if let Some(ref r) = query.recursive
+        && r != "0"
+        && r != "1"
+    {
+        return Err(AppError::BadRequest(
+            "If you want to get recursive dir entries, you should set 'recursive' argument as '1'."
+                .into(),
+        ));
+    }
+    // Validate t (type filter) param
+    if let Some(ref t) = query.t
+        && t != "f"
+        && t != "d"
+    {
+        return Err(AppError::BadRequest(
+            "'t'(type) should be 'f' or 'd'.".into(),
+        ));
+    }
+
+    // Recursive listing path
+    if query.recursive.as_deref() == Some("1") {
+        let (dir_id, all_entries) =
+            crate::api::dir::list_dir_recursive_from_fs_tree(db, &repo_id, &normalized).await?;
+        let dirent_list: Vec<DirEntry> = match query.t.as_deref() {
+            Some("f") => all_entries
+                .into_iter()
+                .filter(|e| e.entry_type == "file")
+                .collect(),
+            Some("d") => all_entries
+                .into_iter()
+                .filter(|e| e.entry_type == "dir")
+                .collect(),
+            _ => all_entries,
+        };
+
+        // Get the user's permission for this repo.
+        let user_perm = repo_member::Entity::find()
+            .filter(repo_member::Column::RepoId.eq(&repo_id))
+            .filter(repo_member::Column::UserId.eq(auth.user_id))
+            .one(db)
+            .await?
+            .map(|m| m.permission)
+            .unwrap_or_else(|| "rw".to_string());
+
+        let mut headers = HeaderMap::new();
+        if !dir_id.is_empty() {
+            headers.insert(
+                HeaderName::from_static("oid"),
+                HeaderValue::from_str(&dir_id).unwrap(),
+            );
+        }
+        let body = serde_json::json!({
+            "user_perm": user_perm,
+            "dir_id": dir_id,
+            "dirent_list": dirent_list,
+        });
+        return Ok((headers, Json(body)).into_response());
+    }
+
+    // Non-recursive path (same as before)
     let (dir_id, entries) =
         crate::api::dir::list_dir_from_fs_tree(db, &repo_id, &normalized).await?;
 

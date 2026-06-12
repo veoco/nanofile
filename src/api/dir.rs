@@ -32,6 +32,10 @@ fn parent_path_from(path: &str) -> &str {
 #[derive(Deserialize)]
 pub struct DirQuery {
     pub p: Option<String>,
+    /// Type filter: "f" (files only) or "d" (dirs only). Used with recursive=1.
+    pub t: Option<String>,
+    /// "1" to list entries recursively (flat list). "0" or absent for single-level listing.
+    pub recursive: Option<String>,
 }
 
 /// Ensure path starts with "/" for consistent DB lookups.
@@ -58,6 +62,15 @@ pub struct DirEntry {
     /// original seafile protocol, but we store it for all entry types.
     #[serde(default)]
     pub modifier: String,
+    /// Parent directory path. Present only in recursive listings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_dir: Option<String>,
+    /// Modifier display name. Present only for file entries in recursive listings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modifier_name: Option<String>,
+    /// Modifier contact email. Present only for file entries in recursive listings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modifier_contact_email: Option<String>,
 }
 
 /// Get the root_fs_id from the repo's head commit for path resolution.
@@ -111,7 +124,49 @@ pub async fn list_dir(
     let path = normalize_path(&query.p.unwrap_or_else(|| "/".to_string()));
     let db = state.db.as_ref();
 
-    // Read from the FS object tree, which is the authoritative source.
+    // Validate recursive param
+    if let Some(ref r) = query.recursive
+        && r != "0"
+        && r != "1"
+    {
+        return Err(AppError::BadRequest(
+            "If you want to get recursive dir entries, you should set 'recursive' argument as '1'."
+                .into(),
+        ));
+    }
+    // Validate t (type filter) param
+    if let Some(ref t) = query.t
+        && t != "f"
+        && t != "d"
+    {
+        return Err(AppError::BadRequest(
+            "'t'(type) should be 'f' or 'd'.".into(),
+        ));
+    }
+
+    // Recursive listing path
+    if query.recursive.as_deref() == Some("1") {
+        let (dir_id, all_entries) = list_dir_recursive_from_fs_tree(db, &repo_id, &path).await?;
+        let filtered: Vec<DirEntry> = match query.t.as_deref() {
+            Some("f") => all_entries
+                .into_iter()
+                .filter(|e| e.entry_type == "file")
+                .collect(),
+            Some("d") => all_entries
+                .into_iter()
+                .filter(|e| e.entry_type == "dir")
+                .collect(),
+            _ => all_entries,
+        };
+        let mut headers = HeaderMap::new();
+        if !dir_id.is_empty() {
+            headers.insert("oid", dir_id.parse().unwrap());
+        }
+        headers.insert("dir_perm", "rw".parse().unwrap());
+        return Ok((headers, Json(filtered)));
+    }
+
+    // Non-recursive path (unchanged)
     let (dir_id, entries) = list_dir_from_fs_tree(db, &repo_id, &path).await?;
     let mut headers = HeaderMap::new();
     if !dir_id.is_empty() {
@@ -173,6 +228,9 @@ pub(crate) async fn list_dir_from_fs_tree(
                 mtime: d.mtime,
                 permission: "rw".to_string(),
                 modifier: d.modifier,
+                parent_dir: None,
+                modifier_name: None,
+                modifier_contact_email: None,
             })
             .collect(),
     ))
@@ -187,6 +245,98 @@ async fn read_fs_dir_data(
     crate::storage::read_fs_dir_data(db, repo_id, fs_id)
         .await
         .map_err(|e| AppError::internal(format!("read fs_dir_data failed: {e}")))
+}
+
+/// Recursively list all directory entries from the FS object tree.
+///
+/// Uses an iterative stack (same pattern as `search_fs_tree` in search.rs)
+/// to avoid deep recursion. Returns a flat list of all entries at every
+/// depth, each with its `parent_dir` set to the containing directory path.
+pub(crate) async fn list_dir_recursive_from_fs_tree(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    path: &str,
+) -> Result<(String, Vec<DirEntry>), AppError> {
+    // Resolve the target directory's fs_id
+    let repo_record = repo::Entity::find_by_id(repo_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
+
+    let head_commit_id = match repo_record.head_commit_id {
+        Some(id) => id,
+        None => return Ok((String::new(), vec![])),
+    };
+
+    let head = commit::Entity::find()
+        .filter(commit::Column::RepoId.eq(repo_id))
+        .filter(commit::Column::CommitId.eq(&head_commit_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
+
+    let dir_id = crate::storage::resolve_fs_id(db, repo_id, &head.root_id, path, None)
+        .await
+        .map_err(|e| AppError::internal(format!("resolve_fs_id failed: {e}")))?;
+
+    // Iterative stack: (fs_id, parent_path)
+    let mut stack: Vec<(String, String)> = vec![(dir_id.clone(), path.to_string())];
+    let mut entries: Vec<DirEntry> = Vec::new();
+
+    while let Some((fs_id, parent_path)) = stack.pop() {
+        // EMPTY_SHA1 sentinel
+        if fs_id == "0000000000000000000000000000000000000000" {
+            continue;
+        }
+
+        let dir_data = match crate::storage::read_fs_dir_data(db, repo_id, &fs_id).await {
+            Ok(d) => d,
+            Err(_) => continue, // skip unreadable objects
+        };
+
+        for dirent in &dir_data.dirents {
+            let is_dir = dirent.mode & crate::serialization::S_IFDIR != 0;
+            let modifier_email = dirent.modifier.clone();
+
+            let mut entry = DirEntry {
+                id: dirent.id.clone(),
+                entry_type: if is_dir {
+                    "dir".to_string()
+                } else {
+                    "file".to_string()
+                },
+                name: dirent.name.clone(),
+                size: dirent.size,
+                mtime: dirent.mtime,
+                permission: "rw".to_string(),
+                modifier: modifier_email.clone(),
+                parent_dir: Some(parent_path.clone()),
+                modifier_name: None,
+                modifier_contact_email: None,
+            };
+
+            // For files, derive modifier_name and modifier_contact_email from the modifier email.
+            if !is_dir && !modifier_email.is_empty() {
+                let local = modifier_email.split('@').next().unwrap_or("");
+                entry.modifier_name = Some(local.to_string());
+                entry.modifier_contact_email = Some(modifier_email);
+            }
+
+            entries.push(entry);
+
+            // Push subdirectories onto the stack
+            if is_dir {
+                let child_path = if parent_path == "/" {
+                    format!("/{}", dirent.name)
+                } else {
+                    format!("{}/{}", parent_path, dirent.name)
+                };
+                stack.push((dirent.id.clone(), child_path));
+            }
+        }
+    }
+
+    Ok((dir_id, entries))
 }
 
 /// Combined POST handler for `/api2/repos/{id}/dir/`.
