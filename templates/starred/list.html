@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}Starred Items | Nanofile{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-gray-900">Starred Items</h1>
+<p class="mt-1 text-sm text-gray-500">Quick access to your starred files and folders.</p>
+
+{% if starred_repos.is_empty() && starred_folders.is_empty() && starred_files.is_empty() %}
+<div class="mt-8 text-center">
+    <p class="text-gray-500">No starred items yet.</p>
+    <p class="mt-2 text-sm text-gray-400">Star files and folders from any library to see them here.</p>
+</div>
+{% endif %}
+
+{% if !starred_repos.is_empty() %}
+<div class="mt-6">
+    <h2 class="text-lg font-medium text-gray-900">Starred Libraries</h2>
+    <div class="mt-2 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for item in starred_repos %}
+                <tr class="hover:bg-gray-50 {% if item.deleted %}opacity-50{% endif %}">
+                    <td class="px-4 py-3 text-sm">
+                        {% if item.deleted %}
+                        <span class="text-red-500 text-xs">[Deleted]</span>
+                        {% endif %}
+                        <a href="/library/{{ item.repo_id }}/" class="text-seafile-blue hover:underline">{{ item.repo_name }}</a>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-right">
+                        {% if !item.deleted %}
+                        <form action="/starred/" method="POST" class="inline">
+                            <input type="hidden" name="repo_id" value="{{ item.repo_id }}">
+                            <input type="hidden" name="path" value="/">
+                            <button type="submit" class="text-red-600 hover:text-red-800 text-xs">Unstar</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% if !starred_folders.is_empty() %}
+<div class="mt-6">
+    <h2 class="text-lg font-medium text-gray-900">Starred Folders</h2>
+    <div class="mt-2 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Library</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for item in starred_folders %}
+                <tr class="hover:bg-gray-50 {% if item.deleted %}opacity-50{% endif %}">
+                    <td class="px-4 py-3 text-sm">
+                        {% if item.deleted %}
+                        <span class="text-red-500 text-xs">[Deleted]</span> {{ item.obj_name }}
+                        {% else %}
+                        <a href="/library/{{ item.repo_id }}/{{ item.obj_name }}/" class="text-seafile-blue hover:underline">{{ item.obj_name }}/</a>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ item.repo_name }}</td>
+                    <td class="px-4 py-3 text-sm text-right">
+                        {% if !item.deleted %}
+                        <form action="/starred/" method="POST" class="inline">
+                            <input type="hidden" name="repo_id" value="{{ item.repo_id }}">
+                            <input type="hidden" name="path" value="{{ item.path }}">
+                            <button type="submit" class="text-red-600 hover:text-red-800 text-xs">Unstar</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% if !starred_files.is_empty() %}
+<div class="mt-6">
+    <h2 class="text-lg font-medium text-gray-900">Starred Files</h2>
+    <div class="mt-2 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Library</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for item in starred_files %}
+                <tr class="hover:bg-gray-50 {% if item.deleted %}opacity-50{% endif %}">
+                    <td class="px-4 py-3 text-sm">
+                        {% if item.deleted %}
+                        <span class="text-red-500 text-xs">[Deleted]</span> {{ item.obj_name }}
+                        {% else %}
+                        <a href="/library/{{ item.repo_id }}/preview/{{ item.repo_name }}/{{ item.obj_name }}" class="text-seafile-blue hover:underline">{{ item.obj_name }}</a>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ item.repo_name }}</td>
+                    <td class="px-4 py-3 text-sm text-right">
+                        {% if !item.deleted %}
+                        <form action="/starred/" method="POST" class="inline">
+                            <input type="hidden" name="repo_id" value="{{ item.repo_id }}">
+                            <input type="hidden" name="path" value="{{ item.path }}">
+                            <button type="submit" class="text-red-600 hover:text-red-800 text-xs">Unstar</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

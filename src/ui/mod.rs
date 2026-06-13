@@ -8,6 +8,7 @@ pub mod repos;
 pub mod search;
 pub mod settings;
 pub mod shares;
+pub mod starred;
 pub mod two_factor;
 
 use axum::Router;
@@ -131,6 +132,11 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route(
             "/profile/two-factor/disable",
             axum::routing::post(two_factor::disable_2fa),
+        )
+        // Starred items
+        .route(
+            "/starred/",
+            get(starred::starred_page).post(starred::unstar_item_ui),
         )
         // Search
         .route("/search", get(search::search_page))

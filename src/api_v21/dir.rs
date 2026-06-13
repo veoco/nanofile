@@ -6,12 +6,13 @@ use axum::{
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::api::dir::DirEntry;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{commit, repo, repo_member};
+use crate::entity::{commit, repo, repo_member, starred_file};
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -237,6 +238,17 @@ pub async fn list_dir_v21(
     dir_list.sort_by_key(|a| a.name.to_lowercase());
     file_list.sort_by_key(|a| a.name.to_lowercase());
 
+    // Query starred entries for this user+repo so we can stamp `starred` on
+    // each dirent, matching seahub's behavior (api2/endpoints/dir.py:59-65).
+    let starred_set: HashSet<String> = starred_file::Entity::find()
+        .filter(starred_file::Column::UserId.eq(auth.user_id))
+        .filter(starred_file::Column::RepoId.eq(&repo_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|s| s.path.trim_end_matches('/').to_string())
+        .collect();
+
     // Match seahub's normalize_dir_path: non-root directories must have a
     // trailing slash in parent_dir so clients (e.g. Android) can safely
     // construct full_path = parent_dir + name without a missing separator.
@@ -249,6 +261,7 @@ pub async fn list_dir_v21(
 
     // Directory entries — no size, no modifier fields.
     for e in &dir_list {
+        let entry_path = format!("{}{}", parent_dir, e.name);
         dirent_list.push(serde_json::json!({
             "type": "dir",
             "id": e.id,
@@ -256,7 +269,7 @@ pub async fn list_dir_v21(
             "mtime": e.mtime,
             "permission": e.permission,
             "parent_dir": parent_dir,
-            "starred": false,
+            "starred": starred_set.contains(&entry_path),
         }));
     }
 
@@ -277,6 +290,7 @@ pub async fn list_dir_v21(
         // IMAGE/PDF/SVG only; the empty fallback is pragmatically safer
         // for the HarmonyOS client which sends with_thumbnail=true on
         // every directory listing.
+        let entry_path = format!("{}{}", parent_dir, e.name);
         let mut entry = serde_json::json!({
             "type": "file",
             "id": e.id,
@@ -285,7 +299,7 @@ pub async fn list_dir_v21(
             "mtime": e.mtime,
             "permission": e.permission,
             "parent_dir": parent_dir,
-            "starred": false,
+            "starred": starred_set.contains(&entry_path),
             "modifier_email": modifier_email,
             "modifier_name": modifier_name,
             "modifier_contact_email": modifier_contact_email,

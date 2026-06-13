@@ -9,10 +9,11 @@ use axum::{
 use chrono::Utc;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::{commit, repo};
+use crate::entity::{commit, repo, starred_file};
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
@@ -95,6 +96,8 @@ pub struct FileEntry {
     pub relative_path: String,
     /// Whether this file can be previewed inline (text/code/image).
     pub is_previewable: bool,
+    /// Whether this file/directory is starred by the current user.
+    pub starred: bool,
 }
 
 pub fn is_previewable_file(name: &str) -> bool {
@@ -314,6 +317,16 @@ async fn file_browser_inner(
     // List directory entries from the FS object tree (authoritative source).
     let entries_data = crate::api::dir::list_dir_from_fs_tree(db, &repo_id, &path).await?;
 
+    // Query starred entries for this user+repo to stamp the `starred` field.
+    let starred_set: HashSet<String> = starred_file::Entity::find()
+        .filter(starred_file::Column::UserId.eq(user.user_id))
+        .filter(starred_file::Column::RepoId.eq(&repo_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|s| s.path.trim_end_matches('/').to_string())
+        .collect();
+
     let mut entries: Vec<FileEntry> = entries_data
         .1
         .into_iter()
@@ -322,6 +335,11 @@ async fn file_browser_inner(
                 e.name.clone()
             } else {
                 format!("{}/{}", path.trim_start_matches('/'), e.name)
+            };
+            let full_path = if path == "/" {
+                format!("/{}", e.name)
+            } else {
+                format!("{}/{}", path.trim_end_matches('/'), e.name)
             };
             let is_previewable = is_previewable_file(&e.name);
             FileEntry {
@@ -334,6 +352,7 @@ async fn file_browser_inner(
                 icon_color: file_icon_color(&e.name),
                 relative_path,
                 is_previewable,
+                starred: starred_set.contains(&full_path),
             }
         })
         .collect();

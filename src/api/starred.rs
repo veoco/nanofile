@@ -14,6 +14,7 @@ pub struct StarredFileEntry {
     pub path: String,
     pub size: Option<i64>,
     pub last_modified: Option<i64>,
+    pub is_dir: bool,
 }
 
 /// `GET /api2/starredfiles/`
@@ -36,6 +37,7 @@ pub async fn list_starred_files(
             path: e.path,
             size: None,
             last_modified: None,
+            is_dir: e.is_dir,
         })
         .collect();
 

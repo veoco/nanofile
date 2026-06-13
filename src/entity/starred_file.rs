@@ -13,6 +13,8 @@ pub struct Model {
     #[sea_orm(not_null)]
     pub user_id: i32,
     #[sea_orm(not_null)]
+    pub is_dir: bool,
+    #[sea_orm(not_null)]
     pub created_at: i64,
 }
 

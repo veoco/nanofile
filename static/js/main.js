@@ -96,4 +96,77 @@
       document.documentElement.classList.add("dark");
     }
   }
+  // Star file/directory toggle (global, called from onclick in file_list.html)
+  window.toggleStar = async function (repoId, path, currentlyStarred, btn) {
+    // Read session token from cookie
+    function getCookie(name) {
+      const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
+      return match ? match[2] : "";
+    }
+    const token = getCookie("seahub-session");
+    if (!token) {
+      window.location.href = "/accounts/login/";
+      return;
+    }
+
+    btn.disabled = true;
+
+    try {
+      if (currentlyStarred) {
+        // DELETE — unstar
+        const url =
+          "/api/v2.1/starred-items/?repo_id=" +
+          encodeURIComponent(repoId) +
+          "&path=" +
+          encodeURIComponent(path);
+        const res = await fetch(url, {
+          method: "DELETE",
+          headers: { Authorization: "Token " + token },
+        });
+        if (res.ok) {
+          btn.classList.remove("text-yellow-400");
+          btn.classList.add("text-gray-300", "hover:text-yellow-400");
+          btn.querySelector("svg").setAttribute("fill", "none");
+          btn.title = "Star";
+          btn.setAttribute(
+            "onclick",
+            "toggleStar('" +
+              repoId +
+              "', '" +
+              path.replace(/'/g, "\\'") +
+              "', false, this)"
+          );
+        }
+      } else {
+        // POST — star
+        const res = await fetch("/api/v2.1/starred-items/", {
+          method: "POST",
+          headers: {
+            Authorization: "Token " + token,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ repo_id: repoId, path: path }),
+        });
+        if (res.ok) {
+          btn.classList.remove("text-gray-300", "hover:text-yellow-400");
+          btn.classList.add("text-yellow-400");
+          btn.querySelector("svg").setAttribute("fill", "currentColor");
+          btn.title = "Unstar";
+          btn.setAttribute(
+            "onclick",
+            "toggleStar('" +
+              repoId +
+              "', '" +
+              path.replace(/'/g, "\\'") +
+              "', true, this)"
+          );
+        }
+      }
+    } catch (e) {
+      // Ignore network errors silently — the UI stays in its current state
+    } finally {
+      btn.disabled = false;
+    }
+  };
 })();
+
