@@ -627,6 +627,20 @@ impl TestClient {
             .unwrap()
     }
 
+    /// POST with multipart body and optional Bearer token.
+    pub async fn post_multipart(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        form: reqwest::multipart::Form,
+    ) -> reqwest::Response {
+        let mut req = self.client.post(self.url(path));
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
+        req.multipart(form).send().await.unwrap()
+    }
+
     // ========== Sync Protocol Endpoints ==========
 
     pub async fn protocol_version(&self) -> reqwest::Response {
@@ -1050,5 +1064,88 @@ impl TestClient {
             .send()
             .await
             .unwrap()
+    }
+
+    // ========== Star feature helpers ==========
+
+    /// POST /api/v2.1/starred-items/ with JSON body.
+    pub async fn star_item(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
+        self.post_json(
+            "/api/v2.1/starred-items/",
+            Some(token),
+            &serde_json::json!({"repo_id": repo_id, "path": path}),
+        )
+        .await
+    }
+
+    /// DELETE /api/v2.1/starred-items/?repo_id=...&path=...
+    pub async fn unstar_item(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
+        // URL-encode the path for the query parameter
+        let encoded: String = path
+            .chars()
+            .map(|c| match c {
+                '/' => "%2F".to_string(),
+                '?' => "%3F".to_string(),
+                '#' => "%23".to_string(),
+                _ => c.to_string(),
+            })
+            .collect();
+        self.delete(
+            &format!(
+                "/api/v2.1/starred-items/?repo_id={}&path={}",
+                repo_id, encoded
+            ),
+            Some(token),
+        )
+        .await
+    }
+
+    /// GET /api/v2.1/starred-items/
+    pub async fn list_starred(&self, token: &str) -> reqwest::Response {
+        self.get("/api/v2.1/starred-items/", Some(token)).await
+    }
+
+    // ========== Activity / operation helpers ==========
+
+    /// GET /api/v2.1/activities/ with optional pagination.
+    pub async fn get_activities(&self, token: &str, page: u32, per_page: u32) -> reqwest::Response {
+        self.get(
+            &format!("/api/v2.1/activities/?page={}&per_page={}", page, per_page),
+            Some(token),
+        )
+        .await
+    }
+
+    /// POST /api2/repos/{repo_id}/file/rename/ with JSON body (v2 JSON endpoint).
+    pub async fn rename_file(
+        &self,
+        token: &str,
+        repo_id: &str,
+        path: &str,
+        new_name: &str,
+    ) -> reqwest::Response {
+        self.post_json(
+            &format!("/api2/repos/{}/file/rename/", repo_id),
+            Some(token),
+            &serde_json::json!({"repo_id": repo_id, "p": path, "new_name": new_name}),
+        )
+        .await
+    }
+
+    /// POST /api2/repos/{src_repo}/file/move/ with JSON body (v2 JSON endpoint).
+    pub async fn move_file(
+        &self,
+        token: &str,
+        src_repo: &str,
+        path: &str,
+        dst_repo: &str,
+        dst_dir: &str,
+    ) -> reqwest::Response {
+        self.post_json(
+            &format!("/api2/repos/{}/file/move/", src_repo),
+            Some(token),
+            &serde_json::json!({"repo_id": src_repo, "p": path, "new_parent_dir": dst_dir}),
+        )
+        .await
     }
 }
