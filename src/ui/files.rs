@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::entity::{commit, repo, starred_file};
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
@@ -608,6 +609,10 @@ pub async fn upload_file(
         .await
         .map_err(|e| AppError::internal(format!("upload failed: {e}")))?;
 
+        // Log activity
+        let op_type = if old_size > 0 { "edit" } else { "create" };
+        activity_log::log_activity(db, &repo_id, op_type, "file", &p, user.user_id, None).await;
+
         // Adjust repo size (delta = new_size - old_size).
         let delta = data.len() as i64 - old_size;
         crate::storage::adjust_repo_size(db, &repo_id, delta).await?;
@@ -707,6 +712,11 @@ pub async fn delete_entry(
 
     // Adjust repo size (subtract the deleted entry's size).
     crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
+
+    // Log activity
+    // For obj_type, check if the name has extension or form provides context.
+    // Default to "file" since most web UI deletes are files.
+    activity_log::log_activity(db, &repo_id, "delete", "file", &path, user.user_id, None).await;
 
     // Redirect back to the current directory.
     let repo_name = form.get("repo_name").map(|s| s.as_str()).unwrap_or("");
@@ -816,6 +826,9 @@ pub async fn create_directory(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // Log activity
+    activity_log::log_activity(db, &repo_id, "create", "dir", &path, user.user_id, None).await;
+
     // Redirect back to the parent directory.
     let repo_name = form.get("repo_name").map(|s| s.as_str()).unwrap_or("");
     let current_dir = form.get("current_dir").map(|s| s.as_str()).unwrap_or("");
@@ -907,6 +920,28 @@ pub async fn rename_entry(
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Log activity
+    let new_path = if parent_path == "/" {
+        format!("/{}", new_name)
+    } else {
+        format!("{}/{}", parent_path, new_name)
+    };
+    let obj_type = if entry_type_label == "directory" {
+        "dir"
+    } else {
+        "file"
+    };
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "rename",
+        obj_type,
+        &new_path,
+        user.user_id,
+        Some(path),
+    )
+    .await;
 
     // Redirect back to current directory.
     let current_dir = form.get("current_dir").map(|s| s.as_str()).unwrap_or("");

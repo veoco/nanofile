@@ -1,4 +1,5 @@
 /// Web UI module — a Seahub-compatible management interface.
+pub mod activities;
 pub mod auth;
 pub mod auth_extractor;
 pub mod client_login;
@@ -138,6 +139,8 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/starred/",
             get(starred::starred_page).post(starred::unstar_item_ui),
         )
+        // File activities
+        .route("/activities/", get(activities::activities_page))
         // Search
         .route("/search", get(search::search_page))
 }

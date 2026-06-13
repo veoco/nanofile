@@ -1,3 +1,4 @@
+pub mod activity_log;
 pub mod api;
 pub mod api_v1;
 pub mod api_v21;

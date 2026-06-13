@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::api::dir::DirEntry;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{commit, repo, repo_member, starred_file};
@@ -27,7 +28,7 @@ pub struct V21DirQuery {
 pub async fn delete_dirent_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Path((repo_id, _obj)): Path<(String, String)>,
+    Path((repo_id, obj)): Path<(String, String)>,
     Query(query): Query<V21DirQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Permission check
@@ -108,6 +109,18 @@ pub async fn delete_dirent_v21(
 
     // Adjust repo size (subtract the deleted entry's size).
     crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
+
+    // Log activity
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "delete",
+        &obj,
+        &normalized,
+        auth.user_id,
+        None,
+    )
+    .await;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

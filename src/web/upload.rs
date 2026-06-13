@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::error::AppError;
 use crate::storage::file_ops::FileOps;
 
@@ -30,6 +31,7 @@ fn compute_target_dir(parent_dir: &str, relative_path: &str) -> String {
 /// Create a file via `FileOps::create_file` and return the standard JSON
 /// array response expected by the Seafile frontend:
 /// `[{"id": "<fs_id>", "name": "<filename>", "size": <bytes>}]`
+#[allow(clippy::too_many_arguments)]
 async fn upload_and_build_response(
     state: &AppState,
     repo_id: &str,
@@ -38,6 +40,7 @@ async fn upload_and_build_response(
     data: &[u8],
     modifier: &str,
     replace: bool,
+    user_id: Option<i32>,
 ) -> Result<serde_json::Value, AppError> {
     // Get old file size for incremental repo size adjustment when overwriting.
     let old_size = if replace {
@@ -71,6 +74,18 @@ async fn upload_and_build_response(
     // Adjust repo size (delta = new_size - old_size).
     crate::storage::adjust_repo_size(state.db.as_ref(), repo_id, data.len() as i64 - old_size)
         .await?;
+
+    // Log activity if a user_id was provided.
+    if let Some(uid) = user_id {
+        let fp = if target_dir == "/" {
+            format!("/{}", filename)
+        } else {
+            format!("{}/{}", target_dir.trim_end_matches('/'), filename)
+        };
+        let op_type = if replace { "edit" } else { "create" };
+        activity_log::log_activity(state.db.as_ref(), repo_id, op_type, "file", &fp, uid, None)
+            .await;
+    }
 
     Ok(json!([{"id": fs_id, "name": filename, "size": data.len()}]))
 }
@@ -226,6 +241,7 @@ pub async fn upload_aj(
             &file_data,
             "web",
             false,
+            None,
         )
         .await?;
         return Ok(Json(resp));
@@ -273,9 +289,10 @@ pub async fn update_api(
             .map(|(_, n)| n)
             .unwrap_or(&file_path);
 
-        let resp =
-            upload_and_build_response(&state, &repo_id, parent, name, &file_data, "web", true)
-                .await?;
+        let resp = upload_and_build_response(
+            &state, &repo_id, parent, name, &file_data, "web", true, None,
+        )
+        .await?;
         return Ok(Json(resp));
     }
 
@@ -322,7 +339,7 @@ pub async fn update_aj(
             .unwrap_or(target_file);
 
         let resp =
-            upload_and_build_response(&state, repo_id, parent, name, &file_data, "web", true)
+            upload_and_build_response(&state, repo_id, parent, name, &file_data, "web", true, None)
                 .await?;
         return Ok(Json(resp));
     }
@@ -380,6 +397,7 @@ pub async fn upload_aj_token(
     let target_dir = compute_target_dir(parent_dir, relative_path);
 
     if !file_data.is_empty() {
+        let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
         let resp = upload_and_build_response(
             &state,
             &info.repo_id,
@@ -387,7 +405,8 @@ pub async fn upload_aj_token(
             &filename,
             &file_data,
             &info.username,
-            true, // replace behaviour (matching seafile-server default)
+            true,
+            uid,
         )
         .await?;
         return Ok(Json(resp));
@@ -462,6 +481,7 @@ pub async fn upload_api(
     if let Some(data) = parsed.file_data
         && !data.is_empty()
     {
+        let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
         let resp = upload_and_build_response(
             &state,
             &info.repo_id,
@@ -469,7 +489,8 @@ pub async fn upload_api(
             &filename,
             &data,
             &info.username,
-            true, // replace existing files (seafile-server behavior)
+            true,
+            uid,
         )
         .await?;
         return Ok(Json(resp));
@@ -535,6 +556,7 @@ pub async fn update_api_handler(
         .unwrap_or_default();
 
     if !data.is_empty() {
+        let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
         if !target_file.is_empty() {
             // Derive target from target_file + optional relative_path
             let (raw_parent, raw_name) =
@@ -581,6 +603,20 @@ pub async fn update_api_handler(
             )
             .await?;
 
+            // Log activity
+            if let Some(uid) = uid {
+                activity_log::log_activity(
+                    state.db.as_ref(),
+                    &info.repo_id,
+                    "edit",
+                    "file",
+                    &fp,
+                    uid,
+                    None,
+                )
+                .await;
+            }
+
             return Ok(Json(
                 json!([{"id": fs_id, "name": name, "size": data.len()}]),
             ));
@@ -604,6 +640,7 @@ pub async fn update_api_handler(
                 &data,
                 &info.username,
                 true,
+                uid,
             )
             .await?;
             return Ok(Json(resp));
@@ -649,6 +686,7 @@ pub async fn update_aj_token(
         return Ok(Json(json!({"success": true})));
     }
 
+    let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
     let target_file = fields.get("target_file").cloned().unwrap_or_default();
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
 
@@ -695,6 +733,20 @@ pub async fn update_aj_token(
         )
         .await?;
 
+        // Log activity
+        if let Some(uid) = uid {
+            activity_log::log_activity(
+                state.db.as_ref(),
+                &info.repo_id,
+                "edit",
+                "file",
+                &fp,
+                uid,
+                None,
+            )
+            .await;
+        }
+
         return Ok(Json(
             json!([{"id": fs_id, "name": name, "size": file_data.len()}]),
         ));
@@ -738,6 +790,7 @@ pub async fn upload_blks_api(
         ));
     }
 
+    let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut blocks: Vec<(String, Vec<u8>)> = Vec::new();
 
@@ -885,6 +938,21 @@ pub async fn upload_blks_api(
         // Adjust repo size
         crate::storage::adjust_repo_size(state.db.as_ref(), &info.repo_id, file_size - old_size)
             .await?;
+
+        // Log activity
+        let op_type = if replace { "edit" } else { "create" };
+        if let Some(uid) = uid {
+            activity_log::log_activity(
+                state.db.as_ref(),
+                &info.repo_id,
+                op_type,
+                "file",
+                &fp,
+                uid,
+                None,
+            )
+            .await;
+        }
 
         return Ok(Json(json!({"id": file_fs_id})));
     }

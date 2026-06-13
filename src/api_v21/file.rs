@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::api::repos::extract_multipart_field;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
@@ -81,6 +82,7 @@ pub async fn create_file_v21(
             &path,
             &newname,
             &auth.email,
+            auth.user_id,
             Some(state.path_cache.as_ref()),
         )
         .await?;
@@ -163,6 +165,9 @@ pub async fn create_file_v21(
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Log activity
+    activity_log::log_activity(db, &repo_id, "create", "file", &path, auth.user_id, None).await;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{commit, fs_object, locked_file, repo, user};
 use crate::error::AppError;
@@ -265,6 +266,7 @@ pub async fn file_post_handler(
                 &path,
                 &newname,
                 &auth.email,
+                auth.user_id,
                 Some(state.path_cache.as_ref()),
             )
             .await?;
@@ -297,6 +299,7 @@ pub async fn file_post_handler(
                     &path,
                     newname,
                     &auth.email,
+                    auth.user_id,
                     Some(state.path_cache.as_ref()),
                 )
                 .await?;
@@ -337,6 +340,7 @@ pub async fn file_post_handler(
                     dst_repo,
                     dst_dir,
                     &auth.email,
+                    auth.user_id,
                     Some(state.path_cache.as_ref()),
                 )
                 .await?;
@@ -455,6 +459,19 @@ async fn upload_file_inner(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // Log activity
+    let op_type = if replace { "edit" } else { "create" };
+    activity_log::log_activity(
+        state.db.as_ref(),
+        &repo_id,
+        op_type,
+        "file",
+        &file_path,
+        auth.user_id,
+        None,
+    )
+    .await;
+
     // Adjust repo size (delta = new_size - old_size).
     crate::storage::adjust_repo_size(
         state.db.as_ref(),
@@ -552,6 +569,9 @@ pub async fn delete_file(
     // Adjust repo size (subtract the deleted entry's size).
     crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
 
+    // Log activity
+    activity_log::log_activity(db, &repo_id, "delete", "file", &path, auth.user_id, None).await;
+
     Ok(())
 }
 
@@ -579,6 +599,7 @@ pub async fn move_file(
         &req.new_parent_dir,
         &req.new_parent_dir,
         &auth.email,
+        auth.user_id,
         Some(state.path_cache.as_ref()),
     )
     .await?;
@@ -617,6 +638,7 @@ pub(crate) async fn rename_file_entry(
     path: &str,
     new_name: &str,
     modifier: &str,
+    user_id: i32,
     cache: Option<&PathCache>,
 ) -> Result<(), AppError> {
     let parent_path = parent_path_from(path);
@@ -660,6 +682,23 @@ pub(crate) async fn rename_file_entry(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // Log activity
+    let new_path = if parent_path == "/" {
+        format!("/{}", new_name)
+    } else {
+        format!("{}/{}", parent_path, new_name)
+    };
+    activity_log::log_activity(
+        db,
+        repo_id,
+        "rename",
+        "file",
+        &new_path,
+        user_id,
+        Some(path),
+    )
+    .await;
+
     Ok(())
 }
 
@@ -672,6 +711,7 @@ pub(crate) async fn rename_file_entry(
 /// A single-commit approach would lose the removal because the second
 /// `update_dir_tree_no_commit` walks up from the original HEAD, not from
 /// the intermediate tree after the first modification.
+#[allow(clippy::too_many_arguments)]
 async fn move_file_entry(
     db: &DatabaseConnection,
     repo_id: &str,
@@ -679,6 +719,7 @@ async fn move_file_entry(
     _dst_repo: &str,
     dst_dir: &str,
     modifier: &str,
+    user_id: i32,
     cache: Option<&PathCache>,
 ) -> Result<(), AppError> {
     // Get root fs_id from head commit
@@ -777,6 +818,14 @@ async fn move_file_entry(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // Log activity
+    let new_path = if new_parent_path == "/" {
+        format!("/{}", file_name)
+    } else {
+        format!("{}/{}", new_parent_path, file_name)
+    };
+    activity_log::log_activity(db, repo_id, "move", "file", &new_path, user_id, Some(path)).await;
+
     Ok(())
 }
 
@@ -803,6 +852,7 @@ pub async fn rename_file(
         &path,
         &req.new_name,
         &auth.email,
+        auth.user_id,
         Some(state.path_cache.as_ref()),
     )
     .await?;

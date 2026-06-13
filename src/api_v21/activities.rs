@@ -2,13 +2,15 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use chrono::DateTime;
+use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::activity;
+use crate::entity::{activity, repo, user};
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -19,34 +21,104 @@ pub struct ActivitiesQuery {
 }
 
 /// GET /api/v2.1/activities/
+///
+/// Returns paginated file activity events for the authenticated user.
+/// Response format matches seahub (api2/endpoints/activities.py).
 pub async fn get_activities(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Query(query): Query<ActivitiesQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let mut find = activity::Entity::find()
-        .filter(activity::Column::UserId.eq(auth.user_id))
-        .order_by_desc(activity::Column::CreatedAt);
+    let db = state.db.as_ref();
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(25).clamp(1, 100);
+    let offset = ((page - 1) * per_page) as u64;
+
+    // Build base query filtered by user
+    let mut base_filter =
+        activity::Entity::find().filter(activity::Column::UserId.eq(auth.user_id));
 
     if let Some(ref repo_id) = query.repo_id {
-        find = find.filter(activity::Column::RepoId.eq(repo_id));
+        base_filter = base_filter.filter(activity::Column::RepoId.eq(repo_id));
     }
 
-    let events = find.all(state.db.as_ref()).await?;
+    // Get total count for pagination metadata
+    let total_count = base_filter.clone().count(db).await?;
 
-    let event_list: Vec<serde_json::Value> = events
-        .into_iter()
-        .map(|e| {
-            serde_json::json!({
-                "repo_id": e.repo_id,
-                "commit_id": e.commit_id,
-                "op_type": e.op_type,
-                "obj_type": e.obj_type,
-                "path": e.path,
-                "time": e.created_at,
-            })
-        })
-        .collect();
+    // Fetch paginated activities
+    let events = base_filter
+        .order_by_desc(activity::Column::CreatedAt)
+        .offset(offset)
+        .limit(per_page as u64)
+        .all(db)
+        .await?;
 
-    Ok(Json(serde_json::json!({"events": event_list})))
+    // Batch-load user emails
+    let mut user_emails: HashMap<i32, String> = HashMap::new();
+    let mut user_ids: Vec<i32> = events.iter().map(|e| e.user_id).collect();
+    user_ids.sort();
+    user_ids.dedup();
+    for uid in &user_ids {
+        if let Ok(Some(u)) = user::Entity::find_by_id(*uid).one(db).await {
+            user_emails.insert(*uid, u.email);
+        }
+    }
+
+    // Batch-load repo names
+    let mut repo_names: HashMap<String, String> = HashMap::new();
+    for e in &events {
+        if let Ok(Some(r)) = repo::Entity::find_by_id(&e.repo_id).one(db).await {
+            repo_names.entry(e.repo_id.clone()).or_insert(r.name);
+        }
+    }
+
+    // Build event list
+    let mut event_list: Vec<serde_json::Value> = Vec::with_capacity(events.len());
+    for e in &events {
+        let email = user_emails
+            .get(&e.user_id)
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        let repo_name = repo_names.get(&e.repo_id).map(|s| s.as_str()).unwrap_or("");
+        let name = e
+            .path
+            .rsplit_once('/')
+            .map(|(_, n)| n.to_string())
+            .unwrap_or_default();
+        let time = DateTime::from_timestamp(e.created_at, 0)
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default();
+
+        let mut d = serde_json::json!({
+            "op_type": e.op_type,
+            "repo_id": e.repo_id,
+            "repo_name": repo_name,
+            "obj_type": e.obj_type,
+            "commit_id": e.commit_id,
+            "path": e.path,
+            "name": name,
+            "author_email": email,
+            "author_name": email.split('@').next().unwrap_or(""),
+            "author_contact_email": email,
+            "login_id": "",
+            "avatar_url": "",
+            "time": time,
+            "details": [],
+            "count": 0,
+        });
+
+        // Include old_path for rename/move operations
+        if let Some(ref old_path) = e.old_path {
+            d["old_path"] = serde_json::json!(old_path);
+        }
+
+        event_list.push(d);
+    }
+
+    Ok(Json(serde_json::json!({
+        "events": event_list,
+        "page": page,
+        "per_page": per_page,
+        "total_count": total_count,
+    })))
 }

@@ -16,6 +16,7 @@ pub struct Model {
     pub obj_type: String,
     #[sea_orm(not_null)]
     pub path: String,
+    pub old_path: Option<String>,
     #[sea_orm(not_null)]
     pub user_id: i32,
     #[sea_orm(not_null)]

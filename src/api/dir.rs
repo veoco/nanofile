@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::api::repos::extract_multipart_field;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{commit, fs_object, repo, repo_member, share_link};
@@ -408,7 +409,15 @@ pub async fn dir_post_handler(
     match op.as_deref() {
         Some("rename") => {
             let newname = newname.ok_or_else(|| AppError::BadRequest("newname required".into()))?;
-            rename_dir_entry(state.db.as_ref(), &repo_id, &path, &newname, &auth.email).await?;
+            rename_dir_entry(
+                state.db.as_ref(),
+                &repo_id,
+                &path,
+                &newname,
+                &auth.email,
+                auth.user_id,
+            )
+            .await?;
             // Return JSON string "success" (not a JSON object) so the Android
             // client's SupportResponseConverter can parse it for Call<String>.
             Ok(Json(serde_json::Value::String("success".to_string())))
@@ -434,6 +443,7 @@ async fn rename_dir_entry(
     path: &str,
     new_name: &str,
     modifier: &str,
+    user_id: i32,
 ) -> Result<(), AppError> {
     let parent_path = parent_path_from(path);
     let old_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
@@ -474,6 +484,14 @@ async fn rename_dir_entry(
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Log activity
+    let new_path = if parent_path == "/" {
+        format!("/{}", new_name)
+    } else {
+        format!("{}/{}", parent_path, new_name)
+    };
+    activity_log::log_activity(db, repo_id, "rename", "dir", &new_path, user_id, Some(path)).await;
 
     Ok(())
 }
@@ -565,6 +583,18 @@ pub(crate) async fn create_dir_by_path(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // Log activity
+    activity_log::log_activity(
+        state.db.as_ref(),
+        &repo_id,
+        "create",
+        "dir",
+        &path,
+        auth.user_id,
+        None,
+    )
+    .await;
+
     Ok(())
 }
 
@@ -624,6 +654,9 @@ pub async fn delete_dir(
 
     // Adjust repo size (subtract the deleted directory's total size).
     crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
+
+    // Log activity
+    activity_log::log_activity(db, &repo_id, "delete", "dir", &path, auth.user_id, None).await;
 
     Ok(())
 }
@@ -752,6 +785,23 @@ pub async fn move_dir(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // Log activity
+    let new_path = if new_parent_path == "/" {
+        format!("/{}", dir_name)
+    } else {
+        format!("{}/{}", new_parent_path, dir_name)
+    };
+    activity_log::log_activity(
+        db,
+        &req.repo_id,
+        "move",
+        "dir",
+        &new_path,
+        auth.user_id,
+        Some(&req.p),
+    )
+    .await;
+
     Ok(())
 }
 
@@ -778,6 +828,7 @@ pub async fn rename_dir(
         &path,
         &req.new_name,
         &auth.email,
+        auth.user_id,
     )
     .await
 }
