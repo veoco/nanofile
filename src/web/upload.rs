@@ -16,6 +16,7 @@ use sea_orm::EntityTrait;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Get encryption key for an encrypted repo if the user has set a password.
+#[allow(dead_code)]
 async fn get_encryption_key_for_repo(
     state: &AppState,
     repo_id: &str,

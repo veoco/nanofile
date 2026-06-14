@@ -60,6 +60,7 @@ impl PasswordManager {
     ///
     /// Returns `Ok(())` on success, or `AppError::RepoPasswdRequired` on
     /// password mismatch, or `AppError::BadRequest` for unsupported versions.
+    #[allow(clippy::too_many_arguments)]
     pub async fn set_password(
         &self,
         repo_id: &str,

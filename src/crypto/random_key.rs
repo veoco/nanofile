@@ -105,10 +105,10 @@ mod tests {
         let encrypted = encrypt_block(data, &key1);
         let result = decrypt_block(&encrypted, &key2);
         // Wrong key should either error or produce wrong data
-        match result {
-            Ok(decrypted) => assert_ne!(decrypted, data),
-            Err(_) => {} // Error is also acceptable
+        if let Ok(decrypted) = result {
+            assert_ne!(decrypted, data);
         }
+        // Error is also acceptable
     }
 
     #[test]
@@ -188,9 +188,8 @@ mod tests {
 
         let result = decrypt_block(&tampered, &key);
         // Should either error OR produce wrong output
-        match result {
-            Ok(decrypted) => assert_ne!(decrypted, data),
-            Err(_) => {} // error is acceptable
+        if let Ok(decrypted) = result {
+            assert_ne!(decrypted, data);
         }
     }
 }

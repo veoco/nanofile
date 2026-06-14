@@ -334,17 +334,17 @@ async fn test_star_response_fields() {
 
     // Verify all expected response fields
     assert_eq!(item["repo_id"], f.repo_id);
-    assert!(item["repo_name"].as_str().unwrap_or("").len() > 0);
+    assert!(!item["repo_name"].as_str().unwrap_or("").is_empty());
     assert_eq!(item["path"], "/field-test.txt");
     assert_eq!(item["obj_name"], "field-test.txt");
     assert_eq!(item["is_dir"], false);
     assert!(
-        item["mtime"].as_str().unwrap_or("").len() > 0,
+        !item["mtime"].as_str().unwrap_or("").is_empty(),
         "mtime should be a non-empty ISO string"
     );
     assert_eq!(item["deleted"], false);
     assert_eq!(item["user_email"], f.email);
-    assert!(item["user_name"].as_str().unwrap_or("").len() > 0);
+    assert!(!item["user_name"].as_str().unwrap_or("").is_empty());
     assert_eq!(item["repo_encrypted"], false);
 }
 

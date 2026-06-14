@@ -233,7 +233,7 @@ pub fn extract_key_from_magic(magic: &str, enc_version: i32) -> Option<Vec<u8>> 
             }
             hex::decode(magic).ok()
         }
-        2 | 3 | 4 => {
+        2..=4 => {
             if magic.len() != 64 {
                 return None;
             }

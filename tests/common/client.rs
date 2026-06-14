@@ -1138,7 +1138,7 @@ impl TestClient {
         token: &str,
         src_repo: &str,
         path: &str,
-        dst_repo: &str,
+        _dst_repo: &str,
         dst_dir: &str,
     ) -> reqwest::Response {
         self.post_json(

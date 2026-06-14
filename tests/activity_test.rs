@@ -90,7 +90,7 @@ async fn test_activity_after_file_create() {
         "time should be ISO 8601"
     );
     assert!(
-        ev["commit_id"].as_str().unwrap_or("").len() > 0,
+        !ev["commit_id"].as_str().unwrap_or("").is_empty(),
         "commit_id should not be empty"
     );
 }
@@ -372,8 +372,8 @@ async fn test_activity_response_fields() {
     assert_eq!(ev["op_type"], "create");
     assert_eq!(ev["obj_type"], "file");
     assert_eq!(ev["repo_id"], f.repo_id);
-    assert!(ev["repo_name"].as_str().unwrap_or("").len() > 0);
-    assert!(ev["commit_id"].as_str().unwrap_or("").len() > 0);
+    assert!(!ev["repo_name"].as_str().unwrap_or("").is_empty());
+    assert!(!ev["commit_id"].as_str().unwrap_or("").is_empty());
     assert_eq!(ev["path"], "/fields-test.txt");
     assert_eq!(ev["name"], "fields-test.txt");
     assert_eq!(ev["author_email"], f.email);
