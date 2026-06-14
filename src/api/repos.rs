@@ -53,6 +53,11 @@ pub struct RepoInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub random_key: Option<String>,
     pub repo_version: i32,
+    /// Indicates whether the user needs to decrypt this encrypted repo.
+    /// Only present when the repo is encrypted. Matches seahub's
+    /// `lib_need_decrypt` field in `api2/views.py::RepoView`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lib_need_decrypt: Option<bool>,
     /// Extra fields set only in create-repo responses.
     /// The Qt client parses POST /api2/repos/ response as RepoDownloadInfo,
     /// which expects repo_id, repo_name, token, email fields.
@@ -89,7 +94,7 @@ pub fn repo_routes() -> Router<Arc<AppState>> {
         .route(
             "/{repo_id}/",
             axum::routing::get(get_repo)
-                .post(rename_repo)
+                .post(repo_post_handler)
                 .delete(delete_repo),
         )
         .route(
@@ -156,6 +161,7 @@ pub async fn list_repos(
                     None
                 },
                 repo_version: r.repo_version,
+                lib_need_decrypt: None,
                 repo_id_dup: None,
                 repo_name_dup: None,
                 token: None,
@@ -286,6 +292,7 @@ pub async fn create_repo(
             magic: if encrypted { magic } else { None },
             random_key: if encrypted { random_key } else { None },
             repo_version: 1,
+            lib_need_decrypt: None,
             // Extra fields for RepoDownloadInfo compatibility
             repo_id_dup: Some(repo_id),
             repo_name_dup: Some(repo_req.name.clone()),
@@ -371,6 +378,7 @@ pub async fn get_repo(
         magic,
         random_key,
         repo_version: r.repo_version,
+        lib_need_decrypt: None,
         repo_id_dup: None,
         repo_name_dup: None,
         token: None,
@@ -432,6 +440,154 @@ pub async fn rename_repo(
     // Android client's SupportResponseConverter can parse it as String.
     // Json("success".to_string()) serializes as the JSON string "success".
     Ok(Json(serde_json::Value::String("success".to_string())))
+}
+
+/// `POST /api2/repos/{repo_id}/`
+///
+/// Dispatches to the appropriate handler based on the `op` query parameter.
+/// Supports: rename, setpassword, checkpassword.
+pub async fn repo_post_handler(
+    auth: AuthUser,
+    state: State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    req: axum::http::Request<Body>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    match params.get("op").map(|s| s.as_str()) {
+        Some("rename") => rename_repo(auth, state, Path(repo_id), Query(params), req).await,
+        Some("setpassword") => set_repo_password_v2(auth, state, Path(repo_id), req).await,
+        Some("checkpassword") => check_repo_password_v2(auth, state, Path(repo_id), req).await,
+        _ => Err(AppError::BadRequest(
+            "invalid operation; use rename, setpassword, or checkpassword".into(),
+        )),
+    }
+}
+
+/// `POST /api2/repos/{repo_id}/?op=setpassword`
+///
+/// Set the password for an encrypted repo (v2 API).
+///
+/// Expects `password` field in form-urlencoded body (matching seahub's
+/// `api2/views.py:set_repo_password()` which sends `password` from a
+/// form-encoded POST).
+pub async fn set_repo_password_v2(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
+    req: axum::http::Request<Body>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_parts, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Parse password from form data (JSON, urlencoded, or multipart)
+    let password = parse_password_field(&bytes)?;
+
+    crate::api_v21::repo_set_password::set_repo_password_inner(
+        &state,
+        &repo_id,
+        auth.user_id,
+        &password,
+    )
+    .await?;
+
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+/// `POST /api2/repos/{repo_id}/?op=checkpassword`
+///
+/// Check if a password is valid for an encrypted repo (v2 API).
+///
+/// Expects `magic` field in form-urlencoded body (the client sends the
+/// pre-computed magic string, not the raw password). The server compares
+/// it against the stored magic.
+pub async fn check_repo_password_v2(
+    _auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
+    req: axum::http::Request<Body>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_parts, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Parse magic from form data
+    let magic = parse_magic_field(&bytes)?;
+
+    // Load the repo
+    let repo_model = repo::Entity::find_by_id(&repo_id)
+        .one(state.db.as_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    if repo_model.encrypted == 0 {
+        return Err(AppError::BadRequest("repo is not encrypted".into()));
+    }
+
+    let stored_magic = repo_model
+        .magic
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("repo has no stored magic".into()))?;
+
+    // Use constant-time comparison
+    use crate::crypto::verify::verify_magic;
+    if verify_magic(stored_magic, &magic) {
+        Ok(Json(serde_json::json!({"success": true})))
+    } else {
+        Err(AppError::RepoPasswdMagicRequired)
+    }
+}
+
+/// Extract the `password` field from a POST body (JSON, form-urlencoded, or
+/// multipart/form-data).
+fn parse_password_field(bytes: &[u8]) -> Result<String, AppError> {
+    // Try JSON body
+    if let Ok(map) = serde_json::from_slice::<HashMap<String, String>>(bytes)
+        && let Some(pw) = map.get("password")
+    {
+        return Ok(pw.clone());
+    }
+
+    // Try form-urlencoded body
+    if let Ok(map) = serde_urlencoded::from_bytes::<HashMap<String, String>>(bytes)
+        && let Some(pw) = map.get("password")
+    {
+        return Ok(pw.clone());
+    }
+
+    // Fallback: multipart/form-data scan
+    if let Some(pw) = extract_multipart_field(bytes, "password") {
+        return Ok(pw);
+    }
+
+    Err(AppError::BadRequest("password required".into()))
+}
+
+/// Extract the `magic` field from a POST body (JSON, form-urlencoded, or
+/// multipart/form-data).
+fn parse_magic_field(bytes: &[u8]) -> Result<String, AppError> {
+    // Try JSON body
+    if let Ok(map) = serde_json::from_slice::<HashMap<String, String>>(bytes)
+        && let Some(m) = map.get("magic")
+    {
+        return Ok(m.clone());
+    }
+
+    // Try form-urlencoded body
+    if let Ok(map) = serde_urlencoded::from_bytes::<HashMap<String, String>>(bytes)
+        && let Some(m) = map.get("magic")
+    {
+        return Ok(m.clone());
+    }
+
+    // Fallback: multipart/form-data scan
+    if let Some(m) = extract_multipart_field(bytes, "magic") {
+        return Ok(m);
+    }
+
+    Err(AppError::BadRequest("magic required".into()))
 }
 
 /// Extract a named field from a multipart/form-data body by scanning the
@@ -793,6 +949,7 @@ pub async fn get_default_repo(
                             None
                         },
                         repo_version: r.repo_version,
+                        lib_need_decrypt: None,
                         repo_id_dup: None,
                         repo_name_dup: None,
                         token: None,
@@ -857,6 +1014,7 @@ pub async fn create_default_repo(
                         None
                     },
                     repo_version: r.repo_version,
+                    lib_need_decrypt: None,
                     repo_id_dup: None,
                     repo_name_dup: None,
                     token: None,
@@ -940,6 +1098,7 @@ pub async fn create_default_repo(
             magic: None,
             random_key: None,
             repo_version: 1,
+            lib_need_decrypt: None,
             repo_id_dup: Some(repo_id),
             repo_name_dup: Some("我的资料库".to_string()),
             token: Some(token_value),

@@ -143,6 +143,7 @@ pub async fn get_thumbnail(
         &repo_id,
         &normalized_path,
         &state.block_store,
+        None,
     )
     .await
     .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;

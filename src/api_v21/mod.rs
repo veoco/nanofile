@@ -11,6 +11,7 @@ pub mod dir;
 pub mod file;
 pub mod links;
 pub mod metadata;
+pub mod repo_set_password;
 pub mod repos;
 pub mod smart_link;
 pub mod starred;
@@ -138,6 +139,11 @@ pub fn api_v21_routes() -> Router<Arc<AppState>> {
         )
         // Search file (v2.1)
         .route("/api/v2.1/search-file", get(crate::api::search::search))
+        // Set/change repo password for encrypted repos
+        .route(
+            "/api/v2.1/repos/{repo_id}/set-password/",
+            post(repo_set_password::set_password_v21).put(repo_set_password::change_password_v21),
+        )
         // Smart link
         .route("/api/v2.1/smart-link/", get(smart_link::get_smart_link))
         // Custom share permissions

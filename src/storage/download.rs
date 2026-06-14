@@ -1,5 +1,6 @@
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
+use crate::crypto::random_key::decrypt_block;
 use crate::entity::{commit, repo};
 use crate::serialization::fs_json::FsFileData;
 use crate::storage::DynBlockStorage;
@@ -12,12 +13,21 @@ impl Downloader {
         repo_id: &str,
         path: &str,
         block_store: &DynBlockStorage,
+        // Optional decryption key (key, iv) — when set, blocks are decrypted
+        // after reading. Used for encrypted repos during web download.
+        dec_key: Option<(&[u8], &[u8])>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let (file_data, block_ids) = Self::download_file_stream(db, repo_id, path).await?;
 
         let mut file_content = Vec::with_capacity(file_data.size as usize);
         for block_id in &block_ids {
             let block_data = block_store.read_block(block_id).await?;
+            // If decryption key is provided, decrypt the block.
+            let block_data = if let Some((key, _iv)) = dec_key {
+                decrypt_block(&block_data, key)?
+            } else {
+                block_data
+            };
             file_content.extend_from_slice(&block_data);
         }
 

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::auth::token::generate_share_link_token;
-use crate::entity::{share_link, upload_link};
+use crate::entity::{repo, share_link, upload_link};
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -51,6 +51,17 @@ pub async fn create_share_link_v21(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateLinkRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Block share links for encrypted repos
+    let repo_model = repo::Entity::find_by_id(&req.repo_id)
+        .one(state.db.as_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+    if repo_model.encrypted != 0 {
+        return Err(AppError::BadRequest(
+            "cannot create share link for encrypted library".into(),
+        ));
+    }
+
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
 

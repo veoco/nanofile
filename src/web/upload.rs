@@ -8,10 +8,41 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::activity_log;
+use crate::entity::repo;
 use crate::error::AppError;
 use crate::storage::file_ops::FileOps;
+use sea_orm::EntityTrait;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Get encryption key for an encrypted repo if the user has set a password.
+async fn get_encryption_key_for_repo(
+    state: &AppState,
+    repo_id: &str,
+    user_id: i32,
+) -> Result<Option<(Vec<u8>, Vec<u8>)>, AppError> {
+    let repo_model = repo::Entity::find_by_id(repo_id)
+        .one(state.db.as_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    if repo_model.encrypted == 0 {
+        return Ok(None);
+    }
+
+    if state
+        .password_manager
+        .is_password_set(repo_id, user_id)
+        .await
+    {
+        Ok(state
+            .password_manager
+            .get_decrypt_key(repo_id, user_id)
+            .await)
+    } else {
+        Err(AppError::RepoPasswdRequired)
+    }
+}
 
 /// Compute the actual target directory given the base `parent_dir` and an
 /// optional `relative_path` (e.g. `"myfolder/sub/"` from a folder upload).
@@ -41,6 +72,7 @@ async fn upload_and_build_response(
     modifier: &str,
     replace: bool,
     user_id: Option<i32>,
+    enc_key: Option<(&[u8], &[u8])>,
 ) -> Result<serde_json::Value, AppError> {
     // Get old file size for incremental repo size adjustment when overwriting.
     let old_size = if replace {
@@ -67,6 +99,7 @@ async fn upload_and_build_response(
         replace,
         &state.block_store,
         Some(state.path_cache.as_ref()),
+        enc_key,
     )
     .await
     .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
@@ -242,6 +275,7 @@ pub async fn upload_aj(
             "web",
             false,
             None,
+            None,
         )
         .await?;
         return Ok(Json(resp));
@@ -290,7 +324,7 @@ pub async fn update_api(
             .unwrap_or(&file_path);
 
         let resp = upload_and_build_response(
-            &state, &repo_id, parent, name, &file_data, "web", true, None,
+            &state, &repo_id, parent, name, &file_data, "web", true, None, None,
         )
         .await?;
         return Ok(Json(resp));
@@ -338,9 +372,10 @@ pub async fn update_aj(
             .map(|(_, n)| n)
             .unwrap_or(target_file);
 
-        let resp =
-            upload_and_build_response(&state, repo_id, parent, name, &file_data, "web", true, None)
-                .await?;
+        let resp = upload_and_build_response(
+            &state, repo_id, parent, name, &file_data, "web", true, None, None,
+        )
+        .await?;
         return Ok(Json(resp));
     }
 
@@ -407,6 +442,7 @@ pub async fn upload_aj_token(
             &info.username,
             true,
             uid,
+            None,
         )
         .await?;
         return Ok(Json(resp));
@@ -491,6 +527,7 @@ pub async fn upload_api(
             &info.username,
             true,
             uid,
+            None,
         )
         .await?;
         return Ok(Json(resp));
@@ -591,6 +628,7 @@ pub async fn update_api_handler(
                 true,
                 &state.block_store,
                 Some(state.path_cache.as_ref()),
+                None,
             )
             .await
             .map_err(|e| AppError::Internal(format!("update failed: {e}")))?;
@@ -641,6 +679,7 @@ pub async fn update_api_handler(
                 &info.username,
                 true,
                 uid,
+                None,
             )
             .await?;
             return Ok(Json(resp));
@@ -721,6 +760,7 @@ pub async fn update_aj_token(
             true,
             &state.block_store,
             Some(state.path_cache.as_ref()),
+            None,
         )
         .await
         .map_err(|e| AppError::Internal(format!("update failed: {e}")))?;

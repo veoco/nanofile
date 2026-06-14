@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{fs_object, share_link};
+use crate::entity::{fs_object, repo, share_link};
 use crate::error::AppError;
 use crate::serialization::fs_json::FsFileData;
 use crate::storage::download::Downloader;
@@ -29,6 +29,7 @@ pub async fn shared_file_download(
         &link.repo_id,
         &link.path,
         &state.block_store,
+        None, // shared links don't have auth — serve encrypted blocks as-is
     )
     .await
     .map_err(|_| AppError::NotFound("file not found".into()))?;
@@ -41,9 +42,43 @@ pub async fn shared_file_download(
         .into_response())
 }
 
+/// Helper: get decryption key for an encrypted repo if password is set.
+///
+/// Returns `None` if the repo is not encrypted, or `Some(Some((key, iv)))` if
+/// the password is cached, or `RepoPasswdRequired` error if the repo is
+/// encrypted but no password has been set.
+async fn get_decryption_key_for_repo(
+    state: &AppState,
+    repo_id: &str,
+    user_id: i32,
+) -> Result<Option<(Vec<u8>, Vec<u8>)>, AppError> {
+    let repo_model = repo::Entity::find_by_id(repo_id)
+        .one(state.db.as_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    if repo_model.encrypted == 0 {
+        return Ok(None); // Not encrypted, no key needed
+    }
+
+    if state
+        .password_manager
+        .is_password_set(repo_id, user_id)
+        .await
+    {
+        let key = state
+            .password_manager
+            .get_decrypt_key(repo_id, user_id)
+            .await;
+        Ok(key)
+    } else {
+        Err(AppError::RepoPasswdRequired)
+    }
+}
+
 /// GET /repos/{repo_id}/files/{*path} — direct file download with auth.
 pub async fn repo_file_download(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path((repo_id, path)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
@@ -53,10 +88,23 @@ pub async fn repo_file_download(
         format!("/{path}")
     };
 
-    let content =
-        Downloader::download_file(state.db.as_ref(), &repo_id, &normalized, &state.block_store)
-            .await
-            .map_err(|_| AppError::NotFound("file not found".into()))?;
+    // Check if repo is encrypted and if password is set
+    let dec_key = get_decryption_key_for_repo(&state, &repo_id, auth.user_id).await?;
+
+    let content = {
+        let dec_key_ref = dec_key
+            .as_ref()
+            .map(|(k, iv)| (k.as_slice(), iv.as_slice()));
+        Downloader::download_file(
+            state.db.as_ref(),
+            &repo_id,
+            &normalized,
+            &state.block_store,
+            dec_key_ref,
+        )
+        .await
+        .map_err(|_| AppError::NotFound("file not found".into()))?
+    };
 
     Ok((
         StatusCode::OK,
@@ -88,9 +136,21 @@ pub async fn download_api(
     let path = &info.parent_dir;
     let filename = info.file_name.as_deref().unwrap_or("download");
 
-    let content = Downloader::download_file(state.db.as_ref(), repo_id, path, &state.block_store)
-        .await
-        .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+    // Check if repo is encrypted and if password is set
+    let dec_key = get_decryption_key_for_repo(&state, repo_id, info.user_id).await?;
+    let dec_key_ref = dec_key
+        .as_ref()
+        .map(|(k, iv)| (k.as_slice(), iv.as_slice()));
+
+    let content = Downloader::download_file(
+        state.db.as_ref(),
+        repo_id,
+        path,
+        &state.block_store,
+        dec_key_ref,
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
 
     let content_len = content.len();
     let mut headers = HeaderMap::new();

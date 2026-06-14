@@ -27,6 +27,7 @@ use crate::api_v21::task_manager::TaskManager;
 use crate::auth::access_token::AccessTokenManager;
 use crate::auth::rate_limit::LoginRateLimiter;
 use crate::config::Config;
+use crate::crypto::password_manager::PasswordManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
 use crate::storage::DynBlockStorage;
@@ -59,6 +60,8 @@ pub struct AppState {
     /// Cancellation token for graceful shutdown.
     /// Triggered from main.rs after axum drains in-flight requests.
     pub shutdown_token: CancellationToken,
+    /// Password manager for encrypted repo key caching.
+    pub password_manager: Arc<PasswordManager>,
 }
 
 impl AppState {
@@ -133,6 +136,7 @@ impl AppState {
             login_rate_limiter,
             csrf_secret,
             shutdown_token,
+            password_manager: Arc::new(PasswordManager::new()),
         }
     }
 }

@@ -605,6 +605,7 @@ pub async fn upload_file(
             true,
             &state.block_store,
             Some(state.path_cache.as_ref()),
+            None,
         )
         .await
         .map_err(|e| AppError::internal(format!("upload failed: {e}")))?;
@@ -646,7 +647,7 @@ pub async fn download_file(
     verify_repo_access(db, user.user_id, &repo_id).await?;
 
     let path = normalize_path(&path);
-    let data = Downloader::download_file(db, &repo_id, &path, &state.block_store)
+    let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
         .await
         .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
 
@@ -1046,7 +1047,7 @@ pub async fn preview_file(
 
     if is_text {
         // Text file preview
-        let data = Downloader::download_file(db, &repo_id, &path, &state.block_store)
+        let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
             .await
             .map_err(|e| AppError::Internal(format!("read failed: {e}")))?;
 
@@ -1136,7 +1137,7 @@ pub async fn view_lib_file(
     verify_repo_access(db, user.user_id, &repo_id).await?;
 
     let path = normalize_path(&path);
-    let data = Downloader::download_file(db, &repo_id, &path, &state.block_store)
+    let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
         .await
         .map_err(|e| AppError::Internal(format!("read failed: {e}")))?;
 

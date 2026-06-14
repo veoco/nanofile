@@ -24,10 +24,9 @@ impl BlockStorage {
         &self,
         block_id: &str,
         file_key: &[u8],
-        file_iv: &[u8],
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let encrypted = self.read_block(block_id).await?;
-        let decrypted = decrypt_block(&encrypted, file_key, file_iv)?;
+        let decrypted = decrypt_block(&encrypted, file_key)?;
         Ok(decrypted)
     }
 
@@ -36,9 +35,8 @@ impl BlockStorage {
         &self,
         data: &[u8],
         file_key: &[u8],
-        file_iv: &[u8],
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let encrypted = encrypt_block(data, file_key, file_iv);
+        let encrypted = encrypt_block(data, file_key);
         let block_id = self.write_block(&encrypted).await?;
         Ok(block_id)
     }

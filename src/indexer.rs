@@ -243,6 +243,7 @@ impl TextIndexer {
             repo_id,
             fullpath,
             block_store,
+            None,
         )
         .await
         {

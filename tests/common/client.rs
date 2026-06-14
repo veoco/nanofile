@@ -1148,4 +1148,117 @@ impl TestClient {
         )
         .await
     }
+
+    // ========== Encrypted Repo Operations ==========
+
+    /// POST /api2/repos/ with client-side encryption params.
+    pub async fn create_encrypted_repo(
+        &self,
+        token: &str,
+        name: &str,
+        repo_id: &str,
+        magic: &str,
+        random_key: &str,
+        enc_version: i32,
+    ) -> reqwest::Response {
+        self.client
+            .post(format!("{}/api2/repos/", self.base_url))
+            .bearer_auth(token)
+            .form(&[
+                ("name", name),
+                ("repo_id", repo_id),
+                ("encrypted", "1"),
+                ("enc_version", &enc_version.to_string()),
+                ("magic", magic),
+                ("random_key", random_key),
+            ])
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// POST /api2/repos/ with server-side password (enc_version 2).
+    pub async fn create_encrypted_repo_with_password(
+        &self,
+        token: &str,
+        name: &str,
+        password: &str,
+    ) -> reqwest::Response {
+        self.client
+            .post(format!("{}/api2/repos/", self.base_url))
+            .bearer_auth(token)
+            .form(&serde_json::json!({
+                "name": name,
+                "encrypted": 1,
+                "enc_version": 2,
+                "password": password,
+            }))
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// POST /api/v2.1/repos/{repo_id}/set-password/ with JSON body.
+    pub async fn set_repo_password_v21(
+        &self,
+        token: &str,
+        repo_id: &str,
+        password: &str,
+    ) -> reqwest::Response {
+        self.post_json(
+            &format!("/api/v2.1/repos/{repo_id}/set-password/"),
+            Some(token),
+            &serde_json::json!({"password": password}),
+        )
+        .await
+    }
+
+    /// POST /api2/repos/{repo_id}/?op=setpassword with form body.
+    pub async fn set_repo_password_v2(
+        &self,
+        token: &str,
+        repo_id: &str,
+        password: &str,
+    ) -> reqwest::Response {
+        self.post_form(
+            &format!("/api2/repos/{repo_id}/?op=setpassword"),
+            Some(token),
+            &[("password", password)],
+        )
+        .await
+    }
+
+    /// POST /api2/repos/{repo_id}/?op=checkpassword with magic form field.
+    pub async fn check_repo_password_v2(
+        &self,
+        token: &str,
+        repo_id: &str,
+        magic: &str,
+    ) -> reqwest::Response {
+        self.post_form(
+            &format!("/api2/repos/{repo_id}/?op=checkpassword"),
+            Some(token),
+            &[("magic", magic)],
+        )
+        .await
+    }
+
+    /// PUT /api/v2.1/repos/{repo_id}/set-password/?operation=change-password
+    pub async fn change_repo_password(
+        &self,
+        token: &str,
+        repo_id: &str,
+        old_password: &str,
+        new_password: &str,
+    ) -> reqwest::Response {
+        self.put_json(
+            &format!("/api/v2.1/repos/{repo_id}/set-password/?operation=change-password"),
+            Some(token),
+            &serde_json::json!({
+                "old_password": old_password,
+                "new_password": new_password,
+            }),
+        )
+        .await
+    }
 }

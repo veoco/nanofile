@@ -1,3 +1,4 @@
+use crate::crypto::random_key::encrypt_block;
 use crate::entity::{commit, repo};
 use crate::notification::events_channel;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
@@ -19,6 +20,9 @@ impl FileOps {
         replace: bool,
         block_store: &DynBlockStorage,
         path_cache: Option<&PathCache>,
+        // Optional encryption key (key, iv) — when set, blocks are encrypted
+        // before writing. Used for encrypted repos during web upload.
+        enc_key: Option<(&[u8], &[u8])>,
     ) -> Result<String, Box<dyn std::error::Error>> {
         let now = chrono::Utc::now().timestamp();
 
@@ -29,7 +33,14 @@ impl FileOps {
 
         for (offset, size) in &file_chunks {
             let chunk_data = &data[*offset..*offset + size];
-            let block_id = block_store.write_block(chunk_data).await?;
+            // If encryption key is provided, encrypt the chunk before writing.
+            // Seafile encrypts each block individually with a per-block random IV.
+            let chunk_to_write = if let Some((key, _iv)) = enc_key {
+                encrypt_block(chunk_data, key)
+            } else {
+                chunk_data.to_vec()
+            };
+            let block_id = block_store.write_block(&chunk_to_write).await?;
             block_ids.push(block_id);
             total_size += *size as i64;
         }

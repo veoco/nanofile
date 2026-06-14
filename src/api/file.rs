@@ -455,6 +455,7 @@ async fn upload_file_inner(
         replace,
         &state.block_store,
         Some(state.path_cache.as_ref()),
+        None,
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
