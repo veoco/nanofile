@@ -33,6 +33,7 @@ pub struct FileBrowserTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub user_email: String,
     pub is_admin: bool,
+    pub session_token: String,
     pub repo_id: String,
     pub repo_name: String,
     pub current_path: String,
@@ -50,6 +51,7 @@ pub struct FileBrowserCoreTemplate {
     pub current_path: String,
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub entries: Vec<FileEntry>,
+    pub session_token: String,
 }
 
 #[derive(Template)]
@@ -400,6 +402,7 @@ async fn file_browser_inner(
             current_path: path.clone(),
             breadcrumbs: breadcrumbs.clone(),
             entries,
+            session_token: user.session_token.clone(),
         };
         let html = tpl
             .render()
@@ -410,6 +413,7 @@ async fn file_browser_inner(
             urls: crate::static_assets::template_urls(),
             user_email: user.email,
             is_admin: user.is_admin,
+            session_token: user.session_token.clone(),
             repo_id,
             repo_name: repo_record.name,
             current_path: path,

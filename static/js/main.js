@@ -98,12 +98,9 @@
   }
   // Star file/directory toggle (global, called from onclick in file_list.html)
   window.toggleStar = async function (repoId, path, currentlyStarred, btn) {
-    // Read session token from cookie
-    function getCookie(name) {
-      const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
-      return match ? match[2] : "";
-    }
-    const token = getCookie("seahub-session");
+    // Read session token from the hidden element injected during server-side render
+    const tokenEl = document.getElementById("session-token-data");
+    const token = tokenEl ? tokenEl.dataset.token : "";
     if (!token) {
       window.location.href = "/accounts/login/";
       return;

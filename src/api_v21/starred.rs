@@ -182,11 +182,7 @@ pub async fn star_item(
             .ok_or_else(|| AppError::NotFound(format!("Item {} not found.", req.path)))?;
 
         let is_dir_flag = dirent.mode & S_IFDIR != 0;
-        let normalized = if is_dir_flag {
-            format!("{}/", path)
-        } else {
-            path.to_string()
-        };
+        let normalized = path.trim_end_matches('/').to_string();
 
         (normalized, is_dir_flag)
     };
