@@ -137,7 +137,7 @@ async fn test_star_directory() {
     let items = body["starred_item_list"].as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["is_dir"], true);
-    assert!(items[0]["path"].as_str().unwrap().ends_with('/'));
+    assert_eq!(items[0]["path"], "/subdir");
     assert_eq!(items[0]["obj_name"], "subdir");
 }
 

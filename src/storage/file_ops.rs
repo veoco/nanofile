@@ -19,7 +19,7 @@ impl FileOps {
         modifier: &str,
         replace: bool,
         block_store: &DynBlockStorage,
-        path_cache: Option<&PathCache>,
+        _path_cache: Option<&PathCache>,
         // Optional encryption key (key, iv) — when set, blocks are encrypted
         // before writing. Used for encrypted repos during web upload.
         enc_key: Option<(&[u8], &[u8])>,
@@ -53,7 +53,9 @@ impl FileOps {
         };
         let file_fs_id = file_fs_data.compute_and_store(db, repo_id).await?;
 
-        let parent_fs_id = if parent_path == "/" {
+        // Resolve the parent directory and build an ancestor chain for
+        // walk_up_ancestors to avoid O(d²) re-resolution.
+        let (parent_fs_id, ancestor_chain) = if parent_path == "/" {
             // Find root via repo head commit, or create empty root fs_object for empty repo
             let repo_model = repo::Entity::find_by_id(repo_id).one(db).await?;
             if let Some(commit_id) = repo_model.as_ref().and_then(|r| r.head_commit_id.clone()) {
@@ -62,17 +64,17 @@ impl FileOps {
                     .one(db)
                     .await?
                     .ok_or_else(|| Box::<dyn std::error::Error>::from("head commit not found"))?;
-                commit_ent.root_id
+                (commit_ent.root_id, Vec::new())
             } else {
                 let empty_dir = FsDirData {
                     dirents: vec![],
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                empty_dir.compute_and_store(db, repo_id).await?
+                (empty_dir.compute_and_store(db, repo_id).await?, Vec::new())
             }
         } else {
-            Self::resolve_fs_id(db, repo_id, parent_path).await?
+            Self::resolve_fs_id_chain(db, repo_id, parent_path).await?
         };
 
         let parent_data = Self::read_dir_fs_object(db, repo_id, &parent_fs_id).await?;
@@ -104,7 +106,14 @@ impl FileOps {
         let root_fs_id = if parent_path == "/" {
             new_dir_fs_id.clone()
         } else {
-            Self::walk_up_ancestors(db, repo_id, parent_path, &new_dir_fs_id).await?
+            Self::walk_up_ancestors(
+                db,
+                repo_id,
+                parent_path,
+                &new_dir_fs_id,
+                Some(&ancestor_chain),
+            )
+            .await?
         };
 
         let repo_model = repo::Entity::find_by_id(repo_id).one(db).await?;
@@ -150,10 +159,6 @@ impl FileOps {
         repo_active.updated_at = sea_orm::Set(now);
         repo_active.update(db).await?;
 
-        if let Some(cache) = path_cache {
-            cache.clear_repo(repo_id);
-        }
-
         // Fire repo-update notification through the global broadcast channel.
         // Without this, the Seafile client won't know about the new file until
         // its next poll cycle, causing a noticeable sync delay.
@@ -165,14 +170,30 @@ impl FileOps {
     /// Walk up the directory tree from immediate_parent_path to root,
     /// updating each ancestor's FsDirData to reference the new child fs_id.
     /// Returns the new root fs_id.
+    ///
+    /// `ancestor_chain` is an optional list of `(path, fs_id)` pairs for
+    /// intermediate directories, ordered from root down to
+    /// `immediate_parent_path`'s parent. When provided, `resolve_fs_id` is
+    /// avoided for each level, reducing O(d²) resolve to O(d).
     pub(crate) async fn walk_up_ancestors(
         db: &DatabaseConnection,
         repo_id: &str,
         immediate_parent_path: &str,
         new_immediate_parent_fs_id: &str,
+        ancestor_chain: Option<&[(String, String)]>,
     ) -> Result<String, Box<dyn std::error::Error>> {
         let mut current_child_fs_id = new_immediate_parent_fs_id.to_string();
         let mut current_child_path = immediate_parent_path.to_string();
+
+        // Build an index of ancestor_chain for O(log n) lookups if provided.
+        // (Insertion order is preserved for iteration; a HashMap would lose it.)
+        let chain_idx: Option<std::collections::HashMap<&str, &str>> =
+            ancestor_chain.map(|chain| {
+                chain
+                    .iter()
+                    .map(|(p, id)| (p.as_str(), id.as_str()))
+                    .collect()
+            });
 
         loop {
             // Split into parent path and child name
@@ -185,9 +206,16 @@ impl FileOps {
                 }
             };
 
-            // Find the ancestor's current fs_id by resolving via the FS tree
+            // Find the ancestor's current fs_id.
+            // When ancestor_chain is provided, look up the parent_path
+            // from the chain instead of re-resolving from root.
             let ancestor_fs_id = if parent_path == "/" {
                 Self::resolve_root_fs_id(db, repo_id).await?
+            } else if let Some(ref idx) = chain_idx {
+                match idx.get(parent_path.as_str()) {
+                    Some(id) => id.to_string(),
+                    None => Self::resolve_fs_id(db, repo_id, &parent_path).await?,
+                }
             } else {
                 Self::resolve_fs_id(db, repo_id, &parent_path).await?
             };
@@ -280,6 +308,46 @@ impl FileOps {
         Ok(current_fs_id)
     }
 
+    /// Resolve a path to its fs_id, also returning the fs_id of every
+    /// intermediate directory from root down to the last component.
+    ///
+    /// The returned vector is ordered from root outward, e.g. for path
+    /// `"/a/b/c"`: `[("/a", fs_a), ("/a/b", fs_b), ("/a/b/c", fs_c)]`.
+    ///
+    /// This can be passed to `walk_up_ancestors` to avoid re-resolving
+    /// each ancestor from root, reducing O(d²) to O(d).
+    async fn resolve_fs_id_chain(
+        db: &DatabaseConnection,
+        repo_id: &str,
+        path: &str,
+    ) -> Result<(String, Vec<(String, String)>), Box<dyn std::error::Error>> {
+        let root_fs_id = Self::resolve_root_fs_id(db, repo_id).await?;
+        if path == "/" || path.is_empty() {
+            return Ok((root_fs_id, Vec::new()));
+        }
+
+        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+        let mut current_fs_id = root_fs_id;
+        let mut chain = Vec::with_capacity(parts.len());
+        let mut accumulated = String::new();
+
+        for part in &parts {
+            accumulated.push('/');
+            accumulated.push_str(part);
+
+            let dir_data = Self::read_dir_fs_object(db, repo_id, &current_fs_id).await?;
+            let found = dir_data
+                .dirents
+                .iter()
+                .find(|e| e.name == *part)
+                .ok_or_else(|| format!("path component '{}' not found in '{}'", part, path))?;
+            current_fs_id = found.id.clone();
+            chain.push((accumulated.clone(), current_fs_id.clone()));
+        }
+
+        Ok((current_fs_id, chain))
+    }
+
     /// Apply a transformation to a parent directory's FsDirData entries,
     /// update the FS tree (walk up ancestors to root), create a new commit,
     /// and update the repo HEAD.
@@ -298,7 +366,7 @@ impl FileOps {
         parent_fs_id: &str,
         modifier: &str,
         description: &str,
-        path_cache: Option<&PathCache>,
+        _path_cache: Option<&PathCache>,
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), Box<dyn std::error::Error>>,
     ) -> Result<String, Box<dyn std::error::Error>> {
         let mut parent_data = Self::read_dir_fs_object(db, repo_id, parent_fs_id).await?;
@@ -309,10 +377,10 @@ impl FileOps {
         let root_fs_id = if parent_path == "/" {
             new_parent_fs_id.clone()
         } else {
-            Self::walk_up_ancestors(db, repo_id, parent_path, &new_parent_fs_id).await?
+            Self::walk_up_ancestors(db, repo_id, parent_path, &new_parent_fs_id, None).await?
         };
 
-        Self::create_commit(db, repo_id, &root_fs_id, modifier, description, path_cache).await?;
+        Self::create_commit(db, repo_id, &root_fs_id, modifier, description, _path_cache).await?;
 
         Ok(root_fs_id)
     }
@@ -328,7 +396,7 @@ impl FileOps {
         repo_id: &str,
         parent_path: &str,
         parent_fs_id: &str,
-        path_cache: Option<&PathCache>,
+        _path_cache: Option<&PathCache>,
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), Box<dyn std::error::Error>>,
     ) -> Result<String, Box<dyn std::error::Error>> {
         let mut parent_data = Self::read_dir_fs_object(db, repo_id, parent_fs_id).await?;
@@ -339,12 +407,8 @@ impl FileOps {
         let root_fs_id = if parent_path == "/" {
             new_parent_fs_id.clone()
         } else {
-            Self::walk_up_ancestors(db, repo_id, parent_path, &new_parent_fs_id).await?
+            Self::walk_up_ancestors(db, repo_id, parent_path, &new_parent_fs_id, None).await?
         };
-
-        if let Some(cache) = path_cache {
-            cache.clear_repo(repo_id);
-        }
 
         Ok(root_fs_id)
     }
@@ -356,7 +420,7 @@ impl FileOps {
         root_fs_id: &str,
         creator_name: &str,
         description: &str,
-        path_cache: Option<&PathCache>,
+        _path_cache: Option<&PathCache>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let now = chrono::Utc::now().timestamp();
 
@@ -403,10 +467,6 @@ impl FileOps {
         repo_active.head_commit_id = sea_orm::Set(Some(commit_id));
         repo_active.updated_at = sea_orm::Set(now);
         repo_active.update(db).await?;
-
-        if let Some(cache) = path_cache {
-            cache.clear_repo(repo_id);
-        }
 
         // Fire repo-update notification through the global broadcast channel.
         events_channel::publish_repo_update(repo_id, commit_id_clone);

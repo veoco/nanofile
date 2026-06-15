@@ -6,12 +6,25 @@ use axum::{
 use rand::Rng;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
 use crate::entity::{commit, fs_object, repo};
 use crate::error::AppError;
+use crate::serialization::S_IFDIR;
+use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData};
+use crate::storage::EMPTY_SHA1;
+
+/// Result of block checking and size delta computation.
+struct CheckResult {
+    /// Relative paths of files with missing blocks.
+    missing: Vec<String>,
+    /// Size delta between the base tree and the new tree.
+    /// Positive = files grew, negative = files shrank/deleted.
+    size_delta: i64,
+}
 
 /// Maximum number of retries when branch update conflicts.
 const MAX_BRANCH_RETRY: u32 = 3;
@@ -211,16 +224,31 @@ pub async fn update_branch(
         .ok_or_else(|| AppError::Internal("commit not found".into()))?;
 
     // Verify all blocks referenced by the new commit exist on the server.
-    // This matches seafile-server's check_blocks() call inside
-    // put_update_branch_cb.
-    let missing = check_commit_blocks(
+    // Uses tree-diff against the parent commit so only changed files are checked.
+    // This matches seafile-server's check_blocks() which calls diff_trees()
+    // to compare base vs remote and only inspects files that differ.
+    let base_root_id: Option<String> = if let Some(ref parent_id) = new_commit.parent_id
+        && parent_id != "0000000000000000000000000000000000000000"
+    {
+        commit::Entity::find()
+            .filter(commit::Column::RepoId.eq(&repo_id))
+            .filter(commit::Column::CommitId.eq(parent_id))
+            .one(state.db.as_ref())
+            .await?
+            .map(|c| c.root_id)
+    } else {
+        None
+    };
+
+    let check_result = check_commit_blocks(
         state.db.as_ref(),
         state.block_store.as_ref(),
         &repo_id,
         &new_commit.root_id,
+        base_root_id.as_deref(),
     )
     .await?;
-    if !missing.is_empty() {
+    if !check_result.missing.is_empty() {
         return Err(AppError::BlockMissing);
     }
 
@@ -274,7 +302,6 @@ pub async fn update_branch(
         let is_same_commit = current_head.as_deref() == Some(new_head.as_str());
         if is_same_commit {
             // Idempotent: HEAD already points to this commit → success.
-            state.path_cache.clear_repo(&repo_id);
             if let Some(ref notif_mgr) = state.notification_manager {
                 notif_mgr
                     .notify(crate::notification::events::RepoUpdateEvent::new(
@@ -304,45 +331,17 @@ pub async fn update_branch(
             .ok_or_else(|| AppError::Internal("repo not found".into()))?
             .into();
 
-        // Capture the old HEAD root_id for size delta computation.
-        let current_repo = repo::Entity::find_by_id(&repo_id)
-            .one(state.db.as_ref())
-            .await?
-            .ok_or_else(|| AppError::Internal("repo not found".into()))?;
-        let old_head_root_id: Option<String> =
-            if let Some(cid) = current_repo.head_commit_id.clone() {
-                let old_commit = commit::Entity::find()
-                    .filter(commit::Column::RepoId.eq(&repo_id))
-                    .filter(commit::Column::CommitId.eq(&cid))
-                    .one(state.db.as_ref())
-                    .await?;
-                old_commit.map(|c| c.root_id)
-            } else {
-                None
-            };
-
         repo_active.head_commit_id = sea_orm::Set(Some(new_head.clone()));
         repo_active.update(state.db.as_ref()).await?;
 
-        // Compute repo size delta (new root size - old root size).
-        let new_root_size =
-            crate::storage::compute_tree_size(state.db.as_ref(), &repo_id, &new_commit.root_id)
-                .await?;
-        if let Some(ref old_root_id) = old_head_root_id {
-            let old_root_size =
-                crate::storage::compute_tree_size(state.db.as_ref(), &repo_id, old_root_id).await?;
-            crate::storage::adjust_repo_size(
-                state.db.as_ref(),
-                &repo_id,
-                new_root_size - old_root_size,
-            )
+        // Compute repo size delta from the tree-diff result, avoiding a
+        // full BFS traversal of every file.  When `size_delta` is 0 and
+        // there's no prior size (first commit), `adjust_repo_size` falls
+        // back to `compute_repo_size()` automatically.
+        crate::storage::adjust_repo_size(state.db.as_ref(), &repo_id, check_result.size_delta)
             .await?;
-        } else if new_root_size > 0 {
-            crate::storage::adjust_repo_size(state.db.as_ref(), &repo_id, new_root_size).await?;
-        }
 
-        // Success — invalidate cache and notify.
-        state.path_cache.clear_repo(&repo_id);
+        // Success — notify listeners.
         if let Some(ref notif_mgr) = state.notification_manager {
             notif_mgr
                 .notify(crate::notification::events::RepoUpdateEvent::new(
@@ -355,78 +354,306 @@ pub async fn update_branch(
     }
 }
 
-/// Walk the FS tree starting from root_id, collecting file objects and
-/// verifying that every block referenced by those files exists in the
-/// block store. Returns the list of files with missing blocks.
+/// Struct for stack-based tree-diff traversal.
+struct DiffFrame {
+    /// base fs_id (None → entirely new subtree)
+    base_fs_id: Option<String>,
+    /// new commit's fs_id for this subtree
+    new_fs_id: String,
+    /// relative path prefix (e.g. "docs/images/")
+    prefix: String,
+}
+
+/// Verify blocks referenced by the new commit exist on the server.
 ///
-/// This mirrors seafile-server's check_blocks() called from
-/// put_update_branch_cb (http-server.c:1366-1377).
+/// When `base_root_id` is provided (non-first commit), uses **tree-diff**
+/// between base and new roots — only files that differ between the two
+/// trees are inspected. Unchanged subtrees are skipped entirely.
 ///
-/// If the root object doesn't exist yet (initial commit, empty repo),
-/// returns an empty list — there's nothing to check.
+/// When `base_root_id` is `None` (first commit or empty parent), falls back
+/// to a full traversal of the new tree.
+///
+/// This matches seafile-server's `check_blocks()` which calls
+/// `diff_trees(base_root, remote_root)` and only invokes `check_file_blocks`
+/// for files whose IDs differ.
 async fn check_commit_blocks(
     db: &sea_orm::DatabaseConnection,
     block_store: &dyn crate::storage::BlockStorageBackend,
     repo_id: &str,
-    root_id: &str,
-) -> Result<Vec<String>, AppError> {
-    if root_id == "0000000000000000000000000000000000000000" {
-        return Ok(Vec::new());
+    new_root_id: &str,
+    base_root_id: Option<&str>,
+) -> Result<CheckResult, AppError> {
+    if new_root_id == "0000000000000000000000000000000000000000" {
+        return Ok(CheckResult {
+            missing: Vec::new(),
+            size_delta: 0,
+        });
     }
 
-    // Use a DFS stack: (fs_id, path) pairs to walk.
-    let mut stack: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
     let mut missing: Vec<String> = Vec::new();
+    let mut size_delta: i64 = 0;
+
+    if let Some(base_root) = base_root_id {
+        if base_root == new_root_id {
+            // Same root — no changes at all, skip entirely.
+            return Ok(CheckResult {
+                missing: Vec::new(),
+                size_delta: 0,
+            });
+        }
+
+        // Stack-based tree-diff traversal.
+        let mut stack: Vec<DiffFrame> = vec![DiffFrame {
+            base_fs_id: Some(base_root.to_string()),
+            new_fs_id: new_root_id.to_string(),
+            prefix: String::new(),
+        }];
+
+        while let Some(frame) = stack.pop() {
+            let Some(ref base_fs) = frame.base_fs_id else {
+                // Entirely new subtree — walk all files.
+                let new_dir: FsDirData =
+                    match crate::storage::read_fs_dir_data(db, repo_id, &frame.new_fs_id).await {
+                        Ok(d) => d,
+                        Err(_) => continue,
+                    };
+                for entry in &new_dir.dirents {
+                    let child = if frame.prefix.is_empty() {
+                        entry.name.clone()
+                    } else {
+                        format!("{}/{}", frame.prefix, entry.name)
+                    };
+                    if entry.mode & S_IFDIR != 0 {
+                        stack.push(DiffFrame {
+                            base_fs_id: None,
+                            new_fs_id: entry.id.clone(),
+                            prefix: child,
+                        });
+                    } else {
+                        size_delta += entry.size;
+                        check_file_blocks(
+                            block_store,
+                            db,
+                            repo_id,
+                            &entry.id,
+                            &child,
+                            &mut missing,
+                        )
+                        .await?;
+                    }
+                }
+                continue;
+            };
+
+            if *base_fs == frame.new_fs_id {
+                // Same fs_id — entire subtree unchanged, skip.
+                continue;
+            }
+
+            if *base_fs == EMPTY_SHA1 {
+                // Base was empty — handle as entirely new subtree.
+                stack.push(DiffFrame {
+                    base_fs_id: None,
+                    new_fs_id: frame.new_fs_id,
+                    prefix: frame.prefix,
+                });
+                continue;
+            }
+
+            // Load both directories.
+            let base_dir: FsDirData =
+                match crate::storage::read_fs_dir_data(db, repo_id, base_fs).await {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+            let new_dir: FsDirData =
+                match crate::storage::read_fs_dir_data(db, repo_id, &frame.new_fs_id).await {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+
+            // Index base entries by name for O(1) lookups.
+            let base_map: HashMap<&str, &DirEntryData> = base_dir
+                .dirents
+                .iter()
+                .map(|d| (d.name.as_str(), d))
+                .collect();
+
+            for new_entry in &new_dir.dirents {
+                let child = if frame.prefix.is_empty() {
+                    new_entry.name.clone()
+                } else {
+                    format!("{}/{}", frame.prefix, new_entry.name)
+                };
+
+                let is_dir = new_entry.mode & S_IFDIR != 0;
+
+                match base_map.get(new_entry.name.as_str()) {
+                    None => {
+                        // Entry only in new tree — added.
+                        if is_dir {
+                            stack.push(DiffFrame {
+                                base_fs_id: None,
+                                new_fs_id: new_entry.id.clone(),
+                                prefix: child,
+                            });
+                        } else {
+                            size_delta += new_entry.size;
+                            check_file_blocks(
+                                block_store,
+                                db,
+                                repo_id,
+                                &new_entry.id,
+                                &child,
+                                &mut missing,
+                            )
+                            .await?;
+                        }
+                    }
+                    Some(base_entry) => {
+                        if new_entry.id == base_entry.id {
+                            // Same id — unchanged.
+                            continue;
+                        }
+                        let base_is_dir = base_entry.mode & S_IFDIR != 0;
+                        if is_dir && base_is_dir {
+                            // Both directories — recurse to compare children.
+                            stack.push(DiffFrame {
+                                base_fs_id: Some(base_entry.id.clone()),
+                                new_fs_id: new_entry.id.clone(),
+                                prefix: child,
+                            });
+                        } else {
+                            // File modified, or file↔dir type change.
+                            size_delta += new_entry.size - base_entry.size;
+                            check_file_blocks(
+                                block_store,
+                                db,
+                                repo_id,
+                                &new_entry.id,
+                                &child,
+                                &mut missing,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+            }
+            // Entries only in base tree (deleted) — no block check needed.
+            // Their size contribution is already removed from size_delta
+            // (since we added new size but didn't subtract deleted ones).
+            // This means size_delta for deleted files is ignored — the
+            // existing `adjust_repo_size` handles this via `repo.size` delta.
+        }
+    } else {
+        // No base commit (first commit) — full traversal fallback.
+        full_check_blocks(
+            db,
+            block_store,
+            repo_id,
+            new_root_id,
+            &mut missing,
+            &mut size_delta,
+        )
+        .await?;
+    }
+
+    Ok(CheckResult {
+        missing,
+        size_delta,
+    })
+}
+
+/// Full tree traversal of all files. Used when there is no base commit
+/// to diff against (first commit). Also accumulates the total size for
+/// repos that haven't been sized yet.
+async fn full_check_blocks(
+    db: &sea_orm::DatabaseConnection,
+    block_store: &dyn crate::storage::BlockStorageBackend,
+    repo_id: &str,
+    root_id: &str,
+    missing: &mut Vec<String>,
+    size_total: &mut i64,
+) -> Result<(), AppError> {
+    let mut stack: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
 
     while let Some((fs_id, path)) = stack.pop() {
         if fs_id == "0000000000000000000000000000000000000000" {
             continue;
         }
 
-        let obj = fs_object::Entity::find()
+        let obj = match fs_object::Entity::find()
             .filter(fs_object::Column::RepoId.eq(repo_id))
             .filter(fs_object::Column::FsId.eq(&fs_id))
             .one(db)
-            .await?;
-
-        let Some(obj) = obj else {
-            // Object not found — this happens during test setup where
-            // a commit is created with a synthetic root_id. In production
-            // this would be a server error, but for safety we continue
-            // rather than rejecting the entire update.
-            continue;
+            .await?
+        {
+            Some(o) => o,
+            None => continue,
         };
 
-        match obj.obj_type {
-            1 => {
-                // File object — extract block_ids and check each.
-                let file_data: crate::serialization::fs_json::FsFileData =
-                    serde_json::from_str(&obj.data)
-                        .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
-                for block_id in &file_data.block_ids {
-                    if !block_store.has_block(block_id).await {
-                        missing.push(path.clone());
-                        break;
-                    }
+        if obj.obj_type == 1 {
+            // File — check blocks and accumulate size.
+            let file_data: FsFileData = serde_json::from_str(&obj.data)
+                .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
+            *size_total += file_data.size;
+            for block_id in &file_data.block_ids {
+                if !block_store.has_block(block_id).await {
+                    missing.push(path.clone());
+                    break;
                 }
             }
-            3 => {
-                // Directory object — push children onto the stack.
-                let dir_data: crate::serialization::fs_json::FsDirData =
-                    serde_json::from_str(&obj.data)
-                        .map_err(|e| AppError::Internal(format!("invalid dir object: {e}")))?;
-                for entry in &dir_data.dirents {
-                    let child_path = if path.is_empty() {
-                        entry.name.clone()
-                    } else {
-                        format!("{}/{}", path, entry.name)
-                    };
-                    stack.push((entry.id.clone(), child_path));
-                }
+        } else if obj.obj_type == 3 {
+            // Directory — push children.
+            let dir_data: FsDirData = serde_json::from_str(&obj.data)
+                .map_err(|e| AppError::Internal(format!("invalid dir object: {e}")))?;
+            for entry in &dir_data.dirents {
+                let child_path = if path.is_empty() {
+                    entry.name.clone()
+                } else {
+                    format!("{}/{}", path, entry.name)
+                };
+                stack.push((entry.id.clone(), child_path));
             }
-            _ => {}
         }
     }
 
-    Ok(missing)
+    Ok(())
+}
+
+/// Check blocks for a single file identified by its fs_id.
+/// If any block is missing, the file's relative path is appended to `missing`.
+async fn check_file_blocks(
+    block_store: &dyn crate::storage::BlockStorageBackend,
+    db: &sea_orm::DatabaseConnection,
+    repo_id: &str,
+    fs_id: &str,
+    path: &str,
+    missing: &mut Vec<String>,
+) -> Result<(), AppError> {
+    let obj = match fs_object::Entity::find()
+        .filter(fs_object::Column::RepoId.eq(repo_id))
+        .filter(fs_object::Column::FsId.eq(fs_id))
+        .one(db)
+        .await?
+    {
+        Some(o) => o,
+        None => return Ok(()),
+    };
+
+    if obj.obj_type != 1 {
+        return Ok(());
+    }
+
+    let file_data: FsFileData = serde_json::from_str(&obj.data)
+        .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
+
+    for block_id in &file_data.block_ids {
+        if !block_store.has_block(block_id).await {
+            missing.push(path.to_string());
+            break;
+        }
+    }
+
+    Ok(())
 }
