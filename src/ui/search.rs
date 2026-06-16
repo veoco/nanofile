@@ -73,9 +73,13 @@ pub async fn search_page(
         let mut seen = std::collections::HashSet::new();
         let mut all_results: Vec<SearchResultItem> = Vec::new();
 
-        // Phase 1: Full-text search via Tantivy.
-        if !search_filename_only && let Some(indexer) = &state.indexer {
-            let ft_results = indexer.search(&q, &repo_ids, 200, 0).unwrap_or_default();
+        // Phase 1: Full-text search via Tantivy (when available).
+        // This runs for both filename-only and content searches, avoiding
+        // the expensive FS tree walk for filename matching.
+        if let Some(indexer) = &state.indexer {
+            let ft_results = indexer
+                .search(&q, &repo_ids, 200, 0, search_filename_only)
+                .unwrap_or_default();
             for (found_repo_id, found_fullpath) in &ft_results {
                 if !seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
                     continue;
@@ -86,7 +90,8 @@ pub async fn search_page(
             }
         }
 
-        // Phase 2: Filename search (always).
+        // Phase 2: Filename search via FS tree walk (fallback for repos
+        // not covered by the index, or when the indexer is disabled).
         for repo_id in &repo_ids {
             let repo_record = match crate::entity::repo::Entity::find_by_id(repo_id)
                 .one(db)

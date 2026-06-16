@@ -111,10 +111,26 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            let cors = CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any);
+            let cors = {
+                let cors_origins = &state.config.server.cors_allowed_origins;
+                let origins: Vec<_> = cors_origins.iter().filter(|o| o.as_str() != "*").collect();
+
+                let origin_layer = if origins.is_empty() {
+                    // "*" or empty → allow all origins
+                    CorsLayer::new().allow_origin(Any)
+                } else {
+                    use tower_http::cors::AllowOrigin;
+                    CorsLayer::new().allow_origin(AllowOrigin::list(
+                        origins
+                            .into_iter()
+                            .map(|o| o.parse().expect("invalid CORS origin")),
+                    ))
+                };
+
+                origin_layer.allow_methods(Any).allow_headers(Any).max_age(
+                    std::time::Duration::from_secs(state.config.server.cors_max_age_secs),
+                )
+            };
 
             let api_routes = nanofile::api::api_routes();
             let sync_routes = nanofile::sync::sync_routes();

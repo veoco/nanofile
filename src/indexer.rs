@@ -18,6 +18,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
@@ -28,6 +29,7 @@ use tantivy::collector::TopDocs;
 use tantivy::doc;
 use tantivy::schema::*;
 use tantivy::tokenizer::TextAnalyzer;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::AppError;
 use crate::storage::DynBlockStorage;
@@ -165,15 +167,27 @@ impl TextIndexer {
         let mut writer = self
             .writer
             .lock()
-            .unwrap_or_else(|e| panic!("indexer mutex poisoned: {e}"));
+            .map_err(|e| AppError::internal(format!("indexer mutex poisoned: {e}")))?;
 
         // Delete any existing document with this (repo_id, fullpath) pair.
         self.delete_docs_inner(&mut writer, repo_id, fullpath)?;
 
-        let repo_id_field = self.schema.get_field(FIELD_REPO_ID).unwrap();
-        let fullpath_field = self.schema.get_field(FIELD_FULLPATH).unwrap();
-        let filename_field = self.schema.get_field(FIELD_FILENAME).unwrap();
-        let content_field = self.schema.get_field(FIELD_CONTENT).unwrap();
+        let repo_id_field = self
+            .schema
+            .get_field(FIELD_REPO_ID)
+            .expect("repo_id field defined");
+        let fullpath_field = self
+            .schema
+            .get_field(FIELD_FULLPATH)
+            .expect("fullpath field defined");
+        let filename_field = self
+            .schema
+            .get_field(FIELD_FILENAME)
+            .expect("filename field defined");
+        let content_field = self
+            .schema
+            .get_field(FIELD_CONTENT)
+            .expect("content field defined");
 
         let doc = doc!(
             repo_id_field => repo_id,
@@ -186,11 +200,9 @@ impl TextIndexer {
             .add_document(doc)
             .map_err(|e| AppError::internal(format!("index add doc: {e}")))?;
 
-        // Auto-commit after each index operation so the reader sees the doc.
-        writer
-            .commit()
-            .map_err(|e| AppError::internal(format!("index commit: {e}")))?;
-
+        // No automatic commit here — the background committer persists pending
+        // documents periodically.  Call commit() manually when immediate
+        // durability is required (e.g. before server shutdown).
         Ok(())
     }
 
@@ -199,11 +211,9 @@ impl TextIndexer {
         let mut writer = self
             .writer
             .lock()
-            .unwrap_or_else(|e| panic!("indexer mutex poisoned: {e}"));
+            .map_err(|e| AppError::internal(format!("indexer mutex poisoned: {e}")))?;
         self.delete_docs_inner(&mut writer, repo_id, fullpath)?;
-        writer
-            .commit()
-            .map_err(|e| AppError::internal(format!("delete commit: {e}")))?;
+        // No automatic commit — the background committer handles persistence.
         Ok(())
     }
 
@@ -213,11 +223,49 @@ impl TextIndexer {
         let mut writer = self
             .writer
             .lock()
-            .unwrap_or_else(|e| panic!("indexer mutex poisoned: {e}"));
+            .map_err(|e| AppError::internal(format!("indexer mutex poisoned: {e}")))?;
         writer
             .commit()
             .map_err(|e| AppError::internal(format!("index commit: {e}")))?;
         Ok(())
+    }
+
+    /// Explicitly reload the reader to pick up newly committed documents.
+    /// Returns the number of segments affected.
+    pub fn reload(&self) -> Result<(), AppError> {
+        self.reader
+            .reload()
+            .map_err(|e| AppError::internal(format!("index reload: {e}")))
+    }
+
+    /// Spawn a background task that commits the Tantivy writer periodically.
+    ///
+    /// The task commits every 30 seconds so uncommitted documents don't
+    /// accumulate indefinitely.  On shutdown the caller should also call
+    /// `commit()` explicitly.
+    ///
+    /// The task exits when `token` is cancelled.
+    pub fn spawn_background_committer(&self, token: CancellationToken) {
+        let writer = self.writer.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Ok(mut w) = writer.lock() {
+                            if let Err(e) = w.commit() {
+                                tracing::warn!("Background index commit failed: {e}");
+                            }
+                        }
+                    }
+                    _ = token.cancelled() => {
+                        tracing::info!("Background index committer shutting down");
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     /// Re-index a file by reading its content from block storage.
@@ -275,6 +323,10 @@ impl TextIndexer {
     /// caller should also run the filename search fallback (FS tree
     /// traversal with `strcasestr`).
     ///
+    /// When `filename_only` is true, only the filename field is searched.
+    /// This is used by the Web UI's filename search to avoid the expensive
+    /// FS tree walk when an index is available.
+    ///
     /// Returns a list of `(repo_id, fullpath)` tuples matching the keyword.
     /// Results are limited by `limit` and offset by `offset`.
     /// If `repo_ids` is non-empty, only results from those repos are returned.
@@ -284,29 +336,55 @@ impl TextIndexer {
         repo_ids: &[String],
         limit: usize,
         offset: usize,
+        filename_only: bool,
     ) -> Result<Vec<(String, String)>, AppError> {
         if keyword.trim().is_empty() {
             return Ok(Vec::new());
         }
 
-        // Reload to pick up any newly committed documents.
-        let _ = self.reader.reload();
+        // Commit any pending documents first so the reader can pick them up.
+        // This ensures search always returns the latest content without
+        // requiring callers to explicitly commit after every index operation.
+        if self.commit().is_ok() {
+            let _ = self.reader.reload();
+        }
         let reader = self.reader.clone();
         let searcher = reader.searcher();
 
-        let filename_field = self.schema.get_field(FIELD_FILENAME).unwrap();
-        let content_field = self.schema.get_field(FIELD_CONTENT).unwrap();
-        let repo_id_field = self.schema.get_field(FIELD_REPO_ID).unwrap();
+        let filename_field = self
+            .schema
+            .get_field(FIELD_FILENAME)
+            .expect("filename field defined");
+        let content_field = self
+            .schema
+            .get_field(FIELD_CONTENT)
+            .expect("content field defined");
+        let repo_id_field = self
+            .schema
+            .get_field(FIELD_REPO_ID)
+            .expect("repo_id field defined");
+        let fullpath_field = self
+            .schema
+            .get_field(FIELD_FULLPATH)
+            .expect("fullpath field defined");
 
         // Build a BooleanQuery that combines:
         // 1. Exact term matching via standard QueryParser.
         // 2. Prefix matching via RegexQuery (pattern `term.*` without `^`
         //    anchor — Tantivy-fst's automaton matches full term strings).
         //    This makes "case" match "caseend", "casetest", etc.
+        // 3. Optional repo_id filter via TermQuery (MUST), pushed down so
+        //    Tantivy only scores and returns docs for matching repos.
         // The LowerCaser filter on the jieba tokenizer ensures case-insensitivity.
-        use tantivy::query::{BooleanQuery, Occur, QueryParser, RegexQuery};
+        use tantivy::query::{BooleanQuery, Occur, QueryParser, RegexQuery, TermQuery};
+        use tantivy::schema::IndexRecordOption;
 
-        let query_parser = QueryParser::for_index(&self.index, vec![filename_field, content_field]);
+        let query_fields: Vec<Field> = if filename_only {
+            vec![filename_field]
+        } else {
+            vec![filename_field, content_field]
+        };
+        let query_parser = QueryParser::for_index(&self.index, query_fields);
         let exact_query = query_parser
             .parse_query(keyword)
             .map_err(|e| AppError::internal(format!("parse query: {e}")))?;
@@ -332,15 +410,60 @@ impl TextIndexer {
             // full term string by design.
             let pattern = format!("{escaped}.*");
 
-            for &field in &[filename_field, content_field] {
+            let regex_fields: &[Field] = if filename_only {
+                &[filename_field]
+            } else {
+                &[filename_field, content_field]
+            };
+            for &field in regex_fields {
                 if let Ok(regex_q) = RegexQuery::from_pattern(&pattern, field) {
                     subqueries.push((Occur::Should, Box::new(regex_q)));
                 }
             }
         }
 
-        let query: Box<dyn tantivy::query::Query> = if subqueries.len() == 1 {
-            subqueries.into_iter().next().unwrap().1
+        // Build the final query.
+        // When repo_ids is non-empty, wrap everything in a top-level Must:
+        //   Must(text_or_prefix_match) AND Must(repo_id filter)
+        let query: Box<dyn tantivy::query::Query> = if !repo_ids.is_empty() {
+            let text_query: Box<dyn tantivy::query::Query> = if subqueries.len() == 1 {
+                subqueries
+                    .into_iter()
+                    .next()
+                    .map(|(_, q)| q)
+                    .expect("non-empty subqueries")
+            } else {
+                Box::new(BooleanQuery::new(subqueries))
+            };
+
+            let repo_query: Box<dyn tantivy::query::Query> = if repo_ids.len() == 1 {
+                Box::new(TermQuery::new(
+                    tantivy::Term::from_field_text(repo_id_field, &repo_ids[0]),
+                    IndexRecordOption::Basic,
+                ))
+            } else {
+                let repo_subqueries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = repo_ids
+                    .iter()
+                    .map(|rid| {
+                        let tq: Box<dyn tantivy::query::Query> = Box::new(TermQuery::new(
+                            tantivy::Term::from_field_text(repo_id_field, rid),
+                            IndexRecordOption::Basic,
+                        ));
+                        (Occur::Should, tq)
+                    })
+                    .collect();
+                Box::new(BooleanQuery::new(repo_subqueries))
+            };
+
+            // Top-level AND: text match AND repo_id filter.
+            let top = vec![(Occur::Must, text_query), (Occur::Must, repo_query)];
+            Box::new(BooleanQuery::new(top))
+        } else if subqueries.len() == 1 {
+            subqueries
+                .into_iter()
+                .next()
+                .map(|(_, q)| q)
+                .expect("non-empty subqueries")
         } else {
             Box::new(BooleanQuery::new(subqueries))
         };
@@ -365,15 +488,10 @@ impl TextIndexer {
                 .unwrap_or("")
                 .to_string();
             let fullpath = doc
-                .get_first(self.schema.get_field(FIELD_FULLPATH).unwrap())
+                .get_first(fullpath_field)
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-
-            // Filter by repo_ids if provided.
-            if !repo_ids.is_empty() && !repo_ids.contains(&repo_id) {
-                continue;
-            }
 
             results.push((repo_id, fullpath));
 
@@ -396,8 +514,14 @@ impl TextIndexer {
         use tantivy::query::{BooleanQuery, Occur, TermQuery};
         use tantivy::schema::IndexRecordOption;
 
-        let repo_id_field = self.schema.get_field(FIELD_REPO_ID).unwrap();
-        let fullpath_field = self.schema.get_field(FIELD_FULLPATH).unwrap();
+        let repo_id_field = self
+            .schema
+            .get_field(FIELD_REPO_ID)
+            .expect("repo_id field defined");
+        let fullpath_field = self
+            .schema
+            .get_field(FIELD_FULLPATH)
+            .expect("fullpath field defined");
 
         // Build a boolean query with ALL terms marked as Must (AND).
         let subqueries = vec![
@@ -517,10 +641,10 @@ mod tests {
             "Hello World, this is a test file",
         )?;
 
-        // Auto-commit happens inside index_file, just wait for reader reload.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Commit so the reader can pick up the new document.
+        indexer.commit()?;
 
-        let results = indexer.search("hello", &[], 10, 0)?;
+        let results = indexer.search("hello", &[], 10, 0, false)?;
         assert_eq!(
             results.len(),
             1,
@@ -530,7 +654,7 @@ mod tests {
         assert_eq!(results[0], ("repo-1".to_string(), "/hello.txt".to_string()));
 
         // Search for content (not filename).
-        let results = indexer.search("test file", &[], 10, 0)?;
+        let results = indexer.search("test file", &[], 10, 0, false)?;
         assert_eq!(results.len(), 1, "should find 'test file' in content");
         assert_eq!(results[0], ("repo-1".to_string(), "/hello.txt".to_string()));
 
@@ -545,14 +669,15 @@ mod tests {
         indexer.index_file("repo-1", "/a.txt", "a.txt", "alpha")?;
         indexer.index_file("repo-2", "/b.txt", "b.txt", "beta")?;
 
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Commit so the reader can pick up the new documents.
+        indexer.commit()?;
 
-        let results = indexer.search("alpha", &["repo-1".to_string()], 10, 0)?;
+        let results = indexer.search("alpha", &["repo-1".to_string()], 10, 0, false)?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "repo-1");
 
         // Scoped to wrong repo — no results.
-        let results = indexer.search("alpha", &["repo-2".to_string()], 10, 0)?;
+        let results = indexer.search("alpha", &["repo-2".to_string()], 10, 0, false)?;
         assert_eq!(results.len(), 0);
 
         Ok(())
@@ -564,13 +689,13 @@ mod tests {
         let indexer = TextIndexer::new(dir.path())?;
 
         indexer.index_file("repo-1", "/hello.txt", "hello.txt", "Hello World")?;
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert_eq!(indexer.search("hello", &[], 10, 0)?.len(), 1);
+        indexer.commit()?;
+        assert_eq!(indexer.search("hello", &[], 10, 0, false)?.len(), 1);
 
         indexer.delete_file("repo-1", "/hello.txt")?;
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        indexer.commit()?;
 
-        assert_eq!(indexer.search("hello", &[], 10, 0)?.len(), 0);
+        assert_eq!(indexer.search("hello", &[], 10, 0, false)?.len(), 0);
 
         Ok(())
     }
@@ -581,19 +706,19 @@ mod tests {
         let indexer = TextIndexer::new(dir.path())?;
 
         indexer.index_file("repo-1", "/file.txt", "file.txt", "old content")?;
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        indexer.commit()?;
 
-        let results = indexer.search("old", &[], 10, 0)?;
+        let results = indexer.search("old", &[], 10, 0, false)?;
         assert_eq!(results.len(), 1);
 
-        // Index same path with new content (auto-commits).
+        // Index same path with new content.
         indexer.index_file("repo-1", "/file.txt", "file.txt", "new content")?;
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        indexer.commit()?;
 
         // Old content should no longer match.
-        assert_eq!(indexer.search("old", &[], 10, 0)?.len(), 0);
+        assert_eq!(indexer.search("old", &[], 10, 0, false)?.len(), 0);
         // New content should match.
-        assert_eq!(indexer.search("new", &[], 10, 0)?.len(), 1);
+        assert_eq!(indexer.search("new", &[], 10, 0, false)?.len(), 1);
 
         Ok(())
     }
@@ -609,18 +734,18 @@ mod tests {
             indexer.index_file("repo-1", &format!("/{}", name), &name, &content)?;
         }
 
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        indexer.commit()?;
 
         // First page: limit=3, offset=0
-        let results = indexer.search("content", &[], 3, 0)?;
+        let results = indexer.search("content", &[], 3, 0, false)?;
         assert_eq!(results.len(), 3, "first page should have 3");
 
         // Second page: limit=3, offset=3
-        let results = indexer.search("content", &[], 3, 3)?;
+        let results = indexer.search("content", &[], 3, 3, false)?;
         assert_eq!(results.len(), 3, "second page should have 3");
 
         // Last page: limit=3, offset=9
-        let results = indexer.search("content", &[], 3, 9)?;
+        let results = indexer.search("content", &[], 3, 9, false)?;
         assert_eq!(results.len(), 1, "last page should have 1");
 
         Ok(())

@@ -1,8 +1,10 @@
 use axum::{
+    body::Body,
     extract::{Path, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use futures::{Stream, StreamExt};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
@@ -12,6 +14,35 @@ use crate::entity::{fs_object, repo, share_link};
 use crate::error::AppError;
 use crate::serialization::fs_json::FsFileData;
 use crate::storage::download::Downloader;
+
+/// Build a streaming body that reads and yields blocks one at a time.
+///
+/// `block_ids` — list of block SHA-1 hashes to stream.
+/// `block_store` — content-addressed block storage backend.
+/// `enc_key` — optional decryption key (None = plaintext blocks).
+fn stream_blocks(
+    block_ids: Vec<String>,
+    block_store: crate::storage::DynBlockStorage,
+    enc_key: Option<Vec<u8>>,
+) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static {
+    futures::stream::iter(block_ids.into_iter().map(move |block_id| {
+        let store = block_store.clone();
+        let key = enc_key.clone();
+        async move {
+            let data = store
+                .read_block(&block_id)
+                .await
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            let data = match &key {
+                Some(k) => crate::crypto::random_key::decrypt_block(&data, k)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?,
+                None => data,
+            };
+            Ok(bytes::Bytes::from(data))
+        }
+    }))
+    .buffered(4)
+}
 
 /// GET /f/{token} — download via shared link token.
 pub async fn shared_file_download(
@@ -24,20 +55,17 @@ pub async fn shared_file_download(
         .await?
         .ok_or_else(|| AppError::NotFound("link not found".into()))?;
 
-    let content = Downloader::download_file(
-        state.db.as_ref(),
-        &link.repo_id,
-        &link.path,
-        &state.block_store,
-        None, // shared links don't have auth — serve encrypted blocks as-is
-    )
-    .await
-    .map_err(|_| AppError::NotFound("file not found".into()))?;
+    let (_file_data, block_ids) =
+        Downloader::resolve_blocks(state.db.as_ref(), &link.repo_id, &link.path)
+            .await
+            .map_err(|_| AppError::NotFound("file not found".into()))?;
+
+    let stream = stream_blocks(block_ids, state.block_store.clone(), None);
 
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/octet-stream")],
-        content,
+        Body::from_stream(stream),
     )
         .into_response())
 }
@@ -91,25 +119,21 @@ pub async fn repo_file_download(
     // Check if repo is encrypted and if password is set
     let dec_key = get_decryption_key_for_repo(&state, &repo_id, auth.user_id).await?;
 
-    let content = {
-        let dec_key_ref = dec_key
-            .as_ref()
-            .map(|(k, iv)| (k.as_slice(), iv.as_slice()));
-        Downloader::download_file(
-            state.db.as_ref(),
-            &repo_id,
-            &normalized,
-            &state.block_store,
-            dec_key_ref,
-        )
-        .await
-        .map_err(|_| AppError::NotFound("file not found".into()))?
-    };
+    let (_file_data, block_ids) =
+        Downloader::resolve_blocks(state.db.as_ref(), &repo_id, &normalized)
+            .await
+            .map_err(|_| AppError::NotFound("file not found".into()))?;
+
+    let stream = stream_blocks(
+        block_ids,
+        state.block_store.clone(),
+        dec_key.map(|(k, _)| k),
+    );
 
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/octet-stream")],
-        content,
+        Body::from_stream(stream),
     )
         .into_response())
 }
@@ -132,27 +156,25 @@ pub async fn download_api(
         return Err(AppError::BadRequest("token not valid for download".into()));
     }
 
-    let repo_id = &info.repo_id;
-    let path = &info.parent_dir;
-    let filename = info.file_name.as_deref().unwrap_or("download");
+    let repo_id = info.repo_id.clone();
+    let path = info.parent_dir.clone();
+    let filename = info.file_name.as_deref().unwrap_or("download").to_string();
 
     // Check if repo is encrypted and if password is set
-    let dec_key = get_decryption_key_for_repo(&state, repo_id, info.user_id).await?;
-    let dec_key_ref = dec_key
-        .as_ref()
-        .map(|(k, iv)| (k.as_slice(), iv.as_slice()));
+    let dec_key = get_decryption_key_for_repo(&state, &repo_id, info.user_id).await?;
 
-    let content = Downloader::download_file(
-        state.db.as_ref(),
-        repo_id,
-        path,
-        &state.block_store,
-        dec_key_ref,
-    )
-    .await
-    .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+    let (_file_data, block_ids) = Downloader::resolve_blocks(state.db.as_ref(), &repo_id, &path)
+        .await
+        .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
 
-    let content_len = content.len();
+    // We don't know the size upfront when streaming, so use
+    // Transfer-Encoding: chunked (omit Content-Length).
+    let stream = stream_blocks(
+        block_ids,
+        state.block_store.clone(),
+        dec_key.map(|(k, _)| k),
+    );
+
     let mut headers = HeaderMap::new();
     headers.insert(
         HeaderName::from_static("content-type"),
@@ -162,12 +184,8 @@ pub async fn download_api(
         HeaderName::from_static("content-disposition"),
         HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename)).unwrap(),
     );
-    headers.insert(
-        HeaderName::from_static("content-length"),
-        HeaderValue::from_str(&content_len.to_string()).unwrap(),
-    );
 
-    Ok((StatusCode::OK, headers, content).into_response())
+    Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())
 }
 
 /// `GET /blks/{token}/{file_id}/{block_id}`

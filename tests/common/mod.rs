@@ -75,6 +75,8 @@ impl TestServer {
                 port,
                 max_upload_size_mb: 512,
                 request_timeout_secs: 36000,
+                cors_allowed_origins: vec!["*".to_string()],
+                cors_max_age_secs: 86400,
             },
             database: nanofile::config::DatabaseConfig {
                 url: "sqlite::memory:".to_string(),

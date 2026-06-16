@@ -12,7 +12,7 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::{commit, file_lock_timestamp, fs_object, locked_file, repo, repo_member};
+use crate::entity::{commit, file_lock_timestamp, fs_object, locked_file, repo};
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{
@@ -171,31 +171,35 @@ pub async fn store_fs_dir_object(
 /// `repo_member.permission`. Non-members and read-only members are
 /// rejected with `AppError::Forbidden`.
 ///
+/// Uses a single LEFT JOIN query instead of two sequential lookups.
+///
 /// Matches seafile-server's `check_permission()` in repo-perm.c.
 pub async fn check_repo_write_permission(
     db: &DatabaseConnection,
     repo_id: &str,
     user_id: i32,
 ) -> Result<(), AppError> {
-    let repo_model = repo::Entity::find_by_id(repo_id)
-        .one(db)
+    use sea_orm::Statement;
+
+    let row: Option<(i32, Option<String>)> = db
+        .query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT r.owner_id, m.permission FROM repos r \
+             LEFT JOIN repo_members m ON r.id = m.repo_id AND m.user_id = $1 \
+             WHERE r.id = $2",
+            vec![user_id.into(), repo_id.to_owned().into()],
+        ))
         .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+        .map(|r| {
+            let owner_id: i32 = r.try_get("", "owner_id").unwrap_or(0);
+            let permission: Option<String> = r.try_get("", "permission").ok();
+            (owner_id, permission)
+        });
 
-    // Owner always has write access
-    if repo_model.owner_id == user_id {
-        return Ok(());
-    }
-
-    // Check repo_member permission
-    let member = repo_member::Entity::find()
-        .filter(repo_member::Column::RepoId.eq(repo_id))
-        .filter(repo_member::Column::UserId.eq(user_id))
-        .one(db)
-        .await?;
-
-    match member {
-        Some(m) if m.permission == "rw" => Ok(()),
+    match row {
+        None => Err(AppError::NotFound("repo not found".into())),
+        Some((owner_id, _)) if owner_id == user_id => Ok(()),
+        Some((_, Some(perm))) if perm == "rw" => Ok(()),
         _ => Err(AppError::Forbidden),
     }
 }
@@ -204,30 +208,35 @@ pub async fn check_repo_write_permission(
 ///
 /// The repo owner always has access. Any member (r or rw) has access.
 /// Non-members are rejected with `AppError::Forbidden`.
+///
+/// Uses a single LEFT JOIN query instead of two sequential lookups.
 pub async fn check_repo_read_permission(
     db: &DatabaseConnection,
     repo_id: &str,
     user_id: i32,
 ) -> Result<(), AppError> {
-    let repo_model = repo::Entity::find_by_id(repo_id)
-        .one(db)
+    use sea_orm::Statement;
+
+    let row: Option<(i32, Option<String>)> = db
+        .query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT r.owner_id, m.permission FROM repos r \
+             LEFT JOIN repo_members m ON r.id = m.repo_id AND m.user_id = $1 \
+             WHERE r.id = $2",
+            vec![user_id.into(), repo_id.to_owned().into()],
+        ))
         .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+        .map(|r| {
+            let owner_id: i32 = r.try_get("", "owner_id").unwrap_or(0);
+            let permission: Option<String> = r.try_get("", "permission").ok();
+            (owner_id, permission)
+        });
 
-    // Owner always has access
-    if repo_model.owner_id == user_id {
-        return Ok(());
-    }
-
-    let member = repo_member::Entity::find()
-        .filter(repo_member::Column::RepoId.eq(repo_id))
-        .filter(repo_member::Column::UserId.eq(user_id))
-        .one(db)
-        .await?;
-
-    match member {
-        Some(_) => Ok(()),
-        None => Err(AppError::Forbidden),
+    match row {
+        None => Err(AppError::NotFound("repo not found".into())),
+        Some((owner_id, _)) if owner_id == user_id => Ok(()),
+        Some((_, Some(_))) => Ok(()), // any membership grants read access
+        _ => Err(AppError::Forbidden),
     }
 }
 

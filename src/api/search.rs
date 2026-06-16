@@ -88,10 +88,14 @@ pub async fn search(
     let mut seen = std::collections::HashSet::new();
     let mut all_results: Vec<FileSearchResult> = Vec::new();
 
-    // Phase 1: Full-text search via Tantivy (when available and not filename-only).
-    if !search_filename_only && let Some(indexer) = &state.indexer {
+    // Phase 1: Full-text search via Tantivy (when available).
+    // When search_filename_only is true, only the filename field is queried
+    // in Tantivy, avoiding the expensive FS tree walk for name matching.
+    if let Some(indexer) = &state.indexer {
         // Search up to 200 results from the index to cover pagination needs.
-        let ft_results = indexer.search(&q, &repo_ids, 200, 0).unwrap_or_default();
+        let ft_results = indexer
+            .search(&q, &repo_ids, 200, 0, search_filename_only)
+            .unwrap_or_default();
         for (found_repo_id, found_fullpath) in &ft_results {
             if !seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
                 continue; // Already seen

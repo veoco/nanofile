@@ -1,4 +1,7 @@
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, Statement,
+};
 
 use crate::entity::{commit, fs_object};
 
@@ -32,12 +35,27 @@ impl GcManager {
             Self::collect_fs_ids(db, &c.root_id, &mut active_fs_ids).await?;
         }
 
-        let mut removed = 0;
-        for fs_obj in &all_fs_ids {
-            if !active_fs_ids.contains(&fs_obj.fs_id) {
-                fs_object::Entity::delete_by_id(fs_obj.id).exec(db).await?;
-                removed += 1;
-            }
+        // Batch delete inactive objects with a single SQL statement
+        // instead of N individual delete_by_id calls.
+        let inactive_ids: Vec<i64> = all_fs_ids
+            .iter()
+            .filter(|fs_obj| !active_fs_ids.contains(&fs_obj.fs_id))
+            .map(|fs_obj| fs_obj.id)
+            .collect();
+
+        let removed = inactive_ids.len() as u64;
+
+        if !inactive_ids.is_empty() {
+            let id_list = inactive_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            db.execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!("DELETE FROM fs_objects WHERE id IN ({id_list})"),
+            ))
+            .await?;
         }
 
         Ok(removed)

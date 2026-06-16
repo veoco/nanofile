@@ -34,6 +34,18 @@ impl Downloader {
         Ok(file_content)
     }
 
+    /// Resolve a file's block IDs without reading their content.
+    ///
+    /// Returns `(FsFileData, Vec<block_id>)` so the caller can stream
+    /// blocks individually without loading the entire file into memory.
+    pub async fn resolve_blocks(
+        db: &DatabaseConnection,
+        repo_id: &str,
+        path: &str,
+    ) -> Result<(FsFileData, Vec<String>), Box<dyn std::error::Error>> {
+        Self::download_file_stream(db, repo_id, path).await
+    }
+
     pub async fn download_file_stream(
         db: &DatabaseConnection,
         repo_id: &str,

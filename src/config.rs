@@ -54,6 +54,20 @@ pub struct ServerConfig {
     pub port: u16,
     pub max_upload_size_mb: u64,
     pub request_timeout_secs: u64,
+    /// Comma-separated list of allowed CORS origins.
+    /// Empty or "*" allows all origins (default).
+    #[serde(default = "default_cors_origins")]
+    pub cors_allowed_origins: Vec<String>,
+    /// CORS max-age in seconds (default 86400 = 24h).
+    #[serde(default = "default_cors_max_age")]
+    pub cors_max_age_secs: u64,
+}
+
+fn default_cors_origins() -> Vec<String> {
+    vec!["*".to_string()]
+}
+fn default_cors_max_age() -> u64 {
+    86400
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -267,6 +281,14 @@ impl Config {
         }
         if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_PASSWORD") {
             self.admin_init.password = Some(v);
+        }
+        if let Ok(v) = std::env::var("NANOFILE_CORS_ALLOWED_ORIGINS") {
+            self.server.cors_allowed_origins = v.split(',').map(|s| s.trim().to_string()).collect();
+        }
+        if let Ok(v) = std::env::var("NANOFILE_CORS_MAX_AGE_SECS")
+            && let Ok(n) = v.parse()
+        {
+            self.server.cors_max_age_secs = n;
         }
     }
 }

@@ -99,7 +99,8 @@ pub async fn put_block(
         )));
     }
 
-    let data = axum::body::to_bytes(body, usize::MAX)
+    let max_bytes = (state.config.server.max_upload_size_mb * 1024 * 1024) as usize;
+    let data = axum::body::to_bytes(body, max_bytes)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 

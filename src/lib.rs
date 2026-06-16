@@ -37,7 +37,7 @@ use crate::storage::DynBlockStorage;
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<DatabaseConnection>,
-    pub config: Config,
+    pub config: Arc<Config>,
     /// Block storage backend — default is filesystem-based.
     pub block_store: DynBlockStorage,
     /// Path to the block storage directory (convenience for FileOps).
@@ -98,6 +98,9 @@ impl AppState {
                         "Full-text indexer initialized at {:?}",
                         config.index.index_dir
                     );
+                    // Spawn the background committer so uncommitted index
+                    // documents are persisted periodically.
+                    idx.spawn_background_committer(shutdown_token.child_token());
                     Some(idx)
                 }
                 Err(e) => {
@@ -121,9 +124,19 @@ impl AppState {
         rand::rng().fill_bytes(&mut csrf_raw);
         let csrf_secret = Arc::new(csrf_raw.to_vec());
 
+        let password_manager = Arc::new(PasswordManager::new());
+        // Start background password cache cleanup (evicts expired entries every 5 min).
+        {
+            let pm = password_manager.clone();
+            let token = shutdown_token.child_token();
+            tokio::spawn(async move {
+                pm.cleanup_expired(token).await;
+            });
+        }
+
         Self {
             db: Arc::new(db),
-            config,
+            config: Arc::new(config),
             block_store,
             block_dir,
             token_manager: Arc::new(AccessTokenManager::new()),
@@ -133,7 +146,7 @@ impl AppState {
             login_rate_limiter,
             csrf_secret,
             shutdown_token,
-            password_manager: Arc::new(PasswordManager::new()),
+            password_manager,
         }
     }
 }

@@ -120,36 +120,32 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
 
         let db = state.db.as_ref();
 
-        let mut user_id: Option<i32> = None;
-
-        // Try API token first
-        if let Ok(Some(token_record)) = api_token::Entity::find()
+        // Query both token tables concurrently instead of sequentially.
+        let api_fut = api_token::Entity::find()
             .filter(api_token::Column::Token.eq(&token_str))
-            .one(db)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-        {
-            user_id = Some(token_record.user_id);
-        }
+            .one(db);
+        let sync_fut = sync_token::Entity::find()
+            .filter(sync_token::Column::Token.eq(&token_str))
+            .one(db);
 
-        // Fall back to sync token (seaf-cli calls download-info with sync token)
-        if user_id.is_none()
-            && let Ok(Some(sync_record)) = sync_token::Entity::find()
-                .filter(sync_token::Column::Token.eq(&token_str))
-                .one(db)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-        {
-            if let Some(expires_at) = sync_record.expires_at {
+        let (api_result, sync_result) = tokio::join!(api_fut, sync_fut);
+
+        let api_record = api_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let sync_record = sync_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let user_id = if let Some(token_record) = api_record {
+            token_record.user_id
+        } else if let Some(sync_rec) = sync_record {
+            if let Some(expires_at) = sync_rec.expires_at {
                 let now = chrono::Utc::now().timestamp();
                 if now > expires_at {
                     return Err(StatusCode::UNAUTHORIZED);
                 }
             }
-            user_id = Some(sync_record.user_id);
-        }
-
-        let user_id = user_id.ok_or(StatusCode::UNAUTHORIZED)?;
+            sync_rec.user_id
+        } else {
+            return Err(StatusCode::UNAUTHORIZED);
+        };
 
         let user_record = user::Entity::find_by_id(user_id)
             .one(db)
@@ -171,12 +167,19 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
 impl SyncAuth {
     /// Authenticate via sync token or API token.
     pub async fn from_token(db: &DatabaseConnection, token_str: &str) -> Result<Self, StatusCode> {
-        // First try sync token (has repo_id associated)
-        if let Ok(Some(record)) = sync_token::Entity::find()
+        // Query both token tables concurrently.
+        let sync_fut = sync_token::Entity::find()
             .filter(sync_token::Column::Token.eq(token_str))
-            .one(db)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            .one(db);
+        let api_fut = api_token::Entity::find()
+            .filter(api_token::Column::Token.eq(token_str))
+            .one(db);
+
+        let (sync_result, api_result) = tokio::join!(sync_fut, api_fut);
+
+        // Check sync token first (has repo_id — preferred).
+        if let Ok(Some(record)) = sync_result
+            && let Ok(_) = &api_result
         {
             if let Some(expires_at) = record.expires_at {
                 let now = chrono::Utc::now().timestamp();
@@ -191,13 +194,8 @@ impl SyncAuth {
             });
         }
 
-        // Fall back to API token (no expiry — matches seahub behavior)
-        if let Ok(Some(record)) = api_token::Entity::find()
-            .filter(api_token::Column::Token.eq(token_str))
-            .one(db)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-        {
+        // Fall back to API token (no expiry — matches seahub behavior).
+        if let Ok(Some(record)) = api_result {
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: String::new(),

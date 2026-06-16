@@ -21,28 +21,41 @@ struct CachedDecryptKey {
 ///
 /// This caches decryption keys per user+repo, matching the behavior of
 /// seafile-server's `passwd-mgr.c`. Keys are cached for a configurable
-/// TTL (default 3600 seconds = 1 hour).
+/// TTL (default 3600 seconds = 1 hour) and the cache is bounded by
+/// `max_entries` (default 10_000) to prevent unbounded growth.
 ///
 /// Key format: `"repo_id:user_id"` composite key.
 pub struct PasswordManager {
     cache: Arc<RwLock<HashMap<String, CachedDecryptKey>>>,
     ttl_secs: i64,
+    max_entries: usize,
 }
 
 impl PasswordManager {
-    /// Create a new PasswordManager with the default 1-hour TTL.
+    /// Create a new PasswordManager with the default 1-hour TTL and 10k max entries.
     pub fn new() -> Self {
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
             ttl_secs: 3600,
+            max_entries: 10_000,
         }
     }
 
-    /// Create a new PasswordManager with a custom TTL.
+    /// Create a new PasswordManager with a custom TTL and 10k max entries.
     pub fn new_with_ttl(ttl_secs: i64) -> Self {
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
             ttl_secs,
+            max_entries: 10_000,
+        }
+    }
+
+    /// Create a new PasswordManager with a custom TTL and capacity.
+    pub fn new_with_capacity(ttl_secs: i64, max_entries: usize) -> Self {
+        Self {
+            cache: Arc::new(RwLock::new(HashMap::with_capacity(max_entries))),
+            ttl_secs,
+            max_entries,
         }
     }
 
@@ -102,6 +115,26 @@ impl PasswordManager {
 
         let mut cache = self.cache.write().await;
         cache.insert(Self::cache_key(repo_id, user_id), cached);
+
+        // Enforce capacity bound: if cache exceeds max_entries, evict expired
+        // entries first, then remove the oldest entries.
+        if cache.len() > self.max_entries {
+            let now = chrono::Utc::now().timestamp();
+            cache.retain(|_, entry| now < entry.expires_at);
+            // If still over capacity, drain oldest entries (HashMap iteration
+            // order is non-deterministic but this is best-effort eviction).
+            while cache.len() > self.max_entries {
+                let oldest_key = cache
+                    .iter()
+                    .min_by_key(|(_, v)| v.expires_at)
+                    .map(|(k, _)| k.clone());
+                if let Some(k) = oldest_key {
+                    cache.remove(&k);
+                } else {
+                    break;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -165,12 +198,21 @@ impl PasswordManager {
     ///
     /// This is intended to be called from a background tokio task.
     /// The interval controls how often expired entries are purged.
-    pub async fn cleanup_expired(&self) {
+    /// Pass a `CancellationToken` to allow graceful shutdown.
+    pub async fn cleanup_expired(&self, token: tokio_util::sync::CancellationToken) {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(300)).await; // every 5 min
-            let now = chrono::Utc::now().timestamp();
-            let mut cache = self.cache.write().await;
-            cache.retain(|_, entry| now < entry.expires_at);
+            tokio::select! {
+                _ = interval.tick() => {
+                    let now = chrono::Utc::now().timestamp();
+                    let mut cache = self.cache.write().await;
+                    cache.retain(|_, entry| now < entry.expires_at);
+                }
+                _ = token.cancelled() => {
+                    break;
+                }
+            }
         }
     }
 }
