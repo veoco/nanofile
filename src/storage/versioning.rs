@@ -86,8 +86,7 @@ impl Versioning {
         // Get the parent directory fs_id
         let parent_fs_id = if parts.len() > 1 {
             let parent_path = format!("/{}", parts[..parts.len() - 1].join("/"));
-            crate::storage::resolve_fs_id(db, repo_id, &target_commit.root_id, &parent_path, None)
-                .await?
+            crate::storage::resolve_fs_id(db, repo_id, &target_commit.root_id, &parent_path).await?
         } else {
             target_commit.root_id.clone()
         };

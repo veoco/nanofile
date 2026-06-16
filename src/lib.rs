@@ -32,7 +32,6 @@ use crate::crypto::password_manager::PasswordManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
 use crate::storage::DynBlockStorage;
-use crate::storage::path_cache::PathCache;
 
 /// Unified application state injected into all axum handlers.
 #[derive(Clone)]
@@ -43,8 +42,6 @@ pub struct AppState {
     pub block_store: DynBlockStorage,
     /// Path to the block storage directory (convenience for FileOps).
     pub block_dir: Arc<PathBuf>,
-    /// In-memory path → fs_id cache (avoids tree traversal for hot paths).
-    pub path_cache: Arc<PathCache>,
     /// Web access token manager for `/upload-api/` and `/update-api/`.
     pub token_manager: Arc<AccessTokenManager>,
     /// In-memory task manager for async copy/move operations.
@@ -129,7 +126,6 @@ impl AppState {
             config,
             block_store,
             block_dir,
-            path_cache: Arc::new(PathCache::default()),
             token_manager: Arc::new(AccessTokenManager::new()),
             task_manager: Arc::new(TaskManager::new()),
             notification_manager,

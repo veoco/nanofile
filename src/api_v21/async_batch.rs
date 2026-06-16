@@ -89,9 +89,7 @@ async fn run_copy_task(
 
     // Resolve source parent
     let src_parent_fs_id =
-        match crate::storage::resolve_fs_id(db, &body.src_repo_id, &head_root_id, &src_dir, None)
-            .await
-        {
+        match crate::storage::resolve_fs_id(db, &body.src_repo_id, &head_root_id, &src_dir).await {
             Ok(id) => id,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -133,9 +131,7 @@ async fn run_copy_task(
 
     // Resolve destination parent
     let dst_parent_fs_id =
-        match crate::storage::resolve_fs_id(db, &body.src_repo_id, &head_root_id, &dst_dir, None)
-            .await
-        {
+        match crate::storage::resolve_fs_id(db, &body.src_repo_id, &head_root_id, &dst_dir).await {
             Ok(id) => id,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -151,7 +147,6 @@ async fn run_copy_task(
         &dst_parent_fs_id,
         modifier,
         "Async copy",
-        Some(state.path_cache.as_ref()),
         crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &new_entries {
@@ -258,7 +253,7 @@ async fn run_move_task(
 
     // Resolve source parent
     let src_parent_fs_id =
-        match crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &src_dir, None).await {
+        match crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &src_dir).await {
             Ok(id) => id,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -300,7 +295,7 @@ async fn run_move_task(
 
     // Resolve destination
     let _dst_parent_fs_id =
-        match crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &dst_dir, None).await {
+        match crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &dst_dir).await {
             Ok(id) => id,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -315,7 +310,6 @@ async fn run_move_task(
         repo_id,
         &src_dir,
         &src_parent_fs_id,
-        Some(state.path_cache.as_ref()),
         crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| !src_names.contains(&d.name));
@@ -331,15 +325,8 @@ async fn run_move_task(
         }
     };
 
-    if let Err(e) = FileOps::create_commit(
-        db,
-        repo_id,
-        &intermediate_root,
-        modifier,
-        "Move (remove)",
-        Some(state.path_cache.as_ref()),
-    )
-    .await
+    if let Err(e) =
+        FileOps::create_commit(db, repo_id, &intermediate_root, modifier, "Move (remove)").await
     {
         state.task_manager.fail_task(task_id, e.to_string());
         return;
@@ -355,7 +342,7 @@ async fn run_move_task(
     };
 
     let new_dst_fs_id =
-        match crate::storage::resolve_fs_id(db, repo_id, &new_head_root, &dst_dir, None).await {
+        match crate::storage::resolve_fs_id(db, repo_id, &new_head_root, &dst_dir).await {
             Ok(id) => id,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -370,7 +357,6 @@ async fn run_move_task(
         &new_dst_fs_id,
         modifier,
         "Move (add)",
-        Some(state.path_cache.as_ref()),
         crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &entries_to_move {

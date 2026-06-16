@@ -204,7 +204,7 @@ async fn resolve_file_metadata(
     let parent_fs_id = if parent_path == "/" {
         root_id.clone()
     } else {
-        crate::storage::resolve_fs_id(db, repo_id, root_id, parent_path, None)
+        crate::storage::resolve_fs_id(db, repo_id, root_id, parent_path)
             .await
             .ok()?
     };

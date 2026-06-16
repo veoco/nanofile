@@ -83,7 +83,6 @@ pub async fn create_file_v21(
             &newname,
             &auth.email,
             auth.user_id,
-            Some(state.path_cache.as_ref()),
         )
         .await?;
         return Ok(Json(serde_json::json!({"success": true})));
@@ -129,15 +128,9 @@ pub async fn create_file_v21(
         let head_root_id = get_head_root_id_no_err(db, &repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
-        crate::storage::resolve_fs_id(
-            db,
-            &repo_id,
-            &head_root_id,
-            parent_path,
-            Some(state.path_cache.as_ref()),
-        )
-        .await
-        .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?
+        crate::storage::resolve_fs_id(db, &repo_id, &head_root_id, parent_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?
     };
 
     // Add entry to parent's FsDirData and create commit
@@ -148,7 +141,6 @@ pub async fn create_file_v21(
         &parent_fs_id,
         &auth.email,
         &format!("Created empty file {}", file_name),
-        Some(state.path_cache.as_ref()),
         crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if !dirents.iter().any(|d| d.name == file_name) {

@@ -3,7 +3,7 @@ pub mod cdc;
 pub mod download;
 pub mod file_ops;
 pub mod gc;
-pub mod path_cache;
+
 pub mod versioning;
 
 use sea_orm::{
@@ -18,7 +18,6 @@ use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{
     FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE,
 };
-use crate::storage::path_cache::PathCache;
 
 /// SHA1 sentinel for empty directories (seafile convention).
 /// seafile-server's seaf_dir_new() forces this when entries are NULL;
@@ -392,15 +391,11 @@ pub async fn read_fs_file_data(
 ///
 /// Path should be absolute (e.g. `/dir/subdir/file.txt`).
 /// Returns the root_fs_id itself if path is "/" or empty.
-///
-/// When `cache` is provided, intermediate directories are cached so
-/// subsequent traversals of sibling paths skip earlier SQL queries.
 pub async fn resolve_fs_id(
     db: &DatabaseConnection,
     repo_id: &str,
     root_fs_id: &str,
     path: &str,
-    cache: Option<&PathCache>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let segments: Vec<&str> = path
         .trim_start_matches('/')
@@ -411,135 +406,21 @@ pub async fn resolve_fs_id(
         return Ok(root_fs_id.to_string());
     }
 
-    // Check cache for the full path first.
-    if let Some(cache) = cache
-        && let Some((_, fs_id, _)) = cache.get(repo_id, root_fs_id, path)
-    {
-        return Ok(fs_id);
-    }
-
     let mut current_fs_id = root_fs_id.to_string();
-    let mut accumulated = String::new();
 
-    for (i, segment) in segments.iter().enumerate() {
+    for segment in segments {
         let dir_data = read_fs_dir_data(db, repo_id, &current_fs_id).await?;
 
-        // Build the path for this segment.
-        if i == 0 {
-            accumulated = format!("/{}", segment);
-        } else {
-            accumulated = format!("{}/{}", accumulated, segment);
-        }
-
-        // Find the entry FIRST and update current_fs_id to the child's fs_id,
-        // then cache using the CHILD's (correct) fs_id and data.
         let entry = dir_data
             .dirents
             .iter()
-            .find(|d| d.name == *segment)
+            .find(|d| d.name == segment)
             .ok_or_else(|| format!("path segment not found: {segment}"))?;
-
-        if i + 1 < segments.len()
-            && let Some(cache) = cache
-        {
-            // Read the child directory's FsDirData so the cache stores the
-            // correct content, NOT the parent's data.
-            let child_fs_id = entry.id.clone();
-            match read_fs_dir_data(db, repo_id, &child_fs_id).await {
-                Ok(child_data) => {
-                    let child_json = child_data.to_compact_json();
-                    cache.set_dir(repo_id, root_fs_id, &accumulated, &child_fs_id, &child_json);
-                }
-                Err(_) => {
-                    // Child may be EMPTY_SHA1 sentinel or a file — cache
-                    // a minimal empty dir so callers can still find it.
-                    cache.set_dir(
-                        repo_id,
-                        root_fs_id,
-                        &accumulated,
-                        &child_fs_id,
-                        r#"{"dirents":[],"type":3,"version":1}"#,
-                    );
-                }
-            }
-        } else {
-            // Even for the final segment, cache the resolved fs_id so
-            // subsequent resolve_fs_id calls for the same path hit quickly.
-            if let Some(cache) = cache {
-                let child_fs_id = entry.id.clone();
-                cache.set_dir(
-                    repo_id,
-                    root_fs_id,
-                    &accumulated,
-                    &child_fs_id,
-                    r#"{"dirents":[],"type":3,"version":1}"#,
-                );
-            }
-        }
 
         current_fs_id = entry.id.clone();
     }
 
-    // Cache the final resolution for the full path (already cached
-    // segment-by-segment above for intermediate paths, but the full
-    // path may differ on the final segment).
-    if let Some(cache) = cache {
-        let fake_json = r#"{"dirents":[],"type":3,"version":1}"#.to_string();
-        cache.set_dir(repo_id, root_fs_id, path, &current_fs_id, &fake_json);
-    }
-
     Ok(current_fs_id)
-}
-
-/// Read and parse a directory fs_object, consulting the path cache first.
-///
-/// Prefer this over `read_fs_dir_data` when you have the `path` and
-/// `root_fs_id` available — it avoids the SQL query on a cache hit.
-pub async fn read_fs_dir_data_cached(
-    db: &DatabaseConnection,
-    repo_id: &str,
-    fs_id: &str,
-    cache: &PathCache,
-    root_fs_id: &str,
-    path: &str,
-) -> Result<FsDirData, Box<dyn std::error::Error>> {
-    // Check cache first.
-    if let Some((3, cached_fs_id, json)) = cache.get(repo_id, root_fs_id, path)
-        && cached_fs_id == fs_id
-    {
-        let data: FsDirData = serde_json::from_str(&json)?;
-        return Ok(data);
-    }
-
-    // Fall back to DB.
-    let data = read_fs_dir_data(db, repo_id, fs_id).await?;
-    let json = data.to_compact_json();
-    cache.set_dir(repo_id, root_fs_id, path, fs_id, &json);
-    Ok(data)
-}
-
-/// Read and parse a file fs_object, consulting the path cache first.
-pub async fn read_fs_file_data_cached(
-    db: &DatabaseConnection,
-    repo_id: &str,
-    fs_id: &str,
-    cache: &PathCache,
-    root_fs_id: &str,
-    path: &str,
-) -> Result<FsFileData, Box<dyn std::error::Error>> {
-    // Check cache first.
-    if let Some((1, cached_fs_id, json)) = cache.get(repo_id, root_fs_id, path)
-        && cached_fs_id == fs_id
-    {
-        let data: FsFileData = serde_json::from_str(&json)?;
-        return Ok(data);
-    }
-
-    // Fall back to DB.
-    let data = read_fs_file_data(db, repo_id, fs_id).await?;
-    let json = crate::serialization::fs_json::FsFileData::to_compact_json(&data);
-    cache.set_file(repo_id, root_fs_id, path, fs_id, &json);
-    Ok(data)
 }
 
 // ====================================================================
@@ -669,7 +550,7 @@ pub async fn get_entry_total_size(
         .await?
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-    let parent_fs_id = resolve_fs_id(db, repo_id, &head.root_id, parent_path, None)
+    let parent_fs_id = resolve_fs_id(db, repo_id, &head.root_id, parent_path)
         .await
         .map_err(|e| AppError::internal(format!("resolve parent failed: {e}")))?;
 

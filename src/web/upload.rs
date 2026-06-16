@@ -99,7 +99,6 @@ async fn upload_and_build_response(
         modifier,
         replace,
         &state.block_store,
-        Some(state.path_cache.as_ref()),
         enc_key,
     )
     .await
@@ -628,7 +627,6 @@ pub async fn update_api_handler(
                 &info.username,
                 true,
                 &state.block_store,
-                Some(state.path_cache.as_ref()),
                 None,
             )
             .await
@@ -760,7 +758,6 @@ pub async fn update_aj_token(
             &info.username,
             true,
             &state.block_store,
-            Some(state.path_cache.as_ref()),
             None,
         )
         .await
@@ -940,7 +937,6 @@ pub async fn upload_blks_api(
             &parent_fs_id,
             &modifier_name,
             &format!("Added {file_name}"),
-            Some(state.path_cache.as_ref()),
             &ancestor_chain,
             |dirents| {
                 if replace {

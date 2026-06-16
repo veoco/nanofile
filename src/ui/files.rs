@@ -20,7 +20,6 @@ use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
 use crate::storage::download::Downloader;
 use crate::storage::file_ops::FileOps;
-use crate::storage::path_cache::PathCache;
 use crate::storage::resolve_fs_id;
 
 use super::auth_extractor::WebUser;
@@ -436,7 +435,6 @@ async fn ensure_parent_dirs(
     repo_id: &str,
     parent_path: &str,
     modifier: &str,
-    path_cache: Option<&PathCache>,
 ) -> Result<(), AppError> {
     if parent_path == "/" {
         return Ok(());
@@ -463,7 +461,7 @@ async fn ensure_parent_dirs(
         };
 
         // Skip if this directory already exists in the current tree
-        if resolve_fs_id(db, repo_id, &root_fs_id, &child_path, path_cache)
+        if resolve_fs_id(db, repo_id, &root_fs_id, &child_path)
             .await
             .is_ok()
         {
@@ -475,7 +473,7 @@ async fn ensure_parent_dirs(
         let parent_fs_id = if current_path == "/" {
             root_fs_id.clone()
         } else {
-            resolve_fs_id(db, repo_id, &root_fs_id, &current_path, path_cache)
+            resolve_fs_id(db, repo_id, &root_fs_id, &current_path)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?
         };
@@ -496,7 +494,6 @@ async fn ensure_parent_dirs(
             &parent_fs_id,
             &mod_email_param,
             &format!("Created directory {}", seg),
-            path_cache,
             crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
             move |dirents| {
                 if !dirents.iter().any(|d| d.name == seg) {
@@ -580,14 +577,7 @@ pub async fn upload_file(
     // Second pass: process the collected file (if any).
     if let Some((file_name, data)) = file_field {
         // Ensure parent directory exists (creates intermediate dirs)
-        ensure_parent_dirs(
-            db,
-            &repo_id,
-            &parent_dir,
-            &user.email,
-            Some(state.path_cache.as_ref()),
-        )
-        .await?;
+        ensure_parent_dirs(db, &repo_id, &parent_dir, &user.email).await?;
 
         // Get old file size for incremental size adjustment (0 if new file).
         let p = if parent_dir == "/" {
@@ -609,7 +599,6 @@ pub async fn upload_file(
             &user.email,
             true,
             &state.block_store,
-            Some(state.path_cache.as_ref()),
             None,
         )
         .await
@@ -689,15 +678,9 @@ pub async fn delete_entry(
     let head_root_id = get_head_root_id(db, &repo_id).await?;
 
     // Resolve the parent directory's fs_id from the FS tree.
-    let parent_fs_id = crate::storage::resolve_fs_id(
-        db,
-        &repo_id,
-        &head_root_id,
-        parent_path,
-        Some(&state.path_cache),
-    )
-    .await
-    .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+    let parent_fs_id = crate::storage::resolve_fs_id(db, &repo_id, &head_root_id, parent_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
     // Update the FS tree and create a commit
     FileOps::update_dir_tree_and_commit(
@@ -707,7 +690,6 @@ pub async fn delete_entry(
         &parent_fs_id,
         &user.email,
         &format!("Deleted {}", name),
-        Some(state.path_cache.as_ref()),
         crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| d.name != name);
@@ -795,15 +777,9 @@ pub async fn create_directory(
         }
     } else {
         let head_root_id = get_head_root_id(db, &repo_id).await?;
-        crate::storage::resolve_fs_id(
-            db,
-            &repo_id,
-            &head_root_id,
-            &parent_path,
-            Some(state.path_cache.as_ref()),
-        )
-        .await
-        .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?
+        crate::storage::resolve_fs_id(db, &repo_id, &head_root_id, &parent_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?
     };
 
     // Use update_dir_tree_and_commit to add the new directory entry to the parent
@@ -815,7 +791,6 @@ pub async fn create_directory(
         &parent_fs_id,
         &user.email,
         &format!("Created directory {}", name),
-        Some(state.path_cache.as_ref()),
         crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if !dirents.iter().any(|d| d.name == name) {
@@ -879,15 +854,9 @@ pub async fn rename_entry(
     let head_root_id = get_head_root_id(db, &repo_id).await?;
 
     // Get parent's current fs_id via FS tree resolution
-    let parent_fs_id = crate::storage::resolve_fs_id(
-        db,
-        &repo_id,
-        &head_root_id,
-        parent_path,
-        Some(state.path_cache.as_ref()),
-    )
-    .await
-    .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+    let parent_fs_id = crate::storage::resolve_fs_id(db, &repo_id, &head_root_id, parent_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
     // Read parent's FsDirData to find the child's fs_id
     let parent_data = crate::storage::read_fs_dir_data(db, &repo_id, &parent_fs_id)
@@ -918,7 +887,6 @@ pub async fn rename_entry(
         &parent_fs_id,
         &user.email,
         &format!("Renamed {} {}", entry_type_label, old_name),
-        Some(state.path_cache.as_ref()),
         crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if let Some(d) = dirents.iter_mut().find(|d| d.id == child_id) {
@@ -1113,7 +1081,7 @@ async fn get_file_size(
             .ok_or_else(|| AppError::NotFound("File not found".to_string()));
     }
 
-    let parent_fs_id = crate::storage::resolve_fs_id(db, repo_id, &head_root_id, parent_path, None)
+    let parent_fs_id = crate::storage::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
         .await
         .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 

@@ -68,15 +68,10 @@ pub async fn delete_dirent_v21(
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
     // Resolve parent's current fs_id
-    let parent_fs_id = crate::storage::resolve_fs_id(
-        db,
-        &repo_id,
-        &head_commit.root_id,
-        parent_path,
-        Some(state.path_cache.as_ref()),
-    )
-    .await
-    .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+    let parent_fs_id =
+        crate::storage::resolve_fs_id(db, &repo_id, &head_commit.root_id, parent_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
     // Get entry size before deletion (for repo size adjustment).
     let deleted_size: i64 = crate::storage::get_entry_total_size(db, &repo_id, &normalized)
@@ -91,7 +86,6 @@ pub async fn delete_dirent_v21(
         &parent_fs_id,
         &auth.email,
         &format!("Deleted {}", name),
-        Some(state.path_cache.as_ref()),
         crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| d.name != name);
@@ -448,15 +442,9 @@ pub async fn dir_detail_v21(
         .await?
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-    crate::storage::resolve_fs_id(
-        db,
-        &repo_id,
-        &head_commit.root_id,
-        &normalized,
-        Some(state.path_cache.as_ref()),
-    )
-    .await
-    .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
+    crate::storage::resolve_fs_id(db, &repo_id, &head_commit.root_id, &normalized)
+        .await
+        .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
 
     // Read the directory data to get entry metadata files in the parent listing.
     // The dir name is the last component of the path.
@@ -488,18 +476,13 @@ pub async fn dir_detail_v21(
             .map(|d| d.mtime)
             .unwrap_or(0)
     } else {
-        let parent_fs_id = match crate::storage::resolve_fs_id(
-            db,
-            &repo_id,
-            &head_commit.root_id,
-            parent_path,
-            Some(state.path_cache.as_ref()),
-        )
-        .await
-        {
-            Ok(id) => id,
-            Err(_) => return Err(AppError::NotFound("Folder not found.".into())),
-        };
+        let parent_fs_id =
+            match crate::storage::resolve_fs_id(db, &repo_id, &head_commit.root_id, parent_path)
+                .await
+            {
+                Ok(id) => id,
+                Err(_) => return Err(AppError::NotFound("Folder not found.".into())),
+            };
         let parent_data = crate::storage::read_fs_dir_data(db, &repo_id, &parent_fs_id)
             .await
             .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;

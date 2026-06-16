@@ -3,7 +3,6 @@ use crate::entity::{commit, repo};
 use crate::notification::events_channel;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use crate::storage::DynBlockStorage;
-use crate::storage::path_cache::PathCache;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 /// Sentinel value indicating that no ancestor chain was pre-computed.
@@ -26,7 +25,6 @@ impl FileOps {
         modifier: &str,
         replace: bool,
         block_store: &DynBlockStorage,
-        _path_cache: Option<&PathCache>,
         // Optional encryption key (key, iv) — when set, blocks are encrypted
         // before writing. Used for encrypted repos during web upload.
         enc_key: Option<(&[u8], &[u8])>,
@@ -363,7 +361,6 @@ impl FileOps {
         parent_fs_id: &str,
         modifier: &str,
         description: &str,
-        _path_cache: Option<&PathCache>,
         ancestor_chain: &[(String, String)],
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), Box<dyn std::error::Error>>,
     ) -> Result<String, Box<dyn std::error::Error>> {
@@ -379,7 +376,7 @@ impl FileOps {
                 .await?
         };
 
-        Self::create_commit(db, repo_id, &root_fs_id, modifier, description, _path_cache).await?;
+        Self::create_commit(db, repo_id, &root_fs_id, modifier, description).await?;
 
         Ok(root_fs_id)
     }
@@ -395,7 +392,6 @@ impl FileOps {
         repo_id: &str,
         parent_path: &str,
         parent_fs_id: &str,
-        _path_cache: Option<&PathCache>,
         ancestor_chain: &[(String, String)],
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), Box<dyn std::error::Error>>,
     ) -> Result<String, Box<dyn std::error::Error>> {
@@ -421,7 +417,6 @@ impl FileOps {
         root_fs_id: &str,
         creator_name: &str,
         description: &str,
-        _path_cache: Option<&PathCache>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let now = chrono::Utc::now().timestamp();
 

@@ -65,7 +65,6 @@ pub async fn get_thumbnail(
         &repo_id,
         &head_commit.root_id,
         &normalized_path,
-        None,
     )
     .await
     .map_err(|_| AppError::NotFound("file not found".into()))?;
