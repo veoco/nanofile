@@ -1,11 +1,12 @@
 /// Password reset token generation and validation helpers.
+use rand::Rng;
 use sha2::{Digest, Sha256};
 
 /// Generate a raw reset token and its SHA-256 hash.
 /// Returns (raw_token, token_hash).
 pub fn generate_reset_token() -> (String, String) {
     let mut raw = [0u8; 32];
-    rand::Rng::fill(&mut rand::thread_rng(), &mut raw);
+    rand::rng().fill_bytes(&mut raw);
     let raw_token = hex::encode(raw);
     let hash = hash_token(&raw_token);
     (raw_token, hash)

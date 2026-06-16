@@ -21,7 +21,7 @@ pub async fn client_login(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Generate 32-char hex token (matching Seahub's ClientLoginToken)
     let mut raw = [0u8; 16];
-    rand::thread_rng().fill(&mut raw);
+    rand::rng().fill_bytes(&mut raw);
     let token = hex::encode(raw);
     let now = chrono::Utc::now().timestamp();
 

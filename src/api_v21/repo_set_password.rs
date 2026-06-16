@@ -204,7 +204,7 @@ async fn change_repo_password_inner(
     // no IV prefix), encrypted with a wrapping key/iv derived from the password.
     // We must decrypt it directly, NOT via decrypt_block() (which expects the
     // IV-prefixed file-block format).
-    use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::NoPadding};
+    use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::NoPadding};
     let old_derived = crate::crypto::key_derivation::derive_key(old_password, enc_version, salt)
         .map_err(|e| AppError::BadRequest(format!("key derivation failed: {e}")))?;
     let random_key_bytes = hex::decode(random_key)
@@ -212,7 +212,7 @@ async fn change_repo_password_inner(
     let old_cipher = cbc::Decryptor::<aes::Aes256>::new_from_slices(&old_derived.0, &old_derived.1)
         .map_err(|e| AppError::BadRequest(format!("cipher init: {e}")))?;
     let secret_key = old_cipher
-        .decrypt_padded_vec_mut::<NoPadding>(&random_key_bytes)
+        .decrypt_padded_vec::<NoPadding>(&random_key_bytes)
         .map_err(|e| AppError::BadRequest(format!("failed to decrypt random_key: {e}")))?;
 
     // 4. Re-encrypt with new password (same format: raw AES-CBC, no IV prefix).
@@ -220,7 +220,7 @@ async fn change_repo_password_inner(
         .map_err(|e| AppError::BadRequest(format!("key derivation failed: {e}")))?;
     let new_cipher = cbc::Encryptor::<aes::Aes256>::new_from_slices(&new_derived.0, &new_derived.1)
         .map_err(|e| AppError::BadRequest(format!("cipher init: {e}")))?;
-    let new_random_key = new_cipher.encrypt_padded_vec_mut::<NoPadding>(&secret_key);
+    let new_random_key = new_cipher.encrypt_padded_vec::<NoPadding>(&secret_key);
     let new_random_key_hex = hex::encode(&new_random_key);
 
     // 5. Update repo in DB

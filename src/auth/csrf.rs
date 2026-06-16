@@ -2,7 +2,7 @@
 ///
 /// Token = HMAC-SHA256(server_secret, session_token)
 /// Stateless, derived from existing session. No extra cookies needed.
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::AppState;

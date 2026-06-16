@@ -1,11 +1,12 @@
 /// Generate a 40-character hex S2FA device trust token.
+use rand::Rng;
 ///
 /// S2FA tokens are stored in plaintext in the `s2fa_tokens` table
 /// (like API tokens — no hashing needed since they're opaque bearer
 /// credentials tied to a specific device).
 pub fn generate_s2fa_token() -> String {
     let mut token = [0u8; 20];
-    rand::Rng::fill(&mut rand::thread_rng(), &mut token);
+    rand::rng().fill_bytes(&mut token);
     hex::encode(token)
 }
 

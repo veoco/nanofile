@@ -1,5 +1,5 @@
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::NoPadding};
-use rand::RngCore;
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::NoPadding};
+use rand::Rng;
 use sha2::Sha256;
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
@@ -132,7 +132,7 @@ pub fn decrypt_repo_enc_key(
     // Step 2: Decrypt random_key to get the secret file key
     let file_key = Aes256CbcDec::new_from_slices(&derived_key, &derived_iv)
         .map_err(|e| CryptoError::DecryptionFailed(format!("init: {e}")))?
-        .decrypt_padded_vec_mut::<NoPadding>(&random_key_bytes)
+        .decrypt_padded_vec::<NoPadding>(&random_key_bytes)
         .map_err(|e| CryptoError::DecryptionFailed(format!("decrypt random_key: {e}")))?;
 
     // Step 3: Derive the actual block encryption key from the file key
@@ -148,7 +148,7 @@ pub fn decrypt_repo_enc_key(
 /// Used for enc_version >= 3.
 pub fn generate_repo_salt() -> String {
     let mut salt = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::rng().fill_bytes(&mut salt);
     hex::encode(salt)
 }
 
@@ -171,11 +171,11 @@ pub fn generate_random_key_for_repo(
     let (derived_key, derived_iv) = derive_key(password, enc_version, repo_salt)?;
 
     let mut secret_key = [0u8; 48]; // 32-byte key + 16 bytes PKCS#7 padding space
-    rand::Rng::fill(&mut rand::thread_rng(), &mut secret_key[..32]);
+    rand::rng().fill_bytes(&mut secret_key[..32]);
 
     // Only encrypt the first 32 bytes of secret key; NoPadding means we must
     // encrypt exactly 32 bytes (no padding needed for AES-CBC on aligned data).
-    // With NoPadding, encrypt_padded_vec_mut will encrypt exactly 32 bytes and
+    // With NoPadding, encrypt_padded_vec will encrypt exactly 32 bytes and
     // produce exactly 48 bytes (32 + 16 for the IV? No — NoPadding doesn't add
     // padding, so output is same as input length. But AES-CBC requires input
     // to be a multiple of 16, and 32 is a multiple of 16, so output is 32 bytes).
@@ -183,11 +183,11 @@ pub fn generate_random_key_for_repo(
     // Wait — seafile's generate_random_key produces a random 48-byte buffer
     // (not 32), and encrypts ALL 48 bytes. Let me match that exactly.
     let mut secret_key_48 = [0u8; 48];
-    rand::thread_rng().fill_bytes(&mut secret_key_48);
+    rand::rng().fill_bytes(&mut secret_key_48);
 
     let ciphertext = Aes256CbcEnc::new_from_slices(&derived_key, &derived_iv)
         .map_err(|e| CryptoError::EncryptionFailed(format!("init: {e}")))?
-        .encrypt_padded_vec_mut::<NoPadding>(&secret_key_48);
+        .encrypt_padded_vec::<NoPadding>(&secret_key_48);
 
     Ok(hex::encode(&ciphertext))
 }

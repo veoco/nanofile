@@ -1,3 +1,4 @@
+use rand::Rng;
 use sha2::Sha256;
 
 const SALT_LEN: usize = 16;
@@ -14,7 +15,7 @@ fn pbkdf2_hash(password: &[u8], salt: &[u8], iterations: u32) -> [u8; HASH_LEN] 
 /// Format: `hex(salt):hex(hash)`.
 pub fn hash_password(password: &str, iterations: u32) -> String {
     let mut salt = [0u8; SALT_LEN];
-    rand::Rng::fill(&mut rand::thread_rng(), &mut salt);
+    rand::rng().fill_bytes(&mut salt);
 
     let hash = pbkdf2_hash(password.as_bytes(), &salt, iterations);
     format!("{}:{}", hex::encode(salt), hex::encode(hash))

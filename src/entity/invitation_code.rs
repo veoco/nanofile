@@ -1,3 +1,4 @@
+use rand::Rng;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +45,6 @@ impl ActiveModelBehavior for ActiveModel {}
 /// Generate a random 32-character hex invitation code.
 pub fn generate_invitation_code() -> String {
     let mut raw = [0u8; 16];
-    rand::Rng::fill(&mut rand::thread_rng(), &mut raw);
+    rand::rng().fill_bytes(&mut raw);
     hex::encode(raw)
 }

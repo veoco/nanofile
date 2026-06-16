@@ -1,4 +1,4 @@
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use rand::Rng;
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
@@ -14,10 +14,11 @@ type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 /// of whether the plaintext is block-aligned.
 pub fn encrypt_block(data: &[u8], file_key: &[u8]) -> Vec<u8> {
     let mut iv = [0u8; 16];
-    rand::thread_rng().fill(&mut iv[..]);
+    rand::rng().fill_bytes(&mut iv[..]);
 
-    let ciphertext =
-        Aes256CbcEnc::new(file_key.into(), &iv.into()).encrypt_padded_vec_mut::<Pkcs7>(data);
+    let ciphertext = Aes256CbcEnc::new_from_slices(file_key, &iv)
+        .expect("key must be 32 bytes, IV must be 16 bytes")
+        .encrypt_padded_vec::<Pkcs7>(data);
 
     let mut result = Vec::with_capacity(16 + ciphertext.len());
     result.extend_from_slice(&iv);
@@ -40,8 +41,9 @@ pub fn decrypt_block(
     let iv = &encrypted[..16];
     let ciphertext = &encrypted[16..];
 
-    let plaintext = Aes256CbcDec::new(file_key.into(), iv.into())
-        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+    let plaintext = Aes256CbcDec::new_from_slices(file_key, iv)
+        .map_err(|e| format!("decrypt init error: {}", e))?
+        .decrypt_padded_vec::<Pkcs7>(ciphertext)
         .map_err(|e| format!("decrypt error: {}", e))?;
 
     Ok(plaintext)
@@ -54,7 +56,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_block() {
         let mut key = [0u8; 32];
-        rand::thread_rng().fill(&mut key[..]);
+        rand::rng().fill_bytes(&mut key[..]);
 
         let data = b"Hello, this is test data for block encryption!";
         let encrypted = encrypt_block(data, &key);
@@ -66,7 +68,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_empty_data() {
         let mut key = [0u8; 32];
-        rand::thread_rng().fill(&mut key[..]);
+        rand::rng().fill_bytes(&mut key[..]);
 
         let data = b"";
         let encrypted = encrypt_block(data, &key);
@@ -78,7 +80,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_large_data() {
         let mut key = [0u8; 32];
-        rand::thread_rng().fill(&mut key[..]);
+        rand::rng().fill_bytes(&mut key[..]);
 
         let data = vec![0xABu8; 10000];
         let encrypted = encrypt_block(&data, &key);
@@ -97,9 +99,9 @@ mod tests {
     #[test]
     fn test_decrypt_wrong_key() {
         let mut key1 = [0u8; 32];
-        rand::thread_rng().fill(&mut key1[..]);
+        rand::rng().fill_bytes(&mut key1[..]);
         let mut key2 = [0u8; 32];
-        rand::thread_rng().fill(&mut key2[..]);
+        rand::rng().fill_bytes(&mut key2[..]);
 
         let data = b"test data";
         let encrypted = encrypt_block(data, &key1);
@@ -128,7 +130,7 @@ mod tests {
     #[test]
     fn test_block_aligned_data() {
         let mut key = [0u8; 32];
-        rand::thread_rng().fill(&mut key[..]);
+        rand::rng().fill_bytes(&mut key[..]);
 
         // 32 bytes = exactly 2 AES blocks
         let data = b"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP";
@@ -144,7 +146,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_multi_block_unaligned() {
         let mut key = [0u8; 32];
-        rand::thread_rng().fill(&mut key[..]);
+        rand::rng().fill_bytes(&mut key[..]);
 
         // 1001 bytes = not a multiple of 16 (AES block size)
         let data = vec![0xABu8; 1001];
@@ -156,7 +158,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_single_byte() {
         let mut key = [0u8; 32];
-        rand::thread_rng().fill(&mut key[..]);
+        rand::rng().fill_bytes(&mut key[..]);
 
         let data = b"\x42";
         let encrypted = encrypt_block(data, &key);
@@ -177,7 +179,7 @@ mod tests {
     #[test]
     fn test_decrypt_block_tampered() {
         let mut key = [0u8; 32];
-        rand::thread_rng().fill(&mut key[..]);
+        rand::rng().fill_bytes(&mut key[..]);
 
         let data = b"tamper test data for block decryption";
         let encrypted = encrypt_block(data, &key);

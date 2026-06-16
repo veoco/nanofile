@@ -1,3 +1,4 @@
+use rand::Rng;
 pub mod activity_log;
 pub mod api;
 pub mod api_v1;
@@ -120,7 +121,7 @@ impl AppState {
 
         // Generate a random 32-byte CSRF secret at startup.
         let mut csrf_raw = [0u8; 32];
-        rand::Rng::fill(&mut rand::thread_rng(), &mut csrf_raw);
+        rand::rng().fill_bytes(&mut csrf_raw);
         let csrf_secret = Arc::new(csrf_raw.to_vec());
 
         Self {

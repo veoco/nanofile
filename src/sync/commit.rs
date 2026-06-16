@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use rand::Rng;
+use rand::RngExt;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -316,7 +316,7 @@ pub async fn update_branch(
         if current_head.is_some() && new_commit.parent_id != current_head {
             if attempt < MAX_BRANCH_RETRY {
                 // Stale HEAD — retry with random backoff (100-500ms).
-                let delay_ms = rand::thread_rng().gen_range(100..=500);
+                let delay_ms = rand::rng().random_range(100..=500);
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 continue;
             }
