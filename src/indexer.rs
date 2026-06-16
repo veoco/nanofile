@@ -253,10 +253,10 @@ impl TextIndexer {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        if let Ok(mut w) = writer.lock() {
-                            if let Err(e) = w.commit() {
-                                tracing::warn!("Background index commit failed: {e}");
-                            }
+                        if let Ok(mut w) = writer.lock()
+                            && let Err(e) = w.commit()
+                        {
+                            tracing::warn!("Background index commit failed: {e}");
                         }
                     }
                     _ = token.cancelled() => {

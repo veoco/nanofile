@@ -32,10 +32,10 @@ fn stream_blocks(
             let data = store
                 .read_block(&block_id)
                 .await
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
             let data = match &key {
                 Some(k) => crate::crypto::random_key::decrypt_block(&data, k)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?,
+                    .map_err(|e| std::io::Error::other(e.to_string()))?,
                 None => data,
             };
             Ok(bytes::Bytes::from(data))
