@@ -552,6 +552,7 @@ pub async fn delete_file(
         &auth.email,
         &format!("Deleted {}", name),
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| d.name != name);
             Ok(())
@@ -673,6 +674,7 @@ pub(crate) async fn rename_file_entry(
         modifier,
         &format!("Renamed {}", old_name),
         cache,
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if let Some(d) = dirents.iter_mut().find(|d| d.id == child_id) {
                 d.name = new_name.to_string();
@@ -763,6 +765,7 @@ async fn move_file_entry(
         parent_path,
         &old_parent_fs_id,
         cache,
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| d.name != file_name);
             Ok(())
@@ -800,6 +803,7 @@ async fn move_file_entry(
         modifier,
         &format!("Moved {}", file_name),
         cache,
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             // Only add if not already present at destination.
             // seafile-server skips the move silently on collision.

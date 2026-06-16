@@ -100,6 +100,7 @@ pub async fn batch_move_items(
         &src_dir,
         &src_parent_fs_id,
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| !src_names_for_closure.contains(&d.name));
             Ok(())
@@ -144,6 +145,7 @@ pub async fn batch_move_items(
         &auth.email,
         &remove_desc,
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &entries_to_move {
                 if dirents.iter().any(|d| d.name == entry.name) {
@@ -341,6 +343,7 @@ pub async fn sync_batch_copy_item(
         &auth.email,
         &description,
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &new_entries {
                 // Check for name collision and generate unique name if needed
@@ -441,6 +444,7 @@ pub async fn batch_delete_item(
         &auth.email,
         &format!("Deleted {} items", names_to_delete.len()),
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| !names_to_delete.contains(&d.name));
             Ok(())

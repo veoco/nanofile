@@ -274,6 +274,7 @@ pub async fn batch_delete_handler(
         &auth.email,
         &format!("Deleted {} items", names_to_delete.len()),
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| !names_to_delete.contains(&d.name));
             Ok(())
@@ -427,6 +428,7 @@ pub async fn batch_copy_handler(
         &auth.email,
         &description,
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &entries_to_add {
                 // Check again in case dirents changed since we read
@@ -563,6 +565,7 @@ pub async fn batch_move_handler(
         &src_parent_dir,
         &src_parent_fs_id,
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| !src_names_for_closure.contains(&d.name));
             Ok(())
@@ -633,6 +636,7 @@ pub async fn batch_move_handler(
         &auth.email,
         &remove_desc,
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &entries_to_add {
                 if dirents.iter().any(|d| d.name == entry.name) {

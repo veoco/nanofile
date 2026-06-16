@@ -14,6 +14,10 @@ use crate::entity::{activity, repo};
 /// `activities` row.  Errors are logged via `tracing::warn!` but **never
 /// propagated** — activity logging is best-effort and must not break the
 /// calling operation.
+///
+/// Note: this is only called by the web UI / REST API paths (direct file
+/// upload, rename, delete via browser).  The seafile sync daemon (seaf-daemon)
+/// handles sync via `/seafhttp/` endpoints and does NOT use this function.
 pub async fn log_activity(
     db: &DatabaseConnection,
     repo_id: &str,

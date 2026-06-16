@@ -92,6 +92,7 @@ pub async fn delete_dirent_v21(
         &auth.email,
         &format!("Deleted {}", name),
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| d.name != name);
             Ok(())

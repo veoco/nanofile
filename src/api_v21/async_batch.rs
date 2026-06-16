@@ -152,6 +152,7 @@ async fn run_copy_task(
         modifier,
         "Async copy",
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &new_entries {
                 if dirents.iter().any(|d| d.name == entry.name) {
@@ -315,6 +316,7 @@ async fn run_move_task(
         &src_dir,
         &src_parent_fs_id,
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| !src_names.contains(&d.name));
             Ok(())
@@ -369,6 +371,7 @@ async fn run_move_task(
         modifier,
         "Move (add)",
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &entries_to_move {
                 if dirents.iter().any(|d| d.name == entry.name) {

@@ -919,19 +919,16 @@ pub async fn upload_blks_api(
             0
         };
 
-        // Get head root and resolve parent directory
-        let head_root_id =
-            crate::api::fileops::get_head_root_id(state.db.as_ref(), &info.repo_id).await?;
-
-        let parent_fs_id = crate::storage::resolve_fs_id(
-            state.db.as_ref(),
-            &info.repo_id,
-            &head_root_id,
-            &target_dir,
-            None,
-        )
-        .await
-        .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
+        // Resolve parent directory and capture ancestor chain for the
+        // subsequent walk_up_ancestors (avoids O(d²) re-resolution).
+        let (parent_fs_id, ancestor_chain) =
+            crate::storage::file_ops::FileOps::resolve_fs_id_chain(
+                state.db.as_ref(),
+                &info.repo_id,
+                &target_dir,
+            )
+            .await
+            .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
 
         // Add file entry to parent directory
         let entry_name = file_name.clone();
@@ -944,6 +941,7 @@ pub async fn upload_blks_api(
             &modifier_name,
             &format!("Added {file_name}"),
             Some(state.path_cache.as_ref()),
+            &ancestor_chain,
             |dirents| {
                 if replace {
                     dirents.retain(|d| d.name != entry_name);

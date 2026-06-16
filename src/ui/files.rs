@@ -497,6 +497,7 @@ async fn ensure_parent_dirs(
             &mod_email_param,
             &format!("Created directory {}", seg),
             path_cache,
+            crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
             move |dirents| {
                 if !dirents.iter().any(|d| d.name == seg) {
                     dirents.push(DirEntryData {
@@ -707,6 +708,7 @@ pub async fn delete_entry(
         &user.email,
         &format!("Deleted {}", name),
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| d.name != name);
             Ok(())
@@ -814,6 +816,7 @@ pub async fn create_directory(
         &user.email,
         &format!("Created directory {}", name),
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if !dirents.iter().any(|d| d.name == name) {
                 dirents.push(DirEntryData {
@@ -916,6 +919,7 @@ pub async fn rename_entry(
         &user.email,
         &format!("Renamed {} {}", entry_type_label, old_name),
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if let Some(d) = dirents.iter_mut().find(|d| d.id == child_id) {
                 d.name = new_name.to_string();

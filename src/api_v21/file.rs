@@ -149,6 +149,7 @@ pub async fn create_file_v21(
         &auth.email,
         &format!("Created empty file {}", file_name),
         Some(state.path_cache.as_ref()),
+        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if !dirents.iter().any(|d| d.name == file_name) {
                 dirents.push(DirEntryData {

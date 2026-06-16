@@ -6,7 +6,10 @@ pub mod gc;
 pub mod path_cache;
 pub mod versioning;
 
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
+    EntityTrait, PaginatorTrait, QueryFilter, Set, Statement,
+};
 use std::sync::Arc;
 
 use crate::entity::{commit, file_lock_timestamp, fs_object, locked_file, repo, repo_member};
@@ -57,15 +60,15 @@ pub fn new_block_store(base_dir: &std::path::Path) -> DynBlockStorage {
 // ====================================================================
 
 impl FsFileData {
-    /// Serialize to compact JSON, compute SHA1, check DB, insert if new.
-    /// Returns the computed fs_id.
-    ///
-    /// This is the async FS ID computation API matching the original design.
-    /// Callers should use this method instead of manually repeating the
-    /// serialize→hash→check→insert pattern.
+    /// Serialize to compact JSON, compute SHA1, insert if new (skips
+    /// duplicate with INSERT OR IGNORE).  Returns the computed fs_id.
     ///
     /// Matches seafile's write_seafile() flow:
     ///   seafile_to_json() → calculate SHA1 → check exists → write.
+    ///
+    /// Unlike the original implementation, we skip the separate existence-check
+    /// SELECT and rely on the UNIQUE(repo_id, fs_id) constraint to silently
+    /// ignore duplicates.  This halves the query count for this hot path.
     pub async fn compute_and_store(
         self,
         db: &DatabaseConnection,
@@ -74,32 +77,26 @@ impl FsFileData {
         let json = self.to_compact_json();
         let fs_id = crate::crypto::fs_id::sha1_hex(json.as_bytes());
 
-        let exists = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.eq(&fs_id))
-            .one(db)
-            .await?
-            .is_some();
-
-        if !exists {
-            fs_object::Entity::insert(fs_object::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: Set(repo_id.to_string()),
-                fs_id: Set(fs_id.clone()),
-                obj_type: Set(SEAF_METADATA_TYPE_FILE as i8),
-                data: Set(json),
-            })
-            .exec(db)
+        let _ = db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT OR IGNORE INTO fs_objects (repo_id, fs_id, obj_type, data) VALUES ($1, $2, $3, $4)",
+                vec![
+                    repo_id.to_owned().into(),
+                    fs_id.clone().into(),
+                    (SEAF_METADATA_TYPE_FILE as i8).into(),
+                    json.into(),
+                ],
+            ))
             .await?;
-        }
 
         Ok(fs_id)
     }
 }
 
 impl FsDirData {
-    /// Serialize to compact JSON, compute SHA1, check DB, insert if new.
-    /// Returns the computed fs_id.
+    /// Serialize to compact JSON, compute SHA1, insert if new (skips
+    /// duplicate with INSERT OR IGNORE).  Returns the computed fs_id.
     ///
     /// Empty directories use the EMPTY_SHA1 sentinel and are never stored,
     /// matching seafile's seaf_dir_save() / seaf_dir_new() behavior:
@@ -118,24 +115,18 @@ impl FsDirData {
         let json = self.to_compact_json();
         let fs_id = crate::crypto::fs_id::sha1_hex(json.as_bytes());
 
-        let exists = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.eq(&fs_id))
-            .one(db)
-            .await?
-            .is_some();
-
-        if !exists {
-            fs_object::Entity::insert(fs_object::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: Set(repo_id.to_string()),
-                fs_id: Set(fs_id.clone()),
-                obj_type: Set(SEAF_METADATA_TYPE_DIR as i8),
-                data: Set(json),
-            })
-            .exec(db)
+        let _ = db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT OR IGNORE INTO fs_objects (repo_id, fs_id, obj_type, data) VALUES ($1, $2, $3, $4)",
+                vec![
+                    repo_id.to_owned().into(),
+                    fs_id.clone().into(),
+                    (SEAF_METADATA_TYPE_DIR as i8).into(),
+                    json.into(),
+                ],
+            ))
             .await?;
-        }
 
         Ok(fs_id)
     }
@@ -254,6 +245,20 @@ pub async fn check_commit_file_locks(
     user_id: i32,
 ) -> Result<(), AppError> {
     if root_id == EMPTY_SHA1 {
+        return Ok(());
+    }
+
+    // Quick skip: if no file locks exist for this repo, skip the expensive
+    // full-tree BFS entirely.  The `idx_locked_files_repo_path` index makes
+    // this count(*) O(log n) instead of O(files in tree).
+    //
+    // Most users never use file locking, so this eliminates the vast majority
+    // of the traversal cost.
+    let lock_count = locked_file::Entity::find()
+        .filter(locked_file::Column::RepoId.eq(repo_id))
+        .count(db)
+        .await?;
+    if lock_count == 0 {
         return Ok(());
     }
 
@@ -682,5 +687,222 @@ pub async fn get_entry_total_size(
         compute_tree_size(db, repo_id, &entry.id).await
     } else {
         Ok(entry.size)
+    }
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+    /// Helper: create an in-memory SQLite database with the minimal schema
+    /// needed for `check_commit_file_locks`.
+    async fn setup_lock_test_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+
+        // Create required tables
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "
+            CREATE TABLE repos (
+                id VARCHAR(36) PRIMARY KEY NOT NULL,
+                name VARCHAR(255) NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                owner_id INTEGER NOT NULL DEFAULT 0,
+                encrypted TINYINT NOT NULL DEFAULT 0,
+                enc_version TINYINT NOT NULL DEFAULT 0,
+                magic VARCHAR(255),
+                random_key VARCHAR(255),
+                salt VARCHAR(255) NOT NULL DEFAULT '',
+                head_commit_id VARCHAR(40),
+                permission VARCHAR(10) NOT NULL DEFAULT 'rw',
+                created_at BIGINT NOT NULL DEFAULT 0,
+                updated_at BIGINT NOT NULL DEFAULT 0,
+                size BIGINT NOT NULL DEFAULT 0,
+                repo_version INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE TABLE commits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id VARCHAR(36) NOT NULL,
+                commit_id VARCHAR(40) NOT NULL,
+                root_id VARCHAR(40) NOT NULL,
+                parent_id VARCHAR(40),
+                second_parent_id VARCHAR(40),
+                creator_name VARCHAR(255) NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                ctime BIGINT NOT NULL,
+                version TINYINT NOT NULL DEFAULT 1
+            );
+            CREATE UNIQUE INDEX idx_commits_repo_commit
+                ON commits(repo_id, commit_id);
+
+            CREATE TABLE fs_objects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id VARCHAR(36) NOT NULL,
+                fs_id VARCHAR(40) NOT NULL,
+                obj_type TINYINT NOT NULL,
+                data TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX idx_fs_objects_repo_fs
+                ON fs_objects(repo_id, fs_id);
+
+            CREATE TABLE locked_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id VARCHAR(36) NOT NULL,
+                path TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                locked_at BIGINT NOT NULL,
+                lock_owner_name VARCHAR(255) NOT NULL DEFAULT ''
+            );
+            CREATE UNIQUE INDEX idx_locked_files_repo_path
+                ON locked_files(repo_id, path);
+            ",
+        ))
+        .await
+        .unwrap();
+
+        // Insert a repo using raw SQL to avoid ORM issues with string PKs
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "
+            INSERT INTO repos (id, name, description, owner_id, encrypted, enc_version,
+                               salt, permission, created_at, updated_at, size, repo_version)
+            VALUES ('test-repo', 'test', '', 1, 0, 0, '', 'rw', 0, 0, 0, 1)
+            ",
+        ))
+        .await
+        .unwrap();
+
+        db
+    }
+
+    /// check_commit_file_locks should return Ok(()) immediately when no
+    /// locked_files records exist for the repo (no tree traversal).
+    #[tokio::test]
+    async fn test_check_locks_skip_when_no_locks() {
+        let db = setup_lock_test_db().await;
+
+        let result = check_commit_file_locks(
+            &db,
+            "test-repo",
+            "0000000000000000000000000000000000000000", // EMPTY_SHA1
+            1,
+        )
+        .await;
+        assert!(result.is_ok(), "empty tree should always succeed");
+    }
+
+    /// check_commit_file_locks should skip full tree traversal when the
+    /// locked_files table has no entries for this repo (even if the tree
+    /// itself has many files).
+    #[tokio::test]
+    async fn test_check_locks_skips_tree_walk_for_unlocked_repo() {
+        let db = setup_lock_test_db().await;
+
+        // Seed a root dir with a file
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            r#"
+            INSERT INTO fs_objects (repo_id, fs_id, obj_type, data)
+            VALUES ('test-repo', 'root-fs-id', 3, '{"dirents":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mode":33188,"modifier":"u1","mtime":1000,"name":"file.txt","size":100}],"type":3,"version":1}')
+            "#,
+        ))
+        .await
+        .unwrap();
+
+        // Seed a commit that references the root dir
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "
+            INSERT INTO commits (repo_id, commit_id, root_id, parent_id, creator_name, description, ctime, version)
+            VALUES ('test-repo', 'cccccccccccccccccccccccccccccccccccccccc', 'root-fs-id', NULL, 'u1', '', 1000, 1)
+            ",
+        ))
+        .await
+        .unwrap();
+
+        // No locked_files records → should skip tree walk and return Ok
+        let result = check_commit_file_locks(&db, "test-repo", "root-fs-id", 1).await;
+        assert!(result.is_ok(), "should skip tree walk when no locks exist");
+    }
+
+    /// check_commit_file_locks should find a lock conflict.
+    #[tokio::test]
+    async fn test_check_locks_detects_conflict() {
+        let db = setup_lock_test_db().await;
+
+        // Root dir with a file
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            r#"
+            INSERT INTO fs_objects (repo_id, fs_id, obj_type, data)
+            VALUES ('test-repo', 'root-fs-id', 3, '{"dirents":[{"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","mode":33188,"modifier":"u1","mtime":1000,"name":"locked.txt","size":100}],"type":3,"version":1}')
+            "#,
+        ))
+        .await
+        .unwrap();
+
+        // Insert the file fs_object that the directory entry references
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            r#"
+            INSERT INTO fs_objects (repo_id, fs_id, obj_type, data)
+            VALUES ('test-repo', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 1, '{"block_ids":["dddddddddddddddddddddddddddddddddddddddd"],"size":100,"type":1,"version":1}')
+            "#,
+        ))
+        .await
+        .unwrap();
+
+        // Commit
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "
+            INSERT INTO commits (repo_id, commit_id, root_id, parent_id, creator_name, description, ctime, version)
+            VALUES ('test-repo', 'cccccccccccccccccccccccccccccccccccccccc', 'root-fs-id', NULL, 'u1', '', 1000, 1)
+            ",
+        ))
+        .await
+        .unwrap();
+
+        // Insert a lock record for this file by user 2
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "
+            INSERT INTO locked_files (repo_id, path, user_id, locked_at, lock_owner_name)
+            VALUES ('test-repo', 'locked.txt', 2, 1000, 'user2')
+            ",
+        ))
+        .await
+        .unwrap();
+
+        // User 1 tries to commit → should detect lock conflict (locked by user 2)
+        let result = check_commit_file_locks(
+            &db,
+            "test-repo",
+            "root-fs-id",
+            1, // user_id = 1
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "should detect lock conflict for file locked by another user"
+        );
+        match result {
+            Err(AppError::Locked(path)) => assert_eq!(path, "locked.txt"),
+            _ => panic!("expected AppError::Locked"),
+        }
+
+        // Same user who locked it should pass
+        let result = check_commit_file_locks(
+            &db,
+            "test-repo",
+            "root-fs-id",
+            2, // user_id = 2 (lock owner)
+        )
+        .await;
+        assert!(result.is_ok(), "lock owner should be allowed to commit");
     }
 }
