@@ -80,8 +80,18 @@ pub async fn get_commit(
     _auth: SyncAuth,
     Path((repo_id, commit_id)): Path<(String, String)>,
 ) -> Result<Vec<u8>, AppError> {
+    // Fetch repo metadata early — the seaf-daemon uses repo_name/repo_desc
+    // from the commit JSON (via seaf_repo_from_commit) to populate the local
+    // library name. Without these fields the library shows as "(unnamed)".
+    let repo_model = repo::Entity::find_by_id(&repo_id)
+        .one(state.db.as_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
     // The zero commit ID represents an empty repository — return a minimal
     // placeholder commit so the client can proceed with the initial sync.
+    // Include repo_name/repo_desc so the daemon can initialize its local
+    // library name from the commit (via seaf_repo_from_commit).
     if commit_id == "0000000000000000000000000000000000000000" {
         let empty_commit = crate::serialization::commit_json::CommitData {
             commit_id: commit_id.clone(),
@@ -93,13 +103,17 @@ pub async fn get_commit(
             ctime: 0,
             parent_id: None,
             second_parent_id: None,
-            repo_name: None,
-            repo_desc: None,
+            repo_name: Some(repo_model.name.clone()),
+            repo_desc: Some(repo_model.description.clone()),
             repo_category: None,
-            encrypted: None,
-            enc_version: None,
-            magic: None,
-            key: None,
+            encrypted: if repo_model.encrypted == 1 {
+                Some("true".to_string())
+            } else {
+                None
+            },
+            enc_version: Some(repo_model.enc_version as i32),
+            magic: repo_model.magic.clone(),
+            key: repo_model.random_key.clone(),
             version: 1,
         };
         let json = empty_commit.to_compact_json();
@@ -112,14 +126,6 @@ pub async fn get_commit(
         .one(state.db.as_ref())
         .await?
         .ok_or_else(|| AppError::NotFound("commit not found".into()))?;
-
-    // Fetch repo metadata — the seaf-daemon uses repo_name/repo_desc from
-    // the commit JSON (via seaf_repo_from_commit) to populate the local
-    // library name. Without these fields the library shows as "(unnamed)".
-    let repo_model = repo::Entity::find_by_id(&repo_id)
-        .one(state.db.as_ref())
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
     let commit_data = crate::serialization::commit_json::CommitData {
         commit_id: commit_model.commit_id.clone(),
