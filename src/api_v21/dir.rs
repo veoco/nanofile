@@ -78,6 +78,39 @@ pub async fn delete_dirent_v21(
         .await
         .unwrap_or_default();
 
+    // --- TRASH: Record deleted entry before tree update ---
+    // Use `.ok()` to discard `Box<dyn Error>` which is !Send and would break
+    // the axum handler trait.
+    #[allow(clippy::match_result_ok, clippy::collapsible_if)]
+    if let Some(parent_dir_data) = crate::storage::read_fs_dir_data(db, &repo_id, &parent_fs_id)
+        .await
+        .ok()
+    {
+        if let Some(entry) = parent_dir_data.dirents.iter().find(|d| d.name == name) {
+            let obj_type = if entry.mode & crate::serialization::S_IFDIR != 0 {
+                "dir"
+            } else {
+                "file"
+            };
+            if let Err(e) = crate::storage::trash::TrashService::add_to_trash(
+                db,
+                &repo_id,
+                &normalized,
+                obj_type,
+                &entry.id,
+                &entry.name,
+                entry.size,
+                &head_commit_id,
+                &auth.email,
+            )
+            .await
+            {
+                tracing::warn!("Failed to record trash for {normalized}: {e}");
+            }
+        }
+    }
+    // --- END TRASH ---
+
     // Update the FS tree and create a commit
     crate::storage::file_ops::FileOps::update_dir_tree_and_commit(
         db,

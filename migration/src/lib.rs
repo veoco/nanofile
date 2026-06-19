@@ -32,6 +32,8 @@ mod m20260614_000002_add_old_path_to_activities;
 mod m20260619_000001_add_share_link_fields;
 mod m20260619_000003_add_detail_to_activities;
 mod m20260619_000004_create_avatars;
+mod m20260620_000001_create_file_trash;
+mod m20260620_000002_create_deleted_repos;
 
 pub struct Migrator;
 
@@ -70,6 +72,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260619_000001_add_share_link_fields::Migration),
             Box::new(m20260619_000003_add_detail_to_activities::Migration),
             Box::new(m20260619_000004_create_avatars::Migration),
+            Box::new(m20260620_000001_create_file_trash::Migration),
+            Box::new(m20260620_000002_create_deleted_repos::Migration),
         ]
     }
 }

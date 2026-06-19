@@ -143,6 +143,21 @@ pub async fn delete_repo_v21(
         return Err(AppError::Forbidden);
     }
 
+    // --- REPO TRASH: Record deleted repo before cascade-delete ---
+    if let Err(e) = crate::storage::trash::TrashService::add_deleted_repo(
+        db,
+        &repo_id,
+        &r.name,
+        r.head_commit_id.as_deref(),
+        r.owner_id,
+        r.size,
+    )
+    .await
+    {
+        tracing::warn!("Failed to record deleted repo in trash: {e}");
+    }
+    // --- END REPO TRASH ---
+
     // Cascade-delete related records
     repo_member::Entity::delete_many()
         .filter(repo_member::Column::RepoId.eq(&repo_id))

@@ -16,6 +16,7 @@ pub mod repos;
 pub mod smart_link;
 pub mod starred;
 pub mod task_manager;
+pub mod trash;
 pub mod user_avatar;
 pub mod wiki;
 
@@ -163,5 +164,27 @@ pub fn api_v21_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/v2.1/repos/{repo_id}/metadata/record/",
             get(metadata::get_metadata_record).put(metadata::update_metadata_record),
+        )
+        // Trash
+        .route(
+            "/api/v2.1/repos/{repo_id}/trash/",
+            get(trash::list_trash).delete(trash::clean_trash),
+        )
+        .route(
+            "/api/v2.1/repos/{repo_id}/trash/revert-dirents/",
+            post(trash::revert_dirents),
+        )
+        .route("/api/v2.1/repos/{repo_id}/trash2/", get(trash::list_trash2))
+        .route(
+            "/api/v2.1/repos/{repo_id}/trash2/search/",
+            get(trash::search_trash),
+        )
+        .route(
+            "/api/v2.1/repos/{repo_id}/trash2/revert/",
+            post(trash::revert_trash),
+        )
+        .route(
+            "/api/v2.1/deleted-repos/",
+            get(trash::list_deleted_repos).post(trash::restore_deleted_repo),
         )
 }

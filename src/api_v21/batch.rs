@@ -490,6 +490,52 @@ pub async fn batch_delete_item(
         }
     }
 
+    // --- TRASH: Record batch deleted items before tree update ---
+    let trash_head_commit_id: Option<String> = repo::Entity::find_by_id(repo_id)
+        .one(db)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|r| r.head_commit_id);
+    if let Some(ref parent_commit_id) = trash_head_commit_id {
+        let trash_items: Vec<_> = body
+            .dirents
+            .iter()
+            .filter_map(|name| {
+                let entry = parent_data.dirents.iter().find(|d| d.name == *name)?;
+                let fp = if parent_dir == "/" {
+                    format!("/{name}")
+                } else {
+                    format!("{parent_dir}/{name}")
+                };
+                Some(crate::storage::trash::TrashItem {
+                    path: fp,
+                    obj_type: if entry.mode & S_IFDIR != 0 {
+                        "dir".to_string()
+                    } else {
+                        "file".to_string()
+                    },
+                    obj_id: entry.id.clone(),
+                    obj_name: entry.name.clone(),
+                    size: entry.size,
+                })
+            })
+            .collect();
+        if !trash_items.is_empty()
+            && let Err(e) = crate::storage::trash::TrashService::add_batch_to_trash(
+                db,
+                repo_id,
+                trash_items,
+                parent_commit_id,
+                &auth.email,
+            )
+            .await
+        {
+            tracing::warn!("Failed to record batch trash: {e}");
+        }
+    }
+    // --- END TRASH ---
+
     FileOps::update_dir_tree_and_commit(
         db,
         repo_id,

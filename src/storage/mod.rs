@@ -3,6 +3,7 @@ pub mod cdc;
 pub mod download;
 pub mod file_ops;
 pub mod gc;
+pub mod trash;
 
 pub mod versioning;
 
