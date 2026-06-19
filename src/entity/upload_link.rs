@@ -12,7 +12,7 @@ pub struct Model {
     pub creator_id: i32,
     #[sea_orm(not_null)]
     pub path: String,
-    #[sea_orm(unique, not_null, length = 24)]
+    #[sea_orm(unique, not_null, length = 16)]
     pub token: String,
     pub password: Option<String>,
     pub expires_at: Option<i64>,

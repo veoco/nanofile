@@ -27,7 +27,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(UploadLinks::Token)
-                            .char_len(24)
+                            .char_len(16)
                             .not_null()
                             .unique_key(),
                     )

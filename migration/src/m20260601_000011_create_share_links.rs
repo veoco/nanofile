@@ -23,7 +23,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ShareLinks::Path).string_len(4096).not_null())
                     .col(
                         ColumnDef::new(ShareLinks::Token)
-                            .char_len(24)
+                            .char_len(16)
                             .not_null()
                             .unique_key(),
                     )
