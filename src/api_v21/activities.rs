@@ -103,14 +103,14 @@ pub async fn get_activities(
         .all(db)
         .await?;
 
-    // Batch-load user emails
-    let mut user_emails: HashMap<i32, String> = HashMap::new();
+    // Batch-load user models for nickname, email, etc.
+    let mut user_cache: HashMap<i32, user::Model> = HashMap::new();
     let mut user_ids: Vec<i32> = events.iter().map(|e| e.user_id).collect();
     user_ids.sort();
     user_ids.dedup();
     for uid in &user_ids {
         if let Ok(Some(u)) = user::Entity::find_by_id(*uid).one(db).await {
-            user_emails.insert(*uid, u.email);
+            user_cache.insert(*uid, u);
         }
     }
 
@@ -125,10 +125,8 @@ pub async fn get_activities(
     // Build event list
     let mut event_list: Vec<serde_json::Value> = Vec::with_capacity(events.len());
     for e in &events {
-        let email = user_emails
-            .get(&e.user_id)
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let u = user_cache.get(&e.user_id);
+        let email = u.map(|u| u.email.as_str()).unwrap_or("");
         let repo_name = repo_names.get(&e.repo_id).map(|s| s.as_str()).unwrap_or("");
         let name = e
             .path
@@ -154,6 +152,14 @@ pub async fn get_activities(
             .and_then(|v| v.as_str())
             .unwrap_or(repo_name);
 
+        // author_name: use full nickname() fallback chain (display_name → name → email local part)
+        let author_name = u
+            .map(|u| u.nickname())
+            .unwrap_or_else(|| email.split('@').next().unwrap_or("").to_string());
+
+        // login_id: match seahub fallback behavior — use email local part
+        let login_id = email.split('@').next().unwrap_or("").to_string();
+
         let mut d = serde_json::json!({
             "op_type": e.op_type,
             "repo_id": e.repo_id,
@@ -163,9 +169,9 @@ pub async fn get_activities(
             "path": e.path,
             "name": name,
             "author_email": email,
-            "author_name": email.split('@').next().unwrap_or(""),
+            "author_name": author_name,
             "author_contact_email": email,
-            "login_id": "",
+            "login_id": login_id,
             "avatar_url": crate::api::avatar::primary_avatar_url(email, 32),
             "time": time,
             "details": details,
@@ -191,6 +197,21 @@ pub async fn get_activities(
             && let Some(orn) = details[0].get("old_repo_name")
         {
             d["old_repo_name"] = orn.clone();
+        }
+
+        // days for clean-up-trash events (from detail JSON)
+        if e.op_type == "clean-up-trash"
+            && !details.is_empty()
+            && let Some(days_val) = details[0].get("days")
+        {
+            d["days"] = days_val.clone();
+        }
+
+        // old_path for publish events
+        if e.op_type == "publish"
+            && let Some(ref old_path) = e.old_path
+        {
+            d["old_path"] = serde_json::json!(old_path);
         }
 
         event_list.push(d);
