@@ -11,6 +11,7 @@ use crate::activity_log;
 use crate::entity::repo;
 use crate::error::AppError;
 use crate::storage::file_ops::FileOps;
+use crate::ui::auth_extractor::WebUser;
 use sea_orm::EntityTrait;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -249,6 +250,7 @@ struct MultipartResult {
 /// - `parent_dir` — target directory (default `/`)
 /// - `relative_path` — subdirectory path for folder uploads (optional)
 pub async fn upload_aj(
+    user: WebUser,
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -283,9 +285,9 @@ pub async fn upload_aj(
             &target_dir,
             &filename,
             &file_data,
-            "web",
+            &user.email,
             false,
-            None,
+            Some(user.user_id),
             None,
         )
         .await?;
@@ -302,6 +304,7 @@ pub async fn upload_aj(
 /// - `repo_id` — repository ID
 /// - `p` or `path` — full path of the target file (e.g. `/dir/file.txt`)
 pub async fn update_api(
+    user: WebUser,
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -335,7 +338,15 @@ pub async fn update_api(
             .unwrap_or(&file_path);
 
         let resp = upload_and_build_response(
-            &state, &repo_id, parent, name, &file_data, "web", true, None, None,
+            &state,
+            &repo_id,
+            parent,
+            name,
+            &file_data,
+            &user.email,
+            true,
+            Some(user.user_id),
+            None,
         )
         .await?;
         return Ok(Json(resp));
@@ -351,6 +362,7 @@ pub async fn update_api(
 /// - `repo_id` — repository ID
 /// - `target_file` — full path (e.g. `/dir/file.txt`)
 pub async fn update_aj(
+    user: WebUser,
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -384,7 +396,15 @@ pub async fn update_aj(
             .unwrap_or(target_file);
 
         let resp = upload_and_build_response(
-            &state, repo_id, parent, name, &file_data, "web", true, None, None,
+            &state,
+            repo_id,
+            parent,
+            name,
+            &file_data,
+            &user.email,
+            true,
+            Some(user.user_id),
+            None,
         )
         .await?;
         return Ok(Json(resp));

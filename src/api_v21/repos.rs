@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{repo, repo_member, sync_token, user};
 use crate::error::AppError;
@@ -157,6 +158,22 @@ pub async fn delete_repo_v21(
         tracing::warn!("Failed to record deleted repo in trash: {e}");
     }
     // --- END REPO TRASH ---
+
+    // Log repo deletion activity BEFORE deleting the repo (FK constraint
+    // prevents inserting activity with a non-existent repo_id).
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "delete",
+        "repo",
+        "/",
+        auth.user_id,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
 
     // Cascade-delete related records
     repo_member::Entity::delete_many()

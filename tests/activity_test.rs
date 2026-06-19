@@ -637,6 +637,49 @@ async fn test_activity_repo_deleted_logged() {
 }
 
 #[tokio::test]
+async fn test_activity_repo_deleted_v21_logged() {
+    let f = TestFixture::new().await;
+    let repo_id1 = f.repo_id.clone();
+
+    // Create a second repo to verify its activities survive FK cascade
+    let resp = f
+        .client
+        .create_repo(&f.api_token, "survivor-repo-v21")
+        .await;
+    assert!(resp.status().is_success());
+    let body: Value = resp.json().await.unwrap();
+    let repo_id2 = body["repo_id"].as_str().unwrap().to_string();
+
+    // List activities before deletion — should have 2 repo-create events
+    let (_events_before, total_before) = get_activities(&f, 1, 10).await;
+    assert_eq!(
+        total_before, 2,
+        "should have 2 repo create events before delete"
+    );
+
+    // Delete the first repo via v2.1 API
+    let resp = f
+        .client
+        .delete(
+            &format!("/api/v2.1/repos/{}/", repo_id1),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "delete repo via v2.1 failed");
+
+    // After deletion, repo1's activities are cascade-deleted,
+    // but repo2's create activity should remain
+    let (events_after, total_after) = get_activities(&f, 1, 10).await;
+    assert_eq!(
+        total_after, 1,
+        "only survivor repo's create activity should remain"
+    );
+    assert_eq!(events_after[0]["repo_id"], repo_id2);
+    assert_eq!(events_after[0]["op_type"], "create");
+    assert_eq!(events_after[0]["obj_type"], "repo");
+}
+
+#[tokio::test]
 async fn test_ui_activities_page() {
     let f = TestFixture::new().await;
 

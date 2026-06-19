@@ -108,7 +108,26 @@ pub async fn log_activity(
             if let Ok(current_detail) = serde_json::from_str::<serde_json::Value>(&recent.detail) {
                 let mut detail_array: Vec<serde_json::Value> = match &current_detail {
                     serde_json::Value::Array(arr) => arr.clone(),
-                    serde_json::Value::Object(_) => vec![current_detail.clone()],
+                    serde_json::Value::Object(_) => {
+                        // Extract only the allowed detail keys (matching seafevents'
+                        // _extract_detail_item behavior), so the first item in a batch
+                        // array has the same shape as subsequently appended items.
+                        let allowed_keys: [&str; 6] = [
+                            "obj_id",
+                            "size",
+                            "old_path",
+                            "repo_name",
+                            "old_repo_name",
+                            "path",
+                        ];
+                        let obj = current_detail.as_object().unwrap();
+                        let filtered: serde_json::Value = allowed_keys
+                            .iter()
+                            .filter_map(|k| obj.get(*k).map(|v| ((*k).to_string(), v.clone())))
+                            .collect::<serde_json::Map<_, _>>()
+                            .into();
+                        vec![filtered]
+                    }
                     _ => Vec::new(),
                 };
 

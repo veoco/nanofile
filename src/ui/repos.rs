@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::entity::{repo, repo_member, sync_token};
 use crate::error::AppError;
 use crate::ui::files::format_size;
@@ -125,13 +126,28 @@ pub async fn create_repo(
 
     repo_member::Entity::insert(repo_member::ActiveModel {
         id: sea_orm::NotSet,
-        repo_id: Set(repo_id),
+        repo_id: Set(repo_id.clone()),
         user_id: Set(user.user_id),
         permission: Set("rw".to_string()),
         created_at: Set(now),
     })
     .exec(db)
     .await?;
+
+    // Log repo creation activity
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "create",
+        "repo",
+        "/",
+        user.user_id,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
 
     Ok(axum::response::Redirect::to("/libraries/"))
 }
@@ -159,6 +175,21 @@ pub async fn rename_repo(
         return Err(AppError::BadRequest("invalid repo name".into()));
     }
 
+    // Log repo rename activity (before update, so detail captures the old name).
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "rename",
+        "repo",
+        "/",
+        user.user_id,
+        None,
+        None,
+        None,
+        Some(&r.name),
+    )
+    .await;
+
     let now = chrono::Utc::now().timestamp();
     let mut active: repo::ActiveModel = r.into();
     active.name = Set(new_name.to_string());
@@ -184,6 +215,22 @@ pub async fn delete_repo(
     if r.owner_id != user.user_id {
         return Err(AppError::Forbidden);
     }
+
+    // Log repo deletion activity BEFORE deleting related records (FK constraint
+    // prevents inserting activity with a non-existent repo_id).
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "delete",
+        "repo",
+        "/",
+        user.user_id,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
 
     repo_member::Entity::delete_many()
         .filter(repo_member::Column::RepoId.eq(&repo_id))
