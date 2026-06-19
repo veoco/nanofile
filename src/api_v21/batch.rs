@@ -8,6 +8,7 @@ use crate::activity_log;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{commit, repo};
 use crate::error::AppError;
+use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::DirEntryData;
 use crate::storage::file_ops::FileOps;
 
@@ -166,11 +167,16 @@ pub async fn batch_move_items(
         } else {
             format!("{dst_dir}/{}", entry.name)
         };
+        let obj_type = if entry.mode & S_IFDIR != 0 {
+            "dir"
+        } else {
+            "file"
+        };
         activity_log::log_activity(
             db,
             repo_id,
             "move",
-            "file",
+            obj_type,
             &new_fp,
             auth.user_id,
             Some(&old_fp),
@@ -383,7 +389,12 @@ pub async fn sync_batch_copy_item(
         } else {
             format!("{}/{}", dst_parent_dir, entry.name)
         };
-        activity_log::log_activity(db, repo_id, "create", "file", &fp, auth.user_id, None).await;
+        let obj_type = if entry.mode & S_IFDIR != 0 {
+            "dir"
+        } else {
+            "file"
+        };
+        activity_log::log_activity(db, repo_id, "create", obj_type, &fp, auth.user_id, None).await;
     }
 
     // Index copied files in full-text search.
@@ -446,6 +457,11 @@ pub async fn batch_delete_item(
 
     let names_to_delete = body.dirents.clone();
 
+    // Read parent dirent metadata to determine obj_type per entry.
+    let parent_data = crate::storage::read_fs_dir_data(db, repo_id, &parent_fs_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
+
     // Get total size of all items being deleted (for repo size adjustment).
     let mut total_deleted: i64 = 0;
     for name in &names_to_delete {
@@ -482,7 +498,20 @@ pub async fn batch_delete_item(
         } else {
             format!("{parent_dir}/{name}")
         };
-        activity_log::log_activity(db, repo_id, "delete", "file", &fp, auth.user_id, None).await;
+        let is_dir = parent_data
+            .dirents
+            .iter()
+            .any(|d| d.name == *name && d.mode & S_IFDIR != 0);
+        activity_log::log_activity(
+            db,
+            repo_id,
+            "delete",
+            if is_dir { "dir" } else { "file" },
+            &fp,
+            auth.user_id,
+            None,
+        )
+        .await;
     }
 
     // Remove from full-text search index.

@@ -1010,6 +1010,81 @@ impl TestClient {
             .unwrap()
     }
 
+    /// POST /api/v2.1/repos/async-batch-copy-item/
+    ///
+    /// Starts an async batch copy and returns the response (containing task_id).
+    pub async fn async_batch_copy(
+        &self,
+        token: &str,
+        src_repo_id: &str,
+        src_parent_dir: &str,
+        src_dirents: &[&str],
+        dst_repo_id: &str,
+        dst_parent_dir: &str,
+    ) -> reqwest::Response {
+        self.client
+            .post(format!(
+                "{}/api/v2.1/repos/async-batch-copy-item/",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "src_repo_id": src_repo_id,
+                "src_parent_dir": src_parent_dir,
+                "src_dirents": src_dirents,
+                "dst_repo_id": dst_repo_id,
+                "dst_parent_dir": dst_parent_dir,
+            }))
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// POST /api/v2.1/repos/async-batch-move-item/
+    ///
+    /// Starts an async batch move and returns the response (containing task_id).
+    pub async fn async_batch_move(
+        &self,
+        token: &str,
+        src_repo_id: &str,
+        src_parent_dir: &str,
+        src_dirents: &[&str],
+        dst_repo_id: &str,
+        dst_parent_dir: &str,
+    ) -> reqwest::Response {
+        self.client
+            .post(format!(
+                "{}/api/v2.1/repos/async-batch-move-item/",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "src_repo_id": src_repo_id,
+                "src_parent_dir": src_parent_dir,
+                "src_dirents": src_dirents,
+                "dst_repo_id": dst_repo_id,
+                "dst_parent_dir": dst_parent_dir,
+            }))
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// GET /api/v2.1/query-copy-move-progress/?task_id=
+    ///
+    /// Poll the progress of an async copy/move task.
+    pub async fn query_copy_move_progress(&self, token: &str, task_id: &str) -> reqwest::Response {
+        self.client
+            .get(format!(
+                "{}/api/v2.1/query-copy-move-progress/?task_id={}",
+                self.base_url, task_id
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+    }
+
     // ========== Chunked Upload ==========
 
     /// POST a multipart form to an arbitrary URL (for upload-blks API calls).

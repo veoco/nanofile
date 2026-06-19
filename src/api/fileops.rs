@@ -265,6 +265,11 @@ pub async fn batch_delete_handler(
         }
     }
 
+    // Read parent dirent metadata to determine obj_type per entry.
+    let parent_data = crate::storage::read_fs_dir_data(db, &repo_id, &parent_fs_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
+
     let names_to_delete = file_names.clone();
     FileOps::update_dir_tree_and_commit(
         db,
@@ -289,7 +294,20 @@ pub async fn batch_delete_handler(
         } else {
             format!("{parent_dir}/{name}")
         };
-        activity_log::log_activity(db, &repo_id, "delete", "file", &fp, auth.user_id, None).await;
+        let is_dir = parent_data
+            .dirents
+            .iter()
+            .any(|d| d.name == *name && d.mode & S_IFDIR != 0);
+        activity_log::log_activity(
+            db,
+            &repo_id,
+            "delete",
+            if is_dir { "dir" } else { "file" },
+            &fp,
+            auth.user_id,
+            None,
+        )
+        .await;
     }
 
     // Remove from full-text search index.
@@ -462,7 +480,12 @@ pub async fn batch_copy_handler(
         } else {
             format!("{}/{}", dst_dir, entry.name)
         };
-        activity_log::log_activity(db, dst_repo, "create", "file", &fp, auth.user_id, None).await;
+        let obj_type = if entry.mode & S_IFDIR != 0 {
+            "dir"
+        } else {
+            "file"
+        };
+        activity_log::log_activity(db, dst_repo, "create", obj_type, &fp, auth.user_id, None).await;
     }
 
     // Index copied files in full-text search.
@@ -674,11 +697,16 @@ pub async fn batch_move_handler(
         } else {
             format!("{}/{}", dst_dir, entry.name)
         };
+        let obj_type = if entry.mode & S_IFDIR != 0 {
+            "dir"
+        } else {
+            "file"
+        };
         activity_log::log_activity(
             db,
             &repo_id,
             "move",
-            "file",
+            obj_type,
             &new_fp,
             auth.user_id,
             Some(&old_fp),

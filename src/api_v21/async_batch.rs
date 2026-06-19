@@ -3,8 +3,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::DirEntryData;
 use crate::storage::file_ops::FileOps;
 
@@ -49,10 +51,11 @@ pub async fn async_batch_copy_item(
         dst_parent_dir: body.dst_parent_dir,
     };
     let modifier = auth.email.clone();
+    let user_id = auth.user_id;
     let tid = task_id.clone();
 
     tokio::spawn(async move {
-        run_copy_task(&state_clone, &tid, &modifier, &body_clone).await;
+        run_copy_task(&state_clone, &tid, &modifier, user_id, &body_clone).await;
     });
 
     Ok(Json(serde_json::json!({"task_id": task_id})))
@@ -62,6 +65,7 @@ async fn run_copy_task(
     state: &Arc<AppState>,
     task_id: &str,
     modifier: &str,
+    user_id: i32,
     body: &super::batch::SyncBatchCopyRequest,
 ) {
     state.task_manager.start_processing(task_id);
@@ -140,7 +144,7 @@ async fn run_copy_task(
         };
 
     // Add entries to destination
-    match FileOps::update_dir_tree_and_commit(
+    if FileOps::update_dir_tree_and_commit(
         db,
         &body.src_repo_id,
         &dst_dir,
@@ -164,14 +168,38 @@ async fn run_copy_task(
         },
     )
     .await
+    .is_err()
     {
-        Ok(_) => {
-            state.task_manager.complete_task(task_id);
-        }
-        Err(e) => {
-            state.task_manager.fail_task(task_id, e.to_string());
-        }
+        state
+            .task_manager
+            .fail_task(task_id, "async copy failed".into());
+        return;
     }
+
+    // Log activity for each copied item (best-effort).
+    for entry in &new_entries {
+        let fp = if dst_dir == "/" {
+            format!("/{}", entry.name)
+        } else {
+            format!("{}/{}", dst_dir, entry.name)
+        };
+        let obj_type = if entry.mode & S_IFDIR != 0 {
+            "dir"
+        } else {
+            "file"
+        };
+        activity_log::log_activity(
+            db,
+            &body.src_repo_id,
+            "create",
+            obj_type,
+            &fp,
+            user_id,
+            None,
+        )
+        .await;
+    }
+    state.task_manager.complete_task(task_id);
 }
 
 /// POST /api/v2.1/repos/async-batch-move-item/
@@ -213,10 +241,11 @@ pub async fn async_batch_move_item(
         dst_parent_dir: body.dst_parent_dir,
     };
     let modifier = auth.email.clone();
+    let user_id = auth.user_id;
     let tid = task_id.clone();
 
     tokio::spawn(async move {
-        run_move_task(&state_clone, &tid, &modifier, &body_clone).await;
+        run_move_task(&state_clone, &tid, &modifier, user_id, &body_clone).await;
     });
 
     Ok(Json(serde_json::json!({"task_id": task_id})))
@@ -226,6 +255,7 @@ async fn run_move_task(
     state: &Arc<AppState>,
     task_id: &str,
     modifier: &str,
+    user_id: i32,
     body: &super::batch::BatchMoveRequest,
 ) {
     state.task_manager.start_processing(task_id);
@@ -350,7 +380,7 @@ async fn run_move_task(
             }
         };
 
-    match FileOps::update_dir_tree_and_commit(
+    if FileOps::update_dir_tree_and_commit(
         db,
         repo_id,
         &dst_dir,
@@ -374,10 +404,43 @@ async fn run_move_task(
         },
     )
     .await
+    .is_err()
     {
-        Ok(_) => state.task_manager.complete_task(task_id),
-        Err(e) => state.task_manager.fail_task(task_id, e.to_string()),
+        state
+            .task_manager
+            .fail_task(task_id, "async move (add) failed".into());
+        return;
     }
+
+    // Log activity for each moved item (best-effort).
+    for entry in &entries_to_move {
+        let new_fp = if dst_dir == "/" {
+            format!("/{}", entry.name)
+        } else {
+            format!("{}/{}", dst_dir, entry.name)
+        };
+        let old_fp = if src_dir == "/" {
+            format!("/{}", entry.name)
+        } else {
+            format!("{}/{}", src_dir, entry.name)
+        };
+        let obj_type = if entry.mode & S_IFDIR != 0 {
+            "dir"
+        } else {
+            "file"
+        };
+        activity_log::log_activity(
+            db,
+            repo_id,
+            "move",
+            obj_type,
+            &new_fp,
+            user_id,
+            Some(&old_fp),
+        )
+        .await;
+    }
+    state.task_manager.complete_task(task_id);
 }
 
 /// POST /api/v2.1/copy-move-task/
@@ -406,6 +469,7 @@ pub async fn copy_move_task(
 
     let state_clone = state.clone();
     let modifier = auth.email.clone();
+    let user_id = auth.user_id;
     let tid = task_id.clone();
 
     match operation.as_str() {
@@ -418,7 +482,7 @@ pub async fn copy_move_task(
                 dst_parent_dir: body.dst_parent_dir.clone(),
             };
             tokio::spawn(async move {
-                run_copy_task(&state_clone, &tid, &modifier, &req).await;
+                run_copy_task(&state_clone, &tid, &modifier, user_id, &req).await;
             });
         }
         "move" => {
@@ -430,7 +494,7 @@ pub async fn copy_move_task(
                 dst_parent_dir: body.dst_parent_dir.clone(),
             };
             tokio::spawn(async move {
-                run_move_task(&state_clone, &tid, &modifier, &req).await;
+                run_move_task(&state_clone, &tid, &modifier, user_id, &req).await;
             });
         }
         _ => {

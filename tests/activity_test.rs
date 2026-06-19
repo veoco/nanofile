@@ -796,3 +796,231 @@ async fn test_activity_batch_move() {
         );
     }
 }
+
+// ── Async batch operation tests ──────────────────────────────────────────
+
+/// Helper: poll async task until completion
+async fn poll_until_done(f: &TestFixture, task_id: &str) {
+    for _ in 0..20 {
+        let resp = f
+            .client
+            .query_copy_move_progress(&f.api_token, task_id)
+            .await;
+        let body: Value = resp.json().await.unwrap();
+        if body["done"].as_bool().unwrap_or(false) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    panic!("async task {task_id} did not complete within 20 polls");
+}
+
+/// Async batch copy → each copied file has a create activity at target path
+#[tokio::test]
+async fn test_activity_async_batch_copy() {
+    let f = TestFixture::new().await;
+
+    // Upload source files
+    upload_file(&f, "async_copy_1.txt").await;
+    upload_file(&f, "async_copy_2.txt").await;
+
+    // Create destination directory
+    create_dir(&f, "/async_copy_dest").await;
+
+    // Start async batch copy
+    let resp = f
+        .client
+        .async_batch_copy(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            &["async_copy_1.txt", "async_copy_2.txt"],
+            &f.repo_id,
+            "/async_copy_dest",
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "async batch copy failed");
+    let body: Value = resp.json().await.unwrap();
+    let task_id = body["task_id"].as_str().unwrap();
+    poll_until_done(&f, task_id).await;
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let create_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            e["op_type"] == "create"
+                && e["path"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("/async_copy_dest/")
+        })
+        .collect();
+    assert_eq!(
+        create_events.len(),
+        2,
+        "expected 2 create events for async copied files, got {}",
+        create_events.len()
+    );
+}
+
+/// Async batch move → each moved file has a move activity with old_path
+#[tokio::test]
+async fn test_activity_async_batch_move() {
+    let f = TestFixture::new().await;
+
+    // Upload source files
+    upload_file(&f, "async_move_1.txt").await;
+    upload_file(&f, "async_move_2.txt").await;
+
+    // Create destination directory
+    create_dir(&f, "/async_move_dest").await;
+
+    // Start async batch move
+    let resp = f
+        .client
+        .async_batch_move(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            &["async_move_1.txt", "async_move_2.txt"],
+            &f.repo_id,
+            "/async_move_dest",
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "async batch move failed");
+    let body: Value = resp.json().await.unwrap();
+    let task_id = body["task_id"].as_str().unwrap();
+    poll_until_done(&f, task_id).await;
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let move_events: Vec<_> = events.iter().filter(|e| e["op_type"] == "move").collect();
+    assert_eq!(
+        move_events.len(),
+        2,
+        "expected 2 move events for async moved files, got {}",
+        move_events.len()
+    );
+    for ev in &move_events {
+        assert!(
+            ev["old_path"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("/async_move_"),
+            "move event should have old_path in source dir, got: {:?}",
+            ev["old_path"]
+        );
+    }
+}
+
+/// Batch delete of mixed files + directories → verify obj_type is correct
+#[tokio::test]
+async fn test_activity_batch_delete_mixed_types() {
+    let f = TestFixture::new().await;
+
+    // Upload a file and create a directory
+    upload_file(&f, "mixed_file.txt").await;
+    create_dir(&f, "/mixed_dir").await;
+
+    // Batch delete both via `/api2/repos/{id}/fileops/delete/`
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/fileops/delete/?p=/", f.repo_id),
+            Some(&f.api_token),
+            &[("file_names", "mixed_file.txt:mixed_dir")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "batch delete failed");
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let delete_events: Vec<_> = events.iter().filter(|e| e["op_type"] == "delete").collect();
+    assert_eq!(
+        delete_events.len(),
+        2,
+        "expected 2 delete events, got {}",
+        delete_events.len()
+    );
+
+    // One should be obj_type "file", the other "dir"
+    let file_del: Vec<_> = delete_events
+        .iter()
+        .filter(|e| e["obj_type"] == "file")
+        .collect();
+    let dir_del: Vec<_> = delete_events
+        .iter()
+        .filter(|e| e["obj_type"] == "dir")
+        .collect();
+    assert_eq!(
+        file_del.len(),
+        1,
+        "expected 1 file delete event, got {}",
+        file_del.len()
+    );
+    assert_eq!(
+        dir_del.len(),
+        1,
+        "expected 1 dir delete event, got {}",
+        dir_del.len()
+    );
+
+    // Verify correct paths
+    assert!(
+        file_del[0]["path"]
+            .as_str()
+            .unwrap_or("")
+            .contains("mixed_file"),
+        "file delete path should contain 'mixed_file'"
+    );
+    assert!(
+        dir_del[0]["path"]
+            .as_str()
+            .unwrap_or("")
+            .contains("mixed_dir"),
+        "dir delete path should contain 'mixed_dir'"
+    );
+}
+
+/// Batch copy of a directory → verify obj_type is "dir"
+#[tokio::test]
+async fn test_activity_batch_copy_dir() {
+    let f = TestFixture::new().await;
+
+    // Create source directory with a file inside
+    create_dir(&f, "/batch_copy_src_dir").await;
+    upload_file(&f, "batch_copy_src_dir/file_inside.txt").await;
+
+    // Batch copy the directory
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/fileops/copy/?p=/", f.repo_id),
+            Some(&f.api_token),
+            &[
+                ("file_names", "batch_copy_src_dir"),
+                ("dst_repo", &f.repo_id),
+                ("dst_dir", "/"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "batch copy failed");
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    // Look for the "create" event at the copy destination
+    let create_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            e["op_type"] == "create"
+                && e["obj_type"] == "dir"
+                && e["path"]
+                    .as_str()
+                    .unwrap_or("")
+                    .ends_with("batch_copy_src_dir")
+        })
+        .collect();
+    assert_eq!(
+        create_events.len(),
+        1,
+        "expected 1 create(dir) event for copied directory, got {}",
+        create_events.len()
+    );
+}
