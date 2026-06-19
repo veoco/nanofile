@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::AppState;
 use crate::api::repos::extract_multipart_field;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{commit, repo, starred_file};
+use crate::entity::{commit, repo, starred_file, user};
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
 use crate::storage::read_fs_dir_data;
@@ -38,10 +38,6 @@ fn timestamp_to_iso(ts: i64) -> String {
         .unwrap_or_default()
 }
 
-fn email_local_part(email: &str) -> &str {
-    email.split('@').next().unwrap_or("")
-}
-
 // ── GET /api/v2.1/starred-items/ ──────────────────────────────────────
 
 pub async fn get_starred_items(
@@ -49,6 +45,14 @@ pub async fn get_starred_items(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = state.db.as_ref();
+
+    // Look up user for nickname
+    let user_nickname = user::Entity::find_by_id(auth.user_id)
+        .one(db)
+        .await?
+        .map(|u| u.nickname())
+        .unwrap_or_else(|| auth.email.split('@').next().unwrap_or("").to_string());
+
     let entries = starred_file::Entity::find()
         .filter(starred_file::Column::UserId.eq(auth.user_id))
         .all(db)
@@ -70,7 +74,7 @@ pub async fn get_starred_items(
 
     for entry in &entries {
         let repo_opt = repo_cache.get(&entry.repo_id).and_then(|o| o.as_ref());
-        let item = build_item_json(db, entry, repo_opt, &auth.email).await;
+        let item = build_item_json(db, entry, repo_opt, &auth.email, &user_nickname).await;
 
         if entry.path == "/" {
             starred_repos.push(item);
@@ -184,6 +188,13 @@ pub async fn star_item(
     // 3. Permission check (read access is sufficient for starring)
     crate::storage::check_repo_read_permission(db, &req.repo_id, auth.user_id).await?;
 
+    // Look up user for nickname
+    let user_nickname = user::Entity::find_by_id(auth.user_id)
+        .one(db)
+        .await?
+        .map(|u| u.nickname())
+        .unwrap_or_else(|| auth.email.split('@').next().unwrap_or("").to_string());
+
     // 4. Check for duplicate
     let existing = starred_file::Entity::find()
         .filter(starred_file::Column::UserId.eq(auth.user_id))
@@ -193,7 +204,8 @@ pub async fn star_item(
         .await?;
 
     if let Some(ref entry) = existing {
-        let item = build_item_json(db, entry, Some(&repo_record), &auth.email).await;
+        let item =
+            build_item_json(db, entry, Some(&repo_record), &auth.email, &user_nickname).await;
         return Ok(Json(item));
     }
 
@@ -210,7 +222,14 @@ pub async fn star_item(
     .insert(db)
     .await?;
 
-    let item = build_item_json(db, &new_entry, Some(&repo_record), &auth.email).await;
+    let item = build_item_json(
+        db,
+        &new_entry,
+        Some(&repo_record),
+        &auth.email,
+        &user_nickname,
+    )
+    .await;
     Ok(Json(item))
 }
 
@@ -255,6 +274,7 @@ async fn build_item_json(
     entry: &starred_file::Model,
     repo_opt: Option<&repo::Model>,
     auth_email: &str,
+    user_nickname: &str,
 ) -> serde_json::Value {
     let (repo_name, repo_encrypted) = match repo_opt {
         Some(r) => (r.name.clone(), r.encrypted != 0),
@@ -289,7 +309,7 @@ async fn build_item_json(
         "mtime": timestamp_to_iso(mtime),
         "deleted": deleted,
         "user_email": auth_email,
-        "user_name": email_local_part(auth_email),
+        "user_name": user_nickname,
         "user_contact_email": auth_email,
     })
 }

@@ -49,14 +49,19 @@ pub async fn list_repos_v21(
         {
             let is_owner = r.owner_id == auth.user_id;
             let repo_type = if is_owner { "mine" } else { "shared" };
-            let owner_email = if is_owner {
-                auth.email.clone()
+            let (owner_email, owner_name) = if is_owner {
+                (
+                    auth.email.clone(),
+                    auth.email.split('@').next().unwrap_or("").to_string(),
+                )
             } else {
-                user::Entity::find_by_id(r.owner_id)
+                match user::Entity::find_by_id(r.owner_id)
                     .one(state.db.as_ref())
                     .await?
-                    .map(|u| u.email)
-                    .unwrap_or_default()
+                {
+                    Some(u) => (u.email.clone(), u.nickname()),
+                    None => (String::new(), String::new()),
+                }
             };
 
             repos_list.push(V21RepoInfo {
@@ -71,8 +76,8 @@ pub async fn list_repos_v21(
                     .map(|d| d.to_rfc3339())
                     .unwrap_or_default(),
                 mtime: r.updated_at,
-                owner_email: owner_email.clone(),
-                owner_name: owner_email,
+                owner_email,
+                owner_name,
             });
         }
     }
@@ -100,14 +105,19 @@ pub async fn get_repo_v21(
 
     let is_owner = r.owner_id == auth.user_id;
     let repo_type = if is_owner { "mine" } else { "shared" };
-    let owner_email = if is_owner {
-        auth.email.clone()
+    let (owner_email, owner_name) = if is_owner {
+        (
+            auth.email.clone(),
+            auth.email.split('@').next().unwrap_or("").to_string(),
+        )
     } else {
-        user::Entity::find_by_id(r.owner_id)
+        match user::Entity::find_by_id(r.owner_id)
             .one(state.db.as_ref())
             .await?
-            .map(|u| u.email)
-            .unwrap_or_default()
+        {
+            Some(u) => (u.email.clone(), u.nickname()),
+            None => (String::new(), String::new()),
+        }
     };
 
     Ok(Json(V21RepoInfo {
@@ -122,8 +132,8 @@ pub async fn get_repo_v21(
             .map(|d| d.to_rfc3339())
             .unwrap_or_default(),
         mtime: r.updated_at,
-        owner_email: owner_email.clone(),
-        owner_name: owner_email,
+        owner_email,
+        owner_name,
     }))
 }
 pub async fn delete_repo_v21(

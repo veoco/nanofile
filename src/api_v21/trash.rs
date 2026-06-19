@@ -4,12 +4,14 @@ use axum::{
     extract::{Path, Query, State},
     http::Request,
 };
+use sea_orm::EntityTrait;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
+use crate::entity::user;
 use crate::error::AppError;
 use crate::storage::trash::TrashService;
 
@@ -278,6 +280,13 @@ pub async fn list_deleted_repos(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let repos = TrashService::list_deleted_repos(state.db.as_ref(), auth.user_id).await?;
 
+    // Look up user for nickname
+    let owner_name = user::Entity::find_by_id(auth.user_id)
+        .one(state.db.as_ref())
+        .await?
+        .map(|u| u.nickname())
+        .unwrap_or_else(|| auth.email.split('@').next().unwrap_or("").to_string());
+
     let items: Vec<serde_json::Value> = repos
         .iter()
         .map(|r| {
@@ -285,7 +294,7 @@ pub async fn list_deleted_repos(
                 "repo_id": r.repo_id,
                 "repo_name": r.repo_name,
                 "owner_email": auth.email,
-                "owner_name": auth.email.split('@').next().unwrap_or(""),
+                "owner_name": &owner_name,
                 "owner_contact_email": auth.email,
                 "head_commit_id": r.head_id,
                 "size": r.size,

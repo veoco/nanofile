@@ -216,6 +216,21 @@ pub async fn delete_repo(
         return Err(AppError::Forbidden);
     }
 
+    // --- REPO TRASH: Record deleted repo before cascade-delete ---
+    if let Err(e) = crate::storage::trash::TrashService::add_deleted_repo(
+        db,
+        &repo_id,
+        &r.name,
+        r.head_commit_id.as_deref(),
+        r.owner_id,
+        r.size,
+    )
+    .await
+    {
+        tracing::warn!("Failed to record deleted repo in trash: {e}");
+    }
+    // --- END REPO TRASH ---
+
     // Log repo deletion activity BEFORE deleting related records (FK constraint
     // prevents inserting activity with a non-existent repo_id).
     activity_log::log_activity(

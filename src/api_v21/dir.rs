@@ -13,7 +13,7 @@ use crate::AppState;
 use crate::activity_log;
 use crate::api::dir::DirEntry;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{commit, repo, repo_member, starred_file};
+use crate::entity::{commit, repo, repo_member, starred_file, user};
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -319,12 +319,30 @@ pub async fn list_dir_v21(
 
     // File entries — include size, modifier info, and thumbnail info.
     let with_thumbnail = query.with_thumbnail.unwrap_or(false);
+
+    // Batch-load user nicknames for modifier emails to avoid N+1 queries.
+    let mut nickname_cache: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let modifier_emails: std::collections::HashSet<&str> =
+        file_list.iter().map(|e| e.modifier.as_str()).collect();
+    for email in &modifier_emails {
+        if !email.is_empty() {
+            let name = user::Entity::find()
+                .filter(user::Column::Email.eq(*email))
+                .one(db)
+                .await?
+                .map(|u| u.nickname())
+                .unwrap_or_else(|| email.split('@').next().unwrap_or("").to_string());
+            nickname_cache.insert((*email).to_string(), name);
+        }
+    }
+
     for e in &file_list {
         let modifier_email = e.modifier.as_str();
-        // Seahub's email2nickname() returns the local part of the email
-        // (the part before '@') when no nickname is configured, not the
-        // full email address and not an empty string.
-        let modifier_name = modifier_email.split('@').next().unwrap_or("");
+        let modifier_name = nickname_cache
+            .get(modifier_email)
+            .map(|s| s.as_str())
+            .unwrap_or_else(|| modifier_email.split('@').next().unwrap_or(""));
         // Seahub's email2contact_email() returns the profile's contact
         // email, or the original login email if none is configured.
         let modifier_contact_email = modifier_email;

@@ -15,7 +15,7 @@ use crate::AppState;
 use crate::activity_log;
 use crate::api::repos::extract_multipart_field;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{commit, fs_object, repo, repo_member, share_link};
+use crate::entity::{commit, fs_object, repo, repo_member, share_link, user};
 use crate::error::AppError;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
 use crate::storage::file_ops::FileOps;
@@ -317,9 +317,15 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
             };
 
             // For files, derive modifier_name and modifier_contact_email from the modifier email.
+            // Use nickname if user exists, otherwise fall back to email local part.
             if !is_dir && !modifier_email.is_empty() {
-                let local = modifier_email.split('@').next().unwrap_or("");
-                entry.modifier_name = Some(local.to_string());
+                let modifier_name = user::Entity::find()
+                    .filter(user::Column::Email.eq(&modifier_email))
+                    .one(db)
+                    .await?
+                    .map(|u| u.nickname())
+                    .unwrap_or_else(|| modifier_email.split('@').next().unwrap_or("").to_string());
+                entry.modifier_name = Some(modifier_name);
                 entry.modifier_contact_email = Some(modifier_email);
             }
 
