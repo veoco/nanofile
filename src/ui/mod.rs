@@ -10,6 +10,7 @@ pub mod search;
 pub mod settings;
 pub mod shares;
 pub mod starred;
+pub mod trash;
 pub mod two_factor;
 
 use axum::Router;
@@ -71,6 +72,13 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/libraries/{id}/delete",
             axum::routing::post(repos::delete_repo),
         )
+        // Trash — global trash page (sidebar entry)
+        .route("/trash/", get(trash::trash_list_page))
+        .route(
+            "/trash/restore/",
+            axum::routing::post(trash::restore_trash_item),
+        )
+        .route("/trash/clean/", axum::routing::post(trash::clean_trash))
         // Library file browser — /library/{repo_id}/{repo_name}/{*path}
         .route("/library/{id}/{*path}", get(files::file_browser_seahub))
         // Seahub-compatible file view — /lib/{repo_id}/file{*path}
