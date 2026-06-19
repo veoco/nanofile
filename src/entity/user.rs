@@ -19,6 +19,10 @@ pub struct Model {
     pub last_login_at: Option<i64>,
     /// User who invited this user (FK → users.id). None for the admin/root user.
     pub invited_by: Option<i32>,
+    /// Full name (optional, reserved for future use).
+    pub name: Option<String>,
+    /// Display name / nickname — preferred for human-readable display.
+    pub display_name: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -98,6 +102,18 @@ impl Related<super::share_link::Entity> for Entity {
 impl Related<super::upload_link::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::UploadLinks.def()
+    }
+}
+
+impl Model {
+    /// Best available display name.
+    /// Fallback chain: display_name → name → local-part-of-email → ""
+    pub fn nickname(&self) -> String {
+        self.display_name
+            .clone()
+            .or_else(|| self.name.clone())
+            .or_else(|| self.email.split('@').next().map(String::from))
+            .unwrap_or_default()
     }
 }
 

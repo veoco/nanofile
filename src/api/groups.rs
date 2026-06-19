@@ -41,7 +41,7 @@ pub async fn list_groups(
             result.push(serde_json::json!({
                 "id": g.id,
                 "name": g.name,
-                "creator_name": creator.map(|u| u.email).unwrap_or_default(),
+                "creator_name": creator.as_ref().map(|u| u.nickname()).unwrap_or_default(),
                 "created_at": g.created_at,
                 "member_count": member_count,
             }));
@@ -74,7 +74,7 @@ pub async fn groups_and_contacts(
             groups_list.push(serde_json::json!({
                 "id": g.id,
                 "name": g.name,
-                "creator_name": creator.map(|u| u.email).unwrap_or_default(),
+                "creator_name": creator.as_ref().map(|u| u.nickname()).unwrap_or_default(),
                 "created_at": g.created_at,
             }));
         }
@@ -128,7 +128,7 @@ pub async fn search_user(
         .map(|u| {
             serde_json::json!({
                 "email": u.email,
-                "name": u.email,
+                "name": u.nickname(),
                 "contact_email": u.email,
             })
         })

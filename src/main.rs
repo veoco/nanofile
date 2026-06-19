@@ -100,6 +100,8 @@ async fn main() -> anyhow::Result<()> {
                         created_at: Set(now),
                         last_login_at: Set(None),
                         invited_by: Set(None),
+                        name: sea_orm::NotSet,
+                        display_name: sea_orm::NotSet,
                     };
                     model.insert(state.db.as_ref()).await?;
                     tracing::info!("Admin user '{}' created", admin_email);
@@ -282,6 +284,8 @@ async fn main() -> anyhow::Result<()> {
                 created_at: Set(now),
                 last_login_at: Set(None),
                 invited_by: Set(None),
+                name: sea_orm::NotSet,
+                display_name: sea_orm::NotSet,
             };
 
             model.insert(&db).await?;

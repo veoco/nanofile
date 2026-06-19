@@ -111,6 +111,10 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/profile/password",
             axum::routing::post(settings::change_password),
         )
+        .route(
+            "/profile/display-name",
+            axum::routing::post(settings::update_display_name),
+        )
         // Invitation codes
         .route(
             "/profile/invitations/",

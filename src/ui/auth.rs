@@ -552,6 +552,8 @@ pub async fn register(
         created_at: Set(now),
         last_login_at: Set(None),
         invited_by: Set(Some(code_record.creator_id)),
+        name: sea_orm::NotSet,
+        display_name: sea_orm::NotSet,
     };
 
     let new_user = new_user

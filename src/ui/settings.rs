@@ -24,6 +24,7 @@ use super::auth_extractor::WebUser;
 pub struct SettingsTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub user_email: String,
+    pub user_display_name: String,
     pub error: Option<String>,
     pub success: Option<String>,
     pub active_page: &'static str,
@@ -71,12 +72,23 @@ pub struct UnlinkDeviceForm {
     pub csrf_token: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct DisplayNameForm {
+    pub display_name: String,
+    pub csrf_token: Option<String>,
+}
+
 /// GET /profile/ — account settings page.
 pub async fn settings_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
     let db = state.db.as_ref();
+
+    let user_record = user::Entity::find_by_id(user.user_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
     let two_fa = user_2fa::Entity::find_by_id(user.user_id).one(db).await?;
     let two_fa_enabled = two_fa.as_ref().map(|tf| tf.enabled).unwrap_or(false);
@@ -89,6 +101,7 @@ pub async fn settings_page(
     let tpl = SettingsTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
+        user_display_name: user_record.nickname(),
         error: None,
         success: None,
         active_page: "settings",
@@ -128,7 +141,8 @@ pub async fn change_password(
         ));
         let tpl = SettingsTemplate {
             urls: crate::static_assets::template_urls(),
-            user_email: user.email,
+            user_email: user.email.clone(),
+            user_display_name: user.email.split('@').next().unwrap_or("").to_string(),
             error: Some("Incorrect current password.".to_string()),
             success: None,
             active_page: "settings",
@@ -152,6 +166,39 @@ pub async fn change_password(
         .update(db)
         .await
         .map_err(|e| AppError::internal(format!("update failed: {e}")))?;
+
+    Ok((StatusCode::FOUND, [("Location", "/profile/")]).into_response())
+}
+
+/// POST /profile/display-name — update the user's display name.
+pub async fn update_display_name(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<DisplayNameForm>,
+) -> Result<impl IntoResponse, AppError> {
+    // CSRF check
+    if let Some(ref token) = form.csrf_token {
+        let expected =
+            crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        if *token != expected {
+            return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
+        }
+    }
+
+    let db = state.db.as_ref();
+
+    let user_record = user::Entity::find_by_id(user.user_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+
+    let mut active: user::ActiveModel = user_record.into();
+    active.display_name = sea_orm::Set(if form.display_name.trim().is_empty() {
+        None
+    } else {
+        Some(form.display_name.trim().to_string())
+    });
+    active.update(db).await?;
 
     Ok((StatusCode::FOUND, [("Location", "/profile/")]).into_response())
 }
@@ -301,7 +348,8 @@ pub async fn upload_avatar(
         ));
         let tpl = SettingsTemplate {
             urls: crate::static_assets::template_urls(),
-            user_email: user.email,
+            user_email: user.email.clone(),
+            user_display_name: user.email.split('@').next().unwrap_or("").to_string(),
             error: Some("Invalid CSRF token.".to_string()),
             success: None,
             active_page: "settings",
@@ -327,6 +375,7 @@ pub async fn upload_avatar(
         let tpl = SettingsTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email.clone(),
+            user_display_name: user.email.split('@').next().unwrap_or("").to_string(),
             error: Some(format!("File too large (max {} bytes)", MAX_AVATAR_SIZE)),
             success: None,
             active_page: "settings",
