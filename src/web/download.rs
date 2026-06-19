@@ -1,11 +1,12 @@
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use futures::{Stream, StreamExt};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -45,9 +46,15 @@ fn stream_blocks(
 }
 
 /// GET /f/{token} — download via shared link token.
+///
+/// Supports password-protected links via the `X-Seafile-Sharelink-Password`
+/// HTTP header or `password` query parameter.
+/// Returns 404 for expired links and 403 for wrong/missing passwords.
 pub async fn shared_file_download(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let link = share_link::Entity::find()
         .filter(share_link::Column::Token.eq(&token))
@@ -55,12 +62,47 @@ pub async fn shared_file_download(
         .await?
         .ok_or_else(|| AppError::NotFound("link not found".into()))?;
 
+    // Check expiry
+    if let Some(expires_at) = link.expires_at
+        && chrono::Utc::now().timestamp() > expires_at
+    {
+        return Err(AppError::NotFound("link has expired".into()));
+    }
+
+    // Check password if set
+    if let Some(ref stored_hash) = link.password {
+        let provided = headers
+            .get("X-Seafile-Sharelink-Password")
+            .and_then(|v| v.to_str().ok().map(|s| s.to_string()))
+            .or_else(|| params.get("password").cloned())
+            .ok_or_else(|| AppError::BadRequest("password required".into()))?;
+
+        if !crate::auth::password::verify_password_legacy(&provided, stored_hash) {
+            return Err(AppError::Forbidden);
+        }
+    }
+
     let (_file_data, block_ids) =
         Downloader::resolve_blocks(state.db.as_ref(), &link.repo_id, &link.path)
             .await
             .map_err(|_| AppError::NotFound("file not found".into()))?;
 
     let stream = stream_blocks(block_ids, state.block_store.clone(), None);
+
+    // Increment view_cnt asynchronously (fire-and-forget)
+    let db = state.db.clone();
+    let link_id = link.id;
+    tokio::spawn(async move {
+        if let Ok(Some(link)) = share_link::Entity::find_by_id(link_id).one(&*db).await {
+            let mut active: share_link::ActiveModel = link.into();
+            let current = match &active.view_cnt {
+                Set(v) => *v,
+                _ => 0,
+            };
+            active.view_cnt = Set(current + 1);
+            let _ = share_link::Entity::update(active).exec(&*db).await;
+        }
+    });
 
     Ok((
         StatusCode::OK,

@@ -18,6 +18,9 @@ pub struct Model {
     pub expires_at: Option<i64>,
     #[sea_orm(not_null)]
     pub created_at: i64,
+    #[sea_orm(not_null, default_value = 0)]
+    pub view_cnt: i64,
+    pub description: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

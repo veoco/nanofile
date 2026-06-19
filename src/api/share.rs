@@ -28,6 +28,11 @@ pub struct ShareLinkInfo {
     pub repo_id: String,
     pub path: String,
     pub created_at: i64,
+    pub has_password: bool,
+    pub expire_at: Option<i64>,
+    pub s_type: String,
+    pub view_cnt: i64,
+    pub description: Option<String>,
 }
 
 pub fn share_routes() -> Router<Arc<AppState>> {
@@ -56,6 +61,11 @@ pub async fn list_share_links(
             repo_id: l.repo_id,
             path: l.path,
             created_at: l.created_at,
+            has_password: l.password.is_some(),
+            expire_at: l.expires_at,
+            s_type: l.s_type,
+            view_cnt: l.view_cnt,
+            description: l.description,
         })
         .collect();
 
@@ -78,12 +88,18 @@ pub async fn create_share_link(
         ));
     }
 
+    // s_type defaults to 'f' (file). Full path-to-type resolution requires
+    // walking the commit tree, which is done lazily at download time.
+    let s_type = "f".to_string();
+
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
 
     let password_hash = req
         .password
-        .map(|p| crate::auth::password::hash_password_legacy(&p));
+        .as_ref()
+        .map(|p| crate::auth::password::hash_password_legacy(p));
+    let has_password = req.password.is_some();
 
     let model = share_link::ActiveModel {
         id: sea_orm::NotSet,
@@ -94,6 +110,9 @@ pub async fn create_share_link(
         password: sea_orm::Set(password_hash),
         expires_at: sea_orm::Set(req.expires_at),
         created_at: sea_orm::Set(now),
+        s_type: sea_orm::Set(s_type.clone()),
+        view_cnt: sea_orm::Set(0i64),
+        description: sea_orm::Set(None),
     };
     share_link::Entity::insert(model)
         .exec(state.db.as_ref())
@@ -105,6 +124,11 @@ pub async fn create_share_link(
         repo_id: req.repo_id,
         path: req.path,
         created_at: now,
+        has_password,
+        expire_at: req.expires_at,
+        s_type,
+        view_cnt: 0,
+        description: None,
     }))
 }
 

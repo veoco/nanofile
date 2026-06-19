@@ -29,6 +29,7 @@ mod m20260607_000007_add_email_to_invitation_codes;
 mod m20260609_000001_create_file_lock_timestamps;
 mod m20260614_000001_add_is_dir_to_starred_files;
 mod m20260614_000002_add_old_path_to_activities;
+mod m20260619_000001_add_share_link_fields;
 
 pub struct Migrator;
 
@@ -64,6 +65,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260609_000001_create_file_lock_timestamps::Migration),
             Box::new(m20260614_000001_add_is_dir_to_starred_files::Migration),
             Box::new(m20260614_000002_add_old_path_to_activities::Migration),
+            Box::new(m20260619_000001_add_share_link_fields::Migration),
         ]
     }
 }

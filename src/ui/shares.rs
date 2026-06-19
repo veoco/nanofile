@@ -96,6 +96,9 @@ pub async fn create_share(
         password: Set(None),
         expires_at: Set(None),
         created_at: Set(now),
+        s_type: Set("f".to_string()),
+        view_cnt: Set(0i64),
+        description: Set(None),
     };
 
     link.insert(db)

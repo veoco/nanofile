@@ -82,6 +82,8 @@ pub async fn create_upload_link(
         password: sea_orm::Set(password_hash),
         expires_at: sea_orm::Set(req.expires_at),
         created_at: sea_orm::Set(now),
+        view_cnt: sea_orm::Set(0i64),
+        description: sea_orm::Set(None),
     };
     upload_link::Entity::insert(model)
         .exec(state.db.as_ref())

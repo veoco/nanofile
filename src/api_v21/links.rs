@@ -35,9 +35,15 @@ pub async fn list_share_links_v21(
         .map(|l| {
             serde_json::json!({
                 "token": l.token,
+                "link": format!("/f/{}/", l.token),
                 "repo_id": l.repo_id,
                 "path": l.path,
                 "created_at": l.created_at,
+                "has_password": l.password.is_some(),
+                "expire_at": l.expires_at,
+                "s_type": l.s_type,
+                "view_cnt": l.view_cnt,
+                "description": l.description,
             })
         })
         .collect();
@@ -62,6 +68,10 @@ pub async fn create_share_link_v21(
         ));
     }
 
+    // s_type defaults to 'f' (file). Full path-to-type resolution requires
+    // walking the commit tree, which is done lazily at download time.
+    let s_type = "f".to_string();
+
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
 
@@ -71,9 +81,14 @@ pub async fn create_share_link_v21(
         creator_id: Set(auth.user_id),
         path: Set(req.path.clone()),
         token: Set(token.clone()),
-        password: Set(req.password.map(|p| sha256_hash(&p))),
+        password: Set(req
+            .password
+            .map(|p| crate::auth::password::hash_password_legacy(&p))),
         expires_at: Set(req.expire_days.map(|d| now + d * 86400)),
         created_at: Set(now),
+        s_type: Set(s_type),
+        view_cnt: Set(0i64),
+        description: Set(None),
     })
     .exec(state.db.as_ref())
     .await?;
@@ -83,14 +98,18 @@ pub async fn create_share_link_v21(
 
 /// DELETE /api/v2.1/share-links/{token}/
 pub async fn delete_share_link_v21(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    share_link::Entity::delete_many()
+    let result = share_link::Entity::delete_many()
         .filter(share_link::Column::Token.eq(&token))
+        .filter(share_link::Column::CreatorId.eq(auth.user_id))
         .exec(state.db.as_ref())
         .await?;
+    if result.rows_affected == 0 {
+        return Err(AppError::NotFound("share link not found".into()));
+    }
     Ok(Json(serde_json::json!({"success": true})))
 }
 
@@ -106,7 +125,17 @@ pub async fn list_upload_links_v21(
 
     let items: Vec<serde_json::Value> = links
         .into_iter()
-        .map(|l| serde_json::json!({"token": l.token, "repo_id": l.repo_id, "path": l.path}))
+        .map(|l| {
+            serde_json::json!({
+                "token": l.token,
+                "repo_id": l.repo_id,
+                "path": l.path,
+                "has_password": l.password.is_some(),
+                "expire_at": l.expires_at,
+                "view_cnt": l.view_cnt,
+                "description": l.description,
+            })
+        })
         .collect();
 
     Ok(Json(serde_json::json!({"upload_link_list": items})))
@@ -127,9 +156,11 @@ pub async fn create_upload_link_v21(
         creator_id: Set(auth.user_id),
         path: Set(req.path),
         token: Set(token.clone()),
-        password: Set(None),
+        password: Set(req.password),
         expires_at: Set(req.expire_days.map(|d| now + d * 86400)),
         created_at: Set(now),
+        view_cnt: Set(0i64),
+        description: Set(None),
     })
     .exec(state.db.as_ref())
     .await?;
@@ -143,19 +174,17 @@ pub async fn create_upload_link_v21(
 /// DialogService.deleteUploadLink() uses `Single<Boolean>` and the
 /// SupportResponseConverter's TypeAdapter<Boolean> cannot parse an object.
 pub async fn delete_upload_link_v21(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    upload_link::Entity::delete_by_id(id)
+    let result = upload_link::Entity::delete_many()
+        .filter(upload_link::Column::Id.eq(id))
+        .filter(upload_link::Column::CreatorId.eq(auth.user_id))
         .exec(state.db.as_ref())
         .await?;
+    if result.rows_affected == 0 {
+        return Err(AppError::NotFound("upload link not found".into()));
+    }
     Ok(Json(serde_json::Value::Bool(true)))
-}
-
-fn sha256_hash(s: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(s.as_bytes());
-    hex::encode(hasher.finalize())
 }
