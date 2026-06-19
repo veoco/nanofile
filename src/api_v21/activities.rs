@@ -147,10 +147,17 @@ pub async fn get_activities(
             _ => (vec![], 0),
         };
 
+        // Prefer repo_name from detail (event-time name) over current DB name.
+        let event_repo_name = details
+            .first()
+            .and_then(|d| d.get("repo_name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(repo_name);
+
         let mut d = serde_json::json!({
             "op_type": e.op_type,
             "repo_id": e.repo_id,
-            "repo_name": repo_name,
+            "repo_name": event_repo_name,
             "obj_type": e.obj_type,
             "commit_id": e.commit_id,
             "path": e.path,
@@ -168,6 +175,22 @@ pub async fn get_activities(
         // Include old_path for rename/move operations
         if let Some(ref old_path) = e.old_path {
             d["old_path"] = serde_json::json!(old_path);
+        }
+
+        // old_name for rename events (seahub API compatibility)
+        if e.op_type == "rename"
+            && (e.obj_type == "file" || e.obj_type == "dir")
+            && let Some(ref old_path) = e.old_path
+        {
+            d["old_name"] =
+                serde_json::json!(old_path.rsplit_once('/').map(|(_, n)| n).unwrap_or(""));
+        }
+
+        // old_repo_name for repo rename events (from detail JSON)
+        if !details.is_empty()
+            && let Some(orn) = details[0].get("old_repo_name")
+        {
+            d["old_repo_name"] = orn.clone();
         }
 
         event_list.push(d);

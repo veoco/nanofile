@@ -306,6 +306,7 @@ pub async fn batch_delete_handler(
             None,
             entry.map(|d| d.size),
             entry.map(|d| d.id.as_str()),
+            None,
         )
         .await;
     }
@@ -495,6 +496,7 @@ pub async fn batch_copy_handler(
             None,
             Some(entry.size),
             Some(entry.id.as_str()),
+            None,
         )
         .await;
     }
@@ -723,6 +725,7 @@ pub async fn batch_move_handler(
             Some(&old_fp),
             Some(entry.size),
             Some(entry.id.as_str()),
+            None,
         )
         .await;
     }

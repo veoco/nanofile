@@ -501,6 +501,7 @@ async fn rename_dir_entry(
         Some(path),
         None,
         None,
+        None,
     )
     .await;
 
@@ -599,6 +600,7 @@ pub(crate) async fn create_dir_by_path(
         None,
         None,
         None,
+        None,
     )
     .await;
 
@@ -664,6 +666,7 @@ pub async fn delete_dir(
         "dir",
         &path,
         auth.user_id,
+        None,
         None,
         None,
         None,
@@ -797,6 +800,7 @@ pub async fn move_dir(
         &new_path,
         auth.user_id,
         Some(&req.p),
+        None,
         None,
         None,
     )

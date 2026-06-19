@@ -116,6 +116,7 @@ pub async fn delete_dirent_v21(
         None,
         None,
         None,
+        None,
     )
     .await;
 

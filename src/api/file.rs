@@ -465,6 +465,7 @@ async fn upload_file_inner(
         None,
         None,
         None,
+        None,
     )
     .await;
 
@@ -567,6 +568,7 @@ pub async fn delete_file(
         "file",
         &path,
         auth.user_id,
+        None,
         None,
         None,
         None,
@@ -694,6 +696,7 @@ pub(crate) async fn rename_file_entry(
         &new_path,
         user_id,
         Some(path),
+        None,
         None,
         None,
     )
@@ -828,6 +831,7 @@ async fn move_file_entry(
         &new_path,
         user_id,
         Some(path),
+        None,
         None,
         None,
     )

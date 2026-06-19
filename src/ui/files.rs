@@ -616,6 +616,7 @@ pub async fn upload_file(
             None,
             None,
             None,
+            None,
         )
         .await;
 
@@ -723,6 +724,7 @@ pub async fn delete_entry(
         "file",
         &path,
         user.user_id,
+        None,
         None,
         None,
         None,
@@ -842,6 +844,7 @@ pub async fn create_directory(
         None,
         None,
         None,
+        None,
     )
     .await;
 
@@ -950,6 +953,7 @@ pub async fn rename_entry(
         &new_path,
         user.user_id,
         Some(path),
+        None,
         None,
         None,
     )

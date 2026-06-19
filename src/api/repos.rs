@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::auth::middleware::AuthUser;
 use crate::auth::token::generate_sync_token;
 use crate::entity::{commit, repo, repo_member, sync_token, user};
@@ -279,6 +280,7 @@ pub async fn create_repo(
         None,
         None,
         None,
+        None,
     )
     .await;
 
@@ -442,6 +444,21 @@ pub async fn rename_repo(
     if new_name.is_empty() || new_name.contains('/') {
         return Err(AppError::BadRequest("invalid repo name".into()));
     }
+
+    // Log repo rename activity (before update, so detail captures the old name).
+    activity_log::log_activity(
+        state.db.as_ref(),
+        &repo_id,
+        "rename",
+        "repo",
+        "/",
+        auth.user_id,
+        None,
+        None,
+        None,
+        Some(&r.name),
+    )
+    .await;
 
     // Update
     let now = chrono::Utc::now().timestamp();
@@ -683,6 +700,7 @@ pub async fn delete_repo(
         "repo",
         "/",
         auth.user_id,
+        None,
         None,
         None,
         None,

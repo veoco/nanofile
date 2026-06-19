@@ -1076,3 +1076,73 @@ async fn test_activity_batch_copy_dir() {
         "batch_create should have count=2 (original + copy)"
     );
 }
+
+// ── Rename/repo-level event tests ──────────────────────────────────────
+
+/// Rename file → API response includes old_name field
+#[tokio::test]
+async fn test_activity_rename_old_name() {
+    let f = TestFixture::new().await;
+    create_file(&f, "/oldname_test.txt").await;
+
+    // Rename via v2 JSON endpoint
+    let resp = f
+        .client
+        .rename_file(&f.api_token, &f.repo_id, "/oldname_test.txt", "newname.txt")
+        .await;
+    assert_eq!(resp.status(), 200, "rename failed");
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let rename_ev = find_event(&events, "rename").expect("rename event should exist");
+    assert_eq!(rename_ev["old_path"], "/oldname_test.txt");
+    assert_eq!(rename_ev["old_name"], "oldname_test.txt");
+    assert_eq!(rename_ev["path"], "/newname.txt");
+}
+
+/// Repo rename → creates a rename+repo activity event
+#[tokio::test]
+async fn test_activity_repo_rename_logged() {
+    let f = TestFixture::new().await;
+
+    // Rename the repo
+    let resp = f
+        .client
+        .rename_repo(&f.api_token, &f.repo_id, "renamed-repo")
+        .await;
+    assert_eq!(resp.status(), 200, "rename repo failed");
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let rename_event = find_event(&events, "rename").expect("rename event should exist");
+    assert_eq!(rename_event["obj_type"], "repo");
+    assert_eq!(rename_event["path"], "/");
+}
+
+/// Repo rename → response includes old_repo_name field
+#[tokio::test]
+async fn test_activity_repo_rename_old_repo_name() {
+    let f = TestFixture::new().await;
+    let old_name = "test-repo"; // TestFixture default repo name
+
+    // Rename the repo
+    let resp = f
+        .client
+        .rename_repo(&f.api_token, &f.repo_id, "renamed-repo-2")
+        .await;
+    assert_eq!(resp.status(), 200, "rename repo failed");
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let rename_event = find_event(&events, "rename").expect("rename event should exist");
+    assert_eq!(
+        rename_event["old_repo_name"].as_str().unwrap_or(""),
+        old_name,
+        "old_repo_name should be the original repo name"
+    );
+
+    // Verify repo_name in the response is the name at event time (the old name),
+    // not the current DB name (which is "renamed-repo-2").
+    assert_eq!(
+        rename_event["repo_name"].as_str().unwrap_or(""),
+        old_name,
+        "repo_name should reflect the name at event time (old name)"
+    );
+}
