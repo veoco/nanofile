@@ -694,6 +694,28 @@ pub async fn delete_entry(
         .await
         .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
+    // Best-effort trash recording (read entry details before tree update).
+    // Fetch the actual head commit ID for accurate parent reference.
+    let head_commit_id = repo::Entity::find_by_id(&repo_id)
+        .one(db)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|r| r.head_commit_id)
+        .unwrap_or_default();
+    if !head_commit_id.is_empty() {
+        record_trash_best_effort(
+            db,
+            &repo_id,
+            &parent_fs_id,
+            &path,
+            name,
+            &head_commit_id,
+            &user.email,
+        )
+        .await;
+    }
+
     // Update the FS tree and create a commit
     FileOps::update_dir_tree_and_commit(
         db,
@@ -1210,6 +1232,45 @@ async fn get_head_root_id(db: &DatabaseConnection, repo_id: &str) -> Result<Stri
         .ok_or_else(|| AppError::NotFound("Head commit not found".to_string()))?;
 
     Ok(head.root_id)
+}
+
+/// Best-effort trash recording: reads the parent directory data to find the
+/// entry's obj_id and type, then inserts into file_trash.  Silently ignores
+/// all errors — trash recording must not break the delete operation.
+async fn record_trash_best_effort(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    parent_fs_id: &str,
+    full_path: &str,
+    entry_name: &str,
+    head_commit_id: &str,
+    user_email: &str,
+) {
+    // Use .ok() to discard the non-Send Box<dyn Error> before any .await.
+    let parent_data = crate::storage::read_fs_dir_data(db, repo_id, parent_fs_id)
+        .await
+        .ok();
+    if let Some(pd) = parent_data
+        && let Some(de) = pd.dirents.iter().find(|d| d.name == entry_name)
+    {
+        let ot = if de.mode & S_IFDIR != 0 {
+            "dir"
+        } else {
+            "file"
+        };
+        let _ = crate::storage::trash::TrashService::add_to_trash(
+            db,
+            repo_id,
+            full_path,
+            ot,
+            &de.id,
+            &de.name,
+            de.size,
+            head_commit_id,
+            user_email,
+        )
+        .await;
+    }
 }
 
 /// Extract the parent directory path from a full path.
