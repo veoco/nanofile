@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{commit, repo};
 use crate::error::AppError;
@@ -152,6 +153,30 @@ pub async fn batch_move_items(
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Log activity for each moved item (best-effort).
+    for entry in &entries_to_move {
+        let old_fp = if src_dir == "/" {
+            format!("/{}", entry.name)
+        } else {
+            format!("{src_dir}/{}", entry.name)
+        };
+        let new_fp = if dst_dir == "/" {
+            format!("/{}", entry.name)
+        } else {
+            format!("{dst_dir}/{}", entry.name)
+        };
+        activity_log::log_activity(
+            db,
+            repo_id,
+            "move",
+            "file",
+            &new_fp,
+            auth.user_id,
+            Some(&old_fp),
+        )
+        .await;
+    }
 
     // Update full-text search index for each moved item.
     if let Some(indexer) = &state.indexer {
@@ -351,6 +376,16 @@ pub async fn sync_batch_copy_item(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // Log activity for each copied item (best-effort).
+    for entry in &new_entries {
+        let fp = if dst_parent_dir == "/" {
+            format!("/{}", entry.name)
+        } else {
+            format!("{}/{}", dst_parent_dir, entry.name)
+        };
+        activity_log::log_activity(db, repo_id, "create", "file", &fp, auth.user_id, None).await;
+    }
+
     // Index copied files in full-text search.
     if let Some(indexer) = &state.indexer {
         for entry in &new_entries {
@@ -439,6 +474,16 @@ pub async fn batch_delete_item(
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Log activity for each deleted item (best-effort).
+    for name in &body.dirents {
+        let fp = if parent_dir == "/" {
+            format!("/{name}")
+        } else {
+            format!("{parent_dir}/{name}")
+        };
+        activity_log::log_activity(db, repo_id, "delete", "file", &fp, auth.user_id, None).await;
+    }
 
     // Remove from full-text search index.
     if let Some(indexer) = &state.indexer {

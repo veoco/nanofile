@@ -653,3 +653,146 @@ async fn test_ui_activities_page() {
         &html[..html.len().min(300)]
     );
 }
+
+// ── Batch operation tests ───────────────────────────────────────────────
+
+/// Batch delete via v2 API → each deleted file has a delete activity
+#[tokio::test]
+async fn test_activity_batch_delete() {
+    let f = TestFixture::new().await;
+
+    // Upload 3 files
+    for i in 1..=3 {
+        upload_file(&f, &format!("batch_del_{i}.txt")).await;
+    }
+
+    // Batch delete via `/api2/repos/{id}/fileops/delete/`
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/fileops/delete/?p=/", f.repo_id),
+            Some(&f.api_token),
+            &[(
+                "file_names",
+                "batch_del_1.txt:batch_del_2.txt:batch_del_3.txt",
+            )],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "batch delete failed: {:?}",
+        resp.text().await
+    );
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let delete_events: Vec<_> = events.iter().filter(|e| e["op_type"] == "delete").collect();
+    assert_eq!(
+        delete_events.len(),
+        3,
+        "expected 3 delete events (one per file), got {}",
+        delete_events.len()
+    );
+}
+
+/// Batch copy via v2 API → each copied file has a create activity at target path
+#[tokio::test]
+async fn test_activity_batch_copy() {
+    let f = TestFixture::new().await;
+
+    // Upload source files
+    for i in 1..=2 {
+        upload_file(&f, &format!("batch_copy_src_{i}.txt")).await;
+    }
+
+    // Create destination directory
+    create_dir(&f, "/copy_dest").await;
+
+    // Batch copy via `/api2/repos/{id}/fileops/copy/`
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/fileops/copy/?p=/", f.repo_id),
+            Some(&f.api_token),
+            &[
+                ("file_names", "batch_copy_src_1.txt:batch_copy_src_2.txt"),
+                ("dst_repo", &f.repo_id),
+                ("dst_dir", "/copy_dest"),
+            ],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "batch copy failed: {:?}",
+        resp.text().await
+    );
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let create_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            e["op_type"] == "create" && e["path"].as_str().unwrap_or("").contains("/copy_dest/")
+        })
+        .collect();
+    assert_eq!(
+        create_events.len(),
+        2,
+        "expected 2 create events for copied files, got {}",
+        create_events.len()
+    );
+}
+
+/// Batch move via v2 API → each moved file has a move activity with old_path
+#[tokio::test]
+async fn test_activity_batch_move() {
+    let f = TestFixture::new().await;
+
+    // Upload source files
+    upload_file(&f, "batch_move_1.txt").await;
+    upload_file(&f, "batch_move_2.txt").await;
+
+    // Create destination directory
+    create_dir(&f, "/move_dest").await;
+
+    // Batch move via `/api2/repos/{id}/fileops/move/`
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/fileops/move/?p=/", f.repo_id),
+            Some(&f.api_token),
+            &[
+                ("file_names", "batch_move_1.txt:batch_move_2.txt"),
+                ("dst_repo", &f.repo_id),
+                ("dst_dir", "/move_dest"),
+            ],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "batch move failed: {:?}",
+        resp.text().await
+    );
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let move_events: Vec<_> = events.iter().filter(|e| e["op_type"] == "move").collect();
+    assert_eq!(
+        move_events.len(),
+        2,
+        "expected 2 move events, got {}",
+        move_events.len()
+    );
+
+    // Each move event should have old_path pointing to source
+    for ev in &move_events {
+        assert!(
+            ev["old_path"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("/batch_move_"),
+            "move event should have old_path in source dir, got: {:?}",
+            ev["old_path"]
+        );
+    }
+}
