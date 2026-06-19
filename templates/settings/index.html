@@ -15,7 +15,28 @@
 {% endif %}
 
 <div class="mt-6 max-w-lg">
+    <!-- Avatar -->
     <div class="rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div class="px-4 py-5 sm:px-6">
+            <h2 class="text-base font-semibold text-gray-900">Avatar</h2>
+            <p class="mt-1 text-sm text-gray-500">Upload a profile picture.</p>
+            <div class="mt-4 flex items-center gap-x-6">
+                <img src="/avatars/user/{{ user_email }}/resized/96/" alt=""
+                     class="h-24 w-24 rounded-full object-cover bg-seafile-blue ring-2 ring-gray-200">
+                <form action="/profile/avatar" method="POST" enctype="multipart/form-data" class="flex flex-col gap-y-3">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                    <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif" required
+                           class="block w-full text-sm text-gray-500 file:mr-4 file:rounded-md file:border-0 file:bg-seafile-blue file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-blue-600">
+                    <button type="submit"
+                            class="self-start rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600">
+                        Upload
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
         <div class="px-4 py-5 sm:px-6">
             <h2 class="text-base font-semibold text-gray-900">Account Info</h2>
             <p class="mt-1 text-sm text-gray-500">{{ user_email }}</p>

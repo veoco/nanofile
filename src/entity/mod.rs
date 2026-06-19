@@ -1,5 +1,6 @@
 pub mod activity;
 pub mod api_token;
+pub mod avatar;
 pub mod client_login_token;
 pub mod commit;
 pub mod file_lock_timestamp;

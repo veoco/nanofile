@@ -16,6 +16,7 @@ pub mod repos;
 pub mod smart_link;
 pub mod starred;
 pub mod task_manager;
+pub mod user_avatar;
 pub mod wiki;
 
 /// Routes for the `/api/v2.1/` prefix.
@@ -139,6 +140,8 @@ pub fn api_v21_routes() -> Router<Arc<AppState>> {
         )
         // Search file (v2.1)
         .route("/api/v2.1/search-file", get(crate::api::search::search))
+        // User avatar upload
+        .route("/api/v2.1/user-avatar/", post(user_avatar::upload_avatar))
         // Set/change repo password for encrypted repos
         .route(
             "/api/v2.1/repos/{repo_id}/set-password/",

@@ -166,7 +166,7 @@ pub async fn get_activities(
             "author_name": email.split('@').next().unwrap_or(""),
             "author_contact_email": email,
             "login_id": "",
-            "avatar_url": "",
+            "avatar_url": crate::api::avatar::primary_avatar_url(email, 32),
             "time": time,
             "details": details,
             "count": count,

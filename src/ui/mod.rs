@@ -120,6 +120,11 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/profile/invitations/{id}/delete",
             axum::routing::post(invitations::delete_invitation),
         )
+        // Avatar upload
+        .route(
+            "/profile/avatar",
+            axum::routing::post(settings::upload_avatar),
+        )
         // Two-Factor Authentication
         .route("/profile/two-factor/", get(two_factor::setup_page))
         .route(

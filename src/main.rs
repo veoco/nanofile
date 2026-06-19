@@ -149,6 +149,7 @@ async fn main() -> anyhow::Result<()> {
                 .merge(web_routes)
                 .merge(ui_routes)
                 .merge(notification_routes)
+                .merge(nanofile::api::avatar::image_routes())
                 .route(
                     "/static/{*path}",
                     get(nanofile::static_assets::serve_static),

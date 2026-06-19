@@ -11,9 +11,8 @@
     <!-- User menu -->
     <div class="relative js-user-menu">
         <button type="button" class="js-user-menu-button flex items-center gap-x-2 rounded-full bg-white text-sm font-semibold text-gray-900 dark:bg-gray-800 dark:text-white">
-            <span class="flex h-8 w-8 items-center justify-center rounded-full bg-seafile-blue text-white text-xs font-bold">
-                {{ user_email.chars().next().unwrap_or('?') }}
-            </span>
+            <img src="/avatars/user/{{ user_email }}/resized/32/" alt=""
+                 class="h-8 w-8 rounded-full object-cover bg-seafile-blue">
             <span class="hidden lg:block">{{ user_email }}</span>
             {% if is_admin %}
             <span class="ml-2 inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-semibold text-yellow-800 ring-1 ring-inset ring-yellow-600/20">

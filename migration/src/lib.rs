@@ -31,6 +31,7 @@ mod m20260614_000001_add_is_dir_to_starred_files;
 mod m20260614_000002_add_old_path_to_activities;
 mod m20260619_000001_add_share_link_fields;
 mod m20260619_000003_add_detail_to_activities;
+mod m20260619_000004_create_avatars;
 
 pub struct Migrator;
 
@@ -68,6 +69,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260614_000002_add_old_path_to_activities::Migration),
             Box::new(m20260619_000001_add_share_link_fields::Migration),
             Box::new(m20260619_000003_add_detail_to_activities::Migration),
+            Box::new(m20260619_000004_create_avatars::Migration),
         ]
     }
 }
