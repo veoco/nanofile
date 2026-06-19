@@ -6,6 +6,8 @@ use axum::{
 };
 use sea_orm::EntityTrait;
 use serde::Deserialize;
+
+use crate::activity_log;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -234,6 +236,22 @@ pub async fn clean_trash(
     let keep_days = parse_clean_trash_body(req).await;
 
     TrashService::clean_trash(state.db.as_ref(), &repo_id, keep_days).await?;
+
+    // Log clean-up-trash activity
+    activity_log::log_activity(
+        state.db.as_ref(),
+        &repo_id,
+        "clean-up-trash",
+        "repo",
+        "/",
+        auth.user_id,
+        None,
+        None,
+        None,
+        None,
+        keep_days,
+    )
+    .await;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

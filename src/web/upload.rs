@@ -128,6 +128,7 @@ async fn upload_and_build_response(
             None,
             None,
             None,
+            None,
         )
         .await;
     }
@@ -684,6 +685,7 @@ pub async fn update_api_handler(
                     None,
                     None,
                     None,
+                    None,
                 )
                 .await;
             }
@@ -814,6 +816,7 @@ pub async fn update_aj_token(
                 "file",
                 &fp,
                 uid,
+                None,
                 None,
                 None,
                 None,
@@ -1021,6 +1024,7 @@ pub async fn upload_blks_api(
                 "file",
                 &fp,
                 uid,
+                None,
                 None,
                 None,
                 None,

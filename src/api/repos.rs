@@ -281,6 +281,7 @@ pub async fn create_repo(
         None,
         None,
         None,
+        None,
     )
     .await;
 
@@ -457,6 +458,7 @@ pub async fn rename_repo(
         None,
         None,
         Some(&r.name),
+        None,
     )
     .await;
 
@@ -715,6 +717,7 @@ pub async fn delete_repo(
         "repo",
         "/",
         auth.user_id,
+        None,
         None,
         None,
         None,

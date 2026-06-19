@@ -105,23 +105,6 @@ pub async fn upload_avatar(
         .await
         .map_err(|e| AppError::Internal(format!("failed to save avatar: {e}")))?;
 
-    // Clean up stale thumbnails from any previous upload
-    let _ = tokio::task::spawn_blocking({
-        let dir = storage_dir.clone();
-        move || {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    // Remove any cached {size}.png thumbnails
-                    if name.ends_with(".png") && name != format!("original.{}", ext) {
-                        let _ = std::fs::remove_file(entry.path());
-                    }
-                }
-            }
-        }
-    })
-    .await;
-
     // Generate and save the default-size thumbnail (256×256)
     let thumbnail_data = generate_thumbnail(&data, 256)
         .map_err(|_| AppError::BadRequest("unable to decode image".into()))?;

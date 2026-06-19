@@ -60,6 +60,7 @@ pub async fn log_activity(
     size: Option<i64>,
     obj_id: Option<&str>,
     old_repo_name: Option<&str>,
+    days: Option<i64>,
 ) {
     let now = chrono::Utc::now().timestamp();
 
@@ -86,6 +87,9 @@ pub async fn log_activity(
     }
     if let Some(orn) = old_repo_name {
         detail_map.insert("old_repo_name".to_string(), serde_json::json!(orn));
+    }
+    if let Some(d) = days {
+        detail_map.insert("days".to_string(), serde_json::json!(d));
     }
 
     // Only aggregate create/delete operations (matching seafevents'

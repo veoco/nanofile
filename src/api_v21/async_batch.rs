@@ -199,6 +199,7 @@ async fn run_copy_task(
             Some(entry.size),
             Some(entry.id.as_str()),
             None,
+            None,
         )
         .await;
     }
@@ -442,6 +443,7 @@ async fn run_move_task(
             Some(&old_fp),
             Some(entry.size),
             Some(entry.id.as_str()),
+            None,
             None,
         )
         .await;

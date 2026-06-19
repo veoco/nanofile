@@ -734,6 +734,7 @@ impl TrashService {
                             Some(entry_size),
                             Some(&obj_id),
                             None,
+                            None,
                         )
                         .await;
 
@@ -899,7 +900,7 @@ impl TrashService {
 
         // Log activity
         activity_log::log_activity(
-            db, repo_id, "recover", "repo", "/", user_id, None, None, None, None,
+            db, repo_id, "recover", "repo", "/", user_id, None, None, None, None, None,
         )
         .await;
 

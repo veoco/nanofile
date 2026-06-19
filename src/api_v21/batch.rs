@@ -183,6 +183,7 @@ pub async fn batch_move_items(
             Some(entry.size),
             Some(entry.id.as_str()),
             None,
+            None,
         )
         .await;
     }
@@ -408,6 +409,7 @@ pub async fn sync_batch_copy_item(
             Some(entry.size),
             Some(entry.id.as_str()),
             None,
+            None,
         )
         .await;
     }
@@ -571,6 +573,7 @@ pub async fn batch_delete_item(
             None,
             entry.map(|d| d.size),
             entry.map(|d| d.id.as_str()),
+            None,
             None,
         )
         .await;
