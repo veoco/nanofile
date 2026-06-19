@@ -114,6 +114,8 @@ pub async fn delete_dirent_v21(
         &normalized,
         auth.user_id,
         None,
+        None,
+        None,
     )
     .await;
 

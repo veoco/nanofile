@@ -606,7 +606,18 @@ pub async fn upload_file(
 
         // Log activity
         let op_type = if old_size > 0 { "edit" } else { "create" };
-        activity_log::log_activity(db, &repo_id, op_type, "file", &p, user.user_id, None).await;
+        activity_log::log_activity(
+            db,
+            &repo_id,
+            op_type,
+            "file",
+            &p,
+            user.user_id,
+            None,
+            None,
+            None,
+        )
+        .await;
 
         // Adjust repo size (delta = new_size - old_size).
         let delta = data.len() as i64 - old_size;
@@ -705,7 +716,18 @@ pub async fn delete_entry(
     // Log activity
     // For obj_type, check if the name has extension or form provides context.
     // Default to "file" since most web UI deletes are files.
-    activity_log::log_activity(db, &repo_id, "delete", "file", &path, user.user_id, None).await;
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "delete",
+        "file",
+        &path,
+        user.user_id,
+        None,
+        None,
+        None,
+    )
+    .await;
 
     // Redirect back to the current directory.
     let repo_name = form.get("repo_name").map(|s| s.as_str()).unwrap_or("");
@@ -810,7 +832,18 @@ pub async fn create_directory(
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     // Log activity
-    activity_log::log_activity(db, &repo_id, "create", "dir", &path, user.user_id, None).await;
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "create",
+        "dir",
+        &path,
+        user.user_id,
+        None,
+        None,
+        None,
+    )
+    .await;
 
     // Redirect back to the parent directory.
     let repo_name = form.get("repo_name").map(|s| s.as_str()).unwrap_or("");
@@ -917,6 +950,8 @@ pub async fn rename_entry(
         &new_path,
         user.user_id,
         Some(path),
+        None,
+        None,
     )
     .await;
 

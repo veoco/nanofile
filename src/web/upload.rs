@@ -116,8 +116,18 @@ async fn upload_and_build_response(
             format!("{}/{}", target_dir.trim_end_matches('/'), filename)
         };
         let op_type = if replace { "edit" } else { "create" };
-        activity_log::log_activity(state.db.as_ref(), repo_id, op_type, "file", &fp, uid, None)
-            .await;
+        activity_log::log_activity(
+            state.db.as_ref(),
+            repo_id,
+            op_type,
+            "file",
+            &fp,
+            uid,
+            None,
+            None,
+            None,
+        )
+        .await;
     }
 
     Ok(json!([{"id": fs_id, "name": filename, "size": data.len()}]))
@@ -650,6 +660,8 @@ pub async fn update_api_handler(
                     &fp,
                     uid,
                     None,
+                    None,
+                    None,
                 )
                 .await;
             }
@@ -780,6 +792,8 @@ pub async fn update_aj_token(
                 "file",
                 &fp,
                 uid,
+                None,
+                None,
                 None,
             )
             .await;
@@ -984,6 +998,8 @@ pub async fn upload_blks_api(
                 "file",
                 &fp,
                 uid,
+                None,
+                None,
                 None,
             )
             .await;

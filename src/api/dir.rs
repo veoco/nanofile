@@ -491,7 +491,18 @@ async fn rename_dir_entry(
     } else {
         format!("{}/{}", parent_path, new_name)
     };
-    activity_log::log_activity(db, repo_id, "rename", "dir", &new_path, user_id, Some(path)).await;
+    activity_log::log_activity(
+        db,
+        repo_id,
+        "rename",
+        "dir",
+        &new_path,
+        user_id,
+        Some(path),
+        None,
+        None,
+    )
+    .await;
 
     Ok(())
 }
@@ -586,6 +597,8 @@ pub(crate) async fn create_dir_by_path(
         &path,
         auth.user_id,
         None,
+        None,
+        None,
     )
     .await;
 
@@ -644,7 +657,18 @@ pub async fn delete_dir(
     crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
 
     // Log activity
-    activity_log::log_activity(db, &repo_id, "delete", "dir", &path, auth.user_id, None).await;
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "delete",
+        "dir",
+        &path,
+        auth.user_id,
+        None,
+        None,
+        None,
+    )
+    .await;
 
     Ok(())
 }
@@ -773,6 +797,8 @@ pub async fn move_dir(
         &new_path,
         auth.user_id,
         Some(&req.p),
+        None,
+        None,
     )
     .await;
 

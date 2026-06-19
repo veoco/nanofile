@@ -5,6 +5,7 @@ use axum::{
 use chrono::DateTime;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -138,6 +139,14 @@ pub async fn get_activities(
             .map(|dt| dt.to_rfc3339())
             .unwrap_or_default();
 
+        // Parse the stored detail JSON (seafevents format).
+        // Single ops store a dict, batch ops store an array.
+        let (details, count) = match serde_json::from_str::<Value>(&e.detail) {
+            Ok(Value::Array(arr)) => (arr.clone(), arr.len()),
+            Ok(Value::Object(_)) => (vec![serde_json::from_str(&e.detail).unwrap_or_default()], 1),
+            _ => (vec![], 0),
+        };
+
         let mut d = serde_json::json!({
             "op_type": e.op_type,
             "repo_id": e.repo_id,
@@ -152,8 +161,8 @@ pub async fn get_activities(
             "login_id": "",
             "avatar_url": "",
             "time": time,
-            "details": [],
-            "count": 0,
+            "details": details,
+            "count": count,
         });
 
         // Include old_path for rename/move operations

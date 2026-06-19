@@ -301,7 +301,11 @@ async fn test_activity_after_dir_move() {
     );
 
     let (events, _) = get_activities(&f, 1, 10).await;
-    assert_eq!(events.len(), 4, "expected 4 events (repo + 2 mkdir + move)");
+    assert_eq!(
+        events.len(),
+        3,
+        "expected 3 events (repo + 2 mkdir aggregated into batch_create + move)"
+    );
 
     let move_ev = find_event(&events, "move").expect("move event should exist");
     assert_eq!(move_ev["obj_type"], "dir");
@@ -319,14 +323,19 @@ async fn test_activity_pagination() {
         create_file(&f, &format!("/file{i}.txt")).await;
     }
 
-    // page=1, per_page=2 → 2 events, total=6 (repo + 5 files)
+    // 5 file creates → aggregated into 1 batch_create event.
+    // Total = repo(1) + batch_create(1) = 2
     let (events, total) = get_activities(&f, 1, 2).await;
     assert_eq!(events.len(), 2, "expected 2 events on page 1");
-    assert_eq!(total, 6);
+    assert_eq!(total, 2, "expected total=2 (repo + batch_create)");
 
-    // page=3, per_page=2 → 2 events (last page: repo + 1 file)
+    // page=3, per_page=2 → 0 events (only 2 total)
     let (events_page3, _) = get_activities(&f, 3, 2).await;
-    assert_eq!(events_page3.len(), 2, "expected 2 events on page 3");
+    assert_eq!(
+        events_page3.len(),
+        0,
+        "expected 0 events on page 3 (only 2 total)"
+    );
 }
 
 #[tokio::test]
@@ -404,8 +413,17 @@ async fn test_activity_response_fields() {
     assert_eq!(ev["author_name"], f.email.split('@').next().unwrap_or(""));
     assert_eq!(ev["author_contact_email"], f.email);
     assert!(ev["time"].as_str().unwrap_or("").contains('T'));
-    assert_eq!(ev["details"], serde_json::json!([]));
-    assert_eq!(ev["count"], 0);
+    // details should contain metadata about the operation
+    let details = ev["details"].as_array().unwrap();
+    assert_eq!(details.len(), 1, "details should have 1 item");
+    assert_eq!(details[0]["path"], "/fields-test.txt");
+    assert!(
+        details[0]["repo_name"]
+            .as_str()
+            .unwrap_or("")
+            .contains("test-repo")
+    );
+    assert_eq!(ev["count"], 1);
 }
 
 #[tokio::test]
@@ -686,13 +704,31 @@ async fn test_activity_batch_delete() {
     );
 
     let (events, _) = get_activities(&f, 1, 25).await;
-    let delete_events: Vec<_> = events.iter().filter(|e| e["op_type"] == "delete").collect();
+    let batch_delete: Vec<_> = events
+        .iter()
+        .filter(|e| e["op_type"] == "batch_delete")
+        .collect();
     assert_eq!(
-        delete_events.len(),
-        3,
-        "expected 3 delete events (one per file), got {}",
-        delete_events.len()
+        batch_delete.len(),
+        1,
+        "expected 1 batch_delete event (aggregated from 3 files), got {}",
+        batch_delete.len()
     );
+    assert_eq!(
+        batch_delete[0]["count"].as_u64().unwrap_or(0),
+        3,
+        "batch_delete should have count=3"
+    );
+    // Verify details contain all three file paths
+    let details = batch_delete[0]["details"].as_array().unwrap();
+    assert_eq!(details.len(), 3, "batch_delete details should have 3 items");
+    let paths: Vec<&str> = details.iter().filter_map(|d| d["path"].as_str()).collect();
+    for name in &["batch_del_1.txt", "batch_del_2.txt", "batch_del_3.txt"] {
+        assert!(
+            paths.iter().any(|p| p.contains(name)),
+            "detail should contain path with {name}"
+        );
+    }
 }
 
 /// Batch copy via v2 API → each copied file has a create activity at target path
@@ -729,17 +765,23 @@ async fn test_activity_batch_copy() {
     );
 
     let (events, _) = get_activities(&f, 1, 25).await;
-    let create_events: Vec<_> = events
+    let batch_create: Vec<_> = events
         .iter()
         .filter(|e| {
-            e["op_type"] == "create" && e["path"].as_str().unwrap_or("").contains("/copy_dest/")
+            e["op_type"] == "batch_create"
+                && e["path"].as_str().unwrap_or("").contains("/copy_dest/")
         })
         .collect();
     assert_eq!(
-        create_events.len(),
+        batch_create.len(),
+        1,
+        "expected 1 batch_create event (aggregated from 2 files), got {}",
+        batch_create.len()
+    );
+    assert_eq!(
+        batch_create[0]["count"].as_u64().unwrap_or(0),
         2,
-        "expected 2 create events for copied files, got {}",
-        create_events.len()
+        "batch_create should have count=2"
     );
 }
 
@@ -845,10 +887,10 @@ async fn test_activity_async_batch_copy() {
     poll_until_done(&f, task_id).await;
 
     let (events, _) = get_activities(&f, 1, 25).await;
-    let create_events: Vec<_> = events
+    let batch_create: Vec<_> = events
         .iter()
         .filter(|e| {
-            e["op_type"] == "create"
+            e["op_type"] == "batch_create"
                 && e["path"]
                     .as_str()
                     .unwrap_or("")
@@ -856,10 +898,15 @@ async fn test_activity_async_batch_copy() {
         })
         .collect();
     assert_eq!(
-        create_events.len(),
+        batch_create.len(),
+        1,
+        "expected 1 batch_create event for async copy (2 files), got {}",
+        batch_create.len()
+    );
+    assert_eq!(
+        batch_create[0]["count"].as_u64().unwrap_or(0),
         2,
-        "expected 2 create events for async copied files, got {}",
-        create_events.len()
+        "batch_create should have count=2"
     );
 }
 
@@ -1005,11 +1052,11 @@ async fn test_activity_batch_copy_dir() {
     assert_eq!(resp.status(), 200, "batch copy failed");
 
     let (events, _) = get_activities(&f, 1, 25).await;
-    // Look for the "create" event at the copy destination
-    let create_events: Vec<_> = events
+    // Look for the batch_create event for the copied directory
+    let batch_create_events: Vec<_> = events
         .iter()
         .filter(|e| {
-            e["op_type"] == "create"
+            e["op_type"] == "batch_create"
                 && e["obj_type"] == "dir"
                 && e["path"]
                     .as_str()
@@ -1018,9 +1065,14 @@ async fn test_activity_batch_copy_dir() {
         })
         .collect();
     assert_eq!(
-        create_events.len(),
+        batch_create_events.len(),
         1,
-        "expected 1 create(dir) event for copied directory, got {}",
-        create_events.len()
+        "expected 1 batch_create(dir) event for copied directory, got {}",
+        batch_create_events.len()
+    );
+    assert_eq!(
+        batch_create_events[0]["count"].as_u64().unwrap_or(0),
+        2,
+        "batch_create should have count=2 (original + copy)"
     );
 }

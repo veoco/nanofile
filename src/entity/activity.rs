@@ -21,6 +21,8 @@ pub struct Model {
     pub user_id: i32,
     #[sea_orm(not_null)]
     pub created_at: i64,
+    #[sea_orm(not_null)]
+    pub detail: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

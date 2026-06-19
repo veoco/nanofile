@@ -277,6 +277,8 @@ pub async fn create_repo(
         "/",
         auth.user_id,
         None,
+        None,
+        None,
     )
     .await;
 
@@ -674,8 +676,18 @@ pub async fn delete_repo(
 
     // Log repo deletion activity BEFORE deleting the repo (FK constraint
     // prevents inserting activity with a non-existent repo_id).
-    crate::activity_log::log_activity(db, &repo_id, "delete", "repo", "/", auth.user_id, None)
-        .await;
+    crate::activity_log::log_activity(
+        db,
+        &repo_id,
+        "delete",
+        "repo",
+        "/",
+        auth.user_id,
+        None,
+        None,
+        None,
+    )
+    .await;
 
     // Cascade-delete related records
     repo_member::Entity::delete_many()

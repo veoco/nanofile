@@ -160,7 +160,18 @@ pub async fn create_file_v21(
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     // Log activity
-    activity_log::log_activity(db, &repo_id, "create", "file", &path, auth.user_id, None).await;
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "create",
+        "file",
+        &path,
+        auth.user_id,
+        None,
+        None,
+        None,
+    )
+    .await;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

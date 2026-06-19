@@ -180,6 +180,8 @@ pub async fn batch_move_items(
             &new_fp,
             auth.user_id,
             Some(&old_fp),
+            Some(entry.size),
+            Some(entry.id.as_str()),
         )
         .await;
     }
@@ -394,7 +396,18 @@ pub async fn sync_batch_copy_item(
         } else {
             "file"
         };
-        activity_log::log_activity(db, repo_id, "create", obj_type, &fp, auth.user_id, None).await;
+        activity_log::log_activity(
+            db,
+            repo_id,
+            "create",
+            obj_type,
+            &fp,
+            auth.user_id,
+            None,
+            Some(entry.size),
+            Some(entry.id.as_str()),
+        )
+        .await;
     }
 
     // Index copied files in full-text search.
@@ -498,10 +511,8 @@ pub async fn batch_delete_item(
         } else {
             format!("{parent_dir}/{name}")
         };
-        let is_dir = parent_data
-            .dirents
-            .iter()
-            .any(|d| d.name == *name && d.mode & S_IFDIR != 0);
+        let entry = parent_data.dirents.iter().find(|d| d.name == *name);
+        let is_dir = entry.is_some_and(|d| d.mode & S_IFDIR != 0);
         activity_log::log_activity(
             db,
             repo_id,
@@ -510,6 +521,8 @@ pub async fn batch_delete_item(
             &fp,
             auth.user_id,
             None,
+            entry.map(|d| d.size),
+            entry.map(|d| d.id.as_str()),
         )
         .await;
     }

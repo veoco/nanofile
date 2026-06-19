@@ -463,6 +463,8 @@ async fn upload_file_inner(
         &file_path,
         auth.user_id,
         None,
+        None,
+        None,
     )
     .await;
 
@@ -558,7 +560,18 @@ pub async fn delete_file(
     crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
 
     // Log activity
-    activity_log::log_activity(db, &repo_id, "delete", "file", &path, auth.user_id, None).await;
+    activity_log::log_activity(
+        db,
+        &repo_id,
+        "delete",
+        "file",
+        &path,
+        auth.user_id,
+        None,
+        None,
+        None,
+    )
+    .await;
 
     Ok(())
 }
@@ -681,6 +694,8 @@ pub(crate) async fn rename_file_entry(
         &new_path,
         user_id,
         Some(path),
+        None,
+        None,
     )
     .await;
 
@@ -805,7 +820,18 @@ async fn move_file_entry(
     } else {
         format!("{}/{}", new_parent_path, file_name)
     };
-    activity_log::log_activity(db, repo_id, "move", "file", &new_path, user_id, Some(path)).await;
+    activity_log::log_activity(
+        db,
+        repo_id,
+        "move",
+        "file",
+        &new_path,
+        user_id,
+        Some(path),
+        None,
+        None,
+    )
+    .await;
 
     Ok(())
 }
