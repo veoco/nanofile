@@ -50,31 +50,26 @@ fn normalize_path(path: &str) -> String {
 }
 
 /// Build a download API URL from the Host header (similar to build_op_url for uploads).
+/// The scheme is taken from `site_url`.
 fn build_download_url(state: &AppState, token: &str, host_header: Option<&str>) -> String {
-    let (host, port) = if let Some(h) = host_header {
+    if let Some(h) = host_header {
+        let scheme = state.config.server.site_url_scheme();
         if let Some((h, p)) = h.split_once(':') {
-            (h.to_string(), p.to_string())
+            format!("{}://{}:{}/download-api/{}", scheme, h, p, token)
         } else {
-            (h.to_string(), state.config.server.port.to_string())
+            format!(
+                "{}://{}:{}/download-api/{}",
+                scheme, h, state.config.server.port, token
+            )
         }
-    } else if state.config.server.addr == "0.0.0.0"
-        || state.config.server.addr == "::"
-        || state.config.server.addr == "127.0.0.1"
-    {
-        (
-            "127.0.0.1".to_string(),
-            state.config.server.port.to_string(),
-        )
     } else {
-        (
-            state.config.server.addr.clone(),
-            state.config.server.port.to_string(),
-        )
-    };
-    format!("http://{}:{}/download-api/{}", host, port, token)
+        let base = state.config.server.site_url.trim_end_matches('/');
+        format!("{}/download-api/{}", base, token)
+    }
 }
 
 /// Build a block download URL in `/blks/{token}/{file_id}/{block_id}` format.
+/// The scheme is taken from `site_url`.
 fn build_block_download_url(
     state: &AppState,
     token: &str,
@@ -82,30 +77,23 @@ fn build_block_download_url(
     block_id: &str,
     host_header: Option<&str>,
 ) -> String {
-    let (host, port) = if let Some(h) = host_header {
+    if let Some(h) = host_header {
+        let scheme = state.config.server.site_url_scheme();
         if let Some((h, p)) = h.split_once(':') {
-            (h.to_string(), p.to_string())
+            format!(
+                "{}://{}:{}/blks/{}/{}/{}",
+                scheme, h, p, token, file_id, block_id
+            )
         } else {
-            (h.to_string(), state.config.server.port.to_string())
+            format!(
+                "{}://{}:{}/blks/{}/{}/{}",
+                scheme, h, state.config.server.port, token, file_id, block_id
+            )
         }
-    } else if state.config.server.addr == "0.0.0.0"
-        || state.config.server.addr == "::"
-        || state.config.server.addr == "127.0.0.1"
-    {
-        (
-            "127.0.0.1".to_string(),
-            state.config.server.port.to_string(),
-        )
     } else {
-        (
-            state.config.server.addr.clone(),
-            state.config.server.port.to_string(),
-        )
-    };
-    format!(
-        "http://{}:{}/blks/{}/{}/{}",
-        host, port, token, file_id, block_id
-    )
+        let base = state.config.server.site_url.trim_end_matches('/');
+        format!("{}/blks/{}/{}/{}", base, token, file_id, block_id)
+    }
 }
 
 /// `GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/?p=/parent_dir`

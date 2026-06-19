@@ -120,6 +120,15 @@ pub async fn change_password(
     State(state): State<Arc<AppState>>,
     Form(form): Form<PasswordForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    // CSRF check
+    if let Some(ref token) = form.csrf_token {
+        let expected =
+            crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        if *token != expected {
+            return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
+        }
+    }
+
     let db = state.db.as_ref();
 
     let user_record = user::Entity::find_by_id(user.user_id)

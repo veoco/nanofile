@@ -31,6 +31,12 @@ impl FileOps {
     ) -> Result<String, Box<dyn std::error::Error>> {
         let now = chrono::Utc::now().timestamp();
 
+        // Validate input — name may contain '/' for nested paths.
+        crate::sanitize::validate_path(parent_path)?;
+        if name.contains('\0') {
+            return Err("filename contains null byte".into());
+        }
+
         let file_chunks = crate::storage::cdc::file_chunk_cdc(data);
 
         let mut block_ids = Vec::new();

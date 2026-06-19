@@ -71,6 +71,18 @@ pub async fn login_page(State(state): State<Arc<AppState>>) -> Result<Html<Strin
     Ok(Html(html))
 }
 
+/// Build a session cookie value with optional Secure flag.
+fn session_cookie(name: &str, value: &str, max_age: Option<u64>, secure: bool) -> String {
+    let mut cookie = format!("{}={}; HttpOnly; SameSite=Lax; Path=/", name, value);
+    if let Some(age) = max_age {
+        cookie.push_str(&format!("; Max-Age={}", age));
+    }
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
 /// Create a short-lived pending token for the 2FA login flow.
 async fn create_pending_token(
     db: &sea_orm::DatabaseConnection,
@@ -123,6 +135,14 @@ pub async fn login(
     headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    // CSRF: validate Origin/Referer.
+    let origin = state.config.server.site_url_origin();
+    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+        return render_login_page(&state, Some("Invalid request origin.".to_string()))
+            .await
+            .map(|html| (StatusCode::FORBIDDEN, Html(html)).into_response());
+    }
+
     let db = state.db.as_ref();
 
     // Extract client IP for rate limiting.
@@ -196,9 +216,11 @@ pub async fn login(
     {
         // User has 2FA enabled — create a pending token and redirect to TOTP page
         let pending_token = create_pending_token(db, user_record.id).await?;
-        let cookie = format!(
-            "seahub-session-pending={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=300",
-            pending_token,
+        let cookie = session_cookie(
+            "seahub-session-pending",
+            &pending_token,
+            Some(300),
+            state.config.server.secure_cookies(),
         );
 
         let response = (
@@ -221,13 +243,12 @@ pub async fn login(
     let is_remembered =
         form.remember_me.as_deref() == Some("1") || form.remember_me.as_deref() == Some("on");
 
-    let (token_expires_at, cookie_max_age_attr) = if is_remembered {
-        let ttl_days = state.config.auth.api_token_ttl_days;
-        let expires_at = now + (ttl_days as i64 * 86400);
-        (Some(expires_at), format!("; Max-Age={}", ttl_days * 86400))
+    let ttl_days = state.config.auth.api_token_ttl_days;
+    let token_expires_at = if is_remembered {
+        Some(now + (ttl_days as i64 * 86400))
     } else {
-        // Unchecked: short-lived token (24h), cookie also 24h (browser-close intent).
-        (Some(now + 86400), "; Max-Age=86400".to_string())
+        // Unchecked: short-lived token (24h).
+        Some(now + 86400)
     };
 
     let token_record = api_token::ActiveModel {
@@ -247,9 +268,15 @@ pub async fn login(
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
-    let cookie = format!(
-        "seahub-session={}; HttpOnly; SameSite=Lax; Path=/{}",
-        session_token, cookie_max_age_attr,
+    let cookie = session_cookie(
+        "seahub-session",
+        &session_token,
+        if is_remembered {
+            Some(ttl_days * 86400)
+        } else {
+            Some(86400)
+        },
+        state.config.server.secure_cookies(),
     );
 
     let response = (
@@ -280,6 +307,19 @@ pub async fn two_factor_auth(
     Form(form): Form<TwoFactorAuthForm>,
 ) -> Result<impl IntoResponse, AppError> {
     let db = state.db.as_ref();
+
+    // Extract client IP for rate limiting.
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
 
     // Read the pending token from cookie
     let pending_token = headers
@@ -321,6 +361,16 @@ pub async fn two_factor_auth(
 
     let user_id = token_record.user_id;
 
+    // Rate limit: per user+IP.
+    let totp_key = format!("totp:{}:{}", user_id, client_ip);
+    if state.totp_limiter.is_limited(&totp_key) {
+        // Delete pending token to force re-login
+        let _ = token_record.delete(db).await;
+        return Err(AppError::BadRequest(
+            "Too many verification attempts. Please log in again.".into(),
+        ));
+    }
+
     // Fetch user's 2FA config
     let two_fa = user_2fa::Entity::find_by_id(user_id)
         .one(db)
@@ -356,6 +406,7 @@ pub async fn two_factor_auth(
     };
 
     if !code_valid && !backup_valid {
+        state.totp_limiter.record_attempt(&totp_key);
         let tpl = TwoFactorLoginTemplate {
             urls: crate::static_assets::template_urls(),
             error: Some("Invalid verification code. Please try again.".to_string()),
@@ -367,6 +418,7 @@ pub async fn two_factor_auth(
     }
 
     // ── TOTP verified — create real session ────────────────────────
+    state.totp_limiter.clear(&totp_key);
     // Delete the pending token
     let _ = token_record.delete(db).await;
 
@@ -392,13 +444,15 @@ pub async fn two_factor_auth(
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
-    let session_cookie = format!(
-        "seahub-session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
-        session_token,
-        ttl_days * 86400
+    let secure_cookies = state.config.server.secure_cookies();
+    let session_cookie_str = session_cookie(
+        "seahub-session",
+        &session_token,
+        Some(ttl_days * 86400),
+        secure_cookies,
     );
 
-    let clear_pending_cookie = "seahub-session-pending=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0";
+    let clear_pending_str = session_cookie("seahub-session-pending", "", Some(0), secure_cookies);
 
     // HeaderMap::append so both Set-Cookie headers reach the browser.
     // A plain array tuple uses `insert` which would overwrite the first one.
@@ -409,11 +463,13 @@ pub async fn two_factor_auth(
     );
     resp_headers.append(
         ::axum::http::header::SET_COOKIE,
-        session_cookie.parse::<::axum::http::HeaderValue>().unwrap(),
+        session_cookie_str
+            .parse::<::axum::http::HeaderValue>()
+            .unwrap(),
     );
     resp_headers.append(
         ::axum::http::header::SET_COOKIE,
-        clear_pending_cookie
+        clear_pending_str
             .parse::<::axum::http::HeaderValue>()
             .unwrap(),
     );
@@ -439,14 +495,17 @@ pub async fn logout(
             .await;
     }
 
+    let clear_cookie = session_cookie(
+        "seahub-session",
+        "",
+        Some(0),
+        state.config.server.secure_cookies(),
+    );
     let response = (
         StatusCode::FOUND,
         [
             ("Location", "/accounts/login/"),
-            (
-                "Set-Cookie",
-                "seahub-session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
-            ),
+            ("Set-Cookie", &clear_cookie),
         ],
     )
         .into_response();
@@ -486,8 +545,35 @@ pub async fn register_page() -> Result<Html<String>, AppError> {
 /// POST /accounts/register/ — validate invitation code and create account.
 pub async fn register(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Form(form): Form<RegisterForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    // CSRF: validate Origin/Referer.
+    let origin = state.config.server.site_url_origin();
+    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+        return Err(AppError::BadRequest("Invalid request origin.".to_string()));
+    }
+
+    // Rate limit: per IP.
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let rl_key = format!("register:{}", client_ip);
+    if state.registration_limiter.is_limited(&rl_key) {
+        return Err(AppError::BadRequest(
+            "Too many registration attempts. Try again later.".to_string(),
+        ));
+    }
+    state.registration_limiter.record_attempt(&rl_key);
+
     let db = state.db.as_ref();
 
     // 1. Validate invitation code.
@@ -588,10 +674,11 @@ pub async fn register(
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
-    let cookie = format!(
-        "seahub-session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
-        session_token,
-        ttl_days * 86400
+    let cookie = session_cookie(
+        "seahub-session",
+        &session_token,
+        Some(ttl_days * 86400),
+        state.config.server.secure_cookies(),
     );
 
     Ok((
@@ -614,6 +701,7 @@ pub struct PasswordResetFormTemplate {
 #[template(path = "page/password_reset_done.html")]
 pub struct PasswordResetDoneTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub reset_url: Option<String>,
 }
 
 #[derive(Template)]
@@ -654,11 +742,44 @@ pub async fn password_reset_page() -> Result<Html<String>, AppError> {
     Ok(Html(html))
 }
 
-/// POST /accounts/password/reset/ — generate a reset token (log it, no email).
+/// POST /accounts/password/reset/ — generate a reset token and display the link.
 pub async fn password_reset(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Form(form): Form<PasswordResetForm>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Html<String>, AppError> {
+    // CSRF: validate Origin/Referer.
+    let origin = state.config.server.site_url_origin();
+    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+        return Ok(Html(String::new()));
+    }
+
+    // Rate limit: per IP.
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let rl_key = format!("password_reset:{}", client_ip);
+    if state.password_reset_limiter.is_limited(&rl_key) {
+        // Show the done page silently to prevent enumeration.
+        let tpl = PasswordResetDoneTemplate {
+            urls: crate::static_assets::template_urls(),
+            reset_url: None,
+        };
+        let html = tpl
+            .render()
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        return Ok(Html(html));
+    }
+    state.password_reset_limiter.record_attempt(&rl_key);
+
     let db = state.db.as_ref();
 
     // Look up the user (fail silently to prevent enumeration).
@@ -667,7 +788,7 @@ pub async fn password_reset(
         .one(db)
         .await?;
 
-    if let Some(user) = user_record {
+    let reset_url = if let Some(user) = user_record {
         let now = chrono::Utc::now().timestamp();
         let (raw_token, token_hash) = crate::auth::password_reset::generate_reset_token();
 
@@ -682,29 +803,31 @@ pub async fn password_reset(
 
         token_model.insert(db).await?;
 
-        tracing::info!(
-            "Password reset link for {}: http://{}:{}/accounts/password/reset/{}/",
-            user.email,
-            state.config.server.addr,
-            state.config.server.port,
-            raw_token,
-        );
+        let base = state.config.server.site_url.trim_end_matches('/');
+        let link = format!("{}/accounts/password/reset/{}/", base, raw_token);
+        tracing::info!("Password reset link generated for user {}", user.email);
+        Some(link)
     } else {
         // User not found — still show the same success page (no enumeration).
         tracing::info!("Password reset requested for unknown email: {}", form.email);
-    }
+        None
+    };
 
-    Ok((
-        StatusCode::FOUND,
-        [("Location", "/accounts/password/reset/done/")],
-    )
-        .into_response())
+    let tpl = PasswordResetDoneTemplate {
+        urls: crate::static_assets::template_urls(),
+        reset_url,
+    };
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Html(html))
 }
 
-/// GET /accounts/password/reset/done/ — show confirmation.
+/// GET /accounts/password/reset/done/ — show confirmation (accessed directly, no URL).
 pub async fn password_reset_done() -> Result<Html<String>, AppError> {
     let tpl = PasswordResetDoneTemplate {
         urls: crate::static_assets::template_urls(),
+        reset_url: None,
     };
     let html = tpl
         .render()
@@ -762,9 +885,16 @@ pub async fn password_reset_confirm_page(
 /// POST /accounts/password/reset/{token}/ — validate token and update password.
 pub async fn password_reset_confirm(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(token): Path<String>,
     Form(form): Form<PasswordResetConfirmForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    // CSRF: validate Origin/Referer.
+    let origin = state.config.server.site_url_origin();
+    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+        return Ok(StatusCode::FORBIDDEN.into_response());
+    }
+
     let db = state.db.as_ref();
 
     // Validate the token.

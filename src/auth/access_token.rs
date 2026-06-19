@@ -81,13 +81,13 @@ impl AccessTokenManager {
             Ok(mut guard) => {
                 let prev_len = guard.len();
                 guard.insert(token.clone(), entry);
-                debug!(token = %token, repo_id = %repo_id, prev_len, new_len = guard.len(), "access token stored");
+                debug!(repo_id = %repo_id, prev_len, new_len = guard.len(), "access token stored");
             }
             Err(poisoned) => {
                 eprintln!("[access_token] WRITE LOCK POISONED! recovering...");
                 let mut guard = poisoned.into_inner();
                 guard.insert(token.clone(), entry);
-                debug!(token = %token, repo_id = %repo_id, "access token stored (after poison recovery)");
+                debug!(repo_id = %repo_id, "access token stored (after poison recovery)");
             }
         }
 
@@ -133,7 +133,7 @@ impl AccessTokenManager {
         // Clean up expired tokens lazily.
         guard.retain(|_, t| t.expires_at > now);
 
-        debug!(token = %token, size = guard.len(), "validating access token");
+        debug!(size = guard.len(), "validating access token");
         let entry = guard.get(token)?.clone();
         if entry.expires_at > now {
             Some(entry)

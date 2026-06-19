@@ -4,12 +4,13 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use clap::Parser;
+use rand::Rng;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
 use sea_orm_migration::MigratorTrait;
 use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -53,7 +54,7 @@ async fn health_check() -> impl IntoResponse {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let config = Config::load()?;
+    let mut config = Config::load()?;
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -62,6 +63,19 @@ async fn main() -> anyhow::Result<()> {
                 .parse_lossy(&config.logging.level),
         )
         .init();
+
+    // Auto-generate notification JWT secret if empty or still the well-known default.
+    if config.notification.private_key.is_empty()
+        || config.notification.private_key == "nanofile-notification-secret"
+    {
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        config.notification.private_key = hex::encode(key);
+        tracing::warn!(
+            "Auto-generated notification secret key. \
+             Set NANOFILE_NOTIFICATION_PRIVATE_KEY to persist across restarts."
+        );
+    }
 
     let db = establish_connection(&config.database).await?;
     migration::Migrator::up(&db, None).await?;
@@ -114,14 +128,12 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let cors = {
-                let cors_origins = &state.config.server.cors_allowed_origins;
-                let origins: Vec<_> = cors_origins.iter().filter(|o| o.as_str() != "*").collect();
+                let origins = state.config.server.cors_origins();
 
                 let origin_layer = if origins.is_empty() {
-                    // "*" or empty → allow all origins
-                    CorsLayer::new().allow_origin(Any)
+                    // Empty list — deny all cross-origin requests.
+                    CorsLayer::new().allow_origin(AllowOrigin::predicate(|_, _| false))
                 } else {
-                    use tower_http::cors::AllowOrigin;
                     CorsLayer::new().allow_origin(AllowOrigin::list(
                         origins
                             .into_iter()
@@ -271,7 +283,10 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!("user '{}' already exists", email);
             }
 
-            let password_hash = nanofile::auth::password::hash_password_legacy(&password);
+            let password_hash = nanofile::auth::password::hash_password(
+                &password,
+                config.auth.password_hash_iterations,
+            );
             let now = chrono::Utc::now().timestamp();
 
             let is_admin = !regular;

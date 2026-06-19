@@ -802,31 +802,22 @@ pub struct LinkQuery {
 /// Uses the request's `Host` header (when available) so the returned URL is
 /// reachable from the client's perspective, even when the server listens on
 /// `0.0.0.0` or `127.0.0.1` (which would otherwise produce an unreachable URL
-/// for remote or emulator-based clients).
+/// for remote or emulator-based clients).  The scheme is taken from `site_url`.
 fn build_op_url(state: &AppState, op: &str, token: &str, host_header: Option<&str>) -> String {
-    let (host, port) = if let Some(h) = host_header {
-        // Use the Host header from the incoming request.
-        // Host may be "host:port" or just "host".
+    if let Some(h) = host_header {
+        let scheme = state.config.server.site_url_scheme();
         if let Some((h, p)) = h.split_once(':') {
-            (h.to_string(), p.to_string())
+            format!("{}://{}:{}/{}/{}", scheme, h, p, op, token)
         } else {
-            (h.to_string(), state.config.server.port.to_string())
+            format!(
+                "{}://{}:{}/{}/{}",
+                scheme, h, state.config.server.port, op, token
+            )
         }
-    } else if state.config.server.addr == "0.0.0.0"
-        || state.config.server.addr == "::"
-        || state.config.server.addr == "127.0.0.1"
-    {
-        (
-            "127.0.0.1".to_string(),
-            state.config.server.port.to_string(),
-        )
     } else {
-        (
-            state.config.server.addr.clone(),
-            state.config.server.port.to_string(),
-        )
-    };
-    format!("http://{}:{}/{}/{}", host, port, op, token)
+        let base = state.config.server.site_url.trim_end_matches('/');
+        format!("{}/{}/{}", base, op, token)
+    }
 }
 
 pub async fn get_upload_link(

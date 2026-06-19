@@ -52,22 +52,81 @@ impl Default for NotificationConfig {
 pub struct ServerConfig {
     pub addr: String,
     pub port: u16,
+    /// External URL for this server, e.g. "http://127.0.0.1:8082".
+    /// Used to construct download/upload/share URLs and as the default CORS origin.
+    /// If empty at startup, derived from addr:port as http://{addr}:{port}.
+    #[serde(default = "default_site_url")]
+    pub site_url: String,
     pub max_upload_size_mb: u64,
     pub request_timeout_secs: u64,
-    /// Comma-separated list of allowed CORS origins.
-    /// Empty or "*" allows all origins (default).
-    #[serde(default = "default_cors_origins")]
+    /// Allowed CORS origins. When empty, defaults to the origin of `site_url`.
+    /// Set to a comma-separated list for multiple origins (e.g. for API clients).
+    #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
     /// CORS max-age in seconds (default 86400 = 24h).
     #[serde(default = "default_cors_max_age")]
     pub cors_max_age_secs: u64,
 }
 
-fn default_cors_origins() -> Vec<String> {
-    vec!["*".to_string()]
+fn default_site_url() -> String {
+    "http://127.0.0.1:8082".to_string()
 }
 fn default_cors_max_age() -> u64 {
     86400
+}
+
+impl ServerConfig {
+    /// Extract the scheme (http / https) from `site_url`.
+    pub fn site_url_scheme(&self) -> &str {
+        if self.site_url.starts_with("https://") {
+            "https"
+        } else {
+            "http"
+        }
+    }
+
+    /// Whether cookies should include the `Secure` flag.
+    /// Enabled when the site_url scheme is `https`.
+    pub fn secure_cookies(&self) -> bool {
+        self.site_url.starts_with("https://")
+    }
+
+    /// Extract the origin (scheme + host + port) from `site_url`.
+    /// e.g. "http://127.0.0.1:8082/some/path" -> "http://127.0.0.1:8082"
+    pub fn site_url_origin(&self) -> String {
+        let http_prefix = "http://";
+        let https_prefix = "https://";
+        let prefix = if self.site_url.starts_with(https_prefix) {
+            https_prefix.len()
+        } else {
+            http_prefix.len()
+        };
+        // Take everything after scheme:// up to the next '/' or end-of-string.
+        let rest = &self.site_url[prefix..];
+        if let Some(pos) = rest.find('/') {
+            format!(
+                "{}{}",
+                if self.site_url.starts_with(https_prefix) {
+                    https_prefix
+                } else {
+                    http_prefix
+                },
+                &rest[..pos]
+            )
+        } else {
+            self.site_url.clone()
+        }
+    }
+
+    /// Return the list of CORS origins to allow.
+    /// If `cors_allowed_origins` is empty, uses the origin of `site_url`.
+    pub fn cors_origins(&self) -> Vec<String> {
+        if self.cors_allowed_origins.is_empty() {
+            vec![self.site_url_origin()]
+        } else {
+            self.cors_allowed_origins.clone()
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -103,6 +162,15 @@ pub struct AuthConfig {
     /// Require at least one letter and one digit in passwords.
     #[serde(default)]
     pub require_strong_password: bool,
+    /// Max password reset requests per IP per hour (0 = unlimited).
+    #[serde(default = "default_five")]
+    pub password_reset_max_per_hour: u32,
+    /// Max registration attempts per IP per hour (0 = unlimited).
+    #[serde(default = "default_five")]
+    pub registration_max_per_hour: u32,
+    /// Max TOTP verification attempts per user per 5 minutes (0 = unlimited).
+    #[serde(default = "default_five")]
+    pub totp_max_attempts: u32,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -113,6 +181,9 @@ pub struct AdminInitConfig {
 
 fn default_true() -> bool {
     true
+}
+fn default_five() -> u32 {
+    5
 }
 fn default_password_min_length() -> u32 {
     8
@@ -167,6 +238,9 @@ impl Config {
             && let Ok(n) = v.parse()
         {
             self.server.max_upload_size_mb = n;
+        }
+        if let Ok(v) = std::env::var("NANOFILE_SERVER_SITE_URL") {
+            self.server.site_url = v;
         }
         if let Ok(v) = std::env::var("NANOFILE_SERVER_REQUEST_TIMEOUT_SECS")
             && let Ok(n) = v.parse()

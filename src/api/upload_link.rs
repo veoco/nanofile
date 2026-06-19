@@ -69,9 +69,9 @@ pub async fn create_upload_link(
     let token = generate_upload_link_token();
     let now = chrono::Utc::now().timestamp();
 
-    let password_hash = req
-        .password
-        .map(|p| crate::auth::password::hash_password_legacy(&p));
+    let password_hash = req.password.map(|p| {
+        crate::auth::password::hash_password(&p, state.config.auth.password_hash_iterations)
+    });
 
     let model = upload_link::ActiveModel {
         id: sea_orm::NotSet,

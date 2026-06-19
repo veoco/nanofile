@@ -73,9 +73,10 @@ impl TestServer {
             server: nanofile::config::ServerConfig {
                 addr: "127.0.0.1".to_string(),
                 port,
+                site_url: format!("http://127.0.0.1:{}", port),
                 max_upload_size_mb: 512,
                 request_timeout_secs: 36000,
-                cors_allowed_origins: vec!["*".to_string()],
+                cors_allowed_origins: vec![],
                 cors_max_age_secs: 86400,
             },
             database: nanofile::config::DatabaseConfig {
@@ -100,6 +101,9 @@ impl TestServer {
                 enable_password_reset: true,
                 password_min_length: 8,
                 require_strong_password: false,
+                password_reset_max_per_hour: 10,
+                registration_max_per_hour: 10,
+                totp_max_attempts: 10,
             },
             logging: nanofile::config::LoggingConfig {
                 level: "debug".to_string(),

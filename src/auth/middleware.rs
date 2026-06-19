@@ -134,6 +134,13 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         let sync_record = sync_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let user_id = if let Some(token_record) = api_record {
+            // Check API token expiration.
+            if let Some(expires_at) = token_record.expires_at {
+                let now = chrono::Utc::now().timestamp();
+                if now > expires_at {
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+            }
             token_record.user_id
         } else if let Some(sync_rec) = sync_record {
             if let Some(expires_at) = sync_rec.expires_at {
@@ -194,8 +201,14 @@ impl SyncAuth {
             });
         }
 
-        // Fall back to API token (no expiry — matches seahub behavior).
+        // Fall back to API token — check expiration like AuthUser does.
         if let Ok(Some(record)) = api_result {
+            if let Some(expires_at) = record.expires_at {
+                let now = chrono::Utc::now().timestamp();
+                if now > expires_at {
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+            }
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: String::new(),

@@ -1,6 +1,9 @@
 [server]
 addr = "0.0.0.0"
 port = 8082
+# External URL used for download links and CORS defaults.
+# Change to "https://your-domain.com" when behind a TLS proxy.
+site_url = "http://127.0.0.1:8082"
 max_upload_size_mb = 512
 request_timeout_secs = 600
 
@@ -22,13 +25,19 @@ enable_invitations = true
 enable_password_reset = true
 password_min_length = 8
 require_strong_password = false
+# Max password reset requests per IP per hour (0 = unlimited)
+# password_reset_max_per_hour = 5
+# Max registration attempts per IP per hour (0 = unlimited)
+# registration_max_per_hour = 5
+# Max TOTP verification attempts per user per 5 minutes (0 = unlimited)
+# totp_max_attempts = 5
 
 [admin_init]
 # email = "admin@example.com"
 # password = "secret123"
 
 [logging]
-level = "debug"
+level = "info"
 
 [gc]
 enabled = false
@@ -41,6 +50,8 @@ index_dir = "data/index"
 
 [notification]
 enabled = true
-private_key = "nanofile-notification-secret"
+# IMPORTANT: Generate a unique secret key for production:
+#   openssl rand -hex 32
+# private_key = ""
 ping_interval = 30
 client_timeout = 90

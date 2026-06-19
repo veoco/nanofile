@@ -95,10 +95,9 @@ pub async fn create_share_link(
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
 
-    let password_hash = req
-        .password
-        .as_ref()
-        .map(|p| crate::auth::password::hash_password_legacy(p));
+    let password_hash = req.password.as_ref().map(|p| {
+        crate::auth::password::hash_password(p, state.config.auth.password_hash_iterations)
+    });
     let has_password = req.password.is_some();
 
     let model = share_link::ActiveModel {

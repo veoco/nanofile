@@ -11,6 +11,7 @@ pub mod entity;
 pub mod error;
 pub mod indexer;
 pub mod notification;
+pub mod sanitize;
 pub mod serialization;
 pub mod static_assets;
 pub mod storage;
@@ -26,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::api_v21::task_manager::TaskManager;
 use crate::auth::access_token::AccessTokenManager;
-use crate::auth::rate_limit::LoginRateLimiter;
+use crate::auth::rate_limit::{GenericRateLimiter, LoginRateLimiter};
 use crate::config::Config;
 use crate::crypto::password_manager::PasswordManager;
 use crate::indexer::TextIndexer;
@@ -53,6 +54,12 @@ pub struct AppState {
     pub indexer: Option<TextIndexer>,
     /// Login rate limiter (tracks failed attempts per IP).
     pub login_rate_limiter: Arc<LoginRateLimiter>,
+    /// Password reset rate limiter (per IP).
+    pub password_reset_limiter: Arc<GenericRateLimiter>,
+    /// User registration rate limiter (per IP).
+    pub registration_limiter: Arc<GenericRateLimiter>,
+    /// TOTP verification rate limiter (per user+IP).
+    pub totp_limiter: Arc<GenericRateLimiter>,
     /// Server-wide secret for CSRF token generation.
     pub csrf_secret: Arc<Vec<u8>>,
     /// Cancellation token for graceful shutdown.
@@ -119,6 +126,19 @@ impl AppState {
             config.auth.lockout_duration_secs,
         ));
 
+        let password_reset_limiter = Arc::new(GenericRateLimiter::new(
+            config.auth.password_reset_max_per_hour.max(1),
+            3600,
+        ));
+        let registration_limiter = Arc::new(GenericRateLimiter::new(
+            config.auth.registration_max_per_hour.max(1),
+            3600,
+        ));
+        let totp_limiter = Arc::new(GenericRateLimiter::new(
+            config.auth.totp_max_attempts.max(1),
+            300,
+        ));
+
         // Generate a random 32-byte CSRF secret at startup.
         let mut csrf_raw = [0u8; 32];
         rand::rng().fill_bytes(&mut csrf_raw);
@@ -144,6 +164,9 @@ impl AppState {
             notification_manager,
             indexer,
             login_rate_limiter,
+            password_reset_limiter,
+            registration_limiter,
+            totp_limiter,
             csrf_secret,
             shutdown_token,
             password_manager,

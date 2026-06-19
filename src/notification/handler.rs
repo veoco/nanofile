@@ -290,9 +290,7 @@ fn validate_event_jwt(token: &str, private_key: &str) -> bool {
 
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
-    validation.required_spec_claims = std::collections::HashSet::new();
-    validation.sub = None;
-    validation.iss = None;
+    validation.sub = Some("nanofile-events".to_string());
 
     let key = DecodingKey::from_secret(private_key.as_bytes());
     jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation).is_ok()
