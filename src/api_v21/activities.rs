@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{activity, repo, user};
+use crate::entity::{activity, repo, repo_member, user};
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -18,11 +18,20 @@ pub struct ActivitiesQuery {
     pub page: Option<u32>,
     pub per_page: Option<u32>,
     pub repo_id: Option<String>,
+    pub op_user: Option<String>,
+    pub avatar_size: Option<u32>,
 }
 
 /// GET /api/v2.1/activities/
 ///
-/// Returns paginated file activity events for the authenticated user.
+/// Returns paginated file activity events visible to the authenticated user.
+///
+/// - Without `op_user`: shows activities from all repos the user has access to
+///   (via repo_membership), from ALL users. This matches what all three seafile
+///   clients (Android, Desktop Qt, iOS) expect.
+/// - With `op_user=<email>`: shows only that user's activities (Web "My Activities").
+/// - With `repo_id=<id>`: shows only activities in that specific repo.
+///
 /// Response format matches seahub (api2/endpoints/activities.py).
 pub async fn get_activities(
     auth: AuthUser,
@@ -34,12 +43,52 @@ pub async fn get_activities(
     let per_page = query.per_page.unwrap_or(25).clamp(1, 100);
     let offset = ((page - 1) * per_page) as u64;
 
-    // Build base query filtered by user
-    let mut base_filter =
-        activity::Entity::find().filter(activity::Column::UserId.eq(auth.user_id));
+    // Get all repo_ids the current user has access to
+    let accessible_repo_ids: Vec<String> = repo_member::Entity::find()
+        .filter(repo_member::Column::UserId.eq(auth.user_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|m| m.repo_id)
+        .collect();
 
-    if let Some(ref repo_id) = query.repo_id {
-        base_filter = base_filter.filter(activity::Column::RepoId.eq(repo_id));
+    // Build base query: activities in repos the user can access
+    let mut base_filter = activity::Entity::find()
+        .filter(activity::Column::RepoId.is_in(accessible_repo_ids.clone()));
+
+    // If op_user is specified (Web "My Activities" mode), filter by that user
+    if let Some(ref email) = query.op_user {
+        match user::Entity::find()
+            .filter(user::Column::Email.eq(email))
+            .one(db)
+            .await?
+        {
+            Some(u) => {
+                base_filter = base_filter.filter(activity::Column::UserId.eq(u.id));
+            }
+            None => {
+                // User not found — return empty result
+                return Ok(Json(serde_json::json!({
+                    "events": [],
+                    "page": page,
+                    "per_page": per_page,
+                    "total_count": 0,
+                })));
+            }
+        }
+    }
+
+    // If repo_id is specified, verify it's accessible then filter
+    if let Some(ref rid) = query.repo_id {
+        if !accessible_repo_ids.contains(rid) {
+            return Ok(Json(serde_json::json!({
+                "events": [],
+                "page": page,
+                "per_page": per_page,
+                "total_count": 0,
+            })));
+        }
+        base_filter = base_filter.filter(activity::Column::RepoId.eq(rid));
     }
 
     // Get total count for pagination metadata

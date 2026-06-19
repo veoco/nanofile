@@ -276,9 +276,9 @@ async fn test_v21_upload_links_create() {
     assert_eq!(resp.status(), 200);
 }
 
-/// D.6 — Activities
+/// D.6 — Activities (fixture creates repo which now logs a repo-create activity)
 #[tokio::test]
-async fn test_v21_activities_empty() {
+async fn test_v21_activities_not_empty() {
     let f = TestFixture::new().await;
     let resp = f
         .client
@@ -286,7 +286,10 @@ async fn test_v21_activities_empty() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["events"].as_array().unwrap().is_empty());
+    assert!(
+        !body["events"].as_array().unwrap().is_empty(),
+        "should have at least the repo creation event"
+    );
 }
 
 /// D.7 — Wikis

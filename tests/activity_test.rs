@@ -1,6 +1,7 @@
 mod common;
 
 use common::TestFixture;
+use common::create_test_user;
 use serde_json::Value;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -59,18 +60,27 @@ fn find_event<'a>(events: &'a [Value], op_type: &str) -> Option<&'a Value> {
     events.iter().find(|ev| ev["op_type"] == op_type)
 }
 
+/// Helper: create second user and return its api_token.
+async fn create_second_user(f: &TestFixture) -> String {
+    let db = &*f.server.db;
+    let _uid = create_test_user(db, "user2@test.com", "password2").await;
+    let resp = f.client.login("user2@test.com", "password2").await;
+    assert_eq!(resp.status(), 200);
+    let tv: Value = resp.json().await.unwrap();
+    tv["token"].as_str().unwrap().to_string()
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
+/// Initial fixture creation produces exactly one event: repo creation.
 #[tokio::test]
-async fn test_activities_empty() {
+async fn test_activities_initial_state() {
     let f = TestFixture::new().await;
     let (events, total) = get_activities(&f, 1, 10).await;
-    assert!(
-        events.is_empty(),
-        "expected empty events, got {} items",
-        events.len()
-    );
-    assert_eq!(total, 0);
+    assert_eq!(total, 1, "expected 1 event (repo create), got {total}");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["op_type"], "create");
+    assert_eq!(events[0]["obj_type"], "repo");
 }
 
 #[tokio::test]
@@ -79,7 +89,8 @@ async fn test_activity_after_file_create() {
     create_file(&f, "/created.txt").await;
 
     let (events, _) = get_activities(&f, 1, 10).await;
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2, "expected 2 events (repo + file create)");
+    // Events ordered by created_at DESC, so events[0] is most recent (file create)
     let ev = &events[0];
     assert_eq!(ev["op_type"], "create");
     assert_eq!(ev["obj_type"], "file");
@@ -103,8 +114,8 @@ async fn test_activity_after_file_upload() {
     let (events, _) = get_activities(&f, 1, 10).await;
     assert_eq!(
         events.len(),
-        1,
-        "expected 1 activity (upload), got: {events:?}"
+        2,
+        "expected 2 events (repo + upload), got: {events:?}"
     );
 }
 
@@ -123,11 +134,11 @@ async fn test_activity_after_file_rename() {
     let (events, _) = get_activities(&f, 1, 10).await;
     assert_eq!(
         events.len(),
-        2,
-        "expected 2 events (create + rename), got: {events:?}"
+        3,
+        "expected 3 events (repo + create + rename), got: {events:?}"
     );
 
-    // Search for the rename event (order is undefined when timestamps match)
+    // Verify rename event has old_path
     let rename_ev = find_event(&events, "rename").expect("rename event should exist");
     assert_eq!(rename_ev["path"], "/new_name.txt");
     assert_eq!(rename_ev["old_path"], "/old_name.txt");
@@ -150,8 +161,8 @@ async fn test_activity_after_file_move() {
     let (events, _) = get_activities(&f, 1, 10).await;
     assert_eq!(
         events.len(),
-        3,
-        "expected 3 events (mkdir + create + move), got: {events:?}"
+        4,
+        "expected 4 events (repo + mkdir + create + move), got: {events:?}"
     );
 
     let move_ev = find_event(&events, "move").expect("move event should exist");
@@ -175,7 +186,11 @@ async fn test_activity_after_file_delete() {
     assert_eq!(resp.status(), 200, "delete failed: {:?}", resp.text().await);
 
     let (events, _) = get_activities(&f, 1, 10).await;
-    assert_eq!(events.len(), 2, "expected 2 events (create + delete)");
+    assert_eq!(
+        events.len(),
+        3,
+        "expected 3 events (repo + create + delete)"
+    );
 
     let delete_ev = find_event(&events, "delete").expect("delete event should exist");
     assert_eq!(delete_ev["obj_type"], "file");
@@ -188,7 +203,12 @@ async fn test_activity_after_dir_create() {
     create_dir(&f, "/newfolder").await;
 
     let (events, _) = get_activities(&f, 1, 10).await;
-    assert_eq!(events.len(), 1, "expected 1 event, got: {events:?}");
+    assert_eq!(
+        events.len(),
+        2,
+        "expected 2 events (repo + mkdir), got: {events:?}"
+    );
+    // Events ordered by created_at DESC, so events[0] is most recent (mkdir)
     assert_eq!(events[0]["op_type"], "create");
     assert_eq!(events[0]["obj_type"], "dir");
 }
@@ -214,7 +234,7 @@ async fn test_activity_after_dir_delete() {
     );
 
     let (events, _) = get_activities(&f, 1, 10).await;
-    assert_eq!(events.len(), 2, "expected 2 events (create + delete)");
+    assert_eq!(events.len(), 3, "expected 3 events (repo + mkdir + delete)");
 
     let delete_ev = find_event(&events, "delete").expect("delete event should exist");
     assert_eq!(delete_ev["obj_type"], "dir");
@@ -246,7 +266,7 @@ async fn test_activity_after_dir_rename() {
     );
 
     let (events, _) = get_activities(&f, 1, 10).await;
-    assert_eq!(events.len(), 2, "expected 2 events (mkdir + rename)");
+    assert_eq!(events.len(), 3, "expected 3 events (repo + mkdir + rename)");
 
     let rename_ev = find_event(&events, "rename").expect("rename event should exist");
     assert_eq!(rename_ev["obj_type"], "dir");
@@ -281,7 +301,7 @@ async fn test_activity_after_dir_move() {
     );
 
     let (events, _) = get_activities(&f, 1, 10).await;
-    assert_eq!(events.len(), 3, "expected 3 events (2 mkdir + move)");
+    assert_eq!(events.len(), 4, "expected 4 events (repo + 2 mkdir + move)");
 
     let move_ev = find_event(&events, "move").expect("move event should exist");
     assert_eq!(move_ev["obj_type"], "dir");
@@ -299,14 +319,14 @@ async fn test_activity_pagination() {
         create_file(&f, &format!("/file{i}.txt")).await;
     }
 
-    // page=1, per_page=2 → 2 events, total=5
+    // page=1, per_page=2 → 2 events, total=6 (repo + 5 files)
     let (events, total) = get_activities(&f, 1, 2).await;
     assert_eq!(events.len(), 2, "expected 2 events on page 1");
-    assert_eq!(total, 5);
+    assert_eq!(total, 6);
 
-    // page=3, per_page=2 → 1 event (last page)
+    // page=3, per_page=2 → 2 events (last page: repo + 1 file)
     let (events_page3, _) = get_activities(&f, 3, 2).await;
-    assert_eq!(events_page3.len(), 1, "expected 1 event on page 3");
+    assert_eq!(events_page3.len(), 2, "expected 2 events on page 3");
 }
 
 #[tokio::test]
@@ -337,7 +357,7 @@ async fn test_activity_repo_id_filter() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Filter by repo2
+    // Filter by repo2 — should see 2 events (repo2 create + file create in repo2)
     let resp = f
         .client
         .get(
@@ -348,7 +368,11 @@ async fn test_activity_repo_id_filter() {
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
     let events = body["events"].as_array().unwrap();
-    assert_eq!(events.len(), 1, "expected 1 event for repo2");
+    assert_eq!(
+        events.len(),
+        2,
+        "expected 2 events for repo2 (repo create + file create)"
+    );
     assert_eq!(events[0]["repo_id"], repo2_id);
 }
 
@@ -365,12 +389,12 @@ async fn test_activity_response_fields() {
     create_file(&f, "/fields-test.txt").await;
 
     let (events, _) = get_activities(&f, 1, 10).await;
-    assert_eq!(events.len(), 1);
-    let ev = &events[0];
+    // Find the file create event (skip repo create)
+    let ev = find_event(&events, "create").expect("create event should exist");
+    assert_eq!(ev["obj_type"], "file");
 
     // Verify all expected response fields
     assert_eq!(ev["op_type"], "create");
-    assert_eq!(ev["obj_type"], "file");
     assert_eq!(ev["repo_id"], f.repo_id);
     assert!(!ev["repo_name"].as_str().unwrap_or("").is_empty());
     assert!(!ev["commit_id"].as_str().unwrap_or("").is_empty());
@@ -437,8 +461,8 @@ async fn test_activity_multiple_operations() {
 
     let (events, total) = get_activities(&f, 1, 10).await;
     assert_eq!(
-        total, 3,
-        "expected 3 total events (create + rename + delete)"
+        total, 4,
+        "expected 4 total events (repo + create + rename + delete)"
     );
     // Verify each operation type appears
     assert!(
@@ -453,6 +477,145 @@ async fn test_activity_multiple_operations() {
         find_event(&events, "delete").is_some(),
         "expected a delete event"
     );
+}
+
+#[tokio::test]
+async fn test_activity_op_user_filter() {
+    let f = TestFixture::new().await;
+
+    // Create a file
+    create_file(&f, "/opuser-test.txt").await;
+
+    // Filter by own email — should see activities (repo create + file create)
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/activities/?op_user={}", f.email),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let events = body["events"].as_array().unwrap();
+    assert!(
+        events.len() >= 2,
+        "filtering by own email should show own events, got {}",
+        events.len()
+    );
+}
+
+#[tokio::test]
+async fn test_activity_op_user_nonexistent() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .get(
+            "/api/v2.1/activities/?op_user=nobody@nowhere.com",
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let events = body["events"].as_array().unwrap();
+    assert_eq!(events.len(), 0, "nonexistent user should have 0 events");
+    assert_eq!(body["total_count"], 0);
+}
+
+#[tokio::test]
+async fn test_activity_cross_user_visibility() {
+    let f = TestFixture::new().await;
+
+    // Create a second user
+    let api_token2 = create_second_user(&f).await;
+
+    // Share the repo with user2 via beshare API
+    let share_resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "user",
+                "user": "user2@test.com",
+                "permission": "rw",
+            }),
+        )
+        .await;
+    assert_eq!(share_resp.status(), 200, "share repo with user2 failed");
+
+    // User1 creates a file in the shared repo
+    create_file(&f, "/shared-file.txt").await;
+
+    // User2 should be able to see User1's activity because they share the repo
+    let resp = f
+        .client
+        .get("/api/v2.1/activities/", Some(&api_token2))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let events = body["events"].as_array().unwrap();
+    assert!(
+        !events.is_empty(),
+        "user2 should see activities in shared repo"
+    );
+
+    // The file create event should have user1's email
+    let file_create = events
+        .iter()
+        .find(|e| e["op_type"] == "create" && e["obj_type"] == "file");
+    assert!(
+        file_create.is_some(),
+        "user2 should see user1's file create event"
+    );
+}
+
+#[tokio::test]
+async fn test_activity_repo_created_logged() {
+    let f = TestFixture::new().await;
+    let (events, total) = get_activities(&f, 1, 10).await;
+    assert!(total >= 1, "should have at least one event");
+
+    let create_ev = find_event(&events, "create").expect("create event should exist");
+    assert_eq!(create_ev["obj_type"], "repo");
+    assert_eq!(create_ev["repo_id"], f.repo_id);
+    assert!(!create_ev["repo_name"].as_str().unwrap_or("").is_empty());
+}
+
+#[tokio::test]
+async fn test_activity_repo_deleted_logged() {
+    let f = TestFixture::new().await;
+    let repo_id1 = f.repo_id.clone();
+
+    // Create a second repo to verify its activities survive FK cascade
+    let resp = f.client.create_repo(&f.api_token, "survivor-repo").await;
+    assert!(resp.status().is_success());
+    let body: Value = resp.json().await.unwrap();
+    let repo_id2 = body["repo_id"].as_str().unwrap().to_string();
+
+    // List activities before deletion — should have 2 repo-create events
+    let (_events_before, total_before) = get_activities(&f, 1, 10).await;
+    assert_eq!(
+        total_before, 2,
+        "should have 2 repo create events before delete"
+    );
+
+    // Delete the first repo (activities cascade-deleted via FK)
+    let resp = f
+        .client
+        .delete(&format!("/api2/repos/{}/", repo_id1), Some(&f.api_token))
+        .await;
+    assert_eq!(resp.status(), 200, "delete repo failed");
+
+    // After deletion, repo1's activities are cascade-deleted,
+    // but repo2's create activity should remain
+    let (events_after, total_after) = get_activities(&f, 1, 10).await;
+    assert_eq!(
+        total_after, 1,
+        "only survivor repo's create activity should remain"
+    );
+    assert_eq!(events_after[0]["repo_id"], repo_id2);
+    assert_eq!(events_after[0]["op_type"], "create");
+    assert_eq!(events_after[0]["obj_type"], "repo");
 }
 
 #[tokio::test]

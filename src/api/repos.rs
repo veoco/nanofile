@@ -268,6 +268,18 @@ pub async fn create_repo(
 
     let encrypted = encrypted_val == 1;
 
+    // Log repo creation activity (best-effort)
+    crate::activity_log::log_activity(
+        state.db.as_ref(),
+        &repo_id,
+        "create",
+        "repo",
+        "/",
+        auth.user_id,
+        None,
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(RepoInfo {
@@ -643,7 +655,7 @@ fn parse_repo_name(bytes: &[u8]) -> Result<String, AppError> {
 }
 
 pub async fn delete_repo(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -656,9 +668,14 @@ pub async fn delete_repo(
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
     // Only owner can delete
-    if r.owner_id != _auth.user_id {
+    if r.owner_id != auth.user_id {
         return Err(AppError::Forbidden);
     }
+
+    // Log repo deletion activity BEFORE deleting the repo (FK constraint
+    // prevents inserting activity with a non-existent repo_id).
+    crate::activity_log::log_activity(db, &repo_id, "delete", "repo", "/", auth.user_id, None)
+        .await;
 
     // Cascade-delete related records
     repo_member::Entity::delete_many()
