@@ -40,6 +40,7 @@ async fn test_avatar_different_sizes() {
 async fn test_avatar_nonexistent_user() {
     let f = TestFixture::new().await;
 
+    // Seahub compatibility: nonexistent users get a default avatar URL, not 404.
     let resp = f
         .client
         .get(
@@ -47,5 +48,8 @@ async fn test_avatar_nonexistent_user() {
             Some(&f.api_token),
         )
         .await;
-    assert_eq!(resp.status(), 404);
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["is_default"].as_bool().unwrap_or(false));
+    assert!(body["url"].as_str().unwrap_or("").contains("avatars"));
 }
