@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{avatar as avatar_entity, user};
+use crate::entity::avatar as avatar_entity;
 use crate::error::AppError;
 
 /// Default avatar SVG embedded at compile time.
@@ -40,13 +40,9 @@ pub async fn get_avatar(
     State(state): State<Arc<AppState>>,
     Path((email, size_str)): Path<(String, String)>,
 ) -> Result<Json<AvatarResponse>, AppError> {
-    // Verify the user exists
-    user::Entity::find()
-        .filter(user::Column::Email.eq(&email))
-        .one(state.db.as_ref())
-        .await?
-        .ok_or_else(|| AppError::NotFound("user not found".into()))?;
-
+    // Seahub compatibility: always return a URL (default if no avatar or user
+    // doesn't exist).  Clients query avatars for any email without checking
+    // user existence first.
     let size = resolve_size(&size_str);
 
     let avatar = avatar_entity::Entity::find()
@@ -106,7 +102,14 @@ async fn serve_existing_avatar(
     if thumbnail_path.exists() {
         match tokio::fs::read(&thumbnail_path).await {
             Ok(data) => {
-                return (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data)
+                return (
+                    StatusCode::OK,
+                    [
+                        (header::CONTENT_TYPE, "image/png"),
+                        (header::CACHE_CONTROL, "public, max-age=86400"),
+                    ],
+                    data,
+                )
                     .into_response();
             }
             Err(_) => return serve_default_avatar(),
@@ -128,7 +131,10 @@ async fn serve_existing_avatar(
 
             (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, "image/png")],
+                [
+                    (header::CONTENT_TYPE, "image/png"),
+                    (header::CACHE_CONTROL, "public, max-age=86400"),
+                ],
                 thumbnail_data,
             )
                 .into_response()
@@ -137,7 +143,10 @@ async fn serve_existing_avatar(
             // Fall back to serving the original at its native size
             (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, avatar.mime_type.as_str())],
+                [
+                    (header::CONTENT_TYPE, avatar.mime_type.as_str()),
+                    (header::CACHE_CONTROL, "public, max-age=86400"),
+                ],
                 content,
             )
                 .into_response()

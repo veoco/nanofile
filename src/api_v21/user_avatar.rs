@@ -3,8 +3,6 @@ use axum::{
     extract::{Multipart, State},
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
-use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -96,7 +94,7 @@ pub async fn upload_avatar(
     };
 
     // Build storage path
-    let storage_dir = avatar_storage_dir(&auth.email);
+    let storage_dir = crate::api::avatar::avatar_storage_dir(&auth.email);
     tokio::fs::create_dir_all(&storage_dir)
         .await
         .map_err(|e| AppError::Internal(format!("failed to create avatar dir: {e}")))?;
@@ -106,6 +104,23 @@ pub async fn upload_avatar(
     tokio::fs::write(&original_path, &data)
         .await
         .map_err(|e| AppError::Internal(format!("failed to save avatar: {e}")))?;
+
+    // Clean up stale thumbnails from any previous upload
+    let _ = tokio::task::spawn_blocking({
+        let dir = storage_dir.clone();
+        move || {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    // Remove any cached {size}.png thumbnails
+                    if name.ends_with(".png") && name != format!("original.{}", ext) {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+    })
+    .await;
 
     // Generate and save the default-size thumbnail (256×256)
     let thumbnail_data = generate_thumbnail(&data, 256)
@@ -145,12 +160,6 @@ pub async fn upload_avatar(
     Ok(Json(serde_json::json!({
         "avatar_url": crate::api::avatar::primary_avatar_url(&auth.email, 256)
     })))
-}
-
-/// Compute the on-disk storage directory for a user's avatar files.
-fn avatar_storage_dir(email: &str) -> PathBuf {
-    let hash = hex::encode(Sha256::digest(email.as_bytes()));
-    PathBuf::from("data/avatars").join(&hash[..16])
 }
 
 /// Generate a square PNG thumbnail from raw image data.

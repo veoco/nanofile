@@ -8,8 +8,6 @@ use axum::{
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -407,7 +405,7 @@ pub async fn upload_avatar(
     };
 
     // Save to disk
-    let storage_dir = avatar_dir(&user.email);
+    let storage_dir = crate::api::avatar::avatar_storage_dir(&user.email);
     tokio::fs::create_dir_all(&storage_dir)
         .await
         .map_err(|e| AppError::Internal(format!("failed to create dir: {e}")))?;
@@ -416,6 +414,22 @@ pub async fn upload_avatar(
     tokio::fs::write(&original_path, &data)
         .await
         .map_err(|e| AppError::Internal(format!("failed to write: {e}")))?;
+
+    // Clean up stale thumbnails from any previous upload
+    let _ = tokio::task::spawn_blocking({
+        let dir = storage_dir.clone();
+        move || {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.ends_with(".png") && name != format!("original.{}", ext) {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+    })
+    .await;
 
     // Generate default-size thumbnail
     if let Ok(thumb) = generate_thumb(&data, 256) {
@@ -450,12 +464,6 @@ pub async fn upload_avatar(
     }
 
     Ok((StatusCode::FOUND, [("Location", "/profile/")]).into_response())
-}
-
-/// Compute avatar storage directory (shared with API handler logic).
-fn avatar_dir(email: &str) -> PathBuf {
-    let hash = hex::encode(Sha256::digest(email.as_bytes()));
-    PathBuf::from("data/avatars").join(&hash[..16])
 }
 
 /// Generate a square PNG thumbnail.

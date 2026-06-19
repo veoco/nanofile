@@ -172,7 +172,7 @@ pub async fn get_activities(
             "author_name": author_name,
             "author_contact_email": email,
             "login_id": login_id,
-            "avatar_url": crate::api::avatar::primary_avatar_url(email, 32),
+            "avatar_url": crate::api::avatar::primary_avatar_url(email, query.avatar_size.unwrap_or(32)),
             "time": time,
             "details": details,
             "count": count,
