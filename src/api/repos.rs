@@ -161,7 +161,7 @@ pub async fn list_repos(
                     None
                 },
                 repo_version: r.repo_version,
-                lib_need_decrypt: None,
+                lib_need_decrypt: if encrypted { Some(true) } else { None },
                 repo_id_dup: None,
                 repo_name_dup: None,
                 token: None,
@@ -292,7 +292,7 @@ pub async fn create_repo(
             magic: if encrypted { magic } else { None },
             random_key: if encrypted { random_key } else { None },
             repo_version: 1,
-            lib_need_decrypt: None,
+            lib_need_decrypt: if encrypted { Some(true) } else { None },
             // Extra fields for RepoDownloadInfo compatibility
             repo_id_dup: Some(repo_id),
             repo_name_dup: Some(repo_req.name.clone()),
@@ -378,7 +378,7 @@ pub async fn get_repo(
         magic,
         random_key,
         repo_version: r.repo_version,
-        lib_need_decrypt: None,
+        lib_need_decrypt: if r.encrypted != 0 { Some(true) } else { None },
         repo_id_dup: None,
         repo_name_dup: None,
         token: None,
@@ -949,7 +949,7 @@ pub async fn get_default_repo(
                             None
                         },
                         repo_version: r.repo_version,
-                        lib_need_decrypt: None,
+                        lib_need_decrypt: if encrypted { Some(true) } else { None },
                         repo_id_dup: None,
                         repo_name_dup: None,
                         token: None,
@@ -1014,7 +1014,7 @@ pub async fn create_default_repo(
                         None
                     },
                     repo_version: r.repo_version,
-                    lib_need_decrypt: None,
+                    lib_need_decrypt: if encrypted { Some(true) } else { None },
                     repo_id_dup: None,
                     repo_name_dup: None,
                     token: None,

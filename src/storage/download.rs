@@ -23,8 +23,8 @@ impl Downloader {
         for block_id in &block_ids {
             let block_data = block_store.read_block(block_id).await?;
             // If decryption key is provided, decrypt the block.
-            let block_data = if let Some((key, _iv)) = dec_key {
-                decrypt_block(&block_data, key)?
+            let block_data = if let Some((key, iv)) = dec_key {
+                decrypt_block(&block_data, key, iv)?
             } else {
                 block_data
             };

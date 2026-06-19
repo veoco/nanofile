@@ -1,49 +1,40 @@
 use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
-use rand::Rng;
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
-/// Encrypt a file block using AES-256-CBC with PKCS#7 padding.
+/// Encrypt a file block using AES-256-CBC with PKCS7 padding (Seafile protocol).
 ///
-/// Each block is encrypted with a random IV which is prepended to the
-/// ciphertext. The output format is: `[16-byte IV][ciphertext]`.
+/// Seafile protocol: the IV is deterministic (derived from the key chain),
+/// and no IV is prepended to the ciphertext. The stored block is raw
+/// AES-256-CBC ciphertext with PKCS7 padding.
 ///
-/// The `file_key` is the 32-byte actual encryption key obtained from
-/// `decrypt_repo_enc_key()`. Seafile always uses PKCS#7 padding regardless
-/// of whether the plaintext is block-aligned.
-pub fn encrypt_block(data: &[u8], file_key: &[u8]) -> Vec<u8> {
-    let mut iv = [0u8; 16];
-    rand::rng().fill_bytes(&mut iv[..]);
-
-    let ciphertext = Aes256CbcEnc::new_from_slices(file_key, &iv)
+/// Block ID = SHA-1(ciphertext), matching seafile's seafile_encrypt().
+///
+/// # Panics
+/// Panics if `file_key` is not 32 bytes or `file_iv` is not 16 bytes.
+pub fn encrypt_block(data: &[u8], file_key: &[u8], file_iv: &[u8]) -> Vec<u8> {
+    Aes256CbcEnc::new_from_slices(file_key, file_iv)
         .expect("key must be 32 bytes, IV must be 16 bytes")
-        .encrypt_padded_vec::<Pkcs7>(data);
-
-    let mut result = Vec::with_capacity(16 + ciphertext.len());
-    result.extend_from_slice(&iv);
-    result.extend_from_slice(&ciphertext);
-    result
+        .encrypt_padded_vec::<Pkcs7>(data)
 }
 
-/// Decrypt a file block that was encrypted with `encrypt_block`.
+/// Decrypt a file block encrypted with `encrypt_block` (Seafile protocol).
 ///
-/// Expects the input to be in `[16-byte IV][ciphertext]` format.
-/// The `file_key` is the 32-byte actual encryption key.
+/// Expects raw AES-256-CBC ciphertext (no IV prefix). The IV is deterministic
+/// from the key chain, passed as `file_iv`.
 pub fn decrypt_block(
     encrypted: &[u8],
     file_key: &[u8],
+    file_iv: &[u8],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    if encrypted.len() < 17 {
-        return Err("encrypted block too short".into());
+    if encrypted.is_empty() {
+        return Err("encrypted block is empty".into());
     }
 
-    let iv = &encrypted[..16];
-    let ciphertext = &encrypted[16..];
-
-    let plaintext = Aes256CbcDec::new_from_slices(file_key, iv)
+    let plaintext = Aes256CbcDec::new_from_slices(file_key, file_iv)
         .map_err(|e| format!("decrypt init error: {}", e))?
-        .decrypt_padded_vec::<Pkcs7>(ciphertext)
+        .decrypt_padded_vec::<Pkcs7>(encrypted)
         .map_err(|e| format!("decrypt error: {}", e))?;
 
     Ok(plaintext)
@@ -52,60 +43,58 @@ pub fn decrypt_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::Rng;
+
+    fn random_key_iv() -> ([u8; 32], [u8; 16]) {
+        let mut key = [0u8; 32];
+        let mut iv = [0u8; 16];
+        rand::rng().fill_bytes(&mut key);
+        rand::rng().fill_bytes(&mut iv);
+        (key, iv)
+    }
 
     #[test]
     fn test_encrypt_decrypt_block() {
-        let mut key = [0u8; 32];
-        rand::rng().fill_bytes(&mut key[..]);
-
+        let (key, iv) = random_key_iv();
         let data = b"Hello, this is test data for block encryption!";
-        let encrypted = encrypt_block(data, &key);
-        let decrypted = decrypt_block(&encrypted, &key).unwrap();
-
+        let encrypted = encrypt_block(data, &key, &iv);
+        let decrypted = decrypt_block(&encrypted, &key, &iv).unwrap();
         assert_eq!(data.to_vec(), decrypted);
     }
 
     #[test]
     fn test_encrypt_decrypt_empty_data() {
-        let mut key = [0u8; 32];
-        rand::rng().fill_bytes(&mut key[..]);
-
+        let (key, iv) = random_key_iv();
         let data = b"";
-        let encrypted = encrypt_block(data, &key);
-        let decrypted = decrypt_block(&encrypted, &key).unwrap();
-
+        let encrypted = encrypt_block(data, &key, &iv);
+        let decrypted = decrypt_block(&encrypted, &key, &iv).unwrap();
         assert_eq!(data.to_vec(), decrypted);
     }
 
     #[test]
     fn test_encrypt_decrypt_large_data() {
-        let mut key = [0u8; 32];
-        rand::rng().fill_bytes(&mut key[..]);
-
+        let (key, iv) = random_key_iv();
         let data = vec![0xABu8; 10000];
-        let encrypted = encrypt_block(&data, &key);
-        let decrypted = decrypt_block(&encrypted, &key).unwrap();
-
+        let encrypted = encrypt_block(&data, &key, &iv);
+        let decrypted = decrypt_block(&encrypted, &key, &iv).unwrap();
         assert_eq!(data, decrypted);
     }
 
     #[test]
     fn test_decrypt_short_input() {
         let key = [0u8; 32];
-        assert!(decrypt_block(&[0u8; 15], &key).is_err());
-        assert!(decrypt_block(&[0u8; 16], &key).is_err());
+        let iv = [0u8; 16];
+        assert!(decrypt_block(&[], &key, &iv).is_err());
     }
 
     #[test]
     fn test_decrypt_wrong_key() {
-        let mut key1 = [0u8; 32];
-        rand::rng().fill_bytes(&mut key1[..]);
-        let mut key2 = [0u8; 32];
-        rand::rng().fill_bytes(&mut key2[..]);
+        let (key1, iv1) = random_key_iv();
+        let (key2, iv2) = random_key_iv();
 
         let data = b"test data";
-        let encrypted = encrypt_block(data, &key1);
-        let result = decrypt_block(&encrypted, &key2);
+        let encrypted = encrypt_block(data, &key1, &iv1);
+        let result = decrypt_block(&encrypted, &key2, &iv2);
         // Wrong key should either error or produce wrong data
         if let Ok(decrypted) = result {
             assert_ne!(decrypted, data);
@@ -114,81 +103,77 @@ mod tests {
     }
 
     #[test]
-    fn test_different_iv_per_call() {
-        let key = [0u8; 32];
+    fn test_deterministic_encryption() {
+        let (key, iv) = random_key_iv();
         let data = b"same data";
 
-        let encrypted1 = encrypt_block(data, &key);
-        let encrypted2 = encrypt_block(data, &key);
+        let encrypted1 = encrypt_block(data, &key, &iv);
+        let encrypted2 = encrypt_block(data, &key, &iv);
 
-        // Each encryption should produce different ciphertext (different IV)
-        let iv1 = &encrypted1[..16];
-        let iv2 = &encrypted2[..16];
-        assert_ne!(iv1, iv2);
+        // Same IV + same key + same data = same ciphertext (Seafile protocol)
+        assert_eq!(encrypted1, encrypted2);
     }
 
     #[test]
     fn test_block_aligned_data() {
-        let mut key = [0u8; 32];
-        rand::rng().fill_bytes(&mut key[..]);
+        let (key, iv) = random_key_iv();
 
         // 32 bytes = exactly 2 AES blocks
         let data = b"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP";
         assert_eq!(data.len(), 32);
 
-        let encrypted = encrypt_block(data, &key);
-        assert!(encrypted.len() > 32 + 16); // has IV + padding
+        let encrypted = encrypt_block(data, &key, &iv);
+        // With PKCS7 padding, 32 bytes input → 48 bytes output (2 blocks + 1 padding block)
+        assert_eq!(encrypted.len(), 48);
 
-        let decrypted = decrypt_block(&encrypted, &key).unwrap();
+        let decrypted = decrypt_block(&encrypted, &key, &iv).unwrap();
         assert_eq!(data.to_vec(), decrypted);
     }
 
     #[test]
     fn test_encrypt_decrypt_multi_block_unaligned() {
-        let mut key = [0u8; 32];
-        rand::rng().fill_bytes(&mut key[..]);
+        let (key, iv) = random_key_iv();
 
         // 1001 bytes = not a multiple of 16 (AES block size)
         let data = vec![0xABu8; 1001];
-        let encrypted = encrypt_block(&data, &key);
-        let decrypted = decrypt_block(&encrypted, &key).unwrap();
+        let encrypted = encrypt_block(&data, &key, &iv);
+        let decrypted = decrypt_block(&encrypted, &key, &iv).unwrap();
         assert_eq!(data, decrypted);
     }
 
     #[test]
     fn test_encrypt_decrypt_single_byte() {
-        let mut key = [0u8; 32];
-        rand::rng().fill_bytes(&mut key[..]);
+        let (key, iv) = random_key_iv();
 
         let data = b"\x42";
-        let encrypted = encrypt_block(data, &key);
-        let decrypted = decrypt_block(&encrypted, &key).unwrap();
+        let encrypted = encrypt_block(data, &key, &iv);
+        let decrypted = decrypt_block(&encrypted, &key, &iv).unwrap();
         assert_eq!(data.to_vec(), decrypted);
     }
 
     #[test]
     fn test_encrypt_decrypt_max_key_bytes() {
         let key = [0xFFu8; 32]; // all bits set
+        let iv = [0xFFu8; 16];
 
         let data = b"test data with maximum key bits";
-        let encrypted = encrypt_block(data, &key);
-        let decrypted = decrypt_block(&encrypted, &key).unwrap();
+        let encrypted = encrypt_block(data, &key, &iv);
+        let decrypted = decrypt_block(&encrypted, &key, &iv).unwrap();
         assert_eq!(data.to_vec(), decrypted);
     }
 
     #[test]
     fn test_decrypt_block_tampered() {
-        let mut key = [0u8; 32];
-        rand::rng().fill_bytes(&mut key[..]);
+        let (key, iv) = random_key_iv();
 
         let data = b"tamper test data for block decryption";
-        let encrypted = encrypt_block(data, &key);
+        let encrypted = encrypt_block(data, &key, &iv);
 
-        // Corrupt the first byte of ciphertext (after the IV)
+        // Corrupt the first byte of ciphertext (no IV prefix now, so offset 0)
         let mut tampered = encrypted.clone();
-        tampered[16] ^= 0xFF;
+        tampered[0] ^= 0xFF;
 
-        let result = decrypt_block(&tampered, &key);
+        let result = decrypt_block(&tampered, &key, &iv);
         // Should either error OR produce wrong output
         if let Ok(decrypted) = result {
             assert_ne!(decrypted, data);

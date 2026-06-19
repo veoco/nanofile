@@ -23,7 +23,7 @@ use crate::storage::download::Downloader;
 fn stream_blocks(
     block_ids: Vec<String>,
     block_store: crate::storage::DynBlockStorage,
-    enc_key: Option<Vec<u8>>,
+    enc_key: Option<(Vec<u8>, Vec<u8>)>,
 ) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static {
     futures::stream::iter(block_ids.into_iter().map(move |block_id| {
         let store = block_store.clone();
@@ -34,7 +34,7 @@ fn stream_blocks(
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             let data = match &key {
-                Some(k) => crate::crypto::random_key::decrypt_block(&data, k)
+                Some((k, iv)) => crate::crypto::random_key::decrypt_block(&data, k, iv)
                     .map_err(|e| std::io::Error::other(e.to_string()))?,
                 None => data,
             };
@@ -124,11 +124,7 @@ pub async fn repo_file_download(
             .await
             .map_err(|_| AppError::NotFound("file not found".into()))?;
 
-    let stream = stream_blocks(
-        block_ids,
-        state.block_store.clone(),
-        dec_key.map(|(k, _)| k),
-    );
+    let stream = stream_blocks(block_ids, state.block_store.clone(), dec_key);
 
     Ok((
         StatusCode::OK,
@@ -169,11 +165,7 @@ pub async fn download_api(
 
     // We don't know the size upfront when streaming, so use
     // Transfer-Encoding: chunked (omit Content-Length).
-    let stream = stream_blocks(
-        block_ids,
-        state.block_store.clone(),
-        dec_key.map(|(k, _)| k),
-    );
+    let stream = stream_blocks(block_ids, state.block_store.clone(), dec_key);
 
     let mut headers = HeaderMap::new();
     headers.insert(

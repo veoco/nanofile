@@ -53,12 +53,12 @@ pub fn verify_magic(stored_magic: &str, provided_magic: &str) -> bool {
 /// Determine the effective salt for password operations.
 ///
 /// For enc_version 2: returns empty string (signals "use MAGIC_SALT")
-/// For enc_version >= 4: returns the stored salt (per-repo random salt)
+/// For enc_version 4: returns the stored salt (per-repo random salt)
 /// For other versions: returns empty (unsupported, will fail at derive_key)
 pub fn effective_salt(enc_version: i32, repo_salt: &str) -> &str {
     match enc_version {
         2 => "", // Use default MAGIC_SALT
-        4 | 3 => repo_salt,
+        4 => repo_salt,
         _ => "",
     }
 }

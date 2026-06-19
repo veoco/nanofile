@@ -1,4 +1,4 @@
-use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::NoPadding};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use rand::Rng;
 use sha2::Sha256;
 
@@ -87,12 +87,25 @@ pub fn derive_key(
     enc_version: i32,
     repo_salt: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
+    derive_key_bytes(password.as_bytes(), enc_version, repo_salt)
+}
+
+/// Derive wrapping key and IV from raw key bytes (not a password string).
+///
+/// This is identical to `derive_key` but accepts `&[u8]` instead of `&str`.
+/// Used for the second stage of the key derivation chain where the file_key
+/// is 32 raw bytes (not a UTF-8 string).
+pub fn derive_key_bytes(
+    key_bytes: &[u8],
+    enc_version: i32,
+    repo_salt: &str,
+) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
     let salt_bytes = decode_salt(repo_salt)?;
 
     match enc_version {
         2 | 4 => {
             let mut key = [0u8; 32];
-            pbkdf2::pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt_bytes, 1000, &mut key);
+            pbkdf2::pbkdf2_hmac::<Sha256>(key_bytes, &salt_bytes, 1000, &mut key);
 
             let mut iv = [0u8; 16];
             pbkdf2::pbkdf2_hmac::<Sha256>(&key, &salt_bytes, 10, &mut iv);
@@ -110,8 +123,8 @@ pub fn derive_key(
 ///
 /// This is the full key derivation chain:
 ///   password → derive_key → (derivedKey, derivedIv)
-///   AES-256-CBC-Decrypt(random_key, derivedKey, derivedIv) → fileKey
-///   fileKey → derive_key → (encKey, encIv)  // actual block encryption key+IV
+///   AES-256-CBC-Decrypt(random_key, derivedKey, derivedIv) → fileKey (32 bytes)
+///   fileKey → derive_key_bytes → (encKey, encIv)  // actual block encryption key+IV
 ///
 /// The `random_key` parameter is a hex-encoded 96-char string (48 bytes encrypted).
 /// The `salt` parameter is the per-repo salt (64 hex chars, or empty for v2).
@@ -129,15 +142,17 @@ pub fn decrypt_repo_enc_key(
     // Step 1: Derive wrapping key from password
     let (derived_key, derived_iv) = derive_key(password, enc_version, repo_salt)?;
 
-    // Step 2: Decrypt random_key to get the secret file key
+    // Step 2: Decrypt random_key with PKCS7 to get the 32-byte secret file key
+    // PKCS7 strips the padding, returning exactly the original 32-byte secret key
     let file_key = Aes256CbcDec::new_from_slices(&derived_key, &derived_iv)
         .map_err(|e| CryptoError::DecryptionFailed(format!("init: {e}")))?
-        .decrypt_padded_vec::<NoPadding>(&random_key_bytes)
+        .decrypt_padded_vec::<Pkcs7>(&random_key_bytes)
         .map_err(|e| CryptoError::DecryptionFailed(format!("decrypt random_key: {e}")))?;
 
-    // Step 3: Derive the actual block encryption key from the file key
-    let (enc_key, enc_iv) =
-        derive_key(&String::from_utf8_lossy(&file_key), enc_version, repo_salt)?;
+    // Step 3: Derive the actual block encryption key from the raw 32-byte file key
+    // Pass as raw bytes — NOT via String::from_utf8_lossy which would corrupt
+    // arbitrary byte values
+    let (enc_key, enc_iv) = derive_key_bytes(&file_key, enc_version, repo_salt)?;
 
     Ok((enc_key, enc_iv))
 }
@@ -159,8 +174,8 @@ pub fn generate_repo_salt() -> String {
 ///
 /// 1. Generate a random 32-byte secret key (the actual file encryption key)
 /// 2. Derive wrapping key from password
-/// 3. Encrypt the secret key with AES-256-CBC
-/// 4. Hex-encode the 48-byte (padded) ciphertext → 96 hex chars
+/// 3. Encrypt the secret key with AES-256-CBC + PKCS7 padding (32 → 48 bytes)
+/// 4. Hex-encode the 48-byte ciphertext → 96 hex chars
 ///
 /// Returns the hex-encoded random_key.
 pub fn generate_random_key_for_repo(
@@ -170,24 +185,13 @@ pub fn generate_random_key_for_repo(
 ) -> Result<String, CryptoError> {
     let (derived_key, derived_iv) = derive_key(password, enc_version, repo_salt)?;
 
-    let mut secret_key = [0u8; 48]; // 32-byte key + 16 bytes PKCS#7 padding space
-    rand::rng().fill_bytes(&mut secret_key[..32]);
+    let mut secret_key = [0u8; 32]; // 32-byte random secret key
+    rand::rng().fill_bytes(&mut secret_key);
 
-    // Only encrypt the first 32 bytes of secret key; NoPadding means we must
-    // encrypt exactly 32 bytes (no padding needed for AES-CBC on aligned data).
-    // With NoPadding, encrypt_padded_vec will encrypt exactly 32 bytes and
-    // produce exactly 48 bytes (32 + 16 for the IV? No — NoPadding doesn't add
-    // padding, so output is same as input length. But AES-CBC requires input
-    // to be a multiple of 16, and 32 is a multiple of 16, so output is 32 bytes).
-    //
-    // Wait — seafile's generate_random_key produces a random 48-byte buffer
-    // (not 32), and encrypts ALL 48 bytes. Let me match that exactly.
-    let mut secret_key_48 = [0u8; 48];
-    rand::rng().fill_bytes(&mut secret_key_48);
-
+    // Encrypt with PKCS7 padding: 32 bytes → 48 bytes ciphertext
     let ciphertext = Aes256CbcEnc::new_from_slices(&derived_key, &derived_iv)
         .map_err(|e| CryptoError::EncryptionFailed(format!("init: {e}")))?
-        .encrypt_padded_vec::<NoPadding>(&secret_key_48);
+        .encrypt_padded_vec::<Pkcs7>(&secret_key);
 
     Ok(hex::encode(&ciphertext))
 }
@@ -369,10 +373,11 @@ mod tests {
         let random_key = generate_random_key_for_repo(password, 2, repo_salt).unwrap();
         let (correct_key, correct_iv) =
             decrypt_repo_enc_key(password, &random_key, 2, repo_salt).unwrap();
-        let (wrong_key, wrong_iv) =
-            decrypt_repo_enc_key("wrong_password", &random_key, 2, repo_salt).unwrap_or_default();
-        // Wrong password produces different keys (not an error - AES decrypts garbage)
-        assert_ne!(correct_key, wrong_key);
-        assert_ne!(correct_iv, wrong_iv);
+        let wrong_result = decrypt_repo_enc_key("wrong_password", &random_key, 2, repo_salt);
+        // With PKCS7 padding, a wrong password causes a padding validation error
+        // (not silently returning garbage data), which is more secure.
+        assert!(wrong_result.is_err());
+        assert_eq!(correct_key.len(), 32);
+        assert_eq!(correct_iv.len(), 16);
     }
 }
