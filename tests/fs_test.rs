@@ -796,10 +796,9 @@ async fn test_resolve_fs_id_root_path() {
         .unwrap();
     assert_eq!(result, root_fs_id, "root path must resolve to root_fs_id");
 
-    let result_empty =
-        nanofile::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "")
-            .await
-            .unwrap();
+    let result_empty = nanofile::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "")
+        .await
+        .unwrap();
     assert_eq!(
         result_empty, root_fs_id,
         "empty path must resolve to root_fs_id"
@@ -868,21 +867,16 @@ async fn test_resolve_fs_id_deep_path() {
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
     // Resolve /sub -> should get sub_fs_id
-    let result =
-        nanofile::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "/sub")
-            .await
-            .unwrap();
+    let result = nanofile::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "/sub")
+        .await
+        .unwrap();
     assert_eq!(result, sub_fs_id, "/sub must resolve to sub_fs_id");
 
     // Resolve /sub/nested.txt -> should get file_fs_id
-    let result = nanofile::repo::resolve_fs_id(
-        server.db.as_ref(),
-        &repo_id,
-        &root_fs_id,
-        "/sub/nested.txt",
-    )
-    .await
-    .unwrap();
+    let result =
+        nanofile::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "/sub/nested.txt")
+            .await
+            .unwrap();
     assert_eq!(
         result, file_fs_id,
         "/sub/nested.txt must resolve to file_fs_id"
