@@ -4,7 +4,7 @@
 /// prevents further attempts after a configurable threshold within
 /// a configurable time window.
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct LoginRateLimiter {
@@ -29,10 +29,17 @@ impl LoginRateLimiter {
             .as_secs() as i64
     }
 
+    /// Acquire the internal mutex, recovering from a poisoned state.
+    /// The rate limiter's HashMap has no invariants that would be violated
+    /// by a panic in another thread, so poison recovery is safe.
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Vec<i64>>> {
+        self.attempts.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Record a failed login attempt for the given key.
     pub fn record_failure(&self, key: &str) {
         let now = Self::now();
-        let mut map = self.attempts.lock().unwrap();
+        let mut map = self.lock();
         let timestamps = map.entry(key.to_string()).or_default();
         timestamps.push(now);
         // Trim entries older than the lockout window to bound memory.
@@ -44,7 +51,7 @@ impl LoginRateLimiter {
     pub fn is_locked(&self, key: &str) -> bool {
         let now = Self::now();
         let cutoff = now - self.lockout_secs;
-        let mut map = self.attempts.lock().unwrap();
+        let mut map = self.lock();
         if let Some(timestamps) = map.get_mut(key) {
             timestamps.retain(|&t| t > cutoff);
             timestamps.len() as u32 >= self.max_attempts
@@ -55,7 +62,7 @@ impl LoginRateLimiter {
 
     /// Clear all recorded attempts for a key (called on successful login).
     pub fn clear(&self, key: &str) {
-        let mut map = self.attempts.lock().unwrap();
+        let mut map = self.lock();
         map.remove(key);
     }
 }
@@ -87,10 +94,15 @@ impl GenericRateLimiter {
             .as_secs() as i64
     }
 
+    /// Acquire the internal mutex, recovering from a poisoned state.
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Vec<i64>>> {
+        self.attempts.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Record an attempt for the given key.
     pub fn record_attempt(&self, key: &str) {
         let now = Self::now();
-        let mut map = self.attempts.lock().unwrap();
+        let mut map = self.lock();
         let timestamps = map.entry(key.to_string()).or_default();
         timestamps.push(now);
         let cutoff = now - self.window_secs;
@@ -101,7 +113,7 @@ impl GenericRateLimiter {
     pub fn is_limited(&self, key: &str) -> bool {
         let now = Self::now();
         let cutoff = now - self.window_secs;
-        let mut map = self.attempts.lock().unwrap();
+        let mut map = self.lock();
         if let Some(timestamps) = map.get_mut(key) {
             timestamps.retain(|&t| t > cutoff);
             timestamps.len() as u32 >= self.max_attempts
@@ -112,7 +124,7 @@ impl GenericRateLimiter {
 
     /// Clear all recorded attempts for a key.
     pub fn clear(&self, key: &str) {
-        let mut map = self.attempts.lock().unwrap();
+        let mut map = self.lock();
         map.remove(key);
     }
 }

@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
-use std::sync::RwLock;
+use std::sync::{PoisonError, RwLock};
+use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -25,6 +26,30 @@ pub struct ClientState {
     pub token_expirations: RwLock<HashMap<String, i64>>,
 }
 
+impl ClientState {
+    fn read_user(&self) -> RwLockReadGuard<'_, String> {
+        self.user.read().unwrap_or_else(PoisonError::into_inner)
+    }
+    fn write_user(&self) -> RwLockWriteGuard<'_, String> {
+        self.user.write().unwrap_or_else(PoisonError::into_inner)
+    }
+    fn write_subscribed_repos(&self) -> RwLockWriteGuard<'_, HashSet<String>> {
+        self.subscribed_repos
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+    fn read_token_expirations(&self) -> RwLockReadGuard<'_, HashMap<String, i64>> {
+        self.token_expirations
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+    fn write_token_expirations(&self) -> RwLockWriteGuard<'_, HashMap<String, i64>> {
+        self.token_expirations
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// In-memory notification subscription manager.
 ///
 /// Tracks all connected WebSocket clients and their repo subscriptions.
@@ -40,6 +65,23 @@ pub struct NotificationManager {
 }
 
 impl NotificationManager {
+    fn read_clients(&self) -> RwLockReadGuard<'_, HashMap<u64, Arc<ClientState>>> {
+        self.clients.read().unwrap_or_else(PoisonError::into_inner)
+    }
+    fn write_clients(&self) -> RwLockWriteGuard<'_, HashMap<u64, Arc<ClientState>>> {
+        self.clients.write().unwrap_or_else(PoisonError::into_inner)
+    }
+    fn read_subscriptions(&self) -> RwLockReadGuard<'_, HashMap<String, HashSet<u64>>> {
+        self.subscriptions
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+    fn write_subscriptions(&self) -> RwLockWriteGuard<'_, HashMap<String, HashSet<u64>>> {
+        self.subscriptions
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub fn new() -> Self {
         Self {
             clients: Arc::new(RwLock::new(HashMap::new())),
@@ -59,7 +101,7 @@ impl NotificationManager {
         });
 
         {
-            let mut clients = self.clients.write().unwrap();
+            let mut clients = self.write_clients();
             clients.insert(id, client.clone());
         }
 
@@ -70,7 +112,7 @@ impl NotificationManager {
     pub async fn unregister_client(&self, client_id: u64) {
         // Remove client from all subscription lists.
         {
-            let subs = self.subscriptions.read().unwrap();
+            let subs = self.read_subscriptions();
             let repos: Vec<String> = subs
                 .iter()
                 .filter(|(_, ids)| ids.contains(&client_id))
@@ -78,7 +120,7 @@ impl NotificationManager {
                 .collect();
             drop(subs);
 
-            let mut subs = self.subscriptions.write().unwrap();
+            let mut subs = self.write_subscriptions();
             for repo in &repos {
                 if let Some(ids) = subs.get_mut(repo) {
                     ids.remove(&client_id);
@@ -91,7 +133,7 @@ impl NotificationManager {
 
         // Remove client from the global client map.
         {
-            let mut clients = self.clients.write().unwrap();
+            let mut clients = self.write_clients();
             clients.remove(&client_id);
         }
     }
@@ -100,7 +142,7 @@ impl NotificationManager {
     /// `username` is extracted from the validated JWT token.
     /// `repos` is a list of (repo_id, jwt_exp_timestamp) pairs.
     pub async fn subscribe(&self, client_id: u64, username: &str, repos: &[(String, i64)]) {
-        let clients = self.clients.read().unwrap();
+        let clients = self.read_clients();
         let client = match clients.get(&client_id) {
             Some(c) => c.clone(),
             None => return,
@@ -109,15 +151,15 @@ impl NotificationManager {
 
         // Set the username on first subscription.
         {
-            let mut user = client.user.write().unwrap();
+            let mut user = client.write_user();
             if user.is_empty() {
                 *user = username.to_string();
             }
         }
 
-        let mut subs = self.subscriptions.write().unwrap();
-        let mut subscribed = client.subscribed_repos.write().unwrap();
-        let mut expirations = client.token_expirations.write().unwrap();
+        let mut subs = self.write_subscriptions();
+        let mut subscribed = client.write_subscribed_repos();
+        let mut expirations = client.write_token_expirations();
 
         for (repo_id, exp) in repos {
             subs.entry(repo_id.clone()).or_default().insert(client_id);
@@ -128,12 +170,12 @@ impl NotificationManager {
 
     /// Unsubscribe a client from a set of repos.
     pub async fn unsubscribe(&self, client_id: u64, repo_ids: &[String]) {
-        let mut subs = self.subscriptions.write().unwrap();
-        let clients = self.clients.read().unwrap();
+        let mut subs = self.write_subscriptions();
+        let clients = self.read_clients();
         let client = clients.get(&client_id);
 
         let mut subscribed = match client {
-            Some(c) => c.subscribed_repos.write().unwrap(),
+            Some(c) => c.write_subscribed_repos(),
             None => return,
         };
 
@@ -153,14 +195,14 @@ impl NotificationManager {
     pub async fn notify_repo(&self, repo_id: &str, message: &NotificationMessage) {
         let event_value = serde_json::to_value(message).unwrap_or(Value::Null);
 
-        let subs = self.subscriptions.read().unwrap();
+        let subs = self.read_subscriptions();
         let client_ids = match subs.get(repo_id) {
             Some(ids) => ids.clone(),
             None => return,
         };
         drop(subs);
 
-        let clients = self.clients.read().unwrap();
+        let clients = self.read_clients();
         for id in &client_ids {
             if let Some(client) = clients.get(id) {
                 let _ = client.sender.send(event_value.clone());
@@ -187,18 +229,18 @@ impl NotificationManager {
     ) -> usize {
         let event_value = serde_json::to_value(message).unwrap_or(Value::Null);
 
-        let subs = self.subscriptions.read().unwrap();
+        let subs = self.read_subscriptions();
         let client_ids = match subs.get(repo_id) {
             Some(ids) => ids.clone(),
             None => return 0,
         };
         drop(subs);
 
-        let clients = self.clients.read().unwrap();
+        let clients = self.read_clients();
         let mut notified = 0;
         for id in &client_ids {
             if let Some(client) = clients.get(id) {
-                let u = client.user.read().unwrap();
+                let u = client.read_user();
                 if *u == user && client.sender.send(event_value.clone()).is_ok() {
                     notified += 1;
                 }
@@ -268,11 +310,11 @@ impl NotificationManager {
     /// can fetch a new JWT and resubscribe.
     async fn check_expired_tokens(&self) {
         let now = chrono::Utc::now().timestamp();
-        let clients = self.clients.read().unwrap();
+        let clients = self.read_clients();
         for (client_id, client) in clients.iter() {
             // Collect expired repo_ids.
             let expired: Vec<String> = {
-                let exps = client.token_expirations.read().unwrap();
+                let exps = client.read_token_expirations();
                 exps.iter()
                     .filter(|&(_, exp)| *exp <= now)
                     .map(|(repo_id, _)| repo_id.clone())
@@ -283,21 +325,21 @@ impl NotificationManager {
             }
             // Remove from token_expirations.
             {
-                let mut exps = client.token_expirations.write().unwrap();
+                let mut exps = client.write_token_expirations();
                 for repo_id in &expired {
                     exps.remove(repo_id);
                 }
             }
             // Remove from subscribed_repos.
             {
-                let mut subscribed = client.subscribed_repos.write().unwrap();
+                let mut subscribed = client.write_subscribed_repos();
                 for repo_id in &expired {
                     subscribed.remove(repo_id);
                 }
             }
             // Remove from global subscriptions map.
             {
-                let mut subs = self.subscriptions.write().unwrap();
+                let mut subs = self.write_subscriptions();
                 for repo_id in &expired {
                     if let Some(ids) = subs.get_mut(repo_id) {
                         ids.remove(client_id);
@@ -326,8 +368,8 @@ impl NotificationManager {
     /// and a clean exit.
     pub async fn shutdown(&self) {
         tracing::info!("Shutting down notification manager");
-        self.clients.write().unwrap().clear();
-        self.subscriptions.write().unwrap().clear();
+        self.write_clients().clear();
+        self.write_subscriptions().clear();
     }
 }
 

@@ -157,7 +157,8 @@ impl FileOps {
         };
         commit::Entity::insert(commit_model).exec(db).await?;
 
-        let mut repo_active: repo::ActiveModel = repo_model.unwrap().into();
+        let repo = repo_model.ok_or("repo not found")?;
+        let mut repo_active: repo::ActiveModel = repo.into();
         repo_active.head_commit_id = sea_orm::Set(Some(commit_id.clone()));
         repo_active.updated_at = sea_orm::Set(now);
         repo_active.update(db).await?;
@@ -462,7 +463,8 @@ impl FileOps {
         };
         commit::Entity::insert(commit_model).exec(db).await?;
 
-        let mut repo_active: repo::ActiveModel = repo_model.unwrap().into();
+        let repo = repo_model.ok_or("repo not found")?;
+        let mut repo_active: repo::ActiveModel = repo.into();
         let commit_id_clone = commit_id.clone();
         repo_active.head_commit_id = sea_orm::Set(Some(commit_id));
         repo_active.updated_at = sea_orm::Set(now);

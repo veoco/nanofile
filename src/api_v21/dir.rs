@@ -245,7 +245,9 @@ pub async fn list_dir_v21(
         if !dir_id.is_empty() {
             headers.insert(
                 HeaderName::from_static("oid"),
-                HeaderValue::from_str(&dir_id).unwrap(),
+                HeaderValue::from_str(&dir_id).unwrap_or_else(|_| {
+                    HeaderValue::from_static("0000000000000000000000000000000000000000")
+                }),
             );
         }
         let body = serde_json::json!({
@@ -378,7 +380,9 @@ pub async fn list_dir_v21(
     if !dir_id.is_empty() {
         headers.insert(
             HeaderName::from_static("oid"),
-            HeaderValue::from_str(&dir_id).unwrap(),
+            HeaderValue::from_str(&dir_id).unwrap_or_else(|_| {
+                HeaderValue::from_static("0000000000000000000000000000000000000000")
+            }),
         );
     }
 

@@ -205,7 +205,9 @@ pub async fn download_file(
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
         HeaderName::from_static("oid"),
-        HeaderValue::from_str(&file_fs_id).unwrap(),
+        HeaderValue::from_str(&file_fs_id).unwrap_or_else(|_| {
+            HeaderValue::from_static("0000000000000000000000000000000000000000")
+        }),
     );
 
     Ok((resp_headers, Json(url)).into_response())

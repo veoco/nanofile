@@ -220,7 +220,8 @@ pub async fn download_api(
     );
     headers.insert(
         HeaderName::from_static("content-disposition"),
-        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename)).unwrap(),
+        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
+            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
     );
 
     Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())
