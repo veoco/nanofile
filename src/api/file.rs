@@ -632,6 +632,10 @@ pub(crate) async fn rename_file_entry(
     modifier: &str,
     user_id: i32,
 ) -> Result<(), AppError> {
+    // Validate the new name before proceeding.
+    crate::sanitize::validate_filename(new_name)
+        .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
+
     let parent_path = parent_path_from(path);
     let old_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
 

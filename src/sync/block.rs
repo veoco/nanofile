@@ -28,6 +28,22 @@ pub fn block_routes() -> Router<Arc<AppState>> {
         )
 }
 
+/// Validate that a block_id is exactly 40 lowercase hex characters.
+/// Matches seafile-server's is_object_id_valid() behavior.
+fn validate_block_id(block_id: &str) -> Result<(), AppError> {
+    if block_id.len() != 40
+        || !block_id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        return Err(AppError::BadRequest(format!(
+            "invalid block_id format: {}",
+            block_id
+        )));
+    }
+    Ok(())
+}
+
 pub async fn check_blocks(
     State(state): State<Arc<AppState>>,
     _auth: SyncAuth,
@@ -72,6 +88,8 @@ pub async fn get_block(
     _auth: SyncAuth,
     Path((_repo_id, block_id)): Path<(String, String)>,
 ) -> Result<Vec<u8>, AppError> {
+    validate_block_id(&block_id)?;
+
     let block_store = state.block_store.clone();
 
     block_store
@@ -86,18 +104,7 @@ pub async fn put_block(
     Path((_repo_id, block_id)): Path<(String, String)>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
-    // Validate block_id format: exactly 40 lowercase hex chars.
-    // Matches seafile-server's is_object_id_valid() behavior.
-    if block_id.len() != 40
-        || !block_id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-    {
-        return Err(AppError::BadRequest(format!(
-            "invalid block_id format: {}",
-            block_id
-        )));
-    }
+    validate_block_id(&block_id)?;
 
     let max_bytes = (state.config.server.max_upload_size_mb * 1024 * 1024) as usize;
     let data = axum::body::to_bytes(body, max_bytes)

@@ -1,4 +1,4 @@
-<span id="session-token-data" data-token="{{ session_token }}" class="hidden"></span>
+<span id="session-token-data" data-token="{{ session_token }}" data-csrf-token="{{ csrf_token }}" class="hidden"></span>
 {% if entries.is_empty() %}
 <div class="px-4 py-8 text-center text-sm text-gray-500">
     This folder is empty.
@@ -25,7 +25,10 @@
                         </svg>
                         {{ entry.name }}/
                     </a>
-                    <button onclick="toggleStar('{{ repo_id }}', '/{{ entry.relative_path }}', {{ entry.starred }}, this)"
+                    <button data-toggle-star
+                            data-repo-id="{{ repo_id }}"
+                            data-path="/{{ entry.relative_path }}"
+                            data-starred="{{ entry.starred }}"
                             class="flex-shrink-0 p-0.5 rounded hover:bg-gray-100 transition-colors
                             {% if entry.starred %}text-yellow-400{% else %}text-gray-300 hover:text-yellow-400{% endif %}"
                             title="{% if entry.starred %}Unstar{% else %}Star{% endif %}">
@@ -46,7 +49,10 @@
                         <a href="/library/{{ repo_id }}/download/{{ entry.relative_path }}" class="hover:text-seafile-blue hover:underline">{{ entry.name }}</a>
                         {% endif %}
                     </span>
-                    <button onclick="toggleStar('{{ repo_id }}', '/{{ entry.relative_path }}', {{ entry.starred }}, this)"
+                    <button data-toggle-star
+                            data-repo-id="{{ repo_id }}"
+                            data-path="/{{ entry.relative_path }}"
+                            data-starred="{{ entry.starred }}"
                             class="flex-shrink-0 p-0.5 rounded hover:bg-gray-100 transition-colors
                             {% if entry.starred %}text-yellow-400{% else %}text-gray-300 hover:text-yellow-400{% endif %}"
                             title="{% if entry.starred %}Unstar{% else %}Star{% endif %}">
@@ -73,20 +79,20 @@
                         Download
                     </a>
                     {% endif %}
-                    <button onclick="showRenameDialog(this)"
+                    <button class="js-rename-btn inline-flex items-center rounded px-2 py-1 text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800 shadow-sm"
                             data-path="{{ entry.relative_path }}"
                             data-name="{{ entry.name }}"
-                            class="inline-flex items-center rounded px-2 py-1 text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800 shadow-sm"
                             title="Rename {{ entry.name }}">
                         <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                         </svg>
                         Rename
                     </button>
-                    <form action="/library/{{ repo_id }}/delete" method="POST" class="inline" onsubmit="return confirm('Delete &quot;{{ entry.name }}&quot;? This cannot be undone.')">
+                    <form action="/library/{{ repo_id }}/delete" method="POST" class="js-delete-form inline">
                         <input type="hidden" name="p" value="{{ entry.relative_path }}">
                         <input type="hidden" name="current_dir" value="{{ current_path }}">
                         <input type="hidden" name="repo_name" value="{{ repo_name }}">
+                        <input type="hidden" name="name" value="{{ entry.name }}">
                         <button type="submit"
                                 class="inline-flex items-center rounded px-2 py-1 text-xs font-medium border border-red-200 bg-white text-red-600 hover:bg-red-50 hover:text-red-700 shadow-sm"
                                 title="Delete {{ entry.name }}">
@@ -104,21 +110,19 @@
 </table>
 
 <!-- Rename dialog overlay -->
-<div id="rename-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" onclick="if(event.target===this)hideRenameDialog()">
+<div id="rename-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30">
     <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
         <h3 class="text-base font-semibold text-gray-900 mb-1">Rename</h3>
         <p class="text-sm text-gray-500 mb-4">Enter a new name.</p>
-        <form id="rename-dialog-form" action="/library/{{ repo_id }}/rename" method="POST" onsubmit="return submitRename(this)">
+        <form id="rename-dialog-form" action="/library/{{ repo_id }}/rename" method="POST">
             <input type="hidden" name="current_dir" value="{{ current_path }}">
             <input type="hidden" name="repo_name" value="{{ repo_name }}">
             <input type="hidden" id="rename-old-path" name="p" value="">
             <input id="rename-input" type="text" name="new_name" placeholder="New name"
                    class="block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue text-sm border p-2"
-                   onkeydown="if(event.key==='Escape'){event.preventDefault();hideRenameDialog();}if(event.key==='Enter'){event.preventDefault();this.form.querySelector('button[type=submit]').click();}"
                    autofocus>
             <div class="mt-4 flex justify-end gap-2">
-                <button type="button" onclick="hideRenameDialog()"
-                        class="rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50">
+                <button type="button" class="js-rename-cancel rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-border-gray-300 hover:bg-gray-50">
                     Cancel
                 </button>
                 <button type="submit"
@@ -129,22 +133,4 @@
         </form>
     </div>
 </div>
-
-<script>
-function showRenameDialog(btn) {
-    document.getElementById('rename-old-path').value = btn.getAttribute('data-path');
-    document.getElementById('rename-input').value = btn.getAttribute('data-name');
-    document.getElementById('rename-overlay').classList.remove('hidden');
-    setTimeout(function() { document.getElementById('rename-input').focus(); document.getElementById('rename-input').select(); }, 100);
-}
-function hideRenameDialog() {
-    document.getElementById('rename-overlay').classList.add('hidden');
-}
-function submitRename(form) {
-    var newName = document.getElementById('rename-input').value.trim();
-    if (!newName) return false;
-    hideRenameDialog();
-    return true;
-}
-</script>
 {% endif %}

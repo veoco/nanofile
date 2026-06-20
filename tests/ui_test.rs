@@ -213,6 +213,22 @@ async fn login_client(fixture: &TestFixture) -> reqwest::Client {
     client // cookie stored by cookie_store
 }
 
+/// Extract CSRF token from any authenticated page that has a `data-csrf-token`
+/// attribute. The caller must have a valid session cookie.
+async fn get_csrf_token(client: &reqwest::Client, base_url: &str, repo_id: &str) -> String {
+    let resp = client
+        .get(format!("{}/library/{}/test-repo/", base_url, repo_id))
+        .send()
+        .await
+        .unwrap();
+    let html = resp.text().await.unwrap();
+    html.split(r#"data-csrf-token=""#)
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .unwrap_or("")
+        .to_string()
+}
+
 #[tokio::test]
 async fn test_repo_list_page_shows_repos() {
     let fixture = TestFixture::new().await;
@@ -706,6 +722,7 @@ async fn test_delete_file_removes_entry() {
         .await;
 
     let client = login_client(&fixture).await;
+    let csrf_token = get_csrf_token(&client, &fixture.server.base_url, &fixture.repo_id).await;
 
     // Delete via UI
     let resp = client
@@ -713,7 +730,7 @@ async fn test_delete_file_removes_entry() {
             "{}/library/{}/delete",
             fixture.server.base_url, fixture.repo_id
         ))
-        .form(&[("p", "/delete_me.txt")])
+        .form(&[("p", "/delete_me.txt"), ("csrf_token", &csrf_token)])
         .send()
         .await
         .unwrap();
@@ -740,13 +757,14 @@ async fn test_delete_file_removes_entry() {
 async fn test_create_directory_works() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
+    let csrf_token = get_csrf_token(&client, &fixture.server.base_url, &fixture.repo_id).await;
 
     let resp = client
         .post(format!(
             "{}/library/{}/new-dir",
             fixture.server.base_url, fixture.repo_id
         ))
-        .form(&[("p", "/new_folder")])
+        .form(&[("p", "/new_folder"), ("csrf_token", &csrf_token)])
         .send()
         .await
         .unwrap();
@@ -785,13 +803,18 @@ async fn test_rename_file_works() {
         .await;
 
     let client = login_client(&fixture).await;
+    let csrf_token = get_csrf_token(&client, &fixture.server.base_url, &fixture.repo_id).await;
 
     let resp = client
         .post(format!(
             "{}/library/{}/rename",
             fixture.server.base_url, fixture.repo_id
         ))
-        .form(&[("p", "/old_name.txt"), ("new_name", "new_name.txt")])
+        .form(&[
+            ("p", "/old_name.txt"),
+            ("new_name", "new_name.txt"),
+            ("csrf_token", &csrf_token),
+        ])
         .send()
         .await
         .unwrap();
@@ -868,6 +891,7 @@ async fn test_share_links_list_shares() {
 async fn test_create_share_link_works() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
+    let csrf_token = get_csrf_token(&client, &fixture.server.base_url, &fixture.repo_id).await;
 
     let resp = client
         .post(format!("{}/share/create", fixture.server.base_url))
@@ -875,6 +899,7 @@ async fn test_create_share_link_works() {
             ("repo_id", fixture.repo_id.as_str()),
             ("path", "/"),
             ("type", "f"),
+            ("csrf_token", &csrf_token),
         ])
         .send()
         .await
@@ -888,11 +913,16 @@ async fn test_create_share_link_works() {
 async fn test_delete_share_link_works() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
+    let csrf_token = get_csrf_token(&client, &fixture.server.base_url, &fixture.repo_id).await;
 
     // First create a share link via UI
     let create_resp = client
         .post(format!("{}/share/create", fixture.server.base_url))
-        .form(&[("repo_id", fixture.repo_id.as_str()), ("path", "/")])
+        .form(&[
+            ("repo_id", fixture.repo_id.as_str()),
+            ("path", "/"),
+            ("csrf_token", &csrf_token),
+        ])
         .send()
         .await
         .unwrap();

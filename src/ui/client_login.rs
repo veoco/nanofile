@@ -99,10 +99,16 @@ pub async fn client_token_login(
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
+    let secure = if state.config.server.site_url.starts_with("https") {
+        "; Secure"
+    } else {
+        ""
+    };
     let cookie = format!(
-        "seahub-session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
+        "seahub-session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}{}",
         api_token,
-        ttl_days * 86400
+        ttl_days * 86400,
+        secure,
     );
 
     let next = resolve_next(params.get("next").map(String::as_str));

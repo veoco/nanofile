@@ -158,10 +158,17 @@ pub async fn login(
         })
         .unwrap_or_else(|| "unknown".to_string());
 
-    let rate_limit_key = format!("login:{}", client_ip);
+    // Use composite keys: per-IP + per-username + global, so that rotating
+    // spoofed X-Forwarded-For headers cannot bypass the rate limiter.
+    let rate_limit_key_ip = format!("login:ip:{}", client_ip);
+    let rate_limit_key_user = format!("login:user:{}", form.email);
+    let rate_limit_key_global = "login:global".to_string();
 
     // Check rate limit before any DB or password work.
-    if state.login_rate_limiter.is_locked(&rate_limit_key) {
+    if state.login_rate_limiter.is_locked(&rate_limit_key_ip)
+        || state.login_rate_limiter.is_locked(&rate_limit_key_user)
+        || state.login_rate_limiter.is_locked(&rate_limit_key_global)
+    {
         return render_login_page(
             &state,
             Some("Too many login attempts. Please try again later.".to_string()),
@@ -179,7 +186,13 @@ pub async fn login(
     let user_record = match user_record {
         Some(u) => u,
         None => {
-            state.login_rate_limiter.record_failure(&rate_limit_key);
+            state.login_rate_limiter.record_failure(&rate_limit_key_ip);
+            state
+                .login_rate_limiter
+                .record_failure(&rate_limit_key_user);
+            state
+                .login_rate_limiter
+                .record_failure(&rate_limit_key_global);
             return render_login_page(&state, Some("Incorrect email or password.".to_string()))
                 .await
                 .map(|html| (StatusCode::OK, Html(html)).into_response());
@@ -188,7 +201,13 @@ pub async fn login(
 
     if !user_record.is_active {
         // Use the same generic error to avoid user-enumeration attacks (matching seahub).
-        state.login_rate_limiter.record_failure(&rate_limit_key);
+        state.login_rate_limiter.record_failure(&rate_limit_key_ip);
+        state
+            .login_rate_limiter
+            .record_failure(&rate_limit_key_user);
+        state
+            .login_rate_limiter
+            .record_failure(&rate_limit_key_global);
         return render_login_page(&state, Some("Incorrect email or password.".to_string()))
             .await
             .map(|html| (StatusCode::OK, Html(html)).into_response());
@@ -199,14 +218,22 @@ pub async fn login(
         &user_record.password_hash,
         state.config.auth.password_hash_iterations,
     ) {
-        state.login_rate_limiter.record_failure(&rate_limit_key);
+        state.login_rate_limiter.record_failure(&rate_limit_key_ip);
+        state
+            .login_rate_limiter
+            .record_failure(&rate_limit_key_user);
+        state
+            .login_rate_limiter
+            .record_failure(&rate_limit_key_global);
         return render_login_page(&state, Some("Incorrect email or password.".to_string()))
             .await
             .map(|html| (StatusCode::OK, Html(html)).into_response());
     }
 
     // Successful login — clear rate limit for this IP.
-    state.login_rate_limiter.clear(&rate_limit_key);
+    state.login_rate_limiter.clear(&rate_limit_key_ip);
+    state.login_rate_limiter.clear(&rate_limit_key_user);
+    state.login_rate_limiter.clear(&rate_limit_key_global);
 
     // ── Check for 2FA ─────────────────────────────────────────────────
     let two_fa = user_2fa::Entity::find_by_id(user_record.id).one(db).await?;
@@ -306,6 +333,11 @@ pub async fn two_factor_auth(
     headers: HeaderMap,
     Form(form): Form<TwoFactorAuthForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    // CSRF: validate Origin/Referer.
+    let origin = state.config.server.site_url_origin();
+    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+        return Err(AppError::BadRequest("Invalid request origin.".to_string()));
+    }
     let db = state.db.as_ref();
 
     // Extract client IP for rate limiting.

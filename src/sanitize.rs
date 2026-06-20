@@ -4,7 +4,7 @@
 //! already prevents server filesystem traversal, but we reject obviously
 //! malicious input early to prevent path confusion within repos.
 
-const INVALID_FILENAME_CHARS: &[char] = &['\0', '\n', '\r', '\t'];
+const INVALID_FILENAME_CHARS: &[char] = &['\0', '\n', '\r', '\t', '\'', '"', '<', '>', '\\'];
 const MAX_FILENAME_LEN: usize = 255;
 const MAX_PATH_LEN: usize = 4096;
 
@@ -23,6 +23,32 @@ pub fn validate_filename(name: &str) -> Result<(), &'static str> {
     }
     if name.contains('/') {
         return Err("filename must not contain path separators");
+    }
+    Ok(())
+}
+
+/// Validate a name that may contain `/` for nested paths (used internally
+/// by `FileOps::create_file` for batch directory copy).
+///
+/// Rejects the same dangerous characters as `validate_filename`, but allows
+/// `/` since it represents nested virtual FS entries, not filesystem paths.
+pub fn validate_name(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() || name == "." || name == ".." {
+        return Err("invalid name");
+    }
+    if name.len() > MAX_FILENAME_LEN {
+        return Err("name too long");
+    }
+    if name.contains('\0') {
+        return Err("name contains null byte");
+    }
+    // Only reject XSS-dangerous characters, allow '/' for nested entries.
+    for segment in name.split('/') {
+        for ch in INVALID_FILENAME_CHARS {
+            if *ch != '\0' && segment.contains(*ch) {
+                return Err("name contains invalid characters");
+            }
+        }
     }
     Ok(())
 }
@@ -70,6 +96,11 @@ mod tests {
         assert!(validate_filename("..").is_err());
         assert!(validate_filename("a/b").is_err());
         assert!(validate_filename("a\0b").is_err());
+        assert!(validate_filename("a'b").is_err());
+        assert!(validate_filename("a\"b").is_err());
+        assert!(validate_filename("a<b").is_err());
+        assert!(validate_filename("a>b").is_err());
+        assert!(validate_filename("a\\b").is_err());
     }
 
     #[test]

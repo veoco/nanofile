@@ -137,6 +137,12 @@ pub async fn login(
             .map_err(|e| AppError::BadRequest(format!("Invalid form body: {e}")))?
     };
 
+    // ── CSRF: validate Origin/Referer for browser-based requests ──────
+    let origin = state.config.server.site_url_origin();
+    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+        return login_error("Invalid request origin.");
+    }
+
     // ── Rate limiting ─────────────────────────────────────────────────
     let client_ip = headers
         .get("x-forwarded-for")
@@ -150,9 +156,16 @@ pub async fn login(
         })
         .unwrap_or_else(|| "unknown".to_string());
 
-    let rate_limit_key = format!("login:{}", client_ip);
+    // Use composite keys: per-IP + per-username + global, so that rotating
+    // spoofed X-Forwarded-For headers cannot bypass the rate limiter.
+    let rate_limit_key_ip = format!("login:ip:{}", client_ip);
+    let rate_limit_key_user = format!("login:user:{}", form.username);
+    let rate_limit_key_global = "login:global".to_string();
 
-    if state.login_rate_limiter.is_locked(&rate_limit_key) {
+    if state.login_rate_limiter.is_locked(&rate_limit_key_ip)
+        || state.login_rate_limiter.is_locked(&rate_limit_key_user)
+        || state.login_rate_limiter.is_locked(&rate_limit_key_global)
+    {
         return login_error("Too many login attempts. Please try again later.");
     }
 
@@ -164,7 +177,13 @@ pub async fn login(
     {
         Some(u) => u,
         None => {
-            state.login_rate_limiter.record_failure(&rate_limit_key);
+            state.login_rate_limiter.record_failure(&rate_limit_key_ip);
+            state
+                .login_rate_limiter
+                .record_failure(&rate_limit_key_user);
+            state
+                .login_rate_limiter
+                .record_failure(&rate_limit_key_global);
             return login_error("Unable to login with provided credentials.");
         }
     };
@@ -174,12 +193,24 @@ pub async fn login(
         &user.password_hash,
         state.config.auth.password_hash_iterations,
     ) {
-        state.login_rate_limiter.record_failure(&rate_limit_key);
+        state.login_rate_limiter.record_failure(&rate_limit_key_ip);
+        state
+            .login_rate_limiter
+            .record_failure(&rate_limit_key_user);
+        state
+            .login_rate_limiter
+            .record_failure(&rate_limit_key_global);
         return login_error("Unable to login with provided credentials.");
     }
 
     if !user.is_active {
-        state.login_rate_limiter.record_failure(&rate_limit_key);
+        state.login_rate_limiter.record_failure(&rate_limit_key_ip);
+        state
+            .login_rate_limiter
+            .record_failure(&rate_limit_key_user);
+        state
+            .login_rate_limiter
+            .record_failure(&rate_limit_key_global);
         return login_error("User account is disabled.");
     }
 
@@ -238,7 +269,13 @@ pub async fn login(
                     )
                     .map_err(|e| AppError::Internal(e.to_string()))?;
                     if !crate::auth::totp::TotpManager::verify_code(&totp, otp_code) {
-                        state.login_rate_limiter.record_failure(&rate_limit_key);
+                        state.login_rate_limiter.record_failure(&rate_limit_key_ip);
+                        state
+                            .login_rate_limiter
+                            .record_failure(&rate_limit_key_user);
+                        state
+                            .login_rate_limiter
+                            .record_failure(&rate_limit_key_global);
                         // Return 400 + X-Seafile-OTP: required so the client knows
                         // to retry with a new OTP code (matching seahub behavior).
                         let mut resp_headers = HeaderMap::new();
@@ -297,7 +334,9 @@ pub async fn login(
     }
 
     // ── Login succeeded — create API token ─────────────────────────────
-    state.login_rate_limiter.clear(&rate_limit_key);
+    state.login_rate_limiter.clear(&rate_limit_key_ip);
+    state.login_rate_limiter.clear(&rate_limit_key_user);
+    state.login_rate_limiter.clear(&rate_limit_key_global);
 
     let token_value = generate_api_token();
     let now = chrono::Utc::now().timestamp();
@@ -307,7 +346,11 @@ pub async fn login(
         user_id: sea_orm::Set(user.id),
         token: sea_orm::Set(token_value.clone()),
         created_at: sea_orm::Set(now),
-        expires_at: sea_orm::Set(None),
+        expires_at: sea_orm::Set(if state.config.auth.api_token_ttl_days > 0 {
+            Some(now + state.config.auth.api_token_ttl_days as i64 * 86400)
+        } else {
+            None
+        }),
         device_id: sea_orm::Set(form.device_id),
         platform: sea_orm::Set(form.platform),
         device_name: sea_orm::Set(form.device_name),

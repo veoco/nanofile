@@ -15,12 +15,16 @@ use std::sync::{Arc, LazyLock, Mutex};
 static PASSWORD_HASH_CACHE: LazyLock<Mutex<HashMap<String, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// PBKDF2 iterations used for password hashing in tests.
+/// Uses a low value to keep test execution fast.
+const TEST_PBKDF2_ITERATIONS: u32 = 1000;
+
 fn cached_hash_password(password: &str) -> String {
     let mut cache = PASSWORD_HASH_CACHE.lock().unwrap();
     if let Some(h) = cache.get(password) {
         return h.clone();
     }
-    let h = nanofile::auth::password::hash_password_legacy(password);
+    let h = nanofile::auth::password::hash_password(password, TEST_PBKDF2_ITERATIONS);
     cache.insert(password.to_string(), h.clone());
     h
 }
@@ -229,7 +233,7 @@ pub async fn create_test_user(db: &DatabaseConnection, email: &str, password: &s
 }
 
 pub async fn create_test_admin(db: &DatabaseConnection, email: &str, password: &str) -> i32 {
-    let password_hash = nanofile::auth::password::hash_password_legacy(password);
+    let password_hash = nanofile::auth::password::hash_password(password, TEST_PBKDF2_ITERATIONS);
     let now = chrono::Utc::now().timestamp();
 
     let user = nanofile::entity::user::ActiveModel {

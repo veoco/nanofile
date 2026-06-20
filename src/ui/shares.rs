@@ -22,6 +22,7 @@ pub struct SharesTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub user_email: String,
     pub is_admin: bool,
+    pub csrf_token: String,
     pub share_links: Vec<ShareLinkInfo>,
     pub active_page: &'static str,
 }
@@ -38,6 +39,7 @@ pub struct ShareLinkInfo {
 pub struct CreateShareForm {
     pub repo_id: String,
     pub path: String,
+    pub csrf_token: Option<String>,
 }
 
 /// GET /share/ — list all share links.
@@ -64,10 +66,13 @@ pub async fn list_shares(
         })
         .collect();
 
+    let csrf_token =
+        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     let tpl = SharesTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
         is_admin: user.is_admin,
+        csrf_token,
         share_links,
         active_page: "shares",
     };
@@ -84,6 +89,7 @@ pub async fn create_share(
     State(state): State<Arc<AppState>>,
     axum::Form(form): axum::Form<CreateShareForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(&state, &user.session_token, form.csrf_token.as_deref())?;
     let db = state.db.as_ref();
     let now = chrono::Utc::now().timestamp();
 
@@ -112,7 +118,13 @@ pub async fn delete_share(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
+    axum::Form(form): axum::Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
     let db = state.db.as_ref();
 
     let link = share_link::Entity::find()

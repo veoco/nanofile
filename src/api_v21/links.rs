@@ -81,9 +81,9 @@ pub async fn create_share_link_v21(
         creator_id: Set(auth.user_id),
         path: Set(req.path.clone()),
         token: Set(token.clone()),
-        password: Set(req
-            .password
-            .map(|p| crate::auth::password::hash_password_legacy(&p))),
+        password: Set(req.password.map(|p| {
+            crate::auth::password::hash_password(&p, state.config.auth.password_hash_iterations)
+        })),
         expires_at: Set(req.expire_days.map(|d| now + d * 86400)),
         created_at: Set(now),
         s_type: Set(s_type),

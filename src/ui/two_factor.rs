@@ -53,6 +53,7 @@ pub struct TwoFactorTemplate {
 #[derive(Deserialize)]
 pub struct VerifyForm {
     pub code: String,
+    pub csrf_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -164,7 +165,13 @@ pub async fn setup_page(
 pub async fn setup_2fa(
     user: WebUser,
     State(state): State<Arc<AppState>>,
+    Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
     let db = state.db.as_ref();
 
     TotpManager::get_or_create_2fa(db, user.user_id)
@@ -196,6 +203,7 @@ pub async fn verify_2fa(
     State(state): State<Arc<AppState>>,
     Form(form): Form<VerifyForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(&state, &user.session_token, form.csrf_token.as_deref())?;
     let db = state.db.as_ref();
 
     let two_fa = user_2fa::Entity::find_by_id(user.user_id)

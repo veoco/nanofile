@@ -524,10 +524,27 @@ async fn test_ui_unstar_form() {
         login_resp.text().await
     );
 
+    // Get CSRF token from the starred page
+    let page_resp = ui_client
+        .get(format!("{}/starred/", f.server.base_url))
+        .send()
+        .await
+        .unwrap();
+    let page_html = page_resp.text().await.unwrap();
+    let csrf_token = page_html
+        .split(r#"data-csrf-token=""#)
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .unwrap_or("");
+
     // POST to /starred/ to unstar via form
     let resp = ui_client
         .post(format!("{}/starred/", f.server.base_url))
-        .form(&[("repo_id", f.repo_id.as_str()), ("path", "/ui-unstar.txt")])
+        .form(&[
+            ("repo_id", f.repo_id.as_str()),
+            ("path", "/ui-unstar.txt"),
+            ("csrf_token", csrf_token),
+        ])
         .send()
         .await
         .unwrap();

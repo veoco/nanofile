@@ -77,7 +77,11 @@ pub async fn shared_file_download(
             .or_else(|| params.get("password").cloned())
             .ok_or_else(|| AppError::BadRequest("password required".into()))?;
 
-        if !crate::auth::password::verify_password_legacy(&provided, stored_hash) {
+        if !crate::auth::password::verify_password(
+            &provided,
+            stored_hash,
+            state.config.auth.password_hash_iterations,
+        ) {
             return Err(AppError::Forbidden);
         }
     }

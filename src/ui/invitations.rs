@@ -44,6 +44,7 @@ pub struct InvitationInfo {
 #[derive(Deserialize)]
 pub struct GenerateForm {
     pub email: Option<String>,
+    pub csrf_token: Option<String>,
 }
 
 /// GET /profile/invitations/ — list invitation codes (admin only).
@@ -106,6 +107,7 @@ pub async fn generate_invitation(
     State(state): State<Arc<AppState>>,
     Form(form): Form<GenerateForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(&state, &user.session_token, form.csrf_token.as_deref())?;
     if !user.is_admin {
         return Err(AppError::Forbidden);
     }
@@ -141,7 +143,13 @@ pub async fn delete_invitation(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
+    Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
     if !user.is_admin {
         return Err(AppError::Forbidden);
     }

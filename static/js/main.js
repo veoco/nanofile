@@ -96,9 +96,15 @@
       document.documentElement.classList.add("dark");
     }
   }
-  // Star file/directory toggle (global, called from onclick in file_list.html)
-  window.toggleStar = async function (repoId, path, currentlyStarred, btn) {
-    // Read session token from the hidden element injected during server-side render
+
+  // ── Star toggle (event delegation) ─────────────────────────────────────
+  document.addEventListener("click", async function (e) {
+    const btn = e.target.closest("[data-toggle-star]");
+    if (!btn) return;
+
+    const repoId = btn.dataset.repoId;
+    const path = btn.dataset.path;
+    const currentlyStarred = btn.dataset.starred === "true";
     const tokenEl = document.getElementById("session-token-data");
     const token = tokenEl ? tokenEl.dataset.token : "";
     if (!token) {
@@ -125,14 +131,7 @@
           btn.classList.add("text-gray-300", "hover:text-yellow-400");
           btn.querySelector("svg").setAttribute("fill", "none");
           btn.title = "Star";
-          btn.setAttribute(
-            "onclick",
-            "toggleStar('" +
-              repoId +
-              "', '" +
-              path.replace(/'/g, "\\'") +
-              "', false, this)"
-          );
+          btn.dataset.starred = "false";
         }
       } else {
         // POST — star
@@ -149,21 +148,107 @@
           btn.classList.add("text-yellow-400");
           btn.querySelector("svg").setAttribute("fill", "currentColor");
           btn.title = "Unstar";
-          btn.setAttribute(
-            "onclick",
-            "toggleStar('" +
-              repoId +
-              "', '" +
-              path.replace(/'/g, "\\'") +
-              "', true, this)"
-          );
+          btn.dataset.starred = "true";
         }
       }
-    } catch (e) {
-      // Ignore network errors silently — the UI stays in its current state
+    } catch (ignored) {
+      // Ignore network errors silently
     } finally {
       btn.disabled = false;
     }
-  };
-})();
+  });
 
+  // ── Delete confirmation (event delegation) ────────────────────────────
+  document.addEventListener("submit", function (e) {
+    const form = e.target.closest(".js-delete-form");
+    if (!form) return;
+
+    const nameInput = form.querySelector('input[name="name"]');
+    const name = nameInput ? nameInput.value : "";
+    const msg = 'Delete "' + name + '"? This cannot be undone.';
+    if (!confirm(msg)) {
+      e.preventDefault();
+    }
+  });
+
+  // ── Rename dialog ─────────────────────────────────────────────────────
+  const renameOverlay = document.getElementById("rename-overlay");
+  const renameOldPath = document.getElementById("rename-old-path");
+  const renameInput = document.getElementById("rename-input");
+
+  // Open rename dialog
+  document.addEventListener("click", function (e) {
+    const btn = e.target.closest(".js-rename-btn");
+    if (!btn) return;
+
+    renameOldPath.value = btn.dataset.path;
+    renameInput.value = btn.dataset.name;
+    renameOverlay.classList.remove("hidden");
+    setTimeout(function () {
+      renameInput.focus();
+      renameInput.select();
+    }, 100);
+  });
+
+  // Close rename dialog on overlay background click
+  if (renameOverlay) {
+    renameOverlay.addEventListener("click", function (e) {
+      if (e.target === renameOverlay) {
+        renameOverlay.classList.add("hidden");
+      }
+    });
+  }
+
+  // Close rename dialog on Escape
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && renameOverlay && !renameOverlay.classList.contains("hidden")) {
+      renameOverlay.classList.add("hidden");
+    }
+  });
+
+  // Close rename dialog on Cancel
+  const renameCancel = document.querySelector(".js-rename-cancel");
+  if (renameCancel) {
+    renameCancel.addEventListener("click", function () {
+      renameOverlay.classList.add("hidden");
+    });
+  }
+
+  // Rename form submit
+  const renameForm = document.getElementById("rename-dialog-form");
+  if (renameForm) {
+    renameForm.addEventListener("submit", function (e) {
+      var newName = renameInput.value.trim();
+      if (!newName) {
+        e.preventDefault();
+        return;
+      }
+      renameOverlay.classList.add("hidden");
+    });
+  }
+
+  // ── Trash restore confirmation (event delegation) ───────────────────
+  document.addEventListener("submit", function (e) {
+    const form = e.target.closest(".js-restore-form");
+    if (!form) return;
+
+    const objName = form.dataset.objName || "";
+    const repoName = form.dataset.repoName || "";
+    const msg = 'Restore "' + objName + '" from ' + repoName + "?";
+    if (!confirm(msg)) {
+      e.preventDefault();
+    }
+  });
+
+  // ── Repo delete confirmation (event delegation) ────────────────────
+  document.addEventListener("submit", function (e) {
+    const form = e.target.closest(".js-delete-repo-form");
+    if (!form) return;
+
+    const repoName = form.dataset.repoName || "";
+    const msg = 'Delete library "' + repoName + '"? All files will be permanently lost.';
+    if (!confirm(msg)) {
+      e.preventDefault();
+    }
+  });
+})();

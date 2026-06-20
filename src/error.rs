@@ -87,9 +87,9 @@ impl IntoResponse for AppError {
                 StatusCode::from_u16(441).unwrap(),
                 json!({ "error_msg":"repo password magic is required" }),
             ),
-            AppError::Internal(msg) => (
+            AppError::Internal(_msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error_msg":msg }),
+                json!({ "error_msg":"Internal server error" }),
             ),
             AppError::OperationFailed(msg) => (
                 StatusCode::from_u16(520).unwrap(),

@@ -41,6 +41,7 @@ pbkdf2 = { version = "0.13", features = ["hmac"] }
 cipher = { version = "0.5", features = ["block-padding", "alloc"] }
 rand = "0.10"
 hex = "0.4"
+subtle = "2"
 base64 = "0.22"
 
 flate2 = "1.1"

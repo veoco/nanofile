@@ -19,6 +19,7 @@ pub struct StarredTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub user_email: String,
     pub is_admin: bool,
+    pub csrf_token: String,
     pub starred_repos: Vec<StarredItemView>,
     pub starred_folders: Vec<StarredItemView>,
     pub starred_files: Vec<StarredItemView>,
@@ -104,10 +105,13 @@ pub async fn starred_page(
     starred_folders.sort_by(sort_desc);
     starred_files.sort_by(sort_desc);
 
+    let csrf_token =
+        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     let tpl = StarredTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
         is_admin: user.is_admin,
+        csrf_token,
         starred_repos,
         starred_folders,
         starred_files,
@@ -126,6 +130,11 @@ pub async fn unstar_item_ui(
     State(state): State<Arc<AppState>>,
     axum::Form(form): axum::Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
     let db = state.db.as_ref();
 
     let repo_id = form

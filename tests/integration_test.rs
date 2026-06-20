@@ -2163,13 +2163,30 @@ async fn test_empty_directory_uses_emtpysha1() {
         .unwrap();
     assert_eq!(login_resp.status(), 302, "UI login should redirect");
 
-    // Create empty dir via UI endpoint
+    // Get CSRF token from the file browser page
+    let page_resp = ui_client
+        .get(format!(
+            "{}/library/{}/{}/",
+            f.server.base_url, f.repo_id, "repo"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page_resp.status(), 200, "UI: file browser should load");
+    let page_html = page_resp.text().await.unwrap();
+    let csrf_token = page_html
+        .split(r#"data-csrf-token=""#)
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .unwrap_or("");
+
+    // Create empty dir via UI endpoint with CSRF token
     let ui_resp = ui_client
         .post(format!(
             "{}/library/{}/new-dir",
             f.server.base_url, f.repo_id
         ))
-        .form(&[("p", "/ui_empty")])
+        .form(&[("p", "/ui_empty"), ("csrf_token", csrf_token)])
         .send()
         .await
         .unwrap();

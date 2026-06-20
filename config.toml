@@ -16,7 +16,7 @@ temp_dir = "data/temp"
 max_storage_bytes = 0
 
 [auth]
-password_hash_iterations = 100000
+password_hash_iterations = 600000
 api_token_ttl_days = 180
 sync_token_ttl_days = 365
 max_login_attempts = 5

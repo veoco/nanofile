@@ -3,7 +3,6 @@ use sha2::Sha256;
 
 const SALT_LEN: usize = 16;
 const HASH_LEN: usize = 32;
-const LEGACY_ITERATIONS: u32 = 1000;
 
 fn pbkdf2_hash(password: &[u8], salt: &[u8], iterations: u32) -> [u8; HASH_LEN] {
     let mut key = [0u8; HASH_LEN];
@@ -22,10 +21,6 @@ pub fn hash_password(password: &str, iterations: u32) -> String {
 }
 
 /// Verify a password against a stored hash.
-///
-/// First tries with the provided `iterations` count. If that fails, falls
-/// back to 1000 iterations for backward compatibility with hashes created
-/// before the configurable-iterations feature.
 pub fn verify_password(password: &str, password_hash: &str, iterations: u32) -> bool {
     let parts: Vec<&str> = password_hash.splitn(2, ':').collect();
     if parts.len() != 2 {
@@ -41,31 +36,8 @@ pub fn verify_password(password: &str, password_hash: &str, iterations: u32) -> 
         Err(_) => return false,
     };
 
-    // Try with the current iteration count first.
     let computed = pbkdf2_hash(password.as_bytes(), &salt, iterations);
-    if computed.as_slice() == stored_hash.as_slice() {
-        return true;
-    }
-
-    // Fall back to legacy iterations (1000) for old hashes.
-    if iterations != LEGACY_ITERATIONS {
-        let legacy = pbkdf2_hash(password.as_bytes(), &salt, LEGACY_ITERATIONS);
-        return legacy.as_slice() == stored_hash.as_slice();
-    }
-
-    false
-}
-
-/// Hash with legacy (1000) iterations — convenience for callers that don't
-/// have access to the config (e.g. CLI adduser, share link password).
-pub fn hash_password_legacy(password: &str) -> String {
-    hash_password(password, LEGACY_ITERATIONS)
-}
-
-/// Verify with legacy (1000) iterations — convenience for callers that don't
-/// have access to the config.
-pub fn verify_password_legacy(password: &str, password_hash: &str) -> bool {
-    verify_password(password, password_hash, LEGACY_ITERATIONS)
+    computed.as_slice() == stored_hash.as_slice()
 }
 
 /// Validate password strength.
@@ -75,7 +47,7 @@ pub fn validate_password(
     min_length: u32,
     require_strong: bool,
 ) -> Result<(), String> {
-    if (password.len() as u32) < min_length {
+    if (password.chars().count() as u32) < min_length {
         return Err(format!(
             "Password must be at least {} characters long.",
             min_length
@@ -89,4 +61,70 @@ pub fn validate_password(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_password_ascii_meets_min_length() {
+        assert!(validate_password("abcd1234", 8, false).is_ok());
+    }
+
+    #[test]
+    fn test_validate_password_ascii_below_min_length() {
+        assert!(validate_password("abc123", 8, false).is_err());
+    }
+
+    #[test]
+    fn test_validate_password_unicode_meets_min_length() {
+        // 4 Chinese characters, each 3 bytes in UTF-8 → 12 bytes, 4 chars
+        assert!(validate_password("密码测试", 4, false).is_ok());
+    }
+
+    #[test]
+    fn test_validate_password_unicode_byte_count_larger_than_char_count() {
+        // 3 Chinese chars + 1 ASCII = 4 chars but 10 bytes
+        // Should pass min_length=4 (char count)
+        assert!(validate_password("密码测a", 4, false).is_ok());
+        // Should fail min_length=5 (only 4 chars)
+        assert!(validate_password("密码测a", 5, false).is_err());
+    }
+
+    #[test]
+    fn test_validate_password_emoji_count() {
+        // 4 emoji characters (each 4 bytes) = 16 bytes, 4 chars
+        assert!(validate_password("😀🎉🚀💡", 4, false).is_ok());
+    }
+
+    #[test]
+    fn test_validate_password_strong_requires_letter_and_digit() {
+        assert!(validate_password("abcdefgh", 8, true).is_err());
+        assert!(validate_password("12345678", 8, true).is_err());
+        assert!(validate_password("abcd1234", 8, true).is_ok());
+    }
+
+    #[test]
+    fn test_hash_and_verify_roundtrip() {
+        let password = "test_password_123";
+        let hash = hash_password(password, 1000);
+        assert!(verify_password(password, &hash, 1000));
+        assert!(!verify_password("wrong_password", &hash, 1000));
+    }
+
+    #[test]
+    fn test_verify_invalid_hash_format() {
+        assert!(!verify_password("password", "invalid-hash", 1000));
+        assert!(!verify_password("password", "not:hex:hash", 1000));
+    }
+
+    #[test]
+    fn test_hash_different_iterations() {
+        let password = "test";
+        let hash_1k = hash_password(password, 1000);
+        assert!(verify_password(password, &hash_1k, 1000));
+        // verify with wrong iterations does not match
+        assert!(!verify_password(password, &hash_1k, 2000));
+    }
 }

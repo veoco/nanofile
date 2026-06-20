@@ -354,7 +354,26 @@ impl Config {
             self.admin_init.email = Some(v);
         }
         if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_PASSWORD") {
+            tracing::warn!(
+                "NANOFILE_ADMIN_INIT_PASSWORD is set via environment variable. \
+                 Consider using NANOFILE_ADMIN_INIT_PASSWORD_FILE instead, \
+                 which is less likely to leak via process listings or logs."
+            );
             self.admin_init.password = Some(v);
+        }
+        if let Ok(filepath) = std::env::var("NANOFILE_ADMIN_INIT_PASSWORD_FILE") {
+            match std::fs::read_to_string(&filepath) {
+                Ok(password) => {
+                    self.admin_init.password = Some(password.trim().to_string());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to read NANOFILE_ADMIN_INIT_PASSWORD_FILE from {}: {}",
+                        filepath,
+                        e
+                    );
+                }
+            }
         }
         if let Ok(v) = std::env::var("NANOFILE_CORS_ALLOWED_ORIGINS") {
             self.server.cors_allowed_origins = v.split(',').map(|s| s.trim().to_string()).collect();

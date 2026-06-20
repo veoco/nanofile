@@ -717,6 +717,7 @@ async function refreshFileList() {
         <h3 class="text-base font-semibold text-gray-900 mb-1">New Folder</h3>
         <p class="text-sm text-gray-500 mb-4">Enter a name for the new folder.</p>
         <form action="/library/{{ repo_id }}/new-dir" method="POST" onsubmit="return submitNewFolder(this)">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="current_dir" value="{{ current_path }}">
             <input type="hidden" name="repo_name" value="{{ repo_name }}">
             <input id="new-folder-input" type="text" name="folder_name" placeholder="Folder name"

@@ -33,6 +33,7 @@ pub struct FileBrowserTemplate {
     pub user_email: String,
     pub is_admin: bool,
     pub session_token: String,
+    pub csrf_token: String,
     pub repo_id: String,
     pub repo_name: String,
     pub current_path: String,
@@ -51,6 +52,7 @@ pub struct FileBrowserCoreTemplate {
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub entries: Vec<FileEntry>,
     pub session_token: String,
+    pub csrf_token: String,
 }
 
 #[derive(Template)]
@@ -393,6 +395,9 @@ async fn file_browser_inner(
 
     let is_partial = query.partial.as_deref() == Some("1");
 
+    let csrf_token =
+        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+
     if is_partial {
         let tpl = FileBrowserCoreTemplate {
             urls: crate::static_assets::template_urls(),
@@ -402,6 +407,7 @@ async fn file_browser_inner(
             breadcrumbs: breadcrumbs.clone(),
             entries,
             session_token: user.session_token.clone(),
+            csrf_token,
         };
         let html = tpl
             .render()
@@ -413,6 +419,7 @@ async fn file_browser_inner(
             user_email: user.email,
             is_admin: user.is_admin,
             session_token: user.session_token.clone(),
+            csrf_token,
             repo_id,
             repo_name: repo_record.name,
             current_path: path,
@@ -671,6 +678,11 @@ pub async fn delete_entry(
     Path(repo_id): Path<String>,
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
     let db = state.db.as_ref();
     crate::storage::check_repo_write_permission(db, &repo_id, user.user_id).await?;
 
@@ -779,6 +791,11 @@ pub async fn create_directory(
     Path(repo_id): Path<String>,
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
     let db = state.db.as_ref();
     crate::storage::check_repo_write_permission(db, &repo_id, user.user_id).await?;
 
@@ -896,6 +913,11 @@ pub async fn rename_entry(
     Path(repo_id): Path<String>,
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
     let db = state.db.as_ref();
     crate::storage::check_repo_write_permission(db, &repo_id, user.user_id).await?;
 

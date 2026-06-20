@@ -96,6 +96,12 @@ pub async fn create_repo(
     State(state): State<Arc<AppState>>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
+
     let name = form.get("name").map(|s| s.trim()).unwrap_or("");
     if name.is_empty() || name.contains('/') {
         return Err(AppError::BadRequest("invalid repo name".into()));
@@ -160,6 +166,12 @@ pub async fn rename_repo(
     axum::extract::Path(repo_id): axum::extract::Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
+
     let db = state.db.as_ref();
 
     let r = repo::Entity::find_by_id(&repo_id)
@@ -206,7 +218,13 @@ pub async fn delete_repo(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     axum::extract::Path(repo_id): axum::extract::Path<String>,
+    axum::Form(form): axum::Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
     let db = state.db.as_ref();
 
     let r = repo::Entity::find_by_id(&repo_id)

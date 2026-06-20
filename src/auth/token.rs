@@ -1,5 +1,4 @@
 use rand::Rng;
-use sha1::{Digest, Sha1};
 
 const TOKEN_LEN: usize = 40;
 
@@ -31,10 +30,4 @@ pub fn generate_backup_code() -> String {
     let mut code = [0u8; 4];
     rand::rng().fill_bytes(&mut code);
     hex::encode(code).to_uppercase()
-}
-
-pub fn hash_backup_code(code: &str) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(code.as_bytes());
-    hex::encode(hasher.finalize())
 }

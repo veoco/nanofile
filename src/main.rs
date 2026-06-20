@@ -1,6 +1,6 @@
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::http::StatusCode;
+use axum::http::{Method, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use clap::Parser;
@@ -10,7 +10,7 @@ use sea_orm_migration::MigratorTrait;
 use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -141,9 +141,20 @@ async fn main() -> anyhow::Result<()> {
                     ))
                 };
 
-                origin_layer.allow_methods(Any).allow_headers(Any).max_age(
-                    std::time::Duration::from_secs(state.config.server.cors_max_age_secs),
-                )
+                origin_layer
+                    .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+                    .allow_headers([
+                        header::AUTHORIZATION,
+                        header::CONTENT_TYPE,
+                        header::HeaderName::from_static("x-requested-with"),
+                        header::HeaderName::from_static("x-seafile-otp"),
+                        header::HeaderName::from_static("x-seafile-s2fa"),
+                        header::HeaderName::from_static("x-seafile-sharelink-password"),
+                        header::HeaderName::from_static("x-seafile-2fa-trust-device"),
+                    ])
+                    .max_age(std::time::Duration::from_secs(
+                        state.config.server.cors_max_age_secs,
+                    ))
             };
 
             let api_routes = nanofile::api::api_routes();

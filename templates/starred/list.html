@@ -3,6 +3,7 @@
 {% block title %}Starred Items | Nanofile{% endblock %}
 
 {% block content %}
+<span id="session-token-data" data-csrf-token="{{ csrf_token }}" class="hidden"></span>
 <h1 class="text-2xl font-semibold text-gray-900">Starred Items</h1>
 <p class="mt-1 text-sm text-gray-500">Quick access to your starred files and folders.</p>
 
@@ -36,6 +37,7 @@
                     <td class="px-4 py-3 text-sm text-right">
                         {% if !item.deleted %}
                         <form action="/starred/" method="POST" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <input type="hidden" name="repo_id" value="{{ item.repo_id }}">
                             <input type="hidden" name="path" value="/">
                             <button type="submit" class="text-red-600 hover:text-red-800 text-xs">Unstar</button>
@@ -76,6 +78,7 @@
                     <td class="px-4 py-3 text-sm text-right">
                         {% if !item.deleted %}
                         <form action="/starred/" method="POST" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <input type="hidden" name="repo_id" value="{{ item.repo_id }}">
                             <input type="hidden" name="path" value="{{ item.path }}">
                             <button type="submit" class="text-red-600 hover:text-red-800 text-xs">Unstar</button>
@@ -116,6 +119,7 @@
                     <td class="px-4 py-3 text-sm text-right">
                         {% if !item.deleted %}
                         <form action="/starred/" method="POST" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <input type="hidden" name="repo_id" value="{{ item.repo_id }}">
                             <input type="hidden" name="path" value="{{ item.path }}">
                             <button type="submit" class="text-red-600 hover:text-red-800 text-xs">Unstar</button>
