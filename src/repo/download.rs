@@ -66,10 +66,10 @@ impl Downloader {
             .await?
             .ok_or_else(|| "head commit not found".to_string())?;
 
-        let fs_id = crate::storage::resolve_fs_id(db, repo_id, &head_commit.root_id, path).await?;
+        let fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_commit.root_id, path).await?;
 
         let file_data =
-            crate::storage::file_ops::FileOps::read_file_fs_object(db, repo_id, &fs_id).await?;
+            crate::repo::file_ops::FileOps::read_file_fs_object(db, repo_id, &fs_id).await?;
 
         Ok((file_data.clone(), file_data.block_ids))
     }

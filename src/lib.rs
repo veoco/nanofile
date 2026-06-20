@@ -1,17 +1,22 @@
 use rand::Rng;
 pub mod activity_log;
 pub mod api;
-pub mod api_v1;
 pub mod api_v21;
 pub mod auth;
+pub mod common;
 pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod entity;
 pub mod error;
+pub mod events;
 pub mod indexer;
 pub mod notification;
+pub mod permission;
+pub mod rate_limit;
+pub mod repo;
 pub mod sanitize;
+pub mod sdoc;
 pub mod serialization;
 pub mod static_assets;
 pub mod storage;
@@ -27,11 +32,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::api_v21::task_manager::TaskManager;
 use crate::auth::access_token::AccessTokenManager;
-use crate::auth::rate_limit::{GenericRateLimiter, LoginRateLimiter};
 use crate::config::Config;
 use crate::crypto::password_manager::PasswordManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
+use crate::rate_limit::{GenericRateLimiter, LoginRateLimiter};
 use crate::storage::DynBlockStorage;
 
 /// Unified application state injected into all axum handlers.

@@ -12,8 +12,8 @@ use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{commit, fs_object, repo, thumbnail as thumbnail_entity};
 use crate::error::AppError;
+use crate::repo::download::Downloader;
 use crate::serialization::fs_json::SEAF_METADATA_TYPE_DIR;
-use crate::storage::download::Downloader;
 
 #[derive(Deserialize)]
 pub struct ThumbnailQuery {
@@ -60,7 +60,7 @@ pub async fn get_thumbnail(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    let file_fs_id = crate::storage::resolve_fs_id(
+    let file_fs_id = crate::repo::resolve_fs_id(
         state.db.as_ref(),
         &repo_id,
         &head_commit.root_id,

@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::events::{JwtExpiredEvent, NotificationJwtClaims, NotificationMessage};
-use super::events_channel;
+use crate::events;
 
 /// Channel capacity for outgoing WebSocket messages per client.
 /// A connected WebSocket client.
@@ -255,7 +255,7 @@ impl NotificationManager {
     /// global broadcast channel and forwards them to WebSocket subscribers.
     /// Pass a `CancellationToken` to allow graceful shutdown.
     pub async fn start_event_listener(&self, token: CancellationToken) {
-        let mut rx = events_channel::subscribe_repo_updates();
+        let mut rx = events::subscribe_repo_updates();
         let mgr = self.clone();
         tokio::spawn(async move {
             loop {

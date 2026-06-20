@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::activity_log;
-use crate::api::dir::DirEntry;
 use crate::auth::middleware::AuthUser;
+use crate::common::types::DirEntry;
 use crate::entity::{commit, repo, repo_member, starred_file, user};
 use crate::error::AppError;
 
@@ -68,13 +68,12 @@ pub async fn delete_dirent_v21(
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
     // Resolve parent's current fs_id
-    let parent_fs_id =
-        crate::storage::resolve_fs_id(db, &repo_id, &head_commit.root_id, parent_path)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+    let parent_fs_id = crate::repo::resolve_fs_id(db, &repo_id, &head_commit.root_id, parent_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
     // Get entry size before deletion (for repo size adjustment).
-    let deleted_size: i64 = crate::storage::get_entry_total_size(db, &repo_id, &normalized)
+    let deleted_size: i64 = crate::repo::get_entry_total_size(db, &repo_id, &normalized)
         .await
         .unwrap_or_default();
 
@@ -82,7 +81,7 @@ pub async fn delete_dirent_v21(
     // Use `.ok()` to discard `Box<dyn Error>` which is !Send and would break
     // the axum handler trait.
     #[allow(clippy::match_result_ok, clippy::collapsible_if)]
-    if let Some(parent_dir_data) = crate::storage::read_fs_dir_data(db, &repo_id, &parent_fs_id)
+    if let Some(parent_dir_data) = crate::repo::read_fs_dir_data(db, &repo_id, &parent_fs_id)
         .await
         .ok()
     {
@@ -92,7 +91,7 @@ pub async fn delete_dirent_v21(
             } else {
                 "file"
             };
-            if let Err(e) = crate::storage::trash::TrashService::add_to_trash(
+            if let Err(e) = crate::repo::trash::TrashService::add_to_trash(
                 db,
                 &repo_id,
                 &normalized,
@@ -112,14 +111,14 @@ pub async fn delete_dirent_v21(
     // --- END TRASH ---
 
     // Update the FS tree and create a commit
-    crate::storage::file_ops::FileOps::update_dir_tree_and_commit(
+    crate::repo::file_ops::FileOps::update_dir_tree_and_commit(
         db,
         &repo_id,
         parent_path,
         &parent_fs_id,
         &auth.email,
         &format!("Deleted {}", name),
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| d.name != name);
             Ok(())
@@ -136,7 +135,7 @@ pub async fn delete_dirent_v21(
     }
 
     // Adjust repo size (subtract the deleted entry's size).
-    crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
+    crate::repo::adjust_repo_size(db, &repo_id, -deleted_size).await?;
 
     // Log activity
     activity_log::log_activity(
@@ -501,7 +500,7 @@ pub async fn dir_detail_v21(
         .await?
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-    crate::storage::resolve_fs_id(db, &repo_id, &head_commit.root_id, &normalized)
+    crate::repo::resolve_fs_id(db, &repo_id, &head_commit.root_id, &normalized)
         .await
         .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
 
@@ -521,7 +520,7 @@ pub async fn dir_detail_v21(
     };
     let mtime = if parent_path == "/" {
         // Root children — resolve the root dir
-        let root_data = crate::storage::read_fs_dir_data(db, &repo_id, &head_commit.root_id)
+        let root_data = crate::repo::read_fs_dir_data(db, &repo_id, &head_commit.root_id)
             .await
             .unwrap_or_else(|_| crate::serialization::fs_json::FsDirData {
                 dirents: vec![],
@@ -536,13 +535,12 @@ pub async fn dir_detail_v21(
             .unwrap_or(0)
     } else {
         let parent_fs_id =
-            match crate::storage::resolve_fs_id(db, &repo_id, &head_commit.root_id, parent_path)
-                .await
+            match crate::repo::resolve_fs_id(db, &repo_id, &head_commit.root_id, parent_path).await
             {
                 Ok(id) => id,
                 Err(_) => return Err(AppError::NotFound("Folder not found.".into())),
             };
-        let parent_data = crate::storage::read_fs_dir_data(db, &repo_id, &parent_fs_id)
+        let parent_data = crate::repo::read_fs_dir_data(db, &repo_id, &parent_fs_id)
             .await
             .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
         parent_data

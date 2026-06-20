@@ -5,10 +5,11 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::activity_log;
 use crate::auth::middleware::AuthUser;
+use crate::common::util::{generate_unique_filename, get_head_root_id, normalize_path};
 use crate::error::AppError;
+use crate::repo::file_ops::FileOps;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::DirEntryData;
-use crate::storage::file_ops::FileOps;
 
 use super::task_manager::TaskState;
 
@@ -80,7 +81,7 @@ async fn run_copy_task(
 
     let db = state.db.as_ref();
 
-    let head_root_id = match super::batch::get_head_root_id(db, &body.src_repo_id).await {
+    let head_root_id = match get_head_root_id(db, &body.src_repo_id).await {
         Ok(id) => id,
         Err(e) => {
             state.task_manager.fail_task(task_id, e.to_string());
@@ -88,12 +89,12 @@ async fn run_copy_task(
         }
     };
 
-    let src_dir = super::batch::normalize_path(&body.src_parent_dir);
-    let dst_dir = super::batch::normalize_path(&body.dst_parent_dir);
+    let src_dir = normalize_path(&body.src_parent_dir);
+    let dst_dir = normalize_path(&body.dst_parent_dir);
 
     // Resolve source parent
     let src_parent_fs_id =
-        match crate::storage::resolve_fs_id(db, &body.src_repo_id, &head_root_id, &src_dir).await {
+        match crate::repo::resolve_fs_id(db, &body.src_repo_id, &head_root_id, &src_dir).await {
             Ok(id) => id,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -102,7 +103,7 @@ async fn run_copy_task(
         };
 
     let src_parent_data =
-        match crate::storage::read_fs_dir_data(db, &body.src_repo_id, &src_parent_fs_id).await {
+        match crate::repo::read_fs_dir_data(db, &body.src_repo_id, &src_parent_fs_id).await {
             Ok(d) => d,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -135,7 +136,7 @@ async fn run_copy_task(
 
     // Resolve destination parent
     let dst_parent_fs_id =
-        match crate::storage::resolve_fs_id(db, &body.src_repo_id, &head_root_id, &dst_dir).await {
+        match crate::repo::resolve_fs_id(db, &body.src_repo_id, &head_root_id, &dst_dir).await {
             Ok(id) => id,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -151,11 +152,11 @@ async fn run_copy_task(
         &dst_parent_fs_id,
         modifier,
         "Async copy",
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &new_entries {
                 if dirents.iter().any(|d| d.name == entry.name) {
-                    let unique_name = super::batch::generate_unique_filename(dirents, &entry.name);
+                    let unique_name = generate_unique_filename(dirents, &entry.name);
                     dirents.push(DirEntryData {
                         name: unique_name,
                         ..entry.clone()
@@ -274,7 +275,7 @@ async fn run_move_task(
     let db = state.db.as_ref();
     let repo_id = &body.src_repo_id;
 
-    let head_root_id = match super::batch::get_head_root_id(db, repo_id).await {
+    let head_root_id = match get_head_root_id(db, repo_id).await {
         Ok(id) => id,
         Err(e) => {
             state.task_manager.fail_task(task_id, e.to_string());
@@ -282,12 +283,12 @@ async fn run_move_task(
         }
     };
 
-    let src_dir = super::batch::normalize_path(&body.src_parent_dir);
-    let dst_dir = super::batch::normalize_path(&body.dst_parent_dir);
+    let src_dir = normalize_path(&body.src_parent_dir);
+    let dst_dir = normalize_path(&body.dst_parent_dir);
 
     // Resolve source parent
     let src_parent_fs_id =
-        match crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &src_dir).await {
+        match crate::repo::resolve_fs_id(db, repo_id, &head_root_id, &src_dir).await {
             Ok(id) => id,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -295,14 +296,14 @@ async fn run_move_task(
             }
         };
 
-    let src_parent_data =
-        match crate::storage::read_fs_dir_data(db, repo_id, &src_parent_fs_id).await {
-            Ok(d) => d,
-            Err(e) => {
-                state.task_manager.fail_task(task_id, e.to_string());
-                return;
-            }
-        };
+    let src_parent_data = match crate::repo::read_fs_dir_data(db, repo_id, &src_parent_fs_id).await
+    {
+        Ok(d) => d,
+        Err(e) => {
+            state.task_manager.fail_task(task_id, e.to_string());
+            return;
+        }
+    };
 
     // Collect entries to move
     let mut entries_to_move: Vec<DirEntryData> = Vec::new();
@@ -329,7 +330,7 @@ async fn run_move_task(
 
     // Resolve destination
     let _dst_parent_fs_id =
-        match crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &dst_dir).await {
+        match crate::repo::resolve_fs_id(db, repo_id, &head_root_id, &dst_dir).await {
             Ok(id) => id,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -344,7 +345,7 @@ async fn run_move_task(
         repo_id,
         &src_dir,
         &src_parent_fs_id,
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| !src_names.contains(&d.name));
             Ok(())
@@ -367,7 +368,7 @@ async fn run_move_task(
     }
 
     // Step 2: Re-read head, add to destination
-    let new_head_root = match super::batch::get_head_root_id(db, repo_id).await {
+    let new_head_root = match get_head_root_id(db, repo_id).await {
         Ok(id) => id,
         Err(e) => {
             state.task_manager.fail_task(task_id, e.to_string());
@@ -376,7 +377,7 @@ async fn run_move_task(
     };
 
     let new_dst_fs_id =
-        match crate::storage::resolve_fs_id(db, repo_id, &new_head_root, &dst_dir).await {
+        match crate::repo::resolve_fs_id(db, repo_id, &new_head_root, &dst_dir).await {
             Ok(id) => id,
             Err(e) => {
                 state.task_manager.fail_task(task_id, e.to_string());
@@ -391,11 +392,11 @@ async fn run_move_task(
         &new_dst_fs_id,
         modifier,
         "Move (add)",
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &entries_to_move {
                 if dirents.iter().any(|d| d.name == entry.name) {
-                    let unique_name = super::batch::generate_unique_filename(dirents, &entry.name);
+                    let unique_name = generate_unique_filename(dirents, &entry.name);
                     dirents.push(DirEntryData {
                         name: unique_name,
                         ..entry.clone()

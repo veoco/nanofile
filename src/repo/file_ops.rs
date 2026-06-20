@@ -1,6 +1,6 @@
 use crate::crypto::random_key::encrypt_block;
 use crate::entity::{commit, repo};
-use crate::notification::events_channel;
+use crate::events;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use crate::storage::DynBlockStorage;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
@@ -166,7 +166,7 @@ impl FileOps {
         // Fire repo-update notification through the global broadcast channel.
         // Without this, the Seafile client won't know about the new file until
         // its next poll cycle, causing a noticeable sync delay.
-        events_channel::publish_repo_update(repo_id, commit_id);
+        events::publish_repo_update(repo_id, commit_id);
 
         Ok(file_fs_id)
     }
@@ -471,7 +471,7 @@ impl FileOps {
         repo_active.update(db).await?;
 
         // Fire repo-update notification through the global broadcast channel.
-        events_channel::publish_repo_update(repo_id, commit_id_clone);
+        events::publish_repo_update(repo_id, commit_id_clone);
 
         Ok(())
     }
@@ -481,7 +481,7 @@ impl FileOps {
         repo_id: &str,
         fs_id: &str,
     ) -> Result<FsDirData, Box<dyn std::error::Error>> {
-        crate::storage::read_fs_dir_data(db, repo_id, fs_id).await
+        crate::repo::read_fs_dir_data(db, repo_id, fs_id).await
     }
 
     pub async fn read_file_fs_object(
@@ -489,6 +489,6 @@ impl FileOps {
         repo_id: &str,
         fs_id: &str,
     ) -> Result<FsFileData, Box<dyn std::error::Error>> {
-        crate::storage::read_fs_file_data(db, repo_id, fs_id).await
+        crate::repo::read_fs_file_data(db, repo_id, fs_id).await
     }
 }

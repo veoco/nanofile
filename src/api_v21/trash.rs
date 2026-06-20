@@ -15,7 +15,7 @@ use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::entity::user;
 use crate::error::AppError;
-use crate::storage::trash::TrashService;
+use crate::repo::trash::TrashService;
 
 // ─── Query / Request types ─────────────────────────────────────────────
 

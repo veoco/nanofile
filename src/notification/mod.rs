@@ -1,5 +1,4 @@
 pub mod events;
-pub mod events_channel;
 pub mod handler;
 pub mod manager;
 

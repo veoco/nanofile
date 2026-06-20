@@ -13,12 +13,13 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::activity_log;
-use crate::api::repos::extract_multipart_field;
 use crate::auth::middleware::AuthUser;
+use crate::common::types::DirEntry;
+use crate::common::util::{extract_multipart_field, get_head_root_id, normalize_path};
 use crate::entity::{commit, fs_object, repo, repo_member, share_link, user};
 use crate::error::AppError;
+use crate::repo::file_ops::FileOps;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
-use crate::storage::file_ops::FileOps;
 
 /// Extract the parent directory path from a full path.
 /// `/dir/file.txt` → `/dir`,  `/file.txt` → `/`
@@ -37,59 +38,6 @@ pub struct DirQuery {
     pub t: Option<String>,
     /// "1" to list entries recursively (flat list). "0" or absent for single-level listing.
     pub recursive: Option<String>,
-}
-
-/// Ensure path starts with "/" for consistent DB lookups.
-fn normalize_path(path: &str) -> String {
-    if path.is_empty() || path == "/" {
-        "/".to_string()
-    } else if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{}", path)
-    }
-}
-
-#[derive(Serialize)]
-pub struct DirEntry {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub entry_type: String,
-    pub name: String,
-    pub size: i64,
-    pub mtime: i64,
-    pub permission: String,
-    /// Last modifier email (empty string if unknown). Files only in the
-    /// original seafile protocol, but we store it for all entry types.
-    #[serde(default)]
-    pub modifier: String,
-    /// Parent directory path. Present only in recursive listings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_dir: Option<String>,
-    /// Modifier display name. Present only for file entries in recursive listings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub modifier_name: Option<String>,
-    /// Modifier contact email. Present only for file entries in recursive listings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub modifier_contact_email: Option<String>,
-}
-
-/// Get the root_fs_id from the repo's head commit for path resolution.
-async fn get_head_root_id(db: &DatabaseConnection, repo_id: &str) -> Result<String, AppError> {
-    let repo_record = repo::Entity::find_by_id(repo_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
-    let head_commit_id = repo_record
-        .head_commit_id
-        .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))?;
-    let head = commit::Entity::find()
-        .filter(commit::Column::RepoId.eq(repo_id))
-        .filter(commit::Column::CommitId.eq(&head_commit_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Head commit not found".to_string()))?;
-    Ok(head.root_id)
 }
 
 pub fn dir_routes() -> Router<Arc<AppState>> {
@@ -205,7 +153,7 @@ pub(crate) async fn list_dir_from_fs_tree(
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
     // Traverse the path to find the target directory's fs_id
-    let dir_id = crate::storage::resolve_fs_id(db, repo_id, &head.root_id, path)
+    let dir_id = crate::repo::resolve_fs_id(db, repo_id, &head.root_id, path)
         .await
         .map_err(|e| AppError::internal(format!("resolve_fs_id failed: {e}")))?;
 
@@ -243,7 +191,7 @@ async fn read_fs_dir_data(
     repo_id: &str,
     fs_id: &str,
 ) -> Result<FsDirData, AppError> {
-    crate::storage::read_fs_dir_data(db, repo_id, fs_id)
+    crate::repo::read_fs_dir_data(db, repo_id, fs_id)
         .await
         .map_err(|e| AppError::internal(format!("read fs_dir_data failed: {e}")))
 }
@@ -276,7 +224,7 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    let dir_id = crate::storage::resolve_fs_id(db, repo_id, &head.root_id, path)
+    let dir_id = crate::repo::resolve_fs_id(db, repo_id, &head.root_id, path)
         .await
         .map_err(|e| AppError::internal(format!("resolve_fs_id failed: {e}")))?;
 
@@ -290,7 +238,7 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
             continue;
         }
 
-        let dir_data = match crate::storage::read_fs_dir_data(db, repo_id, &fs_id).await {
+        let dir_data = match crate::repo::read_fs_dir_data(db, repo_id, &fs_id).await {
             Ok(d) => d,
             Err(_) => continue, // skip unreadable objects
         };
@@ -456,12 +404,12 @@ async fn rename_dir_entry(
 
     // Resolve parent's current fs_id via the FS tree
     let head_root_id = get_head_root_id(db, repo_id).await?;
-    let parent_fs_id = crate::storage::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
+    let parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
         .await
         .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
     // Read parent's FsDirData to find the child's fs_id
-    let parent_data = crate::storage::read_fs_dir_data(db, repo_id, &parent_fs_id)
+    let parent_data = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id)
         .await
         .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
     let child_id = parent_data
@@ -480,7 +428,7 @@ async fn rename_dir_entry(
         &parent_fs_id,
         modifier,
         &format!("Renamed directory {}", old_name),
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if let Some(d) = dirents.iter_mut().find(|d| d.id == child_id) {
                 d.name = new_name.to_string();
@@ -565,7 +513,7 @@ pub(crate) async fn create_dir_by_path(
         }
     } else {
         let head_root_id = get_head_root_id(state.db.as_ref(), &repo_id).await?;
-        crate::storage::resolve_fs_id(state.db.as_ref(), &repo_id, &head_root_id, &parent_path)
+        crate::repo::resolve_fs_id(state.db.as_ref(), &repo_id, &head_root_id, &parent_path)
             .await
             .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?
     };
@@ -578,7 +526,7 @@ pub(crate) async fn create_dir_by_path(
         &parent_fs_id,
         &auth.email,
         &format!("Created directory {}", dir_name),
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if !dirents.iter().any(|d| d.name == *dir_name) {
                 dirents.push(DirEntryData {
@@ -635,14 +583,14 @@ pub async fn delete_dir(
     let parent_path = parent_path_from(&path);
 
     // Get directory total size before deletion (for repo size adjustment).
-    let deleted_size = crate::storage::get_entry_total_size(db, &repo_id, &path)
+    let deleted_size = crate::repo::get_entry_total_size(db, &repo_id, &path)
         .await
         .ok()
         .unwrap_or(0);
 
     // Resolve parent's current fs_id via the FS tree
     let head_root_id = get_head_root_id(db, &repo_id).await?;
-    let parent_fs_id = crate::storage::resolve_fs_id(db, &repo_id, &head_root_id, parent_path)
+    let parent_fs_id = crate::repo::resolve_fs_id(db, &repo_id, &head_root_id, parent_path)
         .await
         .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
@@ -654,7 +602,7 @@ pub async fn delete_dir(
         &parent_fs_id,
         &auth.email,
         &format!("Deleted directory {}", name),
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| d.name != name);
             Ok(())
@@ -664,7 +612,7 @@ pub async fn delete_dir(
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     // Adjust repo size (subtract the deleted directory's total size).
-    crate::storage::adjust_repo_size(db, &repo_id, -deleted_size).await?;
+    crate::repo::adjust_repo_size(db, &repo_id, -deleted_size).await?;
 
     // Log activity
     activity_log::log_activity(
@@ -710,13 +658,12 @@ pub async fn move_dir(
     let dir_name = req.p.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
 
     // Get old parent's current fs_id
-    let old_parent_fs_id =
-        crate::storage::resolve_fs_id(db, &req.repo_id, &head_root_id, parent_path)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve old parent failed: {e}")))?;
+    let old_parent_fs_id = crate::repo::resolve_fs_id(db, &req.repo_id, &head_root_id, parent_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("resolve old parent failed: {e}")))?;
 
     // Read old parent's FsDirData to find the directory entry's metadata
-    let old_parent_data = crate::storage::read_fs_dir_data(db, &req.repo_id, &old_parent_fs_id)
+    let old_parent_data = crate::repo::read_fs_dir_data(db, &req.repo_id, &old_parent_fs_id)
         .await
         .map_err(|e| AppError::Internal(format!("read old parent failed: {e}")))?;
     let entry = old_parent_data
@@ -731,7 +678,7 @@ pub async fn move_dir(
 
     let new_parent_path = normalize_path(&req.new_parent_dir);
     let _new_parent_fs_id =
-        crate::storage::resolve_fs_id(db, &req.repo_id, &head_root_id, &new_parent_path)
+        crate::repo::resolve_fs_id(db, &req.repo_id, &head_root_id, &new_parent_path)
             .await
             .map_err(|e| AppError::Internal(format!("resolve dest parent failed: {e}")))?;
 
@@ -741,7 +688,7 @@ pub async fn move_dir(
         &req.repo_id,
         parent_path,
         &old_parent_fs_id,
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| d.name != dir_name);
             Ok(())
@@ -763,7 +710,7 @@ pub async fn move_dir(
     // Step 2: Re-read head, resolve destination, add entry with commit
     let new_head_root = get_head_root_id(db, &req.repo_id).await?;
     let new_dst_fs_id =
-        crate::storage::resolve_fs_id(db, &req.repo_id, &new_head_root, &new_parent_path)
+        crate::repo::resolve_fs_id(db, &req.repo_id, &new_head_root, &new_parent_path)
             .await
             .map_err(|e| {
                 AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
@@ -777,7 +724,7 @@ pub async fn move_dir(
         &new_dst_fs_id,
         &auth.email,
         &format!("Moved directory {}", dir_name),
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if !dirents.iter().any(|d| d.name == dir_name) {
                 dirents.push(DirEntryData {
@@ -973,7 +920,7 @@ pub async fn create_sub_repo(
     // Verify the source directory exists by resolving its path via the FS tree
     let head_root_id = get_head_root_id(state.db.as_ref(), &repo_id).await?;
     let source_dir_fs_id =
-        crate::storage::resolve_fs_id(state.db.as_ref(), &repo_id, &head_root_id, &path)
+        crate::repo::resolve_fs_id(state.db.as_ref(), &repo_id, &head_root_id, &path)
             .await
             .map_err(|_| AppError::NotFound("directory not found".into()))?;
 

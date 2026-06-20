@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::activity_log;
 use crate::error::AppError;
-use crate::storage::trash::TrashService;
+use crate::repo::trash::TrashService;
 use crate::ui::files::format_size;
 
 use super::auth_extractor::WebUser;

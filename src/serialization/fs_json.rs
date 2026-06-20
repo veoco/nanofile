@@ -1,8 +1,4 @@
-/// SeafMetadataType enum values matching seafile C definitions.
-/// SEAF_METADATA_TYPE_INVALID = 0
-pub const SEAF_METADATA_TYPE_FILE: i32 = 1;
-/// SEAF_METADATA_TYPE_LINK = 2
-pub const SEAF_METADATA_TYPE_DIR: i32 = 3;
+pub use crate::common::constants::{SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DirEntryData {

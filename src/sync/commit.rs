@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
+use crate::common::constants::EMPTY_SHA1;
 use crate::entity::{commit, fs_object, repo};
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData};
-use crate::storage::EMPTY_SHA1;
 
 /// Result of block checking and size delta computation.
 struct CheckResult {
@@ -345,8 +345,7 @@ pub async fn update_branch(
         // full BFS traversal of every file.  When `size_delta` is 0 and
         // there's no prior size (first commit), `adjust_repo_size` falls
         // back to `compute_repo_size()` automatically.
-        crate::storage::adjust_repo_size(state.db.as_ref(), &repo_id, check_result.size_delta)
-            .await?;
+        crate::repo::adjust_repo_size(state.db.as_ref(), &repo_id, check_result.size_delta).await?;
 
         // Success — notify listeners.
         if let Some(ref notif_mgr) = state.notification_manager {
@@ -420,7 +419,7 @@ async fn check_commit_blocks(
             let Some(ref base_fs) = frame.base_fs_id else {
                 // Entirely new subtree — walk all files.
                 let new_dir: FsDirData =
-                    match crate::storage::read_fs_dir_data(db, repo_id, &frame.new_fs_id).await {
+                    match crate::repo::read_fs_dir_data(db, repo_id, &frame.new_fs_id).await {
                         Ok(d) => d,
                         Err(_) => continue,
                     };
@@ -469,12 +468,12 @@ async fn check_commit_blocks(
 
             // Load both directories.
             let base_dir: FsDirData =
-                match crate::storage::read_fs_dir_data(db, repo_id, base_fs).await {
+                match crate::repo::read_fs_dir_data(db, repo_id, base_fs).await {
                     Ok(d) => d,
                     Err(_) => continue,
                 };
             let new_dir: FsDirData =
-                match crate::storage::read_fs_dir_data(db, repo_id, &frame.new_fs_id).await {
+                match crate::repo::read_fs_dir_data(db, repo_id, &frame.new_fs_id).await {
                     Ok(d) => d,
                     Err(_) => continue,
                 };

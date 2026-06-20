@@ -155,7 +155,7 @@ pub async fn delete_repo_v21(
     }
 
     // --- REPO TRASH: Record deleted repo before cascade-delete ---
-    if let Err(e) = crate::storage::trash::TrashService::add_deleted_repo(
+    if let Err(e) = crate::repo::trash::TrashService::add_deleted_repo(
         db,
         &repo_id,
         &r.name,

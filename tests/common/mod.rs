@@ -141,7 +141,7 @@ impl TestServer {
         let api_routes = nanofile::api::api_routes();
         let sync_routes = nanofile::sync::sync_routes();
         let api_v21_routes = nanofile::api_v21::api_v21_routes();
-        let api_v1_routes = nanofile::api_v1::api_v1_routes();
+        let sdoc_routes = nanofile::sdoc::sdoc_routes();
         let web_routes = nanofile::web::web_routes();
         let ui_routes = nanofile::ui::ui_routes();
         let notification_routes = nanofile::notification::notification_routes();
@@ -150,7 +150,7 @@ impl TestServer {
             .merge(api_routes)
             .merge(sync_routes)
             .merge(api_v21_routes)
-            .merge(api_v1_routes)
+            .merge(sdoc_routes)
             .merge(web_routes)
             .merge(ui_routes)
             .merge(notification_routes)

@@ -143,6 +143,6 @@ fn doc_routes() -> Router<Arc<AppState>> {
         )
 }
 
-pub fn api_v1_routes() -> Router<Arc<AppState>> {
+pub fn sdoc_routes() -> Router<Arc<AppState>> {
     Router::new().nest("/api/v1/docs/{doc_uuid}", doc_routes())
 }

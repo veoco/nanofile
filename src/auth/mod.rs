@@ -4,7 +4,6 @@ pub mod csrf;
 pub mod middleware;
 pub mod password;
 pub mod password_reset;
-pub mod rate_limit;
 pub mod s2fa;
 pub mod token;
 pub mod totp;

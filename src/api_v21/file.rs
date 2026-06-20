@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::activity_log;
-use crate::api::repos::extract_multipart_field;
 use crate::auth::middleware::AuthUser;
+use crate::common::util::extract_multipart_field;
 use crate::error::AppError;
+use crate::repo::file_ops::FileOps;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
-use crate::storage::file_ops::FileOps;
 
 #[derive(Deserialize)]
 pub struct CreateFileRequest {
@@ -128,7 +128,7 @@ pub async fn create_file_v21(
         let head_root_id = get_head_root_id_no_err(db, &repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
-        crate::storage::resolve_fs_id(db, &repo_id, &head_root_id, parent_path)
+        crate::repo::resolve_fs_id(db, &repo_id, &head_root_id, parent_path)
             .await
             .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?
     };
@@ -141,7 +141,7 @@ pub async fn create_file_v21(
         &parent_fs_id,
         &auth.email,
         &format!("Created empty file {}", file_name),
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if !dirents.iter().any(|d| d.name == file_name) {
                 dirents.push(DirEntryData {

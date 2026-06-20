@@ -10,13 +10,13 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::AppState;
-use crate::api::repos::extract_multipart_field;
 use crate::auth::middleware::AuthUser;
+use crate::common::util::extract_multipart_field;
 use crate::entity::{commit, repo, starred_file, user};
 use crate::error::AppError;
+use crate::repo::read_fs_dir_data;
+use crate::repo::resolve_fs_id;
 use crate::serialization::S_IFDIR;
-use crate::storage::read_fs_dir_data;
-use crate::storage::resolve_fs_id;
 
 #[derive(Deserialize)]
 pub struct StarOrUnstarRequest {

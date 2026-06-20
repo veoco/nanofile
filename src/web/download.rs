@@ -13,8 +13,8 @@ use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::entity::{fs_object, repo, share_link};
 use crate::error::AppError;
+use crate::repo::download::Downloader;
 use crate::serialization::fs_json::FsFileData;
-use crate::storage::download::Downloader;
 
 /// Build a streaming body that reads and yields blocks one at a time.
 ///

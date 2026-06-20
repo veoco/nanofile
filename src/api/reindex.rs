@@ -5,11 +5,9 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
+use crate::common::constants::EMPTY_SHA1;
 use crate::entity::{commit, repo};
 use crate::error::AppError;
-
-/// The well-known sentinel for empty directories in seafile's protocol.
-const EMPTY_SHA1: &str = "0000000000000000000000000000000000000000";
 
 #[derive(Deserialize)]
 pub struct ReindexRequest {
@@ -204,7 +202,7 @@ async fn collect_file_paths(
             continue;
         }
 
-        let dir_data = match crate::storage::read_fs_dir_data(db, repo_id, &fs_id).await {
+        let dir_data = match crate::repo::read_fs_dir_data(db, repo_id, &fs_id).await {
             Ok(data) => data,
             Err(_) => continue,
         };

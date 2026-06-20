@@ -27,8 +27,7 @@ impl Versioning {
             }
 
             let root_data =
-                crate::storage::file_ops::FileOps::read_dir_fs_object(db, repo_id, &c.root_id)
-                    .await?;
+                crate::repo::file_ops::FileOps::read_dir_fs_object(db, repo_id, &c.root_id).await?;
 
             if Self::path_exists_in_dir(db, &root_data, path).await? {
                 history.push(c);
@@ -62,7 +61,7 @@ impl Versioning {
                 Some(id) => id,
                 None => return Ok(false),
             };
-            current_dir = crate::storage::read_fs_dir_data(db, "", &next_id).await?;
+            current_dir = crate::repo::read_fs_dir_data(db, "", &next_id).await?;
         }
         Ok(false)
     }
@@ -86,13 +85,13 @@ impl Versioning {
         // Get the parent directory fs_id
         let parent_fs_id = if parts.len() > 1 {
             let parent_path = format!("/{}", parts[..parts.len() - 1].join("/"));
-            crate::storage::resolve_fs_id(db, repo_id, &target_commit.root_id, &parent_path).await?
+            crate::repo::resolve_fs_id(db, repo_id, &target_commit.root_id, &parent_path).await?
         } else {
             target_commit.root_id.clone()
         };
 
         // Validate the file exists in the parent directory
-        let parent_dir_data = crate::storage::read_fs_dir_data(db, repo_id, &parent_fs_id).await?;
+        let parent_dir_data = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id).await?;
         let _target_fs_id = parent_dir_data
             .dirents
             .iter()

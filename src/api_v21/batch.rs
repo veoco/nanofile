@@ -1,16 +1,17 @@
 use axum::{Json, extract::State};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::EntityTrait;
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::activity_log;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{commit, repo};
+use crate::common::util::{generate_unique_filename, get_head_root_id, normalize_path};
+use crate::entity::repo;
 use crate::error::AppError;
+use crate::repo::file_ops::FileOps;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::DirEntryData;
-use crate::storage::file_ops::FileOps;
 
 #[derive(Deserialize)]
 pub struct BatchMoveRequest {
@@ -56,11 +57,11 @@ pub async fn batch_move_items(
     let dst_dir = normalize_path(&req.dst_parent_dir);
 
     // Resolve source parent directory to find entry metadata
-    let src_parent_fs_id = crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &src_dir)
+    let src_parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, &src_dir)
         .await
         .map_err(|e| AppError::Internal(format!("resolve source dir failed: {e}")))?;
 
-    let src_parent_data = crate::storage::read_fs_dir_data(db, repo_id, &src_parent_fs_id)
+    let src_parent_data = crate::repo::read_fs_dir_data(db, repo_id, &src_parent_fs_id)
         .await
         .map_err(|e| AppError::Internal(format!("read source dir failed: {e}")))?;
 
@@ -86,7 +87,7 @@ pub async fn batch_move_items(
     }
 
     // Resolve destination parent directory from current tree (validates it exists)
-    let _dst_parent_fs_id = crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &dst_dir)
+    let _dst_parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, &dst_dir)
         .await
         .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
 
@@ -99,7 +100,7 @@ pub async fn batch_move_items(
         repo_id,
         &src_dir,
         &src_parent_fs_id,
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| !src_names_for_closure.contains(&d.name));
             Ok(())
@@ -125,7 +126,7 @@ pub async fn batch_move_items(
     // Step 2: Re-read head, resolve destination again, add entries with commit
     let new_head_root = get_head_root_id(db, repo_id).await?;
 
-    let new_dst_fs_id = crate::storage::resolve_fs_id(db, repo_id, &new_head_root, &dst_dir)
+    let new_dst_fs_id = crate::repo::resolve_fs_id(db, repo_id, &new_head_root, &dst_dir)
         .await
         .map_err(|e| AppError::Internal(format!("resolve dest dir after removal failed: {e}")))?;
 
@@ -136,7 +137,7 @@ pub async fn batch_move_items(
         &new_dst_fs_id,
         &auth.email,
         &remove_desc,
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &entries_to_move {
                 if dirents.iter().any(|d| d.name == entry.name) {
@@ -225,62 +226,6 @@ pub struct SyncBatchCopyRequest {
     pub dst_parent_dir: String,
 }
 
-/// Ensure path starts with "/" for consistent DB lookups.
-pub(crate) fn normalize_path(path: &str) -> String {
-    if path.is_empty() || path == "/" {
-        "/".to_string()
-    } else if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{}", path)
-    }
-}
-
-/// Get the root_fs_id from the repo's head commit for path resolution.
-pub(crate) async fn get_head_root_id(
-    db: &DatabaseConnection,
-    repo_id: &str,
-) -> Result<String, AppError> {
-    let repo_record = repo::Entity::find_by_id(repo_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
-    let head_commit_id = repo_record
-        .head_commit_id
-        .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))?;
-    let head = commit::Entity::find()
-        .filter(commit::Column::RepoId.eq(repo_id))
-        .filter(commit::Column::CommitId.eq(&head_commit_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Head commit not found".to_string()))?;
-    Ok(head.root_id)
-}
-
-/// Generate a unique filename when there's a name collision.
-/// Appends " (N)" before the extension, e.g. "file (1).txt", "file (2).txt".
-pub(crate) fn generate_unique_filename(existing: &[DirEntryData], name: &str) -> String {
-    let base = if let Some(dot) = name.rfind('.') {
-        let (stem, ext) = name.split_at(dot);
-        (stem.to_string(), ext.to_string())
-    } else {
-        (name.to_string(), String::new())
-    };
-
-    let mut i = 1;
-    loop {
-        let candidate = if base.1.is_empty() {
-            format!("{} ({})", base.0, i)
-        } else {
-            format!("{} ({}){}", base.0, i, base.1)
-        };
-        if !existing.iter().any(|d| d.name == candidate) {
-            return candidate;
-        }
-        i += 1;
-    }
-}
-
 /// POST /api/v2.1/repos/sync-batch-copy-item/
 ///
 /// Handles same-repo file/directory copy for the desktop client's
@@ -312,12 +257,11 @@ pub async fn sync_batch_copy_item(
     let dst_parent_dir = normalize_path(&body.dst_parent_dir);
 
     // Resolve source parent directory to get source dirents metadata
-    let src_parent_fs_id =
-        crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &src_parent_dir)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve source dir failed: {e}")))?;
+    let src_parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, &src_parent_dir)
+        .await
+        .map_err(|e| AppError::Internal(format!("resolve source dir failed: {e}")))?;
 
-    let src_parent_data = crate::storage::read_fs_dir_data(db, repo_id, &src_parent_fs_id)
+    let src_parent_data = crate::repo::read_fs_dir_data(db, repo_id, &src_parent_fs_id)
         .await
         .map_err(|e| AppError::Internal(format!("read source dir failed: {e}")))?;
 
@@ -343,10 +287,9 @@ pub async fn sync_batch_copy_item(
     }
 
     // Resolve destination parent directory
-    let dst_parent_fs_id =
-        crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &dst_parent_dir)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
+    let dst_parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, &dst_parent_dir)
+        .await
+        .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
 
     // Add entries to destination parent's FsDirData and create a commit
     let description = if new_entries.len() == 1 {
@@ -366,7 +309,7 @@ pub async fn sync_batch_copy_item(
         &dst_parent_fs_id,
         &auth.email,
         &description,
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             for entry in &new_entries {
                 // Check for name collision and generate unique name if needed
@@ -433,7 +376,7 @@ pub async fn sync_batch_copy_item(
 
     // Adjust repo size (add sizes of copied files).
     let total_copied: i64 = new_entries.iter().map(|e| e.size).sum();
-    crate::storage::adjust_repo_size(db, repo_id, total_copied).await?;
+    crate::repo::adjust_repo_size(db, repo_id, total_copied).await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -468,14 +411,14 @@ pub async fn batch_delete_item(
 
     let head_root_id = get_head_root_id(db, repo_id).await?;
 
-    let parent_fs_id = crate::storage::resolve_fs_id(db, repo_id, &head_root_id, &parent_dir)
+    let parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, &parent_dir)
         .await
         .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
 
     let names_to_delete = body.dirents.clone();
 
     // Read parent dirent metadata to determine obj_type per entry.
-    let parent_data = crate::storage::read_fs_dir_data(db, repo_id, &parent_fs_id)
+    let parent_data = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id)
         .await
         .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
 
@@ -487,7 +430,7 @@ pub async fn batch_delete_item(
         } else {
             format!("{parent_dir}/{name}")
         };
-        if let Ok(sz) = crate::storage::get_entry_total_size(db, repo_id, &fp).await {
+        if let Ok(sz) = crate::repo::get_entry_total_size(db, repo_id, &fp).await {
             total_deleted += sz;
         }
     }
@@ -510,7 +453,7 @@ pub async fn batch_delete_item(
                 } else {
                     format!("{parent_dir}/{name}")
                 };
-                Some(crate::storage::trash::TrashItem {
+                Some(crate::repo::trash::TrashItem {
                     path: fp,
                     obj_type: if entry.mode & S_IFDIR != 0 {
                         "dir".to_string()
@@ -524,7 +467,7 @@ pub async fn batch_delete_item(
             })
             .collect();
         if !trash_items.is_empty()
-            && let Err(e) = crate::storage::trash::TrashService::add_batch_to_trash(
+            && let Err(e) = crate::repo::trash::TrashService::add_batch_to_trash(
                 db,
                 repo_id,
                 trash_items,
@@ -545,7 +488,7 @@ pub async fn batch_delete_item(
         &parent_fs_id,
         &auth.email,
         &format!("Deleted {} items", names_to_delete.len()),
-        crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             dirents.retain(|d| !names_to_delete.contains(&d.name));
             Ok(())
@@ -594,7 +537,7 @@ pub async fn batch_delete_item(
     }
 
     // Adjust repo size (subtract total deleted size).
-    crate::storage::adjust_repo_size(db, repo_id, -total_deleted).await?;
+    crate::repo::adjust_repo_size(db, repo_id, -total_deleted).await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

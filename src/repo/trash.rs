@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use crate::activity_log;
 use crate::entity::{commit, deleted_repo, fs_object, repo};
 use crate::error::AppError;
+use crate::repo::file_ops::FileOps;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::DirEntryData;
-use crate::storage::file_ops::FileOps;
 
 /// A single item recorded during batch delete.
 #[derive(Debug, Clone)]
@@ -502,7 +502,7 @@ impl TrashService {
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-        match crate::storage::resolve_fs_id(db, repo_id, &head.root_id, path).await {
+        match crate::repo::resolve_fs_id(db, repo_id, &head.root_id, path).await {
             Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
@@ -532,13 +532,13 @@ impl TrashService {
 
         // Resolve parent directory fs_id
         let parent_fs_id =
-            match crate::storage::resolve_fs_id(db, repo_id, &head.root_id, parent_path).await {
+            match crate::repo::resolve_fs_id(db, repo_id, &head.root_id, parent_path).await {
                 Ok(id) => id,
                 Err(_) => return Ok(false),
             };
 
         // Read parent directory entries
-        let parent_data = match crate::storage::read_fs_dir_data(db, repo_id, &parent_fs_id).await {
+        let parent_data = match crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id).await {
             Ok(data) => data,
             Err(_) => return Ok(false),
         };
@@ -552,7 +552,7 @@ impl TrashService {
         repo_id: &str,
         fs_id: &str,
     ) -> Result<bool, AppError> {
-        if fs_id == crate::storage::EMPTY_SHA1 {
+        if fs_id == crate::common::EMPTY_SHA1 {
             return Ok(true);
         }
         let obj = fs_object::Entity::find()
@@ -665,9 +665,7 @@ impl TrashService {
                 let parent_fs_id = if parent_dir == "/" {
                     head.root_id.clone()
                 } else {
-                    match crate::storage::resolve_fs_id(db, repo_id, &head.root_id, parent_dir)
-                        .await
-                    {
+                    match crate::repo::resolve_fs_id(db, repo_id, &head.root_id, parent_dir).await {
                         Ok(id) => id,
                         Err(_) => {
                             failed.push(RevertFailedItem {
@@ -680,7 +678,7 @@ impl TrashService {
                     }
                 };
 
-                if parent_fs_id == crate::storage::EMPTY_SHA1 {
+                if parent_fs_id == crate::common::EMPTY_SHA1 {
                     failed.push(RevertFailedItem {
                         commit_id: commit_id.clone(),
                         path: full_path.to_string(),
@@ -705,7 +703,7 @@ impl TrashService {
                     &parent_fs_id,
                     modifier,
                     &description,
-                    crate::storage::file_ops::EMPTY_ANCESTOR_CHAIN,
+                    crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
                     |dirents| {
                         dirents.push(DirEntryData {
                             id: obj_id.clone(),

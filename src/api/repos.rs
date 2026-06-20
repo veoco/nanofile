@@ -13,6 +13,7 @@ use crate::AppState;
 use crate::activity_log;
 use crate::auth::middleware::AuthUser;
 use crate::auth::token::generate_sync_token;
+use crate::common::util::extract_multipart_field;
 use crate::entity::{commit, repo, repo_member, sync_token, user};
 use crate::error::AppError;
 
@@ -623,23 +624,6 @@ fn parse_magic_field(bytes: &[u8]) -> Result<String, AppError> {
     Err(AppError::BadRequest("magic required".into()))
 }
 
-/// Extract a named field from a multipart/form-data body by scanning the
-/// raw body for `name="<field_name>"` and returning the value that follows
-/// the header-terminating `\r\n\r\n` boundary.
-pub(crate) fn extract_multipart_field(bytes: &[u8], field_name: &str) -> Option<String> {
-    let body_str = String::from_utf8_lossy(bytes);
-    let pattern = format!("name=\"{}\"", field_name);
-    let rest = body_str.split(&pattern).nth(1)?;
-    // The value follows after the part headers which end with \r\n\r\n
-    let val_block = rest.split("\r\n\r\n").nth(1)?;
-    let value = val_block.split("\r\n").next().unwrap_or("").trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
-    }
-}
-
 /// Extract `repo_name` from POST body bytes, probing JSON, form-urlencoded,
 /// then multipart/form-data in order.
 fn parse_repo_name(bytes: &[u8]) -> Result<String, AppError> {
@@ -694,7 +678,7 @@ pub async fn delete_repo(
     }
 
     // --- REPO TRASH: Record deleted repo before cascade-delete ---
-    if let Err(e) = crate::storage::trash::TrashService::add_deleted_repo(
+    if let Err(e) = crate::repo::trash::TrashService::add_deleted_repo(
         db,
         &repo_id,
         &r.name,
