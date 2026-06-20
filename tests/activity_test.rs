@@ -1077,7 +1077,17 @@ async fn test_activity_batch_copy_dir() {
 
     // Create source directory with a file inside
     create_dir(&f, "/batch_copy_src_dir").await;
-    upload_file(&f, "batch_copy_src_dir/file_inside.txt").await;
+    let resp = f
+        .client
+        .upload_file(
+            &f.api_token,
+            &f.repo_id,
+            "/batch_copy_src_dir",
+            "file_inside.txt",
+            b"content",
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "upload inside dir failed");
 
     // Batch copy the directory
     let resp = f
