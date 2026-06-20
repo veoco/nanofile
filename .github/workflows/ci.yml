@@ -33,7 +33,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install Tailwind CSS
         run: npm install --silent tailwindcss @tailwindcss/cli
-      - run: cargo clippy -- -D warnings
+      - run: cargo clippy --all-targets -- -D warnings
 
   # ── Tests (linux only, fastest) ─────────────────────────────────────
   test:
@@ -50,5 +50,5 @@ jobs:
         run: npm install --silent tailwindcss @tailwindcss/cli
 
       - name: Run tests
-        run: cargo test -- --nocapture
+        run: cargo test --workspace -- --nocapture
 

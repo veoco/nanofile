@@ -1,0 +1,84 @@
+[package]
+name = "nanofile-server"
+version = "0.1.1"
+edition = "2024"
+description = "Nanofile server — Seafile-compatible sync server"
+license = "MIT"
+
+[dependencies]
+nanofile-domain = { path = "../nanofile-domain", features = ["with-axum"] }
+nanofile-infra = { path = "../nanofile-infra" }
+migration = { path = "../migration" }
+
+async-trait = "0.1"
+axum = { version = "0.8.9", features = ["multipart", "ws"] }
+axum-extra = { version = "0.12.6", features = ["typed-header"] }
+tower = "0.5.3"
+tower-http = { version = "0.7.0", features = ["cors", "trace", "limit", "normalize-path", "timeout"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
+bytes = "1"
+futures = "0.3"
+
+sea-orm = { version = "1.1.20", features = [
+    "sqlx-sqlite",
+    "runtime-tokio-rustls",
+    "macros",
+    "with-chrono",
+    "with-uuid",
+] }
+sea-orm-migration = { version = "1.1.20", features = [
+    "sqlx-sqlite",
+    "runtime-tokio-rustls",
+] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.1"
+dotenvy = "0.15"
+
+rand = "0.10"
+sha1 = "0.11"
+sha2 = "0.11"
+aes = "0.9"
+cbc = "0.2"
+cipher = { version = "0.5", features = ["block-padding", "alloc"] }
+hmac = "0.13"
+pbkdf2 = { version = "0.13", features = ["hmac"] }
+subtle = "2"
+hex = "0.4"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2"
+anyhow = "1"
+totp-rs = { version = "5.7", features = ["gen_secret", "otpauth"] }
+qrcode = "0.14"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+askama = { version = "0.16", features = ["serde_json"] }
+rust-embed = "8"
+serde_urlencoded = "0.7"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+multer = "3.1"
+flate2 = "1.1"
+
+# Full-text search
+tantivy = "0.26.1"
+tantivy-jieba = "0.20.0"
+
+[dev-dependencies]
+reqwest = { version = "0.13", features = ["json", "multipart", "cookies", "form"] }
+tempfile = "3"
+tokio-tungstenite = "0.29"
+
+[[bin]]
+name = "nanofile"
+path = "src/main.rs"
+
+[build-dependencies]
+sha2 = "0.11"

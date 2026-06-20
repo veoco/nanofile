@@ -7,7 +7,6 @@
 *.log
 .env
 config.local.toml
-migration/target
 static/css/app.css
 tailwindcss
 node_modules/
