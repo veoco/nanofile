@@ -138,11 +138,7 @@ async fn main() -> anyhow::Result<()> {
                         origins.into_iter().filter_map(|o| {
                             o.parse()
                                 .map_err(|e| {
-                                    tracing::warn!(
-                                        "Skipping invalid CORS origin '{}': {:?}",
-                                        o,
-                                        e
-                                    )
+                                    tracing::warn!("Skipping invalid CORS origin '{}': {:?}", o, e)
                                 })
                                 .ok()
                         }),
