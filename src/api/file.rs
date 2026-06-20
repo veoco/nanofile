@@ -414,6 +414,10 @@ async fn upload_file_inner(
         return Err(AppError::BadRequest("no file provided".into()));
     }
 
+    // Validate filename (reject path separators and invalid characters)
+    crate::sanitize::validate_filename(&file_name)
+        .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
+
     // Get old file size for incremental repo size adjustment.
     let file_path = if parent_dir == "/" {
         format!("/{}", file_name)

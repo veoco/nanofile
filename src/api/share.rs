@@ -88,6 +88,10 @@ pub async fn create_share_link(
         ));
     }
 
+    // Verify caller has read permission on the repo
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
+
     // s_type defaults to 'f' (file). Full path-to-type resolution requires
     // walking the commit tree, which is done lazily at download time.
     let s_type = "f".to_string();
@@ -156,7 +160,7 @@ pub struct BeshareRequest {
 ///
 /// Shares a repo with another user by adding them as a repo member.
 pub async fn beshare_repo(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Json(req): Json<BeshareRequest>,
@@ -164,6 +168,9 @@ pub async fn beshare_repo(
     if req.user.is_empty() {
         return Err(AppError::BadRequest("user email is required".into()));
     }
+
+    // Verify caller has write permission on the repo
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     // Find the target user
     let target_user = crate::entity::user::Entity::find()

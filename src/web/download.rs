@@ -198,6 +198,11 @@ pub async fn download_api(
         return Err(AppError::BadRequest("token not valid for download".into()));
     }
 
+    // Re-check that user still has read permission on the repo.
+    // Permissions may have been revoked between token issuance and use.
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &info.repo_id, info.user_id)
+        .await?;
+
     let repo_id = info.repo_id.clone();
     let path = info.parent_dir.clone();
     let filename = info.file_name.as_deref().unwrap_or("download").to_string();

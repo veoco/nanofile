@@ -68,6 +68,10 @@ pub async fn create_share_link_v21(
         ));
     }
 
+    // Verify caller has read permission on the repo
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
+
     // s_type defaults to 'f' (file). Full path-to-type resolution requires
     // walking the commit tree, which is done lazily at download time.
     let s_type = "f".to_string();

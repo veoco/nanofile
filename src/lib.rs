@@ -60,6 +60,8 @@ pub struct AppState {
     pub registration_limiter: Arc<GenericRateLimiter>,
     /// TOTP verification rate limiter (per user+IP).
     pub totp_limiter: Arc<GenericRateLimiter>,
+    /// 2FA disable rate limiter (per user, password brute-force prevention).
+    pub disable_2fa_limiter: Arc<GenericRateLimiter>,
     /// Server-wide secret for CSRF token generation.
     pub csrf_secret: Arc<Vec<u8>>,
     /// Cancellation token for graceful shutdown.
@@ -138,6 +140,10 @@ impl AppState {
             config.auth.totp_max_attempts.max(1),
             300,
         ));
+        let disable_2fa_limiter = Arc::new(GenericRateLimiter::new(
+            config.auth.totp_max_attempts.max(1),
+            300,
+        ));
 
         // Generate a random 32-byte CSRF secret at startup.
         let mut csrf_raw = [0u8; 32];
@@ -167,6 +173,7 @@ impl AppState {
             password_reset_limiter,
             registration_limiter,
             totp_limiter,
+            disable_2fa_limiter,
             csrf_secret,
             shutdown_token,
             password_manager,

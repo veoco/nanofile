@@ -94,6 +94,13 @@ pub async fn disable_2fa(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DisableRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
+    // Rate limit password attempts on 2FA disable
+    let rate_limit_key = format!("2fa_disable:{}", auth.user_id);
+    if state.disable_2fa_limiter.is_limited(&rate_limit_key) {
+        return Err(AppError::TooManyRequests);
+    }
+    state.disable_2fa_limiter.record_attempt(&rate_limit_key);
+
     let user = crate::entity::user::Entity::find_by_id(auth.user_id)
         .one(state.db.as_ref())
         .await?
@@ -115,6 +122,9 @@ pub async fn disable_2fa(
     let mut active: user_2fa::ActiveModel = model.into();
     active.enabled = sea_orm::Set(false);
     active.update(state.db.as_ref()).await?;
+
+    // Clear rate limit on successful disable
+    state.disable_2fa_limiter.clear(&rate_limit_key);
 
     Ok(Json(VerifyResponse { success: true }))
 }

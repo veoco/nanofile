@@ -822,6 +822,9 @@ pub async fn get_upload_link(
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
+    // Verify caller has write permission on the repo
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let token =
         state
             .token_manager
@@ -855,6 +858,9 @@ pub async fn get_update_link(
         .one(state.db.as_ref())
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    // Verify caller has write permission on the repo
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let token =
         state

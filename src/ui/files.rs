@@ -583,6 +583,10 @@ pub async fn upload_file(
 
     // Second pass: process the collected file (if any).
     if let Some((file_name, data)) = file_field {
+        // Validate filename (reject path separators and invalid characters)
+        crate::sanitize::validate_filename(&file_name)
+            .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
+
         // Ensure parent directory exists (creates intermediate dirs)
         ensure_parent_dirs(db, &repo_id, &parent_dir, &user.email).await?;
 
