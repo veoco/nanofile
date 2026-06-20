@@ -52,6 +52,8 @@ index_dir = "data/index"
 enabled = true
 # IMPORTANT: Generate a unique secret key for production:
 #   openssl rand -hex 32
-# private_key = ""
+private_key = ""
+# ^ Set to empty string to auto-generate on startup.
+#   For production, set env NANOFILE_NOTIFICATION_PRIVATE_KEY.
 ping_interval = 30
 client_timeout = 90
