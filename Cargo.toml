@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "nanofile-domain",
-    "nanofile-infra",
-    "nanofile-server",
+    "base",
+    "infra",
+    "server",
     "migration",
 ]
 

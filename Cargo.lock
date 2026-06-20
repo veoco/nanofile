@@ -345,6 +345,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "base"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2002,6 +2016,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "infra"
+version = "0.1.1"
+dependencies = [
+ "aes",
+ "anyhow",
+ "async-trait",
+ "base",
+ "base64",
+ "cbc",
+ "chrono",
+ "cipher",
+ "dotenvy",
+ "flate2",
+ "hex",
+ "hmac 0.13.0",
+ "pbkdf2",
+ "rand 0.10.1",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha1 0.11.0",
+ "sha2 0.11.0",
+ "subtle",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "inherent"
 version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2463,109 +2508,6 @@ name = "murmurhash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
-
-[[package]]
-name = "nanofile-domain"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "axum",
- "sea-orm",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "thiserror",
- "tracing",
-]
-
-[[package]]
-name = "nanofile-infra"
-version = "0.1.1"
-dependencies = [
- "aes",
- "anyhow",
- "async-trait",
- "base64",
- "cbc",
- "chrono",
- "cipher",
- "dotenvy",
- "flate2",
- "hex",
- "hmac 0.13.0",
- "nanofile-domain",
- "pbkdf2",
- "rand 0.10.1",
- "sea-orm",
- "serde",
- "serde_json",
- "sha1 0.11.0",
- "sha2 0.11.0",
- "subtle",
- "tokio",
- "tokio-util",
- "toml",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "nanofile-server"
-version = "0.1.1"
-dependencies = [
- "aes",
- "anyhow",
- "askama",
- "async-trait",
- "axum",
- "axum-extra",
- "base64",
- "bytes",
- "cbc",
- "chrono",
- "cipher",
- "clap",
- "dotenvy",
- "flate2",
- "futures",
- "futures-util",
- "hex",
- "hmac 0.13.0",
- "image",
- "jsonwebtoken",
- "migration",
- "multer",
- "nanofile-domain",
- "nanofile-infra",
- "pbkdf2",
- "qrcode",
- "rand 0.10.1",
- "reqwest",
- "rpassword",
- "rust-embed",
- "sea-orm",
- "sea-orm-migration",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sha1 0.11.0",
- "sha2 0.11.0",
- "subtle",
- "tantivy",
- "tantivy-jieba",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "toml",
- "totp-rs",
- "tower",
- "tower-http 0.7.0",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
 
 [[package]]
 name = "nix"
@@ -3948,6 +3890,64 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "server"
+version = "0.1.1"
+dependencies = [
+ "aes",
+ "anyhow",
+ "askama",
+ "async-trait",
+ "axum",
+ "axum-extra",
+ "base",
+ "base64",
+ "bytes",
+ "cbc",
+ "chrono",
+ "cipher",
+ "clap",
+ "dotenvy",
+ "flate2",
+ "futures",
+ "futures-util",
+ "hex",
+ "hmac 0.13.0",
+ "image",
+ "infra",
+ "jsonwebtoken",
+ "migration",
+ "multer",
+ "pbkdf2",
+ "qrcode",
+ "rand 0.10.1",
+ "reqwest",
+ "rpassword",
+ "rust-embed",
+ "sea-orm",
+ "sea-orm-migration",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha1 0.11.0",
+ "sha2 0.11.0",
+ "subtle",
+ "tantivy",
+ "tantivy-jieba",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml",
+ "totp-rs",
+ "tower",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

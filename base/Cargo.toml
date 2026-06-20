@@ -1,0 +1,24 @@
+[package]
+name = "base"
+version = "0.1.1"
+edition = "2024"
+description = "Base types for nanofile — pure types, no axum dependency"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+async-trait = "0.1"
+tracing = "0.1"
+serde_json = "1"
+
+# Optional: IntoResponse for AppError
+axum = { version = "0.8.9", optional = true, default-features = false, features = ["json"] }
+serde_urlencoded = { version = "0.7", optional = true }
+# Optional: sea-orm DbErr conversion (used by infra)
+sea-orm = { version = "1.1.20", optional = true, default-features = false }
+
+[features]
+default = []
+with-sea-orm = ["dep:sea-orm"]
+with-axum = ["dep:axum", "dep:serde_urlencoded", "with-sea-orm"]
