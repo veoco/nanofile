@@ -1,4 +1,12 @@
 [server]
+# Environment variables:
+#   NANOFILE_SERVER_ADDR
+#   NANOFILE_SERVER_PORT
+#   NANOFILE_SERVER_SITE_URL
+#   NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB
+#   NANOFILE_SERVER_REQUEST_TIMEOUT_SECS
+#   NANOFILE_CORS_ALLOWED_ORIGINS           (comma-separated)
+#   NANOFILE_CORS_MAX_AGE_SECS
 addr = "0.0.0.0"
 port = 8082
 # External URL used for download links and CORS defaults.
@@ -6,16 +14,34 @@ port = 8082
 site_url = "http://127.0.0.1:8082"
 max_upload_size_mb = 512
 request_timeout_secs = 600
+cors_allowed_origins = []
+cors_max_age_secs = 86400
 
 [database]
+# Environment variables:
+#   NANOFILE_DATABASE_URL
 url = "sqlite:data/nanofile.db?mode=rwc"
 
 [storage]
+# Environment variables:
+#   NANOFILE_STORAGE_BLOCK_DIR
+#   NANOFILE_STORAGE_TEMP_DIR
+#   NANOFILE_STORAGE_MAX_STORAGE_BYTES
 block_dir = "data/blocks"
 temp_dir = "data/temp"
 max_storage_bytes = 0
 
 [auth]
+# Environment variables:
+#   NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS
+#   NANOFILE_AUTH_API_TOKEN_TTL_DAYS
+#   NANOFILE_AUTH_SYNC_TOKEN_TTL_DAYS
+#   NANOFILE_AUTH_MAX_LOGIN_ATTEMPTS
+#   NANOFILE_AUTH_LOCKOUT_DURATION_SECS
+#   NANOFILE_AUTH_ENABLE_INVITATIONS
+#   NANOFILE_AUTH_ENABLE_PASSWORD_RESET
+#   NANOFILE_AUTH_PASSWORD_MIN_LENGTH
+#   NANOFILE_AUTH_REQUIRE_STRONG_PASSWORD
 password_hash_iterations = 600000
 api_token_ttl_days = 180
 sync_token_ttl_days = 365
@@ -26,34 +52,53 @@ enable_password_reset = true
 password_min_length = 8
 require_strong_password = false
 # Max password reset requests per IP per hour (0 = unlimited)
-# password_reset_max_per_hour = 5
+password_reset_max_per_hour = 5
 # Max registration attempts per IP per hour (0 = unlimited)
-# registration_max_per_hour = 5
+registration_max_per_hour = 5
 # Max TOTP verification attempts per user per 5 minutes (0 = unlimited)
-# totp_max_attempts = 5
+totp_max_attempts = 5
 
 [admin_init]
+# Environment variables:
+#   NANOFILE_ADMIN_INIT_EMAIL
+#   NANOFILE_ADMIN_INIT_PASSWORD
+#   NANOFILE_ADMIN_INIT_PASSWORD_FILE   (read password from a file, safer)
 # email = "admin@example.com"
 # password = "secret123"
 
 [logging]
+# Environment variables:
+#   NANOFILE_LOG_LEVEL
 level = "info"
 
 [gc]
+# Environment variables:
+#   NANOFILE_GC_ENABLED
+#   NANOFILE_GC_INTERVAL_HOURS
+#   NANOFILE_GC_KEEP_COMMITS
 enabled = false
 interval_hours = 24
 keep_commits = 100
 
 [index]
+# Environment variables:
+#   NANOFILE_INDEX_ENABLED
+#   NANOFILE_INDEX_INDEX_DIR
 enabled = true
 index_dir = "data/index"
 
 [notification]
+# Environment variables:
+#   NANOFILE_NOTIFICATION_ENABLED
+#   NANOFILE_NOTIFICATION_PRIVATE_KEY   (generate with: openssl rand -hex 32)
+#   NANOFILE_NOTIFICATION_PING_INTERVAL
+#   NANOFILE_NOTIFICATION_CLIENT_TIMEOUT
 enabled = true
 # IMPORTANT: Generate a unique secret key for production:
 #   openssl rand -hex 32
 private_key = ""
 # ^ Set to empty string to auto-generate on startup.
-#   For production, set env NANOFILE_NOTIFICATION_PRIVATE_KEY.
+#   For production, set the env var to a persistent key.
+#   Otherwise, notifications (WebSocket JWTs) are invalidated on restart.
 ping_interval = 30
 client_timeout = 90
