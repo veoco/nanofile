@@ -44,7 +44,15 @@ pub async fn batch_move_items(
     let src_dir = normalize_path(&req.src_parent_dir);
     let dst_dir = normalize_path(&req.dst_parent_dir);
 
-    svc.batch_move(repo_id, &src_dir, &dst_dir, &req.src_dirents, &auth.email, auth.user_id).await?;
+    svc.batch_move(
+        repo_id,
+        &src_dir,
+        &dst_dir,
+        &req.src_dirents,
+        &auth.email,
+        auth.user_id,
+    )
+    .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -81,7 +89,16 @@ pub async fn sync_batch_copy_item(
     let src_parent_dir = normalize_path(&body.src_parent_dir);
     let dst_parent_dir = normalize_path(&body.dst_parent_dir);
 
-    let _results = svc.batch_copy(repo_id, &src_parent_dir, &dst_parent_dir, &body.src_dirents, &auth.email, auth.user_id).await?;
+    let _results = svc
+        .batch_copy(
+            repo_id,
+            &src_parent_dir,
+            &dst_parent_dir,
+            &body.src_dirents,
+            &auth.email,
+            auth.user_id,
+        )
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -115,7 +132,14 @@ pub async fn batch_delete_item(
         state.indexer.clone(),
     );
 
-    svc.batch_delete(repo_id, &parent_dir, &body.dirents, &auth.email, auth.user_id).await?;
+    svc.batch_delete(
+        repo_id,
+        &parent_dir,
+        &body.dirents,
+        &auth.email,
+        auth.user_id,
+    )
+    .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

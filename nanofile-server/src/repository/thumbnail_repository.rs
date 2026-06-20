@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
 use crate::entity::thumbnail;
@@ -15,13 +13,7 @@ pub trait ThumbnailRepository: Send + Sync {
         path: &str,
         size: i32,
     ) -> Result<Option<thumbnail::Model>, AppError>;
-    async fn create(
-        &self,
-        repo_id: &str,
-        path: &str,
-        size: i32,
-        now: i64,
-    ) -> Result<(), AppError>;
+    async fn create(&self, repo_id: &str, path: &str, size: i32, now: i64) -> Result<(), AppError>;
 }
 
 pub struct DbThumbnailRepository {
@@ -50,13 +42,7 @@ impl ThumbnailRepository for DbThumbnailRepository {
             .await?)
     }
 
-    async fn create(
-        &self,
-        repo_id: &str,
-        path: &str,
-        size: i32,
-        now: i64,
-    ) -> Result<(), AppError> {
+    async fn create(&self, repo_id: &str, path: &str, size: i32, now: i64) -> Result<(), AppError> {
         thumbnail::Entity::insert(thumbnail::ActiveModel {
             id: sea_orm::NotSet,
             repo_id: Set(repo_id.to_string()),

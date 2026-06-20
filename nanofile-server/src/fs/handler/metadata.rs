@@ -51,7 +51,8 @@ pub async fn update_file_tags(
     let tags = req.get("tags").and_then(|v| v.as_array());
 
     let svc = MetadataService::new(state.db.clone(), state.repos.clone());
-    svc.update_file_tags(&repo_id, file_path, tags.as_deref().map(|v| &**v)).await?;
+    svc.update_file_tags(&repo_id, file_path, tags.map(|v| &**v))
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -103,7 +104,8 @@ pub async fn update_metadata_record(
     let value = req.get("value").and_then(|v| v.as_str());
 
     let svc = MetadataService::new(state.db.clone(), state.repos.clone());
-    svc.update_metadata_record(&repo_id, file_path, key, value).await?;
+    svc.update_metadata_record(&repo_id, file_path, key, value)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

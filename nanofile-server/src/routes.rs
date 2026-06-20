@@ -10,8 +10,8 @@ use axum::routing::{delete, get, post, put};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::error::AppError;
 use crate::AppState;
+use crate::error::AppError;
 
 // ── V2 (legacy) API routes ────────────────────────────────────────────────
 
@@ -57,10 +57,7 @@ fn v1_routes() -> Router<Arc<AppState>> {
             "/api2/server-info/",
             get(crate::admin::handler::server_info::server_info),
         )
-        .route(
-            "/api2/ping/",
-            get(crate::auth::handler::login::public_ping),
-        )
+        .route("/api2/ping/", get(crate::auth::handler::login::public_ping))
         .nest("/api2", crate::fs::handler::starred::starred_routes())
         .nest(
             "/api2",
@@ -112,10 +109,7 @@ fn v1_routes() -> Router<Arc<AppState>> {
             "/api2/device-wiped/",
             post(crate::auth::handler::device_wipe::device_wiped),
         )
-        .route(
-            "/api2/search/",
-            get(crate::fs::handler::search::search),
-        )
+        .route("/api2/search/", get(crate::fs::handler::search::search))
         .route(
             "/api2/reindex/",
             post(crate::admin::handler::reindex::reindex),
@@ -135,10 +129,7 @@ fn v1_routes() -> Router<Arc<AppState>> {
             "/api2",
             crate::repo::handler::history::repo_history_routes(),
         )
-        .nest(
-            "/api2",
-            crate::user::handler::devices::devices_routes(),
-        )
+        .nest("/api2", crate::user::handler::devices::devices_routes())
 }
 
 // ── V2.1 API routes ──────────────────────────────────────────────────────
@@ -199,7 +190,10 @@ fn v2_routes() -> Router<Arc<AppState>> {
             get(crate::activity::handler::activities::get_activities),
         )
         // Wikis
-        .route("/api/v2.1/wikis/", get(crate::sharing::handler::wiki::list_wikis))
+        .route(
+            "/api/v2.1/wikis/",
+            get(crate::sharing::handler::wiki::list_wikis),
+        )
         .route(
             "/api/v2.1/wikis2/",
             get(crate::sharing::handler::wiki::list_wikis),
@@ -252,8 +246,7 @@ fn v2_routes() -> Router<Arc<AppState>> {
         // File (create=POST, delete delegated to v2 handler)
         .route(
             "/api/v2.1/repos/{repo_id}/file/",
-            post(crate::fs::handler::file::create_file_v21)
-                .delete(v2_delete_file),
+            post(crate::fs::handler::file::create_file_v21).delete(v2_delete_file),
         )
         // Metadata
         .route(
@@ -347,7 +340,10 @@ async fn v2_delete_dir(
     Path(repo_id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<axum::Json<serde_json::Value>, AppError> {
-    let p = query.get("p").cloned().ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    let p = query
+        .get("p")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     let v2_query = crate::fs::handler::dir::DirQuery {
         p: Some(p),
         t: None,
@@ -369,7 +365,10 @@ async fn v2_delete_file(
     Path(repo_id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<axum::Json<serde_json::Value>, AppError> {
-    let p = query.get("p").cloned().ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    let p = query
+        .get("p")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     let v2_query = crate::fs::handler::file::FileQuery {
         p: Some(p),
         reuse: None,

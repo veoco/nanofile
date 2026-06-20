@@ -298,9 +298,11 @@ async fn test_share_link_encrypted_repo_blocked() {
     // Create an encrypted repo
     let repo_id = uuid::Uuid::new_v4().to_string();
     let magic =
-        nanofile_server::crypto::key_derivation::generate_magic(&repo_id, "testpass", 2, "").unwrap();
+        nanofile_server::crypto::key_derivation::generate_magic(&repo_id, "testpass", 2, "")
+            .unwrap();
     let random_key =
-        nanofile_server::crypto::key_derivation::generate_random_key_for_repo("testpass", 2, "").unwrap();
+        nanofile_server::crypto::key_derivation::generate_random_key_for_repo("testpass", 2, "")
+            .unwrap();
 
     let resp = f
         .client
@@ -366,7 +368,7 @@ async fn test_share_link_list_response_fields() {
 
     let link = &links[0];
     assert!(
-        link["token"].as_str().unwrap_or("").len() > 0,
+        !link["token"].as_str().unwrap_or("").is_empty(),
         "token missing"
     );
     assert!(

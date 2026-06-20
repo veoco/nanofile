@@ -1,4 +1,7 @@
-use axum::{Json, extract::{Path, Query, State}};
+use axum::{
+    Json,
+    extract::{Path, Query, State},
+};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -23,7 +26,10 @@ pub async fn v21_delete_dir(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = query.p.as_deref().ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    let path = query
+        .p
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     let normalized = if path.starts_with('/') {
         path.to_string()
     } else {
@@ -33,7 +39,9 @@ pub async fn v21_delete_dir(
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
     let email = auth.email.clone();
     // Use a closure to isolate the async call from the handler signature
-    let result = svc.delete_dirent(&repo_id, "dir", &normalized, &email, auth.user_id).await;
+    let result = svc
+        .delete_dirent(&repo_id, "dir", &normalized, &email, auth.user_id)
+        .await;
     let _ = result;
     Ok(Json(serde_json::json!({"success": true})))
 }

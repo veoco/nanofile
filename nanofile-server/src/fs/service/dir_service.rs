@@ -8,8 +8,8 @@ use crate::common::DirEntry;
 use crate::common::util::{get_head_root_id, normalize_path};
 use crate::entity::{repo, repo_member};
 use crate::error::AppError;
-use crate::repository::Repositories;
 use crate::repo::file_ops::FileOps;
+use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
 
@@ -126,7 +126,11 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
 
             let mut entry = DirEntry {
                 id: dirent.id.clone(),
-                entry_type: if is_dir { "dir".to_string() } else { "file".to_string() },
+                entry_type: if is_dir {
+                    "dir".to_string()
+                } else {
+                    "file".to_string()
+                },
                 name: dirent.name.clone(),
                 size: dirent.size,
                 mtime: dirent.mtime,
@@ -235,17 +239,7 @@ pub(crate) async fn create_dir_by_path(
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     activity_log::log_activity(
-        db,
-        repo_id,
-        "create",
-        "dir",
-        path,
-        user_id,
-        None,
-        None,
-        None,
-        None,
-        None,
+        db, repo_id, "create", "dir", path, user_id, None, None, None, None, None,
     )
     .await;
 
@@ -434,17 +428,7 @@ impl DirService {
         crate::repo::adjust_repo_size(db, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
-            db,
-            repo_id,
-            "delete",
-            "dir",
-            path,
-            user_id,
-            None,
-            None,
-            None,
-            None,
-            None,
+            db, repo_id, "delete", "dir", path, user_id, None, None, None, None, None,
         )
         .await;
 
@@ -466,10 +450,9 @@ impl DirService {
         let parent_path = parent_path_from(path);
         let dir_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
 
-        let old_parent_fs_id =
-            crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
-                .await
-                .map_err(|e| AppError::Internal(format!("resolve old parent failed: {e}")))?;
+        let old_parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("resolve old parent failed: {e}")))?;
 
         let old_parent_data = crate::repo::read_fs_dir_data(db, repo_id, &old_parent_fs_id)
             .await
@@ -610,10 +593,9 @@ impl DirService {
     ) -> Result<serde_json::Value, AppError> {
         let db = self.db();
         let head_root_id = get_head_root_id(db, repo_id).await?;
-        let source_dir_fs_id =
-            crate::repo::resolve_fs_id(db, repo_id, &head_root_id, path)
-                .await
-                .map_err(|_| AppError::NotFound("directory not found".into()))?;
+        let source_dir_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, path)
+            .await
+            .map_err(|_| AppError::NotFound("directory not found".into()))?;
 
         let new_repo_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
@@ -654,9 +636,15 @@ impl DirService {
 
         copy_fs_tree(db, &self.repos, repo_id, &new_repo_id, &source_dir_fs_id).await?;
 
-        FileOps::create_commit(db, &new_repo_id, &source_dir_fs_id, email, "Created sub-repo")
-            .await
-            .map_err(|e| AppError::Internal(format!("create commit failed: {e}")))?;
+        FileOps::create_commit(
+            db,
+            &new_repo_id,
+            &source_dir_fs_id,
+            email,
+            "Created sub-repo",
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("create commit failed: {e}")))?;
 
         Ok(serde_json::json!({
             "id": new_repo_id,
@@ -701,9 +689,10 @@ impl DirService {
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-        let parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_commit.root_id, parent_path)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+        let parent_fs_id =
+            crate::repo::resolve_fs_id(db, repo_id, &head_commit.root_id, parent_path)
+                .await
+                .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
         let deleted_size: i64 = crate::repo::get_entry_total_size(db, repo_id, path)
             .await
@@ -711,24 +700,27 @@ impl DirService {
 
         // Trash: record deleted entry before tree update
         if let Ok(parent_dir_data) = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id).await
+            && let Some(entry) = parent_dir_data.dirents.iter().find(|d| d.name == name)
         {
-            if let Some(entry) = parent_dir_data.dirents.iter().find(|d| d.name == name) {
-                let obj_type = if entry.mode & S_IFDIR != 0 { "dir" } else { "file" };
-                if let Err(e) = crate::repo::trash::TrashService::add_to_trash(
-                    db,
-                    repo_id,
-                    path,
-                    obj_type,
-                    &entry.id,
-                    &entry.name,
-                    entry.size,
-                    &head_commit_id,
-                    email,
-                )
-                .await
-                {
-                    tracing::warn!("Failed to record trash for {path}: {e}");
-                }
+            let obj_type = if entry.mode & S_IFDIR != 0 {
+                "dir"
+            } else {
+                "file"
+            };
+            if let Err(e) = crate::repo::trash::TrashService::add_to_trash(
+                db,
+                repo_id,
+                path,
+                obj_type,
+                &entry.id,
+                &entry.name,
+                entry.size,
+                &head_commit_id,
+                email,
+            )
+            .await
+            {
+                tracing::warn!("Failed to record trash for {path}: {e}");
             }
         }
 
@@ -749,26 +741,16 @@ impl DirService {
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
         // Remove from full-text search index
-        if let Some(indexer) = &self.indexer {
-            if let Err(e) = indexer.delete_file(repo_id, path) {
-                tracing::warn!("Failed to delete index for {path}: {e}");
-            }
+        if let Some(indexer) = &self.indexer
+            && let Err(e) = indexer.delete_file(repo_id, path)
+        {
+            tracing::warn!("Failed to delete index for {path}: {e}");
         }
 
         crate::repo::adjust_repo_size(db, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
-            db,
-            repo_id,
-            "delete",
-            obj,
-            path,
-            user_id,
-            None,
-            None,
-            None,
-            None,
-            None,
+            db, repo_id, "delete", obj, path, user_id, None, None, None, None, None,
         )
         .await;
 
@@ -838,8 +820,7 @@ impl DirService {
         }
 
         let mut nickname_cache: HashMap<String, String> = HashMap::new();
-        let modifier_emails: Vec<String> =
-            file_list.iter().map(|e| e.modifier.clone()).collect();
+        let modifier_emails: Vec<String> = file_list.iter().map(|e| e.modifier.clone()).collect();
         for email in &modifier_emails {
             if !email.is_empty() {
                 let name = self

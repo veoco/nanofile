@@ -16,7 +16,8 @@ pub trait MemberRepository: Send + Sync {
         repo_id: &str,
         user_id: i32,
     ) -> Result<Option<repo_member::Model>, AppError>;
-    async fn create(&self, model: repo_member::ActiveModel) -> Result<repo_member::Model, AppError>;
+    async fn create(&self, model: repo_member::ActiveModel)
+    -> Result<repo_member::Model, AppError>;
     async fn update_permission(
         &self,
         repo_id: &str,

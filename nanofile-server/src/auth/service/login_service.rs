@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
-use sea_orm::{
-    DatabaseConnection, Set,
-};
+use sea_orm::{DatabaseConnection, Set};
 
 use crate::auth::password::verify_password;
-use crate::auth::s2fa::{generate_s2fa_token, S2FA_TTL_SECONDS};
+use crate::auth::s2fa::{S2FA_TTL_SECONDS, generate_s2fa_token};
 use crate::auth::token::generate_api_token;
 use crate::auth::totp::TotpManager;
 use crate::entity::{api_token, s2fa_token};
@@ -98,8 +96,7 @@ impl LoginService {
         // ── Record failure helper ─────────────────────────────────────────
         let record_failure = || {
             self.login_rate_limiter.record_failure(&rate_limit_key_ip);
-            self.login_rate_limiter
-                .record_failure(&rate_limit_key_user);
+            self.login_rate_limiter.record_failure(&rate_limit_key_user);
             self.login_rate_limiter
                 .record_failure(&rate_limit_key_global);
         };
@@ -114,7 +111,11 @@ impl LoginService {
         };
 
         // ── Verify password ───────────────────────────────────────────────
-        if !verify_password(password, &user_record.password_hash, self.password_hash_iterations) {
+        if !verify_password(
+            password,
+            &user_record.password_hash,
+            self.password_hash_iterations,
+        ) {
             record_failure();
             return Ok(LoginResult::BadCredentials);
         }
@@ -158,12 +159,9 @@ impl LoginService {
             if !skip_2fa {
                 match otp {
                     Some(otp_code) => {
-                        let totp = TotpManager::create_totp(
-                            &tfa.totp_secret,
-                            &user_record.email,
-                            "",
-                        )
-                        .map_err(|e| AppError::Internal(e.to_string()))?;
+                        let totp =
+                            TotpManager::create_totp(&tfa.totp_secret, &user_record.email, "")
+                                .map_err(|e| AppError::Internal(e.to_string()))?;
 
                         if !TotpManager::verify_code(&totp, otp_code) {
                             record_failure();
@@ -182,10 +180,7 @@ impl LoginService {
                                 created_at: Set(now),
                                 expires_at: Set(now + S2FA_TTL_SECONDS),
                             };
-                            self.repos
-                                .s2fa_token
-                                .insert(s2fa_model)
-                                .await?;
+                            self.repos.s2fa_token.insert(s2fa_model).await?;
                             issued_s2fa_token = Some(s2fa_token_value);
                         }
                     }
@@ -221,7 +216,10 @@ impl LoginService {
         };
         self.repos.api_token.insert(token_model).await?;
 
-        self.repos.user.touch_last_login(user_record.id, now).await?;
+        self.repos
+            .user
+            .touch_last_login(user_record.id, now)
+            .await?;
 
         Ok(LoginResult::Success {
             api_token: token_value,

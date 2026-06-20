@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::auth::service::login_service::{LoginService, LoginResult};
+use crate::auth::service::login_service::{LoginResult, LoginService};
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -200,12 +200,8 @@ pub async fn login(
             }
             Ok(response)
         }
-        LoginResult::RateLimited => {
-            login_error("Too many login attempts. Please try again later.")
-        }
-        LoginResult::BadCredentials => {
-            login_error("Unable to login with provided credentials.")
-        }
+        LoginResult::RateLimited => login_error("Too many login attempts. Please try again later."),
+        LoginResult::BadCredentials => login_error("Unable to login with provided credentials."),
         LoginResult::AccountDisabled => login_error("User account is disabled."),
         LoginResult::TwoFactorRequired => {
             let mut resp_headers = HeaderMap::new();
@@ -263,11 +259,7 @@ pub async fn logout_device(
         .ok_or(AppError::Unauthorized)?;
 
     // Delete the api_token record
-    state
-        .repos
-        .api_token
-        .delete_by_token(token_str)
-        .await?;
+    state.repos.api_token.delete_by_token(token_str).await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

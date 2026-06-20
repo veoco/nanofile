@@ -10,8 +10,8 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::user::service::{primary_avatar_url, resolve_size};
 use crate::user::service::AvatarService;
+use crate::user::service::{primary_avatar_url, resolve_size};
 
 // ─── API response types ──────────────────────────────────────────────────────
 
@@ -72,20 +72,18 @@ pub async fn serve_avatar_image(
     let avatar = svc.find_avatar(&email).await;
 
     match avatar {
-        Ok(Some(a)) => {
-            match svc.read_avatar_bytes(&a, size).await {
-                Some((data, mime)) => (
-                    StatusCode::OK,
-                    [
-                        (header::CONTENT_TYPE, mime),
-                        (header::CACHE_CONTROL, "public, max-age=86400"),
-                    ],
-                    data,
-                )
-                    .into_response(),
-                None => serve_default_avatar(),
-            }
-        }
+        Ok(Some(a)) => match svc.read_avatar_bytes(&a, size).await {
+            Some((data, mime)) => (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, "public, max-age=86400"),
+                ],
+                data,
+            )
+                .into_response(),
+            None => serve_default_avatar(),
+        },
         Ok(None) | Err(_) => serve_default_avatar(),
     }
 }

@@ -20,11 +20,7 @@ pub trait InvitationCodeRepository: Send + Sync {
         creator_id: i32,
         now: i64,
     ) -> Result<(), AppError>;
-    async fn delete_by_id_and_creator(
-        &self,
-        id: i32,
-        creator_id: i32,
-    ) -> Result<(), AppError>;
+    async fn delete_by_id_and_creator(&self, id: i32, creator_id: i32) -> Result<(), AppError>;
 }
 
 pub struct DbInvitationCodeRepository {
@@ -71,11 +67,7 @@ impl InvitationCodeRepository for DbInvitationCodeRepository {
         Ok(())
     }
 
-    async fn delete_by_id_and_creator(
-        &self,
-        id: i32,
-        creator_id: i32,
-    ) -> Result<(), AppError> {
+    async fn delete_by_id_and_creator(&self, id: i32, creator_id: i32) -> Result<(), AppError> {
         let result = invitation_code::Entity::delete_many()
             .filter(invitation_code::Column::Id.eq(id))
             .filter(invitation_code::Column::CreatorId.eq(creator_id))

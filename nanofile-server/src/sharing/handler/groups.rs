@@ -24,7 +24,8 @@ pub async fn groups_and_contacts(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let result = group_service::groups_and_contacts(state.db.as_ref(), &state.repos, auth.user_id).await?;
+    let result =
+        group_service::groups_and_contacts(state.db.as_ref(), &state.repos, auth.user_id).await?;
     Ok(Json(result))
 }
 

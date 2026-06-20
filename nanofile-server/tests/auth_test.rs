@@ -208,9 +208,12 @@ async fn enable_2fa(db: &sea_orm::DatabaseConnection, user_id: i32) {
 }
 
 fn generate_valid_totp() -> String {
-    let totp =
-        nanofile_server::auth::totp::TotpManager::create_totp(totp_secret(), "test@example.com", "")
-            .unwrap();
+    let totp = nanofile_server::auth::totp::TotpManager::create_totp(
+        totp_secret(),
+        "test@example.com",
+        "",
+    )
+    .unwrap();
     totp.generate_current().unwrap()
 }
 

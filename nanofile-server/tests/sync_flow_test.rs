@@ -58,7 +58,8 @@ async fn test_full_upload_flow() {
         obj_type: 1,
         version: 1,
     };
-    let file_fs_id = nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
+    let file_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
     let file_json = file_data.to_compact_json();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
@@ -74,7 +75,8 @@ async fn test_full_upload_flow() {
         obj_type: 3,
         version: 1,
     };
-    let root_fs_id = nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
+    let root_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
     let root_json = root_dir.to_compact_json();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -235,7 +237,8 @@ async fn test_incremental_upload() {
         obj_type: 1,
         version: 1,
     };
-    let file_fs_id = nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
+    let file_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
     let file_json = file_data.to_compact_json();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
@@ -251,7 +254,8 @@ async fn test_incremental_upload() {
         obj_type: 3,
         version: 1,
     };
-    let root_fs_id = nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
+    let root_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
     let root_json = root_dir.to_compact_json();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 

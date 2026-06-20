@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
 use crate::entity::metadata_config;
@@ -9,7 +7,10 @@ use crate::error::AppError;
 
 #[async_trait]
 pub trait MetadataConfigRepository: Send + Sync {
-    async fn find_by_repo_id(&self, repo_id: &str) -> Result<Option<metadata_config::Model>, AppError>;
+    async fn find_by_repo_id(
+        &self,
+        repo_id: &str,
+    ) -> Result<Option<metadata_config::Model>, AppError>;
     async fn upsert(&self, repo_id: &str, enabled: bool) -> Result<(), AppError>;
 }
 
@@ -25,7 +26,10 @@ impl DbMetadataConfigRepository {
 
 #[async_trait]
 impl MetadataConfigRepository for DbMetadataConfigRepository {
-    async fn find_by_repo_id(&self, repo_id: &str) -> Result<Option<metadata_config::Model>, AppError> {
+    async fn find_by_repo_id(
+        &self,
+        repo_id: &str,
+    ) -> Result<Option<metadata_config::Model>, AppError> {
         Ok(metadata_config::Entity::find()
             .filter(metadata_config::Column::RepoId.eq(repo_id))
             .one(self.db.as_ref())

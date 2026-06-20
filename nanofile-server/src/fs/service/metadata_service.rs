@@ -23,11 +23,7 @@ impl MetadataService {
 
     /// Get metadata config for a repo.
     pub async fn get_metadata_config(&self, repo_id: &str) -> Result<serde_json::Value, AppError> {
-        let config = self
-            .repos
-            .metadata_config
-            .find_by_repo_id(repo_id)
-            .await?;
+        let config = self.repos.metadata_config.find_by_repo_id(repo_id).await?;
 
         match config {
             Some(c) => Ok(serde_json::json!({"enabled": c.enabled})),

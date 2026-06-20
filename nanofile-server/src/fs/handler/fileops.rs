@@ -134,7 +134,9 @@ pub fn fileops_routes() -> Router<Arc<AppState>> {
 
 // ─── Request body parsing ─────────────────────────────────────
 
-async fn parse_form_body(req: Request<axum::body::Body>) -> Result<HashMap<String, String>, AppError> {
+async fn parse_form_body(
+    req: Request<axum::body::Body>,
+) -> Result<HashMap<String, String>, AppError> {
     let (_, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
         .await
@@ -169,11 +171,19 @@ pub async fn batch_delete_handler(
         state.block_store.clone(),
         state.indexer.clone(),
     );
-    svc.batch_delete(&repo_id, &parent_dir, &file_names, &auth.email, auth.user_id).await?;
+    svc.batch_delete(
+        &repo_id,
+        &parent_dir,
+        &file_names,
+        &auth.email,
+        auth.user_id,
+    )
+    .await?;
 
     // Handle reloaddir=true
     if query.reloaddir.as_deref() == Some("true") {
-        let (_, entries) = list_dir_from_fs_tree(state.db.as_ref(), &state.repos, &repo_id, &parent_dir).await?;
+        let (_, entries) =
+            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, &repo_id, &parent_dir).await?;
         return Ok(Json(json!({"dir_listing": entries})).into_response());
     }
 
@@ -197,7 +207,9 @@ pub async fn batch_copy_handler(
         return Ok(Json(json!([])).into_response());
     }
 
-    let dst_repo = form.get("dst_repo").ok_or_else(|| AppError::BadRequest("dst_repo required".into()))?;
+    let dst_repo = form
+        .get("dst_repo")
+        .ok_or_else(|| AppError::BadRequest("dst_repo required".into()))?;
     let dst_dir = normalize_path(form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/"));
 
     if *dst_repo != repo_id {
@@ -213,10 +225,20 @@ pub async fn batch_copy_handler(
         state.block_store.clone(),
         state.indexer.clone(),
     );
-    let results = svc.batch_copy(&repo_id, &src_parent_dir, &dst_dir, &file_names, &auth.email, auth.user_id).await?;
+    let results = svc
+        .batch_copy(
+            &repo_id,
+            &src_parent_dir,
+            &dst_dir,
+            &file_names,
+            &auth.email,
+            auth.user_id,
+        )
+        .await?;
 
     // Convert results to response format
-    let json_results: Vec<CopyMoveResult> = results.into_iter()
+    let json_results: Vec<CopyMoveResult> = results
+        .into_iter()
         .map(|r| CopyMoveResult {
             repo_id: r.repo_id,
             parent_dir: r.parent_dir,
@@ -225,7 +247,8 @@ pub async fn batch_copy_handler(
         .collect();
 
     if query.reloaddir.as_deref() == Some("true") {
-        let (_, entries) = list_dir_from_fs_tree(state.db.as_ref(), &state.repos, &repo_id, &dst_dir).await?;
+        let (_, entries) =
+            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, &repo_id, &dst_dir).await?;
         return Ok(Json(json!({
             "results": json_results,
             "dir_listing": entries,
@@ -253,7 +276,9 @@ pub async fn batch_move_handler(
         return Ok(Json(json!([])).into_response());
     }
 
-    let dst_repo = form.get("dst_repo").ok_or_else(|| AppError::BadRequest("dst_repo required".into()))?;
+    let dst_repo = form
+        .get("dst_repo")
+        .ok_or_else(|| AppError::BadRequest("dst_repo required".into()))?;
     let dst_dir = normalize_path(form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/"));
 
     if *dst_repo != repo_id {
@@ -269,9 +294,19 @@ pub async fn batch_move_handler(
         state.block_store.clone(),
         state.indexer.clone(),
     );
-    let results = svc.batch_move(&repo_id, &src_parent_dir, &dst_dir, &file_names, &auth.email, auth.user_id).await?;
+    let results = svc
+        .batch_move(
+            &repo_id,
+            &src_parent_dir,
+            &dst_dir,
+            &file_names,
+            &auth.email,
+            auth.user_id,
+        )
+        .await?;
 
-    let json_results: Vec<CopyMoveResult> = results.into_iter()
+    let json_results: Vec<CopyMoveResult> = results
+        .into_iter()
         .map(|r| CopyMoveResult {
             repo_id: r.repo_id,
             parent_dir: r.parent_dir,
@@ -280,7 +315,8 @@ pub async fn batch_move_handler(
         .collect();
 
     if query.reloaddir.as_deref() == Some("true") {
-        let (_, entries) = list_dir_from_fs_tree(state.db.as_ref(), &state.repos, &repo_id, &dst_dir).await?;
+        let (_, entries) =
+            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, &repo_id, &dst_dir).await?;
         return Ok(Json(json!({
             "results": json_results,
             "dir_listing": entries,

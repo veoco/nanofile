@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
 use crate::entity::locked_file;
@@ -22,11 +20,7 @@ pub trait LockedFileRepository: Send + Sync {
         now: i64,
         owner_name: &str,
     ) -> Result<(), AppError>;
-    async fn delete_by_repo_and_path(
-        &self,
-        repo_id: &str,
-        path: &str,
-    ) -> Result<(), AppError>;
+    async fn delete_by_repo_and_path(&self, repo_id: &str, path: &str) -> Result<(), AppError>;
 }
 
 pub struct DbLockedFileRepository {
@@ -74,11 +68,7 @@ impl LockedFileRepository for DbLockedFileRepository {
         Ok(())
     }
 
-    async fn delete_by_repo_and_path(
-        &self,
-        repo_id: &str,
-        path: &str,
-    ) -> Result<(), AppError> {
+    async fn delete_by_repo_and_path(&self, repo_id: &str, path: &str) -> Result<(), AppError> {
         locked_file::Entity::delete_many()
             .filter(locked_file::Column::RepoId.eq(repo_id))
             .filter(locked_file::Column::Path.eq(path))

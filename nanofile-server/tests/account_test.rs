@@ -40,7 +40,7 @@ async fn test_account_info_returns_display_name() {
 async fn test_account_info_falls_back_to_email_local_part() {
     let server = TestServer::start().await;
     let client = server.client();
-    let _user_id = create_test_user(&*server.db, "john.doe@example.com", "password").await;
+    let _user_id = create_test_user(&server.db, "john.doe@example.com", "password").await;
 
     let resp = client.login("john.doe@example.com", "password").await;
     assert_eq!(resp.status(), 200);
@@ -65,7 +65,7 @@ async fn test_account_info_uses_name_when_display_name_unset() {
     use nanofile_server::entity::user;
     use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
-    let user_id = create_test_user(&*server.db, "bob@example.com", "password").await;
+    let user_id = create_test_user(&server.db, "bob@example.com", "password").await;
     let user_record = user::Entity::find_by_id(user_id)
         .one(&*server.db)
         .await

@@ -1,12 +1,12 @@
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 use serde::Serialize;
 
+use crate::Config;
 use crate::auth::password::hash_password;
 use crate::auth::token::{generate_share_link_token, generate_upload_link_token};
 use crate::entity::upload_link;
 use crate::error::AppError;
 use crate::repository::Repositories;
-use crate::Config;
 
 // ── Response types ────────────────────────────────────────────────────
 
@@ -157,8 +157,5 @@ pub async fn delete_upload_link_v21(
 // ── Smart link ────────────────────────────────────────────────────────
 
 pub fn get_smart_link(base_url: &str, repo_id: &str, path: &str) -> String {
-    format!(
-        "{}/api2/repos/{}/file/?p={}",
-        base_url, repo_id, path
-    )
+    format!("{}/api2/repos/{}/file/?p={}", base_url, repo_id, path)
 }

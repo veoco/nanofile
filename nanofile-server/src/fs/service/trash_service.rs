@@ -39,8 +39,7 @@ impl FsTrashService {
         cursor: Option<i64>,
         limit: u32,
     ) -> Result<serde_json::Value, AppError> {
-        let result =
-            TrashService::list_trash_cursor(self.db(), repo_id, cursor, limit).await?;
+        let result = TrashService::list_trash_cursor(self.db(), repo_id, cursor, limit).await?;
         Ok(serde_json::to_value(result)?)
     }
 
@@ -79,7 +78,8 @@ impl FsTrashService {
         user_id: i32,
         body: std::collections::HashMap<String, Vec<String>>,
     ) -> Result<serde_json::Value, AppError> {
-        let result = TrashService::restore_trash_items(self.db(), repo_id, email, user_id, body).await?;
+        let result =
+            TrashService::restore_trash_items(self.db(), repo_id, email, user_id, body).await?;
         Ok(serde_json::to_value(result)?)
     }
 
@@ -165,11 +165,7 @@ impl FsTrashService {
     }
 
     /// Restore a deleted repo.
-    pub async fn restore_deleted_repo(
-        &self,
-        repo_id: &str,
-        user_id: i32,
-    ) -> Result<(), AppError> {
+    pub async fn restore_deleted_repo(&self, repo_id: &str, user_id: i32) -> Result<(), AppError> {
         TrashService::restore_deleted_repo(self.db(), repo_id, user_id).await?;
         Ok(())
     }

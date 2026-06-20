@@ -11,16 +11,9 @@ pub trait UserRepository: Send + Sync {
     async fn find_by_email(&self, email: &str) -> Result<Option<user::Model>, AppError>;
     async fn find_by_email_like(&self, pattern: &str) -> Result<Vec<user::Model>, AppError>;
     async fn exists_by_email(&self, email: &str) -> Result<bool, AppError>;
-    async fn create(
-        &self,
-        email: String,
-        password_hash: String,
-    ) -> Result<user::Model, AppError>;
-    async fn update_display_name(
-        &self,
-        user_id: i32,
-        name: Option<String>,
-    ) -> Result<(), AppError>;
+    async fn create(&self, email: String, password_hash: String) -> Result<user::Model, AppError>;
+    async fn update_display_name(&self, user_id: i32, name: Option<String>)
+    -> Result<(), AppError>;
     async fn touch_last_login(&self, user_id: i32, now: i64) -> Result<(), AppError>;
 }
 
@@ -64,11 +57,7 @@ impl UserRepository for DbUserRepository {
             .is_some())
     }
 
-    async fn create(
-        &self,
-        email: String,
-        password_hash: String,
-    ) -> Result<user::Model, AppError> {
+    async fn create(&self, email: String, password_hash: String) -> Result<user::Model, AppError> {
         let now = chrono::Utc::now().timestamp();
         let model = user::ActiveModel {
             id: sea_orm::NotSet,

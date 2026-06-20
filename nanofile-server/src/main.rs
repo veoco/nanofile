@@ -1,10 +1,10 @@
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use rand::Rng;
 use axum::http::{Method, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use clap::Parser;
+use rand::Rng;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
 use sea_orm_migration::MigratorTrait;
 use std::io::Write;
@@ -16,9 +16,9 @@ use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::timeout::TimeoutLayer;
 use tracing_subscriber::EnvFilter;
 
-use nanofile_server::AppState;
 use nanofile_infra::config::Config;
 use nanofile_infra::db::establish_connection;
+use nanofile_server::AppState;
 
 /// Nanofile — a Seafile-compatible sync server
 #[derive(Parser)]

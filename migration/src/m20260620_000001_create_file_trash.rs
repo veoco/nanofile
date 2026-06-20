@@ -19,14 +19,31 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(FileTrash::User).string_len(255).not_null())
-                    .col(ColumnDef::new(FileTrash::ObjType).string_len(128).not_null())
+                    .col(
+                        ColumnDef::new(FileTrash::ObjType)
+                            .string_len(128)
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(FileTrash::ObjId).char_len(40).not_null())
-                    .col(ColumnDef::new(FileTrash::ObjName).string_len(255).not_null())
-                    .col(ColumnDef::new(FileTrash::DeleteTime).big_integer().not_null())
+                    .col(
+                        ColumnDef::new(FileTrash::ObjName)
+                            .string_len(255)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(FileTrash::DeleteTime)
+                            .big_integer()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(FileTrash::RepoId).char_len(36).not_null())
                     .col(ColumnDef::new(FileTrash::CommitId).char_len(40).not_null())
                     .col(ColumnDef::new(FileTrash::Path).text().not_null())
-                    .col(ColumnDef::new(FileTrash::Size).big_integer().not_null().default(0))
+                    .col(
+                        ColumnDef::new(FileTrash::Size)
+                            .big_integer()
+                            .not_null()
+                            .default(0),
+                    )
                     .to_owned(),
             )
             .await?;

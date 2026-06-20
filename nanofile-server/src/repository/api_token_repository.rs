@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use std::sync::Arc;
 
 use crate::entity::api_token;
@@ -13,10 +11,7 @@ pub trait ApiTokenRepository: Send + Sync {
         &self,
         user_id: i32,
     ) -> Result<Vec<api_token::Model>, AppError>;
-    async fn delete_many_by_device(
-        &self,
-        device_id: &str,
-    ) -> Result<(), AppError>;
+    async fn delete_many_by_device(&self, device_id: &str) -> Result<(), AppError>;
     async fn delete_many_by_user_platform_device(
         &self,
         user_id: i32,
@@ -25,10 +20,7 @@ pub trait ApiTokenRepository: Send + Sync {
     ) -> Result<u64, AppError>;
     async fn delete_by_token(&self, token: &str) -> Result<(), AppError>;
     async fn insert(&self, model: api_token::ActiveModel) -> Result<(), AppError>;
-    async fn delete_many_by_user_id(
-        &self,
-        user_id: i32,
-    ) -> Result<(), AppError>;
+    async fn delete_many_by_user_id(&self, user_id: i32) -> Result<(), AppError>;
 }
 
 pub struct DbApiTokenRepository {
@@ -55,10 +47,7 @@ impl ApiTokenRepository for DbApiTokenRepository {
             .await?)
     }
 
-    async fn delete_many_by_device(
-        &self,
-        device_id: &str,
-    ) -> Result<(), AppError> {
+    async fn delete_many_by_device(&self, device_id: &str) -> Result<(), AppError> {
         api_token::Entity::delete_many()
             .filter(api_token::Column::DeviceId.eq(device_id))
             .exec(self.db.as_ref())
@@ -96,10 +85,7 @@ impl ApiTokenRepository for DbApiTokenRepository {
         Ok(())
     }
 
-    async fn delete_many_by_user_id(
-        &self,
-        user_id: i32,
-    ) -> Result<(), AppError> {
+    async fn delete_many_by_user_id(&self, user_id: i32) -> Result<(), AppError> {
         api_token::Entity::delete_many()
             .filter(api_token::Column::UserId.eq(user_id))
             .exec(self.db.as_ref())

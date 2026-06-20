@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
 use crate::entity::repo;
@@ -48,7 +46,9 @@ impl RepoRepository for DbRepoRepository {
             _ => return Err(AppError::Internal("repo id is required".into())),
         };
         repo::Entity::insert(model).exec(self.db.as_ref()).await?;
-        self.find_by_id(&repo_id).await?.ok_or_else(|| AppError::Internal("Failed to find created repo".into()))
+        self.find_by_id(&repo_id)
+            .await?
+            .ok_or_else(|| AppError::Internal("Failed to find created repo".into()))
     }
 
     async fn update(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError> {

@@ -72,7 +72,10 @@ impl SearchService {
                 if !seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
                     continue;
                 }
-                if let Some(meta) = self.resolve_file_metadata(found_repo_id, found_fullpath).await {
+                if let Some(meta) = self
+                    .resolve_file_metadata(found_repo_id, found_fullpath)
+                    .await
+                {
                     all_results.push(meta);
                 }
             }
@@ -118,11 +121,7 @@ impl SearchService {
         }
 
         // Sort: directories first, then by name
-        all_results.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then_with(|| a.name.cmp(&b.name))
-        });
+        all_results.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
 
         let total = all_results.len() as i32;
         let offset = ((page - 1) * per_page) as usize;

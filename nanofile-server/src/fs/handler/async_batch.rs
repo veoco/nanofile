@@ -1,4 +1,7 @@
-use axum::{Json, extract::{Query, State}};
+use axum::{
+    Json,
+    extract::{Query, State},
+};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -14,16 +17,26 @@ pub async fn async_batch_copy_item(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::batch::SyncBatchCopyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id).await?;
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
+        .await?;
 
     let task_id = uuid::Uuid::new_v4().to_string();
     let description = if body.src_dirents.len() == 1 {
         format!("Copy \"{}\"", body.src_dirents[0])
     } else {
-        format!("Copy \"{}\" and {} more items", body.src_dirents[0], body.src_dirents.len() - 1)
+        format!(
+            "Copy \"{}\" and {} more items",
+            body.src_dirents[0],
+            body.src_dirents.len() - 1
+        )
     };
 
-    state.task_manager.create_task(task_id.clone(), "copy", body.src_dirents.len(), &description);
+    state.task_manager.create_task(
+        task_id.clone(),
+        "copy",
+        body.src_dirents.len(),
+        &description,
+    );
 
     let state_clone = state.clone();
     let repo_id = body.src_repo_id;
@@ -35,7 +48,17 @@ pub async fn async_batch_copy_item(
     let tid = task_id.clone();
 
     tokio::spawn(async move {
-        run_copy_task(&state_clone, &tid, &repo_id, &src_dir, &dst_dir, &file_names, &email, uid).await;
+        run_copy_task(
+            &state_clone,
+            &tid,
+            &repo_id,
+            &src_dir,
+            &dst_dir,
+            &file_names,
+            &email,
+            uid,
+        )
+        .await;
     });
 
     Ok(Json(serde_json::json!({"task_id": task_id})))
@@ -59,7 +82,10 @@ async fn run_copy_task(
         state.indexer.clone(),
     );
 
-    match svc.batch_copy(repo_id, src_dir, dst_dir, file_names, email, user_id).await {
+    match svc
+        .batch_copy(repo_id, src_dir, dst_dir, file_names, email, user_id)
+        .await
+    {
         Ok(_) => state.task_manager.complete_task(task_id),
         Err(e) => state.task_manager.fail_task(task_id, e.to_string()),
     }
@@ -70,16 +96,26 @@ pub async fn async_batch_move_item(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::batch::BatchMoveRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id).await?;
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
+        .await?;
 
     let task_id = uuid::Uuid::new_v4().to_string();
     let description = if body.src_dirents.len() == 1 {
         format!("Move \"{}\"", body.src_dirents[0])
     } else {
-        format!("Move \"{}\" and {} more items", body.src_dirents[0], body.src_dirents.len() - 1)
+        format!(
+            "Move \"{}\" and {} more items",
+            body.src_dirents[0],
+            body.src_dirents.len() - 1
+        )
     };
 
-    state.task_manager.create_task(task_id.clone(), "move", body.src_dirents.len(), &description);
+    state.task_manager.create_task(
+        task_id.clone(),
+        "move",
+        body.src_dirents.len(),
+        &description,
+    );
 
     let state_clone = state.clone();
     let repo_id = body.src_repo_id;
@@ -91,7 +127,17 @@ pub async fn async_batch_move_item(
     let tid = task_id.clone();
 
     tokio::spawn(async move {
-        run_move_task(&state_clone, &tid, &repo_id, &src_dir, &dst_dir, &file_names, &email, uid).await;
+        run_move_task(
+            &state_clone,
+            &tid,
+            &repo_id,
+            &src_dir,
+            &dst_dir,
+            &file_names,
+            &email,
+            uid,
+        )
+        .await;
     });
 
     Ok(Json(serde_json::json!({"task_id": task_id})))
@@ -115,7 +161,10 @@ async fn run_move_task(
         state.indexer.clone(),
     );
 
-    match svc.batch_move(repo_id, src_dir, dst_dir, file_names, email, user_id).await {
+    match svc
+        .batch_move(repo_id, src_dir, dst_dir, file_names, email, user_id)
+        .await
+    {
         Ok(_) => state.task_manager.complete_task(task_id),
         Err(e) => state.task_manager.fail_task(task_id, e.to_string()),
     }
@@ -136,7 +185,8 @@ pub async fn copy_move_task(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CopyMoveTaskRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id).await?;
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
+        .await?;
 
     let operation = body.operation.as_deref().unwrap_or("copy").to_string();
     let task_id = uuid::Uuid::new_v4().to_string();
@@ -146,7 +196,9 @@ pub async fn copy_move_task(
         body.src_dirents.first().map(|s| s.as_str()).unwrap_or("?")
     );
 
-    state.task_manager.create_task(task_id.clone(), &operation, 1, &description);
+    state
+        .task_manager
+        .create_task(task_id.clone(), &operation, 1, &description);
 
     let state_clone = state.clone();
     let repo_id = body.src_repo_id;
@@ -159,14 +211,42 @@ pub async fn copy_move_task(
 
     match operation.as_str() {
         "copy" => {
-            tokio::spawn(async move { run_copy_task(&state_clone, &tid, &repo_id, &src_dir, &dst_dir, &file_names, &email, uid).await; });
+            tokio::spawn(async move {
+                run_copy_task(
+                    &state_clone,
+                    &tid,
+                    &repo_id,
+                    &src_dir,
+                    &dst_dir,
+                    &file_names,
+                    &email,
+                    uid,
+                )
+                .await;
+            });
         }
         "move" => {
-            tokio::spawn(async move { run_move_task(&state_clone, &tid, &repo_id, &src_dir, &dst_dir, &file_names, &email, uid).await; });
+            tokio::spawn(async move {
+                run_move_task(
+                    &state_clone,
+                    &tid,
+                    &repo_id,
+                    &src_dir,
+                    &dst_dir,
+                    &file_names,
+                    &email,
+                    uid,
+                )
+                .await;
+            });
         }
         _ => {
-            state.task_manager.fail_task(&task_id, format!("unknown operation: {operation}"));
-            return Err(AppError::BadRequest(format!("unknown operation: {operation}")));
+            state
+                .task_manager
+                .fail_task(&task_id, format!("unknown operation: {operation}"));
+            return Err(AppError::BadRequest(format!(
+                "unknown operation: {operation}"
+            )));
         }
     }
 
@@ -194,7 +274,10 @@ pub async fn query_copy_move_progress(
                 TaskState::Completed => ("completed", true, false),
                 TaskState::Failed(_) => ("failed", true, true),
             };
-            let error_msg = match &t.state { TaskState::Failed(msg) => msg.clone(), _ => String::new() };
+            let error_msg = match &t.state {
+                TaskState::Failed(msg) => msg.clone(),
+                _ => String::new(),
+            };
 
             Ok(Json(serde_json::json!({
                 "state": state_str, "done": done, "failed": failed,

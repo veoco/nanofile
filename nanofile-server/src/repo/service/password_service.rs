@@ -152,9 +152,7 @@ impl PasswordService {
         active.update(db).await?;
 
         // Remove cached old password
-        password_manager
-            .remove_password(repo_id, user_id)
-            .await;
+        password_manager.remove_password(repo_id, user_id).await;
 
         Ok(())
     }

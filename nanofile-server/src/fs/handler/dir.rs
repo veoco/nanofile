@@ -71,7 +71,9 @@ pub async fn list_dir(
         && t != "f"
         && t != "d"
     {
-        return Err(AppError::BadRequest("'t'(type) should be 'f' or 'd'.".into()));
+        return Err(AppError::BadRequest(
+            "'t'(type) should be 'f' or 'd'.".into(),
+        ));
     }
 
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
@@ -79,8 +81,14 @@ pub async fn list_dir(
     if query.recursive.as_deref() == Some("1") {
         let (dir_id, all_entries) = svc.list_dir_recursive(&repo_id, &path).await?;
         let filtered: Vec<DirEntry> = match query.t.as_deref() {
-            Some("f") => all_entries.into_iter().filter(|e| e.entry_type == "file").collect(),
-            Some("d") => all_entries.into_iter().filter(|e| e.entry_type == "dir").collect(),
+            Some("f") => all_entries
+                .into_iter()
+                .filter(|e| e.entry_type == "file")
+                .collect(),
+            Some("d") => all_entries
+                .into_iter()
+                .filter(|e| e.entry_type == "dir")
+                .collect(),
             _ => all_entries,
         };
         let mut headers = HeaderMap::new();
@@ -116,12 +124,22 @@ pub async fn dir_post_handler(
 
     let (op, p, newname): (Option<String>, Option<String>, Option<String>) =
         if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-            let op = json_val.get("operation").and_then(|v| v.as_str()).map(String::from);
+            let op = json_val
+                .get("operation")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let p = json_val.get("p").and_then(|v| v.as_str()).map(String::from);
-            let newname = json_val.get("newname").and_then(|v| v.as_str()).map(String::from);
+            let newname = json_val
+                .get("newname")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             (op, p, newname)
         } else if let Ok(form) = serde_urlencoded::from_bytes::<HashMap<String, String>>(&bytes) {
-            (form.get("operation").cloned(), form.get("p").cloned(), form.get("newname").cloned())
+            (
+                form.get("operation").cloned(),
+                form.get("p").cloned(),
+                form.get("newname").cloned(),
+            )
         } else {
             let op = crate::common::util::extract_multipart_field(&bytes, "operation");
             let p = crate::common::util::extract_multipart_field(&bytes, "p");
@@ -129,7 +147,9 @@ pub async fn dir_post_handler(
             (op, p, newname)
         };
 
-    let path = p.or_else(|| query.p.clone()).ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    let path = p
+        .or_else(|| query.p.clone())
+        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     let path = normalize_path(&path);
 
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
@@ -137,11 +157,13 @@ pub async fn dir_post_handler(
     match op.as_deref() {
         Some("rename") => {
             let newname = newname.ok_or_else(|| AppError::BadRequest("newname required".into()))?;
-            svc.rename_dir_entry(&repo_id, &path, &newname, &auth.email, auth.user_id).await?;
+            svc.rename_dir_entry(&repo_id, &path, &newname, &auth.email, auth.user_id)
+                .await?;
             Ok(Json(serde_json::Value::String("success".to_string())))
         }
         _ => {
-            svc.create_dir(&repo_id, &path, &auth.email, auth.user_id).await?;
+            svc.create_dir(&repo_id, &path, &auth.email, auth.user_id)
+                .await?;
             Ok(Json(serde_json::Value::String("success".to_string())))
         }
     }
@@ -155,10 +177,15 @@ pub async fn delete_dir(
 ) -> Result<(), AppError> {
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = normalize_path(&query.p.ok_or_else(|| AppError::BadRequest("path is required".into()))?);
+    let path = normalize_path(
+        &query
+            .p
+            .ok_or_else(|| AppError::BadRequest("path is required".into()))?,
+    );
 
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
-    svc.delete_dir(&repo_id, &path, &auth.email, auth.user_id).await
+    svc.delete_dir(&repo_id, &path, &auth.email, auth.user_id)
+        .await
 }
 
 #[derive(Deserialize)]
@@ -173,10 +200,18 @@ pub async fn move_dir(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MoveDirRequest>,
 ) -> Result<(), AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id).await?;
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
 
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
-    svc.move_dir(&req.repo_id, &req.p, &req.new_parent_dir, &auth.email, auth.user_id).await
+    svc.move_dir(
+        &req.repo_id,
+        &req.p,
+        &req.new_parent_dir,
+        &auth.email,
+        auth.user_id,
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -191,11 +226,19 @@ pub async fn rename_dir(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RenameDirRequest>,
 ) -> Result<(), AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id).await?;
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
 
     let path = normalize_path(&req.p);
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
-    svc.rename_dir_entry(&req.repo_id, &path, &req.new_name, &auth.email, auth.user_id).await
+    svc.rename_dir_entry(
+        &req.repo_id,
+        &path,
+        &req.new_name,
+        &auth.email,
+        auth.user_id,
+    )
+    .await
 }
 
 #[derive(Serialize)]
@@ -215,7 +258,9 @@ pub async fn dir_shared_items(
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
     let items = svc.get_dir_shared_items(&repo_id, &path).await?;
 
-    Ok(Json(DirSharedItemsResponse { shared_items: items }))
+    Ok(Json(DirSharedItemsResponse {
+        shared_items: items,
+    }))
 }
 
 pub async fn create_sub_repo(
@@ -226,10 +271,16 @@ pub async fn create_sub_repo(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = normalize_path(&query.p.ok_or_else(|| AppError::BadRequest("path required".into()))?);
+    let path = normalize_path(
+        &query
+            .p
+            .ok_or_else(|| AppError::BadRequest("path required".into()))?,
+    );
 
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
-    let result = svc.create_sub_repo(&repo_id, &path, &auth.email, auth.user_id).await?;
+    let result = svc
+        .create_sub_repo(&repo_id, &path, &auth.email, auth.user_id)
+        .await?;
 
     Ok(Json(result))
 }
@@ -252,7 +303,10 @@ pub async fn delete_dirent_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = query.p.as_deref().ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    let path = query
+        .p
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     let normalized = if path.starts_with('/') {
         path.to_string()
     } else {
@@ -260,7 +314,8 @@ pub async fn delete_dirent_v21(
     };
 
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
-    svc.delete_dirent(&repo_id, &obj, &normalized, &auth.email, auth.user_id).await?;
+    svc.delete_dirent(&repo_id, &obj, &normalized, &auth.email, auth.user_id)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -273,7 +328,10 @@ pub async fn delete_dir_v21_handler(
 ) -> Result<Response, AppError> {
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = query.p.as_deref().ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    let path = query
+        .p
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     let normalized = if path.starts_with('/') {
         path.to_string()
     } else {
@@ -281,7 +339,8 @@ pub async fn delete_dir_v21_handler(
     };
 
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
-    svc.delete_dirent(&repo_id, "dir", &normalized, &auth.email, auth.user_id).await?;
+    svc.delete_dirent(&repo_id, "dir", &normalized, &auth.email, auth.user_id)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})).into_response())
 }
@@ -315,7 +374,9 @@ pub async fn list_dir_v21(
         && t != "f"
         && t != "d"
     {
-        return Err(AppError::BadRequest("'t'(type) should be 'f' or 'd'.".into()));
+        return Err(AppError::BadRequest(
+            "'t'(type) should be 'f' or 'd'.".into(),
+        ));
     }
 
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
@@ -323,8 +384,14 @@ pub async fn list_dir_v21(
     if query.recursive.as_deref() == Some("1") {
         let (dir_id, all_entries) = svc.list_dir_recursive(&repo_id, &normalized).await?;
         let dirent_list: Vec<DirEntry> = match query.t.as_deref() {
-            Some("f") => all_entries.into_iter().filter(|e| e.entry_type == "file").collect(),
-            Some("d") => all_entries.into_iter().filter(|e| e.entry_type == "dir").collect(),
+            Some("f") => all_entries
+                .into_iter()
+                .filter(|e| e.entry_type == "file")
+                .collect(),
+            Some("d") => all_entries
+                .into_iter()
+                .filter(|e| e.entry_type == "dir")
+                .collect(),
             _ => all_entries,
         };
 
@@ -355,15 +422,16 @@ pub async fn list_dir_v21(
 
     let (dir_id, entries) = svc.list_dir(&repo_id, &normalized).await?;
 
-    let json_body = svc.build_list_dir_v21_json(
-        &repo_id,
-        &normalized,
-        auth.user_id,
-        query.with_thumbnail.unwrap_or(false),
-        entries,
-        dir_id.clone(),
-    )
-    .await?;
+    let json_body = svc
+        .build_list_dir_v21_json(
+            &repo_id,
+            &normalized,
+            auth.user_id,
+            query.with_thumbnail.unwrap_or(false),
+            entries,
+            dir_id.clone(),
+        )
+        .await?;
 
     let mut headers = HeaderMap::new();
     if !dir_id.is_empty() {
@@ -394,11 +462,19 @@ pub async fn create_dir_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = body.p.or(query.p).ok_or_else(|| AppError::BadRequest("path (p) required".into()))?;
-    let path = if path.starts_with('/') { path } else { format!("/{path}") };
+    let path = body
+        .p
+        .or(query.p)
+        .ok_or_else(|| AppError::BadRequest("path (p) required".into()))?;
+    let path = if path.starts_with('/') {
+        path
+    } else {
+        format!("/{path}")
+    };
 
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
-    svc.create_dir(&repo_id, &path, &auth.email, auth.user_id).await?;
+    svc.create_dir(&repo_id, &path, &auth.email, auth.user_id)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -416,15 +492,20 @@ pub async fn dir_detail_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = query.path.ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    let path = query
+        .path
+        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     if path == "/" || path.is_empty() {
         return Err(AppError::BadRequest("path invalid.".into()));
     }
-    let normalized = if path.starts_with('/') { path } else { format!("/{path}") };
+    let normalized = if path.starts_with('/') {
+        path
+    } else {
+        format!("/{path}")
+    };
 
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
     let result = svc.dir_detail(&repo_id, &normalized, auth.user_id).await?;
 
     Ok(Json(result))
 }
-

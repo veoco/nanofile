@@ -1,4 +1,9 @@
-use axum::{Json, Router, body::Bytes, extract::{Query, State}, http::HeaderMap};
+use axum::{
+    Json, Router,
+    body::Bytes,
+    extract::{Query, State},
+    http::HeaderMap,
+};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -66,10 +71,13 @@ pub async fn star_item(
     };
 
     // Permission check
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &req.repo_id, auth.user_id).await?;
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
 
     let svc = StarredService::new(state.repos.clone(), state.db.clone());
-    let result = svc.star_item(auth.user_id, &auth.email, &req.repo_id, &req.path).await?;
+    let result = svc
+        .star_item(auth.user_id, &auth.email, &req.repo_id, &req.path)
+        .await?;
 
     Ok(Json(result))
 }
@@ -80,7 +88,8 @@ pub async fn unstar_item(
     Query(query): Query<UnstarQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let svc = StarredService::new(state.repos.clone(), state.db.clone());
-    svc.unstar_item(auth.user_id, &query.repo_id, &query.path).await?;
+    svc.unstar_item(auth.user_id, &query.repo_id, &query.path)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

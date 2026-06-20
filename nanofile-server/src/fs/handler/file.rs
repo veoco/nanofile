@@ -60,7 +60,9 @@ pub async fn download_file(
     );
 
     let host_header = headers.get("host").and_then(|v| v.to_str().ok());
-    let (file_fs_id, url) = svc.get_download_info(&repo_id, &path, auth.user_id, &auth.email, host_header).await?;
+    let (file_fs_id, url) = svc
+        .get_download_info(&repo_id, &path, auth.user_id, &auth.email, host_header)
+        .await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -112,7 +114,15 @@ pub async fn file_post_handler(
             let newname = extract_multipart_field(&bytes, "newname")
                 .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
             let path = normalize_path(&query.p.unwrap_or_default());
-            rename_file_entry(state.db.as_ref(), &repo_id, &path, &newname, &auth.email, auth.user_id).await?;
+            rename_file_entry(
+                state.db.as_ref(),
+                &repo_id,
+                &path,
+                &newname,
+                &auth.email,
+                auth.user_id,
+            )
+            .await?;
             Ok(Json(serde_json::Value::String("success".to_string())))
         } else {
             // Parse multipart fields into UploadedFile
@@ -134,19 +144,33 @@ pub async fn file_post_handler(
                 .map_err(|e| AppError::Internal(format!("invalid multipart boundary: {e}")))?;
             let stream = stream::once(async { Ok::<_, std::convert::Infallible>(bytes.clone()) });
             let mut mp = MulterMultipart::new(stream, boundary);
-            while let Some(field) = mp.next_field().await.map_err(|e| AppError::Internal(e.to_string()))? {
+            while let Some(field) = mp
+                .next_field()
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+            {
                 let field_name = field.name().unwrap_or_default().to_string();
                 match field_name.as_str() {
                     "file" => {
                         upload.file_name = field.file_name().unwrap_or_default().to_string();
-                        upload.file_data = field.bytes().await.map_err(|e| AppError::Internal(e.to_string()))?.to_vec();
+                        upload.file_data = field
+                            .bytes()
+                            .await
+                            .map_err(|e| AppError::Internal(e.to_string()))?
+                            .to_vec();
                     }
                     "parent_dir" => {
-                        let data = field.bytes().await.map_err(|e| AppError::Internal(e.to_string()))?;
+                        let data = field
+                            .bytes()
+                            .await
+                            .map_err(|e| AppError::Internal(e.to_string()))?;
                         upload.parent_dir = String::from_utf8(data.to_vec()).unwrap_or_default();
                     }
                     "replace" => {
-                        let data = field.bytes().await.map_err(|e| AppError::Internal(e.to_string()))?;
+                        let data = field
+                            .bytes()
+                            .await
+                            .map_err(|e| AppError::Internal(e.to_string()))?;
                         let val = String::from_utf8(data.to_vec()).unwrap_or_default();
                         upload.replace = val.trim() == "1" || val.trim() == "true";
                     }
@@ -154,7 +178,8 @@ pub async fn file_post_handler(
                 }
             }
 
-            svc.upload_file(&repo_id, upload, &auth.email, auth.user_id).await?;
+            svc.upload_file(&repo_id, upload, &auth.email, auth.user_id)
+                .await?;
             Ok(Json(serde_json::json!({"success": true})))
         }
     } else {
@@ -164,14 +189,20 @@ pub async fn file_post_handler(
 
         match form.get("operation").map(|s| s.as_str()) {
             Some("rename") => {
-                let newname = form.get("newname").ok_or_else(|| AppError::BadRequest("newname required".into()))?;
-                svc.rename_file(&repo_id, &path, newname, &auth.email, auth.user_id).await?;
+                let newname = form
+                    .get("newname")
+                    .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
+                svc.rename_file(&repo_id, &path, newname, &auth.email, auth.user_id)
+                    .await?;
                 Ok(Json(serde_json::json!({"success": true})))
             }
             Some("move") => {
-                let _dst_repo = form.get("dst_repo").ok_or_else(|| AppError::BadRequest("dst_repo required".into()))?;
+                let _dst_repo = form
+                    .get("dst_repo")
+                    .ok_or_else(|| AppError::BadRequest("dst_repo required".into()))?;
                 let dst_dir = form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/");
-                svc.move_file(&repo_id, &path, dst_dir, &auth.email, auth.user_id).await?;
+                svc.move_file(&repo_id, &path, dst_dir, &auth.email, auth.user_id)
+                    .await?;
                 Ok(Json(serde_json::json!({"success": true})))
             }
             _ => Err(AppError::BadRequest("unknown operation".into())),
@@ -187,7 +218,11 @@ pub async fn delete_file(
 ) -> Result<(), AppError> {
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = normalize_path(&query.p.ok_or_else(|| AppError::BadRequest("path is required".into()))?);
+    let path = normalize_path(
+        &query
+            .p
+            .ok_or_else(|| AppError::BadRequest("path is required".into()))?,
+    );
 
     let svc = FileService::new(
         state.repos.clone(),
@@ -198,7 +233,8 @@ pub async fn delete_file(
         state.config.clone(),
         state.notification_manager.clone(),
     );
-    svc.delete_file(&repo_id, &path, &auth.email, auth.user_id).await
+    svc.delete_file(&repo_id, &path, &auth.email, auth.user_id)
+        .await
 }
 
 #[derive(Deserialize)]
@@ -213,7 +249,8 @@ pub async fn move_file(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MoveRequest>,
 ) -> Result<(), AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id).await?;
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
 
     let path = normalize_path(&req.p);
 
@@ -226,7 +263,14 @@ pub async fn move_file(
         state.config.clone(),
         state.notification_manager.clone(),
     );
-    svc.move_file(&req.repo_id, &path, &req.new_parent_dir, &auth.email, auth.user_id).await
+    svc.move_file(
+        &req.repo_id,
+        &path,
+        &req.new_parent_dir,
+        &auth.email,
+        auth.user_id,
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -241,7 +285,8 @@ pub async fn rename_file(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RenameRequest>,
 ) -> Result<(), AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id).await?;
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+        .await?;
 
     let path = normalize_path(&req.p);
 
@@ -254,9 +299,15 @@ pub async fn rename_file(
         state.config.clone(),
         state.notification_manager.clone(),
     );
-    svc.rename_file(&req.repo_id, &path, &req.new_name, &auth.email, auth.user_id).await
+    svc.rename_file(
+        &req.repo_id,
+        &path,
+        &req.new_name,
+        &auth.email,
+        auth.user_id,
+    )
+    .await
 }
-
 
 pub async fn file_detail(
     auth: AuthUser,
@@ -266,7 +317,11 @@ pub async fn file_detail(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = normalize_path(&query.p.ok_or_else(|| AppError::BadRequest("path is required".into()))?);
+    let path = normalize_path(
+        &query
+            .p
+            .ok_or_else(|| AppError::BadRequest("path is required".into()))?,
+    );
 
     let svc = FileService::new(
         state.repos.clone(),
@@ -297,7 +352,10 @@ pub async fn lock_file_via_api_handler(
     let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)
         .map_err(|_| AppError::BadRequest("invalid form data".into()))?;
 
-    let operation = form.get("operation").map(|s| s.as_str()).ok_or_else(|| AppError::BadRequest("operation required".into()))?;
+    let operation = form
+        .get("operation")
+        .map(|s| s.as_str())
+        .ok_or_else(|| AppError::BadRequest("operation required".into()))?;
     let path = normalize_path(&query.p.unwrap_or_default());
 
     let db = state.db.as_ref();
@@ -313,7 +371,8 @@ pub async fn lock_file_via_api_handler(
         state.config.clone(),
         state.notification_manager.clone(),
     );
-    svc.lock_file(&repo_id, &path, operation, &auth.email, auth.user_id).await?;
+    svc.lock_file(&repo_id, &path, operation, &auth.email, auth.user_id)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -347,11 +406,17 @@ pub async fn create_file_v21(
         let r = serde_json::from_slice::<CreateFileRequest>(&bytes)?;
         r.p.ok_or_else(|| AppError::BadRequest("path (p) required".into()))?
     } else {
-        query.get("p").cloned()
+        query
+            .get("p")
+            .cloned()
             .or_else(|| extract_multipart_field(&bytes, "p"))
             .ok_or_else(|| AppError::BadRequest("path (p) required".into()))?
     };
-    let path = if path.starts_with('/') { path } else { format!("/{path}") };
+    let path = if path.starts_with('/') {
+        path
+    } else {
+        format!("/{path}")
+    };
 
     // Check for rename operation in multipart body
     if let Some(op) = extract_multipart_field(&bytes, "operation")
@@ -359,7 +424,15 @@ pub async fn create_file_v21(
     {
         let newname = extract_multipart_field(&bytes, "newname")
             .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
-        self::rename_file_entry(state.db.as_ref(), &repo_id, &path, &newname, &auth.email, auth.user_id).await?;
+        self::rename_file_entry(
+            state.db.as_ref(),
+            &repo_id,
+            &path,
+            &newname,
+            &auth.email,
+            auth.user_id,
+        )
+        .await?;
         return Ok(Json(serde_json::json!({"success": true})));
     }
 
@@ -372,7 +445,8 @@ pub async fn create_file_v21(
         state.config.clone(),
         state.notification_manager.clone(),
     );
-    svc.create_empty_file(&repo_id, &path, &auth.email, auth.user_id).await?;
+    svc.create_empty_file(&repo_id, &path, &auth.email, auth.user_id)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -413,7 +487,10 @@ pub async fn file_uploaded_bytes(
     let mut headers = HeaderMap::new();
     headers.insert("Accept-Ranges", "bytes".parse().unwrap());
 
-    Ok((headers, Json(serde_json::json!({"uploadedBytes": uploaded_bytes}))))
+    Ok((
+        headers,
+        Json(serde_json::json!({"uploadedBytes": uploaded_bytes})),
+    ))
 }
 
 pub async fn get_block_download_link(
@@ -437,13 +514,19 @@ pub async fn get_block_download_link(
     );
 
     let host_header = headers.get("host").and_then(|v| v.to_str().ok());
-    let url = svc.get_block_download_link(
-        &repo_id, &file_id, &block_id, parent_dir,
-        auth.user_id, &auth.email, host_header,
-    ).await?;
+    let url = svc
+        .get_block_download_link(
+            &repo_id,
+            &file_id,
+            &block_id,
+            parent_dir,
+            auth.user_id,
+            &auth.email,
+            host_header,
+        )
+        .await?;
     Ok(Json(url))
 }
-
 
 pub async fn delete_file_wrapper(
     auth: AuthUser,

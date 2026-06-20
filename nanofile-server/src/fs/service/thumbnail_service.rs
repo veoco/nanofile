@@ -4,8 +4,8 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::error::AppError;
-use crate::repository::Repositories;
 use crate::repo::download::Downloader;
+use crate::repository::Repositories;
 use crate::serialization::fs_json::SEAF_METADATA_TYPE_DIR;
 
 pub struct ThumbnailService {
@@ -68,14 +68,10 @@ impl ThumbnailService {
             .await?
             .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-        let file_fs_id = crate::repo::resolve_fs_id(
-            self.db(),
-            repo_id,
-            &head_commit.root_id,
-            &normalized_path,
-        )
-        .await
-        .map_err(|_| AppError::NotFound("file not found".into()))?;
+        let file_fs_id =
+            crate::repo::resolve_fs_id(self.db(), repo_id, &head_commit.root_id, &normalized_path)
+                .await
+                .map_err(|_| AppError::NotFound("file not found".into()))?;
 
         if file_fs_id == "0000000000000000000000000000000000000000" {
             return Err(AppError::BadRequest("path is a directory".into()));
@@ -118,7 +114,9 @@ impl ThumbnailService {
                     size
                 ));
             if thumbnail_path.exists() {
-                return tokio::fs::read(&thumbnail_path).await.map_err(|e| AppError::Internal(e.to_string()));
+                return tokio::fs::read(&thumbnail_path)
+                    .await
+                    .map_err(|e| AppError::Internal(e.to_string()));
             }
         }
 

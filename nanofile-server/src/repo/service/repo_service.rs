@@ -2,9 +2,9 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Qu
 use serde::Serialize;
 use std::collections::HashMap;
 
+use crate::AccessTokenManager;
 use crate::activity_log;
 use crate::auth::token::generate_sync_token;
-use crate::AccessTokenManager;
 use crate::entity::{repo, sync_token};
 use crate::error::AppError;
 use crate::repository::Repositories;
@@ -153,7 +153,11 @@ fn build_repo_info_from_model(
         desc: r.description.clone(),
         owner: owner_email.to_string(),
         encrypted,
-        enc_version: if encrypted { Some(r.enc_version as i32) } else { None },
+        enc_version: if encrypted {
+            Some(r.enc_version as i32)
+        } else {
+            None
+        },
         size: r.size,
         mtime: r.updated_at,
         permission: permission.to_string(),
@@ -161,9 +165,17 @@ fn build_repo_info_from_model(
         type_,
         virtual_: false,
         root: None,
-        salt: if encrypted && r.enc_version >= 3 { Some(r.salt.clone()) } else { None },
+        salt: if encrypted && r.enc_version >= 3 {
+            Some(r.salt.clone())
+        } else {
+            None
+        },
         magic: if encrypted { r.magic.clone() } else { None },
-        random_key: if encrypted { r.random_key.clone() } else { None },
+        random_key: if encrypted {
+            r.random_key.clone()
+        } else {
+            None
+        },
         repo_version: r.repo_version,
         lib_need_decrypt: if encrypted { Some(true) } else { None },
         repo_id_dup: None,
@@ -186,7 +198,13 @@ impl RepoService {
         let mut result = Vec::new();
         for m in memberships {
             if let Some(r) = repos.repo.find_by_id(&m.repo_id).await? {
-                result.push(build_repo_info_from_model(&r, email, &m.permission, user_id, false));
+                result.push(build_repo_info_from_model(
+                    &r,
+                    email,
+                    &m.permission,
+                    user_id,
+                    false,
+                ));
             }
         }
 
@@ -255,23 +273,15 @@ impl RepoService {
             client_version: sea_orm::NotSet,
             last_sync_time: sea_orm::NotSet,
         };
-        sync_token::Entity::insert(sync_token_model).exec(db).await?;
+        sync_token::Entity::insert(sync_token_model)
+            .exec(db)
+            .await?;
 
         let encrypted = encrypted_val == 1;
 
         // Log repo creation activity (best-effort)
         activity_log::log_activity(
-            db,
-            &repo_id,
-            "create",
-            "repo",
-            "/",
-            user_id,
-            None,
-            None,
-            None,
-            None,
-            None,
+            db, &repo_id, "create", "repo", "/", user_id, None, None, None, None, None,
         )
         .await;
 
@@ -281,7 +291,11 @@ impl RepoService {
             desc: desc.to_string(),
             owner: email.to_string(),
             encrypted,
-            enc_version: if encrypted { Some(enc_version_val) } else { None },
+            enc_version: if encrypted {
+                Some(enc_version_val)
+            } else {
+                None
+            },
             size: 0,
             mtime: now,
             permission: "rw".to_string(),
@@ -317,10 +331,7 @@ impl RepoService {
             .await?
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-        let membership = repos
-            .member
-            .find_by_repo_and_user(repo_id, user_id)
-            .await?;
+        let membership = repos.member.find_by_repo_and_user(repo_id, user_id).await?;
         let permission = membership
             .map(|m| m.permission)
             .unwrap_or_else(|| "rw".to_string());
@@ -336,11 +347,27 @@ impl RepoService {
         };
 
         let encrypted = r.encrypted != 0;
-        let type_ = if r.owner_id == user_id { "repo" } else { "srepo" };
-        let enc_version = if encrypted { Some(r.enc_version as i32) } else { None };
-        let salt = if encrypted && r.enc_version >= 3 { Some(r.salt.clone()) } else { None };
+        let type_ = if r.owner_id == user_id {
+            "repo"
+        } else {
+            "srepo"
+        };
+        let enc_version = if encrypted {
+            Some(r.enc_version as i32)
+        } else {
+            None
+        };
+        let salt = if encrypted && r.enc_version >= 3 {
+            Some(r.salt.clone())
+        } else {
+            None
+        };
         let magic = if encrypted { r.magic.clone() } else { None };
-        let random_key = if encrypted { r.random_key.clone() } else { None };
+        let random_key = if encrypted {
+            r.random_key.clone()
+        } else {
+            None
+        };
 
         Ok(RepoInfo {
             id: r.id.clone(),
@@ -449,17 +476,7 @@ impl RepoService {
 
         // Log repo deletion activity BEFORE deleting the repo
         activity_log::log_activity(
-            db,
-            repo_id,
-            "delete",
-            "repo",
-            "/",
-            user_id,
-            None,
-            None,
-            None,
-            None,
-            None,
+            db, repo_id, "delete", "repo", "/", user_id, None, None, None, None, None,
         )
         .await;
 
@@ -507,11 +524,19 @@ impl RepoService {
             relay_addr: None,
             relay_port: None,
             enc_version: r.enc_version as i32,
-            encrypted: if r.encrypted == 1 { "true".to_string() } else { "false".to_string() },
+            encrypted: if r.encrypted == 1 {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            },
             magic: r.magic,
             random_key: r.random_key,
             repo_version: 1,
-            salt: if r.salt.is_empty() { None } else { Some(r.salt.clone()) },
+            salt: if r.salt.is_empty() {
+                None
+            } else {
+                Some(r.salt.clone())
+            },
             permission: r.permission,
         })
     }
@@ -615,7 +640,13 @@ impl RepoService {
             Some(m) => {
                 let r = repos.repo.find_by_id(&m.repo_id).await?;
                 match r {
-                    Some(r) => Ok(build_repo_info_from_model(&r, email, &m.permission, user_id, false)),
+                    Some(r) => Ok(build_repo_info_from_model(
+                        &r,
+                        email,
+                        &m.permission,
+                        user_id,
+                        false,
+                    )),
                     None => Err(AppError::NotFound("no default repo".into())),
                 }
             }
@@ -643,7 +674,10 @@ impl RepoService {
                 ));
             }
             // Stale repo_member — the repo was deleted, clean up and continue
-            repos.member.delete_by_repo_and_user(&m.repo_id, user_id).await?;
+            repos
+                .member
+                .delete_by_repo_and_user(&m.repo_id, user_id)
+                .await?;
         }
 
         // Create a new repo as default

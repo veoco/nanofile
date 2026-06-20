@@ -2,8 +2,8 @@ use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::admin::service::AdminService;
 use crate::AppState;
+use crate::admin::service::AdminService;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 

@@ -106,9 +106,7 @@ mod into_response_impl {
     impl IntoResponse for AppError {
         fn into_response(self) -> Response {
             let (status, body) = match &self {
-                AppError::BadRequest(msg) => {
-                    (StatusCode::BAD_REQUEST, json!({ "error_msg": msg }))
-                }
+                AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, json!({ "error_msg": msg })),
                 AppError::Unauthorized => (
                     StatusCode::UNAUTHORIZED,
                     json!({ "error_msg": "Unauthorized" }),

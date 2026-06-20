@@ -118,7 +118,8 @@ async fn test_list_devices_with_data() {
         1,
         "should have one sync token after repo creation"
     );
-    let mut sync_active: nanofile_server::entity::sync_token::ActiveModel = sync_tokens[0].clone().into();
+    let mut sync_active: nanofile_server::entity::sync_token::ActiveModel =
+        sync_tokens[0].clone().into();
     sync_active.peer_id = Set(Some("phone-001".to_string()));
     sync_active.last_sync_time = Set(Some(now));
     sync_active.update(server.db.as_ref()).await.unwrap();

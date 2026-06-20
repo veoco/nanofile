@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
 use crate::entity::starred_file;

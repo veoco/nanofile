@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
 use crate::entity::sync_token;
@@ -23,11 +21,7 @@ pub trait SyncTokenRepository: Send + Sync {
         now: i64,
     ) -> Result<(), AppError>;
     async fn delete_by_repo(&self, repo_id: &str) -> Result<(), AppError>;
-    async fn delete_by_user_and_peer(
-        &self,
-        user_id: i32,
-        peer_id: &str,
-    ) -> Result<u64, AppError>;
+    async fn delete_by_user_and_peer(&self, user_id: i32, peer_id: &str) -> Result<u64, AppError>;
 }
 
 pub struct DbSyncTokenRepository {
@@ -88,11 +82,7 @@ impl SyncTokenRepository for DbSyncTokenRepository {
         Ok(())
     }
 
-    async fn delete_by_user_and_peer(
-        &self,
-        user_id: i32,
-        peer_id: &str,
-    ) -> Result<u64, AppError> {
+    async fn delete_by_user_and_peer(&self, user_id: i32, peer_id: &str) -> Result<u64, AppError> {
         let result = sync_token::Entity::delete_many()
             .filter(sync_token::Column::UserId.eq(user_id))
             .filter(sync_token::Column::PeerId.eq(peer_id))

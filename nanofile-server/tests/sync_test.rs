@@ -666,7 +666,8 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
         obj_type: 1, // file
         version: 1,
     };
-    let file_fs_id = nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
+    let file_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
     let file_json = file_data.to_compact_json();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 

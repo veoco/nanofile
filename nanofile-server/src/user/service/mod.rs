@@ -10,8 +10,5 @@ pub use invitation_service::{InvitationInfo, InvitationService};
 
 // Re-export avatar utility functions used by other modules
 pub use avatar_service::{
-    avatar_storage_dir,
-    default_avatar_bytes,
-    primary_avatar_url,
-    resolve_size,
+    avatar_storage_dir, default_avatar_bytes, primary_avatar_url, resolve_size,
 };

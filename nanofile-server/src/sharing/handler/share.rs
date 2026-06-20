@@ -98,7 +98,9 @@ pub async fn beshare_repo(
     .await?;
 
     if result.already_shared {
-        Ok(Json(serde_json::json!({"success": true, "already_shared": true})))
+        Ok(Json(
+            serde_json::json!({"success": true, "already_shared": true}),
+        ))
     } else {
         Ok(Json(serde_json::json!({"success": true})))
     }

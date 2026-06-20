@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ActiveModelTrait, DatabaseConnection, EntityTrait, Set,
-};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use std::sync::Arc;
 
 use crate::entity::user_2fa;
@@ -10,7 +8,11 @@ use crate::error::AppError;
 #[async_trait]
 pub trait User2faRepository: Send + Sync {
     async fn find_by_user_id(&self, user_id: i32) -> Result<Option<user_2fa::Model>, AppError>;
-    async fn get_or_create(&self, user_id: i32, totp_secret: String) -> Result<user_2fa::Model, AppError>;
+    async fn get_or_create(
+        &self,
+        user_id: i32,
+        totp_secret: String,
+    ) -> Result<user_2fa::Model, AppError>;
     async fn set_enabled(&self, user_id: i32, enabled: bool, now: i64) -> Result<(), AppError>;
 }
 
@@ -32,7 +34,11 @@ impl User2faRepository for DbUser2faRepository {
             .await?)
     }
 
-    async fn get_or_create(&self, user_id: i32, totp_secret: String) -> Result<user_2fa::Model, AppError> {
+    async fn get_or_create(
+        &self,
+        user_id: i32,
+        totp_secret: String,
+    ) -> Result<user_2fa::Model, AppError> {
         let existing = user_2fa::Entity::find_by_id(user_id)
             .one(self.db.as_ref())
             .await?;

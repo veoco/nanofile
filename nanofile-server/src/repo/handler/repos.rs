@@ -15,7 +15,9 @@ use crate::error::AppError;
 use crate::repo::service::password_service::PasswordService;
 use crate::repo::service::repo_service;
 // Re-export response types for api module re-exports
-pub use crate::repo::service::repo_service::{DownloadInfoResponse, RepoInfo, V21RepoInfo, V21RepoListResponse};
+pub use crate::repo::service::repo_service::{
+    DownloadInfoResponse, RepoInfo, V21RepoInfo, V21RepoListResponse,
+};
 
 #[derive(Deserialize)]
 pub struct CreateRepoRequest {
@@ -316,12 +318,12 @@ fn parse_repo_name(bytes: &[u8]) -> Result<String, AppError> {
 
     let body_str = String::from_utf8_lossy(bytes);
     let pattern = "name=\"repo_name\"";
-    if let Some(rest) = body_str.split(pattern).nth(1) {
-        if let Some(val_block) = rest.split("\r\n\r\n").nth(1) {
-            let value = val_block.split("\r\n").next().unwrap_or("").trim();
-            if !value.is_empty() {
-                return Ok(value.to_string());
-            }
+    if let Some(rest) = body_str.split(pattern).nth(1)
+        && let Some(val_block) = rest.split("\r\n\r\n").nth(1)
+    {
+        let value = val_block.split("\r\n").next().unwrap_or("").trim();
+        if !value.is_empty() {
+            return Ok(value.to_string());
         }
     }
 
@@ -333,13 +335,8 @@ pub async fn delete_repo(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    repo_service::RepoService::delete_repo(
-        state.db.as_ref(),
-        &state.repos,
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
+    repo_service::RepoService::delete_repo(state.db.as_ref(), &state.repos, &repo_id, auth.user_id)
+        .await?;
 
     Ok(Json(serde_json::Value::String("success".to_string())))
 }
@@ -521,13 +518,8 @@ pub async fn delete_repo_v21(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    repo_service::RepoService::delete_repo(
-        state.db.as_ref(),
-        &state.repos,
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
+    repo_service::RepoService::delete_repo(state.db.as_ref(), &state.repos, &repo_id, auth.user_id)
+        .await?;
 
     Ok(Json(serde_json::Value::String("success".to_string())))
 }

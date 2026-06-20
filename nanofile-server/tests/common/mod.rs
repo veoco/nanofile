@@ -230,7 +230,8 @@ pub async fn create_test_user(db: &DatabaseConnection, email: &str, password: &s
 }
 
 pub async fn create_test_admin(db: &DatabaseConnection, email: &str, password: &str) -> i32 {
-    let password_hash = nanofile_server::auth::password::hash_password(password, TEST_PBKDF2_ITERATIONS);
+    let password_hash =
+        nanofile_server::auth::password::hash_password(password, TEST_PBKDF2_ITERATIONS);
     let now = chrono::Utc::now().timestamp();
 
     let user = nanofile_server::entity::user::ActiveModel {

@@ -660,7 +660,8 @@ async fn test_regression_commit_root_contains_full_tree() {
     let entries = nanofile_server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
     assert_eq!(entries.len(), 1);
 
-    let decompressed = nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let decompressed =
+        nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let root_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let dirent_names: Vec<&str> = root_data["dirents"]
         .as_array()
@@ -731,7 +732,8 @@ async fn test_regression_root_upload_preserves_subdirs() {
     let resp = client.pack_fs(&sync_token, &repo_id, &[root_id]).await;
     let packed = resp.bytes().await.unwrap();
     let entries = nanofile_server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
-    let decompressed = nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let decompressed =
+        nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let root_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let names: Vec<&str> = root_data["dirents"]
         .as_array()
@@ -972,7 +974,8 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
     let entries = nanofile_server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
     assert_eq!(entries.len(), 1, "root pack-fs must return 1 entry");
 
-    let decompressed = nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let decompressed =
+        nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let root_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let root_names: Vec<&str> = root_data["dirents"]
         .as_array()
@@ -1025,7 +1028,8 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         .await;
     let packed = resp.bytes().await.unwrap();
     let entries = nanofile_server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
-    let decompressed = nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let decompressed =
+        nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let docs_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let docs_names: Vec<&str> = docs_data["dirents"]
         .as_array()
@@ -1058,7 +1062,8 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         .await;
     let packed = resp.bytes().await.unwrap();
     let entries = nanofile_server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
-    let decompressed = nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let decompressed =
+        nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let api_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let api_names: Vec<&str> = api_data["dirents"]
         .as_array()
@@ -1080,7 +1085,8 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         .await;
     let packed = resp.bytes().await.unwrap();
     let entries = nanofile_server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
-    let decompressed = nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let decompressed =
+        nanofile_server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let src_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let src_names: Vec<&str> = src_data["dirents"]
         .as_array()
@@ -1156,7 +1162,8 @@ async fn test_regression_cdc_determinism() {
         let child_entries =
             nanofile_server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
         let child_data: serde_json::Value = serde_json::from_slice(
-            &nanofile_server::serialization::pack_fs::decompress_fs_data(&child_entries[0].1).unwrap(),
+            &nanofile_server::serialization::pack_fs::decompress_fs_data(&child_entries[0].1)
+                .unwrap(),
         )
         .unwrap();
         if child_data["type"].as_i64() == Some(1) {
@@ -1582,9 +1589,10 @@ async fn test_root_entry_child_id_stays_in_sync() {
     let root_fs_id = get_root_fs_id(&f).await;
 
     // Read the FsDirData at root_fs_id — must contain a, b, README.md
-    let root_data = nanofile_server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_fs_id)
-        .await
-        .unwrap();
+    let root_data =
+        nanofile_server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_fs_id)
+            .await
+            .unwrap();
     let root_names: Vec<&str> = root_data.dirents.iter().map(|d| d.name.as_str()).collect();
     assert!(
         root_names.contains(&"a"),
@@ -1702,9 +1710,10 @@ async fn test_regression_rename_file_creates_new_commit() {
         "root fs_id must change after rename — FsDirData must be re-computed"
     );
 
-    let root_data = nanofile_server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_after)
-        .await
-        .unwrap();
+    let root_data =
+        nanofile_server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_after)
+            .await
+            .unwrap();
     let renamed_in_tree = root_data.dirents.iter().any(|d| d.name == "renamed.txt");
     let old_in_tree = root_data.dirents.iter().any(|d| d.name == "old_name.txt");
     assert!(
@@ -1786,9 +1795,10 @@ async fn test_regression_delete_file_creates_new_commit() {
 
     // CRITICAL: Verify root FsDirData no longer has the deleted file
     let root_fs_id = get_root_fs_id(&f).await;
-    let root_data = nanofile_server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_fs_id)
-        .await
-        .unwrap();
+    let root_data =
+        nanofile_server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_fs_id)
+            .await
+            .unwrap();
     assert!(
         !root_data.dirents.iter().any(|d| d.name == "delete_me.txt"),
         "root FsDirData must not contain 'delete_me.txt', got: {:?}",
@@ -1849,9 +1859,10 @@ async fn test_regression_rename_dir_creates_new_commit() {
     );
 
     // CRITICAL: Verify root FsDirData has the renamed directory name
-    let root_data = nanofile_server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_after)
-        .await
-        .unwrap();
+    let root_data =
+        nanofile_server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_after)
+            .await
+            .unwrap();
     let renamed_in_tree = root_data.dirents.iter().any(|d| d.name == "renamed_folder");
     let old_in_tree = root_data.dirents.iter().any(|d| d.name == "my_folder");
     assert!(
@@ -1930,9 +1941,10 @@ async fn test_regression_delete_dir_creates_new_commit() {
 
     // CRITICAL: Verify root FsDirData no longer has the deleted directory
     let root_fs_id = get_root_fs_id(&f).await;
-    let root_data = nanofile_server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_fs_id)
-        .await
-        .unwrap();
+    let root_data =
+        nanofile_server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_fs_id)
+            .await
+            .unwrap();
     assert!(
         !root_data.dirents.iter().any(|d| d.name == "my_folder"),
         "root FsDirData must not contain 'my_folder', got: {:?}",

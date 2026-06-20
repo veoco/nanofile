@@ -1,6 +1,7 @@
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde::Serialize;
 
+use crate::Config;
 use crate::auth::password::hash_password;
 use crate::auth::token::generate_share_link_token;
 use crate::entity::{repo_member, share_link};
@@ -8,7 +9,6 @@ use crate::error::AppError;
 use crate::notification::events::FolderPermEvent;
 use crate::repository::Repositories;
 use crate::storage;
-use crate::Config;
 
 // ── Response types ────────────────────────────────────────────────────
 

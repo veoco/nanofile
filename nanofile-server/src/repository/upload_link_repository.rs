@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
 use crate::entity::upload_link;
@@ -18,11 +16,7 @@ pub trait UploadLinkRepository: Send + Sync {
         token: &str,
         user_id: i32,
     ) -> Result<DeleteResult, AppError>;
-    async fn delete_by_id_and_user(
-        &self,
-        id: i32,
-        user_id: i32,
-    ) -> Result<DeleteResult, AppError>;
+    async fn delete_by_id_and_user(&self, id: i32, user_id: i32) -> Result<DeleteResult, AppError>;
 }
 
 pub struct DbUploadLinkRepository {
@@ -59,11 +53,7 @@ impl UploadLinkRepository for DbUploadLinkRepository {
             .await?)
     }
 
-    async fn delete_by_id_and_user(
-        &self,
-        id: i32,
-        user_id: i32,
-    ) -> Result<DeleteResult, AppError> {
+    async fn delete_by_id_and_user(&self, id: i32, user_id: i32) -> Result<DeleteResult, AppError> {
         Ok(upload_link::Entity::delete_many()
             .filter(upload_link::Column::Id.eq(id))
             .filter(upload_link::Column::CreatorId.eq(user_id))

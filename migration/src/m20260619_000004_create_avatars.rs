@@ -29,11 +29,7 @@ impl MigrationTrait for Migration {
                             .string_len(512)
                             .not_null(),
                     )
-                    .col(
-                        ColumnDef::new(Avatars::MimeType)
-                            .string_len(64)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Avatars::MimeType).string_len(64).not_null())
                     .col(ColumnDef::new(Avatars::FileSize).integer().not_null())
                     .col(
                         ColumnDef::new(Avatars::DateUploaded)

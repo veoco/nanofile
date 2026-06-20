@@ -9,9 +9,9 @@ use sea_orm_migration::prelude::*;
 /// - commits:           add encrypted, creator
 /// - sync_tokens:       add UNIQUE(repo_id, user_id)
 /// - Add indexes on     repos(owner_id), fs_objects(repo_id, fs_id), share_links(repo_id),
-///                      upload_links(repo_id), sync_tokens(user_id), commits(commit_id)
+///   upload_links(repo_id), sync_tokens(user_id), commits(commit_id)
 /// - New tables:        starred_files, locked_files, groups, group_members,
-///                      user_contacts, sso_login_tokens, thumbnails
+///   user_contacts, sso_login_tokens, thumbnails
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 

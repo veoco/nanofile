@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use sea_orm::{
-    DatabaseConnection, Set,
-};
+use sea_orm::{DatabaseConnection, Set};
 
 use rand::Rng;
 
@@ -129,10 +127,7 @@ impl SsoService {
         platform: Option<&str>,
     ) -> Result<(), AppError> {
         if let Some(dev_id) = device_id {
-            self.repos
-                .api_token
-                .delete_many_by_device(dev_id)
-                .await?;
+            self.repos.api_token.delete_many_by_device(dev_id).await?;
 
             tracing::info!(
                 "device wiped: user_id={}, device_id={:?}, platform={:?}",

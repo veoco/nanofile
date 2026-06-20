@@ -41,11 +41,7 @@ impl TwoFactorService {
 
     /// Set up 2FA for a user. Creates or retrieves the existing TOTP secret,
     /// returns the secret, otpauth URL, and backup codes.
-    pub async fn setup_2fa(
-        &self,
-        user_id: i32,
-        email: &str,
-    ) -> Result<Setup2faResult, AppError> {
+    pub async fn setup_2fa(&self, user_id: i32, email: &str) -> Result<Setup2faResult, AppError> {
         let model = self
             .repos
             .user_2fa
@@ -68,12 +64,7 @@ impl TwoFactorService {
     }
 
     /// Verify a TOTP code and enable 2FA for the user.
-    pub async fn verify_2fa(
-        &self,
-        user_id: i32,
-        email: &str,
-        code: &str,
-    ) -> Result<(), AppError> {
+    pub async fn verify_2fa(&self, user_id: i32, email: &str, code: &str) -> Result<(), AppError> {
         let model = self
             .repos
             .user_2fa
@@ -94,11 +85,7 @@ impl TwoFactorService {
     }
 
     /// Disable 2FA for a user. Validates the password and rate-limits attempts.
-    pub async fn disable_2fa(
-        &self,
-        user_id: i32,
-        password: &str,
-    ) -> Result<(), AppError> {
+    pub async fn disable_2fa(&self, user_id: i32, password: &str) -> Result<(), AppError> {
         // Rate limit password attempts on 2FA disable
         let rate_limit_key = format!("2fa_disable:{user_id}");
         if self.disable_2fa_limiter.is_limited(&rate_limit_key) {

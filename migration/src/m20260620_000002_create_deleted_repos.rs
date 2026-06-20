@@ -17,11 +17,24 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(DeletedRepos::RepoName).string_len(255).not_null())
+                    .col(
+                        ColumnDef::new(DeletedRepos::RepoName)
+                            .string_len(255)
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(DeletedRepos::HeadId).char_len(40).null())
                     .col(ColumnDef::new(DeletedRepos::OwnerId).integer().not_null())
-                    .col(ColumnDef::new(DeletedRepos::Size).big_integer().not_null().default(0))
-                    .col(ColumnDef::new(DeletedRepos::DelTime).big_integer().not_null())
+                    .col(
+                        ColumnDef::new(DeletedRepos::Size)
+                            .big_integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(DeletedRepos::DelTime)
+                            .big_integer()
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await?;

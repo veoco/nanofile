@@ -60,7 +60,9 @@ impl WikiRepository for DbWikiRepository {
     }
 
     async fn delete_by_id(&self, id: i32) -> Result<(), AppError> {
-        wiki::Entity::delete_by_id(id).exec(self.db.as_ref()).await?;
+        wiki::Entity::delete_by_id(id)
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 }

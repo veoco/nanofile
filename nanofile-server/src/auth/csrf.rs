@@ -67,6 +67,25 @@ pub fn check_form_csrf(
     }
 }
 
+/// Validate Origin/Referer header against the configured site URL origin.
+///
+/// Used for unauthenticated endpoints (login, register, password reset)
+/// where no session exists for HMAC-based CSRF tokens.
+/// Returns `false` only when an Origin or Referer is present AND doesn't match.
+/// Returns `true` when neither header is present (curl, non-browser clients).
+pub fn validate_origin(headers: &HeaderMap, site_url_origin: &str) -> bool {
+    // Origin header is more reliable; check it first.
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        return origin == site_url_origin;
+    }
+    // Fall back to Referer header.
+    if let Some(referer) = headers.get("referer").and_then(|v| v.to_str().ok()) {
+        return referer.starts_with(&format!("{}/", site_url_origin)) || referer == site_url_origin;
+    }
+    // No Origin or Referer — accept the request (curl, CLI clients, etc.).
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,23 +148,4 @@ mod tests {
         let cookie = "seahub-session=my-token; other=cookie; seahub-session=second";
         assert_eq!(extract_session_token(cookie), Some("my-token"));
     }
-}
-
-/// Validate Origin/Referer header against the configured site URL origin.
-///
-/// Used for unauthenticated endpoints (login, register, password reset)
-/// where no session exists for HMAC-based CSRF tokens.
-/// Returns `false` only when an Origin or Referer is present AND doesn't match.
-/// Returns `true` when neither header is present (curl, non-browser clients).
-pub fn validate_origin(headers: &HeaderMap, site_url_origin: &str) -> bool {
-    // Origin header is more reliable; check it first.
-    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        return origin == site_url_origin;
-    }
-    // Fall back to Referer header.
-    if let Some(referer) = headers.get("referer").and_then(|v| v.to_str().ok()) {
-        return referer.starts_with(&format!("{}/", site_url_origin)) || referer == site_url_origin;
-    }
-    // No Origin or Referer — accept the request (curl, CLI clients, etc.).
-    true
 }

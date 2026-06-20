@@ -5,8 +5,6 @@ use crate::error::AppError;
 use crate::repository::Repositories;
 
 /// Invitation code info returned by the service.
-
-/// Invitation code info returned by the service.
 pub struct InvitationInfo {
     pub code: String,
     pub bound_email: Option<String>,
@@ -27,10 +25,7 @@ impl<'a> InvitationService<'a> {
     }
 
     /// List invitation codes created by a user (admin only).
-    pub async fn list_invitations(
-        &self,
-        creator_id: i32,
-    ) -> Result<Vec<InvitationInfo>, AppError> {
+    pub async fn list_invitations(&self, creator_id: i32) -> Result<Vec<InvitationInfo>, AppError> {
         let codes = self
             .repos
             .invitation_code
@@ -40,11 +35,7 @@ impl<'a> InvitationService<'a> {
         let mut invitations = Vec::with_capacity(codes.len());
         for code in codes {
             let used_by_email = if let Some(uid) = code.used_by {
-                self.repos
-                    .user
-                    .find_by_id(uid)
-                    .await?
-                    .map(|u| u.email)
+                self.repos.user.find_by_id(uid).await?.map(|u| u.email)
             } else {
                 None
             };
@@ -83,11 +74,7 @@ impl<'a> InvitationService<'a> {
     }
 
     /// Delete an invitation code owned by a user.
-    pub async fn delete_invitation(
-        &self,
-        creator_id: i32,
-        id: i32,
-    ) -> Result<(), AppError> {
+    pub async fn delete_invitation(&self, creator_id: i32, id: i32) -> Result<(), AppError> {
         self.repos
             .invitation_code
             .delete_by_id_and_creator(id, creator_id)

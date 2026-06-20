@@ -83,17 +83,18 @@ pub async fn search_trash(
     let per_page = query.per_page.unwrap_or(50);
 
     let svc = FsTrashService::new(state.repos.clone(), state.db.clone());
-    let result = svc.search_trash(
-        &repo_id,
-        query.q.as_deref().unwrap_or(""),
-        page,
-        per_page,
-        query.op_users.as_deref(),
-        query.time_from,
-        query.time_to,
-        query.suffixes.as_deref(),
-    )
-    .await?;
+    let result = svc
+        .search_trash(
+            &repo_id,
+            query.q.as_deref().unwrap_or(""),
+            page,
+            per_page,
+            query.op_users.as_deref(),
+            query.time_from,
+            query.time_to,
+            query.suffixes.as_deref(),
+        )
+        .await?;
 
     Ok(Json(result))
 }
@@ -107,7 +108,9 @@ pub async fn revert_trash(
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let svc = FsTrashService::new(state.repos.clone(), state.db.clone());
-    let result = svc.revert_trash(&repo_id, &auth.email, auth.user_id, body).await?;
+    let result = svc
+        .revert_trash(&repo_id, &auth.email, auth.user_id, body)
+        .await?;
 
     Ok(Json(result))
 }
@@ -127,17 +130,25 @@ pub async fn revert_dirents(
     let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)
         .map_err(|_| AppError::BadRequest("invalid form data".into()))?;
 
-    let commit_id = form.get("commit_id").ok_or_else(|| AppError::BadRequest("commit_id required".into()))?;
+    let commit_id = form
+        .get("commit_id")
+        .ok_or_else(|| AppError::BadRequest("commit_id required".into()))?;
     let file_names_str = form.get("file_names").map(|s| s.as_str()).unwrap_or("");
 
     let paths: Vec<String> = if file_names_str.is_empty() {
         Vec::new()
     } else {
-        file_names_str.split(':').filter(|n| !n.is_empty()).map(|n| n.to_string()).collect()
+        file_names_str
+            .split(':')
+            .filter(|n| !n.is_empty())
+            .map(|n| n.to_string())
+            .collect()
     };
 
     let svc = FsTrashService::new(state.repos.clone(), state.db.clone());
-    let result = svc.revert_dirents(&repo_id, &auth.email, auth.user_id, commit_id, paths).await?;
+    let result = svc
+        .revert_dirents(&repo_id, &auth.email, auth.user_id, commit_id, paths)
+        .await?;
 
     Ok(Json(result))
 }
@@ -198,7 +209,8 @@ pub async fn restore_deleted_repo(
     Json(body): Json<RestoreDeletedRepoBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let svc = FsTrashService::new(state.repos.clone(), state.db.clone());
-    svc.restore_deleted_repo(&body.repo_id, auth.user_id).await?;
+    svc.restore_deleted_repo(&body.repo_id, auth.user_id)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

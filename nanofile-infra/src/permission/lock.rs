@@ -5,8 +5,8 @@ use sea_orm::{
 
 use crate::common::EMPTY_SHA1;
 use crate::entity::{file_lock_timestamp, fs_object, locked_file};
-use nanofile_domain::AppError;
 use crate::serialization::fs_json::FsDirData;
+use nanofile_domain::AppError;
 
 /// Walk the FS tree of a commit and check whether any file in the tree
 /// is locked by a different user. Returns `AppError::Locked(path)` with

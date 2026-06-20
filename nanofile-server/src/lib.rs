@@ -5,17 +5,19 @@
 //! Re-exports `nanofile-domain` and `nanofile-infra` crates so that existing
 //! `crate::module` references within the server crate continue to resolve.
 
+#![allow(clippy::too_many_arguments)]
+
 // ── Domain crate re-exports ─────────────────────────────────────────────────
 pub use nanofile_domain::error;
 pub use nanofile_domain::sanitize;
 
 // ── Infra crate re-exports ──────────────────────────────────────────────────
+pub use nanofile_infra::activity_log;
 pub use nanofile_infra::common;
 pub use nanofile_infra::config;
 pub use nanofile_infra::crypto;
 pub use nanofile_infra::db;
 pub use nanofile_infra::entity;
-pub use nanofile_infra::activity_log;
 pub use nanofile_infra::events;
 pub use nanofile_infra::permission;
 pub use nanofile_infra::rate_limit;
@@ -48,10 +50,10 @@ use rand::Rng;
 use sea_orm::DatabaseConnection;
 use tokio_util::sync::CancellationToken;
 
-use crate::fs::task_manager::TaskManager;
 use crate::auth::access_token::AccessTokenManager;
 use crate::config::Config;
 use crate::crypto::password_manager::PasswordManager;
+use crate::fs::task_manager::TaskManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
 use crate::rate_limit::{GenericRateLimiter, LoginRateLimiter};

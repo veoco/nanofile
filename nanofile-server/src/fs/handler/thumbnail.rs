@@ -24,18 +24,21 @@ pub async fn get_thumbnail(
     Path(repo_id): Path<String>,
     Query(query): Query<ThumbnailQuery>,
 ) -> Result<Response, AppError> {
-    let path = query.p.as_deref().ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    let path = query
+        .p
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     let size = query.size.unwrap_or(48);
 
-    let svc = ThumbnailService::new(state.repos.clone(), state.db.clone(), state.block_store.clone(), state.block_dir.clone());
+    let svc = ThumbnailService::new(
+        state.repos.clone(),
+        state.db.clone(),
+        state.block_store.clone(),
+        state.block_dir.clone(),
+    );
     let data = svc.get_thumbnail(&repo_id, path, size).await?;
 
-    Ok((
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "image/png")],
-        data,
-    )
-        .into_response())
+    Ok((StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data).into_response())
 }
 
 pub fn thumbnail_routes() -> Router<Arc<AppState>> {

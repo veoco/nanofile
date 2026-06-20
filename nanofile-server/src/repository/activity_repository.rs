@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect,
+};
 use std::sync::Arc;
 
 use crate::entity::activity;
@@ -54,7 +57,11 @@ impl ActivityRepository for DbActivityRepository {
             query = query.filter(activity::Column::RepoId.eq(rid));
         }
 
-        Ok(query.offset(offset).limit(limit).all(self.db.as_ref()).await?)
+        Ok(query
+            .offset(offset)
+            .limit(limit)
+            .all(self.db.as_ref())
+            .await?)
     }
 
     async fn count_by_repo_ids_filtered(
@@ -63,8 +70,7 @@ impl ActivityRepository for DbActivityRepository {
         user_id: Option<i32>,
         repo_id: Option<&str>,
     ) -> Result<u64, AppError> {
-        let mut query = activity::Entity::find()
-            .filter(activity::Column::RepoId.is_in(repo_ids));
+        let mut query = activity::Entity::find().filter(activity::Column::RepoId.is_in(repo_ids));
 
         if let Some(uid) = user_id {
             query = query.filter(activity::Column::UserId.eq(uid));

@@ -37,15 +37,16 @@ pub async fn search(
     let search_filename_only = query.search_filename_only.unwrap_or(true);
 
     let svc = SearchService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
-    let (results, total, has_more) = svc.search(
-        &q,
-        auth.user_id,
-        per_page,
-        page,
-        query.search_repo.as_deref(),
-        search_filename_only,
-    )
-    .await?;
+    let (results, total, has_more) = svc
+        .search(
+            &q,
+            auth.user_id,
+            per_page,
+            page,
+            query.search_repo.as_deref(),
+            search_filename_only,
+        )
+        .await?;
 
     Ok(Json(SearchResponse {
         results,

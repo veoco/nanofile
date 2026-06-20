@@ -5,9 +5,9 @@ use sea_orm::DatabaseConnection;
 use crate::activity_log;
 use crate::common::util::{get_head_root_id, normalize_path};
 use crate::error::AppError;
-use crate::repository::Repositories;
 use crate::notification::events::FileLockEvent;
 use crate::repo::file_ops::FileOps;
+use crate::repository::Repositories;
 use crate::serialization::S_IFREG;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 
@@ -173,7 +173,10 @@ impl FileService {
             if let Some((h, p)) = h.split_once(':') {
                 format!("{scheme}://{h}:{p}/download-api/{token}")
             } else {
-                format!("{scheme}://{h}:{}/download-api/{token}", self.config.server.port)
+                format!(
+                    "{scheme}://{h}:{}/download-api/{token}",
+                    self.config.server.port
+                )
             }
         } else {
             let base = self.config.server.site_url.trim_end_matches('/');
@@ -194,7 +197,10 @@ impl FileService {
             if let Some((h, p)) = h.split_once(':') {
                 format!("{scheme}://{h}:{p}/blks/{token}/{file_id}/{block_id}")
             } else {
-                format!("{scheme}://{h}:{}/blks/{token}/{file_id}/{block_id}", self.config.server.port)
+                format!(
+                    "{scheme}://{h}:{}/blks/{token}/{file_id}/{block_id}",
+                    self.config.server.port
+                )
             }
         } else {
             let base = self.config.server.site_url.trim_end_matches('/');
@@ -213,13 +219,9 @@ impl FileService {
         email: &str,
         host_header: Option<&str>,
     ) -> Result<String, AppError> {
-        let token = self.token_manager.generate(
-            repo_id,
-            user_id,
-            email,
-            "downloadblks",
-            parent_dir,
-        );
+        let token =
+            self.token_manager
+                .generate(repo_id, user_id, email, "downloadblks", parent_dir);
         Ok(self.build_block_download_url(&token, file_id, block_id, host_header))
     }
 
@@ -275,17 +277,7 @@ impl FileService {
 
         let op_type = if replace { "edit" } else { "create" };
         activity_log::log_activity(
-            db,
-            repo_id,
-            op_type,
-            "file",
-            &file_path,
-            user_id,
-            None,
-            None,
-            None,
-            None,
-            None,
+            db, repo_id, op_type, "file", &file_path, user_id, None, None, None, None, None,
         )
         .await;
 
@@ -304,10 +296,8 @@ impl FileService {
                 if let Err(e) = indexer.index_file(repo_id, &full_path, &file_name, &content) {
                     tracing::warn!("Failed to index file {file_name}: {e}");
                 }
-            } else if replace {
-                if let Err(e) = indexer.delete_file(repo_id, &full_path) {
-                    tracing::warn!("Failed to delete index for {file_name}: {e}");
-                }
+            } else if replace && let Err(e) = indexer.delete_file(repo_id, &full_path) {
+                tracing::warn!("Failed to delete index for {file_name}: {e}");
             }
         }
 
@@ -361,17 +351,7 @@ impl FileService {
         crate::repo::adjust_repo_size(db, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
-            db,
-            repo_id,
-            "delete",
-            "file",
-            path,
-            user_id,
-            None,
-            None,
-            None,
-            None,
-            None,
+            db, repo_id, "delete", "file", path, user_id, None, None, None, None, None,
         )
         .await;
 
@@ -476,7 +456,9 @@ impl FileService {
         let new_dst_fs_id =
             crate::repo::resolve_fs_id(db, repo_id, &new_head_root, &new_parent_path)
                 .await
-                .map_err(|e| AppError::Internal(format!("resolve dest dir after removal failed: {e}")))?;
+                .map_err(|e| {
+                    AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
+                })?;
 
         let now = chrono::Utc::now().timestamp();
         let email_clone = email.to_string();
@@ -555,7 +537,9 @@ impl FileService {
             .map_err(|_| AppError::NotFound("file not found".into()))?;
 
         if file_fs_id == "0000000000000000000000000000000000000000" {
-            return Err(AppError::BadRequest("path is a directory, not a file".into()));
+            return Err(AppError::BadRequest(
+                "path is a directory, not a file".into(),
+            ));
         }
         let file_obj = self
             .repos
@@ -565,7 +549,9 @@ impl FileService {
             .ok_or_else(|| AppError::NotFound("file not found".into()))?;
 
         if file_obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 {
-            return Err(AppError::BadRequest("path is a directory, not a file".into()));
+            return Err(AppError::BadRequest(
+                "path is a directory, not a file".into(),
+            ));
         }
 
         let parent_path = parent_path_from(path);
@@ -667,7 +653,9 @@ impl FileService {
                 }
             }
             _ => {
-                return Err(AppError::BadRequest(format!("unknown operation: {operation}")));
+                return Err(AppError::BadRequest(format!(
+                    "unknown operation: {operation}"
+                )));
             }
         }
 
@@ -751,17 +739,7 @@ impl FileService {
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
         activity_log::log_activity(
-            db,
-            repo_id,
-            "create",
-            "file",
-            path,
-            user_id,
-            None,
-            None,
-            None,
-            None,
-            None,
+            db, repo_id, "create", "file", path, user_id, None, None, None, None, None,
         )
         .await;
 
@@ -769,11 +747,10 @@ impl FileService {
     }
 
     /// Check uploaded bytes for resumable upload.
-    pub async fn check_uploaded_bytes(
-        &self,
-        blockids: Option<&str>,
-    ) -> i64 {
-        let Some(blockids_str) = blockids else { return 0 };
+    pub async fn check_uploaded_bytes(&self, blockids: Option<&str>) -> i64 {
+        let Some(blockids_str) = blockids else {
+            return 0;
+        };
         let mut uploaded: i64 = 0;
         for bid in blockids_str.split(',') {
             let bid = bid.trim();

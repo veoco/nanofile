@@ -179,7 +179,8 @@ async fn test_recv_fs_binary_format() {
     }]);
     let root_json = root_dir.to_compact_json();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
-    let root_fs_id = nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
+    let root_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
 
     let mut root_packed = Vec::new();
     root_packed.extend_from_slice(root_fs_id.as_bytes());
@@ -286,7 +287,8 @@ async fn test_fs_id_list_with_server_head() {
         name: "file.txt".to_string(),
         size: 100,
     }]);
-    let root_fs_id = nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
+    let root_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
     let root_json = root_dir.to_compact_json();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -312,7 +314,8 @@ async fn test_fs_id_list_with_matching_client_head() {
     let client = server.client();
 
     let root_dir = make_dir_fs_data(vec![]);
-    let root_fs_id = nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
+    let root_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
     let root_json = root_dir.to_compact_json();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -365,7 +368,9 @@ async fn test_check_blocks_partial_exists() {
 /// "Failed to find dir" errors and silent sync failures.
 #[tokio::test]
 async fn test_regression_dir_metadata_type_is_3() {
-    use nanofile_server::serialization::fs_json::{SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE};
+    use nanofile_server::serialization::fs_json::{
+        SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE,
+    };
     assert_eq!(
         SEAF_METADATA_TYPE_DIR, 3,
         "SEAF_METADATA_TYPE_DIR must be 3"
@@ -427,7 +432,8 @@ async fn test_regression_recv_fs_stores_correct_file_type() {
     let file_data = make_file_fs_data(vec![random_hex_id()], 256);
     let file_json = file_data.to_compact_json();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
-    let file_fs_id = nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
+    let file_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
 
     let mut packed = Vec::new();
     packed.extend_from_slice(file_fs_id.as_bytes());
@@ -761,7 +767,8 @@ async fn test_resolve_fs_id_root_path() {
 
     // Upload a file to create a real FS tree
     let file_data = make_file_fs_data(vec![block_id.clone()], 64);
-    let file_fs_id = nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
+    let file_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
     let file_json = file_data.to_compact_json();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
@@ -773,7 +780,8 @@ async fn test_resolve_fs_id_root_path() {
         name: "f.txt".to_string(),
         size: 64,
     }]);
-    let root_fs_id = nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
+    let root_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
     let root_json = root_dir.to_compact_json();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -791,14 +799,16 @@ async fn test_resolve_fs_id_root_path() {
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
     // Test resolve_fs_id directly
-    let result = nanofile_server::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "/")
-        .await
-        .unwrap();
+    let result =
+        nanofile_server::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "/")
+            .await
+            .unwrap();
     assert_eq!(result, root_fs_id, "root path must resolve to root_fs_id");
 
-    let result_empty = nanofile_server::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "")
-        .await
-        .unwrap();
+    let result_empty =
+        nanofile_server::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "")
+            .await
+            .unwrap();
     assert_eq!(
         result_empty, root_fs_id,
         "empty path must resolve to root_fs_id"
@@ -822,7 +832,8 @@ async fn test_resolve_fs_id_deep_path() {
 
     // Build: root -> sub/ -> nested.txt
     let file_data = make_file_fs_data(vec![block_id.clone()], 32);
-    let file_fs_id = nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
+    let file_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
     let file_json = file_data.to_compact_json();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
@@ -846,7 +857,8 @@ async fn test_resolve_fs_id_deep_path() {
         name: "sub".to_string(),
         size: 0,
     }]);
-    let root_fs_id = nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
+    let root_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
     let root_json = root_dir.to_compact_json();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -867,16 +879,21 @@ async fn test_resolve_fs_id_deep_path() {
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
     // Resolve /sub -> should get sub_fs_id
-    let result = nanofile_server::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "/sub")
-        .await
-        .unwrap();
+    let result =
+        nanofile_server::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "/sub")
+            .await
+            .unwrap();
     assert_eq!(result, sub_fs_id, "/sub must resolve to sub_fs_id");
 
     // Resolve /sub/nested.txt -> should get file_fs_id
-    let result =
-        nanofile_server::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "/sub/nested.txt")
-            .await
-            .unwrap();
+    let result = nanofile_server::repo::resolve_fs_id(
+        server.db.as_ref(),
+        &repo_id,
+        &root_fs_id,
+        "/sub/nested.txt",
+    )
+    .await
+    .unwrap();
     assert_eq!(
         result, file_fs_id,
         "/sub/nested.txt must resolve to file_fs_id"
@@ -889,7 +906,8 @@ async fn test_resolve_fs_id_nonexistent_segment() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
 
     let root_dir = make_dir_fs_data(vec![]);
-    let root_fs_id = nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
+    let root_fs_id =
+        nanofile_server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
     let root_json = root_dir.to_compact_json();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -902,9 +920,13 @@ async fn test_resolve_fs_id_nonexistent_segment() {
 
     push_commit(&server.client(), &sync_token, &repo_id, &root_fs_id, None).await;
 
-    let result =
-        nanofile_server::repo::resolve_fs_id(server.db.as_ref(), &repo_id, &root_fs_id, "/nonexistent")
-            .await;
+    let result = nanofile_server::repo::resolve_fs_id(
+        server.db.as_ref(),
+        &repo_id,
+        &root_fs_id,
+        "/nonexistent",
+    )
+    .await;
     assert!(result.is_err(), "non-existent path must return error");
 }
 

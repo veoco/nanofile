@@ -1,8 +1,8 @@
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
-use nanofile_domain::AppError;
 use crate::common::EMPTY_SHA1;
 use crate::crypto::fs_id::sha1_hex;
+use nanofile_domain::AppError;
 
 pub use crate::common::{SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE};
 

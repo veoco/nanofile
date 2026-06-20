@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
 use crate::entity::s2fa_token;
@@ -14,20 +12,13 @@ pub trait S2faTokenRepository: Send + Sync {
         token: &str,
         user_id: i32,
     ) -> Result<Option<s2fa_token::Model>, AppError>;
-    async fn delete_expired(
-        &self,
-        user_id: i32,
-        now: i64,
-    ) -> Result<(), AppError>;
+    async fn delete_expired(&self, user_id: i32, now: i64) -> Result<(), AppError>;
     async fn delete_by_user_and_device(
         &self,
         user_id: i32,
         device_id: &str,
     ) -> Result<u64, AppError>;
-    async fn insert(
-        &self,
-        model: s2fa_token::ActiveModel,
-    ) -> Result<(), AppError>;
+    async fn insert(&self, model: s2fa_token::ActiveModel) -> Result<(), AppError>;
 }
 
 pub struct DbS2faTokenRepository {
@@ -54,11 +45,7 @@ impl S2faTokenRepository for DbS2faTokenRepository {
             .await?)
     }
 
-    async fn delete_expired(
-        &self,
-        user_id: i32,
-        now: i64,
-    ) -> Result<(), AppError> {
+    async fn delete_expired(&self, user_id: i32, now: i64) -> Result<(), AppError> {
         s2fa_token::Entity::delete_many()
             .filter(s2fa_token::Column::UserId.eq(user_id))
             .filter(s2fa_token::Column::ExpiresAt.lt(now))
@@ -80,10 +67,7 @@ impl S2faTokenRepository for DbS2faTokenRepository {
         Ok(result.rows_affected)
     }
 
-    async fn insert(
-        &self,
-        model: s2fa_token::ActiveModel,
-    ) -> Result<(), AppError> {
+    async fn insert(&self, model: s2fa_token::ActiveModel) -> Result<(), AppError> {
         s2fa_token::Entity::insert(model)
             .exec(self.db.as_ref())
             .await?;
