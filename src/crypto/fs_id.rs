@@ -21,7 +21,10 @@ pub fn sha1_hex(data: &[u8]) -> String {
 pub async fn async_sha1_hex(data: Vec<u8>) -> String {
     tokio::task::spawn_blocking(move || sha1_hex(&data))
         .await
-        .expect("spawn_blocking panicked")
+        .unwrap_or_else(|_| {
+            tracing::error!("SHA1 computation task panicked, returning empty hash");
+            String::new()
+        })
 }
 
 pub fn compute_commit_id(

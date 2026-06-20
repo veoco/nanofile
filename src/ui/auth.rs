@@ -497,13 +497,13 @@ pub async fn two_factor_auth(
         ::axum::http::header::SET_COOKIE,
         session_cookie_str
             .parse::<::axum::http::HeaderValue>()
-            .expect("session cookie should always be a valid header value"),
+            .map_err(|_| AppError::internal("Failed to create session cookie header"))?,
     );
     resp_headers.append(
         ::axum::http::header::SET_COOKIE,
         clear_pending_str
             .parse::<::axum::http::HeaderValue>()
-            .expect("session cookie should always be a valid header value"),
+            .map_err(|_| AppError::internal("Failed to create session cookie header"))?,
     );
 
     Ok((StatusCode::FOUND, resp_headers).into_response())

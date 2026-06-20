@@ -135,9 +135,17 @@ async fn main() -> anyhow::Result<()> {
                     CorsLayer::new().allow_origin(AllowOrigin::predicate(|_, _| false))
                 } else {
                     CorsLayer::new().allow_origin(AllowOrigin::list(
-                        origins
-                            .into_iter()
-                            .map(|o| o.parse().expect("invalid CORS origin")),
+                        origins.into_iter().filter_map(|o| {
+                            o.parse()
+                                .map_err(|e| {
+                                    tracing::warn!(
+                                        "Skipping invalid CORS origin '{}': {:?}",
+                                        o,
+                                        e
+                                    )
+                                })
+                                .ok()
+                        }),
                     ))
                 };
 

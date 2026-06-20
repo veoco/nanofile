@@ -368,8 +368,7 @@ pub async fn login(
     let mut response = Json(LoginResponse { token: token_value }).into_response();
     if let Some(s2fa_token) = issued_s2fa_token {
         response.headers_mut().insert(
-            HeaderName::from_bytes(b"X-Seafile-S2FA")
-                .expect("X-Seafile-S2FA is a valid header name"),
+            HeaderName::from_static("x-seafile-s2fa"),
             HeaderValue::from_str(&s2fa_token)
                 .unwrap_or_else(|_| HeaderValue::from_static("invalid")),
         );
