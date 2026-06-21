@@ -92,11 +92,14 @@ pub async fn activities_page(
             .map(|u| u.email.clone())
             .unwrap_or_default();
 
-        let name = e
-            .path
-            .rsplit_once('/')
-            .map(|(_, n)| n.to_string())
-            .unwrap_or_default();
+        let name = if e.obj_type == "repo" {
+            repo_name.clone()
+        } else {
+            e.path
+                .rsplit_once('/')
+                .map(|(_, n)| n.to_string())
+                .unwrap_or_default()
+        };
 
         let formatted = super::files::format_mtime(e.created_at);
 
