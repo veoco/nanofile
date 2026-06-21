@@ -88,6 +88,7 @@
                         Rename
                     </button>
                     <form action="/library/{{ repo_id }}/delete" method="POST" class="js-delete-form inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <input type="hidden" name="p" value="{{ entry.relative_path }}">
                         <input type="hidden" name="current_dir" value="{{ current_path }}">
                         <input type="hidden" name="repo_name" value="{{ repo_name }}">
@@ -114,6 +115,7 @@
         <h3 class="text-base font-semibold text-gray-900 mb-1">Rename</h3>
         <p class="text-sm text-gray-500 mb-4">Enter a new name.</p>
         <form id="rename-dialog-form" action="/library/{{ repo_id }}/rename" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="current_dir" value="{{ current_path }}">
             <input type="hidden" name="repo_name" value="{{ repo_name }}">
             <input type="hidden" id="rename-old-path" name="p" value="">

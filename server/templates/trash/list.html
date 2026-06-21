@@ -104,6 +104,7 @@
                     <form action="/trash/restore/" method="POST" class="inline js-restore-form"
                           data-obj-name="{{ item.obj_name }}"
                           data-repo-name="{{ item.repo_name }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <input type="hidden" name="repo_id" value="{{ item.repo_id }}">
                         <input type="hidden" name="commit_id" value="{{ item.commit_id }}">
                         <input type="hidden" name="path" value="{{ item.parent_dir }}/{{ item.obj_name }}">
@@ -160,6 +161,7 @@
             </select>
         </div>
         <form action="/trash/clean/" method="POST" class="flex justify-end gap-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="repo_id" id="clean-repo-input" value="">
             <button type="button" onclick="hideCleanDialog()"
                     class="rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50">

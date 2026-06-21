@@ -1,6 +1,6 @@
 mod common;
 
-use common::{TestServer, create_test_user};
+use common::{TestServer, create_test_admin, create_test_user};
 
 /// Login via the Web UI (form POST) and return a reqwest client with
 /// cookies stored (both `seahub-session` and `sfcsrftoken`).
@@ -362,5 +362,217 @@ async fn test_ui_form_csrf_still_works() {
     assert!(
         status == 302 || status == 200,
         "form submission should succeed, got {status}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// New tests: verify all UI pages embed CSRF tokens and reject form submissions
+// without them.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// All form pages that were previously missing CSRF tokens now include them.
+#[tokio::test]
+async fn test_form_pages_include_csrf_tokens() {
+    let server = TestServer::start().await;
+    let db = server.db.as_ref();
+    let user_id = create_test_user(db, "test@example.com", "password").await;
+    let _admin_id = create_test_admin(db, "admin@example.com", "adminpass").await;
+    let api_token = get_api_token(&server).await;
+    let repo_id = create_repo_api(&server.base_url, &api_token, "csrf-test-repo").await;
+
+    let ui_client = ui_login(&server).await;
+
+    // 1. Libraries page
+    let libs_html = ui_client
+        .get(format!("{}/libraries/", server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        libs_html.contains(r#"name="csrf_token" value=""#),
+        "libraries page should have csrf_token in forms"
+    );
+    // Check for create form csrf_token
+    assert!(
+        libs_html.contains(r#"<input type="hidden" name="csrf_token" value=""#),
+        "libraries create form should have csrf_token hidden input"
+    );
+
+    // 2. File browser page  (has delete and rename forms)
+    let browser_html = ui_client
+        .get(format!(
+            "{}/library/{}/csrf-test-repo/",
+            server.base_url, repo_id
+        ))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let delete_form_has_csrf =
+        browser_html.contains(r#"<input type="hidden" name="csrf_token" value=""#);
+    assert!(
+        delete_form_has_csrf,
+        "file browser page should have csrf_token in delete/rename forms"
+    );
+
+    // 3. Trash page (has restore and clean forms)
+    let trash_html = ui_client
+        .get(format!("{}/trash/", server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        trash_html.contains(r#"name="csrf_token" value=""#),
+        "trash page should have csrf_token in forms"
+    );
+
+    // 4. Settings page (has password, display-name, avatar forms with csrf_token)
+    let settings_html = ui_client
+        .get(format!("{}/profile/", server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let csrf_count = settings_html.matches(r#"csrf_token"#).count();
+    assert!(
+        csrf_count >= 3,
+        "settings page should have csrf_token in at least 3 forms, found {csrf_count}"
+    );
+
+    // 5. 2FA page — create user_2fa record to trigger setup_pending state
+    use sea_orm::ActiveModelTrait;
+    use sea_orm::Set;
+    let _ = server::entity::user_2fa::ActiveModel {
+        user_id: Set(user_id),
+        totp_secret: Set("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Set("SHA1".to_string()),
+        digits: Set(6),
+        period: Set(30),
+        enabled: Set(false),
+        enabled_at: Set(None),
+    }
+    .insert(db)
+    .await
+    .expect("insert user_2fa record");
+
+    let tfa_html = ui_client
+        .get(format!("{}/profile/two-factor/", server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        tfa_html.contains(r#"name="csrf_token""#),
+        "2FA page should include csrf_token in the verify form"
+    );
+    // In setup_pending mode only the verify form is shown
+    assert!(
+        tfa_html.matches(r#"name="csrf_token""#).count() >= 1,
+        "2FA verify form should include csrf_token"
+    );
+}
+
+/// Form submission without a CSRF token returns 400.
+#[tokio::test]
+async fn test_form_submission_without_csrf_token_rejected() {
+    let server = TestServer::start().await;
+    create_test_user(server.db.as_ref(), "test@example.com", "password").await;
+
+    let ui_client = ui_login(&server).await;
+
+    // POST to create a library without a csrf_token — should be rejected.
+    let resp = ui_client
+        .post(format!("{}/libraries/create/", server.base_url))
+        .form(&[("name", "no-csrf-repo")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        400,
+        "form submission without csrf_token should be rejected"
+    );
+
+    // Verify the error message mentions CSRF
+    let body = resp.text().await.unwrap_or_default();
+    assert!(
+        body.contains("CSRF"),
+        "error should mention CSRF, got: {body}"
+    );
+}
+
+/// Shares page includes csrf_token in the delete form when shares exist.
+#[tokio::test]
+async fn test_shares_page_includes_csrf_token() {
+    let server = TestServer::start().await;
+    create_test_user(server.db.as_ref(), "test@example.com", "password").await;
+
+    let api_token = get_api_token(&server).await;
+    let repo_id = create_repo_api(&server.base_url, &api_token, "share-test").await;
+
+    // Create a share link via API
+    let share_resp = reqwest::Client::new()
+        .post(format!("{}/api/v2.1/share-links/", server.base_url))
+        .header("Authorization", format!("Token {}", api_token))
+        .json(&serde_json::json!({
+            "repo_id": repo_id,
+            "path": "/",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        share_resp.status().is_success(),
+        "create share should succeed"
+    );
+
+    let ui_client = ui_login(&server).await;
+
+    let shares_html = ui_client
+        .get(format!("{}/share/", server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        shares_html.contains(r#"name="csrf_token" value=""#),
+        "shares page should have csrf_token in the delete form"
+    );
+}
+
+/// Invitations page includes csrf_token in generate and delete forms (admin only).
+#[tokio::test]
+async fn test_invitations_page_includes_csrf_tokens() {
+    let server = TestServer::start().await;
+    create_test_admin(server.db.as_ref(), "test@example.com", "password").await;
+
+    // Login as admin (ui_login uses test@example.com)
+    let ui_client = ui_login(&server).await;
+
+    let inv_html = ui_client
+        .get(format!("{}/profile/invitations/", server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        inv_html.contains(r#"name="csrf_token" value=""#),
+        "invitations page should have csrf_token in generate form"
     );
 }

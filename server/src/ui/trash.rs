@@ -45,6 +45,7 @@ pub struct TrashListTemplate {
     pub failed: usize,
     pub cleaned: bool,
     pub active_page: &'static str,
+    pub csrf_token: String,
 }
 
 pub struct TrashEntryView {
@@ -112,6 +113,9 @@ pub async fn trash_list_page(
     let failed = query.failed.unwrap_or(0);
     let cleaned = query.cleaned.unwrap_or(false);
 
+    let csrf_token =
+        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+
     let tpl = TrashListTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email.clone(),
@@ -126,6 +130,7 @@ pub async fn trash_list_page(
         failed,
         cleaned,
         active_page: "trash",
+        csrf_token,
     };
 
     let html = tpl

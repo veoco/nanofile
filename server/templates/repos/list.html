@@ -71,6 +71,7 @@
                     </button>
                     <form action="/libraries/{{ r.id }}/delete" method="POST" class="inline js-delete-repo-form"
                           data-repo-name="{{ r.name }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <button type="submit"
                                 class="inline-flex items-center rounded px-2 py-1 text-xs font-medium border border-red-200 bg-white text-red-600 hover:bg-red-50 hover:text-red-700 shadow-sm"
                                 title="Delete">
@@ -94,6 +95,7 @@
         <h3 class="text-base font-semibold text-gray-900 mb-1">New Library</h3>
         <p class="text-sm text-gray-500 mb-4">Enter a name for the new library.</p>
         <form action="/libraries/create/" method="POST" onsubmit="return submitCreate(this)">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input id="create-input" type="text" name="name" placeholder="Library name"
                    class="block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue text-sm border p-2"
                    onkeydown="if(event.key==='Escape'){event.preventDefault();hideCreateDialog();}if(event.key==='Enter'){event.preventDefault();this.form.querySelector('button[type=submit]').click();}"
@@ -118,6 +120,7 @@
         <h3 class="text-base font-semibold text-gray-900 mb-1">Rename Library</h3>
         <p class="text-sm text-gray-500 mb-4">Enter a new name.</p>
         <form id="rename-form" action="" method="POST" onsubmit="return submitRename(this)">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" id="rename-repo-id" name="id" value="">
             <input id="rename-input" type="text" name="name" placeholder="New name"
                    class="block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue text-sm border p-2"

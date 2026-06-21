@@ -131,6 +131,7 @@
                 Enter the 6-digit code from your authenticator app to enable two-factor authentication.
             </p>
             <form action="/profile/two-factor/verify" method="POST" class="mt-4 space-y-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <div>
                     <label for="code" class="block text-sm font-medium text-gray-700">Verification Code</label>
                     <input type="text" name="code" id="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code"

@@ -27,6 +27,7 @@ pub struct InvitationsTemplate {
     pub invitations: Vec<InvitationInfo>,
     pub error: Option<String>,
     pub success: Option<String>,
+    pub csrf_token: String,
 }
 
 #[derive(Deserialize)]
@@ -47,6 +48,9 @@ pub async fn list_invitations(
     let svc = InvitationService::new(state.db.as_ref(), &state.repos);
     let invitations = svc.list_invitations(user.user_id).await?;
 
+    let csrf_token =
+        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+
     let tpl = InvitationsTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
@@ -55,6 +59,7 @@ pub async fn list_invitations(
         invitations,
         error: None,
         success: None,
+        csrf_token,
     };
 
     let html = tpl

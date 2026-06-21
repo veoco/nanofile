@@ -24,6 +24,7 @@ pub struct RepoListTemplate {
     pub repos: Vec<RepoInfo>,
     pub active_page: &'static str,
     pub user_id: i32,
+    pub csrf_token: String,
 }
 
 // ─── Data types ──────────────────────────────────────────────────────────────
@@ -75,6 +76,9 @@ pub async fn list_repos(
         }
     }
 
+    let csrf_token =
+        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+
     let tpl = RepoListTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
@@ -82,6 +86,7 @@ pub async fn list_repos(
         repos,
         active_page: "repos",
         user_id: user.user_id,
+        csrf_token,
     };
 
     let html = tpl
