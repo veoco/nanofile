@@ -46,8 +46,8 @@ pub mod web;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rand::Rng;
 use sea_orm::DatabaseConnection;
+use sha2::Digest;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::access_token::AccessTokenManager;
@@ -172,10 +172,13 @@ impl AppState {
             300,
         ));
 
-        // Generate a random 32-byte CSRF secret at startup.
-        let mut csrf_raw = [0u8; 32];
-        rand::rng().fill_bytes(&mut csrf_raw);
-        let csrf_secret = Arc::new(csrf_raw.to_vec());
+        // Derive the CSRF secret from the server-wide secret_key via SHA-256.
+        // This makes it deterministic across restarts so existing browser
+        // sessions (sfcsrftoken cookies) survive a server restart.
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(b"csrf-v1:");
+        hasher.update(config.server.secret_key.as_bytes());
+        let csrf_secret = Arc::new(hasher.finalize().to_vec());
 
         let password_manager = Arc::new(PasswordManager::new());
         // Start background password cache cleanup (evicts expired entries every 5 min).

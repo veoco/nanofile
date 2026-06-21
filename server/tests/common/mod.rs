@@ -82,6 +82,7 @@ impl TestServer {
                 request_timeout_secs: 36000,
                 cors_allowed_origins: vec![],
                 cors_max_age_secs: 86400,
+                secret_key: String::new(),
             },
             database: server::config::DatabaseConfig {
                 url: "sqlite::memory:".to_string(),

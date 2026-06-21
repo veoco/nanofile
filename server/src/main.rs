@@ -64,17 +64,26 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // Auto-generate notification JWT secret if empty or still the well-known default.
+    // ── Server secret key: auto-generate if empty ──────────────────────
+    if config.server.secret_key.is_empty() || config.server.secret_key == "nanofile-server-secret" {
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        config.server.secret_key = hex::encode(key);
+        tracing::warn!(
+            "Auto-generated server secret key. \
+             Set NANOFILE_SERVER_SECRET_KEY to persist across restarts."
+        );
+    }
+
+    // ── Derive notification private key from secret_key if not set ─────
     if config.notification.private_key.is_empty()
         || config.notification.private_key == "nanofile-notification-secret"
     {
-        let mut key = [0u8; 32];
-        rand::rng().fill_bytes(&mut key);
-        config.notification.private_key = hex::encode(key);
-        tracing::warn!(
-            "Auto-generated notification secret key. \
-             Set NANOFILE_NOTIFICATION_PRIVATE_KEY to persist across restarts."
-        );
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(b"notify-v1:");
+        hasher.update(config.server.secret_key.as_bytes());
+        config.notification.private_key = hex::encode(hasher.finalize());
     }
 
     let db = establish_connection(&config.database).await?;

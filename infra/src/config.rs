@@ -63,6 +63,13 @@ pub struct ServerConfig {
     /// Set to a comma-separated list for multiple origins (e.g. for API clients).
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
+    /// Server-wide secret key for cryptographic operations (CSRF tokens,
+    /// notification JWTs, etc.). Must be a hex-encoded string; recommend 64
+    /// hex characters from `openssl rand -hex 32`. When empty, auto-generated
+    /// on startup with a warning (sessions won't survive a restart).
+    /// Env: NANOFILE_SERVER_SECRET_KEY
+    #[serde(default)]
+    pub secret_key: String,
     /// CORS max-age in seconds (default 86400 = 24h).
     #[serde(default = "default_cors_max_age")]
     pub cors_max_age_secs: u64,
@@ -241,6 +248,9 @@ impl Config {
         }
         if let Ok(v) = std::env::var("NANOFILE_SERVER_SITE_URL") {
             self.server.site_url = v;
+        }
+        if let Ok(v) = std::env::var("NANOFILE_SERVER_SECRET_KEY") {
+            self.server.secret_key = v;
         }
         if let Ok(v) = std::env::var("NANOFILE_SERVER_REQUEST_TIMEOUT_SECS")
             && let Ok(n) = v.parse()

@@ -16,6 +16,14 @@ max_upload_size_mb = 512
 request_timeout_secs = 600
 cors_allowed_origins = []
 cors_max_age_secs = 86400
+#   NANOFILE_SERVER_SECRET_KEY               (generate with: openssl rand -hex 32)
+# IMPORTANT: Generate a unique secret key for production:
+#   openssl rand -hex 32
+secret_key = ""
+# ^ Set to empty string to auto-generate on startup.
+#   This is the single master key. The notification private key and
+#   CSRF signing key are derived from it automatically.
+#   For production, set NANOFILE_SERVER_SECRET_KEY to persist across restarts.
 
 [database]
 # Environment variables:
@@ -90,15 +98,10 @@ index_dir = "data/index"
 [notification]
 # Environment variables:
 #   NANOFILE_NOTIFICATION_ENABLED
-#   NANOFILE_NOTIFICATION_PRIVATE_KEY   (generate with: openssl rand -hex 32)
-#   NANOFILE_NOTIFICATION_PING_INTERVAL
-#   NANOFILE_NOTIFICATION_CLIENT_TIMEOUT
 enabled = true
-# IMPORTANT: Generate a unique secret key for production:
-#   openssl rand -hex 32
 private_key = ""
-# ^ Set to empty string to auto-generate on startup.
-#   For production, set the env var to a persistent key.
-#   Otherwise, notifications (WebSocket JWTs) are invalidated on restart.
+# ^ When empty, derived from [server] secret_key automatically.
+#   Set explicitly if you need a different key for notification JWTs
+#   (e.g., when notification events are posted by external services).
 ping_interval = 30
 client_timeout = 90
