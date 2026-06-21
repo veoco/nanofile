@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
 };
 use std::sync::Arc;
 
@@ -17,12 +17,14 @@ pub trait ActivityRepository: Send + Sync {
         repo_id: Option<&str>,
         offset: u64,
         limit: u64,
+        direct_user_id: Option<i32>,
     ) -> Result<Vec<activity::Model>, AppError>;
     async fn count_by_repo_ids_filtered(
         &self,
         repo_ids: Vec<String>,
         user_id: Option<i32>,
         repo_id: Option<&str>,
+        direct_user_id: Option<i32>,
     ) -> Result<u64, AppError>;
 }
 
@@ -45,9 +47,23 @@ impl ActivityRepository for DbActivityRepository {
         repo_id: Option<&str>,
         offset: u64,
         limit: u64,
+        direct_user_id: Option<i32>,
     ) -> Result<Vec<activity::Model>, AppError> {
+        // Build the access-control condition:
+        //   (repo_id IN accessible_repo_ids) OR (user_id = direct_user_id)
+        // This matches the original seafevents behavior: activities the user
+        // should see come from either repo membership (shared repos) or
+        // direct authorship (the user's own activity, via UserActivity fan-out).
+        let mut access = Condition::any();
+        if !repo_ids.is_empty() {
+            access = access.add(activity::Column::RepoId.is_in(repo_ids));
+        }
+        if let Some(uid) = direct_user_id {
+            access = access.add(activity::Column::UserId.eq(uid));
+        }
+
         let mut query = activity::Entity::find()
-            .filter(activity::Column::RepoId.is_in(repo_ids))
+            .filter(access)
             .order_by_desc(activity::Column::CreatedAt);
 
         if let Some(uid) = user_id {
@@ -69,8 +85,17 @@ impl ActivityRepository for DbActivityRepository {
         repo_ids: Vec<String>,
         user_id: Option<i32>,
         repo_id: Option<&str>,
+        direct_user_id: Option<i32>,
     ) -> Result<u64, AppError> {
-        let mut query = activity::Entity::find().filter(activity::Column::RepoId.is_in(repo_ids));
+        let mut access = Condition::any();
+        if !repo_ids.is_empty() {
+            access = access.add(activity::Column::RepoId.is_in(repo_ids));
+        }
+        if let Some(uid) = direct_user_id {
+            access = access.add(activity::Column::UserId.eq(uid));
+        }
+
+        let mut query = activity::Entity::find().filter(access);
 
         if let Some(uid) = user_id {
             query = query.filter(activity::Column::UserId.eq(uid));

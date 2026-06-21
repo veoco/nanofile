@@ -2,6 +2,8 @@ mod common;
 
 use common::TestFixture;
 use common::create_test_user;
+use sea_orm::ColumnTrait;
+use sea_orm::EntityTrait;
 use serde_json::Value;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -90,8 +92,10 @@ async fn test_activity_after_file_create() {
 
     let (events, _) = get_activities(&f, 1, 10).await;
     assert_eq!(events.len(), 2, "expected 2 events (repo + file create)");
-    // Events ordered by created_at DESC, so events[0] is most recent (file create)
-    let ev = &events[0];
+    let ev = events
+        .iter()
+        .find(|e| e["obj_type"] == "file")
+        .expect("file create event should exist");
     assert_eq!(ev["op_type"], "create");
     assert_eq!(ev["obj_type"], "file");
     assert_eq!(ev["name"], "created.txt");
@@ -208,9 +212,14 @@ async fn test_activity_after_dir_create() {
         2,
         "expected 2 events (repo + mkdir), got: {events:?}"
     );
-    // Events ordered by created_at DESC, so events[0] is most recent (mkdir)
-    assert_eq!(events[0]["op_type"], "create");
-    assert_eq!(events[0]["obj_type"], "dir");
+    // Use find_event because repo-create and dir-create may share the same
+    // second-precision timestamp, making ordering non-deterministic.
+    let dir_ev = events
+        .iter()
+        .find(|e| e["obj_type"] == "dir")
+        .expect("dir create event should exist");
+    assert_eq!(dir_ev["op_type"], "create");
+    assert_eq!(dir_ev["obj_type"], "dir");
 }
 
 #[tokio::test]
@@ -399,8 +408,10 @@ async fn test_activity_response_fields() {
 
     let (events, _) = get_activities(&f, 1, 10).await;
     // Find the file create event (skip repo create)
-    let ev = find_event(&events, "create").expect("create event should exist");
-    assert_eq!(ev["obj_type"], "file");
+    let ev = events
+        .iter()
+        .find(|e| e["op_type"] == "create" && e["obj_type"] == "file")
+        .expect("file create event should exist");
 
     // Verify all expected response fields
     assert_eq!(ev["op_type"], "create");
@@ -585,6 +596,43 @@ async fn test_activity_cross_user_visibility() {
         file_create.is_some(),
         "user2 should see user1's file create event"
     );
+}
+
+/// Verify that a user can see their own activities even when repo membership
+/// is missing (direct_user_id fallback).
+///
+/// This tests our fix for the API query — the original seahub uses a
+/// UserActivity fan-out table, while nanofile adds `OR user_id = current_user`
+/// to ensure users always see their own actions regardless of membership.
+#[tokio::test]
+async fn test_activity_own_visible_without_membership() {
+    let f = TestFixture::new().await;
+
+    // Initially the user is a member → repo-create is visible via both paths.
+    let (events_before, total_before) = get_activities(&f, 1, 10).await;
+    assert!(
+        total_before >= 1,
+        "should see repo-create before removing member"
+    );
+
+    // Remove the user from the repo's member list directly.
+    let db = &*f.server.db;
+    use sea_orm::QueryFilter;
+    server::entity::repo_member::Entity::delete_many()
+        .filter(server::entity::repo_member::Column::RepoId.eq(&f.repo_id))
+        .filter(server::entity::repo_member::Column::UserId.eq(f.user_id))
+        .exec(db)
+        .await
+        .unwrap();
+
+    // Even without membership, the API must return the user's own
+    // activities (the direct_user_id fallback).
+    let (events_after, total_after) = get_activities(&f, 1, 10).await;
+    assert_eq!(
+        total_after, total_before,
+        "user should still see own repo-create activity without membership"
+    );
+    assert_eq!(events_after.len(), events_before.len());
 }
 
 #[tokio::test]

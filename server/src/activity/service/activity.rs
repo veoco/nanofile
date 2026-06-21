@@ -75,6 +75,15 @@ impl ActivityService {
             need_filter_repo_id = Some(rid.to_string());
         }
 
+        // When not filtering by a specific op_user, include the current
+        // user's own activities directly (matching the original seahub
+        // UserActivity fan-out semantics — users always see their own actions).
+        let direct_user_id = if need_filter_user_id.is_none() {
+            Some(user_id)
+        } else {
+            None
+        };
+
         // Get total count for pagination metadata
         let total_count = repos
             .activity
@@ -82,6 +91,7 @@ impl ActivityService {
                 accessible_repo_ids.clone(),
                 need_filter_user_id,
                 need_filter_repo_id.as_deref(),
+                direct_user_id,
             )
             .await?;
 
@@ -94,6 +104,7 @@ impl ActivityService {
                 need_filter_repo_id.as_deref(),
                 offset,
                 per_page as u64,
+                direct_user_id,
             )
             .await?;
 
