@@ -67,6 +67,33 @@ pub fn check_form_csrf(
     }
 }
 
+/// Generate a `Set-Cookie` header string for the CSRF token cookie (`sfcsrftoken`).
+///
+/// The cookie is deliberately **not** HttpOnly so JavaScript can read it and
+/// include it as an `X-CSRFToken` request header.  The value is the same HMAC
+/// token used for form-based CSRF protection.
+pub fn csrf_cookie_header(secret: &[u8], session_token: &str, secure: bool) -> String {
+    let token = generate_csrf_token(secret, session_token);
+    let mut cookie = format!("sfcsrftoken={}; Path=/; SameSite=Lax", token);
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+/// Validate an `X-CSRFToken` request header against the expected HMAC token.
+///
+/// Used when an API endpoint is called from the browser with cookie-based
+/// session authentication (the JS reads `sfcsrftoken` from its cookie and
+/// echoes it back in this header).
+pub fn validate_csrf_header(headers: &HeaderMap, secret: &[u8], session_token: &str) -> bool {
+    let header_val = match headers.get("x-csrftoken").and_then(|v| v.to_str().ok()) {
+        Some(v) => v,
+        None => return false,
+    };
+    validate_csrf_token(secret, session_token, header_val)
+}
+
 /// Validate Origin/Referer header against the configured site URL origin.
 ///
 /// Used for unauthenticated endpoints (login, register, password reset)
@@ -138,9 +165,111 @@ mod tests {
 
     #[test]
     fn test_validate_origin_matching() {
-        let headers = HeaderMap::new();
         // No headers → true (curl/non-browser)
+        assert!(validate_origin(&HeaderMap::new(), "https://example.com"));
+
+        // Origin matches
+        let headers = header_map_from(&[("origin", "https://example.com")]);
         assert!(validate_origin(&headers, "https://example.com"));
+
+        // Origin does NOT match
+        let headers = header_map_from(&[("origin", "https://evil.com")]);
+        assert!(!validate_origin(&headers, "https://example.com"));
+
+        // Referer matches (origin absent)
+        let headers = header_map_from(&[("referer", "https://example.com/some/path")]);
+        assert!(validate_origin(&headers, "https://example.com"));
+
+        // Referer does NOT match
+        let headers = header_map_from(&[("referer", "https://evil.com/")]);
+        assert!(!validate_origin(&headers, "https://example.com"));
+
+        // Referer with subdomain not treated as match (prefix check is safe)
+        let headers = header_map_from(&[("referer", "https://example.com.evil.com/")]);
+        assert!(!validate_origin(&headers, "https://example.com"));
+    }
+
+    fn header_map_from(kvs: &[(&str, &str)]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (k, v) in kvs {
+            map.insert(
+                axum::http::header::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                axum::http::HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        map
+    }
+
+    #[test]
+    fn test_csrf_cookie_header_basic() {
+        let secret = b"test-secret-key-12345678";
+        let cookie = csrf_cookie_header(secret, "session-abc", false);
+        // Should start with sfcsrftoken=
+        assert!(cookie.starts_with("sfcsrftoken="));
+        // Extract just the token value (before the first ";")
+        let value = cookie
+            .trim_start_matches("sfcsrftoken=")
+            .split(';')
+            .next()
+            .unwrap()
+            .trim();
+        assert_eq!(value.len(), 64, "HMAC-SHA256 hex should be 64 chars");
+        // Should have Path=/ and SameSite=Lax
+        assert!(cookie.contains("Path=/"), "cookie should have Path=/");
+        assert!(
+            cookie.contains("SameSite=Lax"),
+            "cookie should have SameSite=Lax"
+        );
+        // Should NOT contain HttpOnly or Secure
+        assert!(
+            !cookie.contains("HttpOnly"),
+            "CSRF cookie must not be HttpOnly"
+        );
+        assert!(
+            !cookie.contains("Secure"),
+            "CSRF cookie should not have Secure by default"
+        );
+    }
+
+    #[test]
+    fn test_csrf_cookie_header_secure() {
+        let secret = b"test-secret-key-12345678";
+        let cookie = csrf_cookie_header(secret, "session-abc", true);
+        assert!(
+            cookie.contains("; Secure"),
+            "secure=true should add Secure flag"
+        );
+    }
+
+    #[test]
+    fn test_validate_csrf_header_matches() {
+        let secret = b"test-secret-key-12345678";
+        let session = "test-session";
+        let token = generate_csrf_token(secret, session);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::HeaderName::from_static("x-csrftoken"),
+            axum::http::HeaderValue::from_str(&token).unwrap(),
+        );
+        assert!(validate_csrf_header(&headers, secret, session));
+    }
+
+    #[test]
+    fn test_validate_csrf_header_mismatch() {
+        let secret = b"test-secret-key-12345678";
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::HeaderName::from_static("x-csrftoken"),
+            axum::http::HeaderValue::from_static("wrong-token-value"),
+        );
+        assert!(!validate_csrf_header(&headers, secret, "some-session"));
+    }
+
+    #[test]
+    fn test_validate_csrf_header_missing() {
+        let secret = b"test-secret-key-12345678";
+        let headers = HeaderMap::new();
+        assert!(!validate_csrf_header(&headers, secret, "test-session"));
     }
 
     #[test]

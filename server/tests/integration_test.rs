@@ -2169,7 +2169,7 @@ async fn test_empty_directory_uses_emtpysha1() {
     assert_eq!(page_resp.status(), 200, "UI: file browser should load");
     let page_html = page_resp.text().await.unwrap();
     let csrf_token = page_html
-        .split(r#"data-csrf-token=""#)
+        .split(r#"name="csrf_token" value=""#)
         .nth(1)
         .and_then(|s| s.split('"').next())
         .unwrap_or("");

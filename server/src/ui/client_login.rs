@@ -5,7 +5,7 @@
 /// the user gets automatically logged in.
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Redirect},
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
@@ -113,11 +113,32 @@ pub async fn client_token_login(
 
     let next = resolve_next(params.get("next").map(String::as_str));
 
-    let response = (
-        StatusCode::FOUND,
-        [("Location", &next), ("Set-Cookie", &cookie)],
-    )
-        .into_response();
+    let csrf_cookie = crate::auth::csrf::csrf_cookie_header(
+        &state.csrf_secret,
+        &api_token,
+        state.config.server.secure_cookies(),
+    );
+
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert(
+        axum::http::header::LOCATION,
+        axum::http::HeaderValue::from_str(&next)
+            .map_err(|_| AppError::internal("Failed to create location header"))?,
+    );
+    resp_headers.append(
+        axum::http::header::SET_COOKIE,
+        cookie
+            .parse::<axum::http::HeaderValue>()
+            .map_err(|_| AppError::internal("Failed to create session cookie header"))?,
+    );
+    resp_headers.append(
+        axum::http::header::SET_COOKIE,
+        csrf_cookie
+            .parse::<axum::http::HeaderValue>()
+            .map_err(|_| AppError::internal("Failed to create CSRF cookie header"))?,
+    );
+
+    let response = (StatusCode::FOUND, resp_headers).into_response();
 
     Ok(response)
 }

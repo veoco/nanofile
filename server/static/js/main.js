@@ -105,9 +105,8 @@
     const repoId = btn.dataset.repoId;
     const path = btn.dataset.path;
     const currentlyStarred = btn.dataset.starred === "true";
-    const tokenEl = document.getElementById("session-token-data");
-    const token = tokenEl ? tokenEl.dataset.token : "";
-    if (!token) {
+    const csrfToken = getCookie("sfcsrftoken");
+    if (!csrfToken) {
       window.location.href = "/accounts/login/";
       return;
     }
@@ -116,7 +115,7 @@
 
     try {
       if (currentlyStarred) {
-        // DELETE — unstar
+        // DELETE — unstar (uses X-CSRFToken header + session cookie)
         const url =
           "/api/v2.1/starred-items/?repo_id=" +
           encodeURIComponent(repoId) +
@@ -124,7 +123,7 @@
           encodeURIComponent(path);
         const res = await fetch(url, {
           method: "DELETE",
-          headers: { Authorization: "Token " + token },
+          headers: { "X-CSRFToken": csrfToken },
         });
         if (res.ok) {
           btn.classList.remove("text-yellow-400");
@@ -138,7 +137,7 @@
         const res = await fetch("/api/v2.1/starred-items/", {
           method: "POST",
           headers: {
-            Authorization: "Token " + token,
+            "X-CSRFToken": csrfToken,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ repo_id: repoId, path: path }),
@@ -157,6 +156,14 @@
       btn.disabled = false;
     }
   });
+
+  // ── Read a cookie value by name ────────────────────────────────────────
+  function getCookie(name) {
+    const match = document.cookie.match(
+      "(^|;)\\s*" + name + "\\s*=\\s*([^;]+)"
+    );
+    return match ? match.pop() : "";
+  }
 
   // ── Delete confirmation (event delegation) ────────────────────────────
   document.addEventListener("submit", function (e) {

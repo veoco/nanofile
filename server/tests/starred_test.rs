@@ -524,7 +524,7 @@ async fn test_ui_unstar_form() {
         login_resp.text().await
     );
 
-    // Get CSRF token from the starred page
+    // Get CSRF token from the starred page's hidden form input
     let page_resp = ui_client
         .get(format!("{}/starred/", f.server.base_url))
         .send()
@@ -532,7 +532,7 @@ async fn test_ui_unstar_form() {
         .unwrap();
     let page_html = page_resp.text().await.unwrap();
     let csrf_token = page_html
-        .split(r#"data-csrf-token=""#)
+        .split(r#"name="csrf_token" value=""#)
         .nth(1)
         .and_then(|s| s.split('"').next())
         .unwrap_or("");

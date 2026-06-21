@@ -295,6 +295,7 @@ pub async fn login(
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
+    let secure_cookies = state.config.server.secure_cookies();
     let cookie = session_cookie(
         "seahub-session",
         &session_token,
@@ -303,14 +304,31 @@ pub async fn login(
         } else {
             Some(86400)
         },
-        state.config.server.secure_cookies(),
+        secure_cookies,
     );
 
-    let response = (
-        StatusCode::FOUND,
-        [("Location", "/libraries/"), ("Set-Cookie", &cookie)],
-    )
-        .into_response();
+    let csrf_cookie =
+        crate::auth::csrf::csrf_cookie_header(&state.csrf_secret, &session_token, secure_cookies);
+
+    let mut resp_headers = axum::http::HeaderMap::new();
+    resp_headers.insert(
+        axum::http::header::LOCATION,
+        axum::http::HeaderValue::from_static("/libraries/"),
+    );
+    resp_headers.append(
+        axum::http::header::SET_COOKIE,
+        cookie
+            .parse::<axum::http::HeaderValue>()
+            .map_err(|_| AppError::internal("Failed to create session cookie header"))?,
+    );
+    resp_headers.append(
+        axum::http::header::SET_COOKIE,
+        csrf_cookie
+            .parse::<axum::http::HeaderValue>()
+            .map_err(|_| AppError::internal("Failed to create CSRF cookie header"))?,
+    );
+
+    let response = (StatusCode::FOUND, resp_headers).into_response();
 
     Ok(response)
 }
@@ -486,7 +504,10 @@ pub async fn two_factor_auth(
 
     let clear_pending_str = session_cookie("seahub-session-pending", "", Some(0), secure_cookies);
 
-    // HeaderMap::append so both Set-Cookie headers reach the browser.
+    let csrf_cookie_str =
+        crate::auth::csrf::csrf_cookie_header(&state.csrf_secret, &session_token, secure_cookies);
+
+    // HeaderMap::append so all Set-Cookie headers reach the browser.
     // A plain array tuple uses `insert` which would overwrite the first one.
     let mut resp_headers = ::axum::http::HeaderMap::new();
     resp_headers.insert(
@@ -504,6 +525,12 @@ pub async fn two_factor_auth(
         clear_pending_str
             .parse::<::axum::http::HeaderValue>()
             .map_err(|_| AppError::internal("Failed to create session cookie header"))?,
+    );
+    resp_headers.append(
+        ::axum::http::header::SET_COOKIE,
+        csrf_cookie_str
+            .parse::<::axum::http::HeaderValue>()
+            .map_err(|_| AppError::internal("Failed to create CSRF cookie header"))?,
     );
 
     Ok((StatusCode::FOUND, resp_headers).into_response())
@@ -527,20 +554,33 @@ pub async fn logout(
             .await;
     }
 
-    let clear_cookie = session_cookie(
-        "seahub-session",
-        "",
-        Some(0),
-        state.config.server.secure_cookies(),
+    let secure_cookies = state.config.server.secure_cookies();
+    let clear_cookie = session_cookie("seahub-session", "", Some(0), secure_cookies);
+    // Clear the CSRF token cookie too.
+    let mut clear_csrf = String::from("sfcsrftoken=; Path=/; SameSite=Lax; Max-Age=0");
+    if secure_cookies {
+        clear_csrf.push_str("; Secure");
+    }
+
+    let mut resp_headers = axum::http::HeaderMap::new();
+    resp_headers.insert(
+        axum::http::header::LOCATION,
+        axum::http::HeaderValue::from_static("/accounts/login/"),
     );
-    let response = (
-        StatusCode::FOUND,
-        [
-            ("Location", "/accounts/login/"),
-            ("Set-Cookie", &clear_cookie),
-        ],
-    )
-        .into_response();
+    resp_headers.append(
+        axum::http::header::SET_COOKIE,
+        clear_cookie
+            .parse::<axum::http::HeaderValue>()
+            .map_err(|_| AppError::internal("Failed to create session cookie header"))?,
+    );
+    resp_headers.append(
+        axum::http::header::SET_COOKIE,
+        clear_csrf
+            .parse::<axum::http::HeaderValue>()
+            .map_err(|_| AppError::internal("Failed to create CSRF cookie header"))?,
+    );
+
+    let response = (StatusCode::FOUND, resp_headers).into_response();
 
     Ok(response)
 }

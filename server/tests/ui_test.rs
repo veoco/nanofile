@@ -213,8 +213,8 @@ async fn login_client(fixture: &TestFixture) -> reqwest::Client {
     client // cookie stored by cookie_store
 }
 
-/// Extract CSRF token from any authenticated page that has a `data-csrf-token`
-/// attribute. The caller must have a valid session cookie.
+/// Extract CSRF token from any authenticated page's hidden form input.
+/// The caller must have a valid session cookie.
 async fn get_csrf_token(client: &reqwest::Client, base_url: &str, repo_id: &str) -> String {
     let resp = client
         .get(format!("{}/library/{}/test-repo/", base_url, repo_id))
@@ -222,7 +222,7 @@ async fn get_csrf_token(client: &reqwest::Client, base_url: &str, repo_id: &str)
         .await
         .unwrap();
     let html = resp.text().await.unwrap();
-    html.split(r#"data-csrf-token=""#)
+    html.split(r#"name="csrf_token" value=""#)
         .nth(1)
         .and_then(|s| s.split('"').next())
         .unwrap_or("")

@@ -1,11 +1,6 @@
 use axum::{
-    RequestPartsExt,
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
-};
-use axum_extra::{
-    TypedHeader,
-    headers::{Authorization, authorization::Bearer},
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
@@ -98,29 +93,21 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         parts: &mut Parts,
         state: &std::sync::Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let token_str = if let Ok(TypedHeader(Authorization(bearer))) =
-            parts.extract::<TypedHeader<Authorization<Bearer>>>().await
-        {
-            bearer.token().to_string()
-        } else if let Some(auth) = parts
-            .headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-        {
-            if let Some(token) = auth.strip_prefix("Token ") {
-                token.to_string()
-            } else if let Some(token) = auth.strip_prefix("Bearer ") {
-                token.to_string()
-            } else {
-                return Err(StatusCode::UNAUTHORIZED);
-            }
-        } else {
-            return Err(StatusCode::UNAUTHORIZED);
-        };
-
         let db = state.db.as_ref();
 
-        // Query both token tables concurrently instead of sequentially.
+        // ── Path 1: Authorization header (external API clients) ──────────────
+        let token_str = extract_auth_header_token(&parts.headers);
+
+        // ── Path 2: Session cookie + CSRF header (browser UI requests) ──────
+        let token_str = match token_str {
+            Some(t) => t,
+            None => match try_extract_cookie_session(&parts.headers, state) {
+                Some(t) => t,
+                None => return Err(StatusCode::UNAUTHORIZED),
+            },
+        };
+
+        // Query both token tables concurrently.
         let api_fut = api_token::Entity::find()
             .filter(api_token::Column::Token.eq(&token_str))
             .one(db);
@@ -169,6 +156,46 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             email: user_record.email,
         })
     }
+}
+
+/// Extract a token from `Authorization: Bearer <token>` or `Authorization: Token <token>`.
+fn extract_auth_header_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    // Prefer the strongly-typed Bearer extraction.
+    // We cannot use TypedHeader here because we only have headers, not Parts,
+    // so we parse the header manually as a fallback.
+    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
+        if let Some(token) = auth.strip_prefix("Token ") {
+            return Some(token.to_string());
+        } else if let Some(token) = auth.strip_prefix("Bearer ") {
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+/// Try to authenticate via `seahub-session` cookie + `X-CSRFToken` header.
+///
+/// This is the **browser UI** path: the browser automatically sends the HttpOnly
+/// session cookie, and JavaScript reads `sfcsrftoken` from its non-HttpOnly cookie
+/// and echoes it back as `X-CSRFToken`.
+fn try_extract_cookie_session(
+    headers: &axum::http::HeaderMap,
+    state: &std::sync::Arc<AppState>,
+) -> Option<String> {
+    let cookie_str = headers.get("cookie").and_then(|v| v.to_str().ok())?;
+
+    let session_token = cookie_str
+        .split(';')
+        .map(|s| s.trim())
+        .find(|s| s.starts_with("seahub-session="))
+        .and_then(|s| s.strip_prefix("seahub-session="))?;
+
+    // CSRF check: validate X-CSRFToken header matches the HMAC-derived token.
+    if !crate::auth::csrf::validate_csrf_header(headers, &state.csrf_secret, session_token) {
+        return None;
+    }
+
+    Some(session_token.to_string())
 }
 
 impl SyncAuth {
