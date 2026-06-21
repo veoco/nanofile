@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::activity_log;
 use crate::auth::middleware::SyncAuth;
 use crate::common::EMPTY_SHA1;
 use crate::entity::{commit, fs_object, repo};
@@ -346,6 +347,48 @@ pub async fn update_branch(
         // there's no prior size (first commit), `adjust_repo_size` falls
         // back to `compute_repo_size()` automatically.
         crate::repo::adjust_repo_size(state.db.as_ref(), &repo_id, check_result.size_delta).await?;
+
+        // Compute tree diff and log activities for changed files/dirs,
+        // matching the original seafevents commit-diff behaviour so that
+        // sync-protocol file operations show up in the activity history.
+        let old_root = if let Some(ref parent_id) = new_commit.parent_id
+            && parent_id != "0000000000000000000000000000000000000000"
+        {
+            commit::Entity::find()
+                .filter(commit::Column::RepoId.eq(&repo_id))
+                .filter(commit::Column::CommitId.eq(parent_id))
+                .one(state.db.as_ref())
+                .await?
+                .map(|c| c.root_id)
+        } else {
+            None
+        };
+
+        let changes = crate::repo::tree_diff::diff_trees(
+            state.db.as_ref(),
+            &repo_id,
+            old_root.as_deref(),
+            &new_commit.root_id,
+        )
+        .await
+        .unwrap_or_default();
+
+        for change in &changes {
+            activity_log::log_activity(
+                state.db.as_ref(),
+                &repo_id,
+                change.op_type,
+                change.obj_type,
+                &change.path,
+                _auth.user_id,
+                None,
+                Some(change.size),
+                Some(&change.obj_id),
+                None,
+                None,
+            )
+            .await;
+        }
 
         // Success — notify listeners.
         if let Some(ref notif_mgr) = state.notification_manager {

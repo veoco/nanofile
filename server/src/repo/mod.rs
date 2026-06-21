@@ -7,6 +7,7 @@ pub mod service;
 pub mod size;
 pub mod store;
 pub mod trash;
+pub mod tree_diff;
 pub mod versioning;
 
 pub use download::Downloader;

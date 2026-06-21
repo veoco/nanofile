@@ -731,6 +731,12 @@ impl RepoService {
         .exec(db)
         .await?;
 
+        // Log repo creation activity (best-effort)
+        activity_log::log_activity(
+            db, &repo_id, "create", "repo", "/", user_id, None, None, None, None, None,
+        )
+        .await;
+
         let repo_info = RepoInfo {
             id: repo_id.clone(),
             name: "我的资料库".to_string(),
