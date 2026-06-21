@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
 };
 use rand::RngExt;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use crate::AppState;
 use crate::activity_log;
 use crate::auth::middleware::SyncAuth;
 use crate::common::EMPTY_SHA1;
-use crate::entity::{commit, fs_object, repo};
+use crate::entity::{commit, fs_object, repo, wiki};
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData};
@@ -27,7 +27,8 @@ struct CheckResult {
     size_delta: i64,
 }
 
-/// Maximum number of retries when branch update conflicts.
+/// Paths that should be excluded from activity logging (matching seafevents).
+const EXCLUDED_ACTIVITY_PREFIXES: &[&str] = &["/_Internal", "/images/sdoc", "/images/auto-upload"];
 const MAX_BRANCH_RETRY: u32 = 3;
 
 #[derive(Serialize)]
@@ -351,43 +352,73 @@ pub async fn update_branch(
         // Compute tree diff and log activities for changed files/dirs,
         // matching the original seafevents commit-diff behaviour so that
         // sync-protocol file operations show up in the activity history.
-        let old_root = if let Some(ref parent_id) = new_commit.parent_id
-            && parent_id != "0000000000000000000000000000000000000000"
-        {
-            commit::Entity::find()
-                .filter(commit::Column::RepoId.eq(&repo_id))
-                .filter(commit::Column::CommitId.eq(parent_id))
-                .one(state.db.as_ref())
-                .await?
-                .map(|c| c.root_id)
-        } else {
-            None
-        };
+        // Skip for wiki repos (seafevents excludes them entirely).
+        let is_wiki = wiki::Entity::find()
+            .filter(wiki::Column::RepoId.eq(&repo_id))
+            .count(state.db.as_ref())
+            .await
+            .unwrap_or(0)
+            > 0;
 
-        let changes = crate::repo::tree_diff::diff_trees(
-            state.db.as_ref(),
-            &repo_id,
-            old_root.as_deref(),
-            &new_commit.root_id,
-        )
-        .await
-        .unwrap_or_default();
+        if !is_wiki {
+            let old_root = if let Some(ref parent_id) = new_commit.parent_id
+                && parent_id != "0000000000000000000000000000000000000000"
+            {
+                commit::Entity::find()
+                    .filter(commit::Column::RepoId.eq(&repo_id))
+                    .filter(commit::Column::CommitId.eq(parent_id))
+                    .one(state.db.as_ref())
+                    .await?
+                    .map(|c| c.root_id)
+            } else {
+                None
+            };
 
-        for change in &changes {
-            activity_log::log_activity(
+            let changes = crate::repo::tree_diff::diff_trees(
                 state.db.as_ref(),
                 &repo_id,
-                change.op_type,
-                change.obj_type,
-                &change.path,
-                _auth.user_id,
-                None,
-                Some(change.size),
-                Some(&change.obj_id),
-                None,
-                None,
+                old_root.as_deref(),
+                &new_commit.root_id,
             )
-            .await;
+            .await
+            .unwrap_or_default();
+
+            // Check for recover operations: seafevents checks if the commit
+            // description starts with "Reverted" or "Recovered" and maps
+            // create/edit → recover.
+            let commit_desc = new_commit.description.as_str();
+            let is_reverted =
+                commit_desc.starts_with("Reverted") || commit_desc.starts_with("Recovered");
+
+            for mut change in changes {
+                // Map create/edit → recover when commit was a revert/restore.
+                if is_reverted && (change.op_type == "create" || change.op_type == "edit") {
+                    change.op_type = "recover";
+                }
+
+                // Skip internal paths (matching seafevents' excluded prefixes).
+                if EXCLUDED_ACTIVITY_PREFIXES
+                    .iter()
+                    .any(|p| change.path.starts_with(p))
+                {
+                    continue;
+                }
+
+                activity_log::log_activity(
+                    state.db.as_ref(),
+                    &repo_id,
+                    change.op_type,
+                    change.obj_type,
+                    &change.path,
+                    _auth.user_id,
+                    change.old_path.as_deref(),
+                    Some(change.size),
+                    Some(&change.obj_id),
+                    None,
+                    None,
+                )
+                .await;
+            }
         }
 
         // Success — notify listeners.
