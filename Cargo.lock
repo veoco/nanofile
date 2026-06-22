@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "base"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -2017,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "infra"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes",
  "anyhow",
@@ -2426,7 +2426,7 @@ dependencies = [
 
 [[package]]
 name = "migration"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flate2",
  "sea-orm-migration",
@@ -3894,7 +3894,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes",
  "anyhow",
