@@ -105,67 +105,6 @@ async fn test_repo_tokens_unauthorized() {
     assert_eq!(resp.status(), 401);
 }
 
-/// B.10.4 — GET/POST /api2/default-repo/
-#[tokio::test]
-async fn test_default_repo_no_default_returns_404() {
-    let f = TestFixture::no_repo("norepo2@test.com", "password").await;
-
-    let resp = f
-        .client
-        .get("/api2/default-repo/", Some(&f.api_token))
-        .await;
-    assert_eq!(resp.status(), 404);
-}
-
-#[tokio::test]
-async fn test_default_repo_create_new() {
-    let f = TestFixture::no_repo("norepo@test.com", "password").await;
-
-    let resp = f
-        .client
-        .get("/api2/default-repo/", Some(&f.api_token))
-        .await;
-    assert_eq!(resp.status(), 404);
-
-    let resp = f
-        .client
-        .post_json(
-            "/api2/default-repo/",
-            Some(&f.api_token),
-            &serde_json::json!({}),
-        )
-        .await;
-    assert_eq!(resp.status(), 201, "create default repo failed");
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let repo_id = body["id"].as_str().unwrap().to_string();
-    assert_eq!(body["name"], "我的资料库");
-
-    let resp = f
-        .client
-        .get("/api2/default-repo/", Some(&f.api_token))
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["id"], repo_id);
-}
-
-#[tokio::test]
-async fn test_default_repo_already_exists() {
-    let f = TestFixture::new().await;
-
-    let resp = f
-        .client
-        .post_json(
-            "/api2/default-repo/",
-            Some(&f.api_token),
-            &serde_json::json!({}),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["id"], f.repo_id);
-}
-
 /// B.10.2 — GET /api2/repos/{repo_id}/dir/shared_items/
 #[tokio::test]
 async fn test_dir_shared_items_returns_list() {

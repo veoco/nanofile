@@ -68,11 +68,6 @@ fn v1_routes() -> Router<Arc<AppState>> {
             get(crate::repo::handler::repos::repo_tokens),
         )
         .route(
-            "/api2/default-repo/",
-            get(crate::repo::handler::repos::get_default_repo)
-                .post(crate::repo::handler::repos::create_default_repo),
-        )
-        .route(
             "/api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/",
             get(crate::fs::handler::file::get_block_download_link),
         )

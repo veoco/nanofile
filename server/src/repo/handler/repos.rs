@@ -429,45 +429,6 @@ pub async fn repo_tokens(
     Ok(Json(result))
 }
 
-/// `GET /api2/default-repo/`
-pub async fn get_default_repo(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<RepoInfo>, AppError> {
-    let repo_info = repo::RepoService::get_default_repo(
-        state.db.as_ref(),
-        &state.repos,
-        auth.user_id,
-        &auth.email,
-    )
-    .await?;
-    Ok(Json(repo_info))
-}
-
-/// `POST /api2/default-repo/`
-pub async fn create_default_repo(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-) -> Result<(StatusCode, Json<RepoInfo>), AppError> {
-    let (repo_info, _token) = repo::RepoService::create_default_repo(
-        state.db.as_ref(),
-        &state.repos,
-        auth.user_id,
-        &auth.email,
-    )
-    .await?;
-
-    // Check if it was a new creation or existing
-    let is_new = repo_info.repo_id_dup.is_some();
-    let status = if is_new {
-        StatusCode::CREATED
-    } else {
-        StatusCode::OK
-    };
-
-    Ok((status, Json(repo_info)))
-}
-
 /// GET /api/v2.1/repos/
 pub async fn list_repos_v21(
     auth: AuthUser,
