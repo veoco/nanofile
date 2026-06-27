@@ -25,6 +25,8 @@ pub struct RepoListTemplate {
     pub active_page: &'static str,
     pub user_id: i32,
     pub csrf_token: String,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 // ─── Data types ──────────────────────────────────────────────────────────────
@@ -79,6 +81,15 @@ pub async fn list_repos(
     let csrf_token =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
 
+    let left_panel_repos: Vec<crate::repo::LeftPanelRepo> = repos
+        .iter()
+        .map(|r| crate::repo::LeftPanelRepo {
+            id: r.id.clone(),
+            name: r.name.clone(),
+            size_display: r.size_display.clone(),
+        })
+        .collect();
+
     let tpl = RepoListTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
@@ -87,6 +98,8 @@ pub async fn list_repos(
         active_page: "repos",
         user_id: user.user_id,
         csrf_token,
+        left_panel_repos,
+        current_repo_id: None,
     };
 
     let html = tpl

@@ -24,6 +24,8 @@ pub struct StarredTemplate {
     pub starred_folders: Vec<StarredItemView>,
     pub starred_files: Vec<StarredItemView>,
     pub active_page: &'static str,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 pub struct StarredItemView {
@@ -107,6 +109,8 @@ pub async fn starred_page(
 
     let csrf_token =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+    let left_panel_repos =
+        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
     let tpl = StarredTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
@@ -116,6 +120,8 @@ pub async fn starred_page(
         starred_folders,
         starred_files,
         active_page: "starred",
+        left_panel_repos,
+        current_repo_id: None,
     };
 
     let html = tpl

@@ -28,6 +28,8 @@ pub struct SearchTemplate {
     pub per_page: i32,
     pub current_page: i32,
     pub search_filename_only: bool,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -150,6 +152,8 @@ pub async fn search_page(
         (results, total, has_more)
     };
 
+    let left_panel_repos =
+        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
     let tpl = SearchTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email.clone(),
@@ -162,6 +166,8 @@ pub async fn search_page(
         per_page,
         current_page: page,
         search_filename_only,
+        left_panel_repos,
+        current_repo_id: None,
     };
     let html = tpl
         .render()

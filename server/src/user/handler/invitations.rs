@@ -28,6 +28,8 @@ pub struct InvitationsTemplate {
     pub error: Option<String>,
     pub success: Option<String>,
     pub csrf_token: String,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -51,6 +53,8 @@ pub async fn list_invitations(
     let csrf_token =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
 
+    let left_panel_repos =
+        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
     let tpl = InvitationsTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
@@ -60,6 +64,8 @@ pub async fn list_invitations(
         error: None,
         success: None,
         csrf_token,
+        left_panel_repos,
+        current_repo_id: None,
     };
 
     let html = tpl

@@ -25,6 +25,8 @@ pub struct SharesTemplate {
     pub csrf_token: String,
     pub share_links: Vec<ShareLinkInfo>,
     pub active_page: &'static str,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 pub struct ShareLinkInfo {
@@ -68,6 +70,8 @@ pub async fn list_shares(
 
     let csrf_token =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+    let left_panel_repos =
+        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
     let tpl = SharesTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
@@ -75,6 +79,8 @@ pub async fn list_shares(
         csrf_token,
         share_links,
         active_page: "shares",
+        left_panel_repos,
+        current_repo_id: None,
     };
 
     let html = tpl

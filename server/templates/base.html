@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full bg-gray-50">
+<html lang="en" class="h-full bg-surface-50 dark:bg-surface-900">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,18 +7,77 @@
     <meta name="description" content="Nanofile - Seafile-compatible sync server">
     <link rel="icon" type="image/svg+xml" href="{{ urls.favicon }}">
     <link rel="stylesheet" href="{{ urls.css }}">
+    {% block head_meta %}{% endblock %}
 </head>
 <body class="h-full">
-    <div class="min-h-full">
+    <!-- Global loading bar (hidden by default) -->
+    <div id="loading-bar" class="hidden fixed top-0 left-0 z-[9999] h-0.5 w-full">
+        <div class="h-full bg-brand-500 animate-loading-bar"></div>
+    </div>
+
+    <div class="min-h-full flex flex-col">
         {% include "includes/topbar.html" %}
-        <div class="flex">
-            {% include "includes/sidebar.html" %}
-            <main class="flex-1 p-6 lg:ml-64">
+
+        <div class="flex flex-1 overflow-hidden">
+            <!-- Left Panel — library tree (large screens only) -->
+            <aside class="js-left-panel hidden lg:flex flex-col flex-shrink-0 bg-white dark:bg-surface-800 border-r border-gray-200 dark:border-gray-700"
+                   style="width: var(--left-panel-width, 240px)">
+                {% include "includes/left_panel.html" %}
+            </aside>
+
+            <!-- Main content — file browser / page content -->
+            <main role="main" aria-label="Main content"
+                  class="flex-1 overflow-y-auto p-4 sm:p-6 pb-20 lg:pb-6">
                 {% block content %}{% endblock %}
             </main>
+
+            <!-- Right Panel — file details (hidden by default) -->
+            <aside class="js-right-panel hidden lg:flex-col flex-shrink-0 bg-white dark:bg-surface-800 border-l border-gray-200 dark:border-gray-700 overflow-y-auto transition-all duration-300"
+                   style="width: 0; overflow: hidden;"
+                   data-expanded-width="300px">
+                {% include "includes/right_panel.html" %}
+            </aside>
         </div>
     </div>
+
+    <!-- Mobile bottom navigation -->
+    <nav class="fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-surface-900 border-t border-gray-200 dark:border-gray-700 lg:hidden"
+         role="navigation" aria-label="Mobile navigation">
+        <div class="flex items-center justify-around h-16">
+            <a href="/libraries/"
+               class="flex flex-col items-center gap-0.5 text-xs {% if active_page == "repos" %}text-brand-500{% else %}text-gray-400 dark:text-gray-500{% endif %}">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                </svg>
+                <span>Files</span>
+            </a>
+            <a href="/starred/"
+               class="flex flex-col items-center gap-0.5 text-xs {% if active_page == "starred" %}text-brand-500{% else %}text-gray-400 dark:text-gray-500{% endif %}">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+                </svg>
+                <span>Starred</span>
+            </a>
+            <a href="/activities/"
+               class="flex flex-col items-center gap-0.5 text-xs {% if active_page == "activities" %}text-brand-500{% else %}text-gray-400 dark:text-gray-500{% endif %}">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                <span>Activity</span>
+            </a>
+            <a href="/profile/"
+               class="flex flex-col items-center gap-0.5 text-xs {% if active_page == "settings" %}text-brand-500{% else %}text-gray-400 dark:text-gray-500{% endif %}">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+                <span>Settings</span>
+            </a>
+        </div>
+    </nav>
+
     <script src="{{ urls.js }}"></script>
+    <script src="{{ urls.file_browser_js }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

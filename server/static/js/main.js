@@ -2,69 +2,113 @@
 (function () {
   "use strict";
 
-  // Mobile sidebar toggle
-  const menuToggle = document.querySelector(".js-mobile-menu-toggle");
-  const sidebar = document.querySelector(".js-sidebar");
-  const overlay = document.querySelector(".js-sidebar-overlay");
-
-  function openSidebar() {
-    if (sidebar) sidebar.classList.remove("hidden");
-    if (sidebar) sidebar.classList.add("flex");
-    if (overlay) overlay.classList.remove("hidden");
+  // ─── Toast notification system ────────────────────────────────────────
+  var toastContainer = null;
+  function initToast() {
+    toastContainer = document.createElement("div");
+    toastContainer.className =
+      "fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none";
+    toastContainer.setAttribute("aria-live", "polite");
+    toastContainer.setAttribute("aria-relevant", "additions removals");
+    document.body.appendChild(toastContainer);
   }
 
-  function closeSidebar() {
-    if (sidebar) sidebar.classList.remove("flex");
-    if (sidebar) sidebar.classList.add("hidden");
-    if (overlay) overlay.classList.add("hidden");
+  function showToast(message, type, duration) {
+    type = type || "success";
+    duration = duration || 4000;
+    if (!toastContainer) initToast();
+
+    var colors = {
+      success:
+        "bg-green-50 border-green-200 text-green-800",
+      error:
+        "bg-red-50 border-red-200 text-red-800",
+      info:
+        "bg-brand-50 border-brand-200 text-brand-800",
+    };
+
+    var icons = {
+      success:
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>',
+      error:
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>',
+      info:
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>',
+    };
+
+    var el = document.createElement("div");
+    el.className =
+      "pointer-events-auto flex items-center gap-3 rounded-xl border px-4 py-3 shadow-lg animate-slide-in " +
+      (colors[type] || colors.success);
+    el.innerHTML =
+      '<svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+      (icons[type] || icons.success) +
+      '</svg><p class="text-sm font-medium flex-1">' +
+      escapeHtml(message) +
+      '</p><button class="flex-shrink-0 rounded-md p-1 opacity-60 hover:opacity-100 transition-opacity" onclick="this.parentElement.classList.add(\'animate-slide-out\');setTimeout(function(){this.parentElement.remove()}.bind(this),250)">' +
+      '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
+      "</button>";
+
+    toastContainer.appendChild(el);
+
+    setTimeout(function () {
+      el.classList.add("animate-slide-out");
+      setTimeout(function () { if (el.parentNode) el.remove(); }, 250);
+    }, duration);
+  }
+
+  // Expose globally for inline scripts in templates
+  window.Toast = { show: showToast, success: function(m) { showToast(m, "success"); }, error: function(m) { showToast(m, "error"); }, info: function(m) { showToast(m, "info"); } };
+
+  // ─── Loading bar ─────────────────────────────────────────────────────
+  var loadingBar = document.getElementById("loading-bar");
+  window.showLoading = function () {
+    if (loadingBar) loadingBar.classList.remove("hidden");
+  };
+  window.hideLoading = function () {
+    if (loadingBar) loadingBar.classList.add("hidden");
+  };
+
+  // ─── Mobile left panel toggle ──────────────────────────────────────
+  const menuToggle = document.querySelector(".js-mobile-menu-toggle");
+  const leftPanel = document.querySelector(".js-left-panel");
+
+  function toggleMobilePanel() {
+    if (!leftPanel) return;
+    if (leftPanel.classList.contains("hidden")) {
+      leftPanel.classList.remove("hidden");
+      leftPanel.classList.add("flex");
+      leftPanel.style.width = "var(--left-panel-width, 240px)";
+    } else {
+      leftPanel.classList.add("hidden");
+      leftPanel.classList.remove("flex");
+      leftPanel.style.width = "0";
+    }
   }
 
   if (menuToggle) {
     menuToggle.addEventListener("click", function (e) {
       e.stopPropagation();
-      if (sidebar && sidebar.classList.contains("hidden")) {
-        openSidebar();
-      } else {
-        closeSidebar();
-      }
+      toggleMobilePanel();
     });
   }
-
-  if (overlay) {
-    overlay.addEventListener("click", closeSidebar);
-  }
-
-  // Close sidebar on Escape key
-  document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") closeSidebar();
-  });
-
-  // User menu dropdown
+  // ─── User menu dropdown (Sign out only) ─────────────────────────
   const userMenu = document.querySelector(".js-user-menu");
   const userButton = document.querySelector(".js-user-menu-button");
   if (userMenu && userButton) {
     userButton.addEventListener("click", function (e) {
       e.stopPropagation();
       let dropdown = userMenu.querySelector(".js-user-menu-dropdown");
-      if (dropdown) {
-        dropdown.remove();
-        return;
-      }
+      if (dropdown) { dropdown.remove(); return; }
       dropdown = document.createElement("div");
       dropdown.className =
-        "js-user-menu-dropdown absolute right-0 z-50 mt-2 w-48 origin-top-right rounded-md bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none";
+        "js-user-menu-dropdown absolute right-0 z-50 mt-2 w-36 origin-top-right rounded-xl bg-white dark:bg-surface-800 py-1 shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-none";
 
-      const links = [
-        { href: "/profile/", text: "Settings" },
-        { href: "/accounts/logout/", text: "Sign out" },
-      ];
-      for (const link of links) {
-        const a = document.createElement("a");
-        a.href = link.href;
-        a.className = "block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100";
-        a.textContent = link.text;
-        dropdown.appendChild(a);
-      }
+      var a = document.createElement("a");
+      a.href = "/accounts/logout/";
+      a.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
+      a.textContent = "Sign out";
+      dropdown.appendChild(a);
 
       userMenu.appendChild(dropdown);
 
@@ -81,7 +125,7 @@
     });
   }
 
-  // Dark mode toggle
+  // ─── Dark mode toggle ────────────────────────────────────────────────
   const darkToggle = document.querySelector(".js-dark-toggle");
   if (darkToggle) {
     darkToggle.addEventListener("click", function () {
@@ -91,13 +135,64 @@
         document.documentElement.classList.contains("dark")
       );
     });
-    // Restore preference
     if (localStorage.getItem("darkMode") === "true") {
       document.documentElement.classList.add("dark");
     }
   }
 
-  // ── Star toggle (event delegation) ─────────────────────────────────────
+  // ─── Quick search ────────────────────────────────────────────────────
+  var searchInput = document.querySelector(".js-quick-search");
+  if (searchInput) {
+    searchInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        var q = searchInput.value.trim();
+        if (q) window.location.href = "/search?q=" + encodeURIComponent(q);
+      }
+    });
+  }
+
+  // ─── Keyboard shortcuts ──────────────────────────────────────────────
+  var searchFocused = false;
+  document.addEventListener("keydown", function (e) {
+    var tag = (e.target && e.target.tagName) || "";
+    var isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+
+    // Close sidebar on Escape
+    if (e.key === "Escape") {
+      closeSidebar();
+      return;
+    }
+
+    // / key to focus search
+    if (e.key === "/" && !isInput) {
+      e.preventDefault();
+      if (searchInput) { searchInput.focus(); searchInput.select(); }
+      return;
+    }
+
+    // g then another key for navigation (only when not in an input)
+    if (!isInput) {
+      if (e.key === "g" && !searchFocused) {
+        searchFocused = true;
+        var navTimer = setTimeout(function () { searchFocused = false; }, 1000);
+        document.addEventListener(
+          "keydown",
+          function navHandler(ev) {
+            if (ev.key === "l") { clearTimeout(navTimer); searchFocused = false; window.location.href = "/libraries/"; }
+            else if (ev.key === "s") { clearTimeout(navTimer); searchFocused = false; window.location.href = "/starred/"; }
+            else if (ev.key === "t") { clearTimeout(navTimer); searchFocused = false; window.location.href = "/trash/"; }
+            else if (ev.key === "a") { clearTimeout(navTimer); searchFocused = false; window.location.href = "/activities/"; }
+            else if (ev.key === "p") { clearTimeout(navTimer); searchFocused = false; window.location.href = "/profile/"; }
+            else if (ev.key === "Escape") { clearTimeout(navTimer); searchFocused = false; }
+            document.removeEventListener("keydown", navHandler);
+          },
+          { once: true }
+        );
+      }
+    }
+  });
+
+  // ─── Star toggle (event delegation) ──────────────────────────────────
   document.addEventListener("click", async function (e) {
     const btn = e.target.closest("[data-toggle-star]");
     if (!btn) return;
@@ -115,7 +210,6 @@
 
     try {
       if (currentlyStarred) {
-        // DELETE — unstar (uses X-CSRFToken header + session cookie)
         const url =
           "/api/v2.1/starred-items/?repo_id=" +
           encodeURIComponent(repoId) +
@@ -126,14 +220,16 @@
           headers: { "X-CSRFToken": csrfToken },
         });
         if (res.ok) {
-          btn.classList.remove("text-yellow-400");
+          btn.classList.remove("text-yellow-400", "text-amber-400");
           btn.classList.add("text-gray-300", "hover:text-yellow-400");
+          if (btn.classList.contains("dark\\:text-gray-600")) {
+            btn.classList.add("dark:text-gray-600");
+          }
           btn.querySelector("svg").setAttribute("fill", "none");
           btn.title = "Star";
           btn.dataset.starred = "false";
         }
       } else {
-        // POST — star
         const res = await fetch("/api/v2.1/starred-items/", {
           method: "POST",
           headers: {
@@ -144,7 +240,10 @@
         });
         if (res.ok) {
           btn.classList.remove("text-gray-300", "hover:text-yellow-400");
-          btn.classList.add("text-yellow-400");
+          if (btn.classList.contains("dark\\:text-gray-600")) {
+            btn.classList.remove("dark:text-gray-600");
+          }
+          btn.classList.add("text-amber-400");
           btn.querySelector("svg").setAttribute("fill", "currentColor");
           btn.title = "Unstar";
           btn.dataset.starred = "true";
@@ -157,7 +256,7 @@
     }
   });
 
-  // ── Read a cookie value by name ────────────────────────────────────────
+  // ─── Cookie helper ───────────────────────────────────────────────────
   function getCookie(name) {
     const match = document.cookie.match(
       "(^|;)\\s*" + name + "\\s*=\\s*([^;]+)"
@@ -165,25 +264,140 @@
     return match ? match.pop() : "";
   }
 
-  // ── Delete confirmation (event delegation) ────────────────────────────
-  document.addEventListener("submit", function (e) {
+  function escapeHtml(str) {
+    var div = document.createElement("div");
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+  }
+
+  // ─── Custom confirm dialog ───────────────────────────────────────────
+  var confirmOverlay = null;
+  var confirmResolve = null;
+
+  function initConfirmDialog() {
+    confirmOverlay = document.createElement("div");
+    confirmOverlay.className =
+      "hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/30";
+    confirmOverlay.setAttribute("role", "alertdialog");
+    confirmOverlay.setAttribute("aria-modal", "true");
+    confirmOverlay.innerHTML =
+      '<div class="bg-white dark:bg-surface-800 rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" onclick="event.stopPropagation()">' +
+      '<h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1 js-confirm-title"></h3>' +
+      '<p class="text-sm text-gray-500 dark:text-gray-400 mb-4 js-confirm-message"></p>' +
+      '<div class="flex justify-end gap-2">' +
+      '<button class="js-confirm-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">Cancel</button>' +
+      '<button class="js-confirm-ok rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors"></button>' +
+      "</div></div>";
+    document.body.appendChild(confirmOverlay);
+
+    confirmOverlay.addEventListener("click", function (e) {
+      if (e.target === confirmOverlay) hideConfirm(false);
+    });
+
+    confirmOverlay.querySelector(".js-confirm-cancel").addEventListener("click", function () {
+      hideConfirm(false);
+    });
+
+    document.addEventListener("keydown", function confirmEsc(e) {
+      if (e.key === "Escape" && confirmOverlay && !confirmOverlay.classList.contains("hidden")) {
+        hideConfirm(false);
+      }
+    });
+  }
+
+  function hideConfirm(result) {
+    if (confirmOverlay) confirmOverlay.classList.add("hidden");
+    if (confirmResolve) { confirmResolve(result); confirmResolve = null; }
+  }
+
+  function showConfirmDialog(title, message, opts) {
+    opts = opts || {};
+    if (!confirmOverlay) initConfirmDialog();
+
+    confirmOverlay.querySelector(".js-confirm-title").textContent = title;
+    confirmOverlay.querySelector(".js-confirm-message").textContent = message;
+
+    var okBtn = confirmOverlay.querySelector(".js-confirm-ok");
+    okBtn.textContent = opts.confirmText || "Delete";
+    okBtn.className =
+      "js-confirm-ok rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors " +
+      (opts.variant === "danger"
+        ? "bg-red-600 hover:bg-red-700"
+        : "bg-brand-500 hover:bg-brand-600");
+
+    // Remove old listener by cloning
+    var newOk = okBtn.cloneNode(true);
+    okBtn.parentNode.replaceChild(newOk, okBtn);
+
+    confirmOverlay.classList.remove("hidden");
+    // Focus the cancel button by default
+    setTimeout(function () {
+      confirmOverlay.querySelector(".js-confirm-cancel").focus();
+    }, 100);
+
+    return new Promise(function (resolve) {
+      confirmResolve = resolve;
+      newOk.addEventListener("click", function () { hideConfirm(true); });
+    });
+  }
+
+  window.ConfirmDialog = {
+    confirm: function (title, message, opts) { return showConfirmDialog(title, message, opts); },
+  };
+
+  // ─── Replace native confirm() calls with custom dialog ─────────────
+  // Delete file
+  document.addEventListener("submit", async function (e) {
     const form = e.target.closest(".js-delete-form");
     if (!form) return;
 
+    e.preventDefault();
     const nameInput = form.querySelector('input[name="name"]');
     const name = nameInput ? nameInput.value : "";
-    const msg = 'Delete "' + name + '"? This cannot be undone.';
-    if (!confirm(msg)) {
-      e.preventDefault();
-    }
+    var confirmed = await showConfirmDialog(
+      "Delete",
+      'Delete "' + name + '"? This cannot be undone.',
+      { confirmText: "Delete", variant: "danger" }
+    );
+    if (confirmed) form.submit();
   });
 
-  // ── Rename dialog ─────────────────────────────────────────────────────
+  // Trash restore
+  document.addEventListener("submit", async function (e) {
+    const form = e.target.closest(".js-restore-form");
+    if (!form) return;
+
+    e.preventDefault();
+    const objName = form.dataset.objName || "";
+    const repoName = form.dataset.repoName || "";
+    var confirmed = await showConfirmDialog(
+      "Restore",
+      'Restore "' + objName + '" from ' + repoName + "?",
+      { confirmText: "Restore", variant: "primary" }
+    );
+    if (confirmed) form.submit();
+  });
+
+  // Repo delete
+  document.addEventListener("submit", async function (e) {
+    const form = e.target.closest(".js-delete-repo-form");
+    if (!form) return;
+
+    e.preventDefault();
+    const repoName = form.dataset.repoName || "";
+    var confirmed = await showConfirmDialog(
+      "Delete Library",
+      'Delete library "' + repoName + '"? All files will be permanently lost.',
+      { confirmText: "Delete", variant: "danger" }
+    );
+    if (confirmed) form.submit();
+  });
+
+  // ─── Rename dialog ──────────────────────────────────────────────────
   const renameOverlay = document.getElementById("rename-overlay");
   const renameOldPath = document.getElementById("rename-old-path");
   const renameInput = document.getElementById("rename-input");
 
-  // Open rename dialog
   document.addEventListener("click", function (e) {
     const btn = e.target.closest(".js-rename-btn");
     if (!btn) return;
@@ -197,23 +411,18 @@
     }, 100);
   });
 
-  // Close rename dialog on overlay background click
   if (renameOverlay) {
     renameOverlay.addEventListener("click", function (e) {
-      if (e.target === renameOverlay) {
-        renameOverlay.classList.add("hidden");
-      }
+      if (e.target === renameOverlay) renameOverlay.classList.add("hidden");
     });
   }
 
-  // Close rename dialog on Escape
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && renameOverlay && !renameOverlay.classList.contains("hidden")) {
       renameOverlay.classList.add("hidden");
     }
   });
 
-  // Close rename dialog on Cancel
   const renameCancel = document.querySelector(".js-rename-cancel");
   if (renameCancel) {
     renameCancel.addEventListener("click", function () {
@@ -221,7 +430,6 @@
     });
   }
 
-  // Rename form submit
   const renameForm = document.getElementById("rename-dialog-form");
   if (renameForm) {
     renameForm.addEventListener("submit", function (e) {
@@ -234,28 +442,17 @@
     });
   }
 
-  // ── Trash restore confirmation (event delegation) ───────────────────
-  document.addEventListener("submit", function (e) {
-    const form = e.target.closest(".js-restore-form");
-    if (!form) return;
+  // ─── Response time display ────────────────────────────────────
+  var respTimeEl = document.getElementById("resp-time");
+  if (respTimeEl) {
+    window.addEventListener("load", function () {
+      var loadTime = performance.now();
+      var display = loadTime >= 2000
+        ? (loadTime / 1000).toFixed(1) + "s"
+        : Math.round(loadTime) + "ms";
+      respTimeEl.textContent = display;
+      respTimeEl.classList.remove("opacity-0");
+    });
+  }
 
-    const objName = form.dataset.objName || "";
-    const repoName = form.dataset.repoName || "";
-    const msg = 'Restore "' + objName + '" from ' + repoName + "?";
-    if (!confirm(msg)) {
-      e.preventDefault();
-    }
-  });
-
-  // ── Repo delete confirmation (event delegation) ────────────────────
-  document.addEventListener("submit", function (e) {
-    const form = e.target.closest(".js-delete-repo-form");
-    if (!form) return;
-
-    const repoName = form.dataset.repoName || "";
-    const msg = 'Delete library "' + repoName + '"? All files will be permanently lost.';
-    if (!confirm(msg)) {
-      e.preventDefault();
-    }
-  });
 })();

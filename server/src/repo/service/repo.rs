@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::AccessTokenManager;
 use crate::activity_log;
 use crate::auth::token::generate_sync_token;
-use crate::entity::{repo, sync_token};
+use crate::entity::{repo, repo_member, sync_token};
 use crate::error::AppError;
 use crate::repository::Repositories;
 
@@ -722,5 +722,58 @@ impl RepoService {
             owner_email,
             owner_name,
         })
+    }
+}
+
+/// Minimum repo data for the left panel sidebar.
+#[derive(Clone)]
+pub struct LeftPanelRepo {
+    pub id: String,
+    pub name: String,
+    pub size_display: String,
+}
+
+/// Query all repos for the given user, returning left-panel data.
+pub async fn load_left_panel_repos(
+    db: &DatabaseConnection,
+    user_id: i32,
+) -> Result<Vec<LeftPanelRepo>, AppError> {
+    use sea_orm::EntityTrait;
+
+    let members = repo_member::Entity::find()
+        .filter(repo_member::Column::UserId.eq(user_id))
+        .all(db)
+        .await
+        .map_err(|e| AppError::internal(format!("db error: {e}")))?;
+
+    let mut repos = Vec::with_capacity(members.len());
+    for m in members {
+        if let Some(r) = repo::Entity::find_by_id(m.repo_id)
+            .one(db)
+            .await
+            .map_err(|e| AppError::internal(format!("db error: {e}")))?
+        {
+            repos.push(LeftPanelRepo {
+                id: r.id,
+                name: r.name,
+                size_display: format_repo_size(r.size),
+            });
+        }
+    }
+    Ok(repos)
+}
+
+fn format_repo_size(bytes: i64) -> String {
+    if bytes == 0 {
+        return "0 B".to_string();
+    }
+    let units = ["B", "KB", "MB", "GB", "TB"];
+    let i = (bytes as f64).log(1024.0).floor() as usize;
+    let i = i.min(units.len() - 1);
+    let val = bytes as f64 / (1024u64.pow(i as u32) as f64);
+    if i == 0 {
+        format!("{} {}", val as i64, units[i])
+    } else {
+        format!("{:.1} {}", val, units[i])
     }
 }

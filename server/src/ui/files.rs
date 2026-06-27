@@ -39,6 +39,8 @@ pub struct FileBrowserTemplate {
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub entries: Vec<FileEntry>,
     pub active_page: &'static str,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 #[derive(Template)]
@@ -67,6 +69,8 @@ pub struct PreviewTextTemplate {
     pub parent_path: String,
     pub size_display: String,
     pub active_page: &'static str,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 #[derive(Template)]
@@ -82,6 +86,8 @@ pub struct PreviewImageTemplate {
     pub parent_path: String,
     pub size_display: String,
     pub active_page: &'static str,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 // ─── Data types ──────────────────────────────────────────────────────────────
@@ -413,6 +419,9 @@ async fn file_browser_inner(
             .map_err(|e| AppError::internal(e.to_string()))?;
         Ok(Html(html).into_response())
     } else {
+        let left_panel_repos =
+            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+        let current_repo_id = Some(repo_id.clone());
         let tpl = FileBrowserTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email,
@@ -1098,6 +1107,8 @@ pub async fn preview_file(
             .map(format_size)
             .unwrap_or_else(|_| "?".to_string());
 
+        let left_panel_repos =
+            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
         let tpl = PreviewImageTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email,
@@ -1109,6 +1120,8 @@ pub async fn preview_file(
             parent_path,
             size_display,
             active_page: "repos",
+            left_panel_repos,
+            current_repo_id: Some(repo_id.clone()),
         };
         let html = tpl
             .render()
@@ -1125,6 +1138,8 @@ pub async fn preview_file(
         let content = String::from_utf8_lossy(&data).to_string();
         let size_display = format_size(data.len() as i64);
 
+        let left_panel_repos =
+            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
         let tpl = PreviewTextTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email,
@@ -1137,6 +1152,8 @@ pub async fn preview_file(
             parent_path,
             size_display,
             active_page: "repos",
+            left_panel_repos,
+            current_repo_id: Some(repo_id.clone()),
         };
         let html = tpl
             .render()

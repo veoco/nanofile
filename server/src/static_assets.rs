@@ -90,6 +90,13 @@ asset_data!(
     FP_FAVICON,
     "img/favicon.svg"
 );
+asset_data!(
+    FB_JS_HASH,
+    FB_JS_LM,
+    ETAG_FB_JS,
+    FP_FB_JS,
+    "js/file-browser.js"
+);
 
 // ─── Template URLs (for Askama templates, fingerprinted filenames) ──────────
 
@@ -101,6 +108,7 @@ asset_data!(
 pub struct TemplateUrls {
     pub css: &'static str,
     pub js: &'static str,
+    pub file_browser_js: &'static str,
     pub favicon: &'static str,
     pub version: &'static str,
 }
@@ -110,6 +118,7 @@ pub fn template_urls() -> &'static TemplateUrls {
     static URLS: LazyLock<TemplateUrls> = LazyLock::new(|| TemplateUrls {
         css: Box::leak(format!("/static/{}", *FP_CSS).into_boxed_str()),
         js: Box::leak(format!("/static/{}", *FP_JS).into_boxed_str()),
+        file_browser_js: Box::leak(format!("/static/{}", *FP_FB_JS).into_boxed_str()),
         favicon: Box::leak(format!("/static/{}", *FP_FAVICON).into_boxed_str()),
         version: env!("CARGO_PKG_VERSION"),
     });
@@ -140,6 +149,8 @@ fn resolve_asset(path: &str) -> Option<(&'static str, &'static str, &'static str
         Some(("css/app.css", &*ETAG_CSS, &*CSS_LM))
     } else if path == "js/main.js" || path == *FP_JS {
         Some(("js/main.js", &*ETAG_JS, &*JS_LM))
+    } else if path == "js/file-browser.js" || path == *FP_FB_JS {
+        Some(("js/file-browser.js", &*ETAG_FB_JS, &*FB_JS_LM))
     } else if path == "img/favicon.svg" || path == *FP_FAVICON {
         Some(("img/favicon.svg", &*ETAG_FAVICON, &*FAVICON_LM))
     } else {

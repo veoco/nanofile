@@ -32,6 +32,8 @@ pub struct SettingsTemplate {
     pub csrf_token: Option<String>,
     /// Whether the user has admin privileges.
     pub is_admin: bool,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 #[derive(Template)]
@@ -45,6 +47,8 @@ pub struct DevicesTemplate {
     pub error: Option<String>,
     pub success: Option<String>,
     pub csrf_token: Option<String>,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 pub struct DeviceInfo {
@@ -96,6 +100,8 @@ pub async fn settings_page(
         &user.session_token,
     ));
 
+    let left_panel_repos =
+        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
     let tpl = SettingsTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
@@ -106,6 +112,8 @@ pub async fn settings_page(
         two_fa_enabled,
         csrf_token,
         is_admin: user.is_admin,
+        left_panel_repos,
+        current_repo_id: None,
     };
 
     let html = tpl
@@ -146,6 +154,8 @@ pub async fn change_password(
             &state.csrf_secret,
             &user.session_token,
         ));
+        let left_panel_repos =
+            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
         let tpl = SettingsTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email.clone(),
@@ -156,6 +166,8 @@ pub async fn change_password(
             two_fa_enabled: false,
             csrf_token,
             is_admin: user.is_admin,
+            left_panel_repos,
+            current_repo_id: None,
         };
         let html = tpl
             .render()
@@ -249,6 +261,8 @@ pub async fn devices_page(
         &state.csrf_secret,
         &user.session_token,
     ));
+    let left_panel_repos =
+        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
 
     let tpl = DevicesTemplate {
         urls: crate::static_assets::template_urls(),
@@ -259,6 +273,8 @@ pub async fn devices_page(
         error: None,
         success: None,
         csrf_token,
+        left_panel_repos,
+        current_repo_id: None,
     };
 
     let html = tpl
@@ -353,6 +369,8 @@ pub async fn upload_avatar(
             &state.csrf_secret,
             &user.session_token,
         ));
+        let left_panel_repos =
+            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
         let tpl = SettingsTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email.clone(),
@@ -363,6 +381,8 @@ pub async fn upload_avatar(
             two_fa_enabled: false,
             csrf_token: csrf_new,
             is_admin: user.is_admin,
+            left_panel_repos,
+            current_repo_id: None,
         };
         let html = tpl
             .render()
@@ -379,6 +399,8 @@ pub async fn upload_avatar(
             &state.csrf_secret,
             &user.session_token,
         ));
+        let left_panel_repos =
+            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
         let tpl = SettingsTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email.clone(),
@@ -389,6 +411,8 @@ pub async fn upload_avatar(
             two_fa_enabled: false,
             csrf_token: csrf_new,
             is_admin: user.is_admin,
+            left_panel_repos,
+            current_repo_id: None,
         };
         let html = tpl
             .render()

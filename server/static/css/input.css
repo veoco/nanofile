@@ -1,9 +1,56 @@
 @import "tailwindcss";
 
-/* Custom theme extensions */
+/* Use class-based dark mode (toggled via JS on <html>) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ─── Custom design tokens ─────────────────────────────────────────────────── */
 @theme {
-    --color-seafile-blue: #2196f3;
-    --color-seafile-dark: #1a2634;
-    --color-seafile-sidebar: #1e2a3a;
+  /* Brand — warm indigo (like Dropbox/Notion) */
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+
+  /* Surface — neutral slate hierarchy */
+  --color-surface-50: #f8fafc;
+  --color-surface-100: #f1f5f9;
+  --color-surface-200: #e2e8f0;
+  --color-surface-700: #334155;
+  --color-surface-800: #1e293b;
+  --color-surface-900: #0f172a;
 }
 
+/* ─── Base layer overrides ─────────────────────────────────────────────────── */
+@layer base {
+  * {
+    @apply border-gray-200 dark:border-gray-700;
+  }
+  body {
+    @apply transition-colors duration-200;
+  }
+}
+
+/* ─── Custom utility animations ────────────────────────────────────────────── */
+@keyframes slide-in-right {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);      opacity: 1; }
+}
+@keyframes slide-out-right {
+  from { transform: translateX(0);      opacity: 1; }
+  to   { transform: translateX(100%); opacity: 0; }
+}
+@keyframes loading-bar {
+  0%   { left: -35%; right: 100%; }
+  60%  { left: 100%; right: -90%; }
+  100% { left: 100%; right: -90%; }
+}
+
+.animate-slide-in  { animation: slide-in-right 0.25s ease-out; }
+.animate-slide-out { animation: slide-out-right 0.25s ease-in forwards; }
+.animate-loading-bar {
+  animation: loading-bar 2s ease-in-out infinite;
+}

@@ -46,6 +46,8 @@ pub struct TrashListTemplate {
     pub cleaned: bool,
     pub active_page: &'static str,
     pub csrf_token: String,
+    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
 }
 
 pub struct TrashEntryView {
@@ -115,6 +117,8 @@ pub async fn trash_list_page(
 
     let csrf_token =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+    let left_panel_repos =
+        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
 
     let tpl = TrashListTemplate {
         urls: crate::static_assets::template_urls(),
@@ -131,6 +135,8 @@ pub async fn trash_list_page(
         cleaned,
         active_page: "trash",
         csrf_token,
+        left_panel_repos,
+        current_repo_id: None,
     };
 
     let html = tpl

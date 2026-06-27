@@ -3,22 +3,22 @@
 {% block title %}Search | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900">Search</h1>
+<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Search</h1>
 
 <form action="/search" method="GET" class="mt-4 max-w-lg">
     <div class="flex gap-x-2">
         <input type="text" name="q" value="{{ query }}"
                placeholder="Search files..."
-               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue sm:text-sm border p-2">
+               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
         <button type="submit"
-                class="rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600">
+                class="rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
             Search
         </button>
     </div>
-    <label class="mt-2 flex items-center gap-x-2 text-sm text-gray-600">
+    <label class="mt-2 flex items-center gap-x-2 text-sm text-gray-600 dark:text-gray-400">
         <input type="checkbox" name="search_filename_only" value="false"
                {% if !search_filename_only %}checked{% endif %}
-               class="rounded border-gray-300 text-seafile-blue focus:ring-seafile-blue"
+               class="rounded border-gray-300 dark:border-gray-600 text-brand-500 focus:ring-brand-500"
                onchange="this.form.submit()">
         Full-text search (search file contents too)
     </label>
@@ -26,16 +26,16 @@
 
 {% if !query.is_empty() %}
 <div class="mt-8">
-    <p class="text-sm text-gray-500">Search results for "{{ query }}" ({{ total }} found)</p>
+    <p class="text-sm text-gray-500 dark:text-gray-400">Search results for "{{ query }}" ({{ total }} found)</p>
 
     {% if results.is_empty() %}
-    <p class="mt-4 text-sm text-gray-400">No results found.</p>
+    <p class="mt-4 text-sm text-gray-400 dark:text-gray-500">No results found.</p>
     {% else %}
-    <ul class="mt-4 divide-y divide-gray-200 border rounded-md">
+    <ul class="mt-4 divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden bg-white dark:bg-surface-800">
         {% for item in results %}
-        <li class="px-4 py-3 flex items-center gap-x-3 hover:bg-gray-50">
+        <li class="px-4 py-3 flex items-center gap-x-3 hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
             <!-- Icon -->
-            <span class="flex-shrink-0 text-gray-400">
+            <span class="flex-shrink-0 text-gray-400 dark:text-gray-500">
                 {% if item.is_dir %}
                 <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -52,16 +52,16 @@
             <!-- File info -->
             <div class="min-w-0 flex-1">
                 <a href="/ui/repos/{{ item.repo_id }}/"
-                   class="text-sm font-medium text-seafile-blue hover:text-blue-800 truncate block">
+                   class="text-sm font-medium text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300 truncate block">
                     {{ item.name }}
                 </a>
-                <p class="text-xs text-gray-500 truncate">
+                <p class="text-xs text-gray-500 dark:text-gray-400 truncate">
                     {{ item.repo_name }} &middot; {{ item.fullpath }}
                 </p>
             </div>
 
             <!-- Size and date -->
-            <div class="flex-shrink-0 text-right text-xs text-gray-400">
+            <div class="flex-shrink-0 text-right text-xs text-gray-400 dark:text-gray-500">
                 {% if !item.is_dir %}
                 <div>{{ item.size_display }}</div>
                 {% endif %}
@@ -75,7 +75,7 @@
     {% if has_more %}
     <div class="mt-4 text-center">
         <a href="/search?q={{ query }}{% if !search_filename_only %}&amp;search_filename_only=false{% endif %}"
-           class="text-sm text-seafile-blue hover:text-blue-800">
+           class="text-sm text-brand-500 dark:text-brand-400 hover:text-brand-600">
             Load more results
         </a>
     </div>

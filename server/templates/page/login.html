@@ -16,25 +16,25 @@
 {% block content %}
 <form class="space-y-5" action="/accounts/login/" method="POST">
     <div>
-        <label for="email" class="block text-sm font-medium text-gray-700">Email address</label>
+        <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Email address</label>
         <input id="email"
                name="email"
                type="email"
                autocomplete="email"
                required
                placeholder="you@example.com"
-               class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2.5 text-gray-900 shadow-sm placeholder:text-gray-400 focus:border-seafile-blue focus:outline-none focus:ring-2 focus:ring-seafile-blue sm:text-sm">
+               class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 text-gray-900 dark:text-gray-100 dark:bg-surface-700 shadow-sm placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm">
     </div>
 
     <div>
-        <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+        <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Password</label>
         <input id="password"
                name="password"
                type="password"
                autocomplete="current-password"
                required
                placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
-               class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2.5 text-gray-900 shadow-sm placeholder:text-gray-400 focus:border-seafile-blue focus:outline-none focus:ring-2 focus:ring-seafile-blue sm:text-sm">
+               class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 text-gray-900 dark:text-gray-100 dark:bg-surface-700 shadow-sm placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm">
     </div>
 
     <div class="flex items-center">
@@ -43,15 +43,15 @@
                type="checkbox"
                value="1"
                checked
-               class="h-4 w-4 rounded border-gray-300 text-seafile-blue focus:ring-seafile-blue">
-        <label for="remember_me" class="ml-2 block text-sm text-gray-600">
+               class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-brand-500 focus:ring-brand-500">
+        <label for="remember_me" class="ml-2 block text-sm text-gray-600 dark:text-gray-400">
             Remember me for {{ remember_days }} days
         </label>
     </div>
 
     <div>
         <button type="submit"
-                class="flex w-full justify-center rounded-lg bg-seafile-blue px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-seafile-blue">
+                class="flex w-full justify-center rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500">
             Sign in
         </button>
     </div>
@@ -60,10 +60,10 @@
 
 {% block footer %}
 <div class="mt-6 flex items-center justify-center gap-4 text-sm">
-    <a href="/accounts/register/" class="font-medium text-seafile-blue transition hover:text-blue-700">Create Account</a>
+    <a href="/accounts/register/" class="font-medium text-brand-500 transition hover:text-brand-600 dark:text-brand-400 dark:hover:text-brand-300">Create Account</a>
     {% if enable_password_reset %}
-    <span class="text-gray-300">|</span>
-    <a href="/accounts/password/reset/" class="font-medium text-seafile-blue transition hover:text-blue-700">Forgot password?</a>
+    <span class="text-gray-300 dark:text-gray-600">|</span>
+    <a href="/accounts/password/reset/" class="font-medium text-brand-500 transition hover:text-brand-600 dark:text-brand-400 dark:hover:text-brand-300">Forgot password?</a>
     {% endif %}
 </div>
 {% endblock %}

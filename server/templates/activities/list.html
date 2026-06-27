@@ -3,71 +3,74 @@
 {% block title %}File Activities | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900">File Activities</h1>
-<p class="mt-1 text-sm text-gray-500">Recent file operations across your libraries.</p>
+<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">File Activities</h1>
+<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Recent file operations across your libraries.</p>
 
 {% if activities.is_empty() %}
 <div class="mt-8 text-center">
-    <p class="text-gray-500">No activity recorded yet.</p>
-    <p class="mt-2 text-sm text-gray-400">Create, upload, rename, move, or delete files to see activity here.</p>
+    <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">No activity recorded yet.</p>
+    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Create, upload, rename, move, or delete files to see activity here.</p>
 </div>
 {% else %}
-<div class="mt-6 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-    <table class="min-w-full divide-y divide-gray-200">
-        <thead class="bg-gray-50">
+<div class="mt-6 overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
+    <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+        <thead class="bg-gray-50 dark:bg-surface-700">
             <tr>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Operation</th>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">File</th>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Library</th>
-                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Operation</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">File</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden sm:table-cell">Library</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
             </tr>
         </thead>
-        <tbody class="divide-y divide-gray-200">
+        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
             {% for item in activities %}
-            <tr class="hover:bg-gray-50">
+            <tr class="hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
                 <td class="px-4 py-3 text-sm whitespace-nowrap">
                     {% if item.op_type == "create" %}
-                    <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
+                    <span class="inline-flex items-center rounded-full bg-green-100 dark:bg-green-900/30 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:text-green-300">
                         <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
                         Created
                     </span>
                     {% else if item.op_type == "edit" %}
-                    <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                    <span class="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/30 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:text-blue-300">
                         <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                         Edited
                     </span>
                     {% else if item.op_type == "rename" %}
-                    <span class="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-medium text-orange-800">
+                    <span class="inline-flex items-center rounded-full bg-orange-100 dark:bg-orange-900/30 px-2.5 py-0.5 text-xs font-medium text-orange-800 dark:text-orange-300">
                         <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
                         Renamed
                     </span>
                     {% else if item.op_type == "move" %}
-                    <span class="inline-flex items-center rounded-full bg-purple-100 px-2.5 py-0.5 text-xs font-medium text-purple-800">
+                    <span class="inline-flex items-center rounded-full bg-purple-100 dark:bg-purple-900/30 px-2.5 py-0.5 text-xs font-medium text-purple-800 dark:text-purple-300">
                         <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
                         Moved
                     </span>
                     {% else if item.op_type == "delete" %}
-                    <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
+                    <span class="inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:text-red-300">
                         <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                         Deleted
                     </span>
                     {% else if item.op_type == "batch_create" %}
-                    <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
+                    <span class="inline-flex items-center rounded-full bg-green-100 dark:bg-green-900/30 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:text-green-300">
                         <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
                         Batch Created
                     </span>
                     {% else if item.op_type == "batch_delete" %}
-                    <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
+                    <span class="inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:text-red-300">
                         <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                         Batch Deleted
                     </span>
                     {% else if item.op_type == "recover" %}
-                    <span class="inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">
+                    <span class="inline-flex items-center rounded-full bg-yellow-100 dark:bg-yellow-900/30 px-2.5 py-0.5 text-xs font-medium text-yellow-800 dark:text-yellow-300">
                         <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 15 3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3"/></svg>
                         Recovered
                     </span>
                     {% else if item.op_type == "clean-up-trash" %}
-                    <span class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-800">
+                    <span class="inline-flex items-center rounded-full bg-gray-100 dark:bg-gray-700 px-2.5 py-0.5 text-xs font-medium text-gray-800 dark:text-gray-300">
                         <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         Trash Cleaned
                     </span>
@@ -75,11 +78,11 @@
                 </td>
                 <td class="px-4 py-3 text-sm">
                     <div class="flex flex-col">
-                        <span class="font-medium text-gray-900">
+                        <span class="font-medium text-gray-900 dark:text-gray-100">
                             {% if item.obj_type == "dir" %}{{ item.name }}/{% else %}{{ item.name }}{% endif %}
                         </span>
                         {% if item.has_old_path() %}
-                        <span class="text-xs text-gray-400 mt-0.5">
+                        <span class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
                             {% if item.op_type == "rename" %}
                             from {{ item.old_path_display }}
                             {% else if item.op_type == "move" %}
@@ -88,18 +91,18 @@
                         </span>
                         {% endif %}
                         {% if item.obj_type == "dir" %}
-                        <span class="text-xs text-gray-400">directory</span>
+                        <span class="text-xs text-gray-400 dark:text-gray-500">directory</span>
                         {% endif %}
                     </div>
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">
+                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 hidden sm:table-cell">
                     {% if !item.repo_name.is_empty() %}
-                    <a href="/library/{{ item.repo_id }}/" class="text-seafile-blue hover:underline">{{ item.repo_name }}</a>
+                    <a href="/library/{{ item.repo_id }}/" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.repo_name }}</a>
                     {% else %}
-                    <span class="text-gray-400">[Deleted]</span>
+                    <span class="text-gray-400 dark:text-gray-500">[Deleted]</span>
                     {% endif %}
                 </td>
-                <td class="px-4 py-3 text-sm text-right text-gray-500 whitespace-nowrap" title="{{ item.time_iso }}">
+                <td class="px-4 py-3 text-sm text-right text-gray-500 dark:text-gray-400 whitespace-nowrap" title="{{ item.time_iso }}">
                     {{ item.time_display }}
                 </td>
             </tr>

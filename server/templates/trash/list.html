@@ -6,8 +6,8 @@
 <!-- Header -->
 <div class="sm:flex sm:items-center sm:justify-between">
     <div>
-        <h1 class="text-2xl font-semibold text-gray-900">Trash</h1>
-        <p class="mt-1 text-sm text-gray-500">
+        <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Trash</h1>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
             Deleted files across your libraries.
             {% if total_count > 0 %}{{ total_count }} item(s) in trash.{% endif %}
         </p>
@@ -16,13 +16,13 @@
 
 <!-- Status banners -->
 {% if restored > 0 || failed > 0 %}
-<div class="mt-4 rounded-md p-4 text-sm {% if failed > 0 %}bg-red-50 text-red-700{% else %}bg-green-50 text-green-700{% endif %}">
+<div class="mt-4 rounded-xl p-4 text-sm {% if failed > 0 %}bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300{% else %}bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300{% endif %}">
     {% if restored > 0 %}{{ restored }} item(s) restored successfully.{% endif %}
     {% if failed > 0 %}{{ failed }} item(s) could not be restored.{% endif %}
 </div>
 {% endif %}
 {% if cleaned %}
-<div class="mt-4 rounded-md bg-green-50 p-4 text-sm text-green-700">Trash emptied.</div>
+<div class="mt-4 rounded-xl bg-green-50 dark:bg-green-900/20 p-4 text-sm text-green-700 dark:text-green-300">Trash emptied.</div>
 {% endif %}
 
 <!-- Search -->
@@ -30,14 +30,14 @@
     <form action="/trash/" method="GET" class="flex gap-2 max-w-md">
         <input type="text" name="q" value="{{ query }}"
                placeholder="Search deleted files..."
-               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue text-sm border p-2">
+               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-surface-700 text-gray-900 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
         <button type="submit"
-                class="rounded-md bg-seafile-blue px-4 py-2 text-sm font-medium text-white hover:bg-blue-600">
+                class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors">
             Search
         </button>
         {% if !query.is_empty() %}
         <a href="/trash/"
-           class="inline-flex items-center rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50">
+           class="inline-flex items-center rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
             Clear
         </a>
         {% endif %}
@@ -46,58 +46,61 @@
 
 <!-- Trash listing -->
 {% if items.is_empty() %}
-<div class="mt-6 rounded-lg border border-gray-200 bg-white p-8 text-center">
+<div class="mt-6 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-8 text-center">
     {% if query.is_empty() %}
-    <p class="text-gray-500">Trash is empty.</p>
+    <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+    </svg>
+    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">Trash is empty.</p>
     {% else %}
-    <p class="text-gray-500">No results found for "{{ query }}".</p>
-    <a href="/trash/" class="mt-2 inline-block text-sm text-seafile-blue hover:underline">Clear search</a>
+    <p class="text-sm font-medium text-gray-500 dark:text-gray-400">No results found for "{{ query }}".</p>
+    <a href="/trash/" class="mt-2 inline-block text-sm text-brand-500 dark:text-brand-400 hover:underline">Clear search</a>
     {% endif %}
 </div>
 {% else %}
-<div class="mt-4 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-    <table class="min-w-full divide-y divide-gray-200">
-        <thead class="bg-gray-50">
+<div class="mt-4 overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
+    <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+        <thead class="bg-gray-50 dark:bg-surface-700">
             <tr>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Original Path</th>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell">Library</th>
-                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Deleted</th>
-                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th>
-                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Name</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Original Path</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden md:table-cell">Library</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden sm:table-cell">Deleted</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Size</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
             </tr>
         </thead>
-        <tbody class="divide-y divide-gray-200">
+        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
             {% for item in items %}
-            <tr class="hover:bg-gray-50">
+            <tr class="hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
                 <td class="px-4 py-3 text-sm">
                     <div class="flex items-center gap-1">
                         {% if item.is_dir %}
-                        <svg class="mr-1 h-5 w-5 flex-shrink-0 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                        <svg class="mr-1 h-5 w-5 flex-shrink-0 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
                         </svg>
                         {% else %}
-                        <svg class="mr-1 h-5 w-5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                        <svg class="mr-1 h-5 w-5 flex-shrink-0 text-gray-400 dark:text-gray-500" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
                         </svg>
                         {% endif %}
-                        <span class="font-medium text-gray-900">{{ item.obj_name }}{% if item.is_dir %}/{% endif %}</span>
+                        <span class="font-medium text-gray-900 dark:text-gray-100">{{ item.obj_name }}{% if item.is_dir %}/{% endif %}</span>
                     </div>
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-500 truncate max-w-xs">
+                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 truncate max-w-xs">
                     {{ item.parent_dir }}
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-500 hidden md:table-cell">
+                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 hidden md:table-cell">
                     {% if !item.repo_name.is_empty() %}
-                    <a href="/library/{{ item.repo_id }}/" class="text-seafile-blue hover:underline">{{ item.repo_name }}</a>
+                    <a href="/library/{{ item.repo_id }}/" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.repo_name }}</a>
                     {% else %}
-                    <span class="text-gray-400">[Deleted]</span>
+                    <span class="text-gray-400 dark:text-gray-500">[Deleted]</span>
                     {% endif %}
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-500 text-right hidden sm:table-cell whitespace-nowrap">
+                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-right hidden sm:table-cell whitespace-nowrap">
                     {{ item.deleted_time_display }}
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-500 text-right whitespace-nowrap">
+                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-right whitespace-nowrap">
                     {% if !item.is_dir %}{{ item.size_display }}{% else %}&mdash;{% endif %}
                 </td>
                 <td class="px-4 py-3 text-sm text-right whitespace-nowrap">
@@ -109,7 +112,7 @@
                         <input type="hidden" name="commit_id" value="{{ item.commit_id }}">
                         <input type="hidden" name="path" value="{{ item.parent_dir }}/{{ item.obj_name }}">
                         <button type="submit"
-                                class="inline-flex items-center rounded px-2 py-1 text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800 shadow-sm">
+                                class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-800 shadow-sm transition-colors">
                             <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                             </svg>
@@ -126,17 +129,17 @@
 <!-- Pagination -->
 {% if total_pages > 1 %}
 <div class="mt-4 flex items-center justify-between">
-    <p class="text-sm text-gray-500">Page {{ current_page }} of {{ total_pages }}</p>
+    <p class="text-sm text-gray-500 dark:text-gray-400">Page {{ current_page }} of {{ total_pages }}</p>
     <div class="flex gap-2">
         {% if current_page > 1 %}
         <a href="/trash/?page={{ current_page - 1 }}&amp;per_page={{ per_page }}{% if !query.is_empty() %}&amp;q={{ query }}{% endif %}"
-           class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50">
+           class="rounded-lg bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors shadow-sm">
             Previous
         </a>
         {% endif %}
         {% if current_page < total_pages %}
         <a href="/trash/?page={{ current_page + 1 }}&amp;per_page={{ per_page }}{% if !query.is_empty() %}&amp;q={{ query }}{% endif %}"
-           class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50">
+           class="rounded-lg bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors shadow-sm">
             Next
         </a>
         {% endif %}
@@ -146,15 +149,15 @@
 {% endif %}
 
 <!-- Clean Trash Confirmation Dialog -->
-<div id="clean-dialog" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" onclick="if(event.target===this)hideCleanDialog()">
-    <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-        <h3 class="text-base font-semibold text-gray-900 mb-1">Empty Trash</h3>
-        <p class="text-sm text-gray-500 mb-4">
+<div id="clean-dialog" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="clean-dialog-title" onclick="if(event.target===this)hideCleanDialog()">
+    <div class="bg-white dark:bg-surface-800 rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+        <h3 id="clean-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Empty Trash</h3>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
             This will permanently delete all items in the trash for this library. This action cannot be undone.
         </p>
         <div class="mb-4">
-            <label for="clean-repo" class="block text-sm font-medium text-gray-700 mb-1">Library</label>
-            <select id="clean-repo" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue text-sm border p-2">
+            <label for="clean-repo" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Library</label>
+            <select id="clean-repo" class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                 {% for item in items %}
                 <option value="{{ item.repo_id }}">{{ item.repo_name }}</option>
                 {% endfor %}
@@ -164,11 +167,11 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="repo_id" id="clean-repo-input" value="">
             <button type="button" onclick="hideCleanDialog()"
-                    class="rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50">
+                    class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
                 Cancel
             </button>
             <button type="submit"
-                    class="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700">
+                    class="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors">
                 Delete All
             </button>
         </form>

@@ -3,8 +3,8 @@
 {% block title %}Settings | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900">Settings</h1>
-<p class="mt-1 text-sm text-gray-500">Manage your account.</p>
+<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Settings</h1>
+<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Manage your account.</p>
 
 {% if let Some(error) = error %}
 {% include "includes/alert_error.html" %}
@@ -14,21 +14,21 @@
 {% include "includes/alert_success.html" %}
 {% endif %}
 
-<div class="mt-6 max-w-lg">
+<div class="mt-6 max-w-lg space-y-6">
     <!-- Avatar -->
-    <div class="rounded-lg border border-gray-200 bg-white shadow-sm">
+    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
         <div class="px-4 py-5 sm:px-6">
-            <h2 class="text-base font-semibold text-gray-900">Avatar</h2>
-            <p class="mt-1 text-sm text-gray-500">Upload a profile picture.</p>
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">Avatar</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Upload a profile picture.</p>
             <div class="mt-4 flex items-center gap-x-6">
                 <img src="/avatars/user/{{ user_email }}/resized/96/" alt=""
-                     class="h-24 w-24 rounded-full object-cover bg-seafile-blue ring-2 ring-gray-200">
+                     class="h-24 w-24 rounded-full object-cover bg-brand-500 ring-2 ring-gray-200 dark:ring-gray-600">
                 <form action="/profile/avatar" method="POST" enctype="multipart/form-data" class="flex flex-col gap-y-3">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                     <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif" required
-                           class="block w-full text-sm text-gray-500 file:mr-4 file:rounded-md file:border-0 file:bg-seafile-blue file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-blue-600">
+                           class="block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-4 file:rounded-lg file:border-0 file:bg-brand-500 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-brand-600 file:transition-colors">
                     <button type="submit"
-                            class="self-start rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600">
+                            class="self-start rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
                         Upload
                     </button>
                 </form>
@@ -36,103 +36,109 @@
         </div>
     </div>
 
-    <div class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
+    <!-- Account Info -->
+    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
         <div class="px-4 py-5 sm:px-6">
-            <h2 class="text-base font-semibold text-gray-900">Account Info</h2>
-            <p class="mt-1 text-sm text-gray-500">{{ user_email }}</p>
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">Account Info</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ user_email }}</p>
         </div>
     </div>
 
-    <div class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
+    <!-- Display Name -->
+    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
         <div class="px-4 py-5 sm:px-6">
-            <h2 class="text-base font-semibold text-gray-900">Display Name</h2>
-            <p class="mt-1 text-sm text-gray-500">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">Display Name</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Your display name is shown to other users and in the desktop client.
             </p>
             <form action="/profile/display-name" method="POST" class="mt-4 space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <div>
-                    <label for="display_name" class="block text-sm font-medium text-gray-700">Display Name</label>
+                    <label for="display_name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Display Name</label>
                     <input type="text" name="display_name" id="display_name"
                            value="{{ user_display_name }}"
                            maxlength="255"
-                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue sm:text-sm border p-2">
+                           class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
                 </div>
                 <button type="submit"
-                        class="rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600">
+                        class="rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
                     Save
                 </button>
             </form>
         </div>
     </div>
 
-    <div class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
+    <!-- Two-Factor Authentication -->
+    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
         <div class="px-4 py-5 sm:px-6">
-            <h2 class="text-base font-semibold text-gray-900">Two-Factor Authentication</h2>
-            <p class="mt-1 text-sm text-gray-500">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">Two-Factor Authentication</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Add an extra layer of security to your account by requiring a
                 verification code from your mobile device in addition to your password.
             </p>
             <p class="mt-2 text-sm">
                 Status:
                 {% if two_fa_enabled %}
-                <span class="font-semibold text-green-700">Enabled</span>
+                <span class="font-semibold text-green-700 dark:text-green-400">Enabled</span>
                 {% else %}
-                <span class="font-semibold text-gray-500">Not configured</span>
+                <span class="font-semibold text-gray-500 dark:text-gray-400">Not configured</span>
                 {% endif %}
             </p>
             <a href="/profile/two-factor/"
-               class="mt-3 inline-block rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600">
+               class="mt-3 inline-block rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
                 Manage Two-Factor Authentication
             </a>
         </div>
     </div>
 
-    <div class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
+    <!-- Connected Devices -->
+    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
         <div class="px-4 py-5 sm:px-6">
-            <h2 class="text-base font-semibold text-gray-900">Connected Devices</h2>
-            <p class="mt-1 text-sm text-gray-500">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">Connected Devices</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 View and manage devices that have access to your account.
             </p>
             <a href="/profile/devices/"
-               class="mt-3 inline-block rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600">
+               class="mt-3 inline-block rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
                 Manage Devices
             </a>
         </div>
     </div>
 
     {% if is_admin %}
-    <div class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
+    <!-- Invitations -->
+    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
         <div class="px-4 py-5 sm:px-6">
-            <h2 class="text-base font-semibold text-gray-900">Invitations</h2>
-            <p class="mt-1 text-sm text-gray-500">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">Invitations</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Generate invitation codes to allow new users to create an account.
             </p>
             <a href="/profile/invitations/"
-               class="mt-3 inline-block rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600">
+               class="mt-3 inline-block rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
                 Manage Invitations
             </a>
         </div>
     </div>
     {% endif %}
 
-    <div class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
+    <!-- Change Password -->
+    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
         <div class="px-4 py-5 sm:px-6">
-            <h2 class="text-base font-semibold text-gray-900">Change Password</h2>
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">Change Password</h2>
             <form action="/profile/password" method="POST" class="mt-4 space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <div>
-                    <label for="old_password" class="block text-sm font-medium text-gray-700">Current Password</label>
+                    <label for="old_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Current Password</label>
                     <input type="password" name="old_password" id="old_password" required
-                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue sm:text-sm border p-2">
+                           class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
                 </div>
                 <div>
-                    <label for="new_password" class="block text-sm font-medium text-gray-700">New Password</label>
+                    <label for="new_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">New Password</label>
                     <input type="password" name="new_password" id="new_password" required
-                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-seafile-blue focus:ring-seafile-blue sm:text-sm border p-2">
+                           class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
                 </div>
                 <button type="submit"
-                        class="rounded-md bg-seafile-blue py-2 px-4 text-sm font-semibold text-white hover:bg-blue-600">
+                        class="rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
                     Change Password
                 </button>
             </form>

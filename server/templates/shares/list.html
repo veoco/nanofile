@@ -3,37 +3,40 @@
 {% block title %}Shares | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900">Shares</h1>
-<p class="mt-1 text-sm text-gray-500">Manage shared links for your libraries.</p>
+<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Shares</h1>
+<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Manage shared links for your libraries.</p>
 
 {% if share_links.is_empty() %}
 <div class="mt-8 text-center">
-    <p class="text-gray-500">No shares yet.</p>
-    <p class="mt-2 text-sm text-gray-400">Use the API to create share or upload links.</p>
+    <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/>
+    </svg>
+    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">No shares yet.</p>
+    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Use the API to create share or upload links.</p>
 </div>
 {% endif %}
 
 {% if !share_links.is_empty() %}
 <div class="mt-6">
-    <h2 class="text-lg font-medium text-gray-900">Share Links</h2>
-    <div class="mt-2 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
+    <h2 class="text-lg font-medium text-gray-900 dark:text-gray-100">Share Links</h2>
+    <div class="mt-2 overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead class="bg-gray-50 dark:bg-surface-700">
                 <tr>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Path</th>
-                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Created</th>
-                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Path</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Created</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Actions</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-200">
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
                 {% for s in share_links %}
-                <tr class="hover:bg-gray-50">
-                    <td class="px-4 py-3 text-sm">{{ s.path }}</td>
-                    <td class="px-4 py-3 text-sm text-right text-gray-500">{{ s.created_at }}</td>
+                <tr class="hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
+                    <td class="px-4 py-3 text-sm text-gray-900 dark:text-gray-100">{{ s.path }}</td>
+                    <td class="px-4 py-3 text-sm text-right text-gray-500 dark:text-gray-400">{{ s.created_at }}</td>
                     <td class="px-4 py-3 text-sm text-right">
                         <form action="/share/{{ s.token }}/delete" method="POST" class="inline">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="text-red-600 hover:text-red-800">Delete</button>
+                            <button type="submit" class="text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 text-sm font-medium">Delete</button>
                         </form>
                     </td>
                 </tr>
