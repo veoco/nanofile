@@ -1,7 +1,4 @@
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, Statement,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 
 use crate::entity::{commit, fs_object};
 
@@ -46,16 +43,10 @@ impl GcManager {
         let removed = inactive_ids.len() as u64;
 
         if !inactive_ids.is_empty() {
-            let id_list = inactive_ids
-                .iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            db.execute(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                format!("DELETE FROM fs_objects WHERE id IN ({id_list})"),
-            ))
-            .await?;
+            fs_object::Entity::delete_many()
+                .filter(fs_object::Column::Id.is_in(inactive_ids))
+                .exec(db)
+                .await?;
         }
 
         Ok(removed)

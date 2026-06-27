@@ -216,11 +216,14 @@ pub async fn set_repo_password_v2(
 ///
 /// Check if a password is valid for an encrypted repo (v2 API).
 pub async fn check_repo_password_v2(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     req: axum::http::Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Check user has access to this repo (matching seahub's check_folder_permission).
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
     let (_parts, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
         .await

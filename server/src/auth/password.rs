@@ -1,5 +1,6 @@
 use rand::Rng;
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 const SALT_LEN: usize = 16;
 const HASH_LEN: usize = 32;
@@ -20,7 +21,7 @@ pub fn hash_password(password: &str, iterations: u32) -> String {
     format!("{}:{}", hex::encode(salt), hex::encode(hash))
 }
 
-/// Verify a password against a stored hash.
+/// Verify a password against a stored hash using constant-time comparison.
 pub fn verify_password(password: &str, password_hash: &str, iterations: u32) -> bool {
     let parts: Vec<&str> = password_hash.splitn(2, ':').collect();
     if parts.len() != 2 {
@@ -37,7 +38,8 @@ pub fn verify_password(password: &str, password_hash: &str, iterations: u32) -> 
     };
 
     let computed = pbkdf2_hash(password.as_bytes(), &salt, iterations);
-    computed.as_slice() == stored_hash.as_slice()
+    // Constant-time comparison to prevent timing side-channel attacks.
+    computed.as_slice().ct_eq(stored_hash.as_slice()).into()
 }
 
 /// Validate password strength.

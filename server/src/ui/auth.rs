@@ -670,7 +670,12 @@ pub async fn register(
         ));
     }
 
-    // 3. Validate email uniqueness.
+    // 3. Validate email format.
+    if !form.email.contains('@') || form.email.len() > 254 {
+        return Err(AppError::BadRequest("Invalid email address.".to_string()));
+    }
+
+    // 4. Validate email uniqueness.
     let existing = user::Entity::find()
         .filter(user::Column::Email.eq(&form.email))
         .one(db)
@@ -681,12 +686,12 @@ pub async fn register(
         ));
     }
 
-    // 4. Validate passwords match.
+    // 5. Validate passwords match.
     if form.password1 != form.password2 {
         return Err(AppError::BadRequest("Passwords do not match.".to_string()));
     }
 
-    // 5. Validate password strength.
+    // 6. Validate password strength.
     let cfg = &state.config.auth;
     if let Err(msg) = validate_password(
         &form.password1,
@@ -696,7 +701,7 @@ pub async fn register(
         return Err(AppError::BadRequest(msg));
     }
 
-    // 6. Create the user.
+    // 7. Create the user.
     let now = chrono::Utc::now().timestamp();
     let iterations = state.config.auth.password_hash_iterations;
     let password_hash = hash_password(&form.password1, iterations);
@@ -719,13 +724,13 @@ pub async fn register(
         .await
         .map_err(|e| AppError::internal(format!("failed to create user: {e}")))?;
 
-    // 7. Mark invitation code as used.
+    // 8. Mark invitation code as used.
     let mut active_code: invitation_code::ActiveModel = code_record.into();
     active_code.used_by = Set(Some(new_user.id));
     active_code.used_at = Set(Some(now));
     active_code.update(db).await?;
 
-    // 8. Auto-login — create session token and cookie.
+    // 9. Auto-login — create session token and cookie.
     let session_token = generate_api_token();
     let ttl_days = cfg.api_token_ttl_days;
 

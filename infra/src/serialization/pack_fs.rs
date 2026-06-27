@@ -40,7 +40,7 @@ pub fn decode_pack_fs_entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Str
         if fs_id.len() != 40 || !fs_id.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(format!(
                 "invalid fs_id: must be 40 hex characters, got {:?}",
-                &fs_id
+                fs_id
             ));
         }
 
