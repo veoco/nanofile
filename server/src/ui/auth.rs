@@ -751,18 +751,36 @@ pub async fn register(
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
+    let secure_cookies = state.config.server.secure_cookies();
     let cookie = session_cookie(
         "seahub-session",
         &session_token,
         Some(ttl_days * 86400),
-        state.config.server.secure_cookies(),
+        secure_cookies,
     );
 
-    Ok((
-        StatusCode::FOUND,
-        [("Location", "/libraries/"), ("Set-Cookie", &cookie)],
-    )
-        .into_response())
+    let csrf_cookie =
+        crate::auth::csrf::csrf_cookie_header(&state.csrf_secret, &session_token, secure_cookies);
+
+    let mut resp_headers = axum::http::HeaderMap::new();
+    resp_headers.insert(
+        axum::http::header::LOCATION,
+        axum::http::HeaderValue::from_static("/libraries/"),
+    );
+    resp_headers.append(
+        axum::http::header::SET_COOKIE,
+        cookie
+            .parse::<axum::http::HeaderValue>()
+            .map_err(|_| AppError::internal("Failed to create session cookie header"))?,
+    );
+    resp_headers.append(
+        axum::http::header::SET_COOKIE,
+        csrf_cookie
+            .parse::<axum::http::HeaderValue>()
+            .map_err(|_| AppError::internal("Failed to create CSRF cookie header"))?,
+    );
+
+    Ok((StatusCode::FOUND, resp_headers).into_response())
 }
 
 // ─── Password Reset ─────────────────────────────────────────────────────────
