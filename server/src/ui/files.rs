@@ -424,6 +424,8 @@ async fn file_browser_inner(
             breadcrumbs,
             entries,
             active_page: "repos",
+            left_panel_repos,
+            current_repo_id,
         };
         let html = tpl
             .render()
@@ -935,7 +937,7 @@ pub async fn rename_entry(
     }
 
     let parent_path = parent_path_from(path);
-    let old_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+    let old_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or(path);
 
     // Get root fs_id from head commit
     let head_root_id = get_head_root_id(db, &repo_id).await?;
