@@ -67,8 +67,8 @@
         </div>
         {% else %}
         <!-- File icon: extension badge -->
-        <div class="h-9 min-w-9 rounded-md bg-gray-100 dark:bg-surface-700 flex items-center justify-center flex-shrink-0 px-1">
-            <span class="text-[10px] leading-none font-semibold {{ entry.icon_color }} truncate">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
+        <div class="h-9 w-9 rounded-md bg-gray-100 dark:bg-surface-700 flex items-center justify-center flex-shrink-0">
+            <span class="text-[10px] leading-none font-semibold {{ entry.icon_color }}" title="{{ entry.extension.as_deref().unwrap_or("?") }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(3) }}</span>
         </div>
         <div class="flex-1 min-w-0">
             {% if entry.is_previewable %}
