@@ -217,7 +217,11 @@ async fn test_api_cookie_wrong_csrf_header() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401, "wrong CSRF token on POST should be rejected");
+    assert_eq!(
+        resp.status(),
+        401,
+        "wrong CSRF token on POST should be rejected"
+    );
 }
 
 /// No X-CSRFToken header on a state-changing POST is rejected.
