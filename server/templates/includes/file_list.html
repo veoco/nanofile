@@ -67,8 +67,8 @@
         </div>
         {% else %}
         <!-- File icon -->
-        <div class="h-8 w-8 rounded-md {{ entry.icon_color }} flex items-center justify-center flex-shrink-0">
-            <svg class="h-4 w-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+        <div class="h-8 w-8 rounded-md bg-gray-100 dark:bg-surface-700 flex items-center justify-center flex-shrink-0">
+            <svg class="h-4 w-4 {{ entry.icon_color }}" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
             </svg>
         </div>
@@ -145,7 +145,7 @@
                 <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
             </svg>
             {% else %}
-            <svg class="h-10 w-10 text-gray-300 dark:text-gray-600" fill="currentColor" viewBox="0 0 24 24">
+            <svg class="h-10 w-10 {{ entry.icon_color }}" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
             </svg>
             {% endif %}
