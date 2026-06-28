@@ -116,7 +116,7 @@ pub async fn create_share(
     link.insert(db)
         .await
         .map_err(|e| AppError::internal(format!("create share failed: {e}")))?;
-    Ok((StatusCode::FOUND, [("Location", "/share/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/shares/")]).into_response())
 }
 
 /// POST /share/{token}/delete — delete a share link.
@@ -150,5 +150,5 @@ pub async fn delete_share(
         .await
         .map_err(|e| AppError::internal(format!("delete failed: {e}")))?;
 
-    Ok((StatusCode::FOUND, [("Location", "/share/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/shares/")]).into_response())
 }

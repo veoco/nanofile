@@ -33,7 +33,7 @@
         {% for r in repos %}
         <li class="transition-colors hover:bg-gray-50 dark:hover:bg-surface-700/50">
             <div class="flex items-center justify-between px-4 py-4">
-                <a href="/library/{{ r.id }}/{{ r.name }}/" class="flex items-center min-w-0 flex-1 gap-4">
+                <a href="/libraries/{{ r.id }}/file/" class="flex items-center min-w-0 flex-1 gap-4">
                     <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-100 dark:bg-brand-500/20 text-brand-600 dark:text-brand-400 flex-shrink-0">
                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
@@ -72,7 +72,7 @@
                         </svg>
                         Settings
                     </button>
-                    <form action="/libraries/{{ r.id }}/delete" method="POST" class="inline js-delete-repo-form"
+                    <form action="/libraries/{{ r.id }}/delete/" method="POST" class="inline js-delete-repo-form"
                           data-repo-name="{{ r.name }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <button type="submit"

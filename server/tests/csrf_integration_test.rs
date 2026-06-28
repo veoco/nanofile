@@ -174,10 +174,7 @@ async fn test_api_cookie_and_csrf_header() {
 
     // Extract CSRF token from the file browser page (which has hidden form inputs).
     let page_resp = ui_client
-        .get(format!(
-            "{}/library/{}/csrf-test-repo/",
-            server.base_url, repo_id
-        ))
+        .get(format!("{}/libraries/{}/file", server.base_url, repo_id))
         .send()
         .await
         .unwrap();
@@ -269,10 +266,7 @@ async fn test_session_token_not_in_dom() {
     let repo_id = create_repo_api(&server.base_url, &api_token, "security-test").await;
 
     let resp = ui_client
-        .get(format!(
-            "{}/library/{}/security-test/",
-            server.base_url, repo_id
-        ))
+        .get(format!("{}/libraries/{}/file", server.base_url, repo_id))
         .send()
         .await
         .unwrap();
@@ -331,10 +325,7 @@ async fn test_ui_form_csrf_still_works() {
 
     // Get a CSRF token from the file browser page (hidden form input).
     let page_resp = ui_client
-        .get(format!(
-            "{}/library/{}/form-csrf-test/",
-            server.base_url, repo_id
-        ))
+        .get(format!("{}/libraries/{}/file", server.base_url, repo_id))
         .send()
         .await
         .unwrap();
@@ -352,7 +343,10 @@ async fn test_ui_form_csrf_still_works() {
 
     // Submit a form to create a directory.
     let form_resp = ui_client
-        .post(format!("{}/library/{}/new-dir", server.base_url, repo_id))
+        .post(format!(
+            "{}/libraries/{}/file/new-dir/",
+            server.base_url, repo_id
+        ))
         .form(&[("p", "/csrf-test-dir"), ("csrf_token", csrf_token)])
         .send()
         .await
@@ -403,10 +397,7 @@ async fn test_form_pages_include_csrf_tokens() {
 
     // 2. File browser page  (has delete and rename forms)
     let browser_html = ui_client
-        .get(format!(
-            "{}/library/{}/csrf-test-repo/",
-            server.base_url, repo_id
-        ))
+        .get(format!("{}/libraries/{}/file", server.base_url, repo_id))
         .send()
         .await
         .unwrap()
@@ -436,7 +427,7 @@ async fn test_form_pages_include_csrf_tokens() {
 
     // 4. Settings page (has password, display-name, avatar forms with csrf_token)
     let settings_html = ui_client
-        .get(format!("{}/profile/", server.base_url))
+        .get(format!("{}/settings/", server.base_url))
         .send()
         .await
         .unwrap()
@@ -466,7 +457,7 @@ async fn test_form_pages_include_csrf_tokens() {
     .expect("insert user_2fa record");
 
     let tfa_html = ui_client
-        .get(format!("{}/profile/two-factor/", server.base_url))
+        .get(format!("{}/settings/two-factor/", server.base_url))
         .send()
         .await
         .unwrap()
@@ -541,7 +532,7 @@ async fn test_shares_page_includes_csrf_token() {
     let ui_client = ui_login(&server).await;
 
     let shares_html = ui_client
-        .get(format!("{}/share/", server.base_url))
+        .get(format!("{}/shares/", server.base_url))
         .send()
         .await
         .unwrap()
@@ -564,7 +555,7 @@ async fn test_invitations_page_includes_csrf_tokens() {
     let ui_client = ui_login(&server).await;
 
     let inv_html = ui_client
-        .get(format!("{}/profile/invitations/", server.base_url))
+        .get(format!("{}/settings/invitations/", server.base_url))
         .send()
         .await
         .unwrap()

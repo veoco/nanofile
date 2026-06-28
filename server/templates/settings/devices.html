@@ -59,7 +59,7 @@
                         </p>
                     </div>
                 </div>
-                <form action="/profile/devices/" method="POST">
+                <form action="/settings/devices/" method="POST">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                     <input type="hidden" name="platform" value="{{ device.platform }}">
                     <input type="hidden" name="device_id" value="{{ device.device_id }}">
@@ -75,7 +75,7 @@
     {% endfor %}
 
     <div class="mt-6">
-        <a href="/profile/" class="text-sm text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300">
+        <a href="/settings/" class="text-sm text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300">
             &larr; Back to Settings
         </a>
     </div>

@@ -5,7 +5,7 @@
 {% block content %}
 <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Search</h1>
 
-<form action="/search" method="GET" class="mt-4 max-w-lg">
+<form action="/search/" method="GET" class="mt-4 max-w-lg">
     <div class="flex gap-x-2">
         <input type="text" name="q" value="{{ query }}"
                placeholder="Search files..."
@@ -51,7 +51,7 @@
 
             <!-- File info -->
             <div class="min-w-0 flex-1">
-                <a href="/ui/repos/{{ item.repo_id }}/"
+                <a href="/libraries/{{ item.repo_id }}/file/"
                    class="text-sm font-medium text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300 truncate block">
                     {{ item.name }}
                 </a>
@@ -74,7 +74,7 @@
     <!-- Pagination -->
     {% if has_more %}
     <div class="mt-4 text-center">
-        <a href="/search?q={{ query }}{% if !search_filename_only %}&amp;search_filename_only=false{% endif %}"
+        <a href="/search/?q={{ query }}{% if !search_filename_only %}&amp;search_filename_only=false{% endif %}"
            class="text-sm text-brand-500 dark:text-brand-400 hover:text-brand-600">
             Load more results
         </a>

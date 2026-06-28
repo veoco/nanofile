@@ -186,7 +186,7 @@ pub async fn change_password(
         .await
         .map_err(|e| AppError::internal(format!("update failed: {e}")))?;
 
-    Ok((StatusCode::FOUND, [("Location", "/profile/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }
 
 /// POST /profile/display-name — update the user's display name.
@@ -219,7 +219,7 @@ pub async fn update_display_name(
     });
     active.update(db).await?;
 
-    Ok((StatusCode::FOUND, [("Location", "/profile/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }
 
 /// GET /profile/devices/ — device management page.
@@ -322,7 +322,7 @@ pub async fn unlink_device(
         .exec(db)
         .await?;
 
-    Ok((StatusCode::FOUND, [("Location", "/profile/devices/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/settings/devices/")]).into_response())
 }
 
 // ─── Avatar upload (web UI) ──────────────────────────────────────────────────
@@ -480,7 +480,7 @@ pub async fn upload_avatar(
         .await?;
     }
 
-    Ok((StatusCode::FOUND, [("Location", "/profile/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }
 
 /// Generate a square PNG thumbnail.

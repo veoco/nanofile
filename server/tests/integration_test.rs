@@ -181,7 +181,7 @@ async fn test_ui_folder_upload_no_root_leak() {
         .part("file", file_part);
     let resp = ui_client
         .post(format!(
-            "{}/library/{}/upload",
+            "{}/libraries/{}/file/upload/",
             f.server.base_url, f.repo_id
         ))
         .multipart(form)
@@ -207,7 +207,7 @@ async fn test_ui_folder_upload_no_root_leak() {
         .part("file", file2_part);
     let resp2 = ui_client
         .post(format!(
-            "{}/library/{}/upload",
+            "{}/libraries/{}/file/upload/",
             f.server.base_url, f.repo_id
         ))
         .multipart(form2)
@@ -2160,8 +2160,8 @@ async fn test_empty_directory_uses_emtpysha1() {
     // Get CSRF token from the file browser page
     let page_resp = ui_client
         .get(format!(
-            "{}/library/{}/{}/",
-            f.server.base_url, f.repo_id, "repo"
+            "{}/libraries/{}/file",
+            f.server.base_url, f.repo_id
         ))
         .send()
         .await
@@ -2177,7 +2177,7 @@ async fn test_empty_directory_uses_emtpysha1() {
     // Create empty dir via UI endpoint with CSRF token
     let ui_resp = ui_client
         .post(format!(
-            "{}/library/{}/new-dir",
+            "{}/libraries/{}/file/new-dir/",
             f.server.base_url, f.repo_id
         ))
         .form(&[("p", "/ui_empty"), ("csrf_token", csrf_token)])

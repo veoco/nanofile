@@ -146,13 +146,7 @@ pub async fn client_token_login(
 /// Resolve the `next` URL to redirect to.
 /// Falls back to /libraries/ for invalid or unsafe URLs.
 fn resolve_next(next: Option<&str>) -> String {
-    const SAFE_PREFIXES: &[&str] = &[
-        "/library/",
-        "/libraries/",
-        "/share/",
-        "/profile/",
-        "/search/",
-    ];
+    const SAFE_PREFIXES: &[&str] = &["/libraries/", "/shares/", "/settings/", "/search/"];
 
     match next {
         Some(url) if url.starts_with('/') => {

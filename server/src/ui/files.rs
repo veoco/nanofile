@@ -656,10 +656,10 @@ pub async fn upload_file(
 
     // Redirect back to the upload directory (standard form submit).
     let redirect = if parent_dir == "/" || upload_repo_name.is_empty() {
-        format!("/library/{}/", repo_id)
+        format!("/libraries/{}/file/", repo_id)
     } else {
         let dir_path = parent_dir.trim_start_matches('/');
-        format!("/library/{}/{}/{}", repo_id, upload_repo_name, dir_path)
+        format!("/libraries/{}/file/{}", repo_id, dir_path)
     };
     Ok((StatusCode::FOUND, [("Location", &redirect)]).into_response())
 }
@@ -783,18 +783,16 @@ pub async fn delete_entry(
     .await;
 
     // Redirect back to the current directory.
-    let repo_name = form.get("repo_name").map(|s| s.as_str()).unwrap_or("");
     let current_dir = form.get("current_dir").map(|s| s.as_str()).unwrap_or("");
-    let redirect = if !current_dir.is_empty() && !repo_name.is_empty() {
-        // Use current_dir directly (it's relative, no leading slash)
-        format!(
-            "/library/{}/{}/{}",
-            repo_id,
-            repo_name,
-            current_dir.trim_start_matches('/')
-        )
+    let redirect = if !current_dir.is_empty() {
+        let dir_path = current_dir.trim_start_matches('/');
+        if dir_path.is_empty() {
+            format!("/libraries/{}/file/", repo_id)
+        } else {
+            format!("/libraries/{}/file/{}", repo_id, dir_path)
+        }
     } else {
-        format!("/library/{}/", repo_id)
+        format!("/libraries/{}/file/", repo_id)
     };
     Ok((StatusCode::FOUND, [("Location", &redirect)]).into_response())
 }
@@ -906,17 +904,16 @@ pub async fn create_directory(
     .await;
 
     // Redirect back to the parent directory.
-    let repo_name = form.get("repo_name").map(|s| s.as_str()).unwrap_or("");
     let current_dir = form.get("current_dir").map(|s| s.as_str()).unwrap_or("");
-    let redirect = if !current_dir.is_empty() && !repo_name.is_empty() {
+    let redirect = if !current_dir.is_empty() {
         let dir_path = current_dir.trim_start_matches('/');
         if dir_path.is_empty() {
-            format!("/library/{}/{}/", repo_id, repo_name)
+            format!("/libraries/{}/file/", repo_id)
         } else {
-            format!("/library/{}/{}/{}", repo_id, repo_name, dir_path)
+            format!("/libraries/{}/file/{}", repo_id, dir_path)
         }
     } else {
-        format!("/library/{}/", repo_id)
+        format!("/libraries/{}/file/", repo_id)
     };
     Ok((StatusCode::FOUND, [("Location", &redirect)]).into_response())
 }
@@ -1024,16 +1021,15 @@ pub async fn rename_entry(
 
     // Redirect back to current directory.
     let current_dir = form.get("current_dir").map(|s| s.as_str()).unwrap_or("");
-    let repo_name = form.get("repo_name").map(|s| s.as_str()).unwrap_or("");
-    let redirect = if !current_dir.is_empty() && !repo_name.is_empty() {
+    let redirect = if !current_dir.is_empty() {
         let dir_path = current_dir.trim_start_matches('/');
         if dir_path.is_empty() {
-            format!("/library/{}/{}/", repo_id, repo_name)
+            format!("/libraries/{}/file/", repo_id)
         } else {
-            format!("/library/{}/{}/{}", repo_id, repo_name, dir_path)
+            format!("/libraries/{}/file/{}", repo_id, dir_path)
         }
     } else {
-        format!("/library/{}/", repo_id)
+        format!("/libraries/{}/file/", repo_id)
     };
     Ok((StatusCode::FOUND, [("Location", &redirect)]).into_response())
 }
@@ -1163,7 +1159,7 @@ pub async fn preview_file(
 
     // Binary files (PDFs, archives, etc.) — redirect to download.
     let download_url = format!(
-        "/library/{}/download/{}",
+        "/libraries/{}/file/download/{}",
         repo_id,
         path.trim_start_matches('/')
     );
@@ -1253,7 +1249,7 @@ pub async fn view_lib_file(
 
     // Default: redirect to the preview page
     let redirect = format!(
-        "/library/{}/preview/{}",
+        "/libraries/{}/file/preview/{}",
         repo_id,
         path.trim_start_matches('/')
     );

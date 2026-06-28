@@ -217,7 +217,7 @@ async fn login_client(fixture: &TestFixture) -> reqwest::Client {
 /// The caller must have a valid session cookie.
 async fn get_csrf_token(client: &reqwest::Client, base_url: &str, repo_id: &str) -> String {
     let resp = client
-        .get(format!("{}/library/{}/test-repo/", base_url, repo_id))
+        .get(format!("{}/libraries/{}/file", base_url, repo_id))
         .send()
         .await
         .unwrap();
@@ -283,7 +283,7 @@ async fn test_repo_detail_page_exists() {
 
     let resp = client
         .get(format!(
-            "{}/library/{}/test-repo/",
+            "{}/libraries/{}/file",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -322,7 +322,7 @@ async fn test_file_list_shows_root_entries() {
     // Now browse via UI
     let resp = client
         .get(format!(
-            "{}/library/{}/test-repo/",
+            "{}/libraries/{}/file",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -363,7 +363,7 @@ async fn test_file_list_navigates_into_dir() {
     // Browse into subdir via UI (Seahub path: /library/{id}/{name}/{path})
     let resp = client
         .get(format!(
-            "{}/library/{}/test-repo/subdir",
+            "{}/libraries/{}/file/subdir",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -386,7 +386,7 @@ async fn test_file_list_empty_dir_shows_empty() {
     let client = login_client(&fixture).await;
     let resp = client
         .get(format!(
-            "{}/library/{}/test-repo/emptydir",
+            "{}/libraries/{}/file/emptydir",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -405,7 +405,7 @@ async fn test_partial_list_returns_fragment() {
 
     let resp = client
         .get(format!(
-            "{}/library/{}/test-repo/?partial=1",
+            "{}/libraries/{}/file?partial=1",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -438,7 +438,7 @@ async fn test_upload_file_creates_entry() {
 
     let resp = client
         .post(format!(
-            "{}/library/{}/upload",
+            "{}/libraries/{}/file/upload/",
             fixture.server.base_url, fixture.repo_id
         ))
         .multipart(form)
@@ -460,7 +460,7 @@ async fn test_upload_file_creates_entry() {
     // Verify file appears in listing
     let list_resp = client
         .get(format!(
-            "{}/library/{}/test-repo/",
+            "{}/libraries/{}/file",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -474,7 +474,7 @@ async fn test_upload_file_creates_entry() {
 }
 
 /// Simulate the frontend folder upload flow: upload files into nested
-/// directories via the UI endpoint (/library/{id}/upload), which internally
+/// directories via the UI endpoint (/library/{id}/file/upload/), which internally
 /// calls `ensure_parent_dirs` + `create_file`. Verify that after uploading,
 /// the file tree is correct — the uploaded folder does NOT contain root-level
 /// files/folders, and root content remains intact.
@@ -515,7 +515,7 @@ async fn test_folder_upload_does_not_leak_root_content() {
     // ── Step 3: Simulate folder upload via the UI endpoint ──
     //
     // Frontend uploads files one at a time via the queue.
-    // Each file sends a POST to /library/{id}/upload with:
+    // Each file sends a POST to /library/{id}/file/upload/ with:
     //   parent_dir = current_path + "/" + webkitRelativePath's dir part
     //   repo_name = name
     //   file = the actual file
@@ -540,7 +540,7 @@ async fn test_folder_upload_does_not_leak_root_content() {
         .text("xhr", "1");
     let resp1 = ui_client
         .post(format!(
-            "{}/library/{}/upload",
+            "{}/libraries/{}/file/upload/",
             fixture.server.base_url, fixture.repo_id
         ))
         .multipart(form1)
@@ -565,7 +565,7 @@ async fn test_folder_upload_does_not_leak_root_content() {
         .text("xhr", "1");
     let resp2 = ui_client
         .post(format!(
-            "{}/library/{}/upload",
+            "{}/libraries/{}/file/upload/",
             fixture.server.base_url, fixture.repo_id
         ))
         .multipart(form2)
@@ -693,7 +693,7 @@ async fn test_download_file_returns_content() {
     let client = login_client(&fixture).await;
     let resp = client
         .get(format!(
-            "{}/library/{}/download/download.txt",
+            "{}/libraries/{}/file/download/download.txt",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -727,7 +727,7 @@ async fn test_delete_file_removes_entry() {
     // Delete via UI
     let resp = client
         .post(format!(
-            "{}/library/{}/delete",
+            "{}/libraries/{}/file/delete/",
             fixture.server.base_url, fixture.repo_id
         ))
         .form(&[("p", "/delete_me.txt"), ("csrf_token", &csrf_token)])
@@ -740,7 +740,7 @@ async fn test_delete_file_removes_entry() {
     // Verify file is gone
     let list_resp = client
         .get(format!(
-            "{}/library/{}/test-repo/",
+            "{}/libraries/{}/file",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -761,7 +761,7 @@ async fn test_create_directory_works() {
 
     let resp = client
         .post(format!(
-            "{}/library/{}/new-dir",
+            "{}/libraries/{}/file/new-dir/",
             fixture.server.base_url, fixture.repo_id
         ))
         .form(&[("p", "/new_folder"), ("csrf_token", &csrf_token)])
@@ -774,7 +774,7 @@ async fn test_create_directory_works() {
     // Verify dir appears in listing
     let list_resp = client
         .get(format!(
-            "{}/library/{}/test-repo/",
+            "{}/libraries/{}/file",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -807,7 +807,7 @@ async fn test_rename_file_works() {
 
     let resp = client
         .post(format!(
-            "{}/library/{}/rename",
+            "{}/libraries/{}/file/rename/",
             fixture.server.base_url, fixture.repo_id
         ))
         .form(&[
@@ -824,7 +824,7 @@ async fn test_rename_file_works() {
     // Verify old name gone, new name present
     let list_resp = client
         .get(format!(
-            "{}/library/{}/test-repo/",
+            "{}/libraries/{}/file",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -853,7 +853,7 @@ async fn test_file_preview_text() {
     let client = login_client(&fixture).await;
     let resp = client
         .get(format!(
-            "{}/library/{}/preview/readme.md",
+            "{}/libraries/{}/file/preview/readme.md",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -874,7 +874,7 @@ async fn test_share_links_list_shares() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
     let resp = client
-        .get(format!("{}/share/", fixture.server.base_url))
+        .get(format!("{}/shares/", fixture.server.base_url))
         .send()
         .await
         .unwrap();
@@ -894,7 +894,7 @@ async fn test_create_share_link_works() {
     let csrf_token = get_csrf_token(&client, &fixture.server.base_url, &fixture.repo_id).await;
 
     let resp = client
-        .post(format!("{}/share/create", fixture.server.base_url))
+        .post(format!("{}/shares/create/", fixture.server.base_url))
         .form(&[
             ("repo_id", fixture.repo_id.as_str()),
             ("path", "/"),
@@ -917,7 +917,7 @@ async fn test_delete_share_link_works() {
 
     // First create a share link via UI
     let create_resp = client
-        .post(format!("{}/share/create", fixture.server.base_url))
+        .post(format!("{}/shares/create/", fixture.server.base_url))
         .form(&[
             ("repo_id", fixture.repo_id.as_str()),
             ("path", "/"),
@@ -930,7 +930,7 @@ async fn test_delete_share_link_works() {
 
     // Verify the shares page renders
     let list_resp = client
-        .get(format!("{}/share/", fixture.server.base_url))
+        .get(format!("{}/shares/", fixture.server.base_url))
         .send()
         .await
         .unwrap();
@@ -949,7 +949,7 @@ async fn test_settings_page_shows_info() {
     let client = login_client(&fixture).await;
 
     let resp = client
-        .get(format!("{}/profile/", fixture.server.base_url))
+        .get(format!("{}/settings/", fixture.server.base_url))
         .send()
         .await
         .unwrap();
@@ -968,7 +968,7 @@ async fn test_change_password_works() {
     let client = login_client(&fixture).await;
 
     let resp = client
-        .post(format!("{}/profile/password", fixture.server.base_url))
+        .post(format!("{}/settings/password/", fixture.server.base_url))
         .form(&[("old_password", "password"), ("new_password", "newpass123")])
         .send()
         .await
@@ -987,7 +987,7 @@ async fn test_change_password_wrong_old() {
     let client = login_client(&fixture).await;
 
     let resp = client
-        .post(format!("{}/profile/password", fixture.server.base_url))
+        .post(format!("{}/settings/password/", fixture.server.base_url))
         .form(&[
             ("old_password", "wrongpass"),
             ("new_password", "newpass123"),
@@ -1018,7 +1018,7 @@ async fn test_search_page_accessible() {
     let client = login_client(&fixture).await;
 
     let resp = client
-        .get(format!("{}/search?q=test", fixture.server.base_url))
+        .get(format!("{}/search/?q=test", fixture.server.base_url))
         .send()
         .await
         .unwrap();
@@ -1053,7 +1053,7 @@ async fn test_search_no_results_message() {
     // Search for something that doesn't exist
     let resp = client
         .get(format!(
-            "{}/search?q=zzzzz_nonexistent",
+            "{}/search/?q=zzzzz_nonexistent",
             fixture.server.base_url
         ))
         .send()
@@ -1088,7 +1088,7 @@ async fn test_search_shows_results() {
 
     // Search via UI
     let resp = client
-        .get(format!("{}/search?q=hello", fixture.server.base_url))
+        .get(format!("{}/search/?q=hello", fixture.server.base_url))
         .send()
         .await
         .unwrap();
@@ -1123,7 +1123,7 @@ async fn test_search_multiple_results_in_ui() {
 
     // Search via UI
     let resp = client
-        .get(format!("{}/search?q=document", fixture.server.base_url))
+        .get(format!("{}/search/?q=document", fixture.server.base_url))
         .send()
         .await
         .unwrap();
@@ -1163,7 +1163,7 @@ async fn test_search_dir_and_file() {
 
     // Search for the directory name
     let resp = client
-        .get(format!("{}/search?q=myfolder", fixture.server.base_url))
+        .get(format!("{}/search/?q=myfolder", fixture.server.base_url))
         .send()
         .await
         .unwrap();
@@ -1177,7 +1177,7 @@ async fn test_search_dir_and_file() {
 
     // Search for the inner file name
     let resp = client
-        .get(format!("{}/search?q=inner", fixture.server.base_url))
+        .get(format!("{}/search/?q=inner", fixture.server.base_url))
         .send()
         .await
         .unwrap();

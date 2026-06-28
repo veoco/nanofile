@@ -321,5 +321,5 @@ pub async fn disable_2fa(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    Ok((StatusCode::FOUND, [("Location", "/profile/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }

@@ -51,7 +51,7 @@
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Enter your password to disable two-factor authentication.
             </p>
-            <form action="/profile/two-factor/disable" method="POST" class="mt-4 space-y-4">
+            <form action="/settings/two-factor/disable/" method="POST" class="mt-4 space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <div>
                     <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Password</label>
@@ -130,7 +130,7 @@
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Enter the 6-digit code from your authenticator app to enable two-factor authentication.
             </p>
-            <form action="/profile/two-factor/verify" method="POST" class="mt-4 space-y-4">
+            <form action="/settings/two-factor/verify/" method="POST" class="mt-4 space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <div>
                     <label for="code" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Verification Code</label>
@@ -150,7 +150,7 @@
 
     {# Back link #}
     <div class="mt-6">
-        <a href="/profile/" class="text-sm font-medium text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300">
+        <a href="/settings/" class="text-sm font-medium text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300">
             &larr; Back to Settings
         </a>
     </div>

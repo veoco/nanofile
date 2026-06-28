@@ -23,7 +23,7 @@
             <div class="mt-4 flex items-center gap-x-6">
                 <img src="/avatars/user/{{ user_email }}/resized/96/" alt=""
                      class="h-24 w-24 rounded-full object-cover bg-brand-500 ring-2 ring-gray-200 dark:ring-gray-600">
-                <form action="/profile/avatar" method="POST" enctype="multipart/form-data" class="flex flex-col gap-y-3">
+                <form action="/settings/avatar/" method="POST" enctype="multipart/form-data" class="flex flex-col gap-y-3">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                     <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif" required
                            class="block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-4 file:rounded-lg file:border-0 file:bg-brand-500 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-brand-600 file:transition-colors">
@@ -51,7 +51,7 @@
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Your display name is shown to other users and in the desktop client.
             </p>
-            <form action="/profile/display-name" method="POST" class="mt-4 space-y-4">
+            <form action="/settings/display-name/" method="POST" class="mt-4 space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <div>
                     <label for="display_name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Display Name</label>
@@ -84,7 +84,7 @@
                 <span class="font-semibold text-gray-500 dark:text-gray-400">Not configured</span>
                 {% endif %}
             </p>
-            <a href="/profile/two-factor/"
+            <a href="/settings/two-factor/"
                class="mt-3 inline-block rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
                 Manage Two-Factor Authentication
             </a>
@@ -98,7 +98,7 @@
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 View and manage devices that have access to your account.
             </p>
-            <a href="/profile/devices/"
+            <a href="/settings/devices/"
                class="mt-3 inline-block rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
                 Manage Devices
             </a>
@@ -113,7 +113,7 @@
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Generate invitation codes to allow new users to create an account.
             </p>
-            <a href="/profile/invitations/"
+            <a href="/settings/invitations/"
                class="mt-3 inline-block rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
                 Manage Invitations
             </a>
@@ -125,7 +125,7 @@
     <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
         <div class="px-4 py-5 sm:px-6">
             <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">Change Password</h2>
-            <form action="/profile/password" method="POST" class="mt-4 space-y-4">
+            <form action="/settings/password/" method="POST" class="mt-4 space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <div>
                     <label for="old_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Current Password</label>

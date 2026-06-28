@@ -23,7 +23,7 @@
         {% else %}
         {% for r in left_panel_repos %}
         <div class="js-repo-item" data-repo-id="{{ r.id }}">
-            <a href="/library/{{ r.id }}/{{ r.name }}/"
+            <a href="/libraries/{{ r.id }}/file/"
                class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors{% if current_repo_id.as_deref() == Some(r.id) %} bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 font-medium{% endif %}">
                 <svg class="h-4 w-4 flex-shrink-0 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
@@ -45,7 +45,7 @@
             </svg>
             <span>Starred</span>
         </a>
-        <a href="/share/"
+        <a href="/shares/"
            class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-surface-700 hover:text-gray-900 dark:hover:text-gray-100 transition-colors">
             <svg class="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/>

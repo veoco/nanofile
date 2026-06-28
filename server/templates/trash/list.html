@@ -92,7 +92,7 @@
                 </td>
                 <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 hidden md:table-cell">
                     {% if !item.repo_name.is_empty() %}
-                    <a href="/library/{{ item.repo_id }}/" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.repo_name }}</a>
+                    <a href="/libraries/{{ item.repo_id }}/file/" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.repo_name }}</a>
                     {% else %}
                     <span class="text-gray-400 dark:text-gray-500">[Deleted]</span>
                     {% endif %}

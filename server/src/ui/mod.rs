@@ -65,11 +65,11 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             axum::routing::post(repos::create_repo),
         )
         .route(
-            "/libraries/{id}/rename",
+            "/libraries/{id}/rename/",
             axum::routing::post(repos::rename_repo),
         )
         .route(
-            "/libraries/{id}/delete",
+            "/libraries/{id}/delete/",
             axum::routing::post(repos::delete_repo),
         )
         // Trash — global trash page (sidebar entry)
@@ -79,76 +79,81 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             axum::routing::post(trash::restore_trash_item),
         )
         .route("/trash/clean/", axum::routing::post(trash::clean_trash))
-        // Library file browser — /library/{repo_id}/{repo_name}/{*path}
-        .route("/library/{id}/{*path}", get(files::file_browser_seahub))
-        // Seahub-compatible file view — /lib/{repo_id}/file{*path}
-        .route("/lib/{id}/file{*path}", get(files::view_lib_file))
-        // Library actions
+        // Library file browser — root and sub-paths
+        .route("/libraries/{id}/file", get(files::file_browser_root))
+        .route("/libraries/{id}/file/{*path}", get(files::file_browser))
+        // File actions — all under /libraries/{id}/file/
         .route(
-            "/library/{id}/upload",
+            "/libraries/{id}/file/upload/",
             axum::routing::post(files::upload_file),
         )
-        .route("/library/{id}/download/{*path}", get(files::download_file))
         .route(
-            "/library/{id}/delete",
+            "/libraries/{id}/file/download/{*path}",
+            get(files::download_file),
+        )
+        .route(
+            "/libraries/{id}/file/delete/",
             axum::routing::post(files::delete_entry),
         )
         .route(
-            "/library/{id}/new-dir",
+            "/libraries/{id}/file/new-dir/",
             axum::routing::post(files::create_directory),
         )
         .route(
-            "/library/{id}/rename",
+            "/libraries/{id}/file/rename/",
             axum::routing::post(files::rename_entry),
         )
-        .route("/library/{id}/preview/{*path}", get(files::preview_file))
-        // Shares
-        .route("/share/", get(shares::list_shares))
-        .route("/share/create", axum::routing::post(shares::create_share))
         .route(
-            "/share/{token}/delete",
+            "/libraries/{id}/file/preview/{*path}",
+            get(files::preview_file),
+        )
+        // Shares
+        .route("/shares/", get(shares::list_shares))
+        .route("/shares/create/", axum::routing::post(shares::create_share))
+        .route(
+            "/shares/{token}/delete/",
             axum::routing::post(shares::delete_share),
         )
         // Profile / Settings
-        .route("/profile/", get(settings::settings_page))
+        .route("/settings/", get(settings::settings_page))
         .route(
-            "/profile/devices/",
+            "/settings/devices/",
             get(settings::devices_page).post(settings::unlink_device),
         )
         .route(
-            "/profile/password",
+            "/settings/password/",
             axum::routing::post(settings::change_password),
         )
         .route(
-            "/profile/display-name",
+            "/settings/display-name/",
             axum::routing::post(settings::update_display_name),
         )
         // Invitation codes
         .route(
-            "/profile/invitations/",
+            "/settings/invitations/",
             get(invitations::list_invitations).post(invitations::generate_invitation),
         )
         .route(
-            "/profile/invitations/{id}/delete",
+            "/settings/invitations/{id}/delete/",
             axum::routing::post(invitations::delete_invitation),
         )
         // Avatar upload
         .route(
-            "/profile/avatar",
+            "/settings/avatar/",
             axum::routing::post(settings::upload_avatar),
         )
         // Two-Factor Authentication
-        .route("/profile/two-factor/", get(two_factor::setup_page))
+        .route("/settings/two-factor/", get(two_factor::setup_page))
         .route(
-            "/profile/two-factor/setup",
+            "/settings/two-factor/setup/",
             axum::routing::post(two_factor::setup_2fa),
         )
         .route(
-            "/profile/two-factor/verify",
+            "/settings/two-factor/verify/",
             axum::routing::post(two_factor::verify_2fa),
         )
         .route(
-            "/profile/two-factor/disable",
+            "/settings/two-factor/disable/",
             axum::routing::post(two_factor::disable_2fa),
         )
         // Starred items
@@ -159,5 +164,5 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         // File activities
         .route("/activities/", get(activities::activities_page))
         // Search
-        .route("/search", get(search::search_page))
+        .route("/search/", get(search::search_page))
 }
