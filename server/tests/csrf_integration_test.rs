@@ -201,7 +201,7 @@ async fn test_api_cookie_and_csrf_header() {
     );
 }
 
-/// Wrong X-CSRFToken header is rejected.
+/// Wrong X-CSRFToken header is rejected on state-changing POST.
 #[tokio::test]
 async fn test_api_cookie_wrong_csrf_header() {
     let server = TestServer::start().await;
@@ -210,15 +210,17 @@ async fn test_api_cookie_wrong_csrf_header() {
     let ui_client = ui_login(&server).await;
 
     let resp = ui_client
-        .get(format!("{}/api/v2.1/starred-items/", server.base_url))
+        .post(format!("{}/api/v2.1/starred-items/", server.base_url))
+        .header("Content-Type", "application/json")
         .header("X-CSRFToken", "this-is-the-wrong-token-value")
+        .body(serde_json::json!({"repo_id": "none", "path": "/"}).to_string())
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401, "wrong CSRF token should be rejected");
+    assert_eq!(resp.status(), 401, "wrong CSRF token on POST should be rejected");
 }
 
-/// No X-CSRFToken header with cookie is rejected.
+/// No X-CSRFToken header on a state-changing POST is rejected.
 #[tokio::test]
 async fn test_api_cookie_no_csrf_header() {
     let server = TestServer::start().await;
@@ -227,14 +229,16 @@ async fn test_api_cookie_no_csrf_header() {
     let ui_client = ui_login(&server).await;
 
     let resp = ui_client
-        .get(format!("{}/api/v2.1/starred-items/", server.base_url))
+        .post(format!("{}/api/v2.1/starred-items/", server.base_url))
+        .header("Content-Type", "application/json")
+        .body(serde_json::json!({"repo_id": "none", "path": "/"}).to_string())
         .send()
         .await
         .unwrap();
     assert_eq!(
         resp.status(),
         401,
-        "missing CSRF header should be rejected when using cookie auth"
+        "missing CSRF header on POST should be rejected when using cookie auth"
     );
 }
 

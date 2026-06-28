@@ -99,9 +99,11 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         let token_str = extract_auth_header_token(&parts.headers);
 
         // ── Path 2: Session cookie + CSRF header (browser UI requests) ──────
+        // CSRF check is skipped for safe methods (GET, HEAD) because browsers
+        // cannot attach custom headers for <img>, <link>, <script> etc.
         let token_str = match token_str {
             Some(t) => t,
-            None => match try_extract_cookie_session(&parts.headers, state) {
+            None => match try_extract_cookie_session(&parts.headers, state, &parts.method) {
                 Some(t) => t,
                 None => return Err(StatusCode::UNAUTHORIZED),
             },
@@ -181,6 +183,7 @@ fn extract_auth_header_token(headers: &axum::http::HeaderMap) -> Option<String> 
 fn try_extract_cookie_session(
     headers: &axum::http::HeaderMap,
     state: &std::sync::Arc<AppState>,
+    method: &axum::http::Method,
 ) -> Option<String> {
     let cookie_str = headers.get("cookie").and_then(|v| v.to_str().ok())?;
 
@@ -190,8 +193,15 @@ fn try_extract_cookie_session(
         .find(|s| s.starts_with("seahub-session="))
         .and_then(|s| s.strip_prefix("seahub-session="))?;
 
-    // CSRF check: validate X-CSRFToken header matches the HMAC-derived token.
-    if !crate::auth::csrf::validate_csrf_header(headers, &state.csrf_secret, session_token) {
+    // ── CSRF check ──
+    // Only required for state-changing methods (POST, PUT, PATCH, DELETE, etc.).
+    // Safe methods (GET, HEAD, OPTIONS) are idempotent and cannot cause side
+    // effects — browsers routinely issue them from <img>, <link>, <script> tags
+    // that cannot attach custom headers.
+    if *method != axum::http::Method::GET
+        && *method != axum::http::Method::HEAD
+        && !crate::auth::csrf::validate_csrf_header(headers, &state.csrf_secret, session_token)
+    {
         return None;
     }
 
