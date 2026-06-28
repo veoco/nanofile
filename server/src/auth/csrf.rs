@@ -75,7 +75,12 @@ pub fn check_form_csrf(
 ///
 /// `max_age` should match the session cookie's `Max-Age` so both cookies stay
 /// in sync across browser restarts.  Pass `None` for a session-scoped cookie.
-pub fn csrf_cookie_header(secret: &[u8], session_token: &str, secure: bool, max_age: Option<u64>) -> String {
+pub fn csrf_cookie_header(
+    secret: &[u8],
+    session_token: &str,
+    secure: bool,
+    max_age: Option<u64>,
+) -> String {
     let token = generate_csrf_token(secret, session_token);
     let mut cookie = format!("sfcsrftoken={}; Path=/; SameSite=Lax", token);
     if let Some(age) = max_age {

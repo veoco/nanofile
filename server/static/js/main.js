@@ -414,20 +414,48 @@
     }
   });
 
-  // ─── Trash restore (still uses form POST) ────────────────────────────
+  // ─── Trash restore (via API) ────────────────────────────────────────
   document.addEventListener("submit", async function (e) {
     const form = e.target.closest(".js-restore-form");
     if (!form) return;
-
     e.preventDefault();
+
+    const repoId = form.querySelector('[name="repo_id"]').value;
+    const commitId = form.querySelector('[name="commit_id"]').value;
+    const path = form.querySelector('[name="path"]').value;
     const objName = form.dataset.objName || "";
     const repoName = form.dataset.repoName || "";
+
     var confirmed = await showConfirmDialog(
       "Restore",
       'Restore "' + objName + '" from ' + repoName + "?",
       { confirmText: "Restore", variant: "primary" }
     );
-    if (confirmed) form.submit();
+    if (!confirmed) return;
+
+    // Build request body: { commit_id: [path] }
+    var body = {};
+    body[commitId] = [path];
+
+    var csrfToken = (function(){var m=document.cookie.match(/(^|;)\s*sfcsrftoken\s*=\s*([^;]+)/);return m?m[2]:'';})();
+    try {
+      var resp = await fetch('/api/v2.1/repos/' + encodeURIComponent(repoId) + '/trash2/revert/', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': csrfToken,
+        },
+        body: JSON.stringify(body),
+      });
+      if (resp.ok) {
+        window.location.reload();
+      } else {
+        window.Toast.error("Restore failed");
+      }
+    } catch (err) {
+      window.Toast.error("Restore failed: " + err.message);
+    }
   });
 
   // ─── Rename dialog ──────────────────────────────────────────────────

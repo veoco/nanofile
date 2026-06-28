@@ -179,6 +179,10 @@
 
 {% block scripts %}
 <script>
+function getCookie(name) {
+    var match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return match ? match.pop() : '';
+}
 function showCleanDialog() {
     document.getElementById('clean-dialog').classList.remove('hidden');
 }
@@ -190,7 +194,11 @@ function cleanTrash() {
     var repoId = select ? select.value : '';
     if (!repoId) { alert('Please select a library'); return; }
     if (!confirm('Permanently delete all trash items for this library?')) return;
-    var csrfToken = (function(){var m=document.cookie.match(/(^|;)\\s*sfcsrftoken\\s*=\\s*([^;]+)/);return m?m[2]:'';})();
+    var csrfToken = getCookie('sfcsrftoken');
+    if (!csrfToken) {
+        window.location.href = '/accounts/login/';
+        return;
+    }
     fetch('/api/v2.1/repos/' + encodeURIComponent(repoId) + '/trash/', {
         method: 'DELETE',
         credentials: 'same-origin',
