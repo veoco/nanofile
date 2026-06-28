@@ -58,6 +58,7 @@ anyhow = "1"
 totp-rs = { version = "5.7", features = ["gen_secret", "otpauth"] }
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+percent-encoding = "2.3"
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"
 askama = { version = "0.16", features = ["serde_json", "urlencode"] }

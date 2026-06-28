@@ -3921,6 +3921,7 @@ dependencies = [
  "migration",
  "multer",
  "pbkdf2",
+ "percent-encoding",
  "qrcode",
  "rand 0.10.1",
  "reqwest",

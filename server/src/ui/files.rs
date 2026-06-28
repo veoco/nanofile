@@ -101,6 +101,20 @@ pub struct FileEntry {
     pub starred: bool,
     /// File extension in uppercase (e.g. "PDF", "PNG"), None for directories.
     pub extension: Option<String>,
+    /// Thumbnail URL for image files (png/jpg/jpeg/gif/bmp/webp), None otherwise.
+    /// Used to show an actual image preview as the file icon instead of an extension badge.
+    pub image_thumbnail_url: Option<String>,
+}
+
+/// Returns true if the file extension is one that the thumbnail service supports
+/// for generating image thumbnails.
+fn is_thumbnail_image(name: &str) -> bool {
+    name.ends_with(".png")
+        || name.ends_with(".jpg")
+        || name.ends_with(".jpeg")
+        || name.ends_with(".gif")
+        || name.ends_with(".bmp")
+        || name.ends_with(".webp")
 }
 
 pub fn is_previewable_file(name: &str) -> bool {
@@ -347,6 +361,16 @@ async fn file_browser_inner(
             } else {
                 None
             };
+            let is_image_file = e.entry_type == "file" && is_thumbnail_image(&e.name);
+            let thumb_url = if is_image_file {
+                Some(format!(
+                    "/api2/repos/{}/thumbnail/?p={}&size=48",
+                    repo_id,
+                    urlencode_path(&full_path)
+                ))
+            } else {
+                None
+            };
             FileEntry {
                 name: e.name.clone(),
                 entry_type: e.entry_type,
@@ -359,6 +383,7 @@ async fn file_browser_inner(
                 is_previewable,
                 starred: starred_set.contains(&full_path),
                 extension: ext,
+                image_thumbnail_url: thumb_url,
             }
         })
         .collect();
@@ -684,4 +709,10 @@ fn mime_guess(filename: &str) -> &'static str {
     } else {
         "application/octet-stream"
     }
+}
+
+/// Percent-encode a URL path segment for use in query parameters.
+fn urlencode_path(path: &str) -> String {
+    // Encode everything except unreserved characters (RFC 3986)
+    percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
