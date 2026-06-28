@@ -139,15 +139,24 @@
 
 {% block scripts %}
 <script>
+function getCookie(name) {
+    var match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return match ? match.pop() : '';
+}
 function unstarItem(repoId, path) {
     if (!confirm('Unstar this item?')) return;
+    var csrfToken = getCookie('sfcsrftoken');
+    if (!csrfToken) {
+        window.location.href = '/accounts/login/';
+        return;
+    }
     fetch('/api/v2.1/starred-items/?repo_id=' + encodeURIComponent(repoId) + '&path=' + encodeURIComponent(path), {
         method: 'DELETE',
         credentials: 'same-origin',
-        headers: { 'X-CSRFToken': (function(){var m=document.cookie.match(/(^|;)\\s*sfcsrftoken\\s*=\\s*([^;]+)/);return m?m[2]:'';})() },
+        headers: { 'X-CSRFToken': csrfToken },
     }).then(function (r) {
         if (r.ok) window.location.reload();
-        else alert('Unstar failed');
+        else alert('Unstar failed: ' + r.status);
     }).catch(function () {
         alert('Network error');
     });

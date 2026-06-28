@@ -117,6 +117,7 @@ pub async fn client_token_login(
         &state.csrf_secret,
         &api_token,
         state.config.server.secure_cookies(),
+        Some(ttl_days * 86400),
     );
 
     let mut resp_headers = HeaderMap::new();

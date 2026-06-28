@@ -307,8 +307,13 @@ pub async fn login(
         secure_cookies,
     );
 
+    let csrf_max_age = if is_remembered {
+        Some(ttl_days * 86400)
+    } else {
+        Some(86400)
+    };
     let csrf_cookie =
-        crate::auth::csrf::csrf_cookie_header(&state.csrf_secret, &session_token, secure_cookies);
+        crate::auth::csrf::csrf_cookie_header(&state.csrf_secret, &session_token, secure_cookies, csrf_max_age);
 
     let mut resp_headers = axum::http::HeaderMap::new();
     resp_headers.insert(
@@ -505,7 +510,7 @@ pub async fn two_factor_auth(
     let clear_pending_str = session_cookie("seahub-session-pending", "", Some(0), secure_cookies);
 
     let csrf_cookie_str =
-        crate::auth::csrf::csrf_cookie_header(&state.csrf_secret, &session_token, secure_cookies);
+        crate::auth::csrf::csrf_cookie_header(&state.csrf_secret, &session_token, secure_cookies, Some(ttl_days * 86400));
 
     // HeaderMap::append so all Set-Cookie headers reach the browser.
     // A plain array tuple uses `insert` which would overwrite the first one.
@@ -760,7 +765,7 @@ pub async fn register(
     );
 
     let csrf_cookie =
-        crate::auth::csrf::csrf_cookie_header(&state.csrf_secret, &session_token, secure_cookies);
+        crate::auth::csrf::csrf_cookie_header(&state.csrf_secret, &session_token, secure_cookies, Some(ttl_days * 86400));
 
     let mut resp_headers = axum::http::HeaderMap::new();
     resp_headers.insert(

@@ -72,9 +72,15 @@ pub fn check_form_csrf(
 /// The cookie is deliberately **not** HttpOnly so JavaScript can read it and
 /// include it as an `X-CSRFToken` request header.  The value is the same HMAC
 /// token used for form-based CSRF protection.
-pub fn csrf_cookie_header(secret: &[u8], session_token: &str, secure: bool) -> String {
+///
+/// `max_age` should match the session cookie's `Max-Age` so both cookies stay
+/// in sync across browser restarts.  Pass `None` for a session-scoped cookie.
+pub fn csrf_cookie_header(secret: &[u8], session_token: &str, secure: bool, max_age: Option<u64>) -> String {
     let token = generate_csrf_token(secret, session_token);
     let mut cookie = format!("sfcsrftoken={}; Path=/; SameSite=Lax", token);
+    if let Some(age) = max_age {
+        cookie.push_str(&format!("; Max-Age={}", age));
+    }
     if secure {
         cookie.push_str("; Secure");
     }
@@ -203,7 +209,7 @@ mod tests {
     #[test]
     fn test_csrf_cookie_header_basic() {
         let secret = b"test-secret-key-12345678";
-        let cookie = csrf_cookie_header(secret, "session-abc", false);
+        let cookie = csrf_cookie_header(secret, "session-abc", false, Some(86400));
         // Should start with sfcsrftoken=
         assert!(cookie.starts_with("sfcsrftoken="));
         // Extract just the token value (before the first ";")
@@ -229,12 +235,17 @@ mod tests {
             !cookie.contains("Secure"),
             "CSRF cookie should not have Secure by default"
         );
+        // Should have Max-Age=86400 when provided
+        assert!(
+            cookie.contains("Max-Age=86400"),
+            "CSRF cookie should have Max-Age=86400"
+        );
     }
 
     #[test]
     fn test_csrf_cookie_header_secure() {
         let secret = b"test-secret-key-12345678";
-        let cookie = csrf_cookie_header(secret, "session-abc", true);
+        let cookie = csrf_cookie_header(secret, "session-abc", true, None);
         assert!(
             cookie.contains("; Secure"),
             "secure=true should add Secure flag"
