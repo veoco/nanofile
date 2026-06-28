@@ -74,12 +74,12 @@
         </div>
         <div class="flex-1 min-w-0">
             {% if entry.is_previewable %}
-            <a href="/libraries/{{ repo_id }}/file/preview/{{ entry.relative_path }}"
+            <a href="/libraries/{{ repo_id }}/file/{{ entry.relative_path }}"
                class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate block">
                 {{ entry.name }}
             </a>
             {% else %}
-            <a href="/libraries/{{ repo_id }}/file/download/{{ entry.relative_path }}"
+            <a href="/libraries/{{ repo_id }}/file/{{ entry.relative_path }}"
                class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate block">
                 {{ entry.name }}
             </a>
@@ -102,7 +102,7 @@
                 </svg>
             </button>
             {% if entry.entry_type == "file" %}
-            <a href="/libraries/{{ repo_id }}/file/download/{{ entry.relative_path }}"
+            <a href="/libraries/{{ repo_id }}/file/{{ entry.relative_path }}?dl=1"
                class="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
                title="Download {{ entry.name }}">
                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

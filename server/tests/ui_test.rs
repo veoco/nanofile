@@ -693,7 +693,7 @@ async fn test_download_file_returns_content() {
     let client = login_client(&fixture).await;
     let resp = client
         .get(format!(
-            "{}/libraries/{}/file/download/download.txt",
+            "{}/libraries/{}/file/download.txt?dl=1",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -853,7 +853,7 @@ async fn test_file_preview_text() {
     let client = login_client(&fixture).await;
     let resp = client
         .get(format!(
-            "{}/libraries/{}/file/preview/readme.md",
+            "{}/libraries/{}/file/readme.md",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()

@@ -234,11 +234,6 @@ pub struct BreadcrumbItem {
 #[derive(Deserialize)]
 pub struct FileBrowserQuery {
     pub partial: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct ViewLibFileQuery {
-    pub raw: Option<String>,
     pub dl: Option<String>,
 }
 
@@ -280,31 +275,6 @@ pub async fn file_browser(
     file_browser_inner(user, state, repo_id, normalize_path(&path), query).await
 }
 
-/// GET /library/{id}/{*path} — Seahub-compatible file browser.
-///
-/// The URL format is /library/{repo_id}/{repo_name}/{*path} where
-/// {repo_name} is purely cosmetic (ignored by the handler).
-pub async fn file_browser_seahub(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    Path((repo_id, path)): Path<(String, String)>,
-    Query(query): Query<FileBrowserQuery>,
-) -> Result<impl IntoResponse, AppError> {
-    // Strip the cosmetic repo name from the path
-    let cleaned = if path.is_empty() {
-        "/".to_string()
-    } else {
-        let segments: Vec<&str> = path.split('/').collect();
-        if segments.len() <= 1 {
-            // Just the repo name, no real path — show root
-            "/".to_string()
-        } else {
-            format!("/{}", segments[1..].join("/"))
-        }
-    };
-    file_browser_inner(user, state, repo_id, cleaned, query).await
-}
-
 async fn file_browser_inner(
     user: WebUser,
     state: Arc<AppState>,
@@ -324,9 +294,20 @@ async fn file_browser_inner(
         .map_err(|e| AppError::internal(format!("db error: {e}")))?
         .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
 
-    // List directory entries from the FS object tree (authoritative source).
-    let entries_data =
-        crate::fs::handler::dir::list_dir_from_fs_tree(db, repos, &repo_id, &path).await?;
+    // Try to list directory entries from the FS object tree.
+    // If the path points to a file (not a directory), fall through to file serving.
+    let entries_result =
+        crate::fs::handler::dir::list_dir_from_fs_tree(db, repos, &repo_id, &path).await;
+
+    let entries_data = match entries_result {
+        Ok(data) => data,
+        Err(_) => {
+            // Path likely points to a file — serve it directly.
+            return serve_file(user, state, repo_id, path, query)
+                .await
+                .map(IntoResponse::into_response);
+        }
+    };
 
     // Query starred entries for this user+repo to stamp the `starred` field.
     let starred_set: HashSet<String> = repos
@@ -441,6 +422,143 @@ async fn file_browser_inner(
             .map_err(|e| AppError::internal(e.to_string()))?;
         Ok(Html(html).into_response())
     }
+}
+
+/// Serve a file directly from the repo (preview or download).
+/// Called by `file_browser_inner` when the path points to a file, not a directory.
+async fn serve_file(
+    user: WebUser,
+    state: Arc<AppState>,
+    repo_id: String,
+    path: String,
+    query: FileBrowserQuery,
+) -> Result<impl IntoResponse, AppError> {
+    let db = state.db.as_ref();
+    let path = normalize_path(&path);
+    let file_name = path.rsplit('/').next().unwrap_or("file").to_string();
+
+    // ?dl=1 → force download
+    if query.dl.as_deref() == Some("1") {
+        let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
+            .await
+            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+        let content_type = mime_guess(&file_name);
+        let disposition = format!("attachment; filename=\"{}\"", file_name);
+        return Ok((
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CONTENT_DISPOSITION, &disposition),
+            ],
+            data,
+        )
+            .into_response());
+    }
+
+    // Image preview
+    let is_image = file_name.ends_with(".png")
+        || file_name.ends_with(".jpg")
+        || file_name.ends_with(".jpeg")
+        || file_name.ends_with(".gif")
+        || file_name.ends_with(".webp")
+        || file_name.ends_with(".bmp")
+        || file_name.ends_with(".svg");
+
+    // Text/code preview
+    let is_text = is_previewable_file(&file_name);
+
+    if is_image {
+        let size_display = get_file_size(db, &repo_id, &path)
+            .await
+            .map(format_size)
+            .unwrap_or_else(|_| "?".to_string());
+
+        let repo_name = state
+            .repos
+            .repo
+            .find_by_id(&repo_id)
+            .await
+            .map_err(|e| AppError::internal(format!("db error: {e}")))?
+            .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?
+            .name;
+
+        let raw_parent = parent_path_from(&path);
+        let parent_path = raw_parent.trim_start_matches('/').to_string();
+
+        let left_panel_repos =
+            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+        let tpl = PreviewImageTemplate {
+            urls: crate::static_assets::template_urls(),
+            user_email: user.email,
+            is_admin: user.is_admin,
+            repo_name,
+            file_name,
+            repo_id: repo_id.clone(),
+            current_path: path.trim_start_matches('/').to_string(),
+            parent_path,
+            size_display,
+            active_page: "repos",
+            left_panel_repos,
+            current_repo_id: Some(repo_id),
+        };
+        let html = tpl
+            .render()
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        return Ok(Html(html).into_response());
+    }
+
+    if is_text {
+        let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
+            .await
+            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+        let content = String::from_utf8_lossy(&data).to_string();
+
+        let repo_name = state
+            .repos
+            .repo
+            .find_by_id(&repo_id)
+            .await
+            .map_err(|e| AppError::internal(format!("db error: {e}")))?
+            .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?
+            .name;
+
+        let raw_parent = parent_path_from(&path);
+        let parent_path = raw_parent.trim_start_matches('/').to_string();
+
+        let size_display = get_file_size(db, &repo_id, &path)
+            .await
+            .map(format_size)
+            .unwrap_or_else(|_| "?".to_string());
+
+        let left_panel_repos =
+            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+        let tpl = PreviewTextTemplate {
+            urls: crate::static_assets::template_urls(),
+            user_email: user.email,
+            is_admin: user.is_admin,
+            repo_name,
+            file_name,
+            content,
+            repo_id: repo_id.clone(),
+            current_path: path.trim_start_matches('/').to_string(),
+            parent_path,
+            size_display,
+            active_page: "repos",
+            left_panel_repos,
+            current_repo_id: Some(repo_id),
+        };
+        let html = tpl
+            .render()
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        return Ok(Html(html).into_response());
+    }
+
+    // Binary files — serve raw bytes inline
+    let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
+        .await
+        .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+    let content_type = mime_guess(&file_name);
+    Ok((StatusCode::OK, [(header::CONTENT_TYPE, content_type)], data).into_response())
 }
 
 /// Ensure all parent directories exist for a given path, creating any that
@@ -662,26 +780,6 @@ pub async fn upload_file(
         format!("/libraries/{}/file/{}", repo_id, dir_path)
     };
     Ok((StatusCode::FOUND, [("Location", &redirect)]).into_response())
-}
-
-/// GET /library/{id}/download/{*path} — download a file.
-pub async fn download_file(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    Path((repo_id, path)): Path<(String, String)>,
-) -> Result<impl IntoResponse, AppError> {
-    let db = state.db.as_ref();
-    verify_repo_access(db, user.user_id, &repo_id).await?;
-
-    let path = normalize_path(&path);
-    let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
-        .await
-        .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
-
-    let file_name = path.rsplit('/').next().unwrap_or("file");
-    let content_type = mime_guess(file_name);
-
-    Ok((StatusCode::OK, [("Content-Type", content_type)], data))
 }
 
 /// POST /library/{id}/delete — delete a file or directory.
@@ -1034,138 +1132,6 @@ pub async fn rename_entry(
     Ok((StatusCode::FOUND, [("Location", &redirect)]).into_response())
 }
 
-/// GET /library/{id}/preview/{*path} — preview a file (text or image).
-pub async fn preview_file(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    Path((repo_id, path)): Path<(String, String)>,
-) -> Result<impl IntoResponse, AppError> {
-    let db = state.db.as_ref();
-    verify_repo_access(db, user.user_id, &repo_id).await?;
-
-    // Get repo name for breadcrumb
-    let repo_name = state
-        .repos
-        .repo
-        .find_by_id(&repo_id)
-        .await
-        .map_err(|e| AppError::internal(format!("db error: {e}")))?
-        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?
-        .name;
-
-    let path = normalize_path(&path);
-    let file_name = path.rsplit('/').next().unwrap_or("file").to_string();
-
-    let raw_parent = parent_path_from(&path);
-    let parent_path = raw_parent.trim_start_matches('/').to_string();
-
-    // Check if this is an image file for special rendering.
-    let is_image = file_name.ends_with(".png")
-        || file_name.ends_with(".jpg")
-        || file_name.ends_with(".jpeg")
-        || file_name.ends_with(".gif")
-        || file_name.ends_with(".webp")
-        || file_name.ends_with(".bmp")
-        || file_name.ends_with(".svg");
-
-    // Check if this is a text/code file that can be previewed inline.
-    let is_text = file_name.ends_with(".txt")
-        || file_name.ends_with(".md")
-        || file_name.ends_with(".rs")
-        || file_name.ends_with(".py")
-        || file_name.ends_with(".js")
-        || file_name.ends_with(".ts")
-        || file_name.ends_with(".html")
-        || file_name.ends_with(".css")
-        || file_name.ends_with(".go")
-        || file_name.ends_with(".java")
-        || file_name.ends_with(".c")
-        || file_name.ends_with(".cpp")
-        || file_name.ends_with(".h")
-        || file_name.ends_with(".rb")
-        || file_name.ends_with(".php")
-        || file_name.ends_with(".sh")
-        || file_name.ends_with(".toml")
-        || file_name.ends_with(".json")
-        || file_name.ends_with(".yaml")
-        || file_name.ends_with(".yml")
-        || file_name.ends_with(".csv")
-        || file_name.ends_with(".xml")
-        || file_name.ends_with(".sql")
-        || file_name.ends_with(".conf")
-        || file_name.ends_with(".ini")
-        || file_name.ends_with(".log");
-
-    if is_image {
-        // Look up file size from the FS tree without downloading the full content.
-        let size_display = get_file_size(db, &repo_id, &path)
-            .await
-            .map(format_size)
-            .unwrap_or_else(|_| "?".to_string());
-
-        let left_panel_repos =
-            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
-        let tpl = PreviewImageTemplate {
-            urls: crate::static_assets::template_urls(),
-            user_email: user.email,
-            is_admin: user.is_admin,
-            repo_name,
-            file_name,
-            repo_id: repo_id.clone(),
-            current_path: path.trim_start_matches('/').to_string(),
-            parent_path,
-            size_display,
-            active_page: "repos",
-            left_panel_repos,
-            current_repo_id: Some(repo_id.clone()),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
-    }
-
-    if is_text {
-        // Text file preview
-        let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
-            .await
-            .map_err(|e| AppError::Internal(format!("read failed: {e}")))?;
-
-        let content = String::from_utf8_lossy(&data).to_string();
-        let size_display = format_size(data.len() as i64);
-
-        let left_panel_repos =
-            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
-        let tpl = PreviewTextTemplate {
-            urls: crate::static_assets::template_urls(),
-            user_email: user.email,
-            is_admin: user.is_admin,
-            repo_name,
-            file_name,
-            content,
-            repo_id: repo_id.clone(),
-            current_path: path,
-            parent_path,
-            size_display,
-            active_page: "repos",
-            left_panel_repos,
-            current_repo_id: Some(repo_id.clone()),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
-    }
-
-    // Binary files (PDFs, archives, etc.) — redirect to download.
-    let download_url = format!(
-        "/libraries/{}/file/download/{}",
-        repo_id,
-        path.trim_start_matches('/')
-    );
-    Ok(axum::response::Redirect::to(&download_url).into_response())
-}
-
 /// Resolve a file's size from the FS tree without downloading its content.
 async fn get_file_size(
     db: &sea_orm::DatabaseConnection,
@@ -1202,58 +1168,6 @@ async fn get_file_size(
         .find(|d| d.name == file_name)
         .map(|d| d.size)
         .ok_or_else(|| AppError::NotFound("File not found".to_string()))
-}
-
-/// GET /lib/{id}/file{*path} — Seahub-compatible file view.
-///
-/// Used by the Seafile desktop client's cloud file browser.
-/// Supports query params:
-///   ?raw=1 — returns raw file content
-///   ?dl=1  — downloads the file
-///   (none) — redirects to the preview page
-pub async fn view_lib_file(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    Path((repo_id, path)): Path<(String, String)>,
-    Query(query): Query<ViewLibFileQuery>,
-) -> Result<impl IntoResponse, AppError> {
-    let db = state.db.as_ref();
-    verify_repo_access(db, user.user_id, &repo_id).await?;
-
-    let path = normalize_path(&path);
-    let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
-        .await
-        .map_err(|e| AppError::Internal(format!("read failed: {e}")))?;
-
-    let file_name = path.rsplit('/').next().unwrap_or("file");
-    let content_type = mime_guess(file_name);
-
-    if query.dl.as_deref() == Some("1") {
-        // Download with Content-Disposition
-        let disposition = format!("attachment; filename=\"{}\"", file_name);
-        return Ok((
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, content_type),
-                (header::CONTENT_DISPOSITION, &disposition),
-            ],
-            data,
-        )
-            .into_response());
-    }
-
-    if query.raw.as_deref() == Some("1") {
-        // Raw file content
-        return Ok((StatusCode::OK, [(header::CONTENT_TYPE, content_type)], data).into_response());
-    }
-
-    // Default: redirect to the preview page
-    let redirect = format!(
-        "/libraries/{}/file/preview/{}",
-        repo_id,
-        path.trim_start_matches('/')
-    );
-    Ok((StatusCode::FOUND, [("Location", redirect.as_str())]).into_response())
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────────────

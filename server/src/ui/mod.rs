@@ -88,10 +88,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             axum::routing::post(files::upload_file),
         )
         .route(
-            "/libraries/{id}/file/download/{*path}",
-            get(files::download_file),
-        )
-        .route(
             "/libraries/{id}/file/delete/",
             axum::routing::post(files::delete_entry),
         )
@@ -102,10 +98,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route(
             "/libraries/{id}/file/rename/",
             axum::routing::post(files::rename_entry),
-        )
-        .route(
-            "/libraries/{id}/file/preview/{*path}",
-            get(files::preview_file),
         )
         // Shares
         .route("/shares/", get(shares::list_shares))

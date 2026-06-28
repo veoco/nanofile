@@ -123,7 +123,7 @@
                         {% if item.deleted %}
                         <span class="text-red-500 text-xs">[Deleted]</span> {{ item.obj_name }}
                         {% else %}
-                        <a href="/libraries/{{ item.repo_id }}/file/preview/{{ item.obj_name }}" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.obj_name }}</a>
+                        <a href="/libraries/{{ item.repo_id }}/file/{{ item.obj_name }}" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.obj_name }}</a>
                         {% endif %}
                     </td>
                     <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ item.repo_name }}</td>
