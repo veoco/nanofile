@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait};
 
 use crate::activity_log;
 use crate::common::DirEntry;
@@ -337,6 +337,23 @@ async fn rename_dir_entry(
         None,
     )
     .await;
+
+    // Update starred items with the new path (dir and all items inside)
+    if let Err(e) = db
+        .execute(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "UPDATE starred_files SET path = $1 || substr(path, length($2) + 1) \
+             WHERE repo_id = $3 AND (path = $2 OR path LIKE $2 || '/%')",
+            vec![
+                new_path.clone().into(),
+                path.to_owned().into(),
+                repo_id.to_owned().into(),
+            ],
+        ))
+        .await
+    {
+        tracing::warn!("Failed to update starred paths for directory {path}: {e}");
+    }
 
     Ok(())
 }

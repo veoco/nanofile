@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::activity_log;
 use crate::common::util::{get_head_commit_id, get_head_root_id, normalize_path};
@@ -97,6 +97,23 @@ pub(crate) async fn rename_file_entry(
         None,
     )
     .await;
+
+    // Update starred items with the new file path
+    if let Err(e) = db
+        .execute(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "UPDATE starred_files SET path = $1 || substr(path, length($2) + 1) \
+             WHERE repo_id = $3 AND (path = $2 OR path LIKE $2 || '/%')",
+            vec![
+                new_path.clone().into(),
+                path.to_owned().into(),
+                repo_id.to_owned().into(),
+            ],
+        ))
+        .await
+    {
+        tracing::warn!("Failed to update starred path for {path}: {e}");
+    }
 
     Ok(())
 }
