@@ -101,9 +101,10 @@ pub struct FileEntry {
     pub starred: bool,
     /// File extension in uppercase (e.g. "PDF", "PNG"), None for directories.
     pub extension: Option<String>,
-    /// Thumbnail URL for image files (png/jpg/jpeg/gif/bmp/webp), None otherwise.
-    /// Used to show an actual image preview as the file icon instead of an extension badge.
+    /// Thumbnail URL for image files at list-view scale (48px), None otherwise.
     pub image_thumbnail_url: Option<String>,
+    /// Thumbnail URL for image files at grid-view scale (256px), None otherwise.
+    pub image_thumbnail_url_large: Option<String>,
 }
 
 /// Returns true if the file extension is one that the thumbnail service supports
@@ -371,6 +372,15 @@ async fn file_browser_inner(
             } else {
                 None
             };
+            let thumb_url_large = if is_image_file {
+                Some(format!(
+                    "/api2/repos/{}/thumbnail/?p={}&size=256",
+                    repo_id,
+                    urlencode_path(&full_path)
+                ))
+            } else {
+                None
+            };
             FileEntry {
                 name: e.name.clone(),
                 entry_type: e.entry_type,
@@ -384,6 +394,7 @@ async fn file_browser_inner(
                 starred: starred_set.contains(&full_path),
                 extension: ext,
                 image_thumbnail_url: thumb_url,
+                image_thumbnail_url_large: thumb_url_large,
             }
         })
         .collect();

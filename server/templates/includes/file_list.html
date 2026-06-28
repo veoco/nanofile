@@ -147,7 +147,7 @@
             <svg class="h-14 w-14 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
             </svg>
-            {% elif let Some(thumb_url) = entry.image_thumbnail_url %}
+            {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
             <img src="{{ thumb_url }}" alt="" class="h-full w-full object-cover" loading="lazy">
             {% else %}
             <span class="text-xl font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
