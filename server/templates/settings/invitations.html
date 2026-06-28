@@ -41,7 +41,7 @@
     </form>
 
     {% if invitations.is_empty() %}
-    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
+    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
         <div class="px-4 py-5 sm:px-6">
             <p class="text-sm text-gray-500 dark:text-gray-400">
                 No invitation codes generated yet.
@@ -52,7 +52,7 @@
     {% endif %}
 
     {% for inv in invitations %}
-    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm {% if !loop.first %}mt-4{% endif %}">
+    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 {% if !loop.first %}mt-4{% endif %}">
         <div class="px-4 py-5 sm:px-6">
             <div class="flex items-center justify-between">
                 <div>

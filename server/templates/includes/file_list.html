@@ -10,8 +10,8 @@
 <!-- Skeleton loading (shown during AJAX refresh) -->
 <div class="js-skeleton hidden">
     {% for i in 0..5 %}
-    <div class="flex items-center gap-3 px-4 py-3">
-        <div class="h-8 w-8 rounded-lg bg-gray-200 dark:bg-surface-700 animate-pulse"></div>
+    <div class="flex items-center gap-3 px-3 py-2">
+        <div class="h-8 w-8 rounded-md bg-gray-200 dark:bg-surface-700 animate-pulse"></div>
         <div class="flex-1">
             <div class="h-4 w-3/4 bg-gray-200 dark:bg-surface-700 rounded animate-pulse"></div>
             <div class="mt-1.5 h-3 w-1/4 bg-gray-200 dark:bg-surface-700 rounded animate-pulse"></div>
@@ -37,10 +37,10 @@
 <!-- List View -->
 <div class="js-file-list-view">
     {% for entry in entries %}
-    <div class="flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-gray-50 dark:hover:bg-surface-800/50 transition-colors">
+    <div class="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-50 dark:hover:bg-surface-800/50 transition-colors">
         {% if entry.entry_type == "dir" %}
         <!-- Folder icon -->
-        <div class="h-8 w-8 rounded-lg bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
+        <div class="h-8 w-8 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
             <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
             </svg>
@@ -67,7 +67,7 @@
         </div>
         {% else %}
         <!-- File icon -->
-        <div class="h-8 w-8 rounded-lg {{ entry.icon_color }} flex items-center justify-center flex-shrink-0">
+        <div class="h-8 w-8 rounded-md {{ entry.icon_color }} flex items-center justify-center flex-shrink-0">
             <svg class="h-4 w-4 text-white" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
             </svg>
@@ -139,10 +139,10 @@
 </div>
 
 <!-- Grid View (hidden by default) -->
-<div class="js-file-grid-view hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 px-4 pb-4">
+<div class="js-file-grid-view hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 px-4 pb-4">
     {% for entry in entries %}
-    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-3 hover:shadow-md transition-shadow">
-        <div class="aspect-square rounded-lg bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2">
+    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-2.5 hover:border-gray-300 dark:hover:border-gray-600 transition-colors">
+        <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2">
             {% if entry.entry_type == "dir" %}
             <svg class="h-10 w-10 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
@@ -164,7 +164,7 @@
 
 <!-- Rename dialog overlay -->
 <div id="rename-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="rename-dialog-title">
-    <div class="bg-white dark:bg-surface-800 rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
         <h3 id="rename-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Rename</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Enter a new name.</p>
         <form id="rename-dialog-form" action="/library/{{ repo_id }}/rename" method="POST">

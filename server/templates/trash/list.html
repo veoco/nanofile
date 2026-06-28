@@ -16,13 +16,13 @@
 
 <!-- Status banners -->
 {% if restored > 0 || failed > 0 %}
-<div class="mt-4 rounded-xl p-4 text-sm {% if failed > 0 %}bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300{% else %}bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300{% endif %}">
+<div class="mt-4 rounded-lg p-4 text-sm {% if failed > 0 %}bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300{% else %}bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300{% endif %}">
     {% if restored > 0 %}{{ restored }} item(s) restored successfully.{% endif %}
     {% if failed > 0 %}{{ failed }} item(s) could not be restored.{% endif %}
 </div>
 {% endif %}
 {% if cleaned %}
-<div class="mt-4 rounded-xl bg-green-50 dark:bg-green-900/20 p-4 text-sm text-green-700 dark:text-green-300">Trash emptied.</div>
+<div class="mt-4 rounded-lg bg-green-50 dark:bg-green-900/20 p-4 text-sm text-green-700 dark:text-green-300">Trash emptied.</div>
 {% endif %}
 
 <!-- Search -->
@@ -30,7 +30,7 @@
     <form action="/trash/" method="GET" class="flex gap-2 max-w-md">
         <input type="text" name="q" value="{{ query }}"
                placeholder="Search deleted files..."
-               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-surface-700 text-gray-900 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-surface-700 text-gray-900 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
         <button type="submit"
                 class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors">
             Search
@@ -46,7 +46,7 @@
 
 <!-- Trash listing -->
 {% if items.is_empty() %}
-<div class="mt-6 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-8 text-center">
+<div class="mt-6 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-8 text-center">
     {% if query.is_empty() %}
     <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
@@ -58,7 +58,7 @@
     {% endif %}
 </div>
 {% else %}
-<div class="mt-4 overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 shadow-sm">
+<div class="mt-4 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
     <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
         <thead class="bg-gray-50 dark:bg-surface-700">
             <tr>
@@ -112,7 +112,7 @@
                         <input type="hidden" name="commit_id" value="{{ item.commit_id }}">
                         <input type="hidden" name="path" value="{{ item.parent_dir }}/{{ item.obj_name }}">
                         <button type="submit"
-                                class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-800 shadow-sm transition-colors">
+                                class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-800 transition-colors">
                             <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                             </svg>
@@ -133,13 +133,13 @@
     <div class="flex gap-2">
         {% if current_page > 1 %}
         <a href="/trash/?page={{ current_page - 1 }}&amp;per_page={{ per_page }}{% if !query.is_empty() %}&amp;q={{ query }}{% endif %}"
-           class="rounded-lg bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors shadow-sm">
+           class="rounded-lg bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
             Previous
         </a>
         {% endif %}
         {% if current_page < total_pages %}
         <a href="/trash/?page={{ current_page + 1 }}&amp;per_page={{ per_page }}{% if !query.is_empty() %}&amp;q={{ query }}{% endif %}"
-           class="rounded-lg bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors shadow-sm">
+           class="rounded-lg bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
             Next
         </a>
         {% endif %}
@@ -150,14 +150,14 @@
 
 <!-- Clean Trash Confirmation Dialog -->
 <div id="clean-dialog" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="clean-dialog-title" onclick="if(event.target===this)hideCleanDialog()">
-    <div class="bg-white dark:bg-surface-800 rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
         <h3 id="clean-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Empty Trash</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
             This will permanently delete all items in the trash for this library. This action cannot be undone.
         </p>
         <div class="mb-4">
             <label for="clean-repo" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Library</label>
-            <select id="clean-repo" class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+            <select id="clean-repo" class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                 {% for item in items %}
                 <option value="{{ item.repo_id }}">{{ item.repo_name }}</option>
                 {% endfor %}
