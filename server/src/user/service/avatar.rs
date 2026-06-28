@@ -107,7 +107,7 @@ impl<'a> AvatarService<'a> {
             .map_err(|e| AppError::Internal(format!("failed to save avatar: {e}")))?;
 
         // Generate and save the default-size thumbnail (256x256)
-        match generate_thumbnail(&data, 256) {
+        match crate::thumbnail_util::generate_square_thumbnail(&data, 256) {
             Ok(thumbnail_data) => {
                 let thumbnail_path = storage_dir.join("256.png");
                 let _ = tokio::fs::write(&thumbnail_path, &thumbnail_data).await;
@@ -150,7 +150,7 @@ impl<'a> AvatarService<'a> {
         let original_path = find_original_path(&storage_dir)?;
         let content = std::fs::read(original_path).ok()?;
 
-        match generate_thumbnail(&content, size) {
+        match crate::thumbnail_util::generate_square_thumbnail(&content, size) {
             Ok(thumbnail_data) => {
                 // Persist for future requests (non-fatal if it fails)
                 let _ = tokio::fs::create_dir_all(&storage_dir).await;
@@ -202,21 +202,4 @@ fn resolve_mime_from_path(dir: &std::path::Path) -> &'static str {
         }
     }
     "image/png"
-}
-
-/// Generate a square PNG thumbnail from raw image data.
-fn generate_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError> {
-    let img = image::load_from_memory(content)
-        .map_err(|_| AppError::Internal("unable to decode image for thumbnail".into()))?;
-
-    let thumbnail = img.thumbnail(size, size);
-    let mut output = Vec::new();
-    thumbnail
-        .write_to(
-            &mut std::io::Cursor::new(&mut output),
-            image::ImageFormat::Png,
-        )
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    Ok(output)
 }

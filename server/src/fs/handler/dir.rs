@@ -300,7 +300,7 @@ pub async fn delete_dirent_v21(
     State(state): State<Arc<AppState>>,
     Path((repo_id, obj)): Path<(String, String)>,
     Query(query): Query<V21DirQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<serde_json::value::Value>, AppError> {
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let path = query
@@ -316,6 +316,17 @@ pub async fn delete_dirent_v21(
     let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
     svc.delete_dirent(&repo_id, &obj, &normalized, &auth.email, auth.user_id)
         .await?;
+
+    // Clean up cached thumbnails for deleted files
+    if obj == "file" {
+        let thumb_svc = crate::fs::service::thumbnail::ThumbnailService::new(
+            state.repos.clone(),
+            state.db.clone(),
+            state.block_store.clone(),
+            state.block_dir.clone(),
+        );
+        thumb_svc.cleanup(&repo_id, &normalized).await;
+    }
 
     Ok(Json(serde_json::json!({"success": true})))
 }

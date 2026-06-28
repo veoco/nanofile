@@ -39,6 +39,7 @@ pub mod sdoc;
 pub mod sharing;
 pub mod static_assets;
 pub mod sync;
+pub mod thumbnail_util;
 pub mod ui;
 pub mod user;
 pub mod web;

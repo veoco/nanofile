@@ -4,7 +4,7 @@ use axum::{
     Form,
     extract::{Multipart, State},
     http::StatusCode,
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Response},
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use serde::Deserialize;
@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::password::{hash_password, verify_password};
-use crate::entity::{api_token, avatar as avatar_entity, s2fa_token, sync_token, user, user_2fa};
+use crate::entity::{api_token, s2fa_token, sync_token, user, user_2fa};
 use crate::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -327,9 +327,6 @@ pub async fn unlink_device(
 
 // ─── Avatar upload (web UI) ──────────────────────────────────────────────────
 
-const MAX_AVATAR_SIZE: usize = 1024 * 1024; // 1 MB
-const ALLOWED_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif"];
-
 /// POST /profile/avatar — upload a new avatar from the web UI.
 pub async fn upload_avatar(
     user: WebUser,
@@ -365,132 +362,54 @@ pub async fn upload_avatar(
     let expected_csrf =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     if csrf_token.as_deref() != Some(&expected_csrf) {
-        let csrf_new = Some(crate::auth::csrf::generate_csrf_token(
-            &state.csrf_secret,
-            &user.session_token,
-        ));
-        let left_panel_repos =
-            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
-        let tpl = SettingsTemplate {
-            urls: crate::static_assets::template_urls(),
-            user_email: user.email.clone(),
-            user_display_name: user.email.split('@').next().unwrap_or("").to_string(),
-            error: Some("Invalid CSRF token.".to_string()),
-            success: None,
-            active_page: "settings",
-            two_fa_enabled: false,
-            csrf_token: csrf_new,
-            is_admin: user.is_admin,
-            left_panel_repos,
-            current_repo_id: None,
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok((StatusCode::OK, Html(html)).into_response());
+        return render_settings_error(&state, &user, Some("Invalid CSRF token.".to_string())).await;
     }
 
     let (file_name, data) =
         avatar_field.ok_or_else(|| AppError::BadRequest("no avatar file provided".into()))?;
 
-    // Validate size
-    if data.len() > MAX_AVATAR_SIZE {
-        let csrf_new = Some(crate::auth::csrf::generate_csrf_token(
-            &state.csrf_secret,
-            &user.session_token,
-        ));
-        let left_panel_repos =
-            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
-        let tpl = SettingsTemplate {
-            urls: crate::static_assets::template_urls(),
-            user_email: user.email.clone(),
-            user_display_name: user.email.split('@').next().unwrap_or("").to_string(),
-            error: Some(format!("File too large (max {} bytes)", MAX_AVATAR_SIZE)),
-            success: None,
-            active_page: "settings",
-            two_fa_enabled: false,
-            csrf_token: csrf_new,
-            is_admin: user.is_admin,
-            left_panel_repos,
-            current_repo_id: None,
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok((StatusCode::OK, Html(html)).into_response());
-    }
-
-    // Validate extension
-    let ext = file_name
-        .rsplit_once('.')
-        .map(|(_, e)| e.to_lowercase())
-        .ok_or_else(|| AppError::BadRequest("file has no extension".into()))?;
-
-    if !ALLOWED_EXTS.contains(&ext.as_str()) {
-        return Err(AppError::BadRequest(format!("invalid extension: .{ext}")));
-    }
-
-    let mime_type = match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        _ => "image/png",
-    };
-
-    // Save to disk
-    let storage_dir = crate::user::service::avatar_storage_dir(&user.email);
-    tokio::fs::create_dir_all(&storage_dir)
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to create dir: {e}")))?;
-
-    let original_path = storage_dir.join(format!("original.{}", ext));
-    tokio::fs::write(&original_path, &data)
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to write: {e}")))?;
-
-    // Generate default-size thumbnail
-    if let Ok(thumb) = generate_thumb(&data, 256) {
-        let _ = tokio::fs::write(storage_dir.join("256.png"), &thumb).await;
-    }
-
-    // Upsert DB record
-    let now = chrono::Utc::now().timestamp();
-    let existing = avatar_entity::Entity::find()
-        .filter(avatar_entity::Column::Email.eq(&user.email))
-        .one(db)
-        .await?;
-
-    if let Some(record) = existing {
-        let mut active: avatar_entity::ActiveModel = record.into();
-        active.avatar_file_name = Set(file_name);
-        active.mime_type = Set(mime_type.to_string());
-        active.file_size = Set(data.len() as i32);
-        active.date_uploaded = Set(now);
-        active.update(db).await?;
-    } else {
-        avatar_entity::ActiveModel {
-            id: sea_orm::NotSet,
-            email: Set(user.email.clone()),
-            avatar_file_name: Set(file_name),
-            mime_type: Set(mime_type.to_string()),
-            file_size: Set(data.len() as i32),
-            date_uploaded: Set(now),
+    // Delegate to the shared AvatarService which handles validation (size/ext),
+    // persistence, thumbnail generation (with square crop + EXIF), and DB upsert.
+    let svc = crate::user::service::AvatarService::new(db, &state.repos);
+    match svc.upload_avatar(&user.email, file_name, data).await {
+        Ok(_url) => Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response()),
+        Err(e) => {
+            let msg = match &e {
+                AppError::BadRequest(m) => m.clone(),
+                _ => "Failed to upload avatar.".to_string(),
+            };
+            render_settings_error(&state, &user, Some(msg)).await
         }
-        .insert(db)
-        .await?;
     }
-
-    Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }
 
-/// Generate a square PNG thumbnail.
-fn generate_thumb(content: &[u8], size: u32) -> Result<Vec<u8>, AppError> {
-    let img = image::load_from_memory(content)
-        .map_err(|_| AppError::BadRequest("unable to decode image".into()))?;
-    let thumb = img.thumbnail(size, size);
-    let mut out = Vec::new();
-    thumb
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    Ok(out)
+/// Re-render the settings page with an error message.
+async fn render_settings_error(
+    state: &Arc<AppState>,
+    user: &WebUser,
+    error: Option<String>,
+) -> Result<Response, AppError> {
+    let csrf_new = Some(crate::auth::csrf::generate_csrf_token(
+        &state.csrf_secret,
+        &user.session_token,
+    ));
+    let left_panel_repos =
+        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+    let tpl = SettingsTemplate {
+        urls: crate::static_assets::template_urls(),
+        user_email: user.email.clone(),
+        user_display_name: user.email.split('@').next().unwrap_or("").to_string(),
+        error,
+        success: None,
+        active_page: "settings",
+        two_fa_enabled: false,
+        csrf_token: csrf_new,
+        is_admin: user.is_admin,
+        left_panel_repos,
+        current_repo_id: None,
+    };
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok((StatusCode::OK, Html(html)).into_response())
 }

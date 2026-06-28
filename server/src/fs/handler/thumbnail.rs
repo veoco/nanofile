@@ -38,7 +38,16 @@ pub async fn get_thumbnail(
     );
     let data = svc.get_thumbnail(&repo_id, path, size).await?;
 
-    Ok((StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data).into_response())
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            // Matching seahub's THUMBNAIL_CACHE_DAYS=7 → 604800 seconds
+            (header::CACHE_CONTROL, "private, max-age=604800"),
+        ],
+        data,
+    )
+        .into_response())
 }
 
 pub fn thumbnail_routes() -> Router<Arc<AppState>> {
