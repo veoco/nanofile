@@ -61,6 +61,63 @@ fn compute_target_dir(parent_dir: &str, relative_path: &str) -> String {
     }
 }
 
+/// Ensure the directory at `path` exists, creating any missing intermediate
+/// directories recursively. No-op if `path` is `/` or already exists.
+async fn ensure_dir_recursive(
+    state: &AppState,
+    repo_id: &str,
+    path: &str,
+    email: &str,
+    user_id: i32,
+) -> Result<(), AppError> {
+    if path == "/" {
+        return Ok(());
+    }
+
+    // Quick check: if the head commit root can't be resolved, the repo is empty.
+    if crate::common::util::get_head_root_id(state.db.as_ref(), repo_id)
+        .await
+        .is_err()
+    {
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|p| !p.is_empty())
+        .collect();
+
+    let mut current = String::from("/");
+    for part in parts {
+        let next = if current == "/" {
+            format!("/{part}")
+        } else {
+            format!("{current}/{part}")
+        };
+
+        // Check if this component already exists
+        let root_id = crate::common::util::get_head_root_id(state.db.as_ref(), repo_id).await?;
+        if crate::repo::fs_tree::resolve_fs_id(state.db.as_ref(), repo_id, &root_id, &next)
+            .await
+            .is_err()
+        {
+            crate::fs::service::dir::create_dir_by_path(
+                state.db.as_ref(),
+                &state.repos,
+                email,
+                user_id,
+                repo_id,
+                &next,
+            )
+            .await?;
+        }
+        current = next;
+    }
+
+    Ok(())
+}
+
 /// Create a file via `FileOps::create_file` and return the standard JSON
 /// array response expected by the Seafile frontend:
 /// `[{"id": "<fs_id>", "name": "<filename>", "size": <bytes>}]`
@@ -90,6 +147,12 @@ async fn upload_and_build_response(
     } else {
         0
     };
+
+    // Ensure the target directory exists before creating the file.
+    // This is needed for folder uploads where subdirectories don't exist yet.
+    if let Some(uid) = user_id {
+        ensure_dir_recursive(state, repo_id, target_dir, modifier, uid).await?;
+    }
 
     let fs_id = FileOps::create_file(
         state.db.as_ref(),

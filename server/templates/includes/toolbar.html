@@ -196,14 +196,24 @@ function addToQueue(items) {
 }
 
 // Fetch upload link token via Seafile API
+function getCookie(name) {
+    var match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return match ? match.pop() : '';
+}
+
 async function fetchUploadToken(repoId) {
     try {
+        var csrfToken = getCookie('sfcsrftoken');
+        var headers = {};
+        if (csrfToken) headers['X-CSRFToken'] = csrfToken;
+
         var resp = await fetch('/api2/repos/' + repoId + '/upload-link/?from=web', {
-            credentials: 'same-origin'
+            credentials: 'same-origin',
+            headers: headers,
         });
         if (resp.ok) {
             var data = await resp.json();
-            uploadTokenUrl = data.url;
+            uploadTokenUrl = data;
         }
     } catch (e) {
         console.warn('Failed to fetch upload token:', e);
@@ -242,6 +252,8 @@ function uploadItem(item) {
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
     formData.append('repo_name', {{ repo_name|json|safe }});
+    // If no token URL (fallback), include repo_id for the non-token endpoint
+    if (!uploadTokenUrl) formData.append('repo_id', {{ repo_id|json|safe }});
     // Explicitly pass the correct filename as the third argument so the
     // multipart Content-Disposition carries just the basename, not the
     // full path that some browsers include in file.name for folder uploads.
@@ -282,7 +294,7 @@ function uploadItem(item) {
         item.xhr = null;
     };
 
-    xhr.open('POST', uploadTokenUrl || '/upload-aj/{{ repo_id }}');
+    xhr.open('POST', uploadTokenUrl || '/upload-aj/');
     xhr.send(formData);
 }
 

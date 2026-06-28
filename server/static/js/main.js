@@ -370,24 +370,51 @@
     confirm: function (title, message, opts) { return showConfirmDialog(title, message, opts); },
   };
 
-  // ─── Replace native confirm() calls with custom dialog ─────────────
-  // Delete file
-  document.addEventListener("submit", async function (e) {
-    const form = e.target.closest(".js-delete-form");
-    if (!form) return;
+  // ─── Delete file/dir via API ─────────────────────────────────────────
+  document.addEventListener("click", async function (e) {
+    const btn = e.target.closest(".js-delete-btn");
+    if (!btn) return;
 
-    e.preventDefault();
-    const nameInput = form.querySelector('input[name="name"]');
-    const name = nameInput ? nameInput.value : "";
+    var repoId = btn.dataset.repoId;
+    var path = btn.dataset.path;
+    var name = btn.dataset.name;
+    var entryType = btn.dataset.type;
+
     var confirmed = await showConfirmDialog(
       "Delete",
       'Delete "' + name + '"? This cannot be undone.',
       { confirmText: "Delete", variant: "danger" }
     );
-    if (confirmed) form.submit();
+    if (!confirmed) return;
+
+    var csrfToken = getCookie("sfcsrftoken");
+    if (!csrfToken) {
+      window.location.href = "/accounts/login/";
+      return;
+    }
+
+    var apiPath = entryType === "dir"
+      ? "/api2/repos/" + repoId + "/dir/?p=" + encodeURIComponent(path)
+      : "/api2/repos/" + repoId + "/file/?p=" + encodeURIComponent(path);
+
+    try {
+      var res = await fetch(apiPath, {
+        method: "DELETE",
+        headers: { "X-CSRFToken": csrfToken },
+      });
+      if (res.ok) {
+        if (window.refreshFileList) window.refreshFileList();
+        else window.location.reload();
+      } else {
+        var text = await res.text().catch(function () { return res.statusText; });
+        window.Toast.error("Delete failed: " + text);
+      }
+    } catch (err) {
+      window.Toast.error("Delete failed: " + err.message);
+    }
   });
 
-  // Trash restore
+  // ─── Trash restore (still uses form POST) ────────────────────────────
   document.addEventListener("submit", async function (e) {
     const form = e.target.closest(".js-restore-form");
     if (!form) return;
@@ -399,21 +426,6 @@
       "Restore",
       'Restore "' + objName + '" from ' + repoName + "?",
       { confirmText: "Restore", variant: "primary" }
-    );
-    if (confirmed) form.submit();
-  });
-
-  // Repo delete
-  document.addEventListener("submit", async function (e) {
-    const form = e.target.closest(".js-delete-repo-form");
-    if (!form) return;
-
-    e.preventDefault();
-    const repoName = form.dataset.repoName || "";
-    var confirmed = await showConfirmDialog(
-      "Delete Library",
-      'Delete library "' + repoName + '"? All files will be permanently lost.',
-      { confirmText: "Delete", variant: "danger" }
     );
     if (confirmed) form.submit();
   });
