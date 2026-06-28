@@ -99,6 +99,8 @@ pub struct FileEntry {
     pub is_previewable: bool,
     /// Whether this file/directory is starred by the current user.
     pub starred: bool,
+    /// File extension in uppercase (e.g. "PDF", "PNG"), None for directories.
+    pub extension: Option<String>,
 }
 
 pub fn is_previewable_file(name: &str) -> bool {
@@ -193,6 +195,15 @@ fn file_icon_color(name: &str) -> &'static str {
     } else {
         "text-gray-400"
     }
+}
+
+/// Extract the uppercase file extension from a name, or None for no extension.
+fn file_extension(name: &str) -> Option<String> {
+    let (_, ext) = name.rsplit_once('.')?;
+    if ext.is_empty() || ext.contains('/') {
+        return None;
+    }
+    Some(ext.to_uppercase())
 }
 
 pub fn format_size(bytes: i64) -> String {
@@ -331,6 +342,11 @@ async fn file_browser_inner(
                 format!("{}/{}", path.trim_end_matches('/'), e.name)
             };
             let is_previewable = is_previewable_file(&e.name);
+            let ext = if e.entry_type == "file" {
+                file_extension(&e.name)
+            } else {
+                None
+            };
             FileEntry {
                 name: e.name.clone(),
                 entry_type: e.entry_type,
@@ -342,6 +358,7 @@ async fn file_browser_inner(
                 relative_path,
                 is_previewable,
                 starred: starred_set.contains(&full_path),
+                extension: ext,
             }
         })
         .collect();
