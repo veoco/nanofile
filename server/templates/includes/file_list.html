@@ -136,7 +136,8 @@
 <!-- Grid View (hidden by default) -->
 <div class="js-file-grid-view hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 px-4 pb-4">
     {% for entry in entries %}
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-2.5 hover:border-gray-300 dark:hover:border-gray-600 transition-colors">
+    <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
+       class="block rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-2.5 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-750 transition-colors">
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2">
             {% if entry.entry_type == "dir" %}
             <svg class="h-10 w-10 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
@@ -150,7 +151,7 @@
         {% if entry.entry_type == "file" %}
         <p class="text-xs text-gray-400 text-center">{{ entry.size_display }}</p>
         {% endif %}
-    </div>
+    </a>
     {% endfor %}
 </div>
 {% endif %}
