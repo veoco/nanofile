@@ -92,7 +92,7 @@
                 </td>
                 <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 hidden md:table-cell">
                     {% if !item.repo_name.is_empty() %}
-                    <a href="/libraries/{{ item.repo_id }}/file/" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.repo_name }}</a>
+                    <a href="/libraries/{{ item.repo_id }}/files/" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.repo_name }}</a>
                     {% else %}
                     <span class="text-gray-400 dark:text-gray-500">[Deleted]</span>
                     {% endif %}
@@ -163,18 +163,16 @@
                 {% endfor %}
             </select>
         </div>
-        <form action="/trash/clean/" method="POST" class="flex justify-end gap-2">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="repo_id" id="clean-repo-input" value="">
+        <div class="flex justify-end gap-2">
             <button type="button" onclick="hideCleanDialog()"
                     class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
                 Cancel
             </button>
-            <button type="submit"
+            <button onclick="cleanTrash()"
                     class="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors">
                 Delete All
             </button>
-        </form>
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -187,16 +185,22 @@ function showCleanDialog() {
 function hideCleanDialog() {
     document.getElementById('clean-dialog').classList.add('hidden');
 }
-// Sync hidden repo_id input with select dropdown
-document.addEventListener('DOMContentLoaded', function () {
+function cleanTrash() {
     var select = document.getElementById('clean-repo');
-    var input = document.getElementById('clean-repo-input');
-    if (select && input) {
-        input.value = select.value;
-        select.addEventListener('change', function () {
-            input.value = this.value;
-        });
-    }
-});
+    var repoId = select ? select.value : '';
+    if (!repoId) { alert('Please select a library'); return; }
+    if (!confirm('Permanently delete all trash items for this library?')) return;
+    var csrfToken = (function(){var m=document.cookie.match(/(^|;)\\s*sfcsrftoken\\s*=\\s*([^;]+)/);return m?m[2]:'';})();
+    fetch('/api/v2.1/repos/' + encodeURIComponent(repoId) + '/trash/', {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { 'X-CSRFToken': csrfToken },
+    }).then(function (r) {
+        if (r.ok) window.location.reload();
+        else alert('Failed to clean trash');
+    }).catch(function () {
+        alert('Network error');
+    });
+}
 </script>
 {% endblock %}

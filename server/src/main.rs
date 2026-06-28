@@ -12,7 +12,6 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::timeout::TimeoutLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -186,7 +185,6 @@ async fn main() -> anyhow::Result<()> {
                 .merge(notification_routes)
                 .merge(server::user::handler::avatar::image_routes())
                 .route("/static/{*path}", get(server::static_assets::serve_static))
-                .layer(NormalizePathLayer::trim_trailing_slash())
                 .layer(cors)
                 .layer(DefaultBodyLimit::max(
                     (config.server.max_upload_size_mb * 1024 * 1024) as usize,

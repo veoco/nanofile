@@ -19,7 +19,11 @@ use std::sync::Arc;
 
 use crate::AppState;
 
-/// Build the web UI route tree with Seahub-compatible paths.
+/// Build the web UI route tree.
+///
+/// Web UI routes serve only GET requests (page browsing, file preview, download).
+/// All mutation operations (rename, delete, upload, etc.) are handled by the
+/// frontend JavaScript calling the Seafile-compatible API (`/api/v2.1/`, `/api2/`).
 pub fn ui_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Auth — Seahub path /accounts/login/
@@ -53,53 +57,22 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         )
         // Client-login — auto-login from desktop client
         .route("/client-login/", get(client_login::client_token_login))
-        // Libraries — root and listing
+        // Libraries — root redirect and listing (GET only)
         .route(
             "/",
             get(|| async { axum::response::Redirect::to("/libraries/") }),
         )
         .route("/libraries/", get(repos::list_repos))
-        // Library CRUD (web UI)
-        .route(
-            "/libraries/create/",
-            axum::routing::post(repos::create_repo),
-        )
-        .route(
-            "/libraries/{id}/rename/",
-            axum::routing::post(repos::rename_repo),
-        )
-        .route(
-            "/libraries/{id}/delete/",
-            axum::routing::post(repos::delete_repo),
-        )
-        // Trash — global trash page (sidebar entry)
+        // Trash — global trash page (GET only)
         .route("/trash/", get(trash::trash_list_page))
-        .route(
-            "/trash/restore/",
-            axum::routing::post(trash::restore_trash_item),
-        )
-        .route("/trash/clean/", axum::routing::post(trash::clean_trash))
-        // Library file browser — root and sub-paths
-        .route("/libraries/{id}/file", get(files::file_browser_root))
-        .route("/libraries/{id}/file/{*path}", get(files::file_browser))
-        // File actions — all under /libraries/{id}/file/
-        .route(
-            "/libraries/{id}/file/upload/",
-            axum::routing::post(files::upload_file),
-        )
-        .route(
-            "/libraries/{id}/file/delete/",
-            axum::routing::post(files::delete_entry),
-        )
-        .route(
-            "/libraries/{id}/file/new-dir/",
-            axum::routing::post(files::create_directory),
-        )
-        .route(
-            "/libraries/{id}/file/rename/",
-            axum::routing::post(files::rename_entry),
-        )
-        // Shares
+        // Library file browser — root and sub-paths (GET only)
+        // Both trailing-slash variants are registered explicitly because
+        // NormalizePathLayer::trim_trailing_slash() in tower-http 0.7 doesn't
+        // reliably rewrite the URI before axum 0.8's router sees it.
+        .route("/libraries/{id}/files", get(files::file_browser_root))
+        .route("/libraries/{id}/files/", get(files::file_browser_root))
+        .route("/libraries/{id}/files/{*path}", get(files::file_browser))
+        // Shares — page listing (GET only)
         .route("/shares/", get(shares::list_shares))
         .route("/shares/create/", axum::routing::post(shares::create_share))
         .route(
@@ -148,11 +121,9 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/settings/two-factor/disable/",
             axum::routing::post(two_factor::disable_2fa),
         )
-        // Starred items
-        .route(
-            "/starred/",
-            get(starred::starred_page).post(starred::unstar_item_ui),
-        )
+        // Starred items — page listing only (GET).
+        // Star/unstar is handled by JS via /api/v2.1/starred-items/.
+        .route("/starred/", get(starred::starred_page))
         // File activities
         .route("/activities/", get(activities::activities_page))
         // Search

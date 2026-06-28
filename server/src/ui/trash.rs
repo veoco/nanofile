@@ -1,14 +1,11 @@
 use askama::Template;
 use axum::{
-    Form,
     extract::{Query, State},
-    response::{Html, IntoResponse},
+    response::Html,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::activity_log;
 use crate::error::AppError;
 use crate::repo::trash::TrashService;
 use crate::ui::files::format_size;
@@ -143,88 +140,4 @@ pub async fn trash_list_page(
         .render()
         .map_err(|e| AppError::Internal(e.to_string()))?;
     Ok(Html(html))
-}
-
-/// POST /trash/restore/ — restore a single item from trash.
-///
-/// Form fields: `repo_id`, `commit_id`, `path`.
-pub async fn restore_trash_item(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    Form(form): Form<HashMap<String, String>>,
-) -> Result<impl IntoResponse, AppError> {
-    crate::auth::csrf::check_form_csrf(
-        &state,
-        &user.session_token,
-        form.get("csrf_token").map(|s| s.as_str()),
-    )?;
-    let db = state.db.as_ref();
-
-    let repo_id = form
-        .get("repo_id")
-        .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-    let commit_id = form
-        .get("commit_id")
-        .ok_or_else(|| AppError::BadRequest("commit_id required".into()))?;
-    let path = form
-        .get("path")
-        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
-
-    crate::storage::check_repo_write_permission(db, repo_id, user.user_id).await?;
-
-    let mut restore_map = HashMap::new();
-    restore_map.insert(commit_id.clone(), vec![path.clone()]);
-
-    let result =
-        TrashService::restore_trash_items(db, repo_id, &user.email, user.user_id, restore_map)
-            .await?;
-
-    let restored = result.success.len();
-    let failed = result.failed.len();
-
-    let redirect = format!("/trash/?restored={}&failed={}", restored, failed);
-    Ok(axum::response::Redirect::to(&redirect))
-}
-
-/// POST /trash/clean/ — empty the trash for a specific repo.
-///
-/// Form fields: `repo_id`.
-pub async fn clean_trash(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    Form(form): Form<HashMap<String, String>>,
-) -> Result<impl IntoResponse, AppError> {
-    crate::auth::csrf::check_form_csrf(
-        &state,
-        &user.session_token,
-        form.get("csrf_token").map(|s| s.as_str()),
-    )?;
-    let db = state.db.as_ref();
-
-    let repo_id = form
-        .get("repo_id")
-        .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-
-    crate::storage::check_repo_write_permission(db, repo_id, user.user_id).await?;
-
-    TrashService::clean_trash(db, repo_id, None).await?;
-
-    // Log activity
-    activity_log::log_activity(
-        db,
-        repo_id,
-        "clean-up-trash",
-        "repo",
-        "/",
-        user.user_id,
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
-    .await;
-
-    let redirect = "/trash/?cleaned=true";
-    Ok(axum::response::Redirect::to(redirect))
 }

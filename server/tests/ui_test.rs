@@ -217,7 +217,7 @@ async fn login_client(fixture: &TestFixture) -> reqwest::Client {
 /// The caller must have a valid session cookie.
 async fn get_csrf_token(client: &reqwest::Client, base_url: &str, repo_id: &str) -> String {
     let resp = client
-        .get(format!("{}/libraries/{}/file", base_url, repo_id))
+        .get(format!("{}/libraries/{}/files", base_url, repo_id))
         .send()
         .await
         .unwrap();
@@ -283,7 +283,7 @@ async fn test_repo_detail_page_exists() {
 
     let resp = client
         .get(format!(
-            "{}/libraries/{}/file",
+            "{}/libraries/{}/files",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -322,7 +322,7 @@ async fn test_file_list_shows_root_entries() {
     // Now browse via UI
     let resp = client
         .get(format!(
-            "{}/libraries/{}/file",
+            "{}/libraries/{}/files",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -363,7 +363,7 @@ async fn test_file_list_navigates_into_dir() {
     // Browse into subdir via UI (Seahub path: /library/{id}/{name}/{path})
     let resp = client
         .get(format!(
-            "{}/libraries/{}/file/subdir",
+            "{}/libraries/{}/files/subdir",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -386,7 +386,7 @@ async fn test_file_list_empty_dir_shows_empty() {
     let client = login_client(&fixture).await;
     let resp = client
         .get(format!(
-            "{}/libraries/{}/file/emptydir",
+            "{}/libraries/{}/files/emptydir",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -405,7 +405,7 @@ async fn test_partial_list_returns_fragment() {
 
     let resp = client
         .get(format!(
-            "{}/libraries/{}/file?partial=1",
+            "{}/libraries/{}/files?partial=1",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -418,259 +418,6 @@ async fn test_partial_list_returns_fragment() {
     assert!(
         !body.contains("</html>"),
         "partial response should be a fragment, not a full page"
-    );
-}
-
-#[tokio::test]
-async fn test_upload_file_creates_entry() {
-    let fixture = TestFixture::new().await;
-    let client = login_client(&fixture).await;
-
-    // Upload via UI endpoint
-    let file_bytes = b"UI upload test content";
-    let file_part = reqwest::multipart::Part::bytes(file_bytes.to_vec())
-        .file_name("ui_test.txt")
-        .mime_str("text/plain")
-        .unwrap();
-    let form = reqwest::multipart::Form::new()
-        .part("file", file_part)
-        .text("parent_dir", "/");
-
-    let resp = client
-        .post(format!(
-            "{}/libraries/{}/file/upload/",
-            fixture.server.base_url, fixture.repo_id
-        ))
-        .multipart(form)
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), 302, "upload should redirect");
-    let location = resp
-        .headers()
-        .get("location")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    assert!(
-        location.contains(&fixture.repo_id),
-        "should redirect to repo"
-    );
-
-    // Verify file appears in listing
-    let list_resp = client
-        .get(format!(
-            "{}/libraries/{}/file",
-            fixture.server.base_url, fixture.repo_id
-        ))
-        .send()
-        .await
-        .unwrap();
-    let body = list_resp.text().await.unwrap();
-    assert!(
-        body.contains("ui_test.txt"),
-        "uploaded file should appear in listing"
-    );
-}
-
-/// Simulate the frontend folder upload flow: upload files into nested
-/// directories via the UI endpoint (/library/{id}/file/upload/), which internally
-/// calls `ensure_parent_dirs` + `create_file`. Verify that after uploading,
-/// the file tree is correct — the uploaded folder does NOT contain root-level
-/// files/folders, and root content remains intact.
-#[tokio::test]
-async fn test_folder_upload_does_not_leak_root_content() {
-    let fixture = TestFixture::new().await;
-
-    // ── Step 1: Add root-level content via API ──
-    // Simulate a repo that already has files/folders at root.
-    fixture
-        .client
-        .upload_file(
-            &fixture.api_token,
-            &fixture.repo_id,
-            "/",
-            "existing_root_file.txt",
-            b"root level file",
-        )
-        .await;
-    fixture
-        .client
-        .create_dir(&fixture.api_token, &fixture.repo_id, "/ExistingFolder")
-        .await;
-    fixture
-        .client
-        .upload_file(
-            &fixture.api_token,
-            &fixture.repo_id,
-            "/ExistingFolder",
-            "file_in_existing.txt",
-            b"existing folder content",
-        )
-        .await;
-
-    // ── Step 2: Login via UI (gets session cookie) ──
-    let ui_client = login_client(&fixture).await;
-
-    // ── Step 3: Simulate folder upload via the UI endpoint ──
-    //
-    // Frontend uploads files one at a time via the queue.
-    // Each file sends a POST to /library/{id}/file/upload/ with:
-    //   parent_dir = current_path + "/" + webkitRelativePath's dir part
-    //   repo_name = name
-    //   file = the actual file
-    //   xhr = "1"  (returns JSON instead of redirect)
-    //
-    // Scenario: user uploads "UploadedFolder" containing:
-    //   UploadedFolder/
-    //     SubDir/
-    //       nested_file.txt
-    //     root_file_in_folder.txt
-
-    // File 1: deepest nesting — should trigger ensure_parent_dirs to
-    // create /UploadedFolder and /UploadedFolder/SubDir
-    let file1_part = reqwest::multipart::Part::bytes(b"nested content".to_vec())
-        .file_name("nested_file.txt")
-        .mime_str("text/plain")
-        .unwrap();
-    let form1 = reqwest::multipart::Form::new()
-        .part("file", file1_part)
-        .text("parent_dir", "/UploadedFolder/SubDir")
-        .text("repo_name", "test-repo")
-        .text("xhr", "1");
-    let resp1 = ui_client
-        .post(format!(
-            "{}/libraries/{}/file/upload/",
-            fixture.server.base_url, fixture.repo_id
-        ))
-        .multipart(form1)
-        .send()
-        .await
-        .unwrap();
-    assert!(
-        resp1.status().is_success(),
-        "nested file upload should succeed, got {}",
-        resp1.status()
-    );
-
-    // File 2: file directly in the uploaded folder (no subdir)
-    let file2_part = reqwest::multipart::Part::bytes(b"root in folder".to_vec())
-        .file_name("root_file_in_folder.txt")
-        .mime_str("text/plain")
-        .unwrap();
-    let form2 = reqwest::multipart::Form::new()
-        .part("file", file2_part)
-        .text("parent_dir", "/UploadedFolder")
-        .text("repo_name", "test-repo")
-        .text("xhr", "1");
-    let resp2 = ui_client
-        .post(format!(
-            "{}/libraries/{}/file/upload/",
-            fixture.server.base_url, fixture.repo_id
-        ))
-        .multipart(form2)
-        .send()
-        .await
-        .unwrap();
-    assert!(
-        resp2.status().is_success(),
-        "folder root file upload should succeed, got {}",
-        resp2.status()
-    );
-
-    // ── Step 4: Verify via API ──
-
-    // 4a. Root directory must contain: existing_root_file.txt, ExistingFolder,
-    //     and UploadedFolder — nothing else, nothing missing.
-    let root_resp = fixture
-        .client
-        .list_dir(&fixture.api_token, &fixture.repo_id, "/")
-        .await;
-    assert_eq!(root_resp.status(), 200, "list root dir");
-    let root_entries: Vec<serde_json::Value> = root_resp.json().await.unwrap();
-    let root_names: Vec<&str> = root_entries
-        .iter()
-        .filter_map(|e| e["name"].as_str())
-        .collect();
-
-    assert!(
-        root_names.contains(&"existing_root_file.txt"),
-        "root should contain existing_root_file.txt, got {:?}",
-        root_names
-    );
-    assert!(
-        root_names.contains(&"ExistingFolder"),
-        "root should contain ExistingFolder, got {:?}",
-        root_names
-    );
-    assert!(
-        root_names.contains(&"UploadedFolder"),
-        "root should contain UploadedFolder, got {:?}",
-        root_names
-    );
-    assert_eq!(
-        root_names.len(),
-        3,
-        "root must have exactly 3 entries (no leaked content), got {:?}",
-        root_names
-    );
-
-    // 4b. UploadedFolder must contain ONLY SubDir and root_file_in_folder.txt
-    //     — NOT existing_root_file.txt or ExistingFolder.
-    let folder_resp = fixture
-        .client
-        .list_dir(&fixture.api_token, &fixture.repo_id, "/UploadedFolder")
-        .await;
-    assert_eq!(folder_resp.status(), 200, "list UploadedFolder dir");
-    let folder_entries: Vec<serde_json::Value> = folder_resp.json().await.unwrap();
-    let folder_names: Vec<&str> = folder_entries
-        .iter()
-        .filter_map(|e| e["name"].as_str())
-        .collect();
-
-    assert!(
-        folder_names.contains(&"SubDir"),
-        "UploadedFolder should contain SubDir, got {:?}",
-        folder_names
-    );
-    assert!(
-        folder_names.contains(&"root_file_in_folder.txt"),
-        "UploadedFolder should contain root_file_in_folder.txt, got {:?}",
-        folder_names
-    );
-    assert!(
-        !folder_names.contains(&"existing_root_file.txt"),
-        "UploadedFolder MUST NOT leak existing_root_file.txt, got {:?}",
-        folder_names
-    );
-    assert!(
-        !folder_names.contains(&"ExistingFolder"),
-        "UploadedFolder MUST NOT leak ExistingFolder, got {:?}",
-        folder_names
-    );
-    assert_eq!(
-        folder_names.len(),
-        2,
-        "UploadedFolder must have exactly 2 entries, got {:?}",
-        folder_names
-    );
-
-    // 4c. ExistingFolder must still contain file_in_existing.txt
-    //     (existing content must not be affected by folder upload).
-    let existing_resp = fixture
-        .client
-        .list_dir(&fixture.api_token, &fixture.repo_id, "/ExistingFolder")
-        .await;
-    assert_eq!(existing_resp.status(), 200, "list ExistingFolder dir");
-    let existing_entries: Vec<serde_json::Value> = existing_resp.json().await.unwrap();
-    let existing_names: Vec<&str> = existing_entries
-        .iter()
-        .filter_map(|e| e["name"].as_str())
-        .collect();
-    assert!(
-        existing_names.contains(&"file_in_existing.txt"),
-        "ExistingFolder should contain file_in_existing.txt, got {:?}",
-        existing_names
     );
 }
 
@@ -693,7 +440,7 @@ async fn test_download_file_returns_content() {
     let client = login_client(&fixture).await;
     let resp = client
         .get(format!(
-            "{}/libraries/{}/file/download.txt?dl=1",
+            "{}/libraries/{}/files/download.txt?dl=1",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()
@@ -703,136 +450,6 @@ async fn test_download_file_returns_content() {
     assert_eq!(resp.status(), 200, "download should return 200");
     let body = resp.text().await.unwrap();
     assert_eq!(body, "Download test content", "should return file content");
-}
-
-#[tokio::test]
-async fn test_delete_file_removes_entry() {
-    let fixture = TestFixture::new().await;
-
-    // Upload via API
-    fixture
-        .client
-        .upload_file(
-            &fixture.api_token,
-            &fixture.repo_id,
-            "/",
-            "delete_me.txt",
-            b"To be deleted",
-        )
-        .await;
-
-    let client = login_client(&fixture).await;
-    let csrf_token = get_csrf_token(&client, &fixture.server.base_url, &fixture.repo_id).await;
-
-    // Delete via UI
-    let resp = client
-        .post(format!(
-            "{}/libraries/{}/file/delete/",
-            fixture.server.base_url, fixture.repo_id
-        ))
-        .form(&[("p", "/delete_me.txt"), ("csrf_token", &csrf_token)])
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), 302, "delete should redirect");
-
-    // Verify file is gone
-    let list_resp = client
-        .get(format!(
-            "{}/libraries/{}/file",
-            fixture.server.base_url, fixture.repo_id
-        ))
-        .send()
-        .await
-        .unwrap();
-    let body = list_resp.text().await.unwrap();
-    assert!(
-        !body.contains("delete_me.txt"),
-        "deleted file should not appear"
-    );
-}
-
-#[tokio::test]
-async fn test_create_directory_works() {
-    let fixture = TestFixture::new().await;
-    let client = login_client(&fixture).await;
-    let csrf_token = get_csrf_token(&client, &fixture.server.base_url, &fixture.repo_id).await;
-
-    let resp = client
-        .post(format!(
-            "{}/libraries/{}/file/new-dir/",
-            fixture.server.base_url, fixture.repo_id
-        ))
-        .form(&[("p", "/new_folder"), ("csrf_token", &csrf_token)])
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), 302, "create dir should redirect");
-
-    // Verify dir appears in listing
-    let list_resp = client
-        .get(format!(
-            "{}/libraries/{}/file",
-            fixture.server.base_url, fixture.repo_id
-        ))
-        .send()
-        .await
-        .unwrap();
-    let body = list_resp.text().await.unwrap();
-    assert!(
-        body.contains("new_folder"),
-        "new directory should appear in listing"
-    );
-}
-
-#[tokio::test]
-async fn test_rename_file_works() {
-    let fixture = TestFixture::new().await;
-
-    fixture
-        .client
-        .upload_file(
-            &fixture.api_token,
-            &fixture.repo_id,
-            "/",
-            "old_name.txt",
-            b"Rename test",
-        )
-        .await;
-
-    let client = login_client(&fixture).await;
-    let csrf_token = get_csrf_token(&client, &fixture.server.base_url, &fixture.repo_id).await;
-
-    let resp = client
-        .post(format!(
-            "{}/libraries/{}/file/rename/",
-            fixture.server.base_url, fixture.repo_id
-        ))
-        .form(&[
-            ("p", "/old_name.txt"),
-            ("new_name", "new_name.txt"),
-            ("csrf_token", &csrf_token),
-        ])
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), 302, "rename should redirect");
-
-    // Verify old name gone, new name present
-    let list_resp = client
-        .get(format!(
-            "{}/libraries/{}/file",
-            fixture.server.base_url, fixture.repo_id
-        ))
-        .send()
-        .await
-        .unwrap();
-    let body = list_resp.text().await.unwrap();
-    assert!(!body.contains("old_name.txt"), "old name should not appear");
-    assert!(body.contains("new_name.txt"), "new name should appear");
 }
 
 #[tokio::test]
@@ -853,7 +470,7 @@ async fn test_file_preview_text() {
     let client = login_client(&fixture).await;
     let resp = client
         .get(format!(
-            "{}/libraries/{}/file/readme.md",
+            "{}/libraries/{}/files/readme.md",
             fixture.server.base_url, fixture.repo_id
         ))
         .send()

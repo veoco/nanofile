@@ -33,7 +33,7 @@
         {% for r in repos %}
         <li class="transition-colors hover:bg-gray-50 dark:hover:bg-surface-700/50">
             <div class="flex items-center justify-between px-4 py-4">
-                <a href="/libraries/{{ r.id }}/file/" class="flex items-center min-w-0 flex-1 gap-4">
+                <a href="/libraries/{{ r.id }}/files/" class="flex items-center min-w-0 flex-1 gap-4">
                     <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-100 dark:bg-brand-500/20 text-brand-600 dark:text-brand-400 flex-shrink-0">
                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
@@ -183,13 +183,32 @@ function submitCreate(form) {
     var name = document.getElementById('create-input').value.trim();
     if (!name) return false;
     hideCreateDialog();
-    return true;
+    // Use Seafile API to create repo
+    var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
+    fetch('/api2/repos/', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            'Content-Type': 'application/json;charset=utf-8',
+            'X-CSRFToken': csrfToken,
+        },
+        body: JSON.stringify({ name: name }),
+    }).then(function (resp) {
+        if (resp.ok) {
+            window.location.reload();
+        } else {
+            alert('Failed to create library: ' + resp.status);
+        }
+    }).catch(function () {
+        alert('Network error');
+    });
+    return false;
 }
 
 function showRenameDialog(btn) {
     var id = btn.getAttribute('data-id');
     var name = btn.getAttribute('data-name');
-    document.getElementById('rename-form').action = '/libraries/' + id + '/rename';
+    document.getElementById('rename-repo-id').value = id;
     document.getElementById('rename-input').value = name;
     document.getElementById('rename-overlay').classList.remove('hidden');
     setTimeout(function() { document.getElementById('rename-input').focus(); document.getElementById('rename-input').select(); }, 100);
@@ -201,7 +220,26 @@ function submitRename(form) {
     var newName = document.getElementById('rename-input').value.trim();
     if (!newName) return false;
     hideRenameDialog();
-    return true;
+    var repoId = document.getElementById('rename-repo-id').value;
+    var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
+    fetch('/api2/repos/' + repoId + '/?op=rename', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            'Content-Type': 'application/json;charset=utf-8',
+            'X-CSRFToken': csrfToken,
+        },
+        body: JSON.stringify({ repo_name: newName }),
+    }).then(function (resp) {
+        if (resp.ok) {
+            window.location.reload();
+        } else {
+            alert('Failed to rename library: ' + resp.status);
+        }
+    }).catch(function () {
+        alert('Network error');
+    });
+    return false;
 }
 
 function showSettingsDialog(btn) {

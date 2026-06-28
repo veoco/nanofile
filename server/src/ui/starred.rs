@@ -1,9 +1,6 @@
 /// Web UI starred-items page.
 use askama::Template;
-use axum::{
-    extract::State,
-    response::{Html, IntoResponse, Redirect},
-};
+use axum::{extract::State, response::Html};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
@@ -128,34 +125,4 @@ pub async fn starred_page(
         .render()
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Html(html))
-}
-
-/// POST /starred/ — unstar an item (form submission from the starred page).
-pub async fn unstar_item_ui(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    axum::Form(form): axum::Form<std::collections::HashMap<String, String>>,
-) -> Result<impl IntoResponse, AppError> {
-    crate::auth::csrf::check_form_csrf(
-        &state,
-        &user.session_token,
-        form.get("csrf_token").map(|s| s.as_str()),
-    )?;
-    let db = state.db.as_ref();
-
-    let repo_id = form
-        .get("repo_id")
-        .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-    let path = form
-        .get("path")
-        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
-
-    starred_file::Entity::delete_many()
-        .filter(starred_file::Column::UserId.eq(user.user_id))
-        .filter(starred_file::Column::RepoId.eq(repo_id))
-        .filter(starred_file::Column::Path.eq(path))
-        .exec(db)
-        .await?;
-
-    Ok(Redirect::to("/starred/"))
 }

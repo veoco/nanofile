@@ -48,11 +48,20 @@ pub(crate) async fn list_dir_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    let dir_id = crate::repo::resolve_fs_id(db, repo_id, &head.root_id, path)
-        .await
-        .map_err(|e| AppError::internal(format!("resolve_fs_id failed: {e}")))?;
+    let dir_id = match crate::repo::resolve_fs_id(db, repo_id, &head.root_id, path).await {
+        Ok(id) => id,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.starts_with("path segment not found") {
+                return Err(AppError::NotFound(msg.to_string()));
+            }
+            return Err(AppError::internal(format!("resolve_fs_id failed: {e}")));
+        }
+    };
 
-    let dir_data = read_fs_dir_data(db, repo_id, &dir_id).await?;
+    let dir_data = read_fs_dir_data(db, repo_id, &dir_id)
+        .await
+        .map_err(|e| AppError::NotFound(format!("not a directory: {e}")))?;
 
     Ok((
         dir_id,
@@ -103,9 +112,16 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    let dir_id = crate::repo::resolve_fs_id(db, repo_id, &head.root_id, path)
-        .await
-        .map_err(|e| AppError::internal(format!("resolve_fs_id failed: {e}")))?;
+    let dir_id = match crate::repo::resolve_fs_id(db, repo_id, &head.root_id, path).await {
+        Ok(id) => id,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.starts_with("path segment not found") {
+                return Err(AppError::NotFound(msg.to_string()));
+            }
+            return Err(AppError::internal(format!("resolve_fs_id failed: {e}")));
+        }
+    };
 
     let mut stack: Vec<(String, String)> = vec![(dir_id.clone(), path.to_string())];
     let mut entries: Vec<DirEntry> = Vec::new();

@@ -1,13 +1,13 @@
 <nav class="flex mb-4 text-sm text-gray-500 dark:text-gray-400 flex-wrap items-center">
     <a href="/libraries/" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">Libraries</a>
     <span class="mx-2 flex-shrink-0">/</span>
-    <a href="/libraries/{{ repo_id }}/file/" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">{{ repo_name }}</a>
+    <a href="/libraries/{{ repo_id }}/files/" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">{{ repo_name }}</a>
     {% for crumb in breadcrumbs %}
     <span class="mx-2 flex-shrink-0">/</span>
     {% if loop.last %}
     <span class="text-gray-900 dark:text-gray-100 font-medium truncate max-w-[200px] sm:max-w-xs">{{ crumb.label }}</span>
     {% else %}
-    <a href="/libraries/{{ repo_id }}/file/{{ crumb.path }}" class="hover:text-brand-500 dark:hover:text-brand-400 truncate max-w-[120px] sm:max-w-[200px]">{{ crumb.label }}</a>
+    <a href="/libraries/{{ repo_id }}/files/{{ crumb.path|urlencode }}" class="hover:text-brand-500 dark:hover:text-brand-400 truncate max-w-[120px] sm:max-w-[200px]">{{ crumb.label }}</a>
     {% endif %}
     {% endfor %}
 </nav>

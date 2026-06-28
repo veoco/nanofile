@@ -23,7 +23,7 @@
         {% else %}
         {% for r in left_panel_repos %}
         <div class="js-repo-item" data-repo-id="{{ r.id }}">
-            <a href="/libraries/{{ r.id }}/file/"
+            <a href="/libraries/{{ r.id }}/files/"
                class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors{% if current_repo_id.as_deref() == Some(r.id) %} bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 font-medium{% endif %}">
                 <svg class="h-4 w-4 flex-shrink-0 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>

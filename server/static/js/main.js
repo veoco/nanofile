@@ -270,6 +270,31 @@
     return div.innerHTML;
   }
 
+  // ─── Authenticated fetch helper ─────────────────────────────────────
+  window.apiFetch = async function (url, options) {
+    options = options || {};
+    var headers = options.headers || {};
+    if (!headers["X-CSRFToken"]) {
+      headers["X-CSRFToken"] = getCookie("sfcsrftoken");
+    }
+    if (
+      options.body &&
+      !(options.body instanceof FormData) &&
+      typeof options.body === "string" &&
+      !headers["Content-Type"]
+    ) {
+      headers["Content-Type"] = "application/json;charset=utf-8";
+    }
+    options.headers = headers;
+
+    var res = await fetch(url, options);
+    if (!res.ok) {
+      var text = await res.text().catch(function () { return res.statusText; });
+      throw new Error(text || res.statusText);
+    }
+    return res;
+  };
+
   // ─── Custom confirm dialog ───────────────────────────────────────────
   var confirmOverlay = null;
   var confirmResolve = null;
@@ -432,13 +457,44 @@
 
   const renameForm = document.getElementById("rename-dialog-form");
   if (renameForm) {
-    renameForm.addEventListener("submit", function (e) {
+    renameForm.addEventListener("submit", async function (e) {
       var newName = renameInput.value.trim();
       if (!newName) {
         e.preventDefault();
         return;
       }
+      e.preventDefault();
       renameOverlay.classList.add("hidden");
+
+      // Extract repo_id from form action URL: /libraries/{id}/files/rename/
+      var repoId = renameForm.action.match(/\/libraries\/([^/]+)\//)[1];
+      var oldPath = renameOldPath.value;
+
+      // Determine entry type from the rename button's data attribute
+      var renameBtn = document.querySelector('.js-rename-btn[data-path="' + oldPath + '"]');
+      var entryType = renameBtn ? renameBtn.dataset.type || "file" : "file";
+
+      var apiPath =
+        entryType === "dir"
+          ? "/api2/repos/" + repoId + "/dir/?p=" + encodeURIComponent(oldPath)
+          : "/api2/repos/" + repoId + "/file/?p=" + encodeURIComponent(oldPath);
+
+      try {
+        var formBody = new URLSearchParams();
+        formBody.append("operation", "rename");
+        formBody.append("newname", newName);
+
+        var res = await window.apiFetch(apiPath, {
+          method: "POST",
+          body: formBody.toString(),
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        });
+        window.Toast.success('Renamed to "' + newName + '"');
+        if (window.refreshFileList) window.refreshFileList();
+        else window.location.reload();
+      } catch (err) {
+        window.Toast.error("Rename failed: " + err.message);
+      }
     });
   }
 

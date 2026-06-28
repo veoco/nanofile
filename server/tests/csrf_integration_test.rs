@@ -174,7 +174,7 @@ async fn test_api_cookie_and_csrf_header() {
 
     // Extract CSRF token from the file browser page (which has hidden form inputs).
     let page_resp = ui_client
-        .get(format!("{}/libraries/{}/file", server.base_url, repo_id))
+        .get(format!("{}/libraries/{}/files", server.base_url, repo_id))
         .send()
         .await
         .unwrap();
@@ -266,7 +266,7 @@ async fn test_session_token_not_in_dom() {
     let repo_id = create_repo_api(&server.base_url, &api_token, "security-test").await;
 
     let resp = ui_client
-        .get(format!("{}/libraries/{}/file", server.base_url, repo_id))
+        .get(format!("{}/libraries/{}/files", server.base_url, repo_id))
         .send()
         .await
         .unwrap();
@@ -311,57 +311,8 @@ async fn test_csrf_token_cookie_not_httponly() {
     );
 }
 
-/// UI form submission with CSRF token still works (backward compatibility).
-#[tokio::test]
-async fn test_ui_form_csrf_still_works() {
-    let server = TestServer::start().await;
-    create_test_user(server.db.as_ref(), "test@example.com", "password").await;
-
-    let api_token = get_api_token(&server).await;
-    let repo_id = create_repo_api(&server.base_url, &api_token, "form-csrf-test").await;
-
-    // Login via UI.
-    let ui_client = ui_login(&server).await;
-
-    // Get a CSRF token from the file browser page (hidden form input).
-    let page_resp = ui_client
-        .get(format!("{}/libraries/{}/file", server.base_url, repo_id))
-        .send()
-        .await
-        .unwrap();
-    let page_html = page_resp.text().await.unwrap_or_default();
-    let csrf_token = page_html
-        .split(r#"name="csrf_token" value=""#)
-        .nth(1)
-        .and_then(|s| s.split('"').next())
-        .unwrap_or("");
-
-    assert!(
-        !csrf_token.is_empty(),
-        "should extract CSRF token from form input"
-    );
-
-    // Submit a form to create a directory.
-    let form_resp = ui_client
-        .post(format!(
-            "{}/libraries/{}/file/new-dir/",
-            server.base_url, repo_id
-        ))
-        .form(&[("p", "/csrf-test-dir"), ("csrf_token", csrf_token)])
-        .send()
-        .await
-        .unwrap();
-
-    let status = form_resp.status();
-    assert!(
-        status == 302 || status == 200,
-        "form submission should succeed, got {status}"
-    );
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// New tests: verify all UI pages embed CSRF tokens and reject form submissions
-// without them.
+// New tests: verify all UI pages embed CSRF tokens.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// All form pages that were previously missing CSRF tokens now include them.
@@ -397,7 +348,7 @@ async fn test_form_pages_include_csrf_tokens() {
 
     // 2. File browser page  (has delete and rename forms)
     let browser_html = ui_client
-        .get(format!("{}/libraries/{}/file", server.base_url, repo_id))
+        .get(format!("{}/libraries/{}/files", server.base_url, repo_id))
         .send()
         .await
         .unwrap()
@@ -411,19 +362,15 @@ async fn test_form_pages_include_csrf_tokens() {
         "file browser page should have csrf_token in delete/rename forms"
     );
 
-    // 3. Trash page (has restore and clean forms)
-    let trash_html = ui_client
+    // 3. Trash page — csrf_token is used by JS fetch (read from cookie via apiFetch).
+    //    The restore/clean forms now use the Seafile API directly, not form POST.
+    //    Verify the page at least renders.
+    let trash_resp = ui_client
         .get(format!("{}/trash/", server.base_url))
         .send()
         .await
-        .unwrap()
-        .text()
-        .await
         .unwrap();
-    assert!(
-        trash_html.contains(r#"name="csrf_token" value=""#),
-        "trash page should have csrf_token in forms"
-    );
+    assert_eq!(trash_resp.status(), 200, "trash page should render");
 
     // 4. Settings page (has password, display-name, avatar forms with csrf_token)
     let settings_html = ui_client
@@ -472,35 +419,6 @@ async fn test_form_pages_include_csrf_tokens() {
     assert!(
         tfa_html.matches(r#"name="csrf_token""#).count() >= 1,
         "2FA verify form should include csrf_token"
-    );
-}
-
-/// Form submission without a CSRF token returns 400.
-#[tokio::test]
-async fn test_form_submission_without_csrf_token_rejected() {
-    let server = TestServer::start().await;
-    create_test_user(server.db.as_ref(), "test@example.com", "password").await;
-
-    let ui_client = ui_login(&server).await;
-
-    // POST to create a library without a csrf_token — should be rejected.
-    let resp = ui_client
-        .post(format!("{}/libraries/create/", server.base_url))
-        .form(&[("name", "no-csrf-repo")])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        400,
-        "form submission without csrf_token should be rejected"
-    );
-
-    // Verify the error message mentions CSRF
-    let body = resp.text().await.unwrap_or_default();
-    assert!(
-        body.contains("CSRF"),
-        "error should mention CSRF, got: {body}"
     );
 }
 

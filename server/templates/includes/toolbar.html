@@ -18,6 +18,7 @@ var isUploadPaused = false;
 var isUploadDialogOpen = false;
 var dragCounter = 0;
 var isDialogMinimized = false;
+var uploadTokenUrl = '';
 
 // Bitrate tracking
 var bitrateLoaded = 0;
@@ -163,7 +164,8 @@ function addToQueue(items) {
     bitrateTimestamp = null;
     currentBitrate = 0;
 
-    var currentDir = '{{ current_path }}';
+    var currentDir = {{ current_path|json|safe }};
+    var repoId = {{ repo_id|json|safe }};
 
     items.forEach(function (item) {
         var parentDir;
@@ -189,7 +191,23 @@ function addToQueue(items) {
     });
 
     showProgressDialog();
-    processQueue();
+    // Fetch upload token for the upload-aj endpoint
+    fetchUploadToken(repoId).then(function () { processQueue(); });
+}
+
+// Fetch upload link token via Seafile API
+async function fetchUploadToken(repoId) {
+    try {
+        var resp = await fetch('/api2/repos/' + repoId + '/upload-link/?from=web', {
+            credentials: 'same-origin'
+        });
+        if (resp.ok) {
+            var data = await resp.json();
+            uploadTokenUrl = data.url;
+        }
+    } catch (e) {
+        console.warn('Failed to fetch upload token:', e);
+    }
 }
 
 function processQueue() {
@@ -223,7 +241,7 @@ function uploadItem(item) {
 
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
-    formData.append('repo_name', '{{ repo_name }}');
+    formData.append('repo_name', {{ repo_name|json|safe }});
     // Explicitly pass the correct filename as the third argument so the
     // multipart Content-Disposition carries just the basename, not the
     // full path that some browsers include in file.name for folder uploads.
@@ -264,7 +282,7 @@ function uploadItem(item) {
         item.xhr = null;
     };
 
-    xhr.open('POST', '/library/{{ repo_id }}/upload');
+    xhr.open('POST', uploadTokenUrl || '/upload-aj/{{ repo_id }}');
     xhr.send(formData);
 }
 
@@ -610,11 +628,32 @@ function submitNewFolder(form) {
     if (!name) return false;
     var currentDir = form.querySelector('[name="current_dir"]').value;
     var p = currentDir === '/' ? '/' + name : currentDir + '/' + name;
-    var pInput = document.createElement('input');
-    pInput.type = 'hidden'; pInput.name = 'p'; pInput.value = p;
-    form.appendChild(pInput);
     hideNewFolderDialog();
-    return true;
+
+    // Use fetch to call Seafile API
+    var repoId = {{ repo_id|json|safe }};
+    var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
+    fetch('/api/v2.1/repos/' + repoId + '/dir/', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': csrfToken,
+        },
+        body: JSON.stringify({ p: p }),
+    }).then(function (resp) {
+        if (resp.ok) {
+            showToast('Folder "' + name + '" created', 'success');
+            if (typeof refreshFileList === 'function') refreshFileList();
+            else window.location.reload();
+        } else {
+            resp.text().then(function (t) { showToast('Failed: ' + t, 'error'); });
+        }
+    }).catch(function () {
+        showToast('Network error creating folder', 'error');
+    });
+
+    return false;
 }
 
 // ─── Small helpers ───
@@ -674,14 +713,10 @@ async function refreshFileList() {
         Upload Folder
     </button>
 
-    <!-- Hidden standard upload form (supports multiple file selection) -->
-    <form id="upload-form" action="/libraries/{{ repo_id }}/file/upload/" method="POST" enctype="multipart/form-data" class="hidden">
-        <input type="hidden" name="parent_dir" value="{{ current_path }}">
-        <input type="hidden" name="repo_name" value="{{ repo_name }}">
-        <input id="file-upload-input" type="file" name="file" multiple onchange="onFileSelected(this)" class="hidden">
-    </form>
+    <!-- File upload input (multiple file selection) -->
+    <input id="file-upload-input" type="file" name="file" multiple onchange="onFileSelected(this)" class="hidden">
 
-    <!-- Hidden folder upload input (webkitdirectory preserves subdirectory structure) -->
+    <!-- Folder upload input (webkitdirectory preserves subdirectory structure) -->
     <input id="folder-upload-input" type="file" webkitdirectory multiple onchange="onFolderSelected(this)" class="hidden">
 </div>
 
@@ -716,7 +751,7 @@ async function refreshFileList() {
     <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
         <h3 id="new-folder-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">New Folder</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Enter a name for the new folder.</p>
-        <form action="/libraries/{{ repo_id }}/file/new-dir/" method="POST" onsubmit="return submitNewFolder(this)">
+        <form action="/libraries/{{ repo_id }}/files/new-dir/" method="POST" onsubmit="return submitNewFolder(this)">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="current_dir" value="{{ current_path }}">
             <input type="hidden" name="repo_name" value="{{ repo_name }}">

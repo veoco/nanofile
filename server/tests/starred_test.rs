@@ -524,36 +524,17 @@ async fn test_ui_unstar_form() {
         login_resp.text().await
     );
 
-    // Get CSRF token from the starred page's hidden form input
-    let page_resp = ui_client
-        .get(format!("{}/starred/", f.server.base_url))
-        .send()
-        .await
-        .unwrap();
-    let page_html = page_resp.text().await.unwrap();
-    let csrf_token = page_html
-        .split(r#"name="csrf_token" value=""#)
-        .nth(1)
-        .and_then(|s| s.split('"').next())
-        .unwrap_or("");
-
-    // POST to /starred/ to unstar via form
-    let resp = ui_client
-        .post(format!("{}/starred/", f.server.base_url))
-        .form(&[
-            ("repo_id", f.repo_id.as_str()),
-            ("path", "/ui-unstar.txt"),
-            ("csrf_token", csrf_token),
-        ])
-        .send()
-        .await
-        .unwrap();
-    // Should return 200 or redirect
-    let status = resp.status();
-    assert!(
-        status == 302 || status == 303 || status == 200,
-        "expected redirect status, got: {status}"
-    );
+    // Unstar via API (the web UI now uses JS fetch to the Seafile API)
+    let _ = f
+        .client
+        .delete(
+            &format!(
+                "/api/v2.1/starred-items/?repo_id={}&path=/ui-unstar.txt",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
 
     // Verify empty via API
     let body: serde_json::Value = f
