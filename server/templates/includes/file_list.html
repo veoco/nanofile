@@ -40,8 +40,8 @@
     <div class="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-50 dark:hover:bg-surface-800/50 transition-colors">
         {% if entry.entry_type == "dir" %}
         <!-- Folder icon -->
-        <div class="h-8 w-8 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
-            <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="currentColor" viewBox="0 0 24 24">
+        <div class="h-9 min-w-9 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
+            <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
             </svg>
         </div>
@@ -67,8 +67,8 @@
         </div>
         {% else %}
         <!-- File icon: extension badge -->
-        <div class="h-8 w-8 rounded-md bg-gray-100 dark:bg-surface-700 flex items-center justify-center flex-shrink-0">
-            <span class="text-[10px] leading-none font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
+        <div class="h-9 min-w-9 rounded-md bg-gray-100 dark:bg-surface-700 flex items-center justify-center flex-shrink-0 px-1">
+            <span class="text-[10px] leading-none font-semibold {{ entry.icon_color }} truncate">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
         </div>
         <div class="flex-1 min-w-0">
             {% if entry.is_previewable %}
@@ -140,16 +140,16 @@
        class="block rounded-lg p-2.5 hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2">
             {% if entry.entry_type == "dir" %}
-            <svg class="h-10 w-10 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
+            <svg class="h-14 w-14 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
             </svg>
             {% else %}
-            <span class="text-sm font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
+            <span class="text-xl font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
             {% endif %}
         </div>
-        <p class="text-xs font-medium text-gray-900 dark:text-gray-100 truncate text-center">{{ entry.name }}</p>
+        <p class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate text-center leading-snug">{{ entry.name }}</p>
         {% if entry.entry_type == "file" %}
-        <p class="text-xs text-gray-400 text-center">{{ entry.size_display }}</p>
+        <p class="text-xs text-gray-400 text-center mt-0.5">{{ entry.size_display }}</p>
         {% endif %}
     </a>
     {% endfor %}
