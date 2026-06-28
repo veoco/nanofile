@@ -5,7 +5,7 @@ use sea_orm::{DatabaseConnection, EntityTrait};
 
 use crate::activity_log;
 use crate::common::DirEntry;
-use crate::common::util::{get_head_root_id, normalize_path};
+use crate::common::util::{get_head_commit_id, get_head_root_id, normalize_path};
 use crate::entity::{repo, repo_member};
 use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
@@ -424,6 +424,9 @@ impl DirService {
         let parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
             .await
             .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+
+        // Record deleted entry to trash before tree update
+        record_delete_trash(db, repo_id, path, name, email, &parent_fs_id).await;
 
         FileOps::update_dir_tree_and_commit(
             db,
@@ -1021,4 +1024,47 @@ async fn copy_fs_tree(
         }
     }
     Ok(())
+}
+
+/// Record a deleted entry to the trash table.
+async fn record_delete_trash(
+    db: &sea_orm::DatabaseConnection,
+    repo_id: &str,
+    path: &str,
+    name: &str,
+    email: &str,
+    parent_fs_id: &str,
+) {
+    let head_commit_id = match get_head_commit_id(db, repo_id).await {
+        Ok(id) => id,
+        Err(_) => return,
+    };
+    let parent_dir_data = match crate::repo::read_fs_dir_data(db, repo_id, parent_fs_id).await {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let entry = match parent_dir_data.dirents.iter().find(|d| d.name == name) {
+        Some(e) => e,
+        None => return,
+    };
+    let obj_type = if entry.mode & S_IFDIR != 0 {
+        "dir"
+    } else {
+        "file"
+    };
+    if let Err(e) = crate::repo::trash::TrashService::add_to_trash(
+        db,
+        repo_id,
+        path,
+        obj_type,
+        &entry.id,
+        &entry.name,
+        entry.size,
+        &head_commit_id,
+        email,
+    )
+    .await
+    {
+        tracing::warn!("Failed to record trash for {path}: {e}");
+    }
 }

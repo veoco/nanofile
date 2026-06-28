@@ -726,7 +726,7 @@ impl TrashService {
                 match result {
                     Ok(_) => {
                         // Delete the trash record
-                        let _ = Self::delete_trash_records(db, &[trash_id]).await;
+                        Self::delete_trash_records(db, &[trash_id]).await?;
 
                         // Log activity
                         activity_log::log_activity(

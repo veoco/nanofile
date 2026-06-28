@@ -50,6 +50,21 @@ pub async fn get_head_root_id(db: &DatabaseConnection, repo_id: &str) -> Result<
     Ok(head.root_id)
 }
 
+/// Get the head commit ID for a repo, without resolving the root fs_id.
+/// Returns an error if the repo or head commit doesn't exist.
+pub async fn get_head_commit_id(
+    db: &DatabaseConnection,
+    repo_id: &str,
+) -> Result<String, AppError> {
+    let repo_record = repo::Entity::find_by_id(repo_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
+    repo_record
+        .head_commit_id
+        .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))
+}
+
 /// Generate a unique filename when there's a name collision.
 /// Appends " (N)" before the extension, e.g. "file (1).txt", "file (2).txt".
 pub fn generate_unique_filename(existing: &[DirEntryData], name: &str) -> String {

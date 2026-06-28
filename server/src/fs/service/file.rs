@@ -3,10 +3,11 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::activity_log;
-use crate::common::util::{get_head_root_id, normalize_path};
+use crate::common::util::{get_head_commit_id, get_head_root_id, normalize_path};
 use crate::error::AppError;
 use crate::notification::events::FileLockEvent;
 use crate::repo::file_ops::FileOps;
+use crate::repo::trash::TrashService;
 use crate::repository::Repositories;
 use crate::serialization::S_IFREG;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
@@ -325,6 +326,9 @@ impl FileService {
         let parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
             .await
             .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+
+        // Record deleted entry to trash before tree update
+        record_delete_file_trash(db, repo_id, path, name, email, &parent_fs_id).await;
 
         FileOps::update_dir_tree_and_commit(
             db,
@@ -783,4 +787,42 @@ async fn get_head_root_id_no_err(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".to_string()))?;
     Ok(Some(head.root_id))
+}
+
+/// Record a deleted entry to the trash table.
+async fn record_delete_file_trash(
+    db: &sea_orm::DatabaseConnection,
+    repo_id: &str,
+    path: &str,
+    name: &str,
+    email: &str,
+    parent_fs_id: &str,
+) {
+    let head_commit_id = match get_head_commit_id(db, repo_id).await {
+        Ok(id) => id,
+        Err(_) => return,
+    };
+    let parent_dir_data = match crate::repo::read_fs_dir_data(db, repo_id, parent_fs_id).await {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let entry = match parent_dir_data.dirents.iter().find(|d| d.name == name) {
+        Some(e) => e,
+        None => return,
+    };
+    if let Err(e) = TrashService::add_to_trash(
+        db,
+        repo_id,
+        path,
+        "file",
+        &entry.id,
+        &entry.name,
+        entry.size,
+        &head_commit_id,
+        email,
+    )
+    .await
+    {
+        tracing::warn!("Failed to record trash for {path}: {e}");
+    }
 }
