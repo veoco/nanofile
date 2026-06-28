@@ -146,7 +146,7 @@
     searchInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         var q = searchInput.value.trim();
-        if (q) window.location.href = "/search?q=" + encodeURIComponent(q);
+        if (q) window.location.href = "/search/?q=" + encodeURIComponent(q);
       }
     });
   }
