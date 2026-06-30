@@ -21,6 +21,32 @@
         {% include "includes/file_list.html" %}
     </div>
 
+    <!-- Rename dialog overlay -->
+    <div id="rename-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="rename-dialog-title">
+        <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+            <h3 id="rename-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Rename</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Enter a new name.</p>
+            <form id="rename-dialog-form" action="/libraries/{{ repo_id }}/files/rename/" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="current_dir" value="{{ current_path }}">
+                <input type="hidden" name="repo_name" value="{{ repo_name }}">
+                <input type="hidden" id="rename-old-path" name="p" value="">
+                <input id="rename-input" type="text" name="new_name" placeholder="New name"
+                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5"
+                       autofocus>
+                <div class="mt-4 flex justify-end gap-2">
+                    <button type="button" class="js-rename-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
+                        Cancel
+                    </button>
+                    <button type="submit"
+                            class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600">
+                        Save
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Drop zone overlay (shown during drag-over) -->
     <div class="drop-overlay hidden absolute inset-0 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-brand-500 bg-brand-50/90 dark:bg-brand-500/10">
         <div class="text-center">
