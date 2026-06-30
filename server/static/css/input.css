@@ -54,3 +54,11 @@
 .animate-loading-bar {
   animation: loading-bar 2s ease-in-out infinite;
 }
+
+/* Selected row in file browser (same color as hover) */
+.js-entry-row.selected {
+  background-color: #f9fafb;
+}
+.dark .js-entry-row.selected {
+  background-color: rgba(30, 41, 59, 0.5);
+}

@@ -47,6 +47,28 @@
         </div>
     </div>
 
+    <!-- Directory picker overlay (for batch move/copy) -->
+    <div id="dir-picker-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
+        <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-md mx-4" onclick="event.stopPropagation()">
+            <h3 id="dir-picker-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Move Items</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">Select destination:</p>
+            <!-- Breadcrumb -->
+            <div id="dir-picker-breadcrumb" class="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 mb-3 overflow-x-auto whitespace-nowrap"></div>
+            <!-- Directory list -->
+            <div id="dir-picker-list" class="max-h-60 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-lg p-1.5 space-y-0.5 mb-4">
+                <div class="text-sm text-gray-400 text-center py-4">Loading...</div>
+            </div>
+            <div class="flex justify-end gap-2">
+                <button type="button" class="js-picker-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
+                    Cancel
+                </button>
+                <button type="button" class="js-picker-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600">
+                    Move Here
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Drop zone overlay (shown during drag-over) -->
     <div class="drop-overlay hidden absolute inset-0 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-brand-500 bg-brand-50/90 dark:bg-brand-500/10">
         <div class="text-center">

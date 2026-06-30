@@ -538,6 +538,324 @@
     });
   }
 
+  // ─── Batch operations: selection state ──────────────────────────────────
+  var selectedPaths = new Set();
+  var pickerOperation = null;  // "move" or "copy"
+  var pickerPath = "/";
+
+  function getCurrentDir() {
+    var input = document.querySelector('[name="current_dir"]');
+    if (input && input.value) return input.value;
+    var m = window.location.pathname.match(/\/files\/(.*)/);
+    return m ? "/" + m[1] : "/";
+  }
+
+  function getRepoId() {
+    var meta = document.querySelector('meta[name="repo-id"]');
+    return meta ? meta.content : "";
+  }
+
+  function updateSelectionBar() {
+    // Auto-clear stale selection (e.g. after partial refresh)
+    if (selectedPaths.size > 0) {
+      var selectedCount = document.querySelectorAll(".js-entry-row.selected").length;
+      if (selectedCount === 0 && document.querySelectorAll(".js-entry-row").length > 0) {
+        selectedPaths.clear();
+      }
+    }
+    var count = selectedPaths.size;
+    var isSelected = count > 0;
+
+    // Toggle selection info and action buttons in the view toggle bar
+    var info = document.getElementById("js-selection-info");
+    var actions = document.getElementById("js-selection-actions");
+    if (info) info.classList.toggle("hidden", !isSelected);
+    if (actions) actions.classList.toggle("hidden", !isSelected);
+
+    if (isSelected) {
+      var countEl = document.querySelector(".js-selection-count");
+      if (countEl) countEl.textContent = count;
+    }
+
+    // Update Select All button text
+    var selBtn = document.getElementById("js-select-all-btn");
+    if (selBtn) {
+      var totalRows = document.querySelectorAll(".js-entry-row").length;
+      selBtn.textContent = selectedPaths.size === totalRows ? "Deselect All" : "Select All";
+    }
+  }
+
+  function clearSelection() {
+    selectedPaths.clear();
+    document.querySelectorAll(".js-entry-row.selected").forEach(function (row) {
+      row.classList.remove("selected");
+    });
+    updateSelectionBar();
+  }
+
+  // Row click — toggle selection (skip <a> links and buttons)
+  document.addEventListener("click", function (e) {
+    var row = e.target.closest(".js-entry-row");
+    if (!row) return;
+    // Ignore clicks on links, buttons, and interactive elements
+    if (e.target.closest("a") || e.target.closest("button")) return;
+
+    var name = row.dataset.name;
+    if (!name) return;
+
+    if (selectedPaths.has(name)) {
+      selectedPaths.delete(name);
+      row.classList.remove("selected");
+    } else {
+      selectedPaths.add(name);
+      row.classList.add("selected");
+    }
+    updateSelectionBar();
+  });
+
+  // Select All / Deselect All button
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("#js-select-all-btn");
+    if (!btn) return;
+
+    var totalRows = document.querySelectorAll(".js-entry-row");
+    if (selectedPaths.size === totalRows.length) {
+      // Deselect all
+      clearSelection();
+    } else {
+      // Select all
+      selectedPaths.clear();
+      totalRows.forEach(function (row) {
+        var name = row.dataset.name;
+        if (name) {
+          selectedPaths.add(name);
+          row.classList.add("selected");
+        }
+      });
+      updateSelectionBar();
+    }
+  });
+
+  document.addEventListener("click", function (e) {
+    if (e.target.closest(".js-deselect-all")) {
+      clearSelection();
+    }
+  });
+
+  // ─── Batch delete ───────────────────────────────────────────────────────
+  document.addEventListener("click", async function (e) {
+    var btn = e.target.closest(".js-batch-delete");
+    if (!btn) return;
+    if (selectedPaths.size === 0) return;
+
+    var confirmed = await showConfirmDialog(
+      "Delete",
+      "Delete " + selectedPaths.size + " item(s)? This cannot be undone.",
+      { confirmText: "Delete", variant: "danger" }
+    );
+    if (!confirmed) return;
+
+    var repoId = getRepoId();
+    if (!repoId) { Toast.error("Cannot determine repo"); return; }
+    var parentDir = getCurrentDir();
+    if (!parentDir) { Toast.error("Cannot determine parent directory"); return; }
+
+    try {
+      await window.apiFetch("/api/v2.1/repos/batch-delete-item/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repo_id: repoId,
+          parent_dir: parentDir,
+          dirents: Array.from(selectedPaths),
+        }),
+      });
+      Toast.success("Deleted " + selectedPaths.size + " item(s)");
+      clearSelection();
+      if (window.refreshFileList) window.refreshFileList();
+      else window.location.reload();
+    } catch (err) {
+      Toast.error("Batch delete failed: " + err.message);
+    }
+  });
+
+  // ─── Directory picker (for batch move/copy) ────────────────────────────
+  function openDirPicker(operation) {
+    pickerOperation = operation;
+    pickerPath = getCurrentDir();
+
+    var titleEl = document.getElementById("dir-picker-title");
+    if (titleEl) {
+      titleEl.textContent = (operation === "move" ? "Move" : "Copy") + " " + selectedPaths.size + " Item(s)";
+    }
+
+    var confirmBtn = document.querySelector(".js-picker-confirm");
+    if (confirmBtn) {
+      confirmBtn.textContent = operation === "move" ? "Move Here" : "Copy Here";
+    }
+
+    var overlay = document.getElementById("dir-picker-overlay");
+    if (!overlay) return;
+    overlay.classList.remove("hidden");
+    loadPickerDirectory(pickerPath);
+  }
+
+  function closeDirPicker() {
+    var overlay = document.getElementById("dir-picker-overlay");
+    if (overlay) overlay.classList.add("hidden");
+    pickerOperation = null;
+  }
+
+  async function loadPickerDirectory(path) {
+    var listEl = document.getElementById("dir-picker-list");
+    var breadcrumbEl = document.getElementById("dir-picker-breadcrumb");
+    if (!listEl || !breadcrumbEl) return;
+
+    listEl.innerHTML = '<div class="text-sm text-gray-400 text-center py-4">Loading...</div>';
+    pickerPath = path;
+    renderPickerBreadcrumb(path, breadcrumbEl);
+
+    var repoId = getRepoId();
+    if (!repoId) { listEl.innerHTML = '<div class="text-sm text-red-500 text-center py-4">Error: no repo</div>'; return; }
+
+    try {
+      var resp = await fetch("/api2/repos/" + encodeURIComponent(repoId) + "/dir/?p=" + encodeURIComponent(path));
+      if (!resp.ok) throw new Error(resp.statusText);
+      var entries = await resp.json();
+      // Filter to directories only
+      var dirs = entries.filter(function (e) { return e.type === "dir"; });
+      renderPickerDirList(dirs, listEl);
+    } catch (err) {
+      listEl.innerHTML = '<div class="text-sm text-red-500 text-center py-4">Failed to load: ' + escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  function renderPickerBreadcrumb(path, breadcrumbEl) {
+    var parts = path.split("/").filter(Boolean);
+    var html = '<button class="js-picker-nav px-1.5 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-surface-700" data-path="/">/</button>';
+    var accum = "";
+    for (var i = 0; i < parts.length; i++) {
+      accum += "/" + parts[i];
+      html += '<span class="text-gray-300 dark:text-gray-600">/</span>';
+      html += '<button class="js-picker-nav px-1.5 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-surface-700" data-path="' + escapeAttr(accum) + '">' + escapeHtml(parts[i]) + '</button>';
+    }
+    breadcrumbEl.innerHTML = html;
+  }
+
+  function renderPickerDirList(dirs, listEl) {
+    if (dirs.length === 0) {
+      listEl.innerHTML = '<div class="text-sm text-gray-400 text-center py-4">No subdirectories</div>';
+      return;
+    }
+    listEl.innerHTML = dirs.map(function (d) {
+      return '<div class="js-picker-dir flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer hover:bg-gray-100 dark:hover:bg-surface-700 text-sm text-gray-700 dark:text-gray-300" data-path="' + escapeAttr(d.path || d.name) + '">' +
+        '<svg class="h-4 w-4 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>' +
+        '<span class="truncate">' + escapeHtml(d.name) + '</span>' +
+        '</div>';
+    }).join("");
+  }
+
+  // Open move/copy picker
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-batch-move, .js-batch-copy");
+    if (!btn) return;
+    if (selectedPaths.size === 0) return;
+    var operation = btn.classList.contains("js-batch-move") ? "move" : "copy";
+    openDirPicker(operation);
+  });
+
+  // Navigate in picker (direct listeners inside stopPropagation boundary)
+  var pickerBreadcrumb = document.getElementById("dir-picker-breadcrumb");
+  if (pickerBreadcrumb) {
+    pickerBreadcrumb.addEventListener("click", function (e) {
+      var navBtn = e.target.closest(".js-picker-nav");
+      if (!navBtn) return;
+      loadPickerDirectory(navBtn.dataset.path);
+    });
+  }
+
+  var pickerList = document.getElementById("dir-picker-list");
+  if (pickerList) {
+    pickerList.addEventListener("click", function (e) {
+      var dirEl = e.target.closest(".js-picker-dir");
+      if (!dirEl) return;
+      var name = dirEl.dataset.path;
+      if (name) {
+        var newPath = pickerPath === "/" ? "/" + name : pickerPath + "/" + name;
+        loadPickerDirectory(newPath);
+      }
+    });
+  }
+
+  // Confirm move/copy (direct listener, inside stopPropagation boundary)
+  var pickerConfirmBtn = document.querySelector(".js-picker-confirm");
+  if (pickerConfirmBtn) {
+    pickerConfirmBtn.addEventListener("click", async function () {
+      var op = pickerOperation;
+      if (!op || selectedPaths.size === 0) return;
+
+      var repoId = getRepoId();
+      var parentDir = getCurrentDir();
+
+      // Prevent moving to the same directory (server would create duplicates)
+      if (op === "move" && pickerPath === parentDir) {
+        Toast.error("Destination is the same as source");
+        return;
+      }
+
+      closeDirPicker();
+
+      try {
+        var apiPath = op === "move"
+          ? "/api/v2.1/repos/sync-batch-move-item/"
+          : "/api/v2.1/repos/sync-batch-copy-item/";
+
+        await window.apiFetch(apiPath, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            src_repo_id: repoId,
+            src_parent_dir: parentDir,
+            src_dirents: Array.from(selectedPaths),
+            dst_repo_id: repoId,
+            dst_parent_dir: pickerPath,
+          }),
+        });
+        Toast.success((op === "move" ? "Moved" : "Copied") + " " + selectedPaths.size + " item(s)");
+        clearSelection();
+        if (window.refreshFileList) window.refreshFileList();
+        else window.location.reload();
+      } catch (err) {
+        Toast.error("Batch " + op + " failed: " + err.message);
+      }
+    });
+  }
+
+  // Cancel picker (direct listener, inside stopPropagation boundary)
+  var pickerCancelBtn = document.querySelector(".js-picker-cancel");
+  if (pickerCancelBtn) {
+    pickerCancelBtn.addEventListener("click", function () {
+      closeDirPicker();
+    });
+  }
+
+  // Click outside picker content to close
+  document.addEventListener("click", function (e) {
+    var overlay = document.getElementById("dir-picker-overlay");
+    if (!overlay || overlay.classList.contains("hidden")) return;
+    // If the click is on the overlay background (not the inner card), close
+    if (e.target === overlay) closeDirPicker();
+  });
+
+  // Escape to close picker
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    var overlay = document.getElementById("dir-picker-overlay");
+    if (overlay && !overlay.classList.contains("hidden")) {
+      closeDirPicker();
+    }
+  });
+
   // ─── Response time display ────────────────────────────────────
   var respTimeEl = document.getElementById("resp-time");
   if (respTimeEl) {

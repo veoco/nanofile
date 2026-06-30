@@ -20,7 +20,7 @@
     {% endfor %}
 </div>
 
-<!-- View toggle -->
+<!-- View toggle + selection actions -->
 <div class="flex items-center gap-1 px-4 pt-2 pb-1">
     <button class="js-view-list p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 text-brand-500" title="List view" aria-label="Switch to list view">
         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -32,12 +32,42 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/>
         </svg>
     </button>
+    <div class="flex-1 min-w-0"></div>
+    <!-- Selection actions (shown when items are selected) -->
+    <span id="js-selection-info" class="hidden flex items-center gap-1 text-xs text-brand-600 dark:text-brand-400 font-medium whitespace-nowrap">
+        <span class="js-selection-count">0</span> selected
+        <span class="text-gray-300 dark:text-gray-600">·</span>
+        <button type="button" class="js-deselect-all hover:underline">Deselect</button>
+    </span>
+    <div id="js-selection-actions" class="hidden flex items-center gap-0.5">
+        <button type="button" class="js-batch-delete p-1.5 rounded-md text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" title="Delete selected">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            </svg>
+        </button>
+        <button type="button" class="js-batch-move p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300" title="Move selected">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+        </button>
+        <button type="button" class="js-batch-copy p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300" title="Copy selected">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+            </svg>
+        </button>
+    </div>
+    <button type="button" id="js-select-all-btn"
+            class="px-2 py-1 text-xs font-medium text-brand-600 dark:text-brand-400 hover:bg-brand-50 dark:hover:bg-brand-900/20 rounded-md transition-colors whitespace-nowrap">
+        Select All
+    </button>
 </div>
 
 <!-- List View -->
 <div class="js-file-list-view">
     {% for entry in entries %}
-    <div class="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-50 dark:hover:bg-surface-800/50 transition-colors">
+    <div class="js-entry-row flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-surface-800/50"
+         data-name="{{ entry.name }}"
+         data-type="{{ entry.entry_type }}">
         {% if entry.entry_type == "dir" %}
         <!-- Folder icon -->
         <div class="h-9 min-w-9 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
@@ -47,7 +77,7 @@
         </div>
         <div class="flex-1 min-w-0">
             <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
-               class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate block">
+               class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate">
                 {{ entry.name }}/
             </a>
             <div class="text-xs text-gray-400 dark:text-gray-500">{{ entry.mtime_display }}</div>
@@ -96,12 +126,12 @@
         <div class="flex-1 min-w-0">
             {% if entry.is_previewable %}
             <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
-               class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate block">
+               class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate">
                 {{ entry.name }}
             </a>
             {% else %}
             <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
-               class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate block">
+               class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate">
                 {{ entry.name }}
             </a>
             {% endif %}
@@ -159,8 +189,9 @@
 <!-- Grid View (hidden by default) -->
 <div class="js-file-grid-view hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 px-4 pb-4">
     {% for entry in entries %}
-    <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
-       class="block rounded-lg p-2.5 hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
+    <div class="js-entry-row relative block rounded-lg p-2.5 hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors cursor-pointer"
+         data-name="{{ entry.name }}"
+         data-type="{{ entry.entry_type }}">
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
             {% if entry.entry_type == "dir" %}
             <svg class="h-14 w-14 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
@@ -176,7 +207,7 @@
         {% if entry.entry_type == "file" %}
         <p class="text-xs text-gray-400 text-center mt-0.5">{{ entry.size_display }}</p>
         {% endif %}
-    </a>
+    </div>
     {% endfor %}
 </div>
 {% endif %}
