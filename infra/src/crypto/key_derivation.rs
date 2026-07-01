@@ -373,10 +373,17 @@ mod tests {
         let random_key = generate_random_key_for_repo(password, 2, repo_salt).unwrap();
         let (correct_key, correct_iv) =
             decrypt_repo_enc_key(password, &random_key, 2, repo_salt).unwrap();
-        let wrong_result = decrypt_repo_enc_key("wrong_password", &random_key, 2, repo_salt);
-        // With PKCS7 padding, a wrong password causes a padding validation error
-        // (not silently returning garbage data), which is more secure.
-        assert!(wrong_result.is_err());
+
+        // Wrong password must not produce the correct key.
+        // It may return Err (PKCS7 padding mismatch, ~94%) or Ok(garbage, ~6%)
+        // — either is acceptable as long as the key material doesn't match.
+        if let Ok((wrong_key, wrong_iv)) =
+            decrypt_repo_enc_key("wrong_password", &random_key, 2, repo_salt)
+        {
+            assert_ne!(wrong_key, correct_key);
+            assert_ne!(wrong_iv, correct_iv);
+        }
+
         assert_eq!(correct_key.len(), 32);
         assert_eq!(correct_iv.len(), 16);
     }
