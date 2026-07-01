@@ -663,6 +663,146 @@
     updateSelectionBar();
   };
 
+  // ─── Load more (pagination) ─────────────────────────────────────────────
+  function getVisibleViewContainer() {
+    var listView = document.querySelector(".js-file-list-view");
+    var gridView = document.querySelector(".js-file-grid-view");
+    if (gridView && !gridView.classList.contains("hidden")) return gridView;
+    return listView;
+  }
+
+  // Sync load-more bar state to the currently visible view
+  window.syncPaginationBar = function () {
+    var container = getVisibleViewContainer();
+    if (!container) return;
+    var bar = document.querySelector(".js-load-more-bar");
+    if (!bar) return;
+    var loadedCount = document.querySelector(".js-loaded-count");
+    var hasMore = container.dataset.hasMore === "true";
+    bar.classList.toggle("hidden", !hasMore);
+    if (loadedCount && container.dataset.total) {
+      var page = parseInt(container.dataset.page || "1", 10);
+      var total = parseInt(container.dataset.total, 10);
+      loadedCount.textContent = Math.min(page * 200, total);
+    }
+  };
+
+  window.loadMoreEntries = async function () {
+    var container = getVisibleViewContainer();
+    if (!container) return;
+    var btn = document.querySelector(".js-load-more-btn");
+    var spinner = document.querySelector(".js-load-more-spinner");
+    if (!btn || btn.disabled) return;
+
+    var page = parseInt(container.dataset.page || "1", 10);
+    var hasMore = container.dataset.hasMore === "true";
+    if (!hasMore) return;
+
+    btn.disabled = true;
+    if (spinner) spinner.classList.remove("hidden");
+
+    var view = (typeof window.getVisibleView === "function") ? window.getVisibleView() : "list";
+    var nextPage = page + 1;
+    var sep = window.location.pathname.indexOf("?") !== -1 ? "&" : "?";
+    var url = window.location.pathname + sep + "partial=1&view=" + view + "&page=" + nextPage;
+
+    try {
+      var resp = await fetch(url);
+      if (!resp.ok) { btn.disabled = false; if (spinner) spinner.classList.add("hidden"); return; }
+      var html = await resp.text();
+
+      // Extract the view container HTML from the partial response
+      var parser = document.createElement("div");
+      parser.innerHTML = html;
+      var newContainer = parser.querySelector(view === "grid" ? ".js-file-grid-view" : ".js-file-list-view");
+      if (!newContainer) { btn.disabled = false; if (spinner) spinner.classList.add("hidden"); return; }
+
+      // Append new rows to the existing container
+      var rows = newContainer.querySelectorAll(".js-entry-row");
+      rows.forEach(function (row) { container.appendChild(row); });
+
+      // DOM recycling: if more than 3 pages loaded, remove the oldest page
+      var allRows = container.querySelectorAll(".js-entry-row");
+      if (allRows.length > 600) {
+        var oldestPage = Infinity;
+        allRows.forEach(function (r) {
+          var p = parseInt(r.dataset.page, 10);
+          if (p < oldestPage) oldestPage = p;
+        });
+        if (oldestPage < nextPage) {
+          var toRemove = container.querySelectorAll('.js-entry-row[data-page="' + oldestPage + '"]');
+          toRemove.forEach(function (r) { r.remove(); });
+        }
+      }
+
+      // Update pagination state from the response
+      container.dataset.page = newContainer.dataset.page || String(nextPage);
+      container.dataset.hasMore = newContainer.dataset.hasMore || "false";
+      container.dataset.total = newContainer.dataset.total || container.dataset.total;
+
+      // Update the count display in the load-more bar
+      var loadedCount = document.querySelector(".js-loaded-count");
+      var totalCount = container.dataset.total;
+      if (loadedCount) {
+        var loadedTotal = parseInt(container.dataset.page, 10) * 200;
+        loadedCount.textContent = Math.min(loadedTotal, parseInt(totalCount, 10));
+      }
+
+      // Hide the load-more bar if no more pages
+      if (container.dataset.hasMore !== "true") {
+        var bar = document.querySelector(".js-load-more-bar");
+        if (bar) bar.classList.add("hidden");
+      }
+    } catch (_) { /* ignore */ }
+
+    btn.disabled = false;
+    if (spinner) spinner.classList.add("hidden");
+  };
+
+  // Load more button click handler
+  document.addEventListener("click", function (e) {
+    if (e.target.closest(".js-load-more-btn")) {
+      window.loadMoreEntries();
+    }
+  });
+
+  // ─── Infinite scroll (Phase 3) ───────────────────────────────────────────
+  var infiniteScrollTimer = null;
+  function onFileListScroll() {
+    if (infiniteScrollTimer) return;
+    infiniteScrollTimer = setTimeout(function () {
+      infiniteScrollTimer = null;
+      var bar = document.querySelector(".js-load-more-bar");
+      if (!bar || bar.classList.contains("hidden")) return;
+      var view = getVisibleViewContainer();
+      if (!view) return;
+      var rect = view.getBoundingClientRect();
+      // Trigger when the view bottom is within 300px of the viewport bottom
+      if (rect.bottom - window.innerHeight < 300) {
+        window.loadMoreEntries();
+      }
+    }, 200);
+  }
+
+  // Use IntersectionObserver when available for better performance
+  var loadMoreBar = document.querySelector(".js-load-more-bar");
+  if (loadMoreBar && "IntersectionObserver" in window) {
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          window.loadMoreEntries();
+        }
+      });
+    }, { rootMargin: "300px" });
+    observer.observe(loadMoreBar);
+  } else {
+    // Fallback: scroll listener on <main>
+    var mainEl = document.querySelector("main");
+    if (mainEl) {
+      mainEl.addEventListener("scroll", onFileListScroll, { passive: true });
+    }
+  }
+
   // ─── Batch delete ───────────────────────────────────────────────────────
   document.addEventListener("click", async function (e) {
     var btn = e.target.closest(".js-batch-delete");

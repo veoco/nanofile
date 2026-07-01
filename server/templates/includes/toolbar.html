@@ -679,10 +679,16 @@ function escapeAttr(str) {
 }
 
 // ─── Partial refresh ───
+window.getVisibleView = function () {
+    var gridView = document.querySelector('.js-file-grid-view');
+    if (gridView && !gridView.classList.contains('hidden')) return 'grid';
+    return 'list';
+};
+
 async function refreshFileList() {
     var url = window.location.pathname;
     var sep = url.indexOf('?') !== -1 ? '&' : '?';
-    url = url + sep + 'partial=1';
+    url = url + sep + 'partial=1&view=' + getVisibleView();
     try {
         var resp = await fetch(url);
         if (resp.ok) {

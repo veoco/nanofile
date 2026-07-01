@@ -55,6 +55,12 @@
   animation: loading-bar 2s ease-in-out infinite;
 }
 
+/* Virtual scrolling optimisation — skip off-screen row rendering */
+.js-file-list-view .js-entry-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 44px;
+}
+
 /* Selected row in file browser — brand tint to distinguish from hover */
 .js-entry-row.selected {
   background-color: var(--color-brand-50);

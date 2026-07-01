@@ -3,40 +3,48 @@
   "use strict";
 
   // ─── View mode toggle (list / grid) ──────────────────────────────────
-  var listView = document.querySelector(".js-file-list-view");
-  var gridView = document.querySelector(".js-file-grid-view");
-  var btnList = document.querySelector(".js-view-list");
-  var btnGrid = document.querySelector(".js-view-grid");
-
-  if (listView && gridView && btnList && btnGrid) {
-    var mode = localStorage.getItem("fileViewMode") || "list";
-
-    function setMode(m) {
-      if (m === "grid") {
-        listView.classList.add("hidden");
-        gridView.classList.remove("hidden");
-        btnList.classList.remove("text-brand-500");
-        btnList.classList.add("text-gray-400");
-        btnGrid.classList.remove("text-gray-400");
-        btnGrid.classList.add("text-brand-500");
-      } else {
-        listView.classList.remove("hidden");
-        gridView.classList.add("hidden");
-        btnGrid.classList.remove("text-brand-500");
-        btnGrid.classList.add("text-gray-400");
-        btnList.classList.remove("text-gray-400");
-        btnList.classList.add("text-brand-500");
-      }
-      localStorage.setItem("fileViewMode", m);
-      if (typeof window.syncSelectionView === "function") {
-        window.syncSelectionView();
-      }
+  function setMode(m) {
+    var listView = document.querySelector(".js-file-list-view");
+    var gridView = document.querySelector(".js-file-grid-view");
+    var btnList = document.querySelector(".js-view-list");
+    var btnGrid = document.querySelector(".js-view-grid");
+    if (!listView || !gridView || !btnList || !btnGrid) return;
+    if (m === "grid") {
+      listView.classList.add("hidden");
+      gridView.classList.remove("hidden");
+      btnList.classList.remove("text-brand-500");
+      btnList.classList.add("text-gray-400");
+      btnGrid.classList.remove("text-gray-400");
+      btnGrid.classList.add("text-brand-500");
+    } else {
+      listView.classList.remove("hidden");
+      gridView.classList.add("hidden");
+      btnGrid.classList.remove("text-brand-500");
+      btnGrid.classList.add("text-gray-400");
+      btnList.classList.remove("text-gray-400");
+      btnList.classList.add("text-brand-500");
     }
-
-    btnList.addEventListener("click", function () { setMode("list"); });
-    btnGrid.addEventListener("click", function () { setMode("grid"); });
-    setMode(mode);
+    localStorage.setItem("fileViewMode", m);
+    if (typeof window.syncSelectionView === "function") {
+      window.syncSelectionView();
+    }
+    if (typeof window.syncPaginationBar === "function") {
+      window.syncPaginationBar();
+    }
   }
+
+  // Event delegation on document so view toggle works after partial refresh
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-view-list");
+    if (btn) { setMode("list"); return; }
+    btn = e.target.closest(".js-view-grid");
+    if (btn) { setMode("grid"); }
+  });
+
+  // Initialize mode from localStorage on page load
+  var mode = localStorage.getItem("fileViewMode") || "list";
+  // Small delay to ensure DOM is settled and view containers exist
+  setTimeout(function () { setMode(mode); }, 0);
 
   // ─── Skeleton loading ────────────────────────────────────────────────
   var skeleton = document.querySelector(".js-skeleton");

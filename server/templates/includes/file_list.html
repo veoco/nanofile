@@ -63,11 +63,16 @@
 </div>
 
 <!-- List View -->
-<div class="js-file-list-view">
+<div class="js-file-list-view"
+     data-page="{{ page }}"
+     data-total="{{ total }}"
+     data-has-more="{% if has_more %}true{% else %}false{% endif %}">
+    {% if render_view != "grid" %}
     {% for entry in entries %}
     <div class="js-entry-row flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-surface-800/50"
          data-name="{{ entry.name }}"
-         data-type="{{ entry.entry_type }}">
+         data-type="{{ entry.entry_type }}"
+         data-page="{{ page }}">
         {% if entry.entry_type == "dir" %}
         <!-- Folder icon -->
         <div class="h-9 min-w-9 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
@@ -184,14 +189,20 @@
         {% endif %}
     </div>
     {% endfor %}
+    {% endif %}
 </div>
 
 <!-- Grid View (hidden by default) -->
-<div class="js-file-grid-view hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 px-4 pb-4">
+<div class="js-file-grid-view hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 px-4 pb-4"
+     data-page="{{ page }}"
+     data-total="{{ total }}"
+     data-has-more="{% if has_more %}true{% else %}false{% endif %}">
+    {% if render_view != "list" %}
     {% for entry in entries %}
     <div class="js-entry-row relative block rounded-lg p-2.5 hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors cursor-pointer"
          data-name="{{ entry.name }}"
-         data-type="{{ entry.entry_type }}">
+         data-type="{{ entry.entry_type }}"
+         data-page="{{ page }}">
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
             {% if entry.entry_type == "dir" %}
             <svg class="h-14 w-14 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
@@ -212,7 +223,22 @@
         {% endif %}
     </div>
     {% endfor %}
+    {% endif %}
 </div>
+
+<!-- Load more (pagination) -->
+{% if has_more %}
+<div class="js-load-more-bar px-4 py-3 text-center border-t border-gray-100 dark:border-gray-700/50">
+    <button type="button" class="js-load-more-btn inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-brand-600 dark:text-brand-400 hover:bg-brand-50 dark:hover:bg-brand-900/20 rounded-md transition-colors">
+        <svg class="js-load-more-spinner hidden h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <span>Load more</span>
+        <span class="text-gray-400 dark:text-gray-500">(<span class="js-loaded-count">{{ total.min(page as i64 * 200) }}</span> / {{ total }})</span>
+    </button>
+</div>
+{% endif %}
 {% endif %}
 
 

@@ -31,6 +31,11 @@ pub struct FileBrowserTemplate {
     pub current_path: String,
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub entries: Vec<FileEntry>,
+    pub total: i64,
+    pub has_more: bool,
+    pub page: u32,
+    /// "all" = render both views (full page), "list" = only list, "grid" = only grid
+    pub render_view: &'static str,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
@@ -45,6 +50,11 @@ pub struct FileBrowserCoreTemplate {
     pub current_path: String,
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub entries: Vec<FileEntry>,
+    pub total: i64,
+    pub has_more: bool,
+    pub page: u32,
+    /// "all" = render both views (full page), "list" = only list, "grid" = only grid
+    pub render_view: &'static str,
     pub csrf_token: String,
 }
 
@@ -85,6 +95,7 @@ pub struct PreviewImageTemplate {
 
 // ─── Data types ──────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 pub struct FileEntry {
     pub name: String,
     pub entry_type: String, // "file" or "dir"
@@ -254,6 +265,9 @@ pub struct BreadcrumbItem {
 pub struct FileBrowserQuery {
     pub partial: Option<String>,
     pub dl: Option<String>,
+    pub view: Option<String>,
+    pub page: Option<u32>,
+    pub per_page: Option<u32>,
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -412,6 +426,19 @@ async fn file_browser_inner(
         }
     });
 
+    // In-memory pagination (FS tree is content-addressed, can't SQL-paginate)
+    let total = entries.len() as i64;
+    let per_page = query.per_page.unwrap_or(200).min(500) as usize;
+    let page = query.page.unwrap_or(1).max(1) as usize;
+    let offset = (page - 1) * per_page;
+    let has_more = offset + per_page < total as usize;
+    entries = if offset < entries.len() {
+        let end = (offset + per_page).min(entries.len());
+        entries[offset..end].to_vec()
+    } else {
+        vec![]
+    };
+
     // Build breadcrumb items from current_path.
     // Each item's path is relative (no leading /) for use in URL construction.
     let mut breadcrumbs: Vec<BreadcrumbItem> = Vec::new();
@@ -436,6 +463,13 @@ async fn file_browser_inner(
     let csrf_token =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
 
+    // Determine which view(s) to render
+    let render_view = match query.view.as_deref() {
+        Some("list") => "list",
+        Some("grid") => "grid",
+        _ => "all",
+    };
+
     if is_partial {
         let tpl = FileBrowserCoreTemplate {
             urls: crate::static_assets::template_urls(),
@@ -444,6 +478,10 @@ async fn file_browser_inner(
             current_path: path.clone(),
             breadcrumbs: breadcrumbs.clone(),
             entries,
+            total,
+            has_more,
+            page: page as u32,
+            render_view,
             csrf_token,
         };
         let html = tpl
@@ -464,6 +502,10 @@ async fn file_browser_inner(
             current_path: path,
             breadcrumbs,
             entries,
+            total,
+            has_more,
+            page: page as u32,
+            render_view: "all",
             active_page: "repos",
             left_panel_repos,
             current_repo_id,
