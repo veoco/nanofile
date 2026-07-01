@@ -642,6 +642,27 @@
     }
   });
 
+  // Sync .selected class to the currently visible view (called after view switch)
+  window.syncSelectionView = function () {
+    if (selectedPaths.size === 0) return;
+    // Remove .selected from all rows (including hidden views)
+    document.querySelectorAll(".js-entry-row.selected").forEach(function (row) {
+      row.classList.remove("selected");
+    });
+    // Re-apply .selected to rows in the visible view that match selectedPaths
+    var visViews = document.querySelectorAll(
+      ".js-file-list-view:not(.hidden), .js-file-grid-view:not(.hidden)"
+    );
+    visViews.forEach(function (view) {
+      view.querySelectorAll(".js-entry-row").forEach(function (row) {
+        if (selectedPaths.has(row.dataset.name)) {
+          row.classList.add("selected");
+        }
+      });
+    });
+    updateSelectionBar();
+  };
+
   // ─── Batch delete ───────────────────────────────────────────────────────
   document.addEventListener("click", async function (e) {
     var btn = e.target.closest(".js-batch-delete");

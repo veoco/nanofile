@@ -65,7 +65,7 @@
 <!-- List View -->
 <div class="js-file-list-view">
     {% for entry in entries %}
-    <div class="js-entry-row flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-surface-800/50"
+    <div class="js-entry-row flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-surface-800/50"
          data-name="{{ entry.name }}"
          data-type="{{ entry.entry_type }}">
         {% if entry.entry_type == "dir" %}
@@ -203,7 +203,10 @@
             <span class="text-xl font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
             {% endif %}
         </div>
-        <p class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate text-center leading-snug">{{ entry.name }}</p>
+        <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
+           class="block text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate text-center leading-snug">
+            {{ entry.name }}{% if entry.entry_type == "dir" %}/{% endif %}
+        </a>
         {% if entry.entry_type == "file" %}
         <p class="text-xs text-gray-400 text-center mt-0.5">{{ entry.size_display }}</p>
         {% endif %}

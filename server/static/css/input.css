@@ -55,10 +55,19 @@
   animation: loading-bar 2s ease-in-out infinite;
 }
 
-/* Selected row in file browser (same color as hover) */
+/* Selected row in file browser — brand tint to distinguish from hover */
 .js-entry-row.selected {
-  background-color: #f9fafb;
+  background-color: var(--color-brand-50);
 }
 .dark .js-entry-row.selected {
-  background-color: rgba(30, 41, 59, 0.5);
+  background-color: color-mix(in srgb, var(--color-brand-900) 30%, transparent);
 }
+
+/* Left border indicator for list view selected rows */
+.js-file-list-view .js-entry-row.selected {
+  box-shadow: inset 3px 0 0 0 var(--color-brand-500);
+}
+.dark .js-file-list-view .js-entry-row.selected {
+  box-shadow: inset 3px 0 0 0 var(--color-brand-400);
+}
+

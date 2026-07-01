@@ -9,7 +9,7 @@
 {% block content %}
 {% include "includes/breadcrumb.html" %}
 
-<div id="drop-zone" data-drop-zone class="relative rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800"
+<div id="drop-zone" data-drop-zone class="relative rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 overflow-hidden"
      ondragover="onDragOver(event)" ondragenter="onDragEnter(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
     <div class="border-b border-gray-200 dark:border-gray-700 px-4 py-3">
         <div class="flex items-center justify-between">

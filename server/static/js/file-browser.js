@@ -28,6 +28,9 @@
         btnList.classList.add("text-brand-500");
       }
       localStorage.setItem("fileViewMode", m);
+      if (typeof window.syncSelectionView === "function") {
+        window.syncSelectionView();
+      }
     }
 
     btnList.addEventListener("click", function () { setMode("list"); });
