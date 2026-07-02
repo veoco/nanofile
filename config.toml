@@ -12,7 +12,7 @@ port = 8082
 # External URL used for download links and CORS defaults.
 # Change to "https://your-domain.com" when behind a TLS proxy.
 site_url = "http://127.0.0.1:8082"
-max_upload_size_mb = 512
+max_upload_size_mb = 4096
 request_timeout_secs = 600
 cors_allowed_origins = []
 cors_max_age_secs = 86400

@@ -78,7 +78,7 @@ impl TestServer {
                 addr: "127.0.0.1".to_string(),
                 port,
                 site_url: format!("http://127.0.0.1:{}", port),
-                max_upload_size_mb: 512,
+                max_upload_size_mb: 4096,
                 request_timeout_secs: 36000,
                 cors_allowed_origins: vec![],
                 cors_max_age_secs: 86400,
