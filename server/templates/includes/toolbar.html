@@ -741,8 +741,9 @@ function updateProgressDialog() {
                       '<span class="text-xs text-gray-500 font-medium w-10 text-right">' + pct + '%</span>' +
                     '</div>';
             }
-            actionHtml =
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-200 active:scale-90 transition-all" onclick="pauseUploadItem(' + item.id + ')" title="Pause">' +
+            actionHtml = item.finalizing
+                ? ''  // No pause/cancel during server-side processing
+                : '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-200 active:scale-90 transition-all" onclick="pauseUploadItem(' + item.id + ')" title="Pause">' +
                   '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>' +
                 '</button>' +
                 '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="Cancel">' +
