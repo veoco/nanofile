@@ -96,7 +96,10 @@ async fn main() -> anyhow::Result<()> {
                 config.server.port
             );
 
-            let state = Arc::new(AppState::new(db, config.clone()));
+            let temp_file_manager =
+                server::web::temp_file::TempFileManager::new(config.storage.temp_dir.clone()).await;
+
+            let state = Arc::new(AppState::new(db, config.clone(), temp_file_manager));
 
             // ── Auto-create admin user from config/env on first startup ──────
             if let (Some(admin_email), Some(admin_password)) = (

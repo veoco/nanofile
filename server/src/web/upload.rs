@@ -1,6 +1,7 @@
 use axum::{
     Json,
     extract::{Multipart, Path, State},
+    http::HeaderMap,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -59,6 +60,132 @@ fn compute_target_dir(parent_dir: &str, relative_path: &str) -> String {
     } else {
         format!("{}/{}", parent_dir.trim_end_matches('/'), rel)
     }
+}
+
+// ─── Content-Range / chunked upload helpers ───────────────────────────────
+
+/// Parse a `Content-Range` header of the form `bytes start-end/file_size`.
+///
+/// Example: `"bytes 0-8388607/26214400"` → `(0, 8388607, 26214400)`
+fn parse_content_range(header: &str) -> Result<(u64, u64, u64), AppError> {
+    let rest = header
+        .strip_prefix("bytes ")
+        .ok_or_else(|| AppError::BadRequest("invalid Content-Range format".into()))?;
+    let (range, size_str) = rest
+        .split_once('/')
+        .ok_or_else(|| AppError::BadRequest("invalid Content-Range: missing file size".into()))?;
+    let (start_str, end_str) = range
+        .split_once('-')
+        .ok_or_else(|| AppError::BadRequest("invalid Content-Range: missing range".into()))?;
+    let start: u64 = start_str
+        .parse()
+        .map_err(|_| AppError::BadRequest("invalid Content-Range: invalid start".into()))?;
+    let end: u64 = end_str
+        .parse()
+        .map_err(|_| AppError::BadRequest("invalid Content-Range: invalid end".into()))?;
+    let file_size: u64 = size_str
+        .parse()
+        .map_err(|_| AppError::BadRequest("invalid Content-Range: invalid file size".into()))?;
+    if end >= file_size || start > end {
+        return Err(AppError::BadRequest(
+            "invalid Content-Range: range out of bounds".into(),
+        ));
+    }
+    Ok((start, end, file_size))
+}
+
+/// Handle a chunked (resumable) upload when a `Content-Range` header is
+/// present.
+///
+/// Returns:
+/// - `Ok(None)` — not a chunked upload (no Content-Range, caller should
+///   handle as a regular non-chunked upload).
+/// - `Ok(Some(json))` — the chunk was handled. If it was an intermediate
+///   chunk the response is `{"success": true}`; if it was the final chunk
+///   the response is the standard file metadata JSON array.
+/// - `Err(...)` — an error occurred.
+async fn try_handle_chunked(
+    temp_mgr: &crate::web::temp_file::TempFileManager,
+    state: &AppState,
+    repo_id: &str,
+    target_dir: &str,
+    file_name: &str,
+    file_data: &[u8],
+    content_range: Option<&str>,
+    modifier: &str,
+    replace: bool,
+    user_id: Option<i32>,
+) -> Result<Option<Json<serde_json::Value>>, AppError> {
+    let Some(range_header) = content_range else {
+        return Ok(None); // not a chunked upload
+    };
+
+    let (start, end, file_size) = parse_content_range(range_header)?;
+
+    // Validate the chunk size matches the declared range
+    let expected_len = (end - start + 1) as usize;
+    if file_data.len() != expected_len {
+        return Err(AppError::BadRequest(format!(
+            "Content-Range chunk size mismatch: header says {expected_len}, actual {}",
+            file_data.len()
+        )));
+    }
+
+    // Check total file size against server limit
+    let max_bytes = state.config.server.max_upload_size_mb * 1024 * 1024;
+    if max_bytes > 0 && file_size > max_bytes {
+        return Err(AppError::BadRequest(format!(
+            "file size {file_size} exceeds upload limit {max_bytes}"
+        )));
+    }
+
+    let file_path = if target_dir == "/" {
+        format!("/{file_name}")
+    } else {
+        format!("{}/{}", target_dir.trim_end_matches('/'), file_name)
+    };
+
+    // Ensure temp file exists
+    temp_mgr
+        .get_or_create(repo_id, &file_path, file_size)
+        .await
+        .map_err(|e| AppError::Internal(format!("temp file create failed: {e}")))?;
+
+    // Write the chunk at the declared offset
+    temp_mgr
+        .write_chunk(repo_id, &file_path, start, file_data)
+        .await
+        .map_err(|e| AppError::Internal(format!("chunk write failed: {e}")))?;
+
+    // Intermediate chunk — tell the client to keep sending
+    if end != file_size - 1 {
+        return Ok(Some(Json(json!({"success": true}))));
+    }
+
+    // ── Final chunk: assemble the complete file and commit ─────────
+    let full_data = temp_mgr
+        .read_complete(repo_id, &file_path)
+        .await
+        .ok_or_else(|| AppError::Internal("failed to read assembled temp file".into()))?;
+
+    // Verify we got the expected number of bytes
+    if full_data.len() as u64 != file_size {
+        temp_mgr.abort(repo_id, &file_path).await;
+        return Err(AppError::Internal(format!(
+            "assembled file size {} does not match expected {file_size}",
+            full_data.len()
+        )));
+    }
+
+    let result = upload_and_build_response(
+        state, repo_id, target_dir, file_name, &full_data, modifier, replace, user_id, None,
+    )
+    .await;
+
+    // Clean up the temp file regardless of success/failure
+    temp_mgr.finish(repo_id, &file_path).await;
+
+    result.map(|json| Some(Json(json)))
 }
 
 /// Ensure the directory at `path` exists, creating any missing intermediate
@@ -315,6 +442,7 @@ struct MultipartResult {
 pub async fn upload_aj(
     user: WebUser,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let mut fields: HashMap<String, String> = HashMap::new();
@@ -356,6 +484,26 @@ pub async fn upload_aj(
     let target_dir = compute_target_dir(parent_dir, relative_path);
 
     if !file_data.is_empty() {
+        // Try chunked upload path first (returns Some if Content-Range was present)
+        let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+        if let Some(resp) = try_handle_chunked(
+            &state.temp_file_manager,
+            &state,
+            repo_id,
+            &target_dir,
+            &filename,
+            &file_data,
+            content_range,
+            &user.email,
+            false,
+            Some(user.user_id),
+        )
+        .await?
+        {
+            return Ok(resp);
+        }
+
+        // Non-chunked upload: standard path
         let resp = upload_and_build_response(
             &state,
             repo_id,
@@ -452,6 +600,7 @@ pub async fn update_api(
 pub async fn update_aj(
     user: WebUser,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let mut fields: HashMap<String, String> = HashMap::new();
@@ -497,6 +646,25 @@ pub async fn update_aj(
             .map(|(_, n)| n)
             .unwrap_or(target_file);
 
+        // Try chunked upload path first
+        let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+        if let Some(resp) = try_handle_chunked(
+            &state.temp_file_manager,
+            &state,
+            repo_id,
+            parent,
+            name,
+            &file_data,
+            content_range,
+            &user.email,
+            true,
+            Some(user.user_id),
+        )
+        .await?
+        {
+            return Ok(resp);
+        }
+
         let resp = upload_and_build_response(
             &state,
             repo_id,
@@ -529,6 +697,7 @@ pub async fn update_aj(
 pub async fn upload_aj_token(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let info = state
@@ -579,6 +748,25 @@ pub async fn upload_aj_token(
     let target_dir = compute_target_dir(parent_dir, relative_path);
 
     if !file_data.is_empty() {
+        // Try chunked upload path first
+        let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+        if let Some(resp) = try_handle_chunked(
+            &state.temp_file_manager,
+            &state,
+            &info.repo_id,
+            &target_dir,
+            &filename,
+            &file_data,
+            content_range,
+            &info.username,
+            true,
+            None,
+        )
+        .await?
+        {
+            return Ok(resp);
+        }
+
         let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
         let resp = upload_and_build_response(
             &state,

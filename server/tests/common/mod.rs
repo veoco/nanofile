@@ -137,7 +137,10 @@ impl TestServer {
         // Ensure block directory exists
         std::fs::create_dir_all(&config.storage.block_dir).unwrap();
 
-        let state = Arc::new(AppState::new(db, config));
+        let temp_file_manager =
+            server::web::temp_file::TempFileManager::new(config.storage.temp_dir.clone()).await;
+
+        let state = Arc::new(AppState::new(db, config, temp_file_manager));
 
         let sync_routes = server::sync::sync_routes();
         let sdoc_routes = server::sdoc::sdoc_routes();

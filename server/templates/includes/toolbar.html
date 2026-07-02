@@ -21,6 +21,11 @@ var isDialogMinimized = false;
 var uploadTokenUrl = '';
 var maxUploadSizeMb = {{ max_upload_size_mb }};
 
+// ─── Chunked upload constants ───
+var CHUNK_SIZE = 8 * 1024 * 1024; // 8MB per chunk
+var CHUNK_UPLOAD_THRESHOLD = 100 * 1024 * 1024; // 100MB – files above this use chunked upload
+var MAX_CHUNK_RETRIES = 3;
+
 // Bitrate tracking
 var bitrateLoaded = 0;
 var bitrateTimestamp = null;
@@ -254,6 +259,18 @@ function uploadItem(item) {
         return;
     }
 
+    var url = uploadTokenUrl || '/upload-aj/';
+
+    // Large files use chunked upload; small files go direct
+    if (item.file.size >= CHUNK_UPLOAD_THRESHOLD) {
+        uploadFileInChunks(item, url);
+    } else {
+        uploadFileDirect(item, url);
+    }
+}
+
+// ─── Direct (single-request) file upload ───
+function uploadFileDirect(item, url) {
     item.state = 'uploading';
     updateProgressDialog();
 
@@ -263,11 +280,7 @@ function uploadItem(item) {
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
     formData.append('repo_name', {{ repo_name|json|safe }});
-    // If no token URL (fallback), include repo_id for the non-token endpoint
     if (!uploadTokenUrl) formData.append('repo_id', {{ repo_id|json|safe }});
-    // Explicitly pass the correct filename as the third argument so the
-    // multipart Content-Disposition carries just the basename, not the
-    // full path that some browsers include in file.name for folder uploads.
     formData.append('file', item.file, item.name);
     formData.append('xhr', '1');
 
@@ -284,7 +297,6 @@ function uploadItem(item) {
             item.state = 'completed';
             item.progress = 100;
         } else {
-            // Try to extract error message from server JSON response
             var errorMsg = 'Upload failed (HTTP ' + xhr.status + ')';
             if (xhr.status === 413) {
                 errorMsg = 'File too large — server rejected the upload';
@@ -299,7 +311,6 @@ function uploadItem(item) {
         }
         item.xhr = null;
         updateProgressDialog();
-        // Small delay to avoid spamming refresh on fast files
         setTimeout(processQueue, 50);
     };
 
@@ -315,8 +326,124 @@ function uploadItem(item) {
         item.xhr = null;
     };
 
-    xhr.open('POST', uploadTokenUrl || '/upload-aj/');
+    xhr.open('POST', url);
     xhr.send(formData);
+}
+
+// ─── Chunked (resumable) file upload ───
+
+/** Query the server for how many bytes have already been uploaded. */
+function getUploadedBytes(parentDir, fileName) {
+    var repoId = {{ repo_id|json|safe }};
+    var url = '/api/v2.1/repos/' + repoId + '/file-uploaded-bytes/'
+        + '?parent_dir=' + encodeURIComponent(parentDir)
+        + '&file_name=' + encodeURIComponent(fileName);
+    return fetch(url, { credentials: 'same-origin' }).then(function (r) {
+        return r.json();
+    }).then(function (data) {
+        return data.uploadedBytes || 0;
+    });
+}
+
+/** Upload a file in 8MB chunks with resume support. */
+function uploadFileInChunks(item, url) {
+    item.state = 'uploading';
+    updateProgressDialog();
+    uploadFileInChunks.tempUrl = url; // hack to avoid passing url through the chain
+
+    var file = item.file;
+    var totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+    // Check for already-uploaded bytes (resume support)
+    getUploadedBytes(item.parentDir, item.name).then(function (uploadedBytes) {
+        var resumeChunk = Math.floor(uploadedBytes / CHUNK_SIZE);
+        if (resumeChunk > 0) {
+            item.progress = Math.round(resumeChunk / totalChunks * 100);
+            updateProgressDialog();
+        }
+        sendNextChunk(item, resumeChunk, totalChunks);
+    }).catch(function () {
+        // Resume check failed — start from scratch
+        sendNextChunk(item, 0, totalChunks);
+    });
+}
+
+/** Send the next pending chunk.  Recurse until done. */
+function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
+    retryCount = retryCount || 0;
+    var file = item.file;
+    var start = chunkIndex * CHUNK_SIZE;
+    var end = Math.min(file.size, start + CHUNK_SIZE);
+    var chunk = file.slice(start, end);
+    var isLast = (end >= file.size);
+
+    var formData = new FormData();
+    formData.append('parent_dir', item.parentDir);
+    formData.append('repo_name', {{ repo_name|json|safe }});
+    if (!uploadTokenUrl) formData.append('repo_id', {{ repo_id|json|safe }});
+    formData.append('file', chunk, item.name);
+    formData.append('xhr', '1');
+
+    var xhr = new XMLHttpRequest();
+    item.xhr = xhr;
+
+    xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable) {
+            // Map this chunk's progress to overall file progress
+            var baseProgress = chunkIndex / totalChunks;
+            var chunkPart = (e.loaded / e.total) / totalChunks;
+            item.progress = Math.round((baseProgress + chunkPart) * 100);
+            updateBitrate(e.loaded);
+            updateProgressDialog();
+        }
+    };
+
+    xhr.onload = function () {
+        item.xhr = null;
+        if (xhr.status >= 200 && xhr.status < 300) {
+            if (isLast) {
+                // All chunks done
+                item.state = 'completed';
+                item.progress = 100;
+                updateProgressDialog();
+                setTimeout(processQueue, 50);
+            } else {
+                // Send the next chunk
+                sendNextChunk(item, chunkIndex + 1, totalChunks);
+            }
+        } else {
+            handleChunkError(item, chunkIndex, totalChunks, retryCount);
+        }
+    };
+
+    xhr.onerror = function () {
+        item.xhr = null;
+        handleChunkError(item, chunkIndex, totalChunks, retryCount);
+    };
+
+    xhr.onabort = function () {
+        item.xhr = null;
+    };
+
+    xhr.open('POST', url);
+    xhr.setRequestHeader('Content-Range', 'bytes ' + start + '-' + (end - 1) + '/' + file.size);
+    xhr.send(formData);
+}
+
+/** Retry logic for a failed chunk. */
+function handleChunkError(item, chunkIndex, totalChunks, retryCount) {
+    if (retryCount < MAX_CHUNK_RETRIES) {
+        var delay = 1000 * (retryCount + 1);
+        setTimeout(function () {
+            sendNextChunk(item, chunkIndex, totalChunks, retryCount + 1);
+        }, delay);
+    } else {
+        item.state = 'error';
+        item.error = 'Upload failed at chunk ' + (chunkIndex + 1) + '/' + totalChunks;
+        item.xhr = null;
+        updateProgressDialog();
+        setTimeout(processQueue, 50);
+    }
 }
 
 // ─── Bitrate calculation ───

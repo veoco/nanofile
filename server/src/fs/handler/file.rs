@@ -482,7 +482,26 @@ pub async fn file_uploaded_bytes(
         state.config.clone(),
         state.notification_manager.clone(),
     );
-    let uploaded_bytes = svc.check_uploaded_bytes(query.blockids.as_deref()).await;
+    let mut uploaded_bytes = svc.check_uploaded_bytes(query.blockids.as_deref()).await;
+
+    // For resumable upload: check if a temp file already exists and return
+    // the actual byte offset.  This takes precedence over the block-count
+    // approach (which is used by the block-level resume protocol).
+    if let (Some(parent_dir), Some(file_name)) = (&query.parent_dir, &query.file_name) {
+        let file_path = if parent_dir == "/" {
+            format!("/{file_name}")
+        } else {
+            format!("{}/{}", parent_dir.trim_end_matches('/'), file_name)
+        };
+        if let Some(bytes) = state
+            .temp_file_manager
+            .get_uploaded_bytes(&repo_id, &file_path)
+            .await
+            && bytes > uploaded_bytes as u64
+        {
+            uploaded_bytes = bytes as i64;
+        }
+    }
 
     let mut headers = HeaderMap::new();
     headers.insert("Accept-Ranges", "bytes".parse().unwrap());

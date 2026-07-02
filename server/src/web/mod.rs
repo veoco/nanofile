@@ -6,6 +6,7 @@ use crate::AppState;
 
 pub mod download;
 pub mod progress;
+pub mod temp_file;
 pub mod upload;
 
 /// Routes for web file access.

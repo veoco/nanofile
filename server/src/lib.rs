@@ -59,6 +59,7 @@ use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
 use crate::rate_limit::{GenericRateLimiter, LoginRateLimiter};
 use crate::storage::DynBlockStorage;
+use crate::web::temp_file::TempFileManager;
 
 /// Unified application state injected into all axum handlers.
 #[derive(Clone)]
@@ -92,6 +93,8 @@ pub struct AppState {
     pub disable_2fa_limiter: Arc<GenericRateLimiter>,
     /// Server-wide secret for CSRF token generation.
     pub csrf_secret: Arc<Vec<u8>>,
+    /// Temporary file manager for resumable/chunked uploads.
+    pub temp_file_manager: TempFileManager,
     /// Cancellation token for graceful shutdown.
     /// Triggered from main.rs after axum drains in-flight requests.
     pub shutdown_token: CancellationToken,
@@ -100,7 +103,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(db: DatabaseConnection, config: Config) -> Self {
+    pub fn new(db: DatabaseConnection, config: Config, temp_file_manager: TempFileManager) -> Self {
         let block_dir = Arc::new(PathBuf::from(&config.storage.block_dir));
         let block_store = crate::storage::new_block_store(&block_dir);
         let shutdown_token = CancellationToken::new();
@@ -209,6 +212,7 @@ impl AppState {
             totp_limiter,
             disable_2fa_limiter,
             csrf_secret,
+            temp_file_manager,
             shutdown_token,
             password_manager,
         }
