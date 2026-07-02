@@ -8,7 +8,7 @@
 //! Thread-safe (Arc<RwLock<...>>), designed for concurrent chunk writes.
 
 use std::collections::HashMap;
-use std::os::unix::fs::FileExt;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -119,11 +119,12 @@ impl TempFileManager {
 
         let data = data.to_vec(); // clone for the blocking closure
         tokio::task::spawn_blocking(move || {
-            let f = std::fs::OpenOptions::new()
+            let mut f = std::fs::OpenOptions::new()
                 .write(true)
                 .create(false)
                 .open(&tmp_path)?;
-            f.write_all_at(&data, offset)?;
+            f.seek(SeekFrom::Start(offset))?;
+            f.write_all(&data)?;
             Ok::<_, std::io::Error>(())
         })
         .await
