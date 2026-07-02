@@ -148,13 +148,15 @@
         </div>
         {% else %}
         <!-- File icon: extension badge or image thumbnail -->
-        <div class="h-9 w-9 rounded-md bg-gray-100 dark:bg-surface-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
-            {% if let Some(thumb_url) = entry.image_thumbnail_url %}
+        {% if let Some(thumb_url) = entry.image_thumbnail_url %}
+        <div class="h-9 w-9 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden">
             <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy">
-            {% else %}
-            <span class="text-[10px] leading-none font-semibold {{ entry.icon_color }}" title="{{ entry.extension.as_deref().unwrap_or("?") }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(3) }}</span>
-            {% endif %}
         </div>
+        {% else %}
+        <div class="h-9 w-9 rounded-md bg-gray-100 dark:bg-surface-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
+            <span class="text-[10px] leading-none font-semibold {{ entry.icon_color }}" title="{{ entry.extension.as_deref().unwrap_or("?") }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(3) }}</span>
+        </div>
+        {% endif %}
         <div class="flex-1 min-w-0">
             {% if entry.is_previewable %}
             <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
@@ -230,17 +232,21 @@
          data-name="{{ entry.name }}"
          data-type="{{ entry.entry_type }}"
          data-page="{{ page }}">
+        {% if entry.entry_type == "dir" %}
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
-            {% if entry.entry_type == "dir" %}
             <svg class="h-14 w-14 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
             </svg>
-            {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
-            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy">
-            {% else %}
-            <span class="text-xl font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
-            {% endif %}
         </div>
+        {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
+        <div class="aspect-square rounded-md flex items-center justify-center mb-2 overflow-hidden">
+            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy">
+        </div>
+        {% else %}
+        <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
+            <span class="text-xl font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
+        </div>
+        {% endif %}
         <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
            class="block text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate text-center leading-snug">
             {{ entry.name }}{% if entry.entry_type == "dir" %}/{% endif %}

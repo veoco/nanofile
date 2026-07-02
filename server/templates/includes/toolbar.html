@@ -875,6 +875,7 @@ async function refreshFileList() {
                 container.outerHTML = html;
                 if (typeof window.setMode === "function") window.setMode(view);
                 if (typeof window.initSortUI === "function") window.initSortUI();
+                if (typeof window.initInfiniteScroll === "function") window.initInfiniteScroll();
             } else {
                 window.location.reload();
             }

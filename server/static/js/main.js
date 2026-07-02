@@ -786,24 +786,30 @@
     }, 200);
   }
 
-  // Use IntersectionObserver when available for better performance
-  var loadMoreBar = document.querySelector(".js-load-more-bar");
-  if (loadMoreBar && "IntersectionObserver" in window) {
-    var observer = new IntersectionObserver(function (entries) {
-      entries.forEach(function (entry) {
-        if (entry.isIntersecting) {
-          window.loadMoreEntries();
-        }
-      });
-    }, { rootMargin: "300px" });
-    observer.observe(loadMoreBar);
-  } else {
-    // Fallback: scroll listener on <main>
+  // Reusable — also called after DOM refresh so the observer reconnects
+  var fileListObserver = null;
+  window.initInfiniteScroll = function () {
+    if (fileListObserver) { fileListObserver.disconnect(); fileListObserver = null; }
+    var loadMoreBar = document.querySelector(".js-load-more-bar");
+    if (loadMoreBar && "IntersectionObserver" in window) {
+      fileListObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            window.loadMoreEntries();
+          }
+        });
+      }, { rootMargin: "300px" });
+      fileListObserver.observe(loadMoreBar);
+    }
+  };
+  // Fallback scroll listener on <main> (runs once; <main> is not replaced on refresh)
+  if (!("IntersectionObserver" in window)) {
     var mainEl = document.querySelector("main");
     if (mainEl) {
       mainEl.addEventListener("scroll", onFileListScroll, { passive: true });
     }
   }
+  window.initInfiniteScroll();
 
   // ─── Batch delete ───────────────────────────────────────────────────────
   document.addEventListener("click", async function (e) {
