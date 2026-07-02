@@ -25,6 +25,7 @@
       btnList.classList.add("text-brand-500");
     }
     localStorage.setItem("fileViewMode", m);
+    document.documentElement.dataset.view = m;
     if (typeof window.syncSelectionView === "function") {
       window.syncSelectionView();
     }
@@ -43,8 +44,7 @@
 
   // Initialize mode from localStorage on page load
   var mode = localStorage.getItem("fileViewMode") || "list";
-  // Small delay to ensure DOM is settled and view containers exist
-  setTimeout(function () { setMode(mode); }, 0);
+  setMode(mode);
 
   // ─── Skeleton loading ────────────────────────────────────────────────
   var skeleton = document.querySelector(".js-skeleton");
