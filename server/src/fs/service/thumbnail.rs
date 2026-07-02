@@ -143,11 +143,7 @@ impl ThumbnailService {
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
 
-        let is_supported = matches!(
-            ext.as_str(),
-            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp"
-        );
-        if !is_supported {
+        if !crate::thumbnail_util::is_supported_image_ext(&ext) {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
@@ -162,7 +158,12 @@ impl ThumbnailService {
         .await
         .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
 
-        let thumbnail_data = crate::thumbnail_util::generate_thumbnail(&content, size)?;
+        let thumbnail_data = tokio::task::spawn_blocking(move || {
+            crate::thumbnail_util::generate_thumbnail(&content, size)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("thumbnail generation panicked: {e}")))?
+        .map_err(|e| AppError::Internal(format!("thumbnail generation failed: {e}")))?;
 
         // ── Store thumbnail for future requests ──
         let thumbnail_dir = self.thumbnail_repo_dir(repo_id);

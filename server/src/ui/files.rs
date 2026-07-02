@@ -123,12 +123,11 @@ pub struct FileEntry {
 /// Returns true if the file extension is one that the thumbnail service supports
 /// for generating image thumbnails.
 fn is_thumbnail_image(name: &str) -> bool {
-    name.ends_with(".png")
-        || name.ends_with(".jpg")
-        || name.ends_with(".jpeg")
-        || name.ends_with(".gif")
-        || name.ends_with(".bmp")
-        || name.ends_with(".webp")
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(crate::thumbnail_util::is_supported_image_ext)
+        .unwrap_or(false)
 }
 
 pub fn is_previewable_file(name: &str) -> bool {
