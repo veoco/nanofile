@@ -39,6 +39,8 @@ pub struct FileBrowserTemplate {
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
+    /// Maximum upload file size in MB, from server config.
+    pub max_upload_size_mb: u64,
 }
 
 #[derive(Template)]
@@ -509,6 +511,7 @@ async fn file_browser_inner(
             active_page: "repos",
             left_panel_repos,
             current_repo_id,
+            max_upload_size_mb: state.config.server.max_upload_size_mb,
         };
         let html = tpl
             .render()

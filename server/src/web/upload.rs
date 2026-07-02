@@ -321,13 +321,27 @@ pub async fn upload_aj(
     let mut file_data = Vec::new();
     let mut filename = String::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
             filename = field.file_name().unwrap_or("unknown").to_string();
-            file_data = field.bytes().await.unwrap_or_default().to_vec();
+            file_data = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+                .to_vec();
         } else {
-            fields.insert(name, field.text().await.unwrap_or_default());
+            fields.insert(
+                name,
+                field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
+            );
         }
     }
 
@@ -375,12 +389,23 @@ pub async fn update_api(
     let mut file_path = String::new();
     let mut file_data: Vec<u8> = Vec::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            file_data = field.bytes().await.unwrap_or_default().to_vec();
+            file_data = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+                .to_vec();
         } else {
-            let val = field.text().await.unwrap_or_default();
+            let val = field
+                .text()
+                .await
+                .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?;
             if name == "repo_id" {
                 repo_id = val.clone();
             }
@@ -432,12 +457,26 @@ pub async fn update_aj(
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut file_data: Vec<u8> = Vec::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            file_data = field.bytes().await.unwrap_or_default().to_vec();
+            file_data = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+                .to_vec();
         } else {
-            fields.insert(name, field.text().await.unwrap_or_default());
+            fields.insert(
+                name,
+                field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
+            );
         }
     }
 
@@ -505,13 +544,27 @@ pub async fn upload_aj_token(
     let mut file_data: Vec<u8> = Vec::new();
     let mut filename = String::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
             filename = field.file_name().unwrap_or("unknown").to_string();
-            file_data = field.bytes().await.unwrap_or_default().to_vec();
+            file_data = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+                .to_vec();
         } else {
-            fields.insert(name, field.text().await.unwrap_or_default());
+            fields.insert(
+                name,
+                field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
+            );
         }
     }
 
@@ -808,12 +861,26 @@ pub async fn update_aj_token(
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut file_data: Vec<u8> = Vec::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            file_data = field.bytes().await.unwrap_or_default().to_vec();
+            file_data = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+                .to_vec();
         } else {
-            fields.insert(name, field.text().await.unwrap_or_default());
+            fields.insert(
+                name,
+                field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
+            );
         }
     }
 
@@ -933,16 +1000,30 @@ pub async fn upload_blks_api(
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut blocks: Vec<(String, Vec<u8>)> = Vec::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
             let block_id = field.file_name().unwrap_or("").to_string();
-            let data = field.bytes().await.unwrap_or_default().to_vec();
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::Internal(format!("block read error: {e}")))?
+                .to_vec();
             if !block_id.is_empty() && !data.is_empty() {
                 blocks.push((block_id, data));
             }
         } else {
-            fields.insert(name, field.text().await.unwrap_or_default());
+            fields.insert(
+                name,
+                field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
+            );
         }
     }
 

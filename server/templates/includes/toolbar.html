@@ -19,6 +19,7 @@ var isUploadDialogOpen = false;
 var dragCounter = 0;
 var isDialogMinimized = false;
 var uploadTokenUrl = '';
+var maxUploadSizeMb = {{ max_upload_size_mb }};
 
 // Bitrate tracking
 var bitrateLoaded = 0;
@@ -243,6 +244,16 @@ function processQueue() {
 }
 
 function uploadItem(item) {
+    // File size check — reject files exceeding server limit before uploading
+    if (maxUploadSizeMb > 0 && item.file.size > maxUploadSizeMb * 1024 * 1024) {
+        item.state = 'error';
+        item.error = 'File exceeds maximum upload size of ' + maxUploadSizeMb + 'MB';
+        item.xhr = null;
+        updateProgressDialog();
+        setTimeout(processQueue, 50);
+        return;
+    }
+
     item.state = 'uploading';
     updateProgressDialog();
 
@@ -273,8 +284,18 @@ function uploadItem(item) {
             item.state = 'completed';
             item.progress = 100;
         } else {
+            // Try to extract error message from server JSON response
+            var errorMsg = 'Upload failed (HTTP ' + xhr.status + ')';
+            if (xhr.status === 413) {
+                errorMsg = 'File too large — server rejected the upload';
+            } else {
+                try {
+                    var resp = JSON.parse(xhr.responseText);
+                    if (resp.error_msg) errorMsg = resp.error_msg;
+                } catch (_) {}
+            }
             item.state = 'error';
-            item.error = 'Upload failed (HTTP ' + xhr.status + ')';
+            item.error = errorMsg;
         }
         item.xhr = null;
         updateProgressDialog();
