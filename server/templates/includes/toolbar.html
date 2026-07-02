@@ -396,6 +396,14 @@ function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
             // Pass cumulative bytes (chunks so far + current progress) for accurate bitrate
             var totalUploaded = chunkIndex * CHUNK_SIZE + e.loaded;
             updateBitrate(totalUploaded);
+
+            // Last chunk: once upload reaches 100%, the server is still
+            // processing (CDC + commit).  Show "Processing…" until response.
+            if (isLast && e.loaded >= e.total) {
+                item.finalizing = true;
+                item.progress = 100;
+            }
+
             updateProgressDialog();
         }
     };
@@ -713,14 +721,26 @@ function updateProgressDialog() {
         var statusHtml, actionHtml;
 
         if (item.state === 'uploading') {
-            var pct = Math.round(item.progress);
-            statusHtml =
-                '<div class="flex items-center gap-2">' +
-                  '<span class="inline-block w-28 h-2 bg-gray-200 rounded-full overflow-hidden">' +
-                    '<span class="block h-full bg-blue-500 rounded-full" style="width:' + pct + '%;transition:width 0.3s ease"></span>' +
-                  '</span>' +
-                  '<span class="text-xs text-gray-500 font-medium w-10 text-right">' + pct + '%</span>' +
-                '</div>';
+            if (item.finalizing) {
+                // All bytes sent, server still processing (CDC + commit)
+                statusHtml =
+                    '<div class="flex items-center gap-1.5">' +
+                      '<svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24">' +
+                        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+                        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>' +
+                      '</svg>' +
+                      '<span class="text-xs text-blue-600 font-medium">Processing...</span>' +
+                    '</div>';
+            } else {
+                var pct = Math.round(item.progress);
+                statusHtml =
+                    '<div class="flex items-center gap-2">' +
+                      '<span class="inline-block w-28 h-2 bg-gray-200 rounded-full overflow-hidden">' +
+                        '<span class="block h-full bg-blue-500 rounded-full" style="width:' + pct + '%;transition:width 0.3s ease"></span>' +
+                      '</span>' +
+                      '<span class="text-xs text-gray-500 font-medium w-10 text-right">' + pct + '%</span>' +
+                    '</div>';
+            }
             actionHtml =
                 '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-200 active:scale-90 transition-all" onclick="pauseUploadItem(' + item.id + ')" title="Pause">' +
                   '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>' +
