@@ -425,7 +425,7 @@ function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
         item.xhr = null;
     };
 
-    xhr.open('POST', url);
+    xhr.open('POST', uploadFileInChunks.tempUrl);
     xhr.setRequestHeader('Content-Range', 'bytes ' + start + '-' + (end - 1) + '/' + file.size);
     xhr.send(formData);
 }
