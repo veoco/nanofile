@@ -35,28 +35,28 @@
         </svg>
     </button>
     <span class="text-gray-300 dark:text-gray-600 select-none">|</span>
-    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700"
+    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 {% if sort_field == "name" %}text-brand-500{% else %}text-gray-400{% endif %}"
             data-sort="name">
         Name
         <svg class="js-sort-arrow h-3 w-3 inline align-middle" viewBox="0 0 10 16">
-          <path class="js-sort-arrow-up" d="M5 2l4 4H1z"/>
-          <path class="js-sort-arrow-down" d="M1 9l4 4 4-4z"/>
+          <path class="js-sort-arrow-up" fill="{% if sort_field == "name" && sort_order == "asc" %}var(--color-brand-500){% else %}var(--color-gray-400){% endif %}" d="M5 2l4 4H1z"/>
+          <path class="js-sort-arrow-down" fill="{% if sort_field == "name" && sort_order == "desc" %}var(--color-brand-500){% else %}var(--color-gray-400){% endif %}" d="M1 9l4 4 4-4z"/>
         </svg>
     </button>
-    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700"
+    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 {% if sort_field == "mtime" %}text-brand-500{% else %}text-gray-400{% endif %}"
             data-sort="mtime">
         Modified
         <svg class="js-sort-arrow h-3 w-3 inline align-middle" viewBox="0 0 10 16">
-          <path class="js-sort-arrow-up" d="M5 2l4 4H1z"/>
-          <path class="js-sort-arrow-down" d="M1 9l4 4 4-4z"/>
+          <path class="js-sort-arrow-up" fill="{% if sort_field == "mtime" && sort_order == "asc" %}var(--color-brand-500){% else %}var(--color-gray-400){% endif %}" d="M5 2l4 4H1z"/>
+          <path class="js-sort-arrow-down" fill="{% if sort_field == "mtime" && sort_order == "desc" %}var(--color-brand-500){% else %}var(--color-gray-400){% endif %}" d="M1 9l4 4 4-4z"/>
         </svg>
     </button>
-    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700"
+    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 {% if sort_field == "size" %}text-brand-500{% else %}text-gray-400{% endif %}"
             data-sort="size">
         Size
         <svg class="js-sort-arrow h-3 w-3 inline align-middle" viewBox="0 0 10 16">
-          <path class="js-sort-arrow-up" d="M5 2l4 4H1z"/>
-          <path class="js-sort-arrow-down" d="M1 9l4 4 4-4z"/>
+          <path class="js-sort-arrow-up" fill="{% if sort_field == "size" && sort_order == "asc" %}var(--color-brand-500){% else %}var(--color-gray-400){% endif %}" d="M5 2l4 4H1z"/>
+          <path class="js-sort-arrow-down" fill="{% if sort_field == "size" && sort_order == "desc" %}var(--color-brand-500){% else %}var(--color-gray-400){% endif %}" d="M1 9l4 4 4-4z"/>
         </svg>
     </button>
     <div class="flex-1 min-w-0"></div>
