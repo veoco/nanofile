@@ -43,33 +43,8 @@ pub fn generate_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError
 }
 
 /// Check whether a file extension corresponds to a supported thumbnail format.
-///
-/// This should stay in sync with the set of image formats enabled by the
-/// `image` crate via `default-formats` + `avif-native`.
 pub fn is_supported_image_ext(ext: &str) -> bool {
-    matches!(
-        ext,
-        "avif"
-            | "bmp"
-            | "dds"
-            | "exr"
-            | "fif"
-            | "gif"
-            | "hdr"
-            | "ico"
-            | "jpg"
-            | "jpeg"
-            | "png"
-            | "pnm"
-            | "ppm"
-            | "pgm"
-            | "pbm"
-            | "qoi"
-            | "tga"
-            | "tif"
-            | "tiff"
-            | "webp"
-    )
+    matches!(ext, "bmp" | "gif" | "ico" | "jpg" | "jpeg" | "png" | "webp")
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────
