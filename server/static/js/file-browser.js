@@ -34,6 +34,8 @@
     }
   }
 
+  window.setMode = setMode;
+
   // Event delegation on document so view toggle works after partial refresh
   document.addEventListener("click", function (e) {
     var btn = e.target.closest(".js-view-list");
