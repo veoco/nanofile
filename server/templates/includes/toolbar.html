@@ -393,7 +393,9 @@ function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
             var baseProgress = chunkIndex / totalChunks;
             var chunkPart = (e.loaded / e.total) / totalChunks;
             item.progress = Math.round((baseProgress + chunkPart) * 100);
-            updateBitrate(e.loaded);
+            // Pass cumulative bytes (chunks so far + current progress) for accurate bitrate
+            var totalUploaded = chunkIndex * CHUNK_SIZE + e.loaded;
+            updateBitrate(totalUploaded);
             updateProgressDialog();
         }
     };
