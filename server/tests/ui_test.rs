@@ -422,6 +422,99 @@ async fn test_partial_list_returns_fragment() {
 }
 
 #[tokio::test]
+async fn test_file_list_sort_by_name() {
+    let fixture = TestFixture::new().await;
+    let client = login_client(&fixture).await;
+
+    // Upload files with different names
+    fixture
+        .client
+        .upload_file(&fixture.api_token, &fixture.repo_id, "/", "c.txt", b"c")
+        .await;
+    fixture
+        .client
+        .upload_file(&fixture.api_token, &fixture.repo_id, "/", "a.txt", b"a")
+        .await;
+    fixture
+        .client
+        .upload_file(&fixture.api_token, &fixture.repo_id, "/", "b.txt", b"b")
+        .await;
+
+    // Request partial list sorted by name asc
+    let resp = client
+        .get(format!(
+            "{}/libraries/{}/files?partial=1&sort=name&sort_order=asc",
+            fixture.server.base_url, fixture.repo_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    let pos_a = body.find("a.txt").unwrap();
+    let pos_b = body.find("b.txt").unwrap();
+    let pos_c = body.find("c.txt").unwrap();
+    assert!(
+        pos_a < pos_b && pos_b < pos_c,
+        "files should appear in asc order: a, b, c"
+    );
+
+    // Request sorted by name desc
+    let resp = client
+        .get(format!(
+            "{}/libraries/{}/files?partial=1&sort=name&sort_order=desc",
+            fixture.server.base_url, fixture.repo_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    let body = resp.text().await.unwrap();
+    let pos_a = body.find("a.txt").unwrap();
+    let pos_b = body.find("b.txt").unwrap();
+    let pos_c = body.find("c.txt").unwrap();
+    assert!(
+        pos_c < pos_b && pos_b < pos_a,
+        "files should appear in desc order: c, b, a"
+    );
+}
+
+#[tokio::test]
+async fn test_file_list_sort_by_mtime() {
+    let fixture = TestFixture::new().await;
+    let client = login_client(&fixture).await;
+
+    // Upload files — the fixture repo already has a commit, so mtimes
+    // will reflect upload order (newer files have higher mtime).
+    fixture
+        .client
+        .upload_file(&fixture.api_token, &fixture.repo_id, "/", "old.txt", b"old")
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await; // ensure distinct mtime
+    fixture
+        .client
+        .upload_file(&fixture.api_token, &fixture.repo_id, "/", "new.txt", b"new")
+        .await;
+
+    // Request sorted by mtime desc (newest first)
+    let resp = client
+        .get(format!(
+            "{}/libraries/{}/files?partial=1&sort=mtime&sort_order=desc",
+            fixture.server.base_url, fixture.repo_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    let pos_new = body.find("new.txt").unwrap();
+    let pos_old = body.find("old.txt").unwrap();
+    assert!(
+        pos_new < pos_old,
+        "newer file should appear before older when sorted by mtime desc"
+    );
+}
+
+#[tokio::test]
 async fn test_download_file_returns_content() {
     let fixture = TestFixture::new().await;
 

@@ -41,6 +41,8 @@ pub struct FileBrowserTemplate {
     pub current_repo_id: Option<String>,
     /// Maximum upload file size in MB, from server config.
     pub max_upload_size_mb: u64,
+    pub sort_field: String,
+    pub sort_order: String,
 }
 
 #[derive(Template)]
@@ -58,6 +60,8 @@ pub struct FileBrowserCoreTemplate {
     /// "all" = render both views (full page), "list" = only list, "grid" = only grid
     pub render_view: &'static str,
     pub csrf_token: String,
+    pub sort_field: String,
+    pub sort_order: String,
 }
 
 #[derive(Template)]
@@ -118,6 +122,31 @@ pub struct FileEntry {
     pub image_thumbnail_url: Option<String>,
     /// Thumbnail URL for image files at grid-view scale (256px), None otherwise.
     pub image_thumbnail_url_large: Option<String>,
+}
+
+/// Sort file entries: directories always first, then by the specified field and order.
+/// Default field is "name", default order is "asc".
+pub fn sort_entries(entries: &mut [FileEntry], sort: &str, sort_order: &str) {
+    entries.sort_by(|a, b| {
+        // Dirs always before files
+        if a.entry_type != b.entry_type {
+            return if a.entry_type == "dir" {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        let cmp = match sort {
+            "mtime" => a.mtime.cmp(&b.mtime),
+            "size" => a.size.cmp(&b.size),
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        };
+        if sort_order == "desc" {
+            cmp.reverse()
+        } else {
+            cmp
+        }
+    });
 }
 
 /// Returns true if the file extension is one that the thumbnail service supports
@@ -269,6 +298,8 @@ pub struct FileBrowserQuery {
     pub view: Option<String>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,
+    pub sort: Option<String>,       // "name" | "mtime" | "size"
+    pub sort_order: Option<String>, // "asc" | "desc"
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -414,18 +445,10 @@ async fn file_browser_inner(
         })
         .collect();
 
-    // Sort: directories first, then by name
-    entries.sort_by(|a, b| {
-        if a.entry_type != b.entry_type {
-            if a.entry_type == "dir" {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
-            }
-        } else {
-            a.name.cmp(&b.name)
-        }
-    });
+    // Sort: directories first, then by configurable field and order
+    let sort_field = query.sort.as_deref().unwrap_or("name");
+    let sort_order = query.sort_order.as_deref().unwrap_or("asc");
+    sort_entries(&mut entries, sort_field, sort_order);
 
     // In-memory pagination (FS tree is content-addressed, can't SQL-paginate)
     let total = entries.len() as i64;
@@ -484,6 +507,8 @@ async fn file_browser_inner(
             page: page as u32,
             render_view,
             csrf_token,
+            sort_field: sort_field.to_string(),
+            sort_order: sort_order.to_string(),
         };
         let html = tpl
             .render()
@@ -511,6 +536,8 @@ async fn file_browser_inner(
             left_panel_repos,
             current_repo_id,
             max_upload_size_mb: state.config.server.max_upload_size_mb,
+            sort_field: sort_field.to_string(),
+            sort_order: sort_order.to_string(),
         };
         let html = tpl
             .render()
@@ -770,4 +797,147 @@ fn mime_guess(filename: &str) -> &'static str {
 fn urlencode_path(path: &str) -> String {
     // Encode everything except unreserved characters (RFC 3986)
     percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_entry(name: &str, entry_type: &str, size: i64, mtime: i64) -> FileEntry {
+        FileEntry {
+            name: name.to_string(),
+            entry_type: entry_type.to_string(),
+            size,
+            size_display: String::new(),
+            mtime,
+            mtime_display: String::new(),
+            icon_color: "",
+            relative_path: String::new(),
+            is_previewable: false,
+            starred: false,
+            extension: None,
+            image_thumbnail_url: None,
+            image_thumbnail_url_large: None,
+        }
+    }
+
+    #[test]
+    fn test_sort_default_name_asc() {
+        let mut entries = vec![
+            make_entry("b", "file", 0, 3),
+            make_entry("a", "dir", 0, 2),
+            make_entry("c", "file", 0, 1),
+            make_entry("d", "dir", 0, 4),
+        ];
+        sort_entries(&mut entries, "name", "asc");
+        assert_eq!(entries[0].name, "a"); // dir first
+        assert_eq!(entries[1].name, "d"); // dir second
+        assert_eq!(entries[2].name, "b"); // file
+        assert_eq!(entries[3].name, "c");
+    }
+
+    #[test]
+    fn test_sort_name_desc() {
+        let mut entries = vec![
+            make_entry("b", "file", 0, 0),
+            make_entry("a", "file", 0, 0),
+            make_entry("c", "dir", 0, 0),
+        ];
+        sort_entries(&mut entries, "name", "desc");
+        assert_eq!(entries[0].name, "c"); // dir first
+        assert_eq!(entries[1].name, "b"); // files: desc order
+        assert_eq!(entries[2].name, "a");
+    }
+
+    #[test]
+    fn test_sort_mtime_asc() {
+        let mut entries = vec![
+            make_entry("old", "file", 0, 10),
+            make_entry("new", "file", 0, 100),
+            make_entry("dir1", "dir", 0, 50),
+        ];
+        sort_entries(&mut entries, "mtime", "asc");
+        assert_eq!(entries[0].name, "dir1");
+        assert_eq!(entries[1].name, "old"); // file with mtime=10
+        assert_eq!(entries[2].name, "new"); // file with mtime=100
+    }
+
+    #[test]
+    fn test_sort_mtime_desc() {
+        let mut entries = vec![
+            make_entry("old", "file", 0, 10),
+            make_entry("new", "file", 0, 100),
+            make_entry("dir1", "dir", 0, 50),
+        ];
+        sort_entries(&mut entries, "mtime", "desc");
+        assert_eq!(entries[0].name, "dir1");
+        assert_eq!(entries[1].name, "new"); // file with mtime=100
+        assert_eq!(entries[2].name, "old"); // file with mtime=10
+    }
+
+    #[test]
+    fn test_sort_size_asc() {
+        let mut entries = vec![
+            make_entry("big", "file", 1000, 0),
+            make_entry("small", "file", 10, 0),
+            make_entry("dir1", "dir", 999, 0),
+        ];
+        sort_entries(&mut entries, "size", "asc");
+        assert_eq!(entries[0].name, "dir1");
+        assert_eq!(entries[1].name, "small");
+        assert_eq!(entries[2].name, "big");
+    }
+
+    #[test]
+    fn test_sort_size_desc() {
+        let mut entries = vec![
+            make_entry("big", "file", 1000, 0),
+            make_entry("small", "file", 10, 0),
+            make_entry("dir1", "dir", 999, 0),
+        ];
+        sort_entries(&mut entries, "size", "desc");
+        assert_eq!(entries[0].name, "dir1");
+        assert_eq!(entries[1].name, "big");
+        assert_eq!(entries[2].name, "small");
+    }
+
+    #[test]
+    fn test_sort_dirs_always_first() {
+        let mut entries = vec![
+            make_entry("z_file", "file", 0, 0),
+            make_entry("a_dir", "dir", 0, 0),
+            make_entry("m_dir", "dir", 0, 0),
+        ];
+        sort_entries(&mut entries, "name", "asc");
+        assert_eq!(entries[0].name, "a_dir");
+        assert_eq!(entries[1].name, "m_dir");
+        assert_eq!(entries[2].name, "z_file");
+
+        // Also verify with mtime sort
+        sort_entries(&mut entries, "mtime", "desc");
+        assert_eq!(entries[0].entry_type, "dir");
+        assert_eq!(entries[1].entry_type, "dir");
+        assert_eq!(entries[2].entry_type, "file");
+    }
+
+    #[test]
+    fn test_sort_case_insensitive() {
+        let mut entries = vec![
+            make_entry("B", "file", 0, 0),
+            make_entry("a", "file", 0, 0),
+            make_entry("c", "file", 0, 0),
+        ];
+        sort_entries(&mut entries, "name", "asc");
+        assert_eq!(entries[0].name, "a");
+        assert_eq!(entries[1].name, "B");
+        assert_eq!(entries[2].name, "c");
+    }
+
+    #[test]
+    fn test_sort_invalid_field_falls_back_to_name() {
+        let mut entries = vec![make_entry("b", "file", 0, 0), make_entry("a", "file", 0, 0)];
+        sort_entries(&mut entries, "invalid_field", "asc");
+        assert_eq!(entries[0].name, "a");
+        assert_eq!(entries[1].name, "b");
+    }
 }

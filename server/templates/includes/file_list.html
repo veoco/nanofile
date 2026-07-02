@@ -20,8 +20,10 @@
     {% endfor %}
 </div>
 
-<!-- View toggle + selection actions -->
-<div class="flex items-center gap-1 px-4 pt-2 pb-1">
+<!-- View toggle + sort + selection actions -->
+<div class="js-sort-bar flex items-center gap-1 px-4 pt-2 pb-1"
+     data-sort-field="{{ sort_field }}"
+     data-sort-order="{{ sort_order }}">
     <button class="js-view-list p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 text-brand-500" title="List view" aria-label="Switch to list view">
         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
@@ -30,6 +32,31 @@
     <button class="js-view-grid p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 text-gray-400" title="Grid view" aria-label="Switch to grid view">
         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/>
+        </svg>
+    </button>
+    <span class="text-gray-300 dark:text-gray-600 select-none">|</span>
+    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700"
+            data-sort="name">
+        Name
+        <svg class="js-sort-arrow h-3 w-3 inline align-middle" viewBox="0 0 10 16">
+          <path class="js-sort-arrow-up" d="M5 2l4 4H1z"/>
+          <path class="js-sort-arrow-down" d="M1 9l4 4 4-4z"/>
+        </svg>
+    </button>
+    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700"
+            data-sort="mtime">
+        Modified
+        <svg class="js-sort-arrow h-3 w-3 inline align-middle" viewBox="0 0 10 16">
+          <path class="js-sort-arrow-up" d="M5 2l4 4H1z"/>
+          <path class="js-sort-arrow-down" d="M1 9l4 4 4-4z"/>
+        </svg>
+    </button>
+    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700"
+            data-sort="size">
+        Size
+        <svg class="js-sort-arrow h-3 w-3 inline align-middle" viewBox="0 0 10 16">
+          <path class="js-sort-arrow-up" d="M5 2l4 4H1z"/>
+          <path class="js-sort-arrow-down" d="M1 9l4 4 4-4z"/>
         </svg>
     </button>
     <div class="flex-1 min-w-0"></div>

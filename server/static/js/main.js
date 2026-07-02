@@ -705,6 +705,8 @@
     var nextPage = page + 1;
     var sep = window.location.pathname.indexOf("?") !== -1 ? "&" : "?";
     var url = window.location.pathname + sep + "partial=1&view=" + view + "&page=" + nextPage;
+    var sort = (typeof window.getSort === "function") ? window.getSort() : null;
+    if (sort) url += '&sort=' + sort.sort + '&sort_order=' + sort.sort_order;
 
     try {
       var resp = await fetch(url);

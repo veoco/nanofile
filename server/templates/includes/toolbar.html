@@ -860,6 +860,10 @@ async function refreshFileList() {
     var url = window.location.pathname;
     var sep = url.indexOf('?') !== -1 ? '&' : '?';
     url = url + sep + 'partial=1&view=' + getVisibleView();
+    var sort = (typeof window.getSort === "function") ? window.getSort() : null;
+    if (sort) {
+        url += '&sort=' + sort.sort + '&sort_order=' + sort.sort_order;
+    }
     try {
         var resp = await fetch(url);
         if (resp.ok) {
@@ -867,6 +871,7 @@ async function refreshFileList() {
             var container = document.querySelector('.file-list-container');
             if (container) {
                 container.outerHTML = html;
+                if (typeof window.initSortUI === "function") window.initSortUI();
             } else {
                 window.location.reload();
             }

@@ -46,6 +46,58 @@
   var mode = localStorage.getItem("fileViewMode") || "list";
   setMode(mode);
 
+  // ─── Sort controls ──────────────────────────────────────────────────
+  function applySortUI(field, order) {
+    var sortBar = document.querySelector(".js-sort-bar");
+    if (sortBar) {
+      sortBar.dataset.sortField = field;
+      sortBar.dataset.sortOrder = order;
+      var btns = sortBar.querySelectorAll(".js-sort-btn");
+      for (var i = 0; i < btns.length; i++) {
+        var f = btns[i].dataset.sort;
+        var isActive = f === field;
+        var upArrow = btns[i].querySelector(".js-sort-arrow-up");
+        var downArrow = btns[i].querySelector(".js-sort-arrow-down");
+        if (upArrow) upArrow.style.fill = isActive && order === "asc" ? "var(--color-brand-500)" : "var(--color-gray-400)";
+        if (downArrow) downArrow.style.fill = isActive && order === "desc" ? "var(--color-brand-500)" : "var(--color-gray-400)";
+        btns[i].classList.toggle("text-brand-500", isActive);
+        btns[i].classList.toggle("text-gray-400", !isActive);
+      }
+    }
+  }
+
+  function initSortUI() {
+    var sortBar = document.querySelector(".js-sort-bar");
+    if (!sortBar) return;
+    applySortUI(sortBar.dataset.sortField || "name", sortBar.dataset.sortOrder || "asc");
+  }
+  window.initSortUI = initSortUI;
+
+  window.getSort = function () {
+    var sortBar = document.querySelector(".js-sort-bar");
+    if (sortBar) {
+      return { sort: sortBar.dataset.sortField || "name", sort_order: sortBar.dataset.sortOrder || "asc" };
+    }
+    return { sort: localStorage.getItem("fileSortField") || "name", sort_order: localStorage.getItem("fileSortOrder") || "asc" };
+  };
+
+  function setSort(field) {
+    var s = window.getSort();
+    var order = field === s.sort ? (s.sort_order === "asc" ? "desc" : "asc") : "asc";
+    localStorage.setItem("fileSortField", field);
+    localStorage.setItem("fileSortOrder", order);
+    applySortUI(field, order);
+    if (typeof window.refreshFileList === "function") window.refreshFileList();
+  }
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-sort-btn");
+    if (btn) { setSort(btn.dataset.sort); return; }
+  });
+
+  // Initialize sort UI from server-rendered data attributes
+  initSortUI();
+
   // ─── Skeleton loading ────────────────────────────────────────────────
   var skeleton = document.querySelector(".js-skeleton");
   var fileListContainer = document.querySelector(".file-list-container");
