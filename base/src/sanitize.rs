@@ -58,6 +58,29 @@ pub fn validate_name(name: &str) -> Result<(), &'static str> {
 /// Must start with `/`, contain no null bytes, and have no
 /// traversal components (`..`, `.` as segments).
 pub fn validate_path(path: &str) -> Result<(), &'static str> {
+    // Use canonicalize_path for validation - if it succeeds, path is valid
+    canonicalize_path(path)?;
+    Ok(())
+}
+
+/// Canonicalize a virtual path by resolving `.` and `..` components.
+///
+/// Returns the normalized path with all `.` components removed and `..`
+/// components resolved. Returns an error if the path attempts to traverse
+/// beyond the root directory.
+///
+/// # Examples
+///
+/// ```
+/// use base::sanitize::canonicalize_path;
+///
+/// assert_eq!(canonicalize_path("/").unwrap(), "/");
+/// assert_eq!(canonicalize_path("/foo/bar").unwrap(), "/foo/bar");
+/// assert_eq!(canonicalize_path("/foo/../bar").unwrap(), "/bar");
+/// assert_eq!(canonicalize_path("/foo/./bar").unwrap(), "/foo/bar");
+/// assert!(canonicalize_path("/../etc").is_err());
+/// ```
+pub fn canonicalize_path(path: &str) -> Result<String, &'static str> {
     if path.is_empty() {
         return Err("path must not be empty");
     }
@@ -70,12 +93,104 @@ pub fn validate_path(path: &str) -> Result<(), &'static str> {
     if path.contains('\0') {
         return Err("path contains null byte");
     }
-    for segment in path.split('/') {
-        if segment == ".." || segment == "." {
-            return Err("path traversal detected");
+
+    use std::path::Component;
+
+    let mut normalized = Vec::new();
+
+    for component in std::path::Path::new(path).components() {
+        match component {
+            Component::RootDir => {
+                // Root is implicit in our format
+            }
+            Component::CurDir => {
+                // Ignore current directory
+            }
+            Component::Normal(name) => {
+                // Validate the component does not contain dangerous patterns
+                if let Some(name_str) = name.to_str() {
+                    if name_str == "." || name_str == ".." {
+                        return Err("path contains unnormalized components");
+                    }
+                    // Check for invalid filename characters in each component
+                    for ch in INVALID_FILENAME_CHARS {
+                        if name_str.contains(*ch) {
+                            return Err("path contains invalid characters");
+                        }
+                    }
+                    normalized.push(name_str.to_string());
+                } else {
+                    return Err("path contains invalid unicode");
+                }
+            }
+            Component::ParentDir => {
+                // Handle parent directory traversal
+                if normalized.pop().is_none() {
+                    return Err("path traversal beyond root");
+                }
+            }
+            _ => {
+                return Err("unsupported path component");
+            }
         }
     }
-    Ok(())
+
+    if normalized.is_empty() {
+        Ok("/".to_string())
+    } else {
+        Ok(format!("/{}", normalized.join("/")))
+    }
+}
+
+/// Safely join a base path with a relative path component.
+///
+/// Both paths are canonicalized, and the result is guaranteed to be a valid
+/// path within the repository. Path traversal attempts that would escape
+/// the root are detected and rejected.
+///
+/// # Arguments
+///
+/// * `base` - The base directory path (must start with `/`)
+/// * `relative` - The relative path to join (may contain `/` separators)
+///
+/// # Returns
+///
+/// Returns the canonicalized combined path, or an error if:
+/// - The base path is invalid
+/// - The combined path attempts to traverse beyond the root
+/// - The path contains invalid characters
+///
+/// # Examples
+///
+/// ```
+/// use base::sanitize::safe_join_path;
+///
+/// assert_eq!(safe_join_path("/", "foo").unwrap(), "/foo");
+/// assert_eq!(safe_join_path("/bar", "foo").unwrap(), "/bar/foo");
+/// assert_eq!(safe_join_path("/bar", "../foo").unwrap(), "/foo");
+/// assert!(safe_join_path("/bar", "../../../etc").is_err());
+/// ```
+pub fn safe_join_path(base: &str, relative: &str) -> Result<String, &'static str> {
+    // Validate and canonicalize the base path
+    let base = canonicalize_path(base)?;
+
+    // Handle empty relative path
+    if relative.trim().is_empty() {
+        return Ok(base);
+    }
+
+    // Ensure relative does not start with / (treat it as relative)
+    let relative = relative.trim_start_matches('/');
+
+    // Build combined path
+    let combined = if base == "/" {
+        format!("/{}", relative)
+    } else {
+        format!("{}/{}", base, relative)
+    };
+
+    // Validate and canonicalize the combined path
+    canonicalize_path(&combined)
 }
 
 #[cfg(test)]
@@ -115,7 +230,89 @@ mod tests {
         assert!(validate_path("").is_err());
         assert!(validate_path("file.txt").is_err());
         assert!(validate_path("/../etc").is_err());
-        assert!(validate_path("/./foo").is_err());
+        // Note: "/./foo" is now valid because canonicalize_path normalizes it to "/foo"
         assert!(validate_path("/foo\0bar").is_err());
+    }
+
+    #[test]
+    fn test_canonicalize_path_basic() {
+        assert_eq!(canonicalize_path("/").unwrap(), "/");
+        assert_eq!(canonicalize_path("/foo").unwrap(), "/foo");
+        assert_eq!(canonicalize_path("/foo/bar").unwrap(), "/foo/bar");
+        assert_eq!(canonicalize_path("/foo/bar/baz").unwrap(), "/foo/bar/baz");
+    }
+
+    #[test]
+    fn test_canonicalize_path_current_dir() {
+        assert_eq!(canonicalize_path("/foo/./bar").unwrap(), "/foo/bar");
+        assert_eq!(canonicalize_path("/./foo/bar").unwrap(), "/foo/bar");
+        assert_eq!(canonicalize_path("/foo/bar/.").unwrap(), "/foo/bar");
+        assert_eq!(canonicalize_path("/././foo").unwrap(), "/foo");
+    }
+
+    #[test]
+    fn test_canonicalize_path_parent_dir() {
+        assert_eq!(canonicalize_path("/foo/../bar").unwrap(), "/bar");
+        assert_eq!(canonicalize_path("/a/b/../c").unwrap(), "/a/c");
+        assert_eq!(canonicalize_path("/a/b/c/../../d").unwrap(), "/a/d");
+        assert_eq!(canonicalize_path("/a/../b/../c").unwrap(), "/c");
+        assert_eq!(canonicalize_path("/a/b/c/../../../d").unwrap(), "/d");
+    }
+
+    #[test]
+    fn test_canonicalize_path_mixed() {
+        assert_eq!(canonicalize_path("/a/./b/../c/./d").unwrap(), "/a/c/d");
+        assert_eq!(canonicalize_path("/a/b/c/../.././d").unwrap(), "/a/d");
+    }
+
+    #[test]
+    fn test_canonicalize_path_traversal_beyond_root() {
+        assert!(canonicalize_path("/../etc").is_err());
+        assert!(canonicalize_path("/foo/../../../etc").is_err());
+        assert!(canonicalize_path("/a/b/c/../../../../d").is_err());
+    }
+
+    #[test]
+    fn test_canonicalize_path_empty_and_invalid() {
+        assert!(canonicalize_path("").is_err());
+        assert!(canonicalize_path("foo/bar").is_err()); // No leading /
+        assert!(canonicalize_path("/foo\0bar").is_err());
+        assert!(canonicalize_path(&format!("/{}", "x".repeat(MAX_PATH_LEN + 1))).is_err());
+    }
+
+    #[test]
+    fn test_safe_join_path_basic() {
+        assert_eq!(safe_join_path("/", "foo").unwrap(), "/foo");
+        assert_eq!(safe_join_path("/bar", "foo").unwrap(), "/bar/foo");
+        assert_eq!(safe_join_path("/bar/", "foo/").unwrap(), "/bar/foo");
+        assert_eq!(safe_join_path("/a/b", "c/d").unwrap(), "/a/b/c/d");
+    }
+
+    #[test]
+    fn test_safe_join_path_with_parent_dir() {
+        assert_eq!(safe_join_path("/bar", "../foo").unwrap(), "/foo");
+        assert_eq!(safe_join_path("/a/b", "../c").unwrap(), "/a/c");
+        assert_eq!(safe_join_path("/a/b/c", "../../d").unwrap(), "/a/d");
+    }
+
+    #[test]
+    fn test_safe_join_path_traversal_blocked() {
+        assert!(safe_join_path("/bar", "../../../etc").is_err());
+        assert!(safe_join_path("/a", "../../b").is_err());
+        assert!(safe_join_path("/", "../etc").is_err());
+    }
+
+    #[test]
+    fn test_safe_join_path_empty_relative() {
+        assert_eq!(safe_join_path("/foo", "").unwrap(), "/foo");
+        assert_eq!(safe_join_path("/", "").unwrap(), "/");
+        assert_eq!(safe_join_path("/foo", "   ").unwrap(), "/foo");
+    }
+
+    #[test]
+    fn test_safe_join_path_absolute_relative() {
+        // When relative starts with /, we strip it and treat as relative to base
+        assert_eq!(safe_join_path("/bar", "/foo").unwrap(), "/bar/foo");
+        assert_eq!(safe_join_path("/a/b", "/c/d").unwrap(), "/a/b/c/d");
     }
 }

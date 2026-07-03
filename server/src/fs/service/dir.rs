@@ -193,6 +193,14 @@ pub(crate) async fn create_dir_by_path(
     repo_id: &str,
     path: &str,
 ) -> Result<(), AppError> {
+    // Validate and canonicalize the path to prevent directory traversal attacks
+    let path = crate::sanitize::canonicalize_path(path).map_err(|e| {
+        AppError::BadRequest(format!(
+            "Invalid directory path: {}. Please ensure the path does not contain '..' components that would escape the repository.",
+            e
+        ))
+    })?;
+
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     if parts.is_empty() {
         return Err(AppError::BadRequest("invalid path".into()));
@@ -255,7 +263,7 @@ pub(crate) async fn create_dir_by_path(
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     activity_log::log_activity(
-        db, repo_id, "create", "dir", path, user_id, None, None, None, None, None,
+        db, repo_id, "create", "dir", &path, user_id, None, None, None, None, None,
     )
     .await;
 

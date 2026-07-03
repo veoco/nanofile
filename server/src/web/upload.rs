@@ -50,16 +50,19 @@ async fn get_encryption_key_for_repo(
 /// Compute the actual target directory given the base `parent_dir` and an
 /// optional `relative_path` (e.g. `"myfolder/sub/"` from a folder upload).
 /// When `relative_path` is empty, returns `parent_dir` unchanged.
-fn compute_target_dir(parent_dir: &str, relative_path: &str) -> String {
-    let rel = relative_path.trim_end_matches('/');
-    if rel.is_empty() {
-        return parent_dir.to_string();
-    }
-    if parent_dir == "/" {
-        format!("/{}", rel)
-    } else {
-        format!("{}/{}", parent_dir.trim_end_matches('/'), rel)
-    }
+///
+/// # Errors
+///
+/// Returns `AppError::BadRequest` if the resulting path contains traversal
+/// components that would escape the repository root, or if the path contains
+/// invalid characters.
+fn compute_target_dir(parent_dir: &str, relative_path: &str) -> Result<String, AppError> {
+    crate::sanitize::safe_join_path(parent_dir, relative_path).map_err(|e| {
+        AppError::BadRequest(format!(
+            "Invalid path: {}. Please ensure the path does not contain '..' components that would escape the repository.",
+            e
+        ))
+    })
 }
 
 // ─── Content-Range / chunked upload helpers ───────────────────────────────
@@ -481,7 +484,7 @@ pub async fn upload_aj(
         .get("relative_path")
         .map(|s| s.as_str())
         .unwrap_or("");
-    let target_dir = compute_target_dir(parent_dir, relative_path);
+    let target_dir = compute_target_dir(parent_dir, relative_path)?;
 
     if !file_data.is_empty() {
         // Try chunked upload path first (returns Some if Content-Range was present)
@@ -745,7 +748,7 @@ pub async fn upload_aj_token(
         .get("relative_path")
         .map(|s| s.as_str())
         .unwrap_or("");
-    let target_dir = compute_target_dir(parent_dir, relative_path);
+    let target_dir = compute_target_dir(parent_dir, relative_path)?;
 
     if !file_data.is_empty() {
         // Try chunked upload path first
@@ -846,7 +849,7 @@ pub async fn upload_api(
         .get("relative_path")
         .cloned()
         .unwrap_or_default();
-    let target_dir = compute_target_dir(&parent_dir, &relative_path);
+    let target_dir = compute_target_dir(&parent_dir, &relative_path)?;
     let filename = parsed.file_name.unwrap_or_default();
 
     if let Some(data) = parsed.file_data
@@ -938,7 +941,7 @@ pub async fn update_api_handler(
             } else {
                 raw_parent
             };
-            let target_dir = compute_target_dir(parent, &relative_path);
+            let target_dir = compute_target_dir(parent, &relative_path)?;
             let name = raw_name.to_string();
 
             // Get old file size for incremental size adjustment.
@@ -1004,7 +1007,7 @@ pub async fn update_api_handler(
             .get("parent_dir")
             .cloned()
             .unwrap_or(info.parent_dir);
-        let target_dir = compute_target_dir(&parent_dir, &relative_path);
+        let target_dir = compute_target_dir(&parent_dir, &relative_path)?;
 
         if !filename.is_empty() {
             let resp = upload_and_build_response(
@@ -1088,7 +1091,7 @@ pub async fn update_aj_token(
             &target_file[..slash_pos]
         };
         let name = target_file[slash_pos + 1..].to_string();
-        let target_dir = compute_target_dir(raw_parent, &relative_path);
+        let target_dir = compute_target_dir(raw_parent, &relative_path)?;
 
         // Get old file size for incremental size adjustment.
         let fp = if target_dir == "/" {
@@ -1264,11 +1267,7 @@ pub async fn upload_blks_api(
             .get("relative_path")
             .map(|s| s.as_str())
             .unwrap_or("");
-        let target_dir = if relative_path.is_empty() {
-            crate::common::util::normalize_path(parent_dir)
-        } else {
-            compute_target_dir(parent_dir, relative_path)
-        };
+        let target_dir = compute_target_dir(parent_dir, relative_path)?;
         let now = chrono::Utc::now().timestamp();
 
         // Get old file size for incremental size adjustment
