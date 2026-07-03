@@ -126,6 +126,8 @@ pub struct FileEntry {
     pub image_thumbnail_url_large: Option<String>,
     /// Whether this file is a video (used for gallery view rendering).
     pub is_video: bool,
+    /// Email of the user who last modified this entry.
+    pub modifier_email: String,
 }
 
 /// A group of file entries belonging to the same calendar month, used by gallery view.
@@ -495,6 +497,7 @@ async fn file_browser_inner(
                 image_thumbnail_url: thumb_url,
                 image_thumbnail_url_large: thumb_url_large,
                 is_video: entry_is_video,
+                modifier_email: e.modifier.clone(),
             }
         })
         .collect();
@@ -891,6 +894,7 @@ mod tests {
             image_thumbnail_url: None,
             image_thumbnail_url_large: None,
             is_video: false,
+            modifier_email: String::new(),
         }
     }
 

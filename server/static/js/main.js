@@ -403,6 +403,7 @@
         headers: { "X-CSRFToken": csrfToken },
       });
       if (res.ok) {
+        clearSelection();
         if (window.refreshFileList) window.refreshFileList();
         else window.location.reload();
       } else {
@@ -591,9 +592,10 @@
       row.classList.remove("selected");
     });
     updateSelectionBar();
+    if (typeof window.resetRightPanel === "function") window.resetRightPanel();
   }
 
-  // Row click — toggle selection (skip <a> links and buttons)
+  // Row click — toggle selection + open right panel (skip <a> links and buttons)
   document.addEventListener("click", function (e) {
     var row = e.target.closest(".js-entry-row");
     if (!row) return;
@@ -606,9 +608,36 @@
     if (selectedPaths.has(name)) {
       selectedPaths.delete(name);
       row.classList.remove("selected");
+      // If nothing selected, reset panel to placeholder
+      if (selectedPaths.size === 0 && typeof window.resetRightPanel === "function") {
+        window.resetRightPanel();
+      }
     } else {
       selectedPaths.add(name);
       row.classList.add("selected");
+
+      // Open/update right panel with this row's data
+      if (typeof window.openRightPanel === "function") {
+        var downloadUrl = row.dataset.type !== "dir"
+          ? "/libraries/" + row.dataset.repoId + "/files/" + row.dataset.path + "?dl=1"
+          : "";
+        window.openRightPanel({
+          name: row.dataset.name,
+          type: row.dataset.type,
+          size: row.dataset.size,
+          sizeDisplay: row.dataset.sizeDisplay,
+          mtime: row.dataset.mtime,
+          mtimeDisplay: row.dataset.mtimeDisplay,
+          starred: row.dataset.starred === "true",
+          extension: row.dataset.extension,
+          path: row.dataset.path,
+          repoId: row.dataset.repoId,
+          modifierEmail: row.dataset.modifierEmail,
+          thumbnailUrl: row.dataset.thumbnailUrl,
+          isPreviewable: row.dataset.isPreviewable === "true",
+          downloadUrl: downloadUrl,
+        });
+      }
     }
     updateSelectionBar();
   });

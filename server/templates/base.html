@@ -27,18 +27,13 @@
                 {% include "includes/left_panel.html" %}
             </aside>
 
-            <!-- Main content — file browser / page content -->
+            {% block main_layout %}
+            <!-- Main content — page content -->
             <main role="main" aria-label="Main content"
                   class="flex-1 overflow-y-auto p-4 sm:p-6 pb-20 lg:pb-6">
                 {% block content %}{% endblock %}
             </main>
-
-            <!-- Right Panel — file details (hidden by default) -->
-            <aside class="js-right-panel hidden lg:flex-col flex-shrink-0 bg-white dark:bg-surface-800 border-l border-gray-200 dark:border-gray-700 overflow-y-auto transition-all duration-300"
-                   style="width: 0; overflow: hidden;"
-                   data-expanded-width="300px">
-                {% include "includes/right_panel.html" %}
-            </aside>
+            {% endblock %}
         </div>
     </div>
 

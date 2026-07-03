@@ -6,11 +6,21 @@
 <meta name="repo-id" content="{{ repo_id }}">
 {% endblock %}
 
-{% block content %}
-{% include "includes/breadcrumb.html" %}
+{% block main_layout %}
+<!-- Right Panel — file details (rendered first to reserve space in progressive rendering) -->
+<aside class="js-right-panel lg:flex lg:flex-col flex-shrink-0 bg-white dark:bg-surface-800 border-l border-gray-200 dark:border-gray-700 overflow-y-auto max-lg:hidden sticky top-0 order-10"
+       style="width: 300px;">
+    {% include "includes/right_panel.html" %}
+</aside>
 
-<div id="drop-zone" data-drop-zone class="relative rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 overflow-hidden"
-     ondragover="onDragOver(event)" ondragenter="onDragEnter(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+<!-- Main content — file browser -->
+<main role="main" aria-label="Main content"
+      class="flex-1 overflow-y-auto p-4 sm:p-6 pb-20 lg:pb-6">
+    {% block content %}
+    {% include "includes/breadcrumb.html" %}
+
+    <div id="drop-zone" data-drop-zone class="relative rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 overflow-hidden"
+         ondragover="onDragOver(event)" ondragenter="onDragEnter(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
     <div class="border-b border-gray-200 dark:border-gray-700 px-4 py-3">
         <div class="flex items-center justify-between">
             <h2 class="text-lg font-medium text-gray-900 dark:text-gray-100">{{ repo_name }}</h2>
@@ -80,4 +90,6 @@
         </div>
     </div>
 </div>
+    {% endblock %}
+</main>
 {% endblock %}

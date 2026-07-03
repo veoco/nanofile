@@ -106,7 +106,18 @@
     <div class="js-entry-row flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-surface-800/50"
          data-name="{{ entry.name }}"
          data-type="{{ entry.entry_type }}"
-         data-page="{{ page }}">
+         data-page="{{ page }}"
+         data-size="{{ entry.size }}"
+         data-size-display="{{ entry.size_display }}"
+         data-mtime="{{ entry.mtime }}"
+         data-mtime-display="{{ entry.mtime_display }}"
+         data-starred="{{ entry.starred }}"
+         data-extension="{{ entry.extension.as_deref().unwrap_or("") }}"
+         data-path="/{{ entry.relative_path }}"
+         data-repo-id="{{ repo_id }}"
+         data-modifier-email="{{ entry.modifier_email }}"
+         data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
+         data-is-previewable="{{ entry.is_previewable }}">
         {% if entry.entry_type == "dir" %}
         <!-- Folder icon -->
         <div class="h-9 min-w-9 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
@@ -238,7 +249,18 @@
     <div class="js-entry-row relative block rounded-lg p-2.5 hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors cursor-pointer"
          data-name="{{ entry.name }}"
          data-type="{{ entry.entry_type }}"
-         data-page="{{ page }}">
+         data-page="{{ page }}"
+         data-size="{{ entry.size }}"
+         data-size-display="{{ entry.size_display }}"
+         data-mtime="{{ entry.mtime }}"
+         data-mtime-display="{{ entry.mtime_display }}"
+         data-starred="{{ entry.starred }}"
+         data-extension="{{ entry.extension.as_deref().unwrap_or("") }}"
+         data-path="/{{ entry.relative_path }}"
+         data-repo-id="{{ repo_id }}"
+         data-modifier-email="{{ entry.modifier_email }}"
+         data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
+         data-is-previewable="{{ entry.is_previewable }}">
         {% if entry.entry_type == "dir" %}
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
             <svg class="h-14 w-14 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
@@ -281,7 +303,18 @@
         {% for entry in group.entries %}
             <div class="js-entry-row group relative block aspect-square overflow-hidden bg-gray-100 dark:bg-surface-700 transition-transform duration-200 hover:scale-[1.04] hover:z-10 cursor-pointer"
                  data-name="{{ entry.name }}"
-                 data-type="{{ entry.entry_type }}">
+                 data-type="{{ entry.entry_type }}"
+                 data-size="{{ entry.size }}"
+                 data-size-display="{{ entry.size_display }}"
+                 data-mtime="{{ entry.mtime }}"
+                 data-mtime-display="{{ entry.mtime_display }}"
+                 data-starred="{{ entry.starred }}"
+                 data-extension="{{ entry.extension.as_deref().unwrap_or("") }}"
+                 data-path="/{{ entry.relative_path }}"
+                 data-repo-id="{{ repo_id }}"
+                 data-modifier-email="{{ entry.modifier_email }}"
+                 data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
+                 data-is-previewable="{{ entry.is_previewable }}">
                 {% if entry.is_video %}
                 <div class="w-full h-full flex items-center justify-center bg-gray-800 dark:bg-gray-900 pointer-events-none">
                     <span class="absolute top-1 right-1 text-[10px] text-white/70 font-medium leading-none">{{ entry.extension.as_deref().unwrap_or("") }}</span>
