@@ -2,25 +2,46 @@
 (function () {
   "use strict";
 
-  // ─── View mode toggle (list / grid) ──────────────────────────────────
+  // ─── View mode toggle (list / grid / gallery) ──────────────────────────
   function setMode(m) {
     var listView = document.querySelector(".js-file-list-view");
     var gridView = document.querySelector(".js-file-grid-view");
+    var galleryView = document.querySelector(".js-gallery-view");
+    var sortBar = document.querySelector(".js-sort-bar");
     var btnList = document.querySelector(".js-view-list");
     var btnGrid = document.querySelector(".js-view-grid");
+    var btnGallery = document.querySelector(".js-view-gallery");
+    var sortSection = document.querySelector(".js-sort-section");
     if (!listView || !gridView || !btnList || !btnGrid) return;
+
+    // Hide sort buttons (Name/Modified/Size) in gallery mode
+    if (sortSection) sortSection.classList.toggle("hidden", m === "gallery");
+
+    // Reset all to hidden / inactive
+    listView.classList.add("hidden");
+    gridView.classList.add("hidden");
+    if (galleryView) galleryView.classList.add("hidden");
+    btnList.classList.remove("text-brand-500");
+    btnList.classList.add("text-gray-400");
+    btnGrid.classList.remove("text-brand-500");
+    btnGrid.classList.add("text-gray-400");
+    if (btnGallery) {
+      btnGallery.classList.remove("text-brand-500");
+      btnGallery.classList.add("text-gray-400");
+    }
+
     if (m === "grid") {
-      listView.classList.add("hidden");
       gridView.classList.remove("hidden");
-      btnList.classList.remove("text-brand-500");
-      btnList.classList.add("text-gray-400");
       btnGrid.classList.remove("text-gray-400");
       btnGrid.classList.add("text-brand-500");
+    } else if (m === "gallery") {
+      if (galleryView) galleryView.classList.remove("hidden");
+      if (btnGallery) {
+        btnGallery.classList.remove("text-gray-400");
+        btnGallery.classList.add("text-brand-500");
+      }
     } else {
       listView.classList.remove("hidden");
-      gridView.classList.add("hidden");
-      btnGrid.classList.remove("text-brand-500");
-      btnGrid.classList.add("text-gray-400");
       btnList.classList.remove("text-gray-400");
       btnList.classList.add("text-brand-500");
     }
@@ -36,12 +57,23 @@
 
   window.setMode = setMode;
 
+  // Returns the current view mode — used by main.js for partial reloads.
+  window.getVisibleView = function () {
+    var gv = document.querySelector(".js-gallery-view");
+    if (gv && !gv.classList.contains("hidden")) return "gallery";
+    var gridV = document.querySelector(".js-file-grid-view");
+    if (gridV && !gridV.classList.contains("hidden")) return "grid";
+    return "list";
+  };
+
   // Event delegation on document so view toggle works after partial refresh
   document.addEventListener("click", function (e) {
     var btn = e.target.closest(".js-view-list");
     if (btn) { setMode("list"); return; }
     btn = e.target.closest(".js-view-grid");
-    if (btn) { setMode("grid"); }
+    if (btn) { setMode("grid"); return; }
+    btn = e.target.closest(".js-view-gallery");
+    if (btn) { setMode("gallery"); }
   });
 
   // Initialize mode from localStorage on page load

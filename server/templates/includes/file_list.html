@@ -20,7 +20,7 @@
     {% endfor %}
 </div>
 
-<!-- View toggle + sort + selection actions -->
+<!-- View toggle + sort + selection actions (sort buttons hidden in gallery mode) -->
 <div class="js-sort-bar flex items-center gap-1 px-4 pt-2 pb-1"
      data-sort-field="{{ sort_field }}"
      data-sort-order="{{ sort_order }}">
@@ -34,6 +34,12 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/>
         </svg>
     </button>
+    <button class="js-view-gallery p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 text-gray-400" title="Gallery view" aria-label="Switch to gallery view">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+        </svg>
+    </button>
+    <span class="js-sort-section">
     <span class="text-gray-300 dark:text-gray-600 select-none">|</span>
     <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 {% if sort_field == "name" %}text-brand-500{% else %}text-gray-400{% endif %}"
             data-sort="name">
@@ -59,6 +65,7 @@
           <path class="js-sort-arrow-down" fill="{% if sort_field == "size" && sort_order == "desc" %}var(--color-brand-500){% else %}var(--color-gray-400){% endif %}" d="M1 9l4 4 4-4z"/>
         </svg>
     </button>
+    </span>
     <div class="flex-1 min-w-0"></div>
     <!-- Selection actions (shown when items are selected) -->
     <span id="js-selection-info" class="hidden flex items-center gap-1 text-xs text-brand-600 dark:text-brand-400 font-medium whitespace-nowrap">
@@ -94,7 +101,7 @@
      data-page="{{ page }}"
      data-total="{{ total }}"
      data-has-more="{% if has_more %}true{% else %}false{% endif %}">
-    {% if render_view != "grid" %}
+    {% if render_view != "grid" && render_view != "gallery" %}
     {% for entry in entries %}
     <div class="js-entry-row flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-surface-800/50"
          data-name="{{ entry.name }}"
@@ -226,7 +233,7 @@
      data-page="{{ page }}"
      data-total="{{ total }}"
      data-has-more="{% if has_more %}true{% else %}false{% endif %}">
-    {% if render_view != "list" %}
+    {% if render_view != "list" && render_view != "gallery" %}
     {% for entry in entries %}
     <div class="js-entry-row relative block rounded-lg p-2.5 hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors cursor-pointer"
          data-name="{{ entry.name }}"
@@ -254,6 +261,52 @@
         {% if entry.entry_type == "file" %}
         <p class="text-xs text-gray-400 text-center mt-0.5">{{ entry.size_display }}</p>
         {% endif %}
+    </div>
+    {% endfor %}
+    {% endif %}
+</div>
+
+<!-- Gallery View (hidden by default) -->
+<div class="js-gallery-view hidden"
+     data-page="{{ page }}"
+     data-total="{{ total }}"
+     data-has-more="{% if has_more %}true{% else %}false{% endif %}">
+    {% if render_view != "list" && render_view != "grid" %}
+    {% for group in gallery_groups %}
+    <div class="gallery-month-group bg-white dark:bg-surface-900">
+        <div class="sticky top-0 z-10 bg-white/90 dark:bg-surface-900/90 backdrop-blur-sm px-4 py-3">
+            <h2 class="text-base font-bold text-gray-800 dark:text-gray-200">{{ group.label }}</h2>
+        </div>
+        <div class="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-0.5 px-4 pb-6">
+        {% for entry in group.entries %}
+            <div class="js-entry-row group relative block aspect-square overflow-hidden bg-gray-100 dark:bg-surface-700 transition-transform duration-200 hover:scale-[1.04] hover:z-10 cursor-pointer"
+                 data-name="{{ entry.name }}"
+                 data-type="{{ entry.entry_type }}">
+                {% if entry.is_video %}
+                <div class="w-full h-full flex items-center justify-center bg-gray-800 dark:bg-gray-900 pointer-events-none">
+                    <span class="absolute top-1 right-1 text-[10px] text-white/70 font-medium leading-none">{{ entry.extension.as_deref().unwrap_or("") }}</span>
+                    <svg class="h-8 w-8 text-white/80" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z"/>
+                    </svg>
+                </div>
+                {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
+                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy">
+                {% else %}
+                <div class="w-full h-full flex items-center justify-center text-gray-400 pointer-events-none">
+                    <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
+                </div>
+                {% endif %}
+                <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
+                   class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/75 to-transparent px-2 py-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                    <span class="text-xs text-white truncate block leading-tight">{{ entry.name }}</span>
+                </a>
+            </div>
+        {% endfor %}
+        </div>
+    </div>
+    {% else %}
+    <div class="px-4 py-12 text-center">
+        <p class="text-sm text-gray-400 dark:text-gray-500">No photos or videos</p>
     </div>
     {% endfor %}
     {% endif %}

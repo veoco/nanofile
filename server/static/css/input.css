@@ -77,3 +77,15 @@
   box-shadow: inset 3px 0 0 0 var(--color-brand-400);
 }
 
+/* Gallery view selected — 4px outline border + background tint */
+.js-gallery-view .js-entry-row.selected {
+  outline: 4px solid var(--color-brand-500);
+  outline-offset: -4px;
+  background-color: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
+}
+.dark .js-gallery-view .js-entry-row.selected {
+  outline: 4px solid var(--color-brand-400);
+  outline-offset: -4px;
+  background-color: color-mix(in srgb, var(--color-brand-400) 20%, transparent);
+}
+

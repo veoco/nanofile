@@ -651,7 +651,7 @@
     });
     // Re-apply .selected to rows in the visible view that match selectedPaths
     var visViews = document.querySelectorAll(
-      ".js-file-list-view:not(.hidden), .js-file-grid-view:not(.hidden)"
+      ".js-file-list-view:not(.hidden), .js-file-grid-view:not(.hidden), .js-gallery-view:not(.hidden)"
     );
     visViews.forEach(function (view) {
       view.querySelectorAll(".js-entry-row").forEach(function (row) {
@@ -667,6 +667,8 @@
   function getVisibleViewContainer() {
     var listView = document.querySelector(".js-file-list-view");
     var gridView = document.querySelector(".js-file-grid-view");
+    var galleryView = document.querySelector(".js-gallery-view");
+    if (galleryView && !galleryView.classList.contains("hidden")) return galleryView;
     if (gridView && !gridView.classList.contains("hidden")) return gridView;
     return listView;
   }
@@ -716,24 +718,33 @@
       // Extract the view container HTML from the partial response
       var parser = document.createElement("div");
       parser.innerHTML = html;
-      var newContainer = parser.querySelector(view === "grid" ? ".js-file-grid-view" : ".js-file-list-view");
+      var newContainer = parser.querySelector(
+        view === "grid" ? ".js-file-grid-view" :
+        view === "gallery" ? ".js-gallery-view" :
+        ".js-file-list-view"
+      );
       if (!newContainer) { btn.disabled = false; if (spinner) spinner.classList.add("hidden"); return; }
 
-      // Append new rows to the existing container
-      var rows = newContainer.querySelectorAll(".js-entry-row");
-      rows.forEach(function (row) { container.appendChild(row); });
+      // Append new content: rows for list/grid, month groups for gallery
+      if (view === "gallery") {
+        var groups = newContainer.querySelectorAll(".gallery-month-group");
+        groups.forEach(function (g) { container.appendChild(g); });
+      } else {
+        var rows = newContainer.querySelectorAll(".js-entry-row");
+        rows.forEach(function (row) { container.appendChild(row); });
 
-      // DOM recycling: if more than 3 pages loaded, remove the oldest page
-      var allRows = container.querySelectorAll(".js-entry-row");
-      if (allRows.length > 600) {
-        var oldestPage = Infinity;
-        allRows.forEach(function (r) {
-          var p = parseInt(r.dataset.page, 10);
-          if (p < oldestPage) oldestPage = p;
-        });
-        if (oldestPage < nextPage) {
-          var toRemove = container.querySelectorAll('.js-entry-row[data-page="' + oldestPage + '"]');
-          toRemove.forEach(function (r) { r.remove(); });
+        // DOM recycling: if more than 3 pages loaded, remove the oldest page
+        var allRows = container.querySelectorAll(".js-entry-row");
+        if (allRows.length > 600) {
+          var oldestPage = Infinity;
+          allRows.forEach(function (r) {
+            var p = parseInt(r.dataset.page, 10);
+            if (p < oldestPage) oldestPage = p;
+          });
+          if (oldestPage < nextPage) {
+            var toRemove = container.querySelectorAll('.js-entry-row[data-page="' + oldestPage + '"]');
+            toRemove.forEach(function (r) { r.remove(); });
+          }
         }
       }
 

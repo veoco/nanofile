@@ -8,8 +8,8 @@
     <link rel="icon" type="image/svg+xml" href="{{ urls.favicon }}">
     <link rel="stylesheet" href="{{ urls.css }}">
     {% block head_meta %}{% endblock %}
-    <script>(function(){var v=localStorage.getItem("fileViewMode");if(v==="grid")document.documentElement.dataset.view="grid";})();</script>
-    <style>html[data-view="grid"] .js-file-list-view{display:none!important}html[data-view="grid"] .js-file-grid-view{display:grid!important}</style>
+    <script>(function(){var v=localStorage.getItem("fileViewMode");if(v==="grid"||v==="gallery")document.documentElement.dataset.view=v;})();</script>
+    <style>html[data-view="grid"] .js-file-list-view{display:none!important}html[data-view="grid"] .js-file-grid-view{display:grid!important}html[data-view="gallery"] .js-file-list-view,html[data-view="gallery"] .js-file-grid-view{display:none!important}html[data-view="gallery"] .js-gallery-view{display:block!important}html[data-view="gallery"] .js-sort-section{display:none!important}html[data-view="grid"] .js-view-list,html[data-view="grid"] .js-view-gallery,html[data-view="gallery"] .js-view-list,html[data-view="gallery"] .js-view-grid{color:var(--color-gray-400)!important}html[data-view="grid"] .js-view-grid,html[data-view="gallery"] .js-view-gallery{color:var(--color-brand-500)!important}</style>
 </head>
 <body class="h-full">
     <!-- Global loading bar (hidden by default) -->

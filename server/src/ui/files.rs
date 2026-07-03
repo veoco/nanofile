@@ -43,6 +43,7 @@ pub struct FileBrowserTemplate {
     pub max_upload_size_mb: u64,
     pub sort_field: String,
     pub sort_order: String,
+    pub gallery_groups: Vec<GalleryMonthGroup>,
 }
 
 #[derive(Template)]
@@ -62,6 +63,7 @@ pub struct FileBrowserCoreTemplate {
     pub csrf_token: String,
     pub sort_field: String,
     pub sort_order: String,
+    pub gallery_groups: Vec<GalleryMonthGroup>,
 }
 
 #[derive(Template)]
@@ -122,6 +124,56 @@ pub struct FileEntry {
     pub image_thumbnail_url: Option<String>,
     /// Thumbnail URL for image files at grid-view scale (256px), None otherwise.
     pub image_thumbnail_url_large: Option<String>,
+    /// Whether this file is a video (used for gallery view rendering).
+    pub is_video: bool,
+}
+
+/// A group of file entries belonging to the same calendar month, used by gallery view.
+#[derive(Clone)]
+pub struct GalleryMonthGroup {
+    /// Month label like "June 2026"
+    pub label: String,
+    /// Entries belonging to this month, sorted by mtime descending.
+    pub entries: Vec<FileEntry>,
+}
+
+/// Returns true if the file extension indicates a video file.
+/// Used by gallery view to render video placeholders with play icon.
+pub fn is_video_file(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "mp4" | "mov" | "avi" | "mkv" | "webm" | "wmv" | "flv" | "3gp"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// Format a unix timestamp into a month label like "June 2026".
+pub fn format_month_label(timestamp: i64) -> String {
+    chrono::DateTime::from_timestamp(timestamp, 0)
+        .map(|dt| dt.format("%B %Y").to_string())
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
+/// Group already-sorted (by mtime descending) entries by calendar month.
+/// Returns groups in descending month order (newest first).
+pub fn group_entries_by_month(entries: Vec<FileEntry>) -> Vec<GalleryMonthGroup> {
+    let mut groups: Vec<GalleryMonthGroup> = Vec::new();
+    for entry in entries {
+        let label = format_month_label(entry.mtime);
+        if groups.last().map(|g| g.label.as_str()) != Some(label.as_str()) {
+            groups.push(GalleryMonthGroup {
+                label,
+                entries: Vec::new(),
+            });
+        }
+        groups.last_mut().unwrap().entries.push(entry);
+    }
+    groups
 }
 
 /// Sort file entries: directories always first, then by the specified field and order.
@@ -409,6 +461,7 @@ async fn file_browser_inner(
                 None
             };
             let is_image_file = e.entry_type == "file" && is_thumbnail_image(&e.name);
+            let entry_is_video = e.entry_type == "file" && is_video_file(&e.name);
             let thumb_url = if is_image_file {
                 Some(format!(
                     "/api2/repos/{}/thumbnail/?p={}&size=48",
@@ -441,6 +494,7 @@ async fn file_browser_inner(
                 extension: ext,
                 image_thumbnail_url: thumb_url,
                 image_thumbnail_url_large: thumb_url_large,
+                is_video: entry_is_video,
             }
         })
         .collect();
@@ -459,6 +513,29 @@ async fn file_browser_inner(
     entries = if offset < entries.len() {
         let end = (offset + per_page).min(entries.len());
         entries[offset..end].to_vec()
+    } else {
+        vec![]
+    };
+
+    // Determine view mode after pagination so gallery can use the same page slice
+    let render_view = match query.view.as_deref() {
+        Some("list") => "list",
+        Some("grid") => "grid",
+        Some("gallery") => "gallery",
+        _ => "all",
+    };
+
+    // Gallery groups: filter paginated entries to media only, sort by mtime desc, group by month.
+    // Non-gallery views get an empty vec (template renders nothing).
+    let gallery_groups: Vec<GalleryMonthGroup> = if render_view == "gallery" || render_view == "all"
+    {
+        let mut media: Vec<FileEntry> = entries
+            .iter()
+            .filter(|e| e.entry_type == "file" && (e.is_video || e.image_thumbnail_url.is_some()))
+            .cloned()
+            .collect();
+        media.sort_by_key(|b| std::cmp::Reverse(b.mtime));
+        group_entries_by_month(media)
     } else {
         vec![]
     };
@@ -487,13 +564,6 @@ async fn file_browser_inner(
     let csrf_token =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
 
-    // Determine which view(s) to render
-    let render_view = match query.view.as_deref() {
-        Some("list") => "list",
-        Some("grid") => "grid",
-        _ => "all",
-    };
-
     if is_partial {
         let tpl = FileBrowserCoreTemplate {
             urls: crate::static_assets::template_urls(),
@@ -509,6 +579,7 @@ async fn file_browser_inner(
             csrf_token,
             sort_field: sort_field.to_string(),
             sort_order: sort_order.to_string(),
+            gallery_groups,
         };
         let html = tpl
             .render()
@@ -538,6 +609,7 @@ async fn file_browser_inner(
             max_upload_size_mb: state.config.server.max_upload_size_mb,
             sort_field: sort_field.to_string(),
             sort_order: sort_order.to_string(),
+            gallery_groups,
         };
         let html = tpl
             .render()
@@ -818,6 +890,7 @@ mod tests {
             extension: None,
             image_thumbnail_url: None,
             image_thumbnail_url_large: None,
+            is_video: false,
         }
     }
 
