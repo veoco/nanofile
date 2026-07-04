@@ -206,6 +206,50 @@ pub async fn delete_share_link_v21(
     Ok(result.rows_affected > 0)
 }
 
+pub async fn update_share_link_v21(
+    db: &DatabaseConnection,
+    _repos: &Repositories,
+    token: &str,
+    user_id: i32,
+    expire_days: Option<Option<i64>>,
+    description: Option<Option<String>>,
+) -> Result<ShareLinkInfo, AppError> {
+    let now = chrono::Utc::now().timestamp();
+
+    // Find and validate ownership
+    let link = share_link::Entity::find()
+        .filter(share_link::Column::Token.eq(token))
+        .filter(share_link::Column::CreatorId.eq(user_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Share link not found".into()))?;
+
+    let mut active: share_link::ActiveModel = link.into();
+
+    if let Some(days) = expire_days {
+        active.expires_at = Set(days.map(|d| now + d * 86400));
+    }
+    if let Some(desc) = description {
+        active.description = Set(desc);
+    }
+
+    let updated = active.update(db).await?;
+    let token = updated.token.clone();
+
+    Ok(ShareLinkInfo {
+        token,
+        link: format!("/f/{}/", updated.token),
+        repo_id: updated.repo_id,
+        path: updated.path,
+        created_at: updated.created_at,
+        has_password: updated.password.is_some(),
+        expire_at: updated.expires_at,
+        s_type: updated.s_type,
+        view_cnt: updated.view_cnt,
+        description: updated.description,
+    })
+}
+
 // ── Repo sharing operations ──────────────────────────────────────────
 
 /// Share (beshare) a repo with another user.

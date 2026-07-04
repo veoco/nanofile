@@ -249,6 +249,14 @@
       deleteBtn.dataset.name = d.name || "";
       deleteBtn.dataset.type = d.type || "";
     }
+
+    // Share
+    var shareBtn = ct.querySelector(".js-rp-share");
+    if (shareBtn) {
+      shareBtn.dataset.repoId = d.repoId || "";
+      shareBtn.dataset.path = d.path || "";
+      shareBtn.dataset.type = d.type || "";
+    }
   };
 
   // Reset right panel to placeholder state

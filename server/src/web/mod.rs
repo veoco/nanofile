@@ -6,6 +6,7 @@ use crate::AppState;
 
 pub mod download;
 pub mod progress;
+pub mod share_view;
 pub mod temp_file;
 pub mod upload;
 pub mod zip_download;
@@ -13,8 +14,14 @@ pub mod zip_download;
 /// Routes for web file access.
 pub fn web_routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/f/{token}", get(download::shared_file_download))
-        .route("/f/{token}/", get(download::shared_file_download))
+        .route(
+            "/f/{token}",
+            get(share_view::shared_file_view).post(share_view::shared_file_view_post),
+        )
+        .route(
+            "/f/{token}/",
+            get(share_view::shared_file_view).post(share_view::shared_file_view_post),
+        )
         .route(
             "/repos/{repo_id}/files/{*path}",
             get(download::repo_file_download),

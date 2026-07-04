@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter, Set,
+};
 use std::sync::Arc;
 
 use crate::entity::share_link;
@@ -20,6 +22,13 @@ pub trait ShareLinkRepository: Send + Sync {
         token: &str,
         user_id: i32,
     ) -> Result<DeleteResult, AppError>;
+    async fn update_expire_and_description(
+        &self,
+        token: &str,
+        user_id: i32,
+        expire_at: Option<Option<i64>>,
+        description: Option<Option<String>>,
+    ) -> Result<bool, AppError>;
 }
 
 pub struct DbShareLinkRepository {
@@ -73,5 +82,34 @@ impl ShareLinkRepository for DbShareLinkRepository {
             .filter(share_link::Column::CreatorId.eq(user_id))
             .exec(self.db.as_ref())
             .await?)
+    }
+
+    async fn update_expire_and_description(
+        &self,
+        token: &str,
+        user_id: i32,
+        expire_at: Option<Option<i64>>,
+        description: Option<Option<String>>,
+    ) -> Result<bool, AppError> {
+        use sea_orm::EntityTrait;
+
+        let link = share_link::Entity::find()
+            .filter(share_link::Column::Token.eq(token))
+            .filter(share_link::Column::CreatorId.eq(user_id))
+            .one(self.db.as_ref())
+            .await?
+            .ok_or_else(|| AppError::NotFound("Share link not found".into()))?;
+
+        let mut active: share_link::ActiveModel = link.into();
+
+        if let Some(val) = expire_at {
+            active.expires_at = Set(val);
+        }
+        if let Some(val) = description {
+            active.description = Set(val);
+        }
+
+        active.update(self.db.as_ref()).await?;
+        Ok(true)
     }
 }

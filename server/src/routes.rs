@@ -167,7 +167,8 @@ fn v2_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/v2.1/share-links/{token}/",
-            delete(crate::sharing::handler::links::delete_share_link_v21),
+            put(crate::sharing::handler::links::update_share_link_v21)
+                .delete(crate::sharing::handler::links::delete_share_link_v21),
         )
         // Upload Links
         .route(

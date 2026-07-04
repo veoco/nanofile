@@ -18,6 +18,12 @@ pub struct CreateLinkRequest {
     pub expire_days: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct UpdateLinkRequest {
+    pub expire_days: Option<Option<i64>>,
+    pub description: Option<Option<String>>,
+}
+
 /// GET /api/v2.1/share-links/
 pub async fn list_share_links_v21(
     auth: AuthUser,
@@ -77,6 +83,37 @@ pub async fn delete_share_link_v21(
         return Err(AppError::NotFound("share link not found".into()));
     }
     Ok(Json(serde_json::json!({"success": true})))
+}
+
+/// PUT /api/v2.1/share-links/{token}/
+pub async fn update_share_link_v21(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+    Json(req): Json<UpdateLinkRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let info = share::update_share_link_v21(
+        state.db.as_ref(),
+        &state.repos,
+        &token,
+        auth.user_id,
+        req.expire_days,
+        req.description,
+    )
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "token": info.token,
+        "link": info.link,
+        "repo_id": info.repo_id,
+        "path": info.path,
+        "created_at": info.created_at,
+        "has_password": info.has_password,
+        "expire_at": info.expire_at,
+        "s_type": info.s_type,
+        "view_cnt": info.view_cnt,
+        "description": info.description,
+    })))
 }
 
 /// GET /api/v2.1/upload-links/

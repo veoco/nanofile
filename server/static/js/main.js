@@ -415,6 +415,91 @@
     }
   });
 
+  // ─── Share dialog elements ──────────────────────────────────────────
+  var shareDialog = document.getElementById("share-dialog-overlay");
+  var shareDialogPath = document.querySelector(".js-share-dialog-path");
+  var sharePasswordInput = document.getElementById("share-password-input");
+  var shareExpirySelect = document.getElementById("share-expiry-select");
+  var shareDescriptionInput = document.getElementById("share-description-input");
+  var shareDialogError = document.querySelector(".js-share-dialog-error");
+  var shareConfirmBtn = document.querySelector(".js-share-confirm");
+  var shareCancelBtn = document.querySelector(".js-share-cancel");
+  var shareCurrentRepoId = "";
+  var shareCurrentPath = "";
+
+  // ─── Share button — open dialog ─────────────────────────────────────
+  document.addEventListener("click", function (e) {
+    const btn = e.target.closest(".js-share-btn");
+    if (!btn) return;
+
+    shareCurrentRepoId = btn.dataset.repoId;
+    shareCurrentPath = btn.dataset.path;
+    var name = shareCurrentPath.split("/").filter(Boolean).pop() || shareCurrentPath;
+
+    if (!shareCurrentRepoId || !shareCurrentPath) return;
+
+    // Reset dialog
+    sharePasswordInput.value = "";
+    shareExpirySelect.value = "";
+    shareDescriptionInput.value = "";
+    shareDialogError.classList.add("hidden");
+    shareDialogError.textContent = "";
+    shareConfirmBtn.disabled = false;
+    shareConfirmBtn.textContent = "Create";
+
+    // Show path
+    var displayName = btn.dataset.name || name;
+    shareDialogPath.textContent = displayName;
+    shareDialog.classList.remove("hidden");
+  });
+
+  // ─── Share cancel ───────────────────────────────────────────────────
+  shareCancelBtn.addEventListener("click", function () {
+    shareDialog.classList.add("hidden");
+  });
+  shareDialog.addEventListener("click", function (e) {
+    if (e.target === shareDialog) shareDialog.classList.add("hidden");
+  });
+
+  // ─── Share confirm — create link via API ────────────────────────────
+  shareConfirmBtn.addEventListener("click", async function () {
+    var body = {
+      repo_id: shareCurrentRepoId,
+      path: shareCurrentPath,
+    };
+
+    var password = sharePasswordInput.value.trim();
+    if (password) body.password = password;
+
+    var expireDays = shareExpirySelect.value;
+    if (expireDays) body.expire_days = parseInt(expireDays, 10);
+
+    var description = shareDescriptionInput.value.trim();
+    if (description) body.description = description;
+
+    shareConfirmBtn.disabled = true;
+    shareConfirmBtn.textContent = "Creating...";
+    shareDialogError.classList.add("hidden");
+
+    try {
+      var resp = await apiFetch("/api/v2.1/share-links/", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      var data = await resp.json();
+      var shareUrl = window.location.origin + "/f/" + data.token + "/";
+      await navigator.clipboard.writeText(shareUrl);
+      shareDialog.classList.add("hidden");
+      window.Toast.success("Share link copied to clipboard: " + data.token);
+    } catch (err) {
+      shareDialogError.textContent = err.message;
+      shareDialogError.classList.remove("hidden");
+    } finally {
+      shareConfirmBtn.disabled = false;
+      shareConfirmBtn.textContent = "Create";
+    }
+  });
+
   // ─── Trash restore (via API) ────────────────────────────────────────
   document.addEventListener("submit", async function (e) {
     const form = e.target.closest(".js-restore-form");

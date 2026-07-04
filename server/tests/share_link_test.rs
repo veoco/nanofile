@@ -38,8 +38,8 @@ async fn test_share_link_create_and_download() {
     let token = body["token"].as_str().unwrap().to_string();
     assert!(!token.is_empty(), "token must not be empty");
 
-    // Download via shared link (no auth, no password)
-    let dl = f.client.get(&format!("/f/{}/", token), None).await;
+    // Download via shared link with ?dl=1 (no auth, no password)
+    let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(dl.status(), 200, "shared download should succeed");
     let content = dl.bytes().await.unwrap();
     assert_eq!(&content[..], b"share content");
@@ -74,30 +74,40 @@ async fn test_share_link_with_password() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // Download WITHOUT password → should return 400
+    // Download WITHOUT password → should return 200 (HTML password form)
     let dl = f.client.get(&format!("/f/{}/", token), None).await;
-    assert_eq!(dl.status(), 400, "must return 400 when password is missing");
+    assert_eq!(dl.status(), 200, "must return 200 with password form");
+    let body = dl.text().await.unwrap();
+    assert!(
+        body.contains("Password Required"),
+        "should show password form"
+    );
 
-    // Download with WRONG password → should return 403
+    // Download with WRONG password → should return 200 (password form with error)
     let wrong = f
         .client
         .get(&format!("/f/{}/?password=wrongpass", token), None)
         .await;
-    assert_eq!(wrong.status(), 403, "must return 403 for wrong password");
+    assert_eq!(wrong.status(), 200, "must return 200 with error");
+    let body = wrong.text().await.unwrap();
+    assert!(
+        body.contains("Incorrect password"),
+        "should show error message"
+    );
 
-    // Download with CORRECT password via query parameter → should succeed
+    // Download with CORRECT password via query parameter (?dl=1) → should succeed
     let ok = f
         .client
-        .get(&format!("/f/{}/?password=mypassword", token), None)
+        .get(&format!("/f/{}/?dl=1&password=mypassword", token), None)
         .await;
     assert_eq!(ok.status(), 200, "should succeed with correct password");
     let content = ok.bytes().await.unwrap();
     assert_eq!(&content[..], b"secret data");
 
-    // Download with CORRECT password via HTTP header → should also succeed
+    // Download with CORRECT password via HTTP header (?dl=1) → should also succeed
     let raw_client = reqwest::Client::builder().no_proxy().build().unwrap();
     let ok2 = raw_client
-        .get(format!("{}/f/{}/", f.server.base_url, token))
+        .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
         .header("X-Seafile-Sharelink-Password", "mypassword")
         .send()
         .await
@@ -174,7 +184,7 @@ async fn test_share_link_delete_v21_own() {
     let token = body["token"].as_str().unwrap().to_string();
 
     // Confirm download works first
-    let dl = f.client.get(&format!("/f/{}/", token), None).await;
+    let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(dl.status(), 200, "download should work before delete");
 
     // Creator deletes via v2.1 — should succeed
@@ -249,7 +259,7 @@ async fn test_share_link_delete_v21_other() {
     assert_eq!(del.status(), 404, "other user's delete must return 404");
 
     // Verify link still exists (user1 can still download)
-    let dl = f.client.get(&format!("/f/{}/", token), None).await;
+    let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(dl.status(), 200, "link should still be valid");
 }
 

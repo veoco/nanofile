@@ -79,6 +79,45 @@
         </div>
     </div>
 
+    <!-- Share dialog overlay -->
+    <div id="share-dialog-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
+        <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+            <h3 id="share-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Create Share Link</h3>
+            <p class="js-share-dialog-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Password <span class="text-gray-400">(optional)</span></label>
+                    <input type="password" id="share-password-input" placeholder="Leave empty for no password"
+                           class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Expires in</label>
+                    <select id="share-expiry-select"
+                            class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                        <option value="">Never</option>
+                        <option value="1">1 day</option>
+                        <option value="7">7 days</option>
+                        <option value="30">30 days</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Description <span class="text-gray-400">(optional)</span></label>
+                    <input type="text" id="share-description-input" placeholder="What is this link for?"
+                           class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                </div>
+            </div>
+            <div class="js-share-dialog-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
+            <div class="mt-4 flex justify-end gap-2">
+                <button type="button" class="js-share-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
+                    Cancel
+                </button>
+                <button type="button" class="js-share-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                    Create
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Drop zone overlay (shown during drag-over) -->
     <div class="drop-overlay hidden absolute inset-0 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-brand-500 bg-brand-50/90 dark:bg-brand-500/10">
         <div class="text-center">

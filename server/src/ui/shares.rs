@@ -9,12 +9,29 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::Deserialize;
 use std::sync::Arc;
 
+use chrono::TimeZone;
+
 use crate::AppState;
 use crate::auth::token::generate_share_link_token;
 use crate::entity::share_link;
 use crate::error::AppError;
 
 use super::auth_extractor::WebUser;
+
+fn format_ts(ts: i64) -> String {
+    chrono::Utc
+        .timestamp_opt(ts, 0)
+        .unwrap()
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
+}
+
+fn format_ts_opt(ts: Option<i64>) -> String {
+    match ts {
+        Some(t) => format_ts(t),
+        None => "Never".to_string(),
+    }
+}
 
 #[derive(Template)]
 #[template(path = "shares/list.html")]
@@ -33,8 +50,13 @@ pub struct ShareLinkInfo {
     pub token: String,
     pub repo_id: String,
     pub path: String,
-    pub created_at: i64,
-    pub expires_at: Option<i64>,
+    pub name: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub has_password: bool,
+    pub view_cnt: i64,
+    pub s_type: String,
+    pub link_url: String,
 }
 
 #[derive(Deserialize)]
@@ -59,12 +81,24 @@ pub async fn list_shares(
 
     let share_links: Vec<ShareLinkInfo> = links
         .into_iter()
-        .map(|s| ShareLinkInfo {
-            token: s.token,
-            repo_id: s.repo_id,
-            path: s.path,
-            created_at: s.created_at,
-            expires_at: s.expires_at,
+        .map(|s| {
+            let name = s
+                .path
+                .rsplit_once('/')
+                .map(|(_, n)| n.to_string())
+                .unwrap_or_else(|| s.path.clone());
+            ShareLinkInfo {
+                token: s.token.clone(),
+                repo_id: s.repo_id,
+                path: s.path.clone(),
+                name,
+                created_at: format_ts(s.created_at),
+                expires_at: format_ts_opt(s.expires_at),
+                has_password: s.password.is_some(),
+                view_cnt: s.view_cnt,
+                s_type: s.s_type,
+                link_url: format!("/f/{}/", s.token),
+            }
         })
         .collect();
 
