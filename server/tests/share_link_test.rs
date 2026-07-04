@@ -435,3 +435,231 @@ async fn test_upload_link_create_with_password() {
         "upload link should have has_password=true"
     );
 }
+
+/// H.11 — PUT update password on share link
+#[tokio::test]
+async fn test_share_link_update_password() {
+    let f = TestFixture::new().await;
+
+    // Upload a file
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "pw_update.txt", b"pw update")
+        .await;
+    assert!(up.status().is_success());
+
+    // Create share link with initial password
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/pw_update.txt",
+                "password": "oldpass",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    // Verify old password works
+    let ok = f
+        .client
+        .get(&format!("/f/{}/?dl=1&password=oldpass", token), None)
+        .await;
+    assert_eq!(ok.status(), 200);
+
+    // PUT update to new password
+    let upd = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/share-links/{}/", token),
+            Some(&f.api_token),
+            &serde_json::json!({"password": "newpass"}),
+        )
+        .await;
+    assert_eq!(upd.status(), 200, "update password should succeed");
+
+    // Old password should no longer work
+    let old = f
+        .client
+        .get(&format!("/f/{}/?dl=1&password=oldpass", token), None)
+        .await;
+    assert_eq!(old.status(), 200, "wrong password shows form");
+    let body_text = old.text().await.unwrap();
+    assert!(
+        body_text.contains("Incorrect password"),
+        "old password should be rejected"
+    );
+
+    // New password should work
+    let ok = f
+        .client
+        .get(&format!("/f/{}/?dl=1&password=newpass", token), None)
+        .await;
+    assert_eq!(ok.status(), 200);
+    let content = ok.bytes().await.unwrap();
+    assert_eq!(&content[..], b"pw update");
+}
+
+/// H.12 — PUT clear password on share link (set to null)
+#[tokio::test]
+async fn test_share_link_clear_password() {
+    let f = TestFixture::new().await;
+
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "pw_clear.txt", b"pw clear")
+        .await;
+    assert!(up.status().is_success());
+
+    // Create share link with password
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/pw_clear.txt",
+                "password": "secret",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    // PUT clear password (null)
+    let upd = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/share-links/{}/", token),
+            Some(&f.api_token),
+            &serde_json::json!({"password": null}),
+        )
+        .await;
+    assert_eq!(upd.status(), 200, "clear password should succeed");
+
+    // Should now be accessible without password
+    let ok = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
+    assert_eq!(ok.status(), 200);
+    let content = ok.bytes().await.unwrap();
+    assert_eq!(&content[..], b"pw clear");
+}
+
+/// H.13 — PUT update expiry on share link
+#[tokio::test]
+async fn test_share_link_update_expiry() {
+    let f = TestFixture::new().await;
+
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "exp_test.txt", b"exp test")
+        .await;
+    assert!(up.status().is_success());
+
+    // Create share link with 1-day expiry
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/exp_test.txt",
+                "expire_days": 1,
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    // Verify accessible now
+    let ok = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
+    assert_eq!(ok.status(), 200);
+
+    // PUT clear expiry (null → never expires)
+    let upd = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/share-links/{}/", token),
+            Some(&f.api_token),
+            &serde_json::json!({"expire_days": null}),
+        )
+        .await;
+    assert_eq!(upd.status(), 200, "clear expiry should succeed");
+}
+
+/// H.14 — PUT update share link by non-owner returns 404
+#[tokio::test]
+async fn test_share_link_update_other_fails() {
+    let f = TestFixture::new().await;
+    let db = &*f.server.db;
+
+    let up = f
+        .client
+        .upload_file(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            "other_update.txt",
+            b"other update",
+        )
+        .await;
+    assert!(up.status().is_success());
+
+    // Create share link as user1
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/other_update.txt",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    // Create a second user
+    let _user2_id = common::create_test_user(db, "user2-upd@test.com", "password2").await;
+    let resp2 = f.client.login("user2-upd@test.com", "password2").await;
+    assert_eq!(resp2.status(), 200);
+    let token2_val: serde_json::Value = resp2.json().await.unwrap();
+    let api_token2 = token2_val["token"].as_str().unwrap().to_string();
+
+    // User2 tries to update user1's link
+    let upd = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/share-links/{}/", token),
+            Some(&api_token2),
+            &serde_json::json!({"expire_days": 7}),
+        )
+        .await;
+    assert_eq!(upd.status(), 404, "non-owner update must return 404");
+}
+
+/// H.15 — PUT update non-existent token returns 404
+#[tokio::test]
+async fn test_share_link_update_nonexistent() {
+    let f = TestFixture::new().await;
+
+    let upd = f
+        .client
+        .put_json(
+            "/api/v2.1/share-links/nonexistent-token/",
+            Some(&f.api_token),
+            &serde_json::json!({"expire_days": 7}),
+        )
+        .await;
+    assert_eq!(upd.status(), 404, "non-existent token must return 404");
+}
