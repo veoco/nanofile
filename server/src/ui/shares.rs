@@ -96,8 +96,12 @@ pub async fn list_shares(
                 expires_at: format_ts_opt(s.expires_at),
                 has_password: s.password.is_some(),
                 view_cnt: s.view_cnt,
-                s_type: s.s_type,
-                link_url: format!("/f/{}/", s.token),
+                s_type: s.s_type.clone(),
+                link_url: if s.s_type == "d" {
+                    format!("/d/{}/", &s.token)
+                } else {
+                    format!("/f/{}/", &s.token)
+                },
             }
         })
         .collect();

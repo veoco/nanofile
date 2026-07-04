@@ -338,7 +338,6 @@ struct SharedDirViewTemplate {
     pub expires_at_display: String,
     pub created_at_display: String,
     pub download_url: String,
-    pub browse_url: String,
     pub password_query: String,
 }
 
@@ -347,7 +346,6 @@ struct DirEntryInfo {
     pub ext: String,
     pub is_dir: bool,
     pub size: String,
-    pub mtime: String,
     pub full_path: String,
 }
 
@@ -599,7 +597,6 @@ pub async fn shared_dir_view(
             ext,
             is_dir,
             size: format_size(size),
-            mtime: format_timestamp(dirent.mtime),
             full_path,
         });
     }
@@ -663,16 +660,6 @@ pub async fn shared_dir_view(
             format!("&{}", &pw_query[1..])
         }
     );
-    let browse_url = format!(
-        "/d/{}/?p=/{}",
-        link.token,
-        if pw_query.is_empty() {
-            String::new()
-        } else {
-            format!("&{}", &pw_query[1..])
-        }
-    );
-
     let tpl = SharedDirViewTemplate {
         token: link.token.clone(),
         dir_name,
@@ -684,7 +671,6 @@ pub async fn shared_dir_view(
         expires_at_display: expires_display,
         created_at_display: created_display,
         download_url,
-        browse_url,
         password_query: pw_query,
     };
 

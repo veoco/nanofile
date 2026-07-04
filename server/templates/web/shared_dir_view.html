@@ -11,21 +11,19 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: linear-gradient(135deg, #f0f5ff 0%, #ffffff 50%, #f5f0ff 100%);
             min-height: 100vh;
-            padding: 2rem 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
             color: #1f2937;
         }
-        .container {
-            max-width: 720px;
-            margin: 0 auto;
-        }
-        /* Header card — matches file share page */
         .card {
             background: white;
             border-radius: 1rem;
             box-shadow: 0 4px 24px rgba(0,0,0,0.08);
             padding: 2rem;
-            text-align: center;
-            margin-bottom: 1.5rem;
+            width: 100%;
+            max-width: 420px;
         }
         .folder-icon {
             width: 64px;
@@ -43,11 +41,13 @@
             font-weight: 600;
             word-break: break-all;
             margin-bottom: 0.25rem;
+            text-align: center;
         }
         .dir-summary {
             font-size: 0.875rem;
             color: #6b7280;
             margin-bottom: 1.5rem;
+            text-align: center;
         }
         .meta {
             display: flex;
@@ -58,23 +58,15 @@
             color: #9ca3af;
             flex-wrap: wrap;
         }
-        .meta-item {
-            display: flex;
-            align-items: center;
-            gap: 0.25rem;
-        }
+        .meta-item { display: flex; align-items: center; gap: 0.25rem; }
         .meta-item svg { width: 14px; height: 14px; }
-        .actions {
-            display: flex;
-            justify-content: center;
-            gap: 0.75rem;
-            flex-wrap: wrap;
-        }
-        .btn {
+        .download-btn {
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
             padding: 0.75rem 2rem;
+            background: #6366f1;
+            color: white;
             border: none;
             border-radius: 0.75rem;
             font-size: 0.9375rem;
@@ -83,17 +75,9 @@
             text-decoration: none;
             transition: background 0.15s;
         }
-        .btn-primary {
-            background: #6366f1;
-            color: white;
-        }
-        .btn-primary:hover { background: #4f46e5; }
-        .btn-secondary {
-            background: #f3f4f6;
-            color: #374151;
-        }
-        .btn-secondary:hover { background: #e5e7eb; }
-        .btn svg { width: 18px; height: 18px; }
+        .download-btn:hover { background: #4f46e5; }
+        .download-btn svg { width: 18px; height: 18px; }
+        .download-btn-wrap { text-align: center; }
         .password-badge {
             display: inline-flex;
             align-items: center;
@@ -105,211 +89,167 @@
             background: #fef3c7;
             color: #92400e;
         }
-        /* Listing panel */
-        .listing {
-            background: white;
-            border-radius: 1rem;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-            padding: 1rem;
+        /* Divider */
+        .divider {
+            margin: 1.5rem 0 1rem;
+            border: none;
+            border-top: 1px solid #f3f4f6;
         }
+        /* Breadcrumb */
         .breadcrumb {
             display: flex;
             align-items: center;
             gap: 0.25rem;
-            font-size: 0.8125rem;
-            padding: 0.5rem 0.75rem;
-            margin-bottom: 0.5rem;
-            border-bottom: 1px solid #f3f4f6;
+            font-size: 0.75rem;
+            margin-bottom: 0.75rem;
             flex-wrap: wrap;
         }
-        .breadcrumb a {
-            color: #6366f1;
-            text-decoration: none;
-        }
+        .breadcrumb a { color: #6366f1; text-decoration: none; }
         .breadcrumb a:hover { text-decoration: underline; }
         .breadcrumb span { color: #d1d5db; }
+        /* Entries */
         .entry {
             display: flex;
             align-items: center;
-            padding: 0.5rem 0.75rem;
-            border-radius: 0.5rem;
-            cursor: pointer;
-            transition: background 0.1s;
+            padding: 0.375rem 0.5rem;
+            border-radius: 0.375rem;
             text-decoration: none;
             color: inherit;
+            transition: background 0.1s;
         }
         .entry:hover { background: #f9fafb; }
         .entry-icon {
-            width: 28px;
-            height: 28px;
-            border-radius: 6px;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-            margin-right: 0.75rem;
-            font-size: 10px;
+            margin-right: 0.5rem;
+            font-size: 8px;
             font-weight: 700;
             text-transform: uppercase;
         }
         .entry-name {
             flex: 1;
-            font-size: 0.875rem;
+            font-size: 0.8125rem;
             font-weight: 500;
             word-break: break-all;
             min-width: 0;
         }
         .entry-size {
-            font-size: 0.8125rem;
+            font-size: 0.75rem;
             color: #9ca3af;
-            margin-left: 1rem;
-            white-space: nowrap;
-        }
-        .entry-mtime {
-            font-size: 0.8125rem;
-            color: #9ca3af;
-            margin-left: 1.5rem;
+            margin-left: 0.75rem;
             white-space: nowrap;
         }
         .empty {
             text-align: center;
-            padding: 3rem 1rem;
+            padding: 2rem 1rem;
             color: #9ca3af;
-            font-size: 0.875rem;
+            font-size: 0.8125rem;
         }
         .footer {
-            text-align: center;
             margin-top: 2rem;
             font-size: 0.75rem;
             color: #d1d5db;
-        }
-        @media (max-width: 640px) {
-            .entry-mtime { display: none; }
-            body { padding: 1rem 0.5rem; }
-            .card, .listing { border-radius: 0.75rem; }
+            text-align: center;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <!-- Header card -->
-        <div class="card">
-            <div class="folder-icon">
-                <svg viewBox="0 0 24 24"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>
-            </div>
-            <div class="dir-name">{{ dir_name }}</div>
-            <div class="dir-summary">{{ item_count }} item{% if item_count != 1 %}s{% endif %}</div>
+    <div class="card">
+        <!-- Folder icon -->
+        <div class="folder-icon">
+            <svg viewBox="0 0 24 24"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>
+        </div>
 
-            <div class="meta">
-                <span class="meta-item">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                    </svg>
-                    {{ created_at_display }}
-                </span>
-                {% if has_password %}
-                <span class="password-badge">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:12px;height:12px;">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                    </svg>
-                    Protected
-                </span>
-                {% endif %}
-            </div>
+        <!-- Name -->
+        <div class="dir-name">{{ dir_name }}</div>
+        <div class="dir-summary">{{ item_count }} item{% if item_count != 1 %}s{% endif %}</div>
 
-            <div class="actions">
-                <a href="{{ download_url }}" class="btn btn-primary">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                    </svg>
-                    Download ZIP
-                </a>
-                <a href="{{ browse_url }}" class="btn btn-secondary">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
-                    </svg>
-                    Browse Files
-                </a>
-            </div>
-
-            {% if expires_at_display != "Never" %}
-            <p style="margin-top: 1.5rem; font-size: 0.8rem; color: #ef4444;">
-                Expires: {{ expires_at_display }}
-            </p>
+        <!-- Metadata -->
+        <div class="meta">
+            <span class="meta-item">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                {{ created_at_display }}
+            </span>
+            {% if has_password %}
+            <span class="password-badge">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:12px;height:12px;">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                </svg>
+                Protected
+            </span>
             {% endif %}
         </div>
 
-        <!-- File listing panel (hidden by default, shown via Browse Files) -->
-        <div id="file-listing" class="listing" style="display:none;">
-            <div class="breadcrumb">
-                <a href="/d/{{ token }}/?p=/{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}">root</a>
-                {% if dir_path != "/" %}
-                <span>/</span>
-                <span>{{ dir_path }}</span>
-                {% endif %}
-            </div>
+        <!-- Download ZIP -->
+        <div class="download-btn-wrap">
+            <a href="{{ download_url }}" class="download-btn">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+                Download ZIP
+            </a>
+        </div>
 
-            {% if entries.is_empty() %}
-            <div class="empty">
-                <p>This folder is empty</p>
-            </div>
-            {% else %}
-            <div>
-                {% if let Some(parent) = parent_path %}
-                <a href="/d/{{ token }}/?p={{ parent }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry">
-                    <div class="entry-icon" style="background:#f3f4f6;">
-                        <svg width="14" height="14" fill="none" stroke="#9ca3af" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        {% if expires_at_display != "Never" %}
+        <p style="margin-top: 1rem; font-size: 0.8rem; color: #ef4444; text-align: center;">
+            Expires: {{ expires_at_display }}
+        </p>
+        {% endif %}
+
+        <!-- File browser (always visible) -->
+        <hr class="divider">
+
+        <div class="breadcrumb">
+            <a href="/d/{{ token }}/{% if !password_query.is_empty() %}?{{ password_query }}{% endif %}">root</a>
+            {% if dir_path != "/" %}
+            <span>/</span>
+            <span>{{ dir_path }}</span>
+            {% endif %}
+        </div>
+
+        {% if entries.is_empty() %}
+        <div class="empty">This folder is empty</div>
+        {% else %}
+            {% if let Some(parent) = parent_path %}
+            <a href="/d/{{ token }}/?p={{ parent }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry">
+                <div class="entry-icon" style="background:#f3f4f6;">
+                    <svg width="12" height="12" fill="none" stroke="#9ca3af" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                    </svg>
+                </div>
+                <span class="entry-name" style="color:#6366f1;">.. (parent)</span>
+            </a>
+            {% endif %}
+
+            {% for entry in entries %}
+                {% if entry.is_dir %}
+                <a href="/d/{{ token }}/?p={{ entry.full_path }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry">
+                    <div class="entry-icon" style="background:#fef3c7;">
+                        <svg width="12" height="12" fill="#d97706" viewBox="0 0 24 24">
+                            <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
                         </svg>
                     </div>
-                    <span class="entry-name" style="color:#6366f1;">.. (parent)</span>
+                    <span class="entry-name">{{ entry.name }}/</span>
+                    <span class="entry-size">-</span>
+                </a>
+                {% else %}
+                <a href="/d/{{ token }}/files{{ entry.full_path }}?dl=1{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry">
+                    <div class="entry-icon" style="background:#f3f4f6;color:#6366f1;">{{ entry.ext|truncate(4) }}</div>
+                    <span class="entry-name">{{ entry.name }}</span>
+                    <span class="entry-size">{{ entry.size }}</span>
                 </a>
                 {% endif %}
-
-                {% for entry in entries %}
-                    {% if entry.is_dir %}
-                    <a href="/d/{{ token }}/?p={{ entry.full_path }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry">
-                        <div class="entry-icon" style="background:#fef3c7;">
-                            <svg width="14" height="14" fill="#d97706" viewBox="0 0 24 24">
-                                <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
-                            </svg>
-                        </div>
-                        <span class="entry-name">{{ entry.name }}/</span>
-                        <span class="entry-size">-</span>
-                        <span class="entry-mtime">{{ entry.mtime }}</span>
-                    </a>
-                    {% else %}
-                    <a href="/d/{{ token }}/files{{ entry.full_path }}?dl=1{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry">
-                        <div class="entry-icon" style="background:#f3f4f6;color:#6366f1;">{{ entry.ext|truncate(4) }}</div>
-                        <span class="entry-name">{{ entry.name }}</span>
-                        <span class="entry-size">{{ entry.size }}</span>
-                        <span class="entry-mtime">{{ entry.mtime }}</span>
-                    </a>
-                    {% endif %}
-                {% endfor %}
-            </div>
-            {% endif %}
-        </div>
+            {% endfor %}
+        {% endif %}
 
         <div class="footer">Powered by Nanofile</div>
     </div>
-
-    <script>
-        // Show file listing if URL has ?p= param, otherwise hide it
-        (function() {
-            var params = new URLSearchParams(window.location.search);
-            var listing = document.getElementById("file-listing");
-            if (params.has("p") && params.get("p") !== "/") {
-                listing.style.display = "block";
-            }
-            // Click "Browse Files" toggles the listing
-            document.querySelectorAll('[href="#listing"]').forEach(function(el) {
-                el.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    listing.style.display = listing.style.display === "none" ? "block" : "none";
-                });
-            });
-        })();
-    </script>
 </body>
 </html>
