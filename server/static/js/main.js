@@ -697,39 +697,82 @@
     if (selectedPaths.has(name)) {
       selectedPaths.delete(name);
       row.classList.remove("selected");
-      // If nothing selected, reset panel to placeholder
       if (selectedPaths.size === 0 && typeof window.resetRightPanel === "function") {
         window.resetRightPanel();
+      } else if (selectedPaths.size === 1) {
+        // One item left — show its details in the right panel
+        var lastRow = document.querySelector(".js-entry-row.selected");
+        if (lastRow && typeof window.openRightPanel === "function") {
+          var dlUrl = lastRow.dataset.type !== "dir"
+            ? "/libraries/" + lastRow.dataset.repoId + "/files/" + lastRow.dataset.path + "?dl=1"
+            : "";
+          window.openRightPanel({
+            name: lastRow.dataset.name,
+            type: lastRow.dataset.type,
+            size: lastRow.dataset.size,
+            sizeDisplay: lastRow.dataset.sizeDisplay,
+            mtime: lastRow.dataset.mtime,
+            mtimeDisplay: lastRow.dataset.mtimeDisplay,
+            starred: lastRow.dataset.starred === "true",
+            extension: lastRow.dataset.extension,
+            path: lastRow.dataset.path,
+            repoId: lastRow.dataset.repoId,
+            modifierEmail: lastRow.dataset.modifierEmail,
+            thumbnailUrl: lastRow.dataset.thumbnailUrl,
+            isPreviewable: lastRow.dataset.isPreviewable === "true",
+            downloadUrl: dlUrl,
+          });
+        }
+      } else {
+        // Still multiple items — update multi-select panel
+        if (typeof window.openMultiSelectPanel === "function") {
+          window.openMultiSelectPanel(getSelectedItems());
+        }
       }
     } else {
       selectedPaths.add(name);
       row.classList.add("selected");
 
-      // Open/update right panel with this row's data
-      if (typeof window.openRightPanel === "function") {
-        var downloadUrl = row.dataset.type !== "dir"
-          ? "/libraries/" + row.dataset.repoId + "/files/" + row.dataset.path + "?dl=1"
-          : "";
-        window.openRightPanel({
-          name: row.dataset.name,
-          type: row.dataset.type,
-          size: row.dataset.size,
-          sizeDisplay: row.dataset.sizeDisplay,
-          mtime: row.dataset.mtime,
-          mtimeDisplay: row.dataset.mtimeDisplay,
-          starred: row.dataset.starred === "true",
-          extension: row.dataset.extension,
-          path: row.dataset.path,
-          repoId: row.dataset.repoId,
-          modifierEmail: row.dataset.modifierEmail,
-          thumbnailUrl: row.dataset.thumbnailUrl,
-          isPreviewable: row.dataset.isPreviewable === "true",
-          downloadUrl: downloadUrl,
-        });
+      if (selectedPaths.size === 1) {
+        // Single selection — show file details
+        if (typeof window.openRightPanel === "function") {
+          var downloadUrl = row.dataset.type !== "dir"
+            ? "/libraries/" + row.dataset.repoId + "/files/" + row.dataset.path + "?dl=1"
+            : "";
+          window.openRightPanel({
+            name: row.dataset.name,
+            type: row.dataset.type,
+            size: row.dataset.size,
+            sizeDisplay: row.dataset.sizeDisplay,
+            mtime: row.dataset.mtime,
+            mtimeDisplay: row.dataset.mtimeDisplay,
+            starred: row.dataset.starred === "true",
+            extension: row.dataset.extension,
+            path: row.dataset.path,
+            repoId: row.dataset.repoId,
+            modifierEmail: row.dataset.modifierEmail,
+            thumbnailUrl: row.dataset.thumbnailUrl,
+            isPreviewable: row.dataset.isPreviewable === "true",
+            downloadUrl: downloadUrl,
+          });
+        }
+      } else {
+        // Multi-selection — show summary of selected items
+        if (typeof window.openMultiSelectPanel === "function") {
+          window.openMultiSelectPanel(getSelectedItems());
+        }
       }
     }
     updateSelectionBar();
   });
+
+  function getSelectedItems() {
+    var items = [];
+    document.querySelectorAll(".js-entry-row.selected").forEach(function (r) {
+      items.push({ name: r.dataset.name, type: r.dataset.type });
+    });
+    return items;
+  }
 
   // Select All / Deselect All button
   document.addEventListener("click", function (e) {
@@ -751,6 +794,10 @@
         }
       });
       updateSelectionBar();
+      // Show multi-select panel
+      if (typeof window.openMultiSelectPanel === "function") {
+        window.openMultiSelectPanel(getSelectedItems());
+      }
     }
   });
 

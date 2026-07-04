@@ -158,11 +158,13 @@
 
     var ph = document.querySelector(".js-rp-placeholder");
     var ct = document.querySelector(".js-rp-content");
+    var mc = document.querySelector(".js-rp-multi-content");
     if (!ph || !ct) return;
 
-    // Show content, hide placeholder
+    // Show content, hide placeholder and multi-select panel
     ph.classList.add("hidden");
     ct.classList.remove("hidden");
+    if (mc) mc.classList.add("hidden");
 
     // ── Preview ──
     var thumbImg = ct.querySelector(".js-rp-thumb-img");
@@ -257,14 +259,91 @@
       shareBtn.dataset.path = d.path || "";
       shareBtn.dataset.type = d.type || "";
     }
+
+    // ── Share Links (fetch existing links for this file) ──
+    var shareSection = ct.querySelector(".js-rp-share-links-section");
+    var shareList = ct.querySelector(".js-rp-share-links-list");
+    var noLinks = ct.querySelector(".js-rp-no-share-links");
+    if (shareSection && shareList && noLinks) {
+      shareSection.classList.add("hidden");
+      noLinks.classList.add("hidden");
+      if (d.repoId && d.path) {
+        fetch("/api/v2.1/share-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            var links = data.share_link_list || [];
+            shareList.innerHTML = "";
+            if (links.length === 0) {
+              noLinks.classList.remove("hidden");
+            } else {
+              links.forEach(function (link) {
+                var div = document.createElement("div");
+                div.className = "flex items-center justify-between py-0.5";
+                div.innerHTML =
+                  '<a href="' + escapeHtml(link.link || "") + '" target="_blank" class="text-xs text-brand-500 hover:text-brand-600 truncate block">' +
+                    escapeHtml(link.token || "") +
+                  '</a>' +
+                  '<span class="text-xs text-gray-400 flex-shrink-0 ml-2">' + (link.view_cnt || 0) + ' views</span>';
+                shareList.appendChild(div);
+              });
+            }
+            shareSection.classList.remove("hidden");
+          })
+          .catch(function () { /* ignore */ });
+      }
+    }
+  };
+
+  // ─── Multi-select right panel ──────────────────────────────────────
+  window.openMultiSelectPanel = function (selectedItems) {
+    // selectedItems = [{ name, type }, ...]
+    var ph = document.querySelector(".js-rp-placeholder");
+    var ct = document.querySelector(".js-rp-content");
+    var mc = document.querySelector(".js-rp-multi-content");
+    if (!ph || !ct || !mc) return;
+
+    ph.classList.add("hidden");
+    ct.classList.add("hidden");
+    mc.classList.remove("hidden");
+
+    var countEl = mc.querySelector(".js-rp-multi-count");
+    if (countEl) countEl.textContent = selectedItems.length + " item(s) selected";
+
+    var listEl = mc.querySelector(".js-rp-multi-list");
+    if (listEl) {
+      listEl.innerHTML = "";
+      selectedItems.forEach(function (item) {
+        var div = document.createElement("div");
+        div.className = "flex items-center gap-2 py-0.5";
+        // Folder icon or file extension badge
+        if (item.type === "dir") {
+          var iconSpan = document.createElement("span");
+          iconSpan.className = "h-5 w-5 flex-shrink-0 flex items-center justify-center";
+          iconSpan.innerHTML = '<svg class="h-4 w-4 text-amber-400" fill="currentColor" viewBox="0 0 24 24"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>';
+          div.appendChild(iconSpan);
+        } else {
+          var badgeSpan = document.createElement("span");
+          badgeSpan.className = "h-5 w-5 flex-shrink-0 rounded bg-gray-100 dark:bg-surface-700 flex items-center justify-center text-[9px] leading-none font-semibold text-gray-500 dark:text-gray-400";
+          badgeSpan.textContent = "F";
+          div.appendChild(badgeSpan);
+        }
+        var nameSpan = document.createElement("span");
+        nameSpan.className = "text-xs text-gray-900 dark:text-gray-100 truncate";
+        nameSpan.textContent = item.name + (item.type === "dir" ? "/" : "");
+        div.appendChild(nameSpan);
+        listEl.appendChild(div);
+      });
+    }
   };
 
   // Reset right panel to placeholder state
   window.resetRightPanel = function () {
     var ph = document.querySelector(".js-rp-placeholder");
     var ct = document.querySelector(".js-rp-content");
+    var mc = document.querySelector(".js-rp-multi-content");
     if (ph) ph.classList.remove("hidden");
     if (ct) ct.classList.add("hidden");
+    if (mc) mc.classList.add("hidden");
   };
 
   // ─── Helpers ─────────────────────────────────────────────────────────

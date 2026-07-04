@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -32,6 +32,12 @@ pub struct CreateLinkRequest {
 }
 
 #[derive(Deserialize)]
+pub struct ListShareLinksQuery {
+    pub repo_id: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct UpdateLinkRequest {
     #[serde(default, deserialize_with = "deserialize_nullable")]
     pub password: Option<Option<String>>,
@@ -42,11 +48,20 @@ pub struct UpdateLinkRequest {
 }
 
 /// GET /api/v2.1/share-links/
+///
+/// Optional query params (matching seafile API contract):
+/// - `repo_id` — filter by repo
+/// - `path` — filter by exact path (used with `repo_id`)
 pub async fn list_share_links_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
+    Query(query): Query<ListShareLinksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let infos = share::list_share_links(&state.repos, auth.user_id).await?;
+    let infos = if let (Some(repo_id), Some(path)) = (&query.repo_id, &query.path) {
+        share::list_share_links_for_path(&state.repos, repo_id, path).await?
+    } else {
+        share::list_share_links(&state.repos, auth.user_id).await?
+    };
     let items: Vec<serde_json::Value> = infos
         .into_iter()
         .map(|l| {

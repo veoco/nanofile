@@ -118,6 +118,35 @@ pub async fn list_share_links(
     Ok(infos)
 }
 
+pub async fn list_share_links_for_path(
+    repos: &Repositories,
+    repo_id: &str,
+    path: &str,
+) -> Result<Vec<ShareLinkInfo>, AppError> {
+    let links = repos
+        .share_link
+        .find_by_repo_and_path(repo_id, path)
+        .await?;
+
+    let infos: Vec<ShareLinkInfo> = links
+        .into_iter()
+        .map(|l| ShareLinkInfo {
+            token: l.token.clone(),
+            link: format!("/f/{}/", l.token),
+            repo_id: l.repo_id,
+            path: l.path,
+            created_at: l.created_at,
+            has_password: l.password.is_some(),
+            expire_at: l.expires_at,
+            s_type: l.s_type,
+            view_cnt: l.view_cnt,
+            description: l.description,
+        })
+        .collect();
+
+    Ok(infos)
+}
+
 pub async fn create_share_link(
     db: &DatabaseConnection,
     repos: &Repositories,
