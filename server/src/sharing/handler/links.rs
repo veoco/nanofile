@@ -39,6 +39,12 @@ pub struct ListShareLinksQuery {
 }
 
 #[derive(Deserialize)]
+pub struct ListUploadLinksQuery {
+    pub repo_id: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct UpdateLinkRequest {
     #[serde(default, deserialize_with = "deserialize_nullable")]
     pub password: Option<Option<String>>,
@@ -155,11 +161,20 @@ pub async fn update_share_link_v21(
 }
 
 /// GET /api/v2.1/upload-links/
+///
+/// Optional query params (matching seafile API contract):
+/// - `repo_id` — filter by repo
+/// - `path` — filter by exact path (used with `repo_id`)
 pub async fn list_upload_links_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
+    Query(query): Query<ListUploadLinksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let items = link::list_upload_links_v21(&state.repos, auth.user_id).await?;
+    let items = if let (Some(repo_id), Some(path)) = (&query.repo_id, &query.path) {
+        link::list_upload_links_for_path(&state.repos, repo_id, path).await?
+    } else {
+        link::list_upload_links_v21(&state.repos, auth.user_id).await?
+    };
     Ok(Json(serde_json::json!({"upload_link_list": items})))
 }
 

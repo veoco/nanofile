@@ -9,6 +9,11 @@ use crate::error::AppError;
 
 #[async_trait]
 pub trait UploadLinkRepository: Send + Sync {
+    async fn find_by_repo_and_path(
+        &self,
+        repo_id: &str,
+        path: &str,
+    ) -> Result<Vec<upload_link::Model>, AppError>;
     async fn find_by_creator_id(
         &self,
         creator_id: i32,
@@ -44,6 +49,18 @@ impl DbUploadLinkRepository {
 
 #[async_trait]
 impl UploadLinkRepository for DbUploadLinkRepository {
+    async fn find_by_repo_and_path(
+        &self,
+        repo_id: &str,
+        path: &str,
+    ) -> Result<Vec<upload_link::Model>, AppError> {
+        Ok(upload_link::Entity::find()
+            .filter(upload_link::Column::RepoId.eq(repo_id))
+            .filter(upload_link::Column::Path.eq(path))
+            .all(self.db.as_ref())
+            .await?)
+    }
+
     async fn find_by_creator_id(
         &self,
         creator_id: i32,

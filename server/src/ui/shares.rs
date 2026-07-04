@@ -1,7 +1,7 @@
 /// Web UI share handlers — list, create, delete share links.
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse},
 };
@@ -44,6 +44,7 @@ pub struct SharesTemplate {
     pub share_links: Vec<ShareLinkInfo>,
     pub upload_links: Vec<UploadLinkInfo>,
     pub active_page: &'static str,
+    pub active_tab: String,
     pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
@@ -82,10 +83,16 @@ pub struct CreateShareForm {
     pub csrf_token: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct SharesQuery {
+    pub tab: Option<String>,
+}
+
 /// GET /share/ — list all share links.
 pub async fn list_shares(
     user: WebUser,
     State(state): State<Arc<AppState>>,
+    Query(query): Query<SharesQuery>,
 ) -> Result<Html<String>, AppError> {
     let db = state.db.as_ref();
 
@@ -154,6 +161,11 @@ pub async fn list_shares(
         })
         .collect();
 
+    let active_tab = query
+        .tab
+        .filter(|t| t == "upload-links")
+        .unwrap_or("share-links".to_string());
+
     let csrf_token =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     let left_panel_repos =
@@ -166,6 +178,7 @@ pub async fn list_shares(
         share_links,
         upload_links,
         active_page: "shares",
+        active_tab,
         left_panel_repos,
         current_repo_id: None,
     };
@@ -243,7 +256,11 @@ pub async fn delete_share(
         .await
         .map_err(|e| AppError::internal(format!("delete failed: {e}")))?;
 
-    Ok((StatusCode::FOUND, [("Location", "/shares/")]).into_response())
+    let redirect = match form.get("tab").map(|s| s.as_str()) {
+        Some("upload-links") => "/shares/?tab=upload-links",
+        _ => "/shares/",
+    };
+    Ok((StatusCode::FOUND, [("Location", redirect)]).into_response())
 }
 
 /// POST /shares/upload/{token}/delete/ — delete an upload link.
@@ -276,5 +293,9 @@ pub async fn delete_upload(
         .await
         .map_err(|e| AppError::internal(format!("delete failed: {e}")))?;
 
-    Ok((StatusCode::FOUND, [("Location", "/shares/")]).into_response())
+    let redirect = match form.get("tab").map(|s| s.as_str()) {
+        Some("upload-links") => "/shares/?tab=upload-links",
+        _ => "/shares/",
+    };
+    Ok((StatusCode::FOUND, [("Location", redirect)]).into_response())
 }

@@ -126,6 +126,9 @@
                 <button type="button" class="js-share-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
                     Cancel
                 </button>
+                <button type="button" id="share-delete-btn" class="hidden rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50">
+                    Delete
+                </button>
                 <button type="button" class="js-share-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
                     Create
                 </button>
@@ -238,6 +241,7 @@
         createForm.classList.remove('hidden');
         linkDisplay.classList.add('hidden');
         deleteBtn.classList.add('hidden');
+        cancelBtn.classList.remove('hidden');
         createBtn.textContent = 'Create';
         createBtn.disabled = false;
         pwdInput.value = '';
@@ -245,23 +249,6 @@
         descInput.value = '';
         errorDiv.classList.add('hidden');
         overlay.classList.remove('hidden');
-        checkExistingLink();
-    }
-
-    async function checkExistingLink() {
-        try {
-            var url = '/api/v2.1/upload-links/?repo_id=' + encodeURIComponent(currentRepoId) +
-                      '&path=' + encodeURIComponent(currentPath);
-            var resp = await apiFetch(url);
-            if (!resp.ok) return;
-            var data = await resp.json();
-            var list = data.upload_link_list || [];
-            if (list.length > 0) {
-                var link = list[0];
-                currentToken = link.token;
-                showLink('/u/' + link.token + '/');
-            }
-        } catch (e) { /* silently ignore */ }
     }
 
     function showLink(url) {
@@ -269,6 +256,7 @@
         linkDisplay.classList.remove('hidden');
         linkUrl.value = window.location.origin + url;
         deleteBtn.classList.remove('hidden');
+        cancelBtn.classList.add('hidden');
         createBtn.textContent = 'Close';
     }
 
@@ -329,6 +317,7 @@
                 createForm.classList.remove('hidden');
                 linkDisplay.classList.add('hidden');
                 deleteBtn.classList.add('hidden');
+                cancelBtn.classList.remove('hidden');
                 createBtn.textContent = 'Create';
             } else {
                 var text = await resp.text().catch(function() { return ''; });

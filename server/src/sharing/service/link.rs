@@ -117,6 +117,32 @@ pub async fn list_upload_links_v21(
     Ok(items)
 }
 
+pub async fn list_upload_links_for_path(
+    repos: &Repositories,
+    repo_id: &str,
+    path: &str,
+) -> Result<Vec<serde_json::Value>, AppError> {
+    let links = repos
+        .upload_link
+        .find_by_repo_and_path(repo_id, path)
+        .await?;
+    let items: Vec<serde_json::Value> = links
+        .into_iter()
+        .map(|l| {
+            serde_json::json!({
+                "token": l.token,
+                "repo_id": l.repo_id,
+                "path": l.path,
+                "has_password": l.password.is_some(),
+                "expire_at": l.expires_at,
+                "view_cnt": l.view_cnt,
+                "description": l.description,
+            })
+        })
+        .collect();
+    Ok(items)
+}
+
 pub async fn create_upload_link_v21(
     db: &DatabaseConnection,
     config: &Config,

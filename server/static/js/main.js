@@ -424,12 +424,14 @@
   var shareDialogError = document.querySelector(".js-share-dialog-error");
   var shareConfirmBtn = document.querySelector(".js-share-confirm");
   var shareCancelBtn = document.querySelector(".js-share-cancel");
+  var shareDeleteBtn = document.getElementById("share-delete-btn");
   var shareLinkDisplay = document.getElementById("share-link-display");
   var shareLinkUrl = document.getElementById("share-link-url");
   var shareCreateForm = shareDialog ? shareDialog.querySelector(".space-y-3") : null;
   var shareCurrentRepoId = "";
   var shareCurrentPath = "";
   var shareCurrentType = "";
+  var shareCurrentToken = "";
 
   // ─── Share button — open dialog ─────────────────────────────────────
   document.addEventListener("click", function (e) {
@@ -439,6 +441,7 @@
     shareCurrentRepoId = btn.dataset.repoId;
     shareCurrentPath = btn.dataset.path;
     shareCurrentType = btn.dataset.type || "file";
+    shareCurrentToken = "";
     var name = shareCurrentPath.split("/").filter(Boolean).pop() || shareCurrentPath;
 
     if (!shareCurrentRepoId || !shareCurrentPath) return;
@@ -453,6 +456,7 @@
     shareConfirmBtn.textContent = "Create";
     shareConfirmBtn.classList.remove("hidden");
     shareCancelBtn.classList.remove("hidden");
+    shareDeleteBtn.classList.add("hidden");
     if (shareCreateForm) shareCreateForm.classList.remove("hidden");
     if (shareLinkDisplay) shareLinkDisplay.classList.add("hidden");
 
@@ -468,6 +472,39 @@
   });
   shareDialog.addEventListener("click", function (e) {
     if (e.target === shareDialog) shareDialog.classList.add("hidden");
+  });
+
+  // ─── Share delete — delete link via API ────────────────────────────
+  shareDeleteBtn.addEventListener("click", async function () {
+    if (!shareCurrentToken) return;
+    if (!confirm("Delete this share link?")) return;
+
+    shareDeleteBtn.disabled = true;
+    shareDialogError.classList.add("hidden");
+
+    try {
+      var resp = await apiFetch("/api/v2.1/share-links/" + shareCurrentToken + "/", {
+        method: "DELETE",
+      });
+      if (resp.ok) {
+        shareCurrentToken = "";
+        if (shareCreateForm) shareCreateForm.classList.remove("hidden");
+        if (shareLinkDisplay) shareLinkDisplay.classList.add("hidden");
+        shareDeleteBtn.classList.add("hidden");
+        shareConfirmBtn.textContent = "Create";
+        shareCancelBtn.classList.remove("hidden");
+        shareDialogError.textContent = "";
+      } else {
+        var text = await resp.text().catch(function () { return ""; });
+        shareDialogError.textContent = text || "Failed to delete share link";
+        shareDialogError.classList.remove("hidden");
+      }
+    } catch (err) {
+      shareDialogError.textContent = err.message;
+      shareDialogError.classList.remove("hidden");
+    } finally {
+      shareDeleteBtn.disabled = false;
+    }
   });
 
   // ─── Share confirm — create link via API ────────────────────────────
@@ -502,6 +539,7 @@
         body: JSON.stringify(body),
       });
       var data = await resp.json();
+      shareCurrentToken = data.token;
       var sType = data.s_type || shareCurrentType;
       var prefix = sType === "d" ? "/d/" : "/f/";
       var shareUrl = window.location.origin + prefix + data.token + "/";
@@ -513,6 +551,7 @@
       }
       shareConfirmBtn.textContent = "Close";
       shareCancelBtn.classList.add("hidden");
+      shareDeleteBtn.classList.remove("hidden");
     } catch (err) {
       shareDialogError.textContent = err.message;
       shareDialogError.classList.remove("hidden");

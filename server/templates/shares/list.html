@@ -8,18 +8,18 @@
 
 <!-- Tab bar -->
 <div class="mt-4 flex gap-4 border-b border-gray-200 dark:border-gray-700">
-    <button type="button" class="tab-btn tab-btn--active pb-2 px-1 text-sm font-medium text-brand-600 dark:text-brand-400 border-b-2 border-brand-600 dark:border-brand-400"
+    <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium border-b-2 {% if active_tab == "share-links" %}tab-btn--active text-brand-600 dark:text-brand-400 border-brand-600 dark:border-brand-400{% else %}text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300{% endif %}"
             data-tab="share-links" onclick="switchTab('share-links')">
         Share Links ({{ share_links.len() }})
     </button>
-    <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium text-gray-500 dark:text-gray-400 border-b-2 border-transparent hover:text-gray-700 dark:hover:text-gray-300"
+    <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium border-b-2 {% if active_tab == "upload-links" %}tab-btn--active text-brand-600 dark:text-brand-400 border-brand-600 dark:border-brand-400{% else %}text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300{% endif %}"
             data-tab="upload-links" onclick="switchTab('upload-links')">
         Upload Links ({{ upload_links.len() }})
     </button>
 </div>
 
 <!-- Share Links table -->
-<div id="tab-share-links" class="tab-content">
+<div id="tab-share-links" class="tab-content {% if active_tab != "share-links" %}hidden{% endif %}">
 {% if share_links.is_empty() %}
 <div class="mt-8 text-center">
     <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -99,8 +99,9 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                                 </svg>
                             </button>
-                            <form action="/shares/{{ s.token }}/delete/" method="POST" class="inline" onsubmit="return confirm('Delete this share link?');">
+                            <form action="/shares/{{ s.token }}/delete/" method="POST" class="delete-form inline" onsubmit="return confirm('Delete this share link?');">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="tab" value="{{ active_tab }}">
                                 <button type="submit" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors" title="Delete share link">
                                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
@@ -119,7 +120,7 @@
 </div>
 
 <!-- Upload Links table -->
-<div id="tab-upload-links" class="tab-content hidden">
+<div id="tab-upload-links" class="tab-content {% if active_tab != "upload-links" %}hidden{% endif %}">
 {% if upload_links.is_empty() %}
 <div class="mt-8 text-center">
     <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -185,8 +186,9 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                                 </svg>
                             </button>
-                            <form action="/shares/upload/{{ u.token }}/delete/" method="POST" class="inline" onsubmit="return confirm('Delete this upload link?');">
+                            <form action="/shares/upload/{{ u.token }}/delete/" method="POST" class="delete-form inline" onsubmit="return confirm('Delete this upload link?');">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="tab" value="{{ active_tab }}">
                                 <button type="submit" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors" title="Delete upload link">
                                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
@@ -318,6 +320,22 @@ function switchTab(name) {
         btn.classList.remove('text-gray-500', 'dark:text-gray-400', 'border-transparent');
         btn.classList.add('tab-btn--active', 'text-brand-600', 'dark:text-brand-400', 'border-brand-600', 'dark:border-brand-400');
     }
+
+    // Update URL query param to persist tab state across reloads
+    var params = new URLSearchParams(window.location.search);
+    if (name === 'upload-links') {
+        params.set('tab', 'upload-links');
+    } else {
+        params.delete('tab');
+    }
+    var newSearch = params.toString();
+    var newUrl = newSearch ? window.location.pathname + '?' + newSearch : window.location.pathname;
+    window.history.replaceState(null, '', newUrl);
+
+    // Keep delete form hidden inputs in sync
+    document.querySelectorAll('.delete-form input[name="tab"]').forEach(function(input) {
+        input.value = name === 'upload-links' ? 'upload-links' : '';
+    });
 }
 
 // ─── Edit share link dialog ──────────────────────────────────────────
