@@ -62,6 +62,7 @@ struct ShareViewTemplate {
     pub expires_at_display: String,
     pub created_at_display: String,
     pub download_url: String,
+    pub description: Option<String>,
 }
 
 #[derive(Template)]
@@ -269,6 +270,7 @@ pub async fn shared_file_view(
         expires_at_display: expires_display,
         created_at_display: created_display,
         download_url,
+        description: link.description.clone(),
     };
 
     let html = tpl
@@ -330,6 +332,7 @@ struct SharedDirViewTemplate {
     pub created_at_display: String,
     pub download_url: String,
     pub password_query: String,
+    pub description: Option<String>,
 }
 
 struct DirEntryInfo {
@@ -663,6 +666,7 @@ pub async fn shared_dir_view(
         created_at_display: created_display,
         download_url,
         password_query: pw_query,
+        description: link.description.clone(),
     };
 
     let html = tpl

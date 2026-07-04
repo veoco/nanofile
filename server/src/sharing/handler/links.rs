@@ -3,12 +3,24 @@ use axum::{
     extract::{Path, State},
 };
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::sharing::service::{link, share};
+
+/// Custom deserializer that maps JSON `null` to `Some(None)` and a present
+/// value to `Some(Some(v))`, while a missing field remains `None` (via
+/// `#[serde(default)]`). This distinguishes "don't update" from "set to null".
+fn deserialize_nullable<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    Ok(Some(Option::<T>::deserialize(d)?))
+}
 
 #[derive(Deserialize)]
 pub struct CreateLinkRequest {
@@ -21,8 +33,11 @@ pub struct CreateLinkRequest {
 
 #[derive(Deserialize)]
 pub struct UpdateLinkRequest {
+    #[serde(default, deserialize_with = "deserialize_nullable")]
     pub password: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_nullable")]
     pub expire_days: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_nullable")]
     pub description: Option<Option<String>>,
 }
 
@@ -99,6 +114,7 @@ pub async fn update_share_link_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let info = share::update_share_link_v21(
         state.db.as_ref(),
+        &state.config,
         &state.repos,
         &token,
         auth.user_id,

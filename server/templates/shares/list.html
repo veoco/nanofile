@@ -26,6 +26,7 @@
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Type</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Created</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Expires</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Description</th>
                     <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Views</th>
                     <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Password</th>
                     <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Actions</th>
@@ -54,6 +55,13 @@
                     </td>
                     <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ s.created_at }}</td>
                     <td class="px-4 py-3 text-sm {% if s.expires_at != "Never" %}text-red-500{% else %}text-gray-500 dark:text-gray-400{% endif %} whitespace-nowrap">{{ s.expires_at }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 max-w-0">
+                        {% if s.description.is_some() %}
+                        <span class="truncate block" title="{{ s.description.as_deref().unwrap_or("") }}">{{ s.description.as_deref().unwrap_or("") }}</span>
+                        {% else %}
+                        <span class="text-gray-300 dark:text-gray-600">—</span>
+                        {% endif %}
+                    </td>
                     <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-center">{{ s.view_cnt }}</td>
                     <td class="px-4 py-3 text-center">
                         {% if s.has_password %}
@@ -71,6 +79,7 @@
                                     data-token="{{ s.token }}"
                                     data-path="{{ s.path }}"
                                     data-expires="{{ s.expires_at }}"
+                                    data-description="{{ s.description.as_deref().unwrap_or("") }}"
                                     title="Edit share link">
                                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
@@ -166,7 +175,7 @@
         expirySelect.value = "";
         passwordInput.value = "";
         document.getElementById("edit-password-clear").checked = false;
-        descInput.value = "";
+        descInput.value = btn.dataset.description || "";
         errorDiv.classList.add("hidden");
         confirmBtn.disabled = false;
         confirmBtn.textContent = "Save";
@@ -201,7 +210,7 @@
         }
 
         var desc = descInput.value.trim();
-        if (desc) body.description = desc;
+        body.description = desc || null;
 
         confirmBtn.disabled = true;
         confirmBtn.textContent = "Saving...";

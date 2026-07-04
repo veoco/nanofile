@@ -57,6 +57,7 @@ pub struct ShareLinkInfo {
     pub view_cnt: i64,
     pub s_type: String,
     pub link_url: String,
+    pub description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +103,7 @@ pub async fn list_shares(
                 } else {
                     format!("/f/{}/", s.token)
                 },
+                description: s.description,
             }
         })
         .collect();

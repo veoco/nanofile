@@ -169,6 +169,10 @@
         <div class="dir-name">{{ dir_name }}</div>
         <div class="dir-summary">{{ item_count }} item{% if item_count != 1 %}s{% endif %}</div>
 
+        {% if let Some(desc) = description %}
+        <p style="margin-bottom: 1.5rem; font-size: 0.875rem; color: #6b7280; word-break: break-word; text-align: center;">{{ desc }}</p>
+        {% endif %}
+
         <!-- Metadata -->
         <div class="meta">
             <span class="meta-item">

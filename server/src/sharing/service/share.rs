@@ -271,6 +271,7 @@ pub async fn delete_share_link_v21(
 
 pub async fn update_share_link_v21(
     db: &DatabaseConnection,
+    config: &Config,
     _repos: &Repositories,
     token: &str,
     user_id: i32,
@@ -292,7 +293,7 @@ pub async fn update_share_link_v21(
     let mut active: share_link::ActiveModel = link.into();
 
     if let Some(pwd) = password {
-        active.password = Set(pwd.map(|p| hash_password(&p, 10000)));
+        active.password = Set(pwd.map(|p| hash_password(&p, config.auth.password_hash_iterations)));
     }
     if let Some(days) = expire_days {
         active.expires_at = Set(days.map(|d| now + d * 86400));
