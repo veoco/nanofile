@@ -23,6 +23,8 @@ pub struct AccessToken {
     pub file_fs_id: Option<String>,
     /// File name (set for download tokens, used for Content-Disposition).
     pub file_name: Option<String>,
+    /// Upload link database ID (set for upload-link tokens, used to count uploads).
+    pub upload_link_id: Option<i32>,
     pub created_at: i64,
     pub expires_at: i64,
 }
@@ -73,6 +75,7 @@ impl AccessTokenManager {
             parent_dir: parent_dir.to_owned(),
             file_fs_id: None,
             file_name: None,
+            upload_link_id: None,
             created_at: now,
             expires_at: now + TOKEN_EXPIRE_SECS,
         };
@@ -139,6 +142,15 @@ impl AccessTokenManager {
             Some(entry)
         } else {
             None
+        }
+    }
+
+    /// Set the upload_link_id on an existing token (used to link uploads back to the source link).
+    pub fn set_upload_link_id(&self, token: &str, link_id: i32) {
+        if let Ok(mut guard) = self.tokens.write()
+            && let Some(entry) = guard.get_mut(token)
+        {
+            entry.upload_link_id = Some(link_id);
         }
     }
 

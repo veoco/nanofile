@@ -12,6 +12,7 @@ use crate::activity_log;
 use crate::entity::repo;
 use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
+use crate::sharing::service::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
 use sea_orm::EntityTrait;
 
@@ -783,6 +784,12 @@ pub async fn upload_aj_token(
             None,
         )
         .await?;
+
+        // Increment upload count if this was triggered by an upload link
+        if let Some(link_id) = info.upload_link_id {
+            upload_link_service::increment_upload_view_cnt(state.db.clone(), link_id);
+        }
+
         return Ok(Json(resp));
     }
 

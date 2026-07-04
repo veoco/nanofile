@@ -304,6 +304,11 @@ pub async fn get_upload_link_upload_url_v21(
         &link.path,
     );
 
+    // Link the upload token back to the upload link so we can count uploads
+    state
+        .token_manager
+        .set_upload_link_id(&upload_token, link.id);
+
     let upload_url = format!("/upload-aj/{}", upload_token);
 
     Ok(Json(serde_json::json!({"upload_link": upload_url})))

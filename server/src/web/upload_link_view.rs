@@ -138,9 +138,6 @@ pub async fn upload_link_view(
         return Ok(Html(html).into_response());
     }
 
-    // Increment view count
-    crate::sharing::service::link::increment_upload_view_cnt(state.db.clone(), link.id);
-
     // Build template data
     let dir_name = link
         .path
