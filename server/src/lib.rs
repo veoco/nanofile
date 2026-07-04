@@ -233,6 +233,43 @@ impl AppState {
             });
         }
 
+        // Start background expired upload link cleanup (runs hourly).
+        {
+            let db_clone = db.clone();
+            let token = shutdown_token.child_token();
+            tokio::spawn(async move {
+                use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = token.cancelled() => {
+                            tracing::info!("Expired upload link cleaner stopped");
+                            break;
+                        }
+                        _ = interval.tick() => {
+                            let now = chrono::Utc::now().timestamp();
+                            match crate::entity::upload_link::Entity::delete_many()
+                                .filter(crate::entity::upload_link::Column::ExpiresAt.is_not_null())
+                                .filter(crate::entity::upload_link::Column::ExpiresAt.lt(now))
+                                .exec(db_clone.as_ref())
+                                .await
+                            {
+                                Ok(result) => {
+                                    if result.rows_affected > 0 {
+                                        tracing::info!("Cleaned up {} expired upload link(s)", result.rows_affected);
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to clean expired upload links: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         Self {
             repos: Arc::new(crate::repository::Repositories::new(db.clone())),
             db,
