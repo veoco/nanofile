@@ -1065,6 +1065,80 @@
     }
   });
 
+  // ─── Zip download (folder / batch) ───────────────────────────────
+  function zipDownload(repoId, parentDir, dirents) {
+    var json = JSON.stringify({
+      parent_dir: parentDir,
+      dirents: dirents,
+    });
+    return fetch("/api/v2.1/repos/" + repoId + "/zip-task/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": getCookie("sfcsrftoken"),
+      },
+      body: json,
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        if (data.zip_token) {
+          window.location.href = "/zip/" + data.zip_token;
+        } else {
+          throw new Error("No zip_token in response");
+        }
+      })
+      .catch(function (err) {
+        console.error("Zip download failed", err);
+        if (typeof Toast !== "undefined") {
+          Toast.error("Download failed: " + err.message);
+        }
+      });
+  }
+
+  // Single folder download button (.js-entry-download)
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-entry-download");
+    if (!btn) return;
+    e.preventDefault();
+
+    var row = btn.closest(".js-entry-row");
+    if (!row) return;
+    var repoId = row.dataset.repoId;
+    var parentDir = (function () {
+      var input = document.querySelector('[name="current_dir"]');
+      if (input && input.value) return input.value;
+      var m = window.location.pathname.match(/\/files\/(.*)/);
+      return m ? "/" + m[1] : "/";
+    })();
+    var name = row.dataset.name;
+
+    zipDownload(repoId, parentDir, [name]);
+  });
+
+  // Batch download selected items (.js-batch-download)
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-batch-download");
+    if (!btn) return;
+
+    if (selectedPaths.size === 0) return;
+
+    var repoId = (function () {
+      var meta = document.querySelector('meta[name="repo-id"]');
+      return meta ? meta.content : "";
+    })();
+    var parentDir = (function () {
+      var input = document.querySelector('[name="current_dir"]');
+      if (input && input.value) return input.value;
+      var m = window.location.pathname.match(/\/files\/(.*)/);
+      return m ? "/" + m[1] : "/";
+    })();
+
+    zipDownload(repoId, parentDir, Array.from(selectedPaths));
+  });
+
   // ─── Response time display ────────────────────────────────────
   var respTimeEl = document.getElementById("resp-time");
   if (respTimeEl) {

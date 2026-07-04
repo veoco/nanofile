@@ -8,6 +8,7 @@ pub mod download;
 pub mod progress;
 pub mod temp_file;
 pub mod upload;
+pub mod zip_download;
 
 /// Routes for web file access.
 pub fn web_routes() -> Router<Arc<AppState>> {
@@ -33,4 +34,9 @@ pub fn web_routes() -> Router<Arc<AppState>> {
         .route("/update-api/{token}", post(upload::update_api_handler))
         .route("/upload_progress", get(progress::upload_progress))
         .route("/idx_progress", get(progress::idx_progress))
+        .route(
+            "/api/v2.1/repos/{repo_id}/zip-task/",
+            post(zip_download::zip_task_handler),
+        )
+        .route("/zip/{token}", get(zip_download::zip_download_handler))
 }
