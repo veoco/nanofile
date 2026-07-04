@@ -60,7 +60,6 @@ struct ShareViewTemplate {
     pub file_size: String,
     pub has_password: bool,
     pub expires_at_display: String,
-    pub view_cnt: i64,
     pub created_at_display: String,
     pub download_url: String,
 }
@@ -239,13 +238,6 @@ pub async fn shared_file_view(
 
     increment_view_cnt(state.db.clone(), link.id);
 
-    // Re-fetch to get updated view_cnt
-    let updated_link = share_link::Entity::find()
-        .filter(share_link::Column::Token.eq(&token))
-        .one(state.db.as_ref())
-        .await?
-        .ok_or_else(|| AppError::NotFound("Link not found".into()))?;
-
     let file_name = link
         .path
         .rsplit_once('/')
@@ -275,7 +267,6 @@ pub async fn shared_file_view(
         file_size: format_size(file_size),
         has_password: link.password.is_some(),
         expires_at_display: expires_display,
-        view_cnt: updated_link.view_cnt,
         created_at_display: created_display,
         download_url,
     };

@@ -98,9 +98,9 @@ pub async fn list_shares(
                 view_cnt: s.view_cnt,
                 s_type: s.s_type.clone(),
                 link_url: if s.s_type == "d" {
-                    format!("/d/{}/", &s.token)
+                    format!("/d/{}/", s.token)
                 } else {
-                    format!("/f/{}/", &s.token)
+                    format!("/f/{}/", s.token)
                 },
             }
         })

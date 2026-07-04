@@ -16,10 +16,12 @@ pub struct CreateLinkRequest {
     pub path: String,
     pub password: Option<String>,
     pub expire_days: Option<i64>,
+    pub description: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateLinkRequest {
+    pub password: Option<Option<String>>,
     pub expire_days: Option<Option<i64>>,
     pub description: Option<Option<String>>,
 }
@@ -65,6 +67,7 @@ pub async fn create_share_link_v21(
         &req.path,
         req.password.as_deref(),
         req.expire_days,
+        req.description.as_deref(),
         auth.user_id,
     )
     .await?;
@@ -99,6 +102,7 @@ pub async fn update_share_link_v21(
         &state.repos,
         &token,
         auth.user_id,
+        req.password,
         req.expire_days,
         req.description,
     )

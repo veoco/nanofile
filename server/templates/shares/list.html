@@ -106,6 +106,15 @@
                        class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50 dark:bg-surface-700">
             </div>
             <div>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Password <span class="text-gray-400">(leave empty to keep current)</span></label>
+                <input type="password" id="edit-password-input" placeholder="New password"
+                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                <label class="flex items-center gap-1.5 mt-1.5 cursor-pointer">
+                    <input type="checkbox" id="edit-password-clear" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
+                    <span class="text-xs text-gray-500 dark:text-gray-400">Remove password</span>
+                </label>
+            </div>
+            <div>
                 <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Expires in</label>
                 <select id="edit-expiry-select"
                         class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
@@ -140,6 +149,7 @@
     var overlay = document.getElementById("share-edit-overlay");
     var tokenInput = document.getElementById("edit-token-input");
     var expirySelect = document.getElementById("edit-expiry-select");
+    var passwordInput = document.getElementById("edit-password-input");
     var descInput = document.getElementById("edit-description-input");
     var pathDisplay = document.querySelector(".js-edit-share-path");
     var errorDiv = document.querySelector(".js-edit-share-error");
@@ -154,6 +164,8 @@
         pathDisplay.textContent = btn.dataset.path;
         tokenInput.value = editToken;
         expirySelect.value = "";
+        passwordInput.value = "";
+        document.getElementById("edit-password-clear").checked = false;
         descInput.value = "";
         errorDiv.classList.add("hidden");
         confirmBtn.disabled = false;
@@ -172,6 +184,14 @@
     // Save — PUT to API
     confirmBtn.addEventListener("click", async function() {
         var body = {};
+
+        var clearPwd = document.getElementById("edit-password-clear").checked;
+        var pwd = passwordInput.value.trim();
+        if (clearPwd) {
+            body.password = null;
+        } else if (pwd) {
+            body.password = pwd;
+        }
 
         var expiryVal = expirySelect.value;
         if (expiryVal === "clear") {

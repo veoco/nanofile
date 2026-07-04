@@ -214,6 +214,7 @@ pub async fn create_share_link_v21(
     path: &str,
     password: Option<&str>,
     expire_days: Option<i64>,
+    description: Option<&str>,
     creator_id: i32,
 ) -> Result<CreateShareLinkResult, AppError> {
     // Block share links for encrypted repos
@@ -247,7 +248,7 @@ pub async fn create_share_link_v21(
         created_at: Set(now),
         s_type: Set(s_type.clone()),
         view_cnt: Set(0i64),
-        description: Set(None),
+        description: Set(description.map(|s| s.to_string())),
     })
     .exec(db)
     .await?;
@@ -273,9 +274,11 @@ pub async fn update_share_link_v21(
     _repos: &Repositories,
     token: &str,
     user_id: i32,
+    password: Option<Option<String>>,
     expire_days: Option<Option<i64>>,
     description: Option<Option<String>>,
 ) -> Result<ShareLinkInfo, AppError> {
+    use crate::auth::password::hash_password;
     let now = chrono::Utc::now().timestamp();
 
     // Find and validate ownership
@@ -288,6 +291,9 @@ pub async fn update_share_link_v21(
 
     let mut active: share_link::ActiveModel = link.into();
 
+    if let Some(pwd) = password {
+        active.password = Set(pwd.map(|p| hash_password(&p, 10000)));
+    }
     if let Some(days) = expire_days {
         active.expires_at = Set(days.map(|d| now + d * 86400));
     }
@@ -297,10 +303,15 @@ pub async fn update_share_link_v21(
 
     let updated = active.update(db).await?;
     let token = updated.token.clone();
+    let link_url = if updated.s_type == "d" {
+        format!("/d/{}/", updated.token)
+    } else {
+        format!("/f/{}/", updated.token)
+    };
 
     Ok(ShareLinkInfo {
         token,
-        link: format!("/f/{}/", updated.token),
+        link: link_url,
         repo_id: updated.repo_id,
         path: updated.path,
         created_at: updated.created_at,
