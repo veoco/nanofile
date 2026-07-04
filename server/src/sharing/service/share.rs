@@ -35,9 +35,7 @@ pub async fn resolve_entry_type_raw(
         .ok_or_else(|| AppError::Internal("head commit not found".into()))?;
 
     // Resolve the parent directory to find the entry's mode
-    let (parent_path, entry_name) = path
-        .rsplit_once('/')
-        .unwrap_or(("/", path));
+    let (parent_path, entry_name) = path.rsplit_once('/').unwrap_or(("/", path));
 
     let parent_fs_id = if parent_path.is_empty() {
         head_commit.root_id.clone()
