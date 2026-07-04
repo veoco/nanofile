@@ -177,8 +177,23 @@ fn v2_routes() -> Router<Arc<AppState>> {
                 .post(crate::sharing::handler::links::create_upload_link_v21),
         )
         .route(
-            "/api/v2.1/upload-links/{id}/",
-            delete(crate::sharing::handler::links::delete_upload_link_v21),
+            "/api/v2.1/upload-links/clean-invalid/",
+            delete(crate::sharing::handler::links::clean_invalid_upload_links_v21),
+        )
+        .route(
+            "/api/v2.1/upload-links/{token}/",
+            get(crate::sharing::handler::links::get_upload_link_v21)
+                .put(crate::sharing::handler::links::update_upload_link_v21)
+                .delete(crate::sharing::handler::links::delete_upload_link_v21),
+        )
+        .route(
+            "/api/v2.1/upload-links/{token}/upload/",
+            get(crate::sharing::handler::links::get_upload_link_upload_url_v21),
+        )
+        // Repo-level upload links
+        .route(
+            "/api/v2.1/repos/{repo_id}/upload-links/",
+            get(crate::sharing::handler::links::list_repo_upload_links_v21),
         )
         // Activities
         .route(

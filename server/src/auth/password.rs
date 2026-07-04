@@ -22,6 +22,8 @@ pub fn hash_password(password: &str, iterations: u32) -> String {
 }
 
 /// Verify a password against a stored hash using constant-time comparison.
+///
+/// Format: `hex(salt):hex(hash)` as produced by `hash_password`.
 pub fn verify_password(password: &str, password_hash: &str, iterations: u32) -> bool {
     let parts: Vec<&str> = password_hash.splitn(2, ':').collect();
     if parts.len() != 2 {

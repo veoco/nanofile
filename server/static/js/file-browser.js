@@ -235,12 +235,15 @@
     // ── Actions ──
     // Download
     var downloadRow = ct.querySelector(".js-rp-download-row");
-    if (downloadRow) downloadRow.classList.toggle("hidden", d.type === "dir");
+    if (downloadRow) downloadRow.classList.remove("hidden");
     var downloadLink = ct.querySelector(".js-rp-download");
     if (downloadLink) {
-      downloadLink.href = d.downloadUrl || "#";
-      downloadLink.classList.toggle("pointer-events-none", !d.downloadUrl);
-      downloadLink.classList.toggle("opacity-50", !d.downloadUrl);
+      downloadLink.href = d.type === "dir" ? "#" : (d.downloadUrl || "#");
+      downloadLink.classList.remove("pointer-events-none", "opacity-50");
+      downloadLink.dataset.repoId = d.repoId || "";
+      downloadLink.dataset.path = d.path || "";
+      downloadLink.dataset.name = d.name || "";
+      downloadLink.dataset.type = d.type || "";
     }
 
     // Delete
@@ -288,6 +291,40 @@
               });
             }
             shareSection.classList.remove("hidden");
+          })
+          .catch(function () { /* ignore */ });
+      }
+    }
+
+    // Upload links (directories only)
+    var ulSection = ct.querySelector(".js-rp-upload-links-section");
+    var ulList = ct.querySelector(".js-rp-upload-links-list");
+    var noUl = ct.querySelector(".js-rp-no-upload-links");
+    if (ulSection && ulList && noUl) {
+      ulSection.classList.add("hidden");
+      noUl.classList.add("hidden");
+      if (d.type === "dir" && d.repoId && d.path) {
+        fetch("/api/v2.1/upload-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            var links = data.upload_link_list || [];
+            ulList.innerHTML = "";
+            if (links.length === 0) {
+              noUl.classList.remove("hidden");
+            } else {
+              links.forEach(function (link) {
+                var div = document.createElement("div");
+                div.className = "flex items-center justify-between py-0.5";
+                var linkUrl = link.link || "/u/" + link.token + "/";
+                div.innerHTML =
+                  '<a href="' + escapeHtml(linkUrl) + '" target="_blank" class="text-xs text-emerald-500 hover:text-emerald-600 truncate block">' +
+                    escapeHtml(link.token || "") +
+                  '</a>' +
+                  '<span class="text-xs text-gray-400 flex-shrink-0 ml-2">' + (link.view_cnt || 0) + ' uploads</span>';
+                ulList.appendChild(div);
+              });
+            }
+            ulSection.classList.remove("hidden");
           })
           .catch(function () { /* ignore */ });
       }

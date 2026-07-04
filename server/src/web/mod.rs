@@ -9,6 +9,7 @@ pub mod progress;
 pub mod share_view;
 pub mod temp_file;
 pub mod upload;
+pub mod upload_link_view;
 pub mod zip_download;
 
 /// Routes for web file access.
@@ -37,6 +38,14 @@ pub fn web_routes() -> Router<Arc<AppState>> {
         .route(
             "/repos/{repo_id}/files/{*path}",
             get(download::repo_file_download),
+        )
+        .route(
+            "/u/{token}",
+            get(upload_link_view::upload_link_view).post(upload_link_view::upload_link_view_post),
+        )
+        .route(
+            "/u/{token}/",
+            get(upload_link_view::upload_link_view).post(upload_link_view::upload_link_view_post),
         )
         .route("/upload-aj/", post(upload::upload_aj))
         .route("/upload-aj/{token}", post(upload::upload_aj_token))

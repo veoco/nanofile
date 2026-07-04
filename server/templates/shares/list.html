@@ -4,8 +4,22 @@
 
 {% block content %}
 <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Shares</h1>
-<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Manage shared links for your libraries.</p>
+<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Manage shared links and upload links for your libraries.</p>
 
+<!-- Tab bar -->
+<div class="mt-4 flex gap-4 border-b border-gray-200 dark:border-gray-700">
+    <button type="button" class="tab-btn tab-btn--active pb-2 px-1 text-sm font-medium text-brand-600 dark:text-brand-400 border-b-2 border-brand-600 dark:border-brand-400"
+            data-tab="share-links" onclick="switchTab('share-links')">
+        Share Links ({{ share_links.len() }})
+    </button>
+    <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium text-gray-500 dark:text-gray-400 border-b-2 border-transparent hover:text-gray-700 dark:hover:text-gray-300"
+            data-tab="upload-links" onclick="switchTab('upload-links')">
+        Upload Links ({{ upload_links.len() }})
+    </button>
+</div>
+
+<!-- Share Links table -->
+<div id="tab-share-links" class="tab-content">
 {% if share_links.is_empty() %}
 <div class="mt-8 text-center">
     <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -102,6 +116,93 @@
     </div>
 </div>
 {% endif %}
+</div>
+
+<!-- Upload Links table -->
+<div id="tab-upload-links" class="tab-content hidden">
+{% if upload_links.is_empty() %}
+<div class="mt-8 text-center">
+    <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+    </svg>
+    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">No upload links yet.</p>
+    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Create an upload link from the file browser to allow others to upload files.</p>
+</div>
+{% endif %}
+
+{% if !upload_links.is_empty() %}
+<div class="mt-6">
+    <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead class="bg-gray-50 dark:bg-surface-700">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Name</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Created</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Expires</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Description</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Uploads</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Password</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                {% for u in upload_links %}
+                <tr class="hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
+                    <td class="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 max-w-0">
+                        <a href="{{ u.link_url }}" target="_blank" class="hover:text-brand-500 dark:hover:text-brand-400 truncate block" title="{{ u.path }}">
+                            {{ u.name }}
+                        </a>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ u.created_at }}</td>
+                    <td class="px-4 py-3 text-sm {% if u.expires_at != "Never" %}text-red-500{% else %}text-gray-500 dark:text-gray-400{% endif %} whitespace-nowrap">{{ u.expires_at }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 max-w-0">
+                        {% if u.description.is_some() %}
+                        <span class="truncate block" title="{{ u.description.as_deref().unwrap_or("") }}">{{ u.description.as_deref().unwrap_or("") }}</span>
+                        {% else %}
+                        <span class="text-gray-300 dark:text-gray-600">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-center">{{ u.view_cnt }}</td>
+                    <td class="px-4 py-3 text-center">
+                        {% if u.has_password %}
+                        <span class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                            Yes
+                        </span>
+                        {% else %}
+                        <span class="text-xs text-gray-400">No</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-right">
+                        <div class="flex items-center justify-end gap-1">
+                            <button type="button" class="js-ul-edit-btn p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20 transition-colors"
+                                    data-token="{{ u.token }}"
+                                    data-path="{{ u.path }}"
+                                    data-expires="{{ u.expires_at }}"
+                                    data-description="{{ u.description.as_deref().unwrap_or("") }}"
+                                    title="Edit upload link">
+                                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                </svg>
+                            </button>
+                            <form action="/shares/upload/{{ u.token }}/delete/" method="POST" class="inline" onsubmit="return confirm('Delete this upload link?');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <button type="submit" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors" title="Delete upload link">
+                                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                    </svg>
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+</div>
 
 <!-- Edit dialog overlay -->
 <div id="share-edit-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
@@ -152,7 +253,73 @@
     </div>
 </div>
 
+<!-- Upload link edit dialog overlay -->
+<div id="ul-edit-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
+    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Edit Upload Link</h3>
+        <p class="js-ul-edit-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
+        <div class="space-y-3">
+            <div>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Token <span class="text-gray-400">(read-only)</span></label>
+                <input type="text" id="ul-edit-token-input" readonly
+                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50 dark:bg-surface-700">
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Password <span class="text-gray-400">(leave empty to keep current)</span></label>
+                <input type="password" id="ul-edit-password-input" placeholder="New password"
+                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                <label class="flex items-center gap-1.5 mt-1.5 cursor-pointer">
+                    <input type="checkbox" id="ul-edit-password-clear" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
+                    <span class="text-xs text-gray-500 dark:text-gray-400">Remove password</span>
+                </label>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Expires in</label>
+                <select id="ul-edit-expiry-select"
+                        class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                    <option value="">Never</option>
+                    <option value="1">1 day</option>
+                    <option value="7">7 days</option>
+                    <option value="30">30 days</option>
+                    <option value="clear">Clear expiry</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+                <input type="text" id="ul-edit-description-input" placeholder="What is this link for?"
+                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+            </div>
+        </div>
+        <div class="js-ul-edit-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
+        <div class="mt-4 flex justify-end gap-2">
+            <button type="button" class="js-ul-edit-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
+                Cancel
+            </button>
+            <button type="button" class="js-ul-edit-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                Save
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
+// ─── Tab switching ─────────────────────────────────────────────────────
+function switchTab(name) {
+    document.querySelectorAll('.tab-content').forEach(function(el) {
+        el.classList.add('hidden');
+    });
+    document.querySelectorAll('.tab-btn').forEach(function(el) {
+        el.classList.remove('tab-btn--active', 'text-brand-600', 'dark:text-brand-400', 'border-brand-600', 'dark:border-brand-400');
+        el.classList.add('text-gray-500', 'dark:text-gray-400', 'border-transparent');
+    });
+    document.getElementById('tab-' + name).classList.remove('hidden');
+    var btn = document.querySelector('[data-tab="' + name + '"]');
+    if (btn) {
+        btn.classList.remove('text-gray-500', 'dark:text-gray-400', 'border-transparent');
+        btn.classList.add('tab-btn--active', 'text-brand-600', 'dark:text-brand-400', 'border-brand-600', 'dark:border-brand-400');
+    }
+}
+
 // ─── Edit share link dialog ──────────────────────────────────────────
 (function() {
     var overlay = document.getElementById("share-edit-overlay");
@@ -225,6 +392,86 @@
                 overlay.classList.add("hidden");
                 if (window.refreshFileList) window.refreshFileList();
                 else window.location.reload();
+            } else {
+                var text = await resp.text().catch(function() { return resp.statusText; });
+                errorDiv.textContent = text;
+                errorDiv.classList.remove("hidden");
+            }
+        } catch (err) {
+            errorDiv.textContent = err.message;
+            errorDiv.classList.remove("hidden");
+        } finally {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = "Save";
+        }
+    });
+})();
+
+// ─── Edit upload link dialog ──────────────────────────────────────────
+(function() {
+    var overlay = document.getElementById("ul-edit-overlay");
+    var tokenInput = document.getElementById("ul-edit-token-input");
+    var expirySelect = document.getElementById("ul-edit-expiry-select");
+    var passwordInput = document.getElementById("ul-edit-password-input");
+    var descInput = document.getElementById("ul-edit-description-input");
+    var pathDisplay = document.querySelector(".js-ul-edit-path");
+    var errorDiv = document.querySelector(".js-ul-edit-error");
+    var confirmBtn = document.querySelector(".js-ul-edit-confirm");
+    var editToken = "";
+
+    document.addEventListener("click", function(e) {
+        var btn = e.target.closest(".js-ul-edit-btn");
+        if (!btn) return;
+        editToken = btn.dataset.token;
+        pathDisplay.textContent = btn.dataset.path;
+        tokenInput.value = editToken;
+        expirySelect.value = "";
+        passwordInput.value = "";
+        document.getElementById("ul-edit-password-clear").checked = false;
+        descInput.value = btn.dataset.description || "";
+        errorDiv.classList.add("hidden");
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "Save";
+        overlay.classList.remove("hidden");
+    });
+
+    overlay.querySelector(".js-ul-edit-cancel").addEventListener("click", function() {
+        overlay.classList.add("hidden");
+    });
+    overlay.addEventListener("click", function(e) {
+        if (e.target === overlay) overlay.classList.add("hidden");
+    });
+
+    confirmBtn.addEventListener("click", async function() {
+        var body = {};
+        var clearPwd = document.getElementById("ul-edit-password-clear").checked;
+        var pwd = passwordInput.value.trim();
+        if (clearPwd) {
+            body.password = null;
+        } else if (pwd) {
+            body.password = pwd;
+        }
+        var expiryVal = expirySelect.value;
+        if (expiryVal === "clear") {
+            body.expire_days = null;
+        } else if (expiryVal) {
+            body.expire_days = parseInt(expiryVal, 10);
+        }
+        var desc = descInput.value.trim();
+        body.description = desc || null;
+
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "Saving...";
+        errorDiv.classList.add("hidden");
+
+        try {
+            var resp = await apiFetch("/api/v2.1/upload-links/" + editToken + "/", {
+                method: "PUT",
+                body: JSON.stringify(body),
+            });
+            if (resp.ok) {
+                overlay.classList.add("hidden");
+                window.location.reload();
             } else {
                 var text = await resp.text().catch(function() { return resp.statusText; });
                 errorDiv.textContent = text;

@@ -106,12 +106,88 @@
                            class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                 </div>
             </div>
+            <!-- Link URL display (shown after creation) -->
+            <div id="share-link-display" class="hidden space-y-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Share Link URL</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="share-link-url" readonly
+                               class="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50">
+                        <button type="button" onclick="copyShareLinkUrl()"
+                                class="rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white hover:bg-brand-600">
+                            Copy
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div class="js-share-dialog-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
             <div class="mt-4 flex justify-end gap-2">
                 <button type="button" class="js-share-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
                     Cancel
                 </button>
                 <button type="button" class="js-share-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                    Create
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload link dialog overlay -->
+    <div id="upload-link-dialog-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
+        <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+            <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Upload Link</h3>
+            <p class="js-ul-dialog-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
+
+            <!-- Create form -->
+            <div id="ul-create-form" class="space-y-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Password <span class="text-gray-400">(optional)</span></label>
+                    <input type="password" id="ul-password-input" placeholder="Leave empty for no password"
+                           class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Expires in</label>
+                    <select id="ul-expiry-select"
+                            class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                        <option value="">Never</option>
+                        <option value="1">1 day</option>
+                        <option value="7">7 days</option>
+                        <option value="30">30 days</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Description <span class="text-gray-400">(optional)</span></label>
+                    <input type="text" id="ul-description-input" placeholder="What is this link for?"
+                           class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                </div>
+            </div>
+
+            <!-- Link display (shown after creation) -->
+            <div id="ul-link-display" class="hidden space-y-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Upload Link URL</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="ul-link-url" readonly
+                               class="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50">
+                        <button type="button" onclick="copyUploadLinkUrl()"
+                                class="rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white hover:bg-brand-600">
+                            Copy
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="js-ul-dialog-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
+
+            <div class="mt-4 flex justify-end gap-2">
+                <button type="button" class="js-ul-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
+                    Cancel
+                </button>
+                <button type="button" id="ul-delete-btn" class="hidden rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50">
+                    Delete
+                </button>
+                <button type="button" id="ul-create-btn" class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
                     Create
                 </button>
             </div>
@@ -131,4 +207,204 @@
 </div>
     {% endblock %}
 </main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ─── Upload Link Dialog ────────────────────────────────────────────────
+(function() {
+    var overlay = document.getElementById('upload-link-dialog-overlay');
+    var pathDisplay = document.querySelector('.js-ul-dialog-path');
+    var errorDiv = document.querySelector('.js-ul-dialog-error');
+    var createBtn = document.getElementById('ul-create-btn');
+    var deleteBtn = document.getElementById('ul-delete-btn');
+    var cancelBtn = document.querySelector('.js-ul-cancel');
+    var createForm = document.getElementById('ul-create-form');
+    var linkDisplay = document.getElementById('ul-link-display');
+    var linkUrl = document.getElementById('ul-link-url');
+    var pwdInput = document.getElementById('ul-password-input');
+    var expirySelect = document.getElementById('ul-expiry-select');
+    var descInput = document.getElementById('ul-description-input');
+
+    var currentRepoId = '';
+    var currentPath = '';
+    var currentToken = '';
+
+    function open(repoId, path) {
+        currentRepoId = repoId;
+        currentPath = path;
+        currentToken = '';
+        pathDisplay.textContent = path;
+        createForm.classList.remove('hidden');
+        linkDisplay.classList.add('hidden');
+        deleteBtn.classList.add('hidden');
+        createBtn.textContent = 'Create';
+        createBtn.disabled = false;
+        pwdInput.value = '';
+        expirySelect.value = '';
+        descInput.value = '';
+        errorDiv.classList.add('hidden');
+        overlay.classList.remove('hidden');
+        checkExistingLink();
+    }
+
+    async function checkExistingLink() {
+        try {
+            var url = '/api/v2.1/upload-links/?repo_id=' + encodeURIComponent(currentRepoId) +
+                      '&path=' + encodeURIComponent(currentPath);
+            var resp = await apiFetch(url);
+            if (!resp.ok) return;
+            var data = await resp.json();
+            var list = data.upload_link_list || [];
+            if (list.length > 0) {
+                var link = list[0];
+                currentToken = link.token;
+                showLink('/u/' + link.token + '/');
+            }
+        } catch (e) { /* silently ignore */ }
+    }
+
+    function showLink(url) {
+        createForm.classList.add('hidden');
+        linkDisplay.classList.remove('hidden');
+        linkUrl.value = window.location.origin + url;
+        deleteBtn.classList.remove('hidden');
+        createBtn.textContent = 'Close';
+    }
+
+    createBtn.addEventListener('click', async function() {
+        if (createBtn.textContent === 'Close') {
+            overlay.classList.add('hidden');
+            return;
+        }
+
+        var body = { repo_id: currentRepoId, path: currentPath };
+        var pwd = pwdInput.value.trim();
+        if (pwd) body.password = pwd;
+        var expiry = expirySelect.value;
+        if (expiry) body.expire_days = parseInt(expiry, 10);
+        var desc = descInput.value.trim();
+        if (desc) body.description = desc;
+
+        createBtn.disabled = true;
+        createBtn.textContent = 'Creating...';
+        errorDiv.classList.add('hidden');
+
+        try {
+            var resp = await apiFetch('/api/v2.1/upload-links/', {
+                method: 'POST',
+                body: JSON.stringify(body),
+            });
+            if (resp.ok) {
+                var data = await resp.json();
+                currentToken = data.token;
+                showLink('/u/' + data.token + '/');
+            } else {
+                var text = await resp.text().catch(function() { return ''; });
+                errorDiv.textContent = text || 'Failed to create upload link';
+                errorDiv.classList.remove('hidden');
+            }
+        } catch (err) {
+            errorDiv.textContent = err.message;
+            errorDiv.classList.remove('hidden');
+        } finally {
+            createBtn.disabled = false;
+            createBtn.textContent = currentToken ? 'Close' : 'Create';
+        }
+    });
+
+    deleteBtn.addEventListener('click', async function() {
+        if (!currentToken) return;
+        if (!confirm('Delete this upload link?')) return;
+
+        deleteBtn.disabled = true;
+        errorDiv.classList.add('hidden');
+
+        try {
+            var resp = await apiFetch('/api/v2.1/upload-links/' + currentToken + '/', {
+                method: 'DELETE',
+            });
+            if (resp.ok) {
+                currentToken = '';
+                createForm.classList.remove('hidden');
+                linkDisplay.classList.add('hidden');
+                deleteBtn.classList.add('hidden');
+                createBtn.textContent = 'Create';
+            } else {
+                var text = await resp.text().catch(function() { return ''; });
+                errorDiv.textContent = text || 'Failed to delete upload link';
+                errorDiv.classList.remove('hidden');
+            }
+        } catch (err) {
+            errorDiv.textContent = err.message;
+            errorDiv.classList.remove('hidden');
+        } finally {
+            deleteBtn.disabled = false;
+        }
+    });
+
+    cancelBtn.addEventListener('click', function() { overlay.classList.add('hidden'); });
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.classList.add('hidden'); });
+
+    window.openUploadLinkDialog = open;
+})();
+
+function copyUploadLinkUrl() {
+    var input = document.getElementById('ul-link-url');
+    input.select();
+    input.setSelectionRange(0, 99999);
+    navigator.clipboard.writeText(input.value).catch(function() {});
+}
+
+function copyShareLinkUrl() {
+    var input = document.getElementById('share-link-url');
+    input.select();
+    input.setSelectionRange(0, 99999);
+    navigator.clipboard.writeText(input.value).catch(function() {});
+}
+
+// Show/hide upload link button based on selected item type
+// Uses style.display (not CSS class) to avoid Tailwind cascade conflicts
+function updateUploadLinkBtn() {
+    var btn = document.getElementById('rp-upload-link-btn');
+    if (!btn) return;
+    var selected = document.querySelector('.selected[data-type]');
+    var type = selected ? selected.getAttribute('data-type') : '';
+    btn.style.display = (type === 'dir') ? '' : 'none';
+}
+// Initial check (in case an item is pre-selected)
+setTimeout(updateUploadLinkBtn, 100);
+var _origOpenRightPanel = window.openRightPanel;
+window.openRightPanel = function(data) {
+    if (_origOpenRightPanel) _origOpenRightPanel(data);
+    updateUploadLinkBtn();
+};
+// Also update when right panel is reset (deselection)
+var _origResetRightPanel = window.resetRightPanel;
+window.resetRightPanel = function() {
+    if (_origResetRightPanel) _origResetRightPanel();
+    var btn = document.getElementById('rp-upload-link-btn');
+    if (btn) btn.style.display = 'none';
+};
+
+// Upload Link button in right panel — only for directories
+document.addEventListener('click', function(e) {
+    var btn = e.target.closest('#rp-upload-link-btn');
+    if (!btn) return;
+    var meta = document.querySelector('meta[name="repo-id"]');
+    var repoId = meta ? meta.getAttribute('content') : '';
+    // Find selected file entry
+    var selectedRow = document.querySelector('.selected[data-type]');
+    var path = selectedRow ? selectedRow.getAttribute('data-path') : '';
+    var type = selectedRow ? selectedRow.getAttribute('data-type') : '';
+    if (!repoId || !path) return;
+    // Only allow upload links for directories
+    if (type !== 'dir') {
+        if (window.Toast) window.Toast.error('Upload links can only be created for directories.');
+        else alert('Upload links can only be created for directories.');
+        return;
+    }
+    window.openUploadLinkDialog(repoId, path);
+});
+</script>
 {% endblock %}

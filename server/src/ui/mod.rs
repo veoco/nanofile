@@ -79,6 +79,10 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/shares/{token}/delete/",
             axum::routing::post(shares::delete_share),
         )
+        .route(
+            "/shares/upload/{token}/delete/",
+            axum::routing::post(shares::delete_upload),
+        )
         // Profile / Settings
         .route("/settings/", get(settings::settings_page))
         .route(

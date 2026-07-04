@@ -65,11 +65,13 @@ struct ShareViewTemplate {
     pub description: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Template)]
 #[template(path = "web/share_access_validation.html")]
 struct ShareAccessValidationTemplate {
     pub token: String,
     pub error: Option<String>,
+    pub form_action: String,
 }
 
 // ── Handler helpers ───────────────────────────────────────────────────────
@@ -198,6 +200,7 @@ pub async fn shared_file_view(
         let tpl = ShareAccessValidationTemplate {
             token: token.clone(),
             error,
+            form_action: format!("/f/{}/", token),
         };
         let html = tpl
             .render()
@@ -304,6 +307,7 @@ pub async fn shared_file_view_post(
         let tpl = ShareAccessValidationTemplate {
             token: token.clone(),
             error: Some("Incorrect password".to_string()),
+            form_action: format!("/f/{}/", token),
         };
         let html = tpl
             .render()
@@ -467,6 +471,7 @@ pub async fn shared_dir_view(
         let tpl = ShareAccessValidationTemplate {
             token: token.clone(),
             error,
+            form_action: format!("/f/{}/", token),
         };
         let html = tpl
             .render()
@@ -759,6 +764,7 @@ pub async fn shared_dir_view_post(
         let tpl = ShareAccessValidationTemplate {
             token: token.clone(),
             error: Some("Incorrect password".to_string()),
+            form_action: format!("/d/{}/", token),
         };
         let html = tpl
             .render()

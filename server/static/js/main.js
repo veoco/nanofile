@@ -424,6 +424,9 @@
   var shareDialogError = document.querySelector(".js-share-dialog-error");
   var shareConfirmBtn = document.querySelector(".js-share-confirm");
   var shareCancelBtn = document.querySelector(".js-share-cancel");
+  var shareLinkDisplay = document.getElementById("share-link-display");
+  var shareLinkUrl = document.getElementById("share-link-url");
+  var shareCreateForm = shareDialog ? shareDialog.querySelector(".space-y-3") : null;
   var shareCurrentRepoId = "";
   var shareCurrentPath = "";
   var shareCurrentType = "";
@@ -448,6 +451,10 @@
     shareDialogError.textContent = "";
     shareConfirmBtn.disabled = false;
     shareConfirmBtn.textContent = "Create";
+    shareConfirmBtn.classList.remove("hidden");
+    shareCancelBtn.classList.remove("hidden");
+    if (shareCreateForm) shareCreateForm.classList.remove("hidden");
+    if (shareLinkDisplay) shareLinkDisplay.classList.add("hidden");
 
     // Show path
     var displayName = btn.dataset.name || name;
@@ -465,6 +472,12 @@
 
   // ─── Share confirm — create link via API ────────────────────────────
   shareConfirmBtn.addEventListener("click", async function () {
+    // If in "Close" mode, just close the dialog
+    if (shareConfirmBtn.textContent === "Close") {
+      shareDialog.classList.add("hidden");
+      return;
+    }
+
     var body = {
       repo_id: shareCurrentRepoId,
       path: shareCurrentPath,
@@ -492,15 +505,23 @@
       var sType = data.s_type || shareCurrentType;
       var prefix = sType === "d" ? "/d/" : "/f/";
       var shareUrl = window.location.origin + prefix + data.token + "/";
-      await navigator.clipboard.writeText(shareUrl);
-      shareDialog.classList.add("hidden");
-      window.Toast.success("Share link copied to clipboard: " + data.token);
+      // Show URL in dialog instead of closing
+      if (shareCreateForm) shareCreateForm.classList.add("hidden");
+      if (shareLinkDisplay) {
+        shareLinkUrl.value = shareUrl;
+        shareLinkDisplay.classList.remove("hidden");
+      }
+      shareConfirmBtn.textContent = "Close";
+      shareCancelBtn.classList.add("hidden");
     } catch (err) {
       shareDialogError.textContent = err.message;
       shareDialogError.classList.remove("hidden");
     } finally {
       shareConfirmBtn.disabled = false;
-      shareConfirmBtn.textContent = "Create";
+      // Don't reset to "Create" if in Close mode (success path sets it to Close)
+      if (shareConfirmBtn.textContent !== "Close") {
+        shareConfirmBtn.textContent = "Create";
+      }
     }
   });
 
@@ -703,9 +724,7 @@
         // One item left — show its details in the right panel
         var lastRow = document.querySelector(".js-entry-row.selected");
         if (lastRow && typeof window.openRightPanel === "function") {
-          var dlUrl = lastRow.dataset.type !== "dir"
-            ? "/libraries/" + lastRow.dataset.repoId + "/files/" + lastRow.dataset.path + "?dl=1"
-            : "";
+          var dlUrl = "/libraries/" + lastRow.dataset.repoId + "/files/" + lastRow.dataset.path + "?dl=1";
           window.openRightPanel({
             name: lastRow.dataset.name,
             type: lastRow.dataset.type,
@@ -1292,5 +1311,21 @@
       respTimeEl.classList.remove("opacity-0");
     });
   }
+
+  // Right panel download — ZIP for directories
+  document.addEventListener("click", function (e) {
+    var link = e.target.closest(".js-rp-download");
+    if (!link) return;
+    if (link.dataset.type !== "dir") return;
+    e.preventDefault();
+    var repoId = link.dataset.repoId;
+    var name = link.dataset.name;
+    if (!repoId || !name) return;
+    var parentDir = link.dataset.path;
+    if (parentDir.endsWith(name)) {
+      parentDir = parentDir.slice(0, -name.length).replace(/\/+$/, "") || "/";
+    }
+    zipDownload(repoId, parentDir, [name]);
+  });
 
 })();

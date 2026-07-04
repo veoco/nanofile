@@ -14,6 +14,7 @@ use chrono::TimeZone;
 use crate::AppState;
 use crate::auth::token::generate_share_link_token;
 use crate::entity::share_link;
+use crate::entity::upload_link;
 use crate::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -41,9 +42,23 @@ pub struct SharesTemplate {
     pub is_admin: bool,
     pub csrf_token: String,
     pub share_links: Vec<ShareLinkInfo>,
+    pub upload_links: Vec<UploadLinkInfo>,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
+}
+
+pub struct UploadLinkInfo {
+    pub token: String,
+    pub repo_id: String,
+    pub path: String,
+    pub name: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub has_password: bool,
+    pub view_cnt: i64,
+    pub link_url: String,
+    pub description: Option<String>,
 }
 
 pub struct ShareLinkInfo {
@@ -108,6 +123,37 @@ pub async fn list_shares(
         })
         .collect();
 
+    // Query upload links
+    let upload_models = upload_link::Entity::find()
+        .filter(upload_link::Column::CreatorId.eq(user.user_id))
+        .all(db)
+        .await
+        .map_err(|e| AppError::internal(format!("db error: {e}")))?;
+
+    let upload_links: Vec<UploadLinkInfo> = upload_models
+        .into_iter()
+        .map(|u| {
+            let name = u
+                .path
+                .trim_end_matches('/')
+                .rsplit_once('/')
+                .map(|(_, n)| n.to_string())
+                .unwrap_or_else(|| u.path.clone());
+            UploadLinkInfo {
+                token: u.token.clone(),
+                repo_id: u.repo_id,
+                path: u.path.clone(),
+                name,
+                created_at: format_ts(u.created_at),
+                expires_at: format_ts_opt(u.expires_at),
+                has_password: u.password.is_some(),
+                view_cnt: u.view_cnt,
+                link_url: format!("/u/{}/", u.token),
+                description: u.description,
+            }
+        })
+        .collect();
+
     let csrf_token =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     let left_panel_repos =
@@ -118,6 +164,7 @@ pub async fn list_shares(
         is_admin: user.is_admin,
         csrf_token,
         share_links,
+        upload_links,
         active_page: "shares",
         left_panel_repos,
         current_repo_id: None,
@@ -193,6 +240,39 @@ pub async fn delete_share(
     share_link::Entity::delete_many()
         .filter(share_link::Column::Token.eq(&token))
         .exec(db)
+        .await
+        .map_err(|e| AppError::internal(format!("delete failed: {e}")))?;
+
+    Ok((StatusCode::FOUND, [("Location", "/shares/")]).into_response())
+}
+
+/// POST /shares/upload/{token}/delete/ — delete an upload link.
+pub async fn delete_upload(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+    axum::Form(form): axum::Form<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, AppError> {
+    crate::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.get("csrf_token").map(|s| s.as_str()),
+    )?;
+
+    let link = upload_link::Entity::find()
+        .filter(upload_link::Column::Token.eq(&token))
+        .one(state.db.as_ref())
+        .await
+        .map_err(|e| AppError::internal(format!("db error: {e}")))?
+        .ok_or_else(|| AppError::NotFound("Upload link not found".to_string()))?;
+
+    if link.creator_id != user.user_id {
+        return Err(AppError::Forbidden);
+    }
+
+    upload_link::Entity::delete_many()
+        .filter(upload_link::Column::Token.eq(&token))
+        .exec(state.db.as_ref())
         .await
         .map_err(|e| AppError::internal(format!("delete failed: {e}")))?;
 

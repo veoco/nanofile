@@ -96,7 +96,7 @@
         <div class="error">{{ error_msg }}</div>
         {% endif %}
 
-        <form action="/f/{{ token }}/" method="POST">
+        <form action="{{ form_action }}" method="POST">
             <input type="password" name="password" placeholder="Enter password" autofocus required>
             <button type="submit">Submit</button>
         </form>
