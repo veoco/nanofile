@@ -73,16 +73,6 @@ pub async fn update_blks_link(
 }
 
 fn build_blks_op_url(state: &AppState, op: &str, token: &str) -> String {
-    let host = if state.config.server.addr == "0.0.0.0"
-        || state.config.server.addr == "::"
-        || state.config.server.addr == "127.0.0.1"
-    {
-        "127.0.0.1"
-    } else {
-        &state.config.server.addr
-    };
-    format!(
-        "http://{}:{}/{}/{}",
-        host, state.config.server.port, op, token
-    )
+    let base = state.config.server.site_url_origin();
+    format!("{}/{}/{}", base.trim_end_matches('/'), op, token)
 }

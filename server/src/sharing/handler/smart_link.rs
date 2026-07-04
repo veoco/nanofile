@@ -25,7 +25,7 @@ pub async fn get_smart_link(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SmartLinkQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let base_url = format!("http://127.0.0.1:{}", state.config.server.port);
+    let base_url = state.config.server.site_url_origin();
     let url = link::get_smart_link(&base_url, &query.repo_id, &query.path);
 
     Ok(Json(serde_json::json!({
