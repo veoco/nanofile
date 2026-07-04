@@ -5,7 +5,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait};
 
 use crate::activity_log;
 use crate::common::DirEntry;
-use crate::common::util::{get_head_commit_id, get_head_root_id, normalize_path};
+use crate::common::util::{get_head_commit_id, get_head_root_id};
 use crate::entity::{repo, repo_member};
 use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
@@ -511,7 +511,10 @@ impl DirService {
         let dir_mode = entry.mode;
         let dir_size = entry.size;
 
-        let new_parent_path = normalize_path(new_parent_dir);
+        // new_parent_dir should already be validated by handler, but we use safe_normalize_path
+        // for defensive programming. If it fails, it's an internal error (handler bug).
+        let new_parent_path = crate::sanitize::safe_normalize_path(new_parent_dir)
+            .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
         let _new_parent_fs_id =
             crate::repo::resolve_fs_id(db, repo_id, &head_root_id, &new_parent_path)
                 .await

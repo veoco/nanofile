@@ -386,7 +386,9 @@ pub async fn file_browser(
     Path((repo_id, path)): Path<(String, String)>,
     Query(query): Query<FileBrowserQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    file_browser_inner(user, state, repo_id, normalize_path(&path), query).await
+    let path = crate::sanitize::safe_normalize_path(&path)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+    file_browser_inner(user, state, repo_id, path, query).await
 }
 
 async fn file_browser_inner(
@@ -658,7 +660,8 @@ async fn serve_file(
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
     let db = state.db.as_ref();
-    let path = normalize_path(&path);
+    let path = crate::sanitize::safe_normalize_path(&path)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
     let file_name = path.rsplit('/').next().unwrap_or("file").to_string();
 
     // ?dl=1 → force download
@@ -855,16 +858,6 @@ fn parent_path_from(path: &str) -> &str {
         Some(("", _)) => "/",
         Some((parent, _)) => parent,
         None => "/",
-    }
-}
-
-fn normalize_path(path: &str) -> String {
-    if path.is_empty() || path == "/" {
-        "/".to_string()
-    } else if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{}", path)
     }
 }
 

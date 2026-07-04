@@ -533,16 +533,11 @@ pub async fn shared_dir_view(
 
     increment_view_cnt(state.db.clone(), link.id);
 
-    // Resolve the current directory path
-
-    // Resolve the current directory path
+    // Resolve the current directory path using safe path joining
+    // to prevent path traversal attacks (e.g., ?p=../other-dir)
     let sub_path = params.get("p").map(|s| s.as_str()).unwrap_or("/");
-    let current_path = if sub_path == "/" {
-        link.path.clone()
-    } else {
-        let trimmed = sub_path.trim_start_matches('/');
-        format!("{}/{}", link.path.trim_end_matches('/'), trimmed)
-    };
+    let current_path = crate::sanitize::safe_join_path(&link.path, sub_path)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     // Get repo head commit and resolve directory
     let repo_model = crate::entity::repo::Entity::find_by_id(&link.repo_id)

@@ -1,4 +1,5 @@
-use crate::common::util::{extract_multipart_field, normalize_path};
+use crate::common::util::extract_multipart_field;
+use crate::sanitize::safe_normalize_path;
 use axum::{
     Json, Router,
     body::Body,
@@ -47,7 +48,8 @@ pub async fn download_file(
 ) -> Result<Response, AppError> {
     crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = normalize_path(&query.p.unwrap_or_else(|| "/".to_string()));
+    let path = safe_normalize_path(&query.p.unwrap_or_else(|| "/".to_string()))
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let svc = FileService::new(
         state.repos.clone(),
@@ -113,7 +115,8 @@ pub async fn file_post_handler(
         {
             let newname = extract_multipart_field(&bytes, "newname")
                 .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
-            let path = normalize_path(&query.p.unwrap_or_default());
+            let path = safe_normalize_path(&query.p.unwrap_or_default())
+                .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
             rename_file_entry(
                 state.db.as_ref(),
                 &repo_id,
@@ -185,7 +188,8 @@ pub async fn file_post_handler(
     } else {
         let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)
             .map_err(|_| AppError::BadRequest("invalid form data".into()))?;
-        let path = normalize_path(&query.p.unwrap_or_default());
+        let path = safe_normalize_path(&query.p.unwrap_or_default())
+            .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
         match form.get("operation").map(|s| s.as_str()) {
             Some("rename") => {
@@ -218,11 +222,12 @@ pub async fn delete_file(
 ) -> Result<(), AppError> {
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = normalize_path(
+    let path = safe_normalize_path(
         &query
             .p
             .ok_or_else(|| AppError::BadRequest("path is required".into()))?,
-    );
+    )
+    .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let svc = FileService::new(
         state.repos.clone(),
@@ -252,7 +257,8 @@ pub async fn move_file(
     crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
         .await?;
 
-    let path = normalize_path(&req.p);
+    let path = safe_normalize_path(&req.p)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let svc = FileService::new(
         state.repos.clone(),
@@ -288,7 +294,8 @@ pub async fn rename_file(
     crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
         .await?;
 
-    let path = normalize_path(&req.p);
+    let path = safe_normalize_path(&req.p)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let svc = FileService::new(
         state.repos.clone(),
@@ -317,11 +324,12 @@ pub async fn file_detail(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let path = normalize_path(
+    let path = safe_normalize_path(
         &query
             .p
             .ok_or_else(|| AppError::BadRequest("path is required".into()))?,
-    );
+    )
+    .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let svc = FileService::new(
         state.repos.clone(),
@@ -356,7 +364,8 @@ pub async fn lock_file_via_api_handler(
         .get("operation")
         .map(|s| s.as_str())
         .ok_or_else(|| AppError::BadRequest("operation required".into()))?;
-    let path = normalize_path(&query.p.unwrap_or_default());
+    let path = safe_normalize_path(&query.p.unwrap_or_default())
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let db = state.db.as_ref();
 
@@ -412,11 +421,8 @@ pub async fn create_file_v21(
             .or_else(|| extract_multipart_field(&bytes, "p"))
             .ok_or_else(|| AppError::BadRequest("path (p) required".into()))?
     };
-    let path = if path.starts_with('/') {
-        path
-    } else {
-        format!("/{path}")
-    };
+    let path = safe_normalize_path(&path)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     // Check for rename operation in multipart body
     if let Some(op) = extract_multipart_field(&bytes, "operation")

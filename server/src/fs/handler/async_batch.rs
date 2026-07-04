@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::common::util::normalize_path;
 use crate::error::AppError;
 use crate::fs::service::fileops::FileOpsService;
 use crate::fs::task_manager::TaskState;
+use crate::sanitize::safe_normalize_path;
 
 pub async fn async_batch_copy_item(
     auth: AuthUser,
@@ -19,6 +19,11 @@ pub async fn async_batch_copy_item(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
         .await?;
+
+    let src_dir = safe_normalize_path(&body.src_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
+    let dst_dir = safe_normalize_path(&body.dst_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
 
     let task_id = uuid::Uuid::new_v4().to_string();
     let description = if body.src_dirents.len() == 1 {
@@ -40,8 +45,6 @@ pub async fn async_batch_copy_item(
 
     let state_clone = state.clone();
     let repo_id = body.src_repo_id;
-    let src_dir = normalize_path(&body.src_parent_dir);
-    let dst_dir = normalize_path(&body.dst_parent_dir);
     let file_names = body.src_dirents;
     let email = auth.email.clone();
     let uid = auth.user_id;
@@ -99,6 +102,11 @@ pub async fn async_batch_move_item(
     crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
         .await?;
 
+    let src_dir = safe_normalize_path(&body.src_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
+    let dst_dir = safe_normalize_path(&body.dst_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
+
     let task_id = uuid::Uuid::new_v4().to_string();
     let description = if body.src_dirents.len() == 1 {
         format!("Move \"{}\"", body.src_dirents[0])
@@ -119,8 +127,6 @@ pub async fn async_batch_move_item(
 
     let state_clone = state.clone();
     let repo_id = body.src_repo_id;
-    let src_dir = normalize_path(&body.src_parent_dir);
-    let dst_dir = normalize_path(&body.dst_parent_dir);
     let file_names = body.src_dirents;
     let email = auth.email.clone();
     let uid = auth.user_id;
@@ -188,6 +194,11 @@ pub async fn copy_move_task(
     crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
         .await?;
 
+    let src_dir = safe_normalize_path(&body.src_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
+    let dst_dir = safe_normalize_path(&body.dst_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
+
     let operation = body.operation.as_deref().unwrap_or("copy").to_string();
     let task_id = uuid::Uuid::new_v4().to_string();
     let description = format!(
@@ -202,8 +213,6 @@ pub async fn copy_move_task(
 
     let state_clone = state.clone();
     let repo_id = body.src_repo_id;
-    let src_dir = normalize_path(&body.src_parent_dir);
-    let dst_dir = normalize_path(&body.dst_parent_dir);
     let file_names = body.src_dirents;
     let email = auth.email.clone();
     let uid = auth.user_id;

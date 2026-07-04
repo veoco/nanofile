@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::common::util::normalize_path;
 use crate::error::AppError;
 use crate::fs::service::fileops::FileOpsService;
+use crate::sanitize::safe_normalize_path;
 
 #[derive(Deserialize)]
 pub struct BatchMoveRequest {
@@ -41,8 +41,10 @@ pub async fn batch_move_items(
         state.indexer.clone(),
     );
 
-    let src_dir = normalize_path(&req.src_parent_dir);
-    let dst_dir = normalize_path(&req.dst_parent_dir);
+    let src_dir = safe_normalize_path(&req.src_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
+    let dst_dir = safe_normalize_path(&req.dst_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
 
     svc.batch_move(
         repo_id,
@@ -86,8 +88,10 @@ pub async fn sync_batch_copy_item(
         state.indexer.clone(),
     );
 
-    let src_parent_dir = normalize_path(&body.src_parent_dir);
-    let dst_parent_dir = normalize_path(&body.dst_parent_dir);
+    let src_parent_dir = safe_normalize_path(&body.src_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
+    let dst_parent_dir = safe_normalize_path(&body.dst_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
 
     let _results = svc
         .batch_copy(
@@ -124,7 +128,8 @@ pub async fn batch_delete_item(
 
     crate::storage::check_repo_write_permission(db, repo_id, auth.user_id).await?;
 
-    let parent_dir = normalize_path(&body.parent_dir);
+    let parent_dir = safe_normalize_path(&body.parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let svc = FileOpsService::new(
         state.db.clone(),

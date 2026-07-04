@@ -21,17 +21,6 @@ pub fn extract_multipart_field(bytes: &[u8], field_name: &str) -> Option<String>
     }
 }
 
-/// Ensure path starts with "/" for consistent DB lookups.
-pub fn normalize_path(path: &str) -> String {
-    if path.is_empty() || path == "/" {
-        "/".to_string()
-    } else if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{}", path)
-    }
-}
-
 /// Get the root_fs_id from the repo's head commit for path resolution.
 pub async fn get_head_root_id(db: &DatabaseConnection, repo_id: &str) -> Result<String, AppError> {
     let repo_record = repo::Entity::find_by_id(repo_id)

@@ -193,6 +193,47 @@ pub fn safe_join_path(base: &str, relative: &str) -> Result<String, &'static str
     canonicalize_path(&combined)
 }
 
+/// Safely normalize a path, validating it for security.
+///
+/// This function validates the path and rejects any attempts
+/// at path traversal (`..` components that escape root).
+///
+/// # Arguments
+///
+/// * `path` - The path to normalize (may or may not start with `/`)
+///
+/// # Returns
+///
+/// Returns the canonicalized path starting with `/`, or an error if:
+/// - The path contains `..` components that would traverse beyond root
+/// - The path contains null bytes or other invalid characters
+/// - The path exceeds the maximum length (4096)
+///
+/// # Examples
+///
+/// ```
+/// use base::sanitize::safe_normalize_path;
+///
+/// assert_eq!(safe_normalize_path("/foo/bar").unwrap(), "/foo/bar");
+/// assert_eq!(safe_normalize_path("foo/bar").unwrap(), "/foo/bar");
+/// assert_eq!(safe_normalize_path("").unwrap(), "/");
+/// assert!(safe_normalize_path("/../etc").is_err());
+/// assert!(safe_normalize_path("/foo/../../bar").is_err());
+/// ```
+pub fn safe_normalize_path(path: &str) -> Result<String, &'static str> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Ok("/".to_string());
+    }
+    // Add leading slash if missing, then canonicalize
+    let path_with_slash = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{}", path)
+    };
+    canonicalize_path(&path_with_slash)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +355,47 @@ mod tests {
         // When relative starts with /, we strip it and treat as relative to base
         assert_eq!(safe_join_path("/bar", "/foo").unwrap(), "/bar/foo");
         assert_eq!(safe_join_path("/a/b", "/c/d").unwrap(), "/a/b/c/d");
+    }
+
+    #[test]
+    fn test_safe_normalize_path_basic() {
+        assert_eq!(safe_normalize_path("/foo/bar").unwrap(), "/foo/bar");
+        assert_eq!(safe_normalize_path("foo/bar").unwrap(), "/foo/bar");
+        assert_eq!(safe_normalize_path("/").unwrap(), "/");
+        assert_eq!(safe_normalize_path("").unwrap(), "/");
+        assert_eq!(safe_normalize_path("   ").unwrap(), "/");
+    }
+
+    #[test]
+    fn test_safe_normalize_path_normalization() {
+        // Normalizes . and .. components
+        assert_eq!(safe_normalize_path("/foo/./bar").unwrap(), "/foo/bar");
+        assert_eq!(safe_normalize_path("/foo/../bar").unwrap(), "/bar");
+        assert_eq!(safe_normalize_path("a/b/../c").unwrap(), "/a/c");
+    }
+
+    #[test]
+    fn test_safe_normalize_path_traversal_blocked() {
+        // Blocks traversal beyond root
+        assert!(safe_normalize_path("/../etc").is_err());
+        assert!(safe_normalize_path("../etc").is_err());
+        assert!(safe_normalize_path("/foo/../../bar").is_err());
+        assert!(safe_normalize_path("../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_safe_normalize_path_invalid_characters() {
+        assert!(safe_normalize_path("/foo\0bar").is_err());
+        assert!(safe_normalize_path("/foo'bar").is_err()); // single quote blocked
+        assert!(safe_normalize_path("/foo\"bar").is_err()); // double quote blocked
+        assert!(safe_normalize_path("/foo<bar").is_err()); // < blocked
+        assert!(safe_normalize_path("/foo>bar").is_err()); // > blocked
+        assert!(safe_normalize_path("/foo\\bar").is_err()); // backslash blocked
+    }
+
+    #[test]
+    fn test_safe_normalize_path_max_length() {
+        let long_path = format!("/{}", "x".repeat(MAX_PATH_LEN + 1));
+        assert!(safe_normalize_path(&long_path).is_err());
     }
 }

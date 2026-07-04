@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::common::util::normalize_path;
 use crate::error::AppError;
 use crate::fs::service::fileops::{self as fops_svc, FileOpsService};
 use crate::repository::Repositories;
+use crate::sanitize::safe_normalize_path;
 use crate::serialization::fs_json::DirEntryData;
 
 /// Read and parse an FsDirData object from the fs_objects table.
@@ -164,7 +164,8 @@ pub async fn batch_delete_handler(
         return Ok(Json(json!({})).into_response());
     }
 
-    let parent_dir = normalize_path(query.p.as_deref().unwrap_or("/"));
+    let parent_dir = safe_normalize_path(query.p.as_deref().unwrap_or("/"))
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let svc = FileOpsService::new(
         state.db.clone(),
@@ -210,7 +211,8 @@ pub async fn batch_copy_handler(
     let dst_repo = form
         .get("dst_repo")
         .ok_or_else(|| AppError::BadRequest("dst_repo required".into()))?;
-    let dst_dir = normalize_path(form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/"));
+    let dst_dir = safe_normalize_path(form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/"))
+        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
 
     if *dst_repo != repo_id {
         return Err(AppError::BadRequest("cross-repo copy not supported".into()));
@@ -218,7 +220,8 @@ pub async fn batch_copy_handler(
 
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let src_parent_dir = normalize_path(query.p.as_deref().unwrap_or("/"));
+    let src_parent_dir = safe_normalize_path(query.p.as_deref().unwrap_or("/"))
+        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
 
     let svc = FileOpsService::new(
         state.db.clone(),
@@ -279,7 +282,8 @@ pub async fn batch_move_handler(
     let dst_repo = form
         .get("dst_repo")
         .ok_or_else(|| AppError::BadRequest("dst_repo required".into()))?;
-    let dst_dir = normalize_path(form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/"));
+    let dst_dir = safe_normalize_path(form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/"))
+        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
 
     if *dst_repo != repo_id {
         return Err(AppError::BadRequest("cross-repo move not supported".into()));
@@ -287,7 +291,8 @@ pub async fn batch_move_handler(
 
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let src_parent_dir = normalize_path(query.p.as_deref().unwrap_or("/"));
+    let src_parent_dir = safe_normalize_path(query.p.as_deref().unwrap_or("/"))
+        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
 
     let svc = FileOpsService::new(
         state.db.clone(),
