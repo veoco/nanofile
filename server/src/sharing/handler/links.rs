@@ -57,7 +57,7 @@ pub async fn create_share_link_v21(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateLinkRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let token = share::create_share_link_v21(
+    let result = share::create_share_link_v21(
         state.db.as_ref(),
         &state.repos,
         &state.config,
@@ -69,7 +69,9 @@ pub async fn create_share_link_v21(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({"token": token})))
+    Ok(Json(
+        serde_json::json!({"token": result.token, "s_type": result.s_type}),
+    ))
 }
 
 /// DELETE /api/v2.1/share-links/{token}/

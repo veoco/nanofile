@@ -426,6 +426,7 @@
   var shareCancelBtn = document.querySelector(".js-share-cancel");
   var shareCurrentRepoId = "";
   var shareCurrentPath = "";
+  var shareCurrentType = "";
 
   // ─── Share button — open dialog ─────────────────────────────────────
   document.addEventListener("click", function (e) {
@@ -434,6 +435,7 @@
 
     shareCurrentRepoId = btn.dataset.repoId;
     shareCurrentPath = btn.dataset.path;
+    shareCurrentType = btn.dataset.type || "file";
     var name = shareCurrentPath.split("/").filter(Boolean).pop() || shareCurrentPath;
 
     if (!shareCurrentRepoId || !shareCurrentPath) return;
@@ -487,7 +489,9 @@
         body: JSON.stringify(body),
       });
       var data = await resp.json();
-      var shareUrl = window.location.origin + "/f/" + data.token + "/";
+      var sType = data.s_type || shareCurrentType;
+      var prefix = sType === "d" ? "/d/" : "/f/";
+      var shareUrl = window.location.origin + prefix + data.token + "/";
       await navigator.clipboard.writeText(shareUrl);
       shareDialog.classList.add("hidden");
       window.Toast.success("Share link copied to clipboard: " + data.token);

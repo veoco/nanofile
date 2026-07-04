@@ -7,8 +7,63 @@ use crate::auth::token::generate_share_link_token;
 use crate::entity::{repo_member, share_link};
 use crate::error::AppError;
 use crate::notification::events::FolderPermEvent;
+use crate::repo::fs_tree::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
 use crate::storage;
+
+/// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
+pub async fn resolve_entry_type_raw(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    path: &str,
+) -> Result<String, AppError> {
+    if path == "/" || path.is_empty() {
+        return Ok("d".to_string());
+    }
+
+    let repo_model = crate::entity::repo::Entity::find_by_id(repo_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+    let head_commit_id = repo_model
+        .head_commit_id
+        .ok_or_else(|| AppError::BadRequest("repo has no commits".into()))?;
+    let head_commit = crate::entity::commit::Entity::find()
+        .filter(crate::entity::commit::Column::CommitId.eq(&head_commit_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::Internal("head commit not found".into()))?;
+
+    // Resolve the parent directory to find the entry's mode
+    let (parent_path, entry_name) = path
+        .rsplit_once('/')
+        .unwrap_or(("/", path));
+
+    let parent_fs_id = if parent_path.is_empty() {
+        head_commit.root_id.clone()
+    } else {
+        resolve_fs_id(db, repo_id, &head_commit.root_id, parent_path)
+            .await
+            .map_err(|_| AppError::NotFound("path not found".into()))?
+    };
+
+    let dir_data = read_fs_dir_data(db, repo_id, &parent_fs_id)
+        .await
+        .map_err(|_| AppError::NotFound("path not found".into()))?;
+
+    let is_dir = dir_data
+        .dirents
+        .iter()
+        .find(|d| d.name == entry_name)
+        .map(|d| d.mode == crate::common::S_IFDIR)
+        .unwrap_or(false);
+
+    Ok(if is_dir {
+        "d".to_string()
+    } else {
+        "f".to_string()
+    })
+}
 
 // ── Response types ────────────────────────────────────────────────────
 
@@ -90,9 +145,7 @@ pub async fn create_share_link(
     // Verify caller has read permission on the repo
     storage::check_repo_read_permission(db, repo_id, creator_id).await?;
 
-    // s_type defaults to 'f' (file). Full path-to-type resolution requires
-    // walking the commit tree, which is done lazily at download time.
-    let s_type = "f".to_string();
+    let s_type = resolve_entry_type_raw(db, repo_id, path).await?;
 
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
@@ -114,9 +167,15 @@ pub async fn create_share_link(
     };
     share_link::Entity::insert(model).exec(db).await?;
 
+    let link = if s_type == "d" {
+        format!("/d/{}/", token)
+    } else {
+        format!("/f/{}/", token)
+    };
+
     Ok(ShareLinkInfo {
         token: token.clone(),
-        link: format!("/f/{}/", token),
+        link,
         repo_id: repo_id.to_string(),
         path: path.to_string(),
         created_at: now,
@@ -144,6 +203,11 @@ pub async fn delete_share_link(
 
 // ── Share link operations (v21) ───────────────────────────────────────
 
+pub struct CreateShareLinkResult {
+    pub token: String,
+    pub s_type: String,
+}
+
 pub async fn create_share_link_v21(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -153,7 +217,7 @@ pub async fn create_share_link_v21(
     password: Option<&str>,
     expire_days: Option<i64>,
     creator_id: i32,
-) -> Result<String, AppError> {
+) -> Result<CreateShareLinkResult, AppError> {
     // Block share links for encrypted repos
     let repo_model = repos
         .repo
@@ -169,7 +233,7 @@ pub async fn create_share_link_v21(
     // Verify caller has read permission on the repo
     storage::check_repo_read_permission(db, repo_id, creator_id).await?;
 
-    let s_type = "f".to_string();
+    let s_type = resolve_entry_type_raw(db, repo_id, path).await?;
 
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
@@ -183,14 +247,14 @@ pub async fn create_share_link_v21(
         password: Set(password.map(|p| hash_password(p, config.auth.password_hash_iterations))),
         expires_at: Set(expire_days.map(|d| now + d * 86400)),
         created_at: Set(now),
-        s_type: Set(s_type),
+        s_type: Set(s_type.clone()),
         view_cnt: Set(0i64),
         description: Set(None),
     })
     .exec(db)
     .await?;
 
-    Ok(token)
+    Ok(CreateShareLinkResult { token, s_type })
 }
 
 pub async fn delete_share_link_v21(

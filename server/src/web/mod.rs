@@ -23,6 +23,18 @@ pub fn web_routes() -> Router<Arc<AppState>> {
             get(share_view::shared_file_view).post(share_view::shared_file_view_post),
         )
         .route(
+            "/d/{token}",
+            get(share_view::shared_dir_view).post(share_view::shared_dir_view_post),
+        )
+        .route(
+            "/d/{token}/",
+            get(share_view::shared_dir_view).post(share_view::shared_dir_view_post),
+        )
+        .route(
+            "/d/{token}/files/{*path}",
+            get(share_view::shared_dir_file_view),
+        )
+        .route(
             "/repos/{repo_id}/files/{*path}",
             get(download::repo_file_download),
         )
