@@ -513,12 +513,6 @@ async fn file_browser_inner(
     let page = query.page.unwrap_or(1).max(1) as usize;
     let offset = (page - 1) * per_page;
     let has_more = offset + per_page < total as usize;
-    entries = if offset < entries.len() {
-        let end = (offset + per_page).min(entries.len());
-        entries[offset..end].to_vec()
-    } else {
-        vec![]
-    };
 
     // Determine view mode after pagination so gallery can use the same page slice
     let render_view = match query.view.as_deref() {
@@ -528,19 +522,52 @@ async fn file_browser_inner(
         _ => "all",
     };
 
-    // Gallery groups: filter paginated entries to media only, sort by mtime desc, group by month.
-    // Non-gallery views get an empty vec (template renders nothing).
-    let gallery_groups: Vec<GalleryMonthGroup> = if render_view == "gallery" || render_view == "all"
-    {
+    // Gallery groups: built from ALL entries sorted by mtime desc, independently paginated.
+    // This ensures gallery maintains correct reverse-chronological order regardless
+    // of the configured sort used by list/grid views.
+    let mut gallery_media: Vec<FileEntry> = Vec::new();
+    let gallery_total: i64;
+    if render_view == "gallery" || render_view == "all" {
         let mut media: Vec<FileEntry> = entries
             .iter()
             .filter(|e| e.entry_type == "file" && (e.is_video || e.image_thumbnail_url.is_some()))
             .cloned()
             .collect();
-        media.sort_by_key(|b| std::cmp::Reverse(b.mtime));
-        group_entries_by_month(media)
+        media.sort_by_key(|b| std::cmp::Reverse(b.mtime)); // mtime descending
+        gallery_total = media.len() as i64;
+        gallery_media = media;
+    } else {
+        gallery_total = 0;
+    }
+
+    // Now paginate entries for list/grid views
+    entries = if offset < entries.len() {
+        let end = (offset + per_page).min(entries.len());
+        entries[offset..end].to_vec()
     } else {
         vec![]
+    };
+
+    // Build gallery month groups from the mtime-desc sorted media (paginated independently)
+    let gallery_groups: Vec<GalleryMonthGroup> = if render_view == "gallery" || render_view == "all"
+    {
+        let gallery_offset = (page - 1) * per_page;
+        let paginated: Vec<FileEntry> = if gallery_offset < gallery_media.len() {
+            let end = (gallery_offset + per_page).min(gallery_media.len());
+            gallery_media[gallery_offset..end].to_vec()
+        } else {
+            vec![]
+        };
+        group_entries_by_month(paginated)
+    } else {
+        vec![]
+    };
+
+    // In gallery-only mode, override pagination info to reflect media counts
+    let (effective_total, effective_has_more) = if render_view == "gallery" {
+        (gallery_total, page * per_page < gallery_total as usize)
+    } else {
+        (total, has_more)
     };
 
     // Build breadcrumb items from current_path.
@@ -575,8 +602,8 @@ async fn file_browser_inner(
             current_path: path.clone(),
             breadcrumbs: breadcrumbs.clone(),
             entries,
-            total,
-            has_more,
+            total: effective_total,
+            has_more: effective_has_more,
             page: page as u32,
             render_view,
             csrf_token,
