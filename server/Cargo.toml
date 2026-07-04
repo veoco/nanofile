@@ -77,6 +77,7 @@ tantivy-jieba = "0.20.0"
 reqwest = { version = "0.13", features = ["json", "multipart", "cookies", "form"] }
 tempfile = "3"
 tokio-tungstenite = "0.29"
+zip = "2"
 
 [[bin]]
 name = "nanofile"

@@ -1336,4 +1336,32 @@ impl TestClient {
         )
         .await
     }
+
+    /// POST /api/v2.1/repos/{repo_id}/zip-task/ — request a zip download token.
+    pub async fn zip_task(
+        &self,
+        token: &str,
+        repo_id: &str,
+        parent_dir: &str,
+        dirents: &[&str],
+    ) -> reqwest::Response {
+        self.post_json(
+            &format!("/api/v2.1/repos/{repo_id}/zip-task/"),
+            Some(token),
+            &serde_json::json!({
+                "parent_dir": parent_dir,
+                "dirents": dirents,
+            }),
+        )
+        .await
+    }
+
+    /// GET /zip/{token} — download a zip archive for a previously requested token.
+    pub async fn zip_download(&self, token: &str) -> reqwest::Response {
+        self.client
+            .get(self.url(&format!("/zip/{token}")))
+            .send()
+            .await
+            .unwrap()
+    }
 }
