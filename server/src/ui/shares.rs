@@ -7,12 +7,14 @@ use axum::{
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::TimeZone;
 
 use crate::AppState;
 use crate::auth::token::generate_share_link_token;
+use crate::entity::repo;
 use crate::entity::share_link;
 use crate::entity::upload_link;
 use crate::error::AppError;
@@ -52,6 +54,7 @@ pub struct SharesTemplate {
 pub struct UploadLinkInfo {
     pub token: String,
     pub repo_id: String,
+    pub repo_name: String,
     pub path: String,
     pub name: String,
     pub created_at: String,
@@ -65,6 +68,7 @@ pub struct UploadLinkInfo {
 pub struct ShareLinkInfo {
     pub token: String,
     pub repo_id: String,
+    pub repo_name: String,
     pub path: String,
     pub name: String,
     pub created_at: String,
@@ -102,6 +106,31 @@ pub async fn list_shares(
         .await
         .map_err(|e| AppError::internal(format!("db error: {e}")))?;
 
+    // Query upload links
+    let upload_models = upload_link::Entity::find()
+        .filter(upload_link::Column::CreatorId.eq(user.user_id))
+        .all(db)
+        .await
+        .map_err(|e| AppError::internal(format!("db error: {e}")))?;
+
+    // Build repo name lookup
+    let mut repo_ids: Vec<String> = Vec::new();
+    for s in &links {
+        if !repo_ids.contains(&s.repo_id) {
+            repo_ids.push(s.repo_id.clone());
+        }
+    }
+    for u in &upload_models {
+        if !repo_ids.contains(&u.repo_id) {
+            repo_ids.push(u.repo_id.clone());
+        }
+    }
+    let mut repo_names: HashMap<String, String> = HashMap::new();
+    for rid in &repo_ids {
+        let r = repo::Entity::find_by_id(rid).one(db).await?;
+        repo_names.insert(rid.clone(), r.map(|r| r.name).unwrap_or_default());
+    }
+
     let share_links: Vec<ShareLinkInfo> = links
         .into_iter()
         .map(|s| {
@@ -112,7 +141,8 @@ pub async fn list_shares(
                 .unwrap_or_else(|| s.path.clone());
             ShareLinkInfo {
                 token: s.token.clone(),
-                repo_id: s.repo_id,
+                repo_id: s.repo_id.clone(),
+                repo_name: repo_names.get(&s.repo_id).cloned().unwrap_or_default(),
                 path: s.path.clone(),
                 name,
                 created_at: format_ts(s.created_at),
@@ -130,13 +160,6 @@ pub async fn list_shares(
         })
         .collect();
 
-    // Query upload links
-    let upload_models = upload_link::Entity::find()
-        .filter(upload_link::Column::CreatorId.eq(user.user_id))
-        .all(db)
-        .await
-        .map_err(|e| AppError::internal(format!("db error: {e}")))?;
-
     let upload_links: Vec<UploadLinkInfo> = upload_models
         .into_iter()
         .map(|u| {
@@ -148,7 +171,8 @@ pub async fn list_shares(
                 .unwrap_or_else(|| u.path.clone());
             UploadLinkInfo {
                 token: u.token.clone(),
-                repo_id: u.repo_id,
+                repo_id: u.repo_id.clone(),
+                repo_name: repo_names.get(&u.repo_id).cloned().unwrap_or_default(),
                 path: u.path.clone(),
                 name,
                 created_at: format_ts(u.created_at),

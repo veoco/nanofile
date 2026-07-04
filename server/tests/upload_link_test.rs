@@ -21,7 +21,10 @@ async fn test_upload_link_create_basic() {
         .await;
     assert_eq!(resp.status(), 200, "create upload link failed");
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(!body["token"].as_str().unwrap_or("").is_empty(), "token must not be empty");
+    assert!(
+        !body["token"].as_str().unwrap_or("").is_empty(),
+        "token must not be empty"
+    );
 }
 
 /// U.2 — POST /api/v2.1/upload-links/ with password
@@ -41,7 +44,11 @@ async fn test_upload_link_create_with_password() {
             }),
         )
         .await;
-    assert_eq!(resp.status(), 200, "create upload link with password failed");
+    assert_eq!(
+        resp.status(),
+        200,
+        "create upload link with password failed"
+    );
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
     assert!(!token.is_empty());
@@ -55,7 +62,10 @@ async fn test_upload_link_create_with_password() {
     let list_body: serde_json::Value = list.json().await.unwrap();
     let links = list_body["upload_link_list"].as_array().unwrap();
     let ul = links.iter().find(|l| l["token"] == token).unwrap();
-    assert_eq!(ul["has_password"], true, "upload link should have has_password=true");
+    assert_eq!(
+        ul["has_password"], true,
+        "upload link should have has_password=true"
+    );
 }
 
 /// U.3 — POST /api/v2.1/upload-links/ with description
@@ -126,14 +136,20 @@ async fn test_upload_link_list_filter_by_repo_and_path() {
     let list2 = f
         .client
         .get(
-            &format!("/api/v2.1/upload-links/?repo_id={}&path=/nonexistent", f.repo_id),
+            &format!(
+                "/api/v2.1/upload-links/?repo_id={}&path=/nonexistent",
+                f.repo_id
+            ),
             Some(&f.api_token),
         )
         .await;
     assert_eq!(list2.status(), 200);
     let body2: serde_json::Value = list2.json().await.unwrap();
     let links2 = body2["upload_link_list"].as_array().unwrap();
-    assert!(links2.is_empty(), "should not find upload link for non-matching path");
+    assert!(
+        links2.is_empty(),
+        "should not find upload link for non-matching path"
+    );
 }
 
 /// U.5 — GET /api/v2.1/upload-links/ list response fields
@@ -164,9 +180,18 @@ async fn test_upload_link_list_response_fields() {
     assert!(!links.is_empty(), "should have at least one upload link");
 
     let link = &links[0];
-    assert!(!link["token"].as_str().unwrap_or("").is_empty(), "token missing");
-    assert!(link["has_password"].is_boolean(), "has_password should be boolean");
-    assert!(link.get("expire_at").is_some(), "expire_at should be present");
+    assert!(
+        !link["token"].as_str().unwrap_or("").is_empty(),
+        "token missing"
+    );
+    assert!(
+        link["has_password"].is_boolean(),
+        "has_password should be boolean"
+    );
+    assert!(
+        link.get("expire_at").is_some(),
+        "expire_at should be present"
+    );
     assert!(link.get("view_cnt").is_some(), "view_cnt should be present");
 }
 
@@ -187,8 +212,10 @@ async fn test_upload_link_get_detail() {
         )
         .await;
     assert_eq!(resp.status(), 200);
-    let token = resp.json::<serde_json::Value>().await.unwrap()
-        ["token"].as_str().unwrap().to_string();
+    let token = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Get detail
     let detail = f
@@ -426,10 +453,7 @@ async fn test_upload_link_delete_own() {
         .await;
     assert_eq!(list.status(), 200);
     let list_body: serde_json::Value = list.json().await.unwrap();
-    assert_eq!(
-        list_body["upload_link_list"].as_array().unwrap().len(),
-        1
-    );
+    assert_eq!(list_body["upload_link_list"].as_array().unwrap().len(), 1);
 
     // Delete
     let del = f
@@ -555,7 +579,11 @@ async fn test_upload_link_get_nonexistent() {
             Some(&f.api_token),
         )
         .await;
-    assert_eq!(detail.status(), 404, "non-existent upload link must return 404");
+    assert_eq!(
+        detail.status(),
+        404,
+        "non-existent upload link must return 404"
+    );
 }
 
 /// U.16 — Upload link list by repo
