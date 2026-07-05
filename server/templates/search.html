@@ -31,7 +31,13 @@
     {% if results.is_empty() %}
     <p class="mt-4 text-sm text-gray-400 dark:text-gray-500">No results found.</p>
     {% else %}
-    <ul class="mt-4 divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-surface-800">
+    <ul id="search-results"
+        class="mt-4 divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-surface-800"
+        data-query="{{ query }}"
+        data-search-filename-only="{% if search_filename_only %}true{% else %}false{% endif %}"
+        data-per-page="{{ per_page }}"
+        data-page="{{ current_page }}"
+        data-has-more="{% if has_more %}true{% else %}false{% endif %}">
         {% for item in results %}
         <li class="px-4 py-3 flex items-center gap-x-3 hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
             <!-- Icon -->
@@ -71,16 +77,142 @@
         {% endfor %}
     </ul>
 
-    <!-- Pagination -->
-    {% if has_more %}
-    <div class="mt-4 text-center">
-        <a href="/search/?q={{ query }}{% if !search_filename_only %}&amp;search_filename_only=false{% endif %}"
-           class="text-sm text-brand-500 dark:text-brand-400 hover:text-brand-600">
-            Load more results
-        </a>
+    <!-- Infinite scroll sentinel -->
+    <div id="scroll-sentinel" class="mt-4 text-center">
+        <div id="loading-spinner" class="hidden">
+            <svg class="inline h-5 w-5 animate-spin text-gray-400" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+            <span class="ml-2 text-sm text-gray-400 dark:text-gray-500">Loading more results...</span>
+        </div>
     </div>
-    {% endif %}
     {% endif %}
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    var list = document.getElementById('search-results');
+    if (!list) return;
+
+    var sentinel = document.getElementById('scroll-sentinel');
+    var spinner = document.getElementById('loading-spinner');
+    if (!sentinel) return;
+
+    var page = parseInt(list.dataset.page) || 1;
+    var perPage = parseInt(list.dataset.perPage) || 20;
+    var query = list.dataset.query;
+    var filenameOnly = list.dataset.searchFilenameOnly !== 'false'; // default true
+    var hasMore = list.dataset.hasMore === 'true';
+    var loading = false;
+
+    if (!hasMore) {
+        sentinel.style.display = 'none';
+        return;
+    }
+
+    function formatSize(bytes) {
+        if (bytes === 0) return '0 B';
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+    }
+
+    function formatDate(ts) {
+        var d = new Date(ts * 1000);
+        var y = d.getFullYear();
+        var m = ('0' + (d.getMonth() + 1)).slice(-2);
+        var day = ('0' + d.getDate()).slice(-2);
+        var h = ('0' + d.getHours()).slice(-2);
+        var min = ('0' + d.getMinutes()).slice(-2);
+        return y + '-' + m + '-' + day + ' ' + h + ':' + min;
+    }
+
+    function createResultItem(item) {
+        var li = document.createElement('li');
+        li.className = 'px-4 py-3 flex items-center gap-x-3 hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors';
+
+        // Icon
+        var iconSpan = document.createElement('span');
+        iconSpan.className = 'flex-shrink-0 text-gray-400 dark:text-gray-500';
+        if (item.is_dir) {
+            iconSpan.innerHTML = '<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>';
+        } else {
+            iconSpan.innerHTML = '<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>';
+        }
+        li.appendChild(iconSpan);
+
+        // File info
+        var infoDiv = document.createElement('div');
+        infoDiv.className = 'min-w-0 flex-1';
+
+        var link = document.createElement('a');
+        link.href = '/libraries/' + encodeURIComponent(item.repo_id) + '/files/';
+        link.className = 'text-sm font-medium text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300 truncate block';
+        link.textContent = item.name;
+        infoDiv.appendChild(link);
+
+        var metaP = document.createElement('p');
+        metaP.className = 'text-xs text-gray-500 dark:text-gray-400 truncate';
+        metaP.textContent = item.repo_name + ' \u00b7 ' + item.fullpath;
+        infoDiv.appendChild(metaP);
+
+        li.appendChild(infoDiv);
+
+        // Size and date
+        var metaDiv = document.createElement('div');
+        metaDiv.className = 'flex-shrink-0 text-right text-xs text-gray-400 dark:text-gray-500';
+        if (!item.is_dir) {
+            var sizeDiv = document.createElement('div');
+            sizeDiv.textContent = formatSize(item.size);
+            metaDiv.appendChild(sizeDiv);
+        }
+        var dateDiv = document.createElement('div');
+        dateDiv.textContent = formatDate(item.last_modified);
+        metaDiv.appendChild(dateDiv);
+        li.appendChild(metaDiv);
+
+        return li;
+    }
+
+    var observer = new IntersectionObserver(async function(entries) {
+        for (var i = 0; i < entries.length; i++) {
+            var entry = entries[i];
+            if (entry.isIntersecting && hasMore && !loading) {
+                loading = true;
+                spinner.classList.remove('hidden');
+
+                try {
+                    page++;
+                    var params = new URLSearchParams({ q: query, page: page, per_page: perPage });
+                    if (!filenameOnly) params.set('search_filename_only', 'false');
+
+                    var resp = await fetch('/api2/search/?' + params.toString());
+                    var data = await resp.json();
+
+                    for (var j = 0; j < data.results.length; j++) {
+                        list.appendChild(createResultItem(data.results[j]));
+                    }
+
+                    hasMore = data.has_more;
+                    if (!hasMore) {
+                        sentinel.style.display = 'none';
+                        observer.unobserve(sentinel);
+                    }
+                } catch (e) {
+                    console.error('Failed to load more results:', e);
+                } finally {
+                    loading = false;
+                    spinner.classList.add('hidden');
+                }
+            }
+        }
+    }, { rootMargin: '200px' });
+
+    observer.observe(sentinel);
+})();
+</script>
 {% endblock %}

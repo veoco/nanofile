@@ -360,29 +360,32 @@ pub async fn update_branch(
             .unwrap_or(0)
             > 0;
 
+        // Compute tree diff between old and new commits.
+        // Always computed (even for wiki repos) — needed for indexing.
+        let old_root = if let Some(ref parent_id) = new_commit.parent_id
+            && parent_id != "0000000000000000000000000000000000000000"
+        {
+            commit::Entity::find()
+                .filter(commit::Column::RepoId.eq(&repo_id))
+                .filter(commit::Column::CommitId.eq(parent_id))
+                .one(state.db.as_ref())
+                .await?
+                .map(|c| c.root_id)
+        } else {
+            None
+        };
+
+        let mut changes = crate::repo::tree_diff::diff_trees(
+            state.db.as_ref(),
+            &repo_id,
+            old_root.as_deref(),
+            &new_commit.root_id,
+        )
+        .await
+        .unwrap_or_default();
+
+        // Log activities (skip for wiki repos, matching seafevents).
         if !is_wiki {
-            let old_root = if let Some(ref parent_id) = new_commit.parent_id
-                && parent_id != "0000000000000000000000000000000000000000"
-            {
-                commit::Entity::find()
-                    .filter(commit::Column::RepoId.eq(&repo_id))
-                    .filter(commit::Column::CommitId.eq(parent_id))
-                    .one(state.db.as_ref())
-                    .await?
-                    .map(|c| c.root_id)
-            } else {
-                None
-            };
-
-            let changes = crate::repo::tree_diff::diff_trees(
-                state.db.as_ref(),
-                &repo_id,
-                old_root.as_deref(),
-                &new_commit.root_id,
-            )
-            .await
-            .unwrap_or_default();
-
             // Check for recover operations: seafevents checks if the commit
             // description starts with "Reverted" or "Recovered" and maps
             // create/edit → recover.
@@ -390,7 +393,7 @@ pub async fn update_branch(
             let is_reverted =
                 commit_desc.starts_with("Reverted") || commit_desc.starts_with("Recovered");
 
-            for mut change in changes {
+            for change in &mut changes {
                 // Map create/edit → recover when commit was a revert/restore.
                 if is_reverted && (change.op_type == "create" || change.op_type == "edit") {
                     change.op_type = "recover";
@@ -418,6 +421,53 @@ pub async fn update_branch(
                     None,
                 )
                 .await;
+            }
+        }
+
+        // Update the full-text search index for changed files.
+        if let Some(ref indexer) = state.indexer {
+            for change in &changes {
+                if change.obj_type != "file" {
+                    continue;
+                }
+                match change.op_type {
+                    "create" | "edit" | "recover" => {
+                        if let Err(e) = indexer
+                            .reindex_file(
+                                state.db.as_ref(),
+                                &repo_id,
+                                &change.path,
+                                &state.block_store,
+                            )
+                            .await
+                        {
+                            tracing::warn!("sync index file {}: {e}", change.path);
+                        }
+                    }
+                    "delete" => {
+                        if let Err(e) = indexer.delete_file(&repo_id, &change.path) {
+                            tracing::warn!("sync delete index {}: {e}", change.path);
+                        }
+                    }
+                    "rename" | "move" => {
+                        // Remove old path from index, index new path.
+                        if let Some(ref old_path) = change.old_path {
+                            let _ = indexer.delete_file(&repo_id, old_path);
+                        }
+                        if let Err(e) = indexer
+                            .reindex_file(
+                                state.db.as_ref(),
+                                &repo_id,
+                                &change.path,
+                                &state.block_store,
+                            )
+                            .await
+                        {
+                            tracing::warn!("sync reindex {}: {e}", change.path);
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 

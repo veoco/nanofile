@@ -65,9 +65,13 @@ impl SearchService {
 
         // Phase 1: Full-text search via Tantivy
         if let Some(indexer) = &self.indexer {
-            let ft_results = indexer
-                .search(q, &repo_ids, 200, 0, search_filename_only)
-                .unwrap_or_default();
+            let ft_results = match indexer.search(q, &repo_ids, 200, 0, search_filename_only) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("Tantivy search failed: {e}");
+                    Vec::new()
+                }
+            };
             for (found_repo_id, found_fullpath) in &ft_results {
                 if !seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
                     continue;

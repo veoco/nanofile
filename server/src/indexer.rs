@@ -345,8 +345,10 @@ impl TextIndexer {
         // Commit any pending documents first so the reader can pick them up.
         // This ensures search always returns the latest content without
         // requiring callers to explicitly commit after every index operation.
-        if self.commit().is_ok() {
-            let _ = self.reader.reload();
+        if let Err(e) = self.commit() {
+            tracing::warn!("search: commit before search failed: {e}");
+        } else if let Err(e) = self.reader.reload() {
+            tracing::warn!("search: reload after commit failed: {e}");
         }
         let reader = self.reader.clone();
         let searcher = reader.searcher();
