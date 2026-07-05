@@ -57,7 +57,7 @@
 
             <!-- File info -->
             <div class="min-w-0 flex-1">
-                <a href="/libraries/{{ item.repo_id }}/files/"
+                <a href="{{ item.dir_url }}"
                    class="text-sm font-medium text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300 truncate block">
                     {{ item.name }}
                 </a>
@@ -150,7 +150,7 @@
         infoDiv.className = 'min-w-0 flex-1';
 
         var link = document.createElement('a');
-        link.href = '/libraries/' + encodeURIComponent(item.repo_id) + '/files/';
+        link.href = item.dir_url || '/libraries/' + encodeURIComponent(item.repo_id) + '/files/';
         link.className = 'text-sm font-medium text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300 truncate block';
         link.textContent = item.name;
         infoDiv.appendChild(link);

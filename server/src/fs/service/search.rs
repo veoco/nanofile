@@ -19,6 +19,8 @@ pub struct FileSearchResult {
     pub fullpath: String,
     pub size: i64,
     pub is_dir: bool,
+    /// URL pointing to the directory containing this file (or the directory itself).
+    pub dir_url: String,
 }
 
 pub struct SearchService {
@@ -219,6 +221,17 @@ impl SearchService {
         let entry = dir_data.dirents.iter().find(|d| d.name == *name)?;
 
         let is_dir = entry.mode & S_IFDIR != 0;
+
+        let dir_url = if is_dir {
+            format!("/libraries/{}/files{}", repo_id, fullpath)
+        } else {
+            let parent = fullpath
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .unwrap_or("/");
+            format!("/libraries/{}/files{}", repo_id, parent)
+        };
+
         Some(FileSearchResult {
             repo_id: repo_id.to_string(),
             repo_name: repo_record.name,
@@ -228,6 +241,7 @@ impl SearchService {
             fullpath: fullpath.to_string(),
             size: entry.size,
             is_dir,
+            dir_url,
         })
     }
 }
@@ -272,6 +286,15 @@ async fn search_fs_tree(
                     // Already seen
                 } else {
                     let is_dir = entry.mode & S_IFDIR != 0;
+                    let dir_url = if is_dir {
+                        format!("/libraries/{}/files{}", repo_id, full_path)
+                    } else {
+                        let parent = full_path
+                            .rsplit_once('/')
+                            .map(|(parent, _)| parent)
+                            .unwrap_or("/");
+                        format!("/libraries/{}/files{}", repo_id, parent)
+                    };
                     results.push(FileSearchResult {
                         repo_id: repo_id.to_string(),
                         repo_name: repo_name.to_string(),
@@ -281,6 +304,7 @@ async fn search_fs_tree(
                         fullpath: full_path.clone(),
                         size: entry.size,
                         is_dir,
+                        dir_url,
                     });
                 }
             }
