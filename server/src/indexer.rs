@@ -102,16 +102,28 @@ impl TextIndexer {
         );
         let schema = schema_builder.build();
 
-        let index = match Index::create_in_dir(index_dir, schema.clone()) {
-            Ok(index) => index,
+        // Try to open an existing index first. This preserves indexed data
+        // across restarts. Only if no valid index exists do we create a new one.
+        let index = match Index::open_in_dir(index_dir) {
+            Ok(index) => {
+                tracing::info!("Opened existing full-text index at {:?}", index_dir);
+                index
+            }
             Err(_) => {
-                // Index directory exists but may have incompatible schema
-                // (e.g. from a previous version). Delete and recreate.
-                tracing::info!("Rebuilding full-text index at {:?}", index_dir);
-                std::fs::remove_dir_all(index_dir)
-                    .map_err(|e| AppError::internal(format!("remove old index dir: {e}")))?;
-                std::fs::create_dir_all(index_dir)
-                    .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
+                // No valid index found — check if the directory is empty or corrupt.
+                if index_dir.join("meta.json").exists() {
+                    tracing::warn!(
+                        "Full-text index meta.json found but corrupt, rebuilding at {:?}",
+                        index_dir
+                    );
+                    std::fs::remove_dir_all(index_dir).map_err(|e| {
+                        AppError::internal(format!("remove corrupt index dir: {e}"))
+                    })?;
+                    std::fs::create_dir_all(index_dir)
+                        .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
+                } else {
+                    tracing::info!("Creating new full-text index at {:?}", index_dir);
+                }
                 Index::create_in_dir(index_dir, schema.clone())
                     .map_err(|e| AppError::internal(format!("create tantivy index: {e}")))?
             }
