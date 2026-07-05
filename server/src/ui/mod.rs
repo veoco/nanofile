@@ -1,5 +1,6 @@
 /// Web UI module — a Seahub-compatible management interface.
 pub mod activities;
+pub mod adminshares;
 pub mod auth;
 pub mod auth_extractor;
 pub mod client_login;
@@ -134,7 +135,7 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         // Search
         .route("/search/", get(search::search_page))
         // Admin — user management
-        .route("/sysadmin/", get(sysadmin::sysadmin_page))
+        .route("/sysadmin/users/", get(sysadmin::sysadmin_page))
         .route(
             "/sysadmin/users/create/",
             axum::routing::post(sysadmin::create_user),
@@ -146,5 +147,15 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route(
             "/sysadmin/users/{user_id}/delete/",
             axum::routing::post(sysadmin::delete_user),
+        )
+        // Admin — share management
+        .route("/sysadmin/shares/", get(adminshares::list_all_shares))
+        .route(
+            "/sysadmin/shares/share/{token}/delete/",
+            axum::routing::post(adminshares::delete_share),
+        )
+        .route(
+            "/sysadmin/shares/upload/{token}/delete/",
+            axum::routing::post(adminshares::delete_upload),
         )
 }

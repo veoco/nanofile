@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+
+{% block title %}Share Management | Nanofile{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Share Management</h1>
+<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">View and manage all shared links across all users.</p>
+
+<!-- Tab bar -->
+<div class="mt-4 flex gap-4 border-b border-gray-200 dark:border-gray-700">
+    <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium border-b-2 {% if active_tab == "share-links" %}tab-btn--active text-brand-600 dark:text-brand-400 border-brand-600 dark:border-brand-400{% else %}text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300{% endif %}"
+            data-tab="share-links" onclick="switchTab('share-links')">
+        Share Links ({{ share_links.len() }})
+    </button>
+    <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium border-b-2 {% if active_tab == "upload-links" %}tab-btn--active text-brand-600 dark:text-brand-400 border-brand-600 dark:border-brand-400{% else %}text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300{% endif %}"
+            data-tab="upload-links" onclick="switchTab('upload-links')">
+        Upload Links ({{ upload_links.len() }})
+    </button>
+</div>
+
+<!-- Share Links table -->
+<div id="tab-share-links" class="tab-content {% if active_tab != "share-links" %}hidden{% endif %}">
+{% if share_links.is_empty() %}
+<div class="mt-8 text-center">
+    <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/>
+    </svg>
+    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">No share links across any users.</p>
+    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Share links are created when users share files or folders from their libraries.</p>
+</div>
+{% endif %}
+
+{% if !share_links.is_empty() %}
+<div class="mt-6">
+    <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead class="bg-gray-50 dark:bg-surface-700">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Creator</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Library</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Name</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Type</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Created</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Expires</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Description</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Views</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Password</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                {% for s in share_links %}
+                <tr class="hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
+                    <td class="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">{{ s.creator_email }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 max-w-0">
+                        <span class="truncate block" title="{{ s.repo_name }}">{{ s.repo_name }}</span>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 max-w-0">
+                        <a href="{{ s.link_url }}" target="_blank" class="hover:text-brand-500 dark:hover:text-brand-400 truncate block" title="{{ s.path }}">
+                            {{ s.name }}
+                        </a>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                        {% if s.s_type == "d" %}
+                        <span class="inline-flex items-center gap-1">
+                            <svg class="h-3.5 w-3.5 text-amber-500" fill="currentColor" viewBox="0 0 24 24"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>
+                            Folder
+                        </span>
+                        {% else %}
+                        <span class="inline-flex items-center gap-1">
+                            <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                            File
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ s.created_at }}</td>
+                    <td class="px-4 py-3 text-sm {% if s.expires_at != "Never" %}text-red-500{% else %}text-gray-500 dark:text-gray-400{% endif %} whitespace-nowrap">{{ s.expires_at }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 max-w-0">
+                        {% if s.description.is_some() %}
+                        <span class="truncate block" title="{{ s.description.as_deref().unwrap_or("") }}">{{ s.description.as_deref().unwrap_or("") }}</span>
+                        {% else %}
+                        <span class="text-gray-300 dark:text-gray-600">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-center">{{ s.view_cnt }}</td>
+                    <td class="px-4 py-3 text-center">
+                        {% if s.has_password %}
+                        <span class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                            Yes
+                        </span>
+                        {% else %}
+                        <span class="text-xs text-gray-400">No</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-right">
+                        <div class="flex items-center justify-end gap-1">
+                            <form action="/sysadmin/shares/share/{{ s.token }}/delete/" method="POST" class="delete-form inline" onsubmit="return confirm('Delete this share link?');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                                <input type="hidden" name="tab" value="{{ active_tab }}">
+                                <button type="submit" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors" title="Delete share link">
+                                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                    </svg>
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+</div>
+
+<!-- Upload Links table -->
+<div id="tab-upload-links" class="tab-content {% if active_tab != "upload-links" %}hidden{% endif %}">
+{% if upload_links.is_empty() %}
+<div class="mt-8 text-center">
+    <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+    </svg>
+    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">No upload links across any users.</p>
+    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Upload links are created when users allow others to upload files to their libraries.</p>
+</div>
+{% endif %}
+
+{% if !upload_links.is_empty() %}
+<div class="mt-6">
+    <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead class="bg-gray-50 dark:bg-surface-700">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Creator</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Library</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Name</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Created</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Expires</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Description</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Uploads</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Password</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                {% for u in upload_links %}
+                <tr class="hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
+                    <td class="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">{{ u.creator_email }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 max-w-0">
+                        <span class="truncate block" title="{{ u.repo_name }}">{{ u.repo_name }}</span>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 max-w-0">
+                        <a href="{{ u.link_url }}" target="_blank" class="hover:text-brand-500 dark:hover:text-brand-400 truncate block" title="{{ u.path }}">
+                            {{ u.name }}
+                        </a>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ u.created_at }}</td>
+                    <td class="px-4 py-3 text-sm {% if u.expires_at != "Never" %}text-red-500{% else %}text-gray-500 dark:text-gray-400{% endif %} whitespace-nowrap">{{ u.expires_at }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 max-w-0">
+                        {% if u.description.is_some() %}
+                        <span class="truncate block" title="{{ u.description.as_deref().unwrap_or("") }}">{{ u.description.as_deref().unwrap_or("") }}</span>
+                        {% else %}
+                        <span class="text-gray-300 dark:text-gray-600">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-center">{{ u.view_cnt }}</td>
+                    <td class="px-4 py-3 text-center">
+                        {% if u.has_password %}
+                        <span class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                            Yes
+                        </span>
+                        {% else %}
+                        <span class="text-xs text-gray-400">No</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-right">
+                        <div class="flex items-center justify-end gap-1">
+                            <form action="/sysadmin/shares/upload/{{ u.token }}/delete/" method="POST" class="delete-form inline" onsubmit="return confirm('Delete this upload link?');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                                <input type="hidden" name="tab" value="{{ active_tab }}">
+                                <button type="submit" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors" title="Delete upload link">
+                                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                    </svg>
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+</div>
+
+<script>
+// ─── Tab switching ─────────────────────────────────────────────────────
+function switchTab(name) {
+    document.querySelectorAll('.tab-content').forEach(function(el) {
+        el.classList.add('hidden');
+    });
+    document.querySelectorAll('.tab-btn').forEach(function(el) {
+        el.classList.remove('tab-btn--active', 'text-brand-600', 'dark:text-brand-400', 'border-brand-600', 'dark:border-brand-400');
+        el.classList.add('text-gray-500', 'dark:text-gray-400', 'border-transparent');
+    });
+    document.getElementById('tab-' + name).classList.remove('hidden');
+    var btn = document.querySelector('[data-tab="' + name + '"]');
+    if (btn) {
+        btn.classList.remove('text-gray-500', 'dark:text-gray-400', 'border-transparent');
+        btn.classList.add('tab-btn--active', 'text-brand-600', 'dark:text-brand-400', 'border-brand-600', 'dark:border-brand-400');
+    }
+
+    // Update URL query param to persist tab state across reloads
+    var params = new URLSearchParams(window.location.search);
+    if (name === 'upload-links') {
+        params.set('tab', 'upload-links');
+    } else {
+        params.delete('tab');
+    }
+    var newSearch = params.toString();
+    var newUrl = newSearch ? window.location.pathname + '?' + newSearch : window.location.pathname;
+    window.history.replaceState(null, '', newUrl);
+
+    // Keep delete form hidden inputs in sync
+    document.querySelectorAll('.delete-form input[name="tab"]').forEach(function(input) {
+        input.value = name === 'upload-links' ? 'upload-links' : '';
+    });
+}
+</script>
+{% endblock %}

@@ -42,7 +42,7 @@ pub struct UserRow {
     pub last_login_at: String,
 }
 
-/// GET /sysadmin/ — user management page (admin only).
+/// GET /sysadmin/users/ — user management page (admin only).
 pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) -> Response {
     if !user.is_admin {
         return Redirect::to("/libraries/").into_response();
@@ -171,7 +171,7 @@ pub async fn create_user(
         return Ok(render_sysadmin_error(&state, e).await);
     }
 
-    Ok((StatusCode::FOUND, [("Location", "/sysadmin/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/sysadmin/users/")]).into_response())
 }
 
 #[derive(Deserialize)]
@@ -215,7 +215,7 @@ pub async fn update_user(
         return Ok(render_sysadmin_error(&state, e).await);
     }
 
-    Ok((StatusCode::FOUND, [("Location", "/sysadmin/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/sysadmin/users/")]).into_response())
 }
 
 /// POST /sysadmin/users/{user_id}/delete/ — delete a user.
@@ -234,7 +234,7 @@ pub async fn delete_user(
         return Ok(render_sysadmin_error(&state, e).await);
     }
 
-    Ok((StatusCode::FOUND, [("Location", "/sysadmin/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/sysadmin/users/")]).into_response())
 }
 
 /// Parse an optional storage quota string.
@@ -252,5 +252,5 @@ fn parse_quota(s: Option<&str>) -> Option<i64> {
 async fn render_sysadmin_error(_state: &Arc<AppState>, _error: AppError) -> Response {
     // For simplicity, just redirect back — we can't extract WebUser here to
     // re-render the template with an error message inline.
-    (StatusCode::FOUND, [("Location", "/sysadmin/")]).into_response()
+    (StatusCode::FOUND, [("Location", "/sysadmin/users/")]).into_response()
 }

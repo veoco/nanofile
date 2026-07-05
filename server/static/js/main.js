@@ -108,10 +108,16 @@
       var isAdmin = userMenu.getAttribute("data-is-admin") === "true";
       if (isAdmin) {
         var adminLink = document.createElement("a");
-        adminLink.href = "/sysadmin/";
+        adminLink.href = "/sysadmin/users/";
         adminLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
         adminLink.textContent = "User Management";
         dropdown.appendChild(adminLink);
+
+        var shareLink = document.createElement("a");
+        shareLink.href = "/sysadmin/shares/";
+        shareLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
+        shareLink.textContent = "Share Management";
+        dropdown.appendChild(shareLink);
       }
 
       var signOut = document.createElement("a");
