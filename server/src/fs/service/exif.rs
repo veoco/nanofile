@@ -121,10 +121,10 @@ impl ExifService {
 /// Check whether a GPS coordinate field has at least one non-zero rational
 /// component (avoids displaying "NaN deg NaN min NaN sec" for invalid data).
 fn has_valid_gps(exif: &exif::Exif, coord_tag: exif::Tag) -> bool {
-    if let Some(field) = exif.get_field(coord_tag, exif::In::PRIMARY) {
-        if let exif::Value::Rational(vals) = &field.value {
-            return vals.iter().any(|r| r.num != 0 && r.denom != 0);
-        }
+    if let Some(field) = exif.get_field(coord_tag, exif::In::PRIMARY)
+        && let exif::Value::Rational(vals) = &field.value
+    {
+        return vals.iter().any(|r| r.num != 0 && r.denom != 0);
     }
     false
 }
