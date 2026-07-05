@@ -84,16 +84,14 @@
         </div>
     </div>
 
-    {# QR Code #}
-    {% if let Some(url) = otpauth_url %}
+    {# QR Code — generated locally, no external API calls #}
     <div class="mt-4 flex justify-center rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-6">
-        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{ url }}"
+        <img src="/settings/two-factor/qr-code/"
              alt="QR Code for TOTP"
              class="h-48 w-48"
              width="200"
              height="200">
     </div>
-    {% endif %}
 
     {# Manual entry #}
     {% if let Some(secret) = secret %}

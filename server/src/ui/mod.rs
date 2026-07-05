@@ -127,6 +127,10 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/settings/two-factor/disable/",
             axum::routing::post(two_factor::disable_2fa),
         )
+        .route(
+            "/settings/two-factor/qr-code/",
+            get(two_factor::qr_code_image),
+        )
         // Starred items — page listing only (GET).
         // Star/unstar is handled by JS via /api/v2.1/starred-items/.
         .route("/starred/", get(starred::starred_page))

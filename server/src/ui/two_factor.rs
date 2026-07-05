@@ -38,8 +38,6 @@ pub struct TwoFactorTemplate {
     pub setup_pending: bool,
     /// TOTP secret (shown during setup).
     pub secret: Option<String>,
-    /// otpauth:// URL for QR code.
-    pub otpauth_url: Option<String>,
     /// Raw backup codes (shown once after generation).
     pub backup_codes: Option<Vec<String>>,
     pub error: Option<String>,
@@ -78,16 +76,11 @@ async fn render_page(
     let enabled = two_fa.as_ref().map(|tf| tf.enabled).unwrap_or(false);
     let setup_pending = two_fa.is_some() && !enabled;
 
-    let (secret, otpauth_url) = if setup_pending {
+    let secret = if setup_pending {
         let tf = two_fa.as_ref().unwrap();
-        let totp = TotpManager::create_totp(&tf.totp_secret, &user.email, "Nanofile")
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        (
-            Some(tf.totp_secret.clone()),
-            Some(TotpManager::get_otpauth_url(&totp)),
-        )
+        Some(tf.totp_secret.clone())
     } else {
-        (None, None)
+        None
     };
 
     let csrf_token = Some(crate::auth::csrf::generate_csrf_token(
@@ -105,7 +98,6 @@ async fn render_page(
         enabled,
         setup_pending,
         secret,
-        otpauth_url,
         backup_codes,
         error,
         success,
@@ -322,4 +314,31 @@ pub async fn disable_2fa(
         .map_err(|e| AppError::internal(e.to_string()))?;
 
     Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
+}
+
+/// GET /settings/two-factor/qr-code/ — serve QR code generated locally.
+pub async fn qr_code_image(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, AppError> {
+    let db = state.db.as_ref();
+
+    let two_fa = user_2fa::Entity::find_by_id(user.user_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::BadRequest("2FA not set up.".into()))?;
+
+    let totp = TotpManager::create_totp(&two_fa.totp_secret, &user.email, "Nanofile")
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let url = TotpManager::get_otpauth_url(&totp);
+
+    let qr = qrcode::QrCode::new(url.as_bytes()).map_err(|e| AppError::internal(e.to_string()))?;
+    let svg = qr
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(200, 200)
+        .dark_color(qrcode::render::svg::Color("#000000"))
+        .light_color(qrcode::render::svg::Color("#ffffff"))
+        .build();
+
+    Ok(([("Content-Type", "image/svg+xml; charset=utf-8")], svg))
 }
