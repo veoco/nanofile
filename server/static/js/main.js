@@ -437,6 +437,7 @@
   document.addEventListener("click", function (e) {
     const btn = e.target.closest(".js-share-btn");
     if (!btn) return;
+    if (!shareDialog) return;
 
     shareCurrentRepoId = btn.dataset.repoId;
     shareCurrentPath = btn.dataset.path;
@@ -466,103 +467,105 @@
     shareDialog.classList.remove("hidden");
   });
 
-  // ─── Share cancel ───────────────────────────────────────────────────
-  shareCancelBtn.addEventListener("click", function () {
-    shareDialog.classList.add("hidden");
-  });
-  shareDialog.addEventListener("click", function (e) {
-    if (e.target === shareDialog) shareDialog.classList.add("hidden");
-  });
-
-  // ─── Share delete — delete link via API ────────────────────────────
-  shareDeleteBtn.addEventListener("click", async function () {
-    if (!shareCurrentToken) return;
-    if (!confirm("Delete this share link?")) return;
-
-    shareDeleteBtn.disabled = true;
-    shareDialogError.classList.add("hidden");
-
-    try {
-      var resp = await apiFetch("/api/v2.1/share-links/" + shareCurrentToken + "/", {
-        method: "DELETE",
-      });
-      if (resp.ok) {
-        shareCurrentToken = "";
-        if (shareCreateForm) shareCreateForm.classList.remove("hidden");
-        if (shareLinkDisplay) shareLinkDisplay.classList.add("hidden");
-        shareDeleteBtn.classList.add("hidden");
-        shareConfirmBtn.textContent = "Create";
-        shareCancelBtn.classList.remove("hidden");
-        shareDialogError.textContent = "";
-      } else {
-        var text = await resp.text().catch(function () { return ""; });
-        shareDialogError.textContent = text || "Failed to delete share link";
-        shareDialogError.classList.remove("hidden");
-      }
-    } catch (err) {
-      shareDialogError.textContent = err.message;
-      shareDialogError.classList.remove("hidden");
-    } finally {
-      shareDeleteBtn.disabled = false;
-    }
-  });
-
-  // ─── Share confirm — create link via API ────────────────────────────
-  shareConfirmBtn.addEventListener("click", async function () {
-    // If in "Close" mode, just close the dialog
-    if (shareConfirmBtn.textContent === "Close") {
+  // ─── Share dialog event listeners (only on pages with the dialog) ────
+  if (shareDialog) {
+    shareCancelBtn.addEventListener("click", function () {
       shareDialog.classList.add("hidden");
-      return;
-    }
+    });
+    shareDialog.addEventListener("click", function (e) {
+      if (e.target === shareDialog) shareDialog.classList.add("hidden");
+    });
 
-    var body = {
-      repo_id: shareCurrentRepoId,
-      path: shareCurrentPath,
-    };
+    // ─── Share delete — delete link via API ────────────────────────────
+    shareDeleteBtn.addEventListener("click", async function () {
+      if (!shareCurrentToken) return;
+      if (!confirm("Delete this share link?")) return;
 
-    var password = sharePasswordInput.value.trim();
-    if (password) body.password = password;
+      shareDeleteBtn.disabled = true;
+      shareDialogError.classList.add("hidden");
 
-    var expireDays = shareExpirySelect.value;
-    if (expireDays) body.expire_days = parseInt(expireDays, 10);
-
-    var description = shareDescriptionInput.value.trim();
-    if (description) body.description = description;
-
-    shareConfirmBtn.disabled = true;
-    shareConfirmBtn.textContent = "Creating...";
-    shareDialogError.classList.add("hidden");
-
-    try {
-      var resp = await apiFetch("/api/v2.1/share-links/", {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-      var data = await resp.json();
-      shareCurrentToken = data.token;
-      var sType = data.s_type || shareCurrentType;
-      var prefix = sType === "d" ? "/d/" : "/f/";
-      var shareUrl = window.location.origin + prefix + data.token + "/";
-      // Show URL in dialog instead of closing
-      if (shareCreateForm) shareCreateForm.classList.add("hidden");
-      if (shareLinkDisplay) {
-        shareLinkUrl.value = shareUrl;
-        shareLinkDisplay.classList.remove("hidden");
+      try {
+        var resp = await apiFetch("/api/v2.1/share-links/" + shareCurrentToken + "/", {
+          method: "DELETE",
+        });
+        if (resp.ok) {
+          shareCurrentToken = "";
+          if (shareCreateForm) shareCreateForm.classList.remove("hidden");
+          if (shareLinkDisplay) shareLinkDisplay.classList.add("hidden");
+          shareDeleteBtn.classList.add("hidden");
+          shareConfirmBtn.textContent = "Create";
+          shareCancelBtn.classList.remove("hidden");
+          shareDialogError.textContent = "";
+        } else {
+          var text = await resp.text().catch(function () { return ""; });
+          shareDialogError.textContent = text || "Failed to delete share link";
+          shareDialogError.classList.remove("hidden");
+        }
+      } catch (err) {
+        shareDialogError.textContent = err.message;
+        shareDialogError.classList.remove("hidden");
+      } finally {
+        shareDeleteBtn.disabled = false;
       }
-      shareConfirmBtn.textContent = "Close";
-      shareCancelBtn.classList.add("hidden");
-      shareDeleteBtn.classList.remove("hidden");
-    } catch (err) {
-      shareDialogError.textContent = err.message;
-      shareDialogError.classList.remove("hidden");
-    } finally {
-      shareConfirmBtn.disabled = false;
-      // Don't reset to "Create" if in Close mode (success path sets it to Close)
-      if (shareConfirmBtn.textContent !== "Close") {
-        shareConfirmBtn.textContent = "Create";
+    });
+
+    // ─── Share confirm — create link via API ────────────────────────────
+    shareConfirmBtn.addEventListener("click", async function () {
+      // If in "Close" mode, just close the dialog
+      if (shareConfirmBtn.textContent === "Close") {
+        shareDialog.classList.add("hidden");
+        return;
       }
-    }
-  });
+
+      var body = {
+        repo_id: shareCurrentRepoId,
+        path: shareCurrentPath,
+      };
+
+      var password = sharePasswordInput.value.trim();
+      if (password) body.password = password;
+
+      var expireDays = shareExpirySelect.value;
+      if (expireDays) body.expire_days = parseInt(expireDays, 10);
+
+      var description = shareDescriptionInput.value.trim();
+      if (description) body.description = description;
+
+      shareConfirmBtn.disabled = true;
+      shareConfirmBtn.textContent = "Creating...";
+      shareDialogError.classList.add("hidden");
+
+      try {
+        var resp = await apiFetch("/api/v2.1/share-links/", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        var data = await resp.json();
+        shareCurrentToken = data.token;
+        var sType = data.s_type || shareCurrentType;
+        var prefix = sType === "d" ? "/d/" : "/f/";
+        var shareUrl = window.location.origin + prefix + data.token + "/";
+        // Show URL in dialog instead of closing
+        if (shareCreateForm) shareCreateForm.classList.add("hidden");
+        if (shareLinkDisplay) {
+          shareLinkUrl.value = shareUrl;
+          shareLinkDisplay.classList.remove("hidden");
+        }
+        shareConfirmBtn.textContent = "Close";
+        shareCancelBtn.classList.add("hidden");
+        shareDeleteBtn.classList.remove("hidden");
+      } catch (err) {
+        shareDialogError.textContent = err.message;
+        shareDialogError.classList.remove("hidden");
+      } finally {
+        shareConfirmBtn.disabled = false;
+        // Don't reset to "Create" if in Close mode (success path sets it to Close)
+        if (shareConfirmBtn.textContent !== "Close") {
+          shareConfirmBtn.textContent = "Create";
+        }
+      }
+    });
+  }
 
   // ─── Trash restore (via API) ────────────────────────────────────────
   document.addEventListener("submit", async function (e) {
