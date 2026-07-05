@@ -559,6 +559,13 @@ impl TextIndexer {
         repo_id: &str,
         fullpath: &str,
     ) -> Result<Option<String>, AppError> {
+        // Commit any pending documents first so we can see freshly-indexed files.
+        if let Err(e) = self.commit() {
+            tracing::warn!("get_indexed_content: commit failed: {e}");
+        } else if let Err(e) = self.reader.reload() {
+            tracing::warn!("get_indexed_content: reload failed: {e}");
+        }
+
         use tantivy::query::{BooleanQuery, Occur, TermQuery};
         use tantivy::schema::IndexRecordOption;
 
