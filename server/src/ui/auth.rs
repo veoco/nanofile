@@ -295,6 +295,12 @@ pub async fn login(
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
+    state
+        .repos
+        .user
+        .touch_last_login(user_record.id, now)
+        .await?;
+
     let secure_cookies = state.config.server.secure_cookies();
     let cookie = session_cookie(
         "seahub-session",
@@ -502,6 +508,8 @@ pub async fn two_factor_auth(
         .insert(db)
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
+
+    state.repos.user.touch_last_login(user_id, now).await?;
 
     let secure_cookies = state.config.server.secure_cookies();
     let session_cookie_str = session_cookie(
@@ -764,6 +772,8 @@ pub async fn register(
         .insert(db)
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
+
+    state.repos.user.touch_last_login(new_user.id, now).await?;
 
     let secure_cookies = state.config.server.secure_cookies();
     let cookie = session_cookie(

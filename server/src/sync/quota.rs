@@ -3,11 +3,13 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
+use sea_orm::EntityTrait;
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
+use crate::entity::repo;
 use crate::error::AppError;
 
 /// GET /seafhttp/repo/{repo_id}/quota-check/?delta={delta}
@@ -17,8 +19,6 @@ use crate::error::AppError;
 /// - 200 OK (quota allows the delta)
 /// - 400 Bad Request (invalid delta parameter)
 /// - 443 No Quota (quota exceeded)
-///
-/// Nanofile doesn't enforce quotas, so we always return 200.
 pub fn quota_routes() -> Router<Arc<AppState>> {
     Router::new().route("/{repo_id}/quota-check/", axum::routing::get(check_quota))
 }
@@ -29,11 +29,35 @@ pub struct QuotaCheckQuery {
 }
 
 async fn check_quota(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     _auth: SyncAuth,
-    Path(_repo_id): Path<String>,
-    Query(_query): Query<QuotaCheckQuery>,
+    Path(repo_id): Path<String>,
+    Query(query): Query<QuotaCheckQuery>,
 ) -> Result<StatusCode, AppError> {
-    // Nanofile doesn't enforce quotas — always allow.
+    let delta = match query.delta {
+        Some(ref d) => d
+            .parse::<i64>()
+            .map_err(|_| AppError::BadRequest("invalid delta parameter".into()))?,
+        None => 0,
+    };
+
+    if delta <= 0 {
+        return Ok(StatusCode::OK);
+    }
+
+    // Look up the repo owner to check their quota.
+    let repo_record = repo::Entity::find_by_id(&repo_id)
+        .one(state.db.as_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    crate::web::quota::check_upload_quota(
+        &state.repos,
+        repo_record.owner_id,
+        delta,
+        state.config.storage.max_storage_bytes,
+    )
+    .await?;
+
     Ok(StatusCode::OK)
 }

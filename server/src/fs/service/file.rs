@@ -278,6 +278,15 @@ impl FileService {
             0
         };
 
+        // Check storage quota before accepting the upload.
+        crate::web::quota::check_upload_quota(
+            &self.repos,
+            user_id,
+            file_data.len() as i64,
+            self.config.storage.max_storage_bytes,
+        )
+        .await?;
+
         let db = self.db();
         FileOps::create_file(
             db,

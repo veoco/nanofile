@@ -277,6 +277,17 @@ async fn upload_and_build_response(
     let file_exists = size_result.is_ok();
     let old_size = size_result.ok().unwrap_or(0);
 
+    // Check storage quota before accepting the upload.
+    if let Some(uid) = user_id {
+        crate::web::quota::check_upload_quota(
+            &state.repos,
+            uid,
+            data.len() as i64,
+            state.config.storage.max_storage_bytes,
+        )
+        .await?;
+    }
+
     // Ensure the target directory exists before creating the file.
     // This is needed for folder uploads where subdirectories don't exist yet.
     if let Some(uid) = user_id {
