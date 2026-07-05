@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+
+{% block title %}User Management | Nanofile{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">User Management</h1>
+<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Manage users, roles, and storage quotas.</p>
+
+{% if let Some(error) = error %}
+<div class="mt-4 rounded-lg bg-red-50 dark:bg-red-900/30 p-3 text-sm text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800">
+    {{ error }}
+</div>
+{% endif %}
+{% if let Some(success) = success %}
+<div class="mt-4 rounded-lg bg-green-50 dark:bg-green-900/30 p-3 text-sm text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800">
+    {{ success }}
+</div>
+{% endif %}
+
+<!-- New User button -->
+<div class="mt-6 mb-4">
+    <button type="button" onclick="openCreate()"
+            class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
+        + New User
+    </button>
+</div>
+
+<!-- Users table -->
+<div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
+    <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+        <thead class="bg-gray-50 dark:bg-surface-700">
+            <tr>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Email</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Status</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Role</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Usage</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Quota</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Created</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Last Login</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Actions</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+            {% for u in users %}
+            <tr class="hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
+                <td class="px-4 py-3 text-sm text-gray-900 dark:text-gray-100">{{ u.email }}</td>
+                <td class="px-4 py-3">
+                    {% if u.is_active %}
+                    <span class="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20 dark:bg-green-500/10 dark:text-green-300 dark:ring-green-400/20">Active</span>
+                    {% else %}
+                    <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-400/20">Inactive</span>
+                    {% endif %}
+                </td>
+                <td class="px-4 py-3">
+                    {% if u.is_admin %}
+                    <span class="inline-flex items-center rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700 ring-1 ring-inset ring-brand-600/20 dark:bg-brand-500/10 dark:text-brand-300 dark:ring-brand-400/20">Admin</span>
+                    {% else %}
+                    <span class="text-xs text-gray-400">User</span>
+                    {% endif %}
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ u.usage_formatted }}</td>
+                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ u.quota_formatted }}</td>
+                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ u.created_at }}</td>
+                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ u.last_login_at }}</td>
+                <td class="px-4 py-3 text-sm text-right">
+                    <div class="flex items-center justify-end gap-1">
+                        <button type="button" class="p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20 transition-colors"
+                                onclick="openEdit({{ u.id }}, '{{ u.email }}', {{ u.is_admin }}, {{ u.is_active }}, '{{ u.storage_quota_display }}')"
+                                title="Edit user">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                            </svg>
+                        </button>
+                        <button type="button" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                                onclick="openDelete({{ u.id }}, '{{ u.email }}')"
+                                title="Delete user">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                            </svg>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Create overlay -->
+<div id="create-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
+    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">New User</h3>
+        <form action="/sysadmin/users/create/" method="POST" class="space-y-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+            <div>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+                <input type="email" name="email" required
+                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5">
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+                <input type="password" name="password" required
+                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5">
+            </div>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" name="is_admin" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
+                <span class="text-xs text-gray-700 dark:text-gray-300">Admin</span>
+            </label>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" name="is_active" checked class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
+                <span class="text-xs text-gray-700 dark:text-gray-300">Active</span>
+            </label>
+            <div>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Storage Quota (bytes, 0 = unlimited, empty = global default)</label>
+                <input type="text" name="storage_quota" placeholder="e.g. 1073741824"
+                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5">
+            </div>
+            <div class="flex justify-end gap-2 mt-4">
+                <button type="button" class="js-create-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600"
+                        onclick="closeCreate()">
+                    Cancel
+                </button>
+                <button type="submit"
+                        class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600">
+                    Create
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit overlay -->
+<div id="edit-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
+    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Edit User</h3>
+        <p class="js-edit-email text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
+        <form id="edit-form" method="POST" class="space-y-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+            <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" name="is_admin" id="edit-is-admin" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
+                <span class="text-xs text-gray-700 dark:text-gray-300">Admin</span>
+            </label>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" name="is_active" id="edit-is-active" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
+                <span class="text-xs text-gray-700 dark:text-gray-300">Active</span>
+            </label>
+            <div>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Storage Quota (bytes, 0 = unlimited, empty = global default)</label>
+                <input type="text" name="storage_quota" id="edit-quota"
+                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5">
+            </div>
+            <div class="flex justify-end gap-2 mt-4">
+                <button type="button" class="js-edit-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600"
+                        onclick="closeEdit()">
+                    Cancel
+                </button>
+                <button type="submit"
+                        class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600">
+                    Save
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete overlay -->
+<div id="delete-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
+    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Delete User</h3>
+        <p class="text-sm text-gray-600 dark:text-gray-400">
+            Are you sure you want to delete user <strong id="delete-email"></strong>? This action cannot be undone.
+        </p>
+        <form id="delete-form" method="POST" class="mt-4">
+            <div class="flex justify-end gap-2">
+                <button type="button" class="js-delete-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600"
+                        onclick="closeDelete()">
+                    Cancel
+                </button>
+                <button type="submit"
+                        class="rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600">
+                    Delete
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openCreate() {
+    document.getElementById('create-overlay').classList.remove('hidden');
+}
+function closeCreate() {
+    document.getElementById('create-overlay').classList.add('hidden');
+}
+
+function openEdit(id, email, isAdmin, isActive, quota) {
+    document.querySelector('.js-edit-email').textContent = email;
+    document.getElementById('edit-is-admin').checked = isAdmin;
+    document.getElementById('edit-is-active').checked = isActive;
+    document.getElementById('edit-quota').value = quota !== '' ? quota : '';
+    document.getElementById('edit-form').action = '/sysadmin/users/' + id + '/update/';
+    document.getElementById('edit-overlay').classList.remove('hidden');
+}
+
+function closeEdit() {
+    document.getElementById('edit-overlay').classList.add('hidden');
+}
+
+function openDelete(id, email) {
+    document.getElementById('delete-email').textContent = email;
+    document.getElementById('delete-form').action = '/sysadmin/users/' + id + '/delete/';
+    document.getElementById('delete-overlay').classList.remove('hidden');
+}
+
+function closeDelete() {
+    document.getElementById('delete-overlay').classList.add('hidden');
+}
+
+// Close overlays on background click
+document.querySelectorAll('[id$="-overlay"]').forEach(function(overlay) {
+    overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) overlay.classList.add('hidden');
+    });
+});
+</script>
+{% endblock %}

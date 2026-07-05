@@ -92,7 +92,7 @@
       toggleMobilePanel();
     });
   }
-  // ─── User menu dropdown (Sign out only) ─────────────────────────
+  // ─── User menu dropdown (Sign out + User Management for admins) ──
   const userMenu = document.querySelector(".js-user-menu");
   const userButton = document.querySelector(".js-user-menu-button");
   if (userMenu && userButton) {
@@ -102,13 +102,23 @@
       if (dropdown) { dropdown.remove(); return; }
       dropdown = document.createElement("div");
       dropdown.className =
-        "js-user-menu-dropdown absolute right-0 z-50 mt-2 w-36 origin-top-right rounded-xl bg-white dark:bg-surface-800 py-1 shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-none";
+        "js-user-menu-dropdown absolute right-0 z-50 mt-2 w-44 origin-top-right rounded-xl bg-white dark:bg-surface-800 py-1 shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-none";
 
-      var a = document.createElement("a");
-      a.href = "/accounts/logout/";
-      a.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
-      a.textContent = "Sign out";
-      dropdown.appendChild(a);
+      // Admin-only: User Management link
+      var isAdmin = userMenu.getAttribute("data-is-admin") === "true";
+      if (isAdmin) {
+        var adminLink = document.createElement("a");
+        adminLink.href = "/sysadmin/";
+        adminLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
+        adminLink.textContent = "User Management";
+        dropdown.appendChild(adminLink);
+      }
+
+      var signOut = document.createElement("a");
+      signOut.href = "/accounts/logout/";
+      signOut.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
+      signOut.textContent = "Sign out";
+      dropdown.appendChild(signOut);
 
       userMenu.appendChild(dropdown);
 

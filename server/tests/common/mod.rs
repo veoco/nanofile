@@ -226,6 +226,7 @@ pub async fn create_test_user(db: &DatabaseConnection, email: &str, password: &s
         created_at: sea_orm::Set(now),
         last_login_at: sea_orm::NotSet,
         invited_by: sea_orm::Set(None),
+        storage_quota: sea_orm::NotSet,
         name: sea_orm::NotSet,
         display_name: sea_orm::NotSet,
     };
@@ -246,6 +247,7 @@ pub async fn create_test_admin(db: &DatabaseConnection, email: &str, password: &
         created_at: sea_orm::Set(now),
         last_login_at: sea_orm::NotSet,
         invited_by: sea_orm::Set(None),
+        storage_quota: sea_orm::NotSet,
         name: sea_orm::NotSet,
         display_name: sea_orm::NotSet,
     };

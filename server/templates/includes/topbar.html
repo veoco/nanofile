@@ -50,7 +50,7 @@
         </button>
 
         <!-- User menu dropdown -->
-        <div class="relative js-user-menu">
+        <div class="relative js-user-menu" data-is-admin="{{ is_admin }}">
             <button type="button" class="js-user-menu-button flex items-center gap-x-2 rounded-full p-1 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors">
                 <img src="/avatars/user/{{ user_email }}/resized/32/" alt=""
                      class="h-7 w-7 rounded-full object-cover bg-brand-500">

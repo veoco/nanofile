@@ -728,6 +728,7 @@ pub async fn register(
         created_at: Set(now),
         last_login_at: Set(None),
         invited_by: Set(Some(code_record.creator_id)),
+        storage_quota: sea_orm::NotSet,
         name: sea_orm::NotSet,
         display_name: sea_orm::NotSet,
     };

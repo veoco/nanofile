@@ -125,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
                         created_at: Set(now),
                         last_login_at: Set(None),
                         invited_by: Set(None),
+                        storage_quota: sea_orm::NotSet,
                         name: sea_orm::NotSet,
                         display_name: sea_orm::NotSet,
                     };
@@ -318,6 +319,7 @@ async fn main() -> anyhow::Result<()> {
                 created_at: Set(now),
                 last_login_at: Set(None),
                 invited_by: Set(None),
+                storage_quota: sea_orm::NotSet,
                 name: sea_orm::NotSet,
                 display_name: sea_orm::NotSet,
             };

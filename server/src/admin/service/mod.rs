@@ -3,8 +3,10 @@ use sea_orm::DatabaseConnection;
 use crate::error::AppError;
 
 mod reindex;
+mod users;
 
 pub use reindex::AdminService;
+pub use users::AdminUserService;
 
 /// Collect all file paths from a FS tree recursively.
 pub(crate) async fn collect_file_paths(

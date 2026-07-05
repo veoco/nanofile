@@ -10,6 +10,7 @@ pub mod search;
 pub mod settings;
 pub mod shares;
 pub mod starred;
+pub mod sysadmin;
 pub mod trash;
 pub mod two_factor;
 
@@ -132,4 +133,18 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route("/activities/", get(activities::activities_page))
         // Search
         .route("/search/", get(search::search_page))
+        // Admin — user management
+        .route("/sysadmin/", get(sysadmin::sysadmin_page))
+        .route(
+            "/sysadmin/users/create/",
+            axum::routing::post(sysadmin::create_user),
+        )
+        .route(
+            "/sysadmin/users/{user_id}/update/",
+            axum::routing::post(sysadmin::update_user),
+        )
+        .route(
+            "/sysadmin/users/{user_id}/delete/",
+            axum::routing::post(sysadmin::delete_user),
+        )
 }

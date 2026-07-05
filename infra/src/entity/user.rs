@@ -19,6 +19,8 @@ pub struct Model {
     pub last_login_at: Option<i64>,
     /// User who invited this user (FK → users.id). None for the admin/root user.
     pub invited_by: Option<i32>,
+    /// Per-user storage quota in bytes (null = use global default, 0 = unlimited).
+    pub storage_quota: Option<i64>,
     /// Full name (optional, reserved for future use).
     pub name: Option<String>,
     /// Display name / nickname — preferred for human-readable display.
