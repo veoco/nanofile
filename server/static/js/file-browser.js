@@ -516,7 +516,7 @@
       if (result.indexed) {
         window.Toast && Toast.success("Reindexed");
       } else {
-        window.Toast && Toast.warning("File type not supported for indexing");
+        window.Toast && Toast.info("File type not supported for indexing");
       }
       // Reload the indexed content display
       var ct = document.querySelector(".js-rp-content");

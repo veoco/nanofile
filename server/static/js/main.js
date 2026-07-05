@@ -1486,7 +1486,7 @@
       files.push({ repoId: rows[i].dataset.repoId, path: rows[i].dataset.path });
     }
     if (files.length === 0) {
-      window.Toast && Toast.warning("No files selected");
+      window.Toast && Toast.info("No files selected");
       return;
     }
 
@@ -1513,7 +1513,7 @@
         window.Toast && Toast.success("Reindexed " + indexedCount + " file(s)");
       }
       if (skippedCount > 0) {
-        window.Toast && Toast.warning(skippedCount + " file(s) skipped (unsupported type)");
+        window.Toast && Toast.info(skippedCount + " file(s) skipped (unsupported type)");
       }
     } catch (e) {
       window.Toast && Toast.error("Reindex failed: " + (e.message || e));
