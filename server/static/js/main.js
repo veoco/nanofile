@@ -690,6 +690,9 @@
 
   // ─── Batch operations: selection state ──────────────────────────────────
   var selectedPaths = new Set();
+  var anchorPath = null;       // Anchor for Shift+click range selection
+  var touchSelectMode = false; // Touch multi-select mode (long-press activated)
+  var suppressClick = false;   // Suppress synthetic click after long-press
   var pickerOperation = null;  // "move" or "copy"
   var pickerPath = "/";
 
@@ -736,6 +739,7 @@
   }
 
   function clearSelection() {
+    touchSelectMode = false;
     selectedPaths.clear();
     document.querySelectorAll(".js-entry-row.selected").forEach(function (row) {
       row.classList.remove("selected");
@@ -744,84 +748,108 @@
     if (typeof window.resetRightPanel === "function") window.resetRightPanel();
   }
 
-  // Row click — toggle selection + open right panel (skip <a> links and buttons)
+  // Row click — single select, Ctrl toggle, Shift range, or touch multi-select
   document.addEventListener("click", function (e) {
     var row = e.target.closest(".js-entry-row");
-    if (!row) return;
-    // Ignore clicks on links, buttons, and interactive elements
+
+    // Suppress synthetic click after long-press on touch devices
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+
+    // Click on empty space inside file list — clear selection
+    if (!row) {
+      if (e.target.closest("button, a, #js-select-all-btn, .js-sort-bar")) return;
+      if (e.target.closest(".file-list-container")) {
+        touchSelectMode = false;
+        clearSelection();
+      }
+      return;
+    }
+
+    // Ignore clicks on links and buttons within rows
     if (e.target.closest("a") || e.target.closest("button")) return;
 
     var name = row.dataset.name;
     if (!name) return;
 
-    if (selectedPaths.has(name)) {
-      selectedPaths.delete(name);
-      row.classList.remove("selected");
-      if (selectedPaths.size === 0 && typeof window.resetRightPanel === "function") {
-        window.resetRightPanel();
-      } else if (selectedPaths.size === 1) {
-        // One item left — show its details in the right panel
-        var lastRow = document.querySelector(".js-entry-row.selected");
-        if (lastRow && typeof window.openRightPanel === "function") {
-          var dlUrl = "/libraries/" + lastRow.dataset.repoId + "/files/" + lastRow.dataset.path + "?dl=1";
-          window.openRightPanel({
-            name: lastRow.dataset.name,
-            type: lastRow.dataset.type,
-            size: lastRow.dataset.size,
-            sizeDisplay: lastRow.dataset.sizeDisplay,
-            mtime: lastRow.dataset.mtime,
-            mtimeDisplay: lastRow.dataset.mtimeDisplay,
-            starred: lastRow.dataset.starred === "true",
-            extension: lastRow.dataset.extension,
-            path: lastRow.dataset.path,
-            repoId: lastRow.dataset.repoId,
-            modifierEmail: lastRow.dataset.modifierEmail,
-            thumbnailUrl: lastRow.dataset.thumbnailUrl,
-            isPreviewable: lastRow.dataset.isPreviewable === "true",
-            downloadUrl: dlUrl,
-          });
+    // ── Shift+click: range select from anchor to clicked item ──
+    if (e.shiftKey) {
+      var view = document.querySelector(
+        ".js-file-list-view:not(.hidden), .js-file-grid-view:not(.hidden), .js-gallery-view:not(.hidden)"
+      );
+      if (view && anchorPath) {
+        var rows = view.querySelectorAll(".js-entry-row");
+        var anchorIdx = -1, currentIdx = -1;
+        for (var i = 0; i < rows.length; i++) {
+          var dn = rows[i].dataset.name;
+          if (dn === anchorPath) anchorIdx = i;
+          if (dn === name) currentIdx = i;
         }
-      } else {
-        // Still multiple items — update multi-select panel
-        if (typeof window.openMultiSelectPanel === "function") {
-          window.openMultiSelectPanel(getSelectedItems());
+        if (anchorIdx !== -1 && currentIdx !== -1) {
+          // Clear current selection and select range
+          clearSelection();
+          var start = Math.min(anchorIdx, currentIdx);
+          var end = Math.max(anchorIdx, currentIdx);
+          for (var i = start; i <= end; i++) {
+            var n = rows[i].dataset.name;
+            if (n) {
+              selectedPaths.add(n);
+              rows[i].classList.add("selected");
+            }
+          }
+          updateSelectionBar();
+          updateSelectionPanel();
+          return;
         }
       }
-    } else {
+      // Fallback: anchor not found or no view — single select
+      clearSelection();
       selectedPaths.add(name);
       row.classList.add("selected");
+      anchorPath = name;
+      updateSelectionBar();
+      updateSelectionPanel();
+      return;
+    }
 
-      if (selectedPaths.size === 1) {
-        // Single selection — show file details
-        if (typeof window.openRightPanel === "function") {
-          var downloadUrl = row.dataset.type !== "dir"
-            ? "/libraries/" + row.dataset.repoId + "/files/" + row.dataset.path + "?dl=1"
-            : "";
-          window.openRightPanel({
-            name: row.dataset.name,
-            type: row.dataset.type,
-            size: row.dataset.size,
-            sizeDisplay: row.dataset.sizeDisplay,
-            mtime: row.dataset.mtime,
-            mtimeDisplay: row.dataset.mtimeDisplay,
-            starred: row.dataset.starred === "true",
-            extension: row.dataset.extension,
-            path: row.dataset.path,
-            repoId: row.dataset.repoId,
-            modifierEmail: row.dataset.modifierEmail,
-            thumbnailUrl: row.dataset.thumbnailUrl,
-            isPreviewable: row.dataset.isPreviewable === "true",
-            downloadUrl: downloadUrl,
-          });
-        }
+    // ── Ctrl+click: toggle this item ──
+    if (e.ctrlKey || e.metaKey) {
+      if (selectedPaths.has(name)) {
+        selectedPaths.delete(name);
+        row.classList.remove("selected");
       } else {
-        // Multi-selection — show summary of selected items
-        if (typeof window.openMultiSelectPanel === "function") {
-          window.openMultiSelectPanel(getSelectedItems());
-        }
+        selectedPaths.add(name);
+        row.classList.add("selected");
+      }
+
+    // ── Touch multi-select: toggle like Ctrl+click ──
+    } else if (touchSelectMode) {
+      if (selectedPaths.has(name)) {
+        selectedPaths.delete(name);
+        row.classList.remove("selected");
+      } else {
+        selectedPaths.add(name);
+        row.classList.add("selected");
+      }
+
+    // ── Normal click: update anchor, single select ──
+    } else {
+      anchorPath = name;
+      if (selectedPaths.size === 1 && selectedPaths.has(name)) {
+        // Clicking the only selected item — deselect it
+        selectedPaths.delete(name);
+        row.classList.remove("selected");
+      } else {
+        clearSelection();
+        selectedPaths.add(name);
+        row.classList.add("selected");
       }
     }
+
     updateSelectionBar();
+    updateSelectionPanel();
   });
 
   function getSelectedItems() {
@@ -830,6 +858,44 @@
       items.push({ name: r.dataset.name, type: r.dataset.type });
     });
     return items;
+  }
+
+  // Update right panel based on current selection state
+  function updateSelectionPanel() {
+    var count = selectedPaths.size;
+    if (count === 0) {
+      if (typeof window.resetRightPanel === "function") window.resetRightPanel();
+      return;
+    }
+    if (count === 1) {
+      var selRow = document.querySelector(".js-entry-row.selected");
+      if (selRow && typeof window.openRightPanel === "function") {
+        var dlUrl = selRow.dataset.type !== "dir"
+          ? "/libraries/" + selRow.dataset.repoId + "/files/" + selRow.dataset.path + "?dl=1"
+          : "";
+        window.openRightPanel({
+          name: selRow.dataset.name,
+          type: selRow.dataset.type,
+          size: selRow.dataset.size,
+          sizeDisplay: selRow.dataset.sizeDisplay,
+          mtime: selRow.dataset.mtime,
+          mtimeDisplay: selRow.dataset.mtimeDisplay,
+          starred: selRow.dataset.starred === "true",
+          extension: selRow.dataset.extension,
+          path: selRow.dataset.path,
+          repoId: selRow.dataset.repoId,
+          modifierEmail: selRow.dataset.modifierEmail,
+          thumbnailUrl: selRow.dataset.thumbnailUrl,
+          isPreviewable: selRow.dataset.isPreviewable === "true",
+          downloadUrl: dlUrl,
+        });
+      }
+      return;
+    }
+    // Multiple items selected
+    if (typeof window.openMultiSelectPanel === "function") {
+      window.openMultiSelectPanel(getSelectedItems());
+    }
   }
 
   // Select All / Deselect All button
@@ -861,6 +927,68 @@
 
   document.addEventListener("click", function (e) {
     if (e.target.closest(".js-deselect-all")) {
+      touchSelectMode = false;
+      clearSelection();
+    }
+  });
+
+  // ─── Touch selection support (long-press multi-select) ──────────────
+  var touchLongPressTimer = null;
+  var touchStartTarget = null;
+  var TOUCH_LONG_PRESS_MS = 500;
+
+  document.addEventListener("touchstart", function (e) {
+    var row = e.target.closest(".js-entry-row");
+    if (!row) return;
+    if (e.target.closest("a") || e.target.closest("button")) return;
+
+    touchStartTarget = row;
+
+    touchLongPressTimer = setTimeout(function () {
+      // Long press detected — enter multi-select mode
+      touchSelectMode = true;
+      touchLongPressTimer = null;
+
+      var name = row.dataset.name;
+      if (!name) return;
+
+      // Toggle this item
+      if (selectedPaths.has(name)) {
+        selectedPaths.delete(name);
+        row.classList.remove("selected");
+      } else {
+        selectedPaths.add(name);
+        row.classList.add("selected");
+      }
+      updateSelectionBar();
+      updateSelectionPanel();
+
+      suppressClick = true;
+
+      // Haptic feedback if available
+      if (navigator.vibrate) navigator.vibrate(20);
+    }, TOUCH_LONG_PRESS_MS);
+  }, { passive: true });
+
+  document.addEventListener("touchmove", function (e) {
+    // Cancel long press if user starts scrolling
+    if (touchLongPressTimer) {
+      clearTimeout(touchLongPressTimer);
+      touchLongPressTimer = null;
+    }
+  }, { passive: true });
+
+  document.addEventListener("touchend", function (e) {
+    if (touchLongPressTimer) {
+      clearTimeout(touchLongPressTimer);
+      touchLongPressTimer = null;
+    }
+  }, { passive: true });
+
+  // Escape key exits touch multi-select mode
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && touchSelectMode) {
+      touchSelectMode = false;
       clearSelection();
     }
   });
