@@ -40,10 +40,16 @@ impl<'a> AccountService<'a> {
             .ok_or(AppError::Unauthorized)?;
 
         let usage = self.compute_usage(user_id).await?;
-        let total = if max_storage_bytes > 0 {
-            max_storage_bytes as i64
-        } else {
-            0
+        let total = match user_record.storage_quota {
+            Some(0) => -1, // explicitly unlimited
+            Some(n) => n,  // user-specific quota
+            None => {
+                if max_storage_bytes > 0 {
+                    max_storage_bytes as i64
+                } else {
+                    -1 // global unlimited
+                }
+            }
         };
 
         let nickname = user_record.nickname();
@@ -84,10 +90,16 @@ impl<'a> AccountService<'a> {
             .ok_or(AppError::Unauthorized)?;
 
         let usage = self.compute_usage(user_id).await?;
-        let total = if max_storage_bytes > 0 {
-            max_storage_bytes as i64
-        } else {
-            0
+        let total = match user_record.storage_quota {
+            Some(0) => -1, // explicitly unlimited
+            Some(n) => n,  // user-specific quota
+            None => {
+                if max_storage_bytes > 0 {
+                    max_storage_bytes as i64
+                } else {
+                    -1 // global unlimited
+                }
+            }
         };
 
         let nickname = user_record.nickname();

@@ -166,3 +166,71 @@ async fn test_account_info_unauthorized() {
         .await;
     assert_eq!(resp.status(), 401);
 }
+
+/// GET /api2/account/info/ returns total = -1 when storage_quota = 0 (unlimited).
+#[tokio::test]
+async fn test_account_info_quota_unlimited() {
+    let f = TestFixture::no_repo("test@example.com", "password").await;
+
+    // Set storage_quota to 0 (explicitly unlimited)
+    use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+    let user_record = server::entity::user::Entity::find_by_id(f.user_id)
+        .one(&*f.server.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: server::entity::user::ActiveModel = user_record.into();
+    active.storage_quota = Set(Some(0));
+    active.update(&*f.server.db).await.unwrap();
+
+    let resp = f
+        .client
+        .get("/api2/account/info/", Some(&f.api_token))
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["total"], -1);
+}
+
+/// GET /api2/account/info/ returns the user's storage_quota when set to a specific value.
+#[tokio::test]
+async fn test_account_info_quota_user_specific() {
+    let f = TestFixture::no_repo("test@example.com", "password").await;
+
+    // Set storage_quota to 1 GB
+    use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+    let user_record = server::entity::user::Entity::find_by_id(f.user_id)
+        .one(&*f.server.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: server::entity::user::ActiveModel = user_record.into();
+    active.storage_quota = Set(Some(1_073_741_824)); // 1 GB
+    active.update(&*f.server.db).await.unwrap();
+
+    let resp = f
+        .client
+        .get("/api2/account/info/", Some(&f.api_token))
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["total"], 1_073_741_824);
+}
+
+/// GET /api2/account/info/ returns global quota when storage_quota is None.
+#[tokio::test]
+async fn test_account_info_quota_fallback_global() {
+    let f = TestFixture::no_repo("test@example.com", "password").await;
+
+    // storage_quota is None by default -> should return global max_storage_bytes (10 GB)
+    let resp = f
+        .client
+        .get("/api2/account/info/", Some(&f.api_token))
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["total"], 10_737_418_240_i64); // 10 GB from test config
+}
