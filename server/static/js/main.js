@@ -1516,7 +1516,7 @@
         window.Toast && Toast.warning(skippedCount + " file(s) skipped (unsupported type)");
       }
     } catch (e) {
-      window.Toast && Toast.error("Reindex failed");
+      window.Toast && Toast.error("Reindex failed: " + (e.message || e));
     } finally {
       btn.disabled = false;
       btn.textContent = "Reindex Selected";

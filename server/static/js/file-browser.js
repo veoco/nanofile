@@ -535,7 +535,7 @@
         }
       }
     } catch (e) {
-      window.Toast && Toast.error("Reindex failed");
+      window.Toast && Toast.error("Reindex failed: " + (e.message || e));
     } finally {
       btn.textContent = "Reindex";
       btn.disabled = false;
