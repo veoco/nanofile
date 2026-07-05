@@ -147,7 +147,7 @@ mod into_response_impl {
                 ),
                 AppError::QuotaExceeded => (
                     StatusCode::from_u16(443).unwrap(),
-                    json!({ "error_msg": "Storage quota exceeded." }),
+                    json!({ "error_msg": "Out of quota." }),
                 ),
                 AppError::BlockMissing => (
                     StatusCode::from_u16(446).unwrap(),
