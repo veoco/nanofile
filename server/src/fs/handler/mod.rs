@@ -3,6 +3,7 @@ pub mod batch;
 pub mod chunked_upload;
 pub mod dir;
 pub mod dir_v21;
+pub mod exif;
 pub mod file;
 pub mod fileops;
 pub mod metadata;

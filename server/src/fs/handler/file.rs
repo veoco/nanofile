@@ -14,6 +14,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::fs::handler::exif::get_exif;
 use crate::fs::service::file::{self as file_svc, FileService};
 
 // Re-export pub(crate) rename function for create_file_v21 use
@@ -45,6 +46,7 @@ pub fn file_routes() -> Router<Arc<AppState>> {
             "/{repo_id}/file/reindex/",
             axum::routing::post(reindex_file_handler),
         )
+        .route("/{repo_id}/file/exif/", axum::routing::get(get_exif))
 }
 
 pub async fn download_file(

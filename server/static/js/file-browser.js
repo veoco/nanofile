@@ -347,6 +347,43 @@
     } else if (indexSection) {
       indexSection.classList.add("hidden");
     }
+
+    // ── EXIF Data (image files only) ──
+    var exifSection = ct.querySelector(".js-rp-exif-section");
+    var exifContent = ct.querySelector(".js-rp-exif-content");
+    var noExif = ct.querySelector(".js-rp-no-exif");
+
+    if (exifSection && d.type !== "dir" && d.thumbnailUrl && d.repoId && d.path) {
+      fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/exif/?p=" + encodeURIComponent(d.path))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          exifContent.innerHTML = "";
+          if (data && typeof data === "object" && !Array.isArray(data)) {
+            var fields = getExifFields(data);
+            var hasData = false;
+            fields.forEach(function (f) {
+              hasData = true;
+              var div = document.createElement("div");
+              div.className = "flex items-center justify-between";
+              div.innerHTML = '<span class="text-xs text-gray-500 dark:text-gray-400">' + f.label + '</span>' +
+                '<span class="text-xs font-medium text-gray-900 dark:text-gray-100 text-right">' + escapeHtml(f.value) + '</span>';
+              exifContent.appendChild(div);
+            });
+            if (hasData) {
+              exifSection.classList.remove("hidden");
+              if (noExif) noExif.classList.add("hidden");
+            } else {
+              exifSection.classList.add("hidden");
+            }
+          } else {
+            exifSection.classList.add("hidden");
+            if (noExif) noExif.classList.remove("hidden");
+          }
+        })
+        .catch(function () { /* ignore */ });
+    } else if (exifSection) {
+      exifSection.classList.add("hidden");
+    }
   };
 
   // ─── Multi-select right panel ──────────────────────────────────────
@@ -405,6 +442,79 @@
   function setText(container, selector, val) {
     var el = container.querySelector(selector);
     if (el) el.textContent = val;
+  }
+
+  // Map EXIF field names to human-readable labels and format values.
+  function getExifFields(data) {
+    var labelMap = {
+      "Make": "Camera Make",
+      "Model": "Camera Model",
+      "DateTimeOriginal": "Date Taken",
+      "ExposureTime": "Exposure",
+      "FNumber": "Aperture",
+      "FocalLength": "Focal Length",
+      "ISOSpeed": "ISO",
+      "Flash": "Flash",
+      "Software": "Software",
+      "GPSLatitude": "GPS Latitude",
+      "GPSLongitude": "GPS Longitude",
+      "PixelXDimension": "Width",
+      "PixelYDimension": "Height",
+      "Orientation": "Orientation"
+    };
+    // Simple value formatters for certain fields
+    var formatters = {
+      "ISOSpeed": function (v) { return v.replace(/^"|"$/g, ""); },
+      "ExposureTime": function (v) { return v.replace(/^"|"$/g, ""); },
+      "FNumber": function (v) { return v.replace(/^"|"$/g, "").replace(/^F\//, "f/"); },
+      "FocalLength": function (v) { return v.replace(/^"|"$/g, ""); },
+      "Flash": function (v) {
+        var val = parseInt(v, 10);
+        if (isNaN(val)) return v;
+        // Bit 0: flash fired
+        return (val & 1) ? "Yes" : "No";
+      },
+      "PixelXDimension": function (v) { return v.replace(/^"|"$/g, "") + " px"; },
+      "PixelYDimension": function (v) { return v.replace(/^"|"$/g, "") + " px"; },
+      "DateTimeOriginal": function (v) { return v.replace(/^"|"$/g, ""); },
+      "Make": function (v) { return v.replace(/^"|"$/g, ""); },
+      "Model": function (v) { return v.replace(/^"|"$/g, ""); },
+      "Software": function (v) { return v.replace(/^"|"$/g, ""); },
+      "GPSLatitude": function (v) { return v.replace(/^"|"$/g, ""); },
+      "GPSLongitude": function (v) { return v.replace(/^"|"$/g, ""); },
+      "Orientation": function (v) {
+        var m = {
+          "1": "Normal",
+          "2": "Mirrored",
+          "3": "Upside-down",
+          "4": "Rotated 180°",
+          "5": "Mirrored + 90° CW",
+          "6": "90° CW",
+          "7": "Mirrored + 90° CCW",
+          "8": "90° CCW"
+        };
+        var val = v.replace(/^"|"$/g, "");
+        return m[val] || v;
+      }
+    };
+    var order = [
+      "Make", "Model", "DateTimeOriginal",
+      "ExposureTime", "FNumber", "ISOSpeed", "FocalLength", "Flash",
+      "Software",
+      "GPSLatitude", "GPSLongitude",
+      "PixelXDimension", "PixelYDimension",
+      "Orientation"
+    ];
+    var result = [];
+    for (var i = 0; i < order.length; i++) {
+      var key = order[i];
+      var raw = data[key];
+      if (raw === undefined || raw === null) continue;
+      var label = labelMap[key] || key;
+      var value = formatters[key] ? formatters[key](raw) : raw;
+      result.push({ label: label, value: value });
+    }
+    return result;
   }
 
   function humanType(type, ext) {
