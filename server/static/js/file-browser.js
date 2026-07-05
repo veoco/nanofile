@@ -329,6 +329,37 @@
           .catch(function () { /* ignore */ });
       }
     }
+
+    // ── Indexed Content ──
+    var indexSection = ct.querySelector(".js-rp-index-section");
+    var indexContent = ct.querySelector(".js-rp-index-content");
+    var indexEmpty = ct.querySelector(".js-rp-index-empty");
+    var reindexBtn = ct.querySelector(".js-rp-reindex-btn");
+
+    if (indexSection && d.type !== "dir" && d.repoId && d.path) {
+      indexSection.classList.remove("hidden");
+      if (reindexBtn) {
+        reindexBtn.dataset.repoId = d.repoId;
+        reindexBtn.dataset.path = d.path;
+        reindexBtn.disabled = false;
+        reindexBtn.textContent = "Reindex";
+      }
+      fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/index-text/?p=" + encodeURIComponent(d.path))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.content) {
+            indexContent.textContent = data.content;
+            indexContent.classList.remove("hidden");
+            if (indexEmpty) indexEmpty.classList.add("hidden");
+          } else {
+            indexContent.classList.add("hidden");
+            if (indexEmpty) indexEmpty.classList.remove("hidden");
+          }
+        })
+        .catch(function () { /* ignore */ });
+    } else if (indexSection) {
+      indexSection.classList.add("hidden");
+    }
   };
 
   // ─── Multi-select right panel ──────────────────────────────────────
@@ -465,6 +496,46 @@
     hideQuickCreate();
     return false;
   };
+
+  // ─── Reindex single file ───────────────────────────────────────────────
+  document.addEventListener("click", async function (e) {
+    var btn = e.target.closest(".js-rp-reindex-btn");
+    if (!btn) return;
+    var repoId = btn.dataset.repoId;
+    var path = btn.dataset.path;
+    if (!repoId || !path) return;
+    try {
+      btn.disabled = true;
+      btn.textContent = "Indexing...";
+      await window.apiFetch("/api2/repos/" + encodeURIComponent(repoId) + "/file/reindex/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ p: path }),
+      });
+      window.Toast && Toast.success("Reindexed");
+      // Reload the indexed content display
+      var ct = document.querySelector(".js-rp-content");
+      if (ct) {
+        var indexContent = ct.querySelector(".js-rp-index-content");
+        var indexEmpty = ct.querySelector(".js-rp-index-empty");
+        var fetchResp = await fetch("/api2/repos/" + encodeURIComponent(repoId) + "/file/index-text/?p=" + encodeURIComponent(path));
+        var fetchData = await fetchResp.json();
+        if (fetchData.content) {
+          indexContent.textContent = fetchData.content;
+          indexContent.classList.remove("hidden");
+          if (indexEmpty) indexEmpty.classList.add("hidden");
+        } else {
+          indexContent.classList.add("hidden");
+          if (indexEmpty) indexEmpty.classList.remove("hidden");
+        }
+      }
+    } catch (e) {
+      window.Toast && Toast.error("Reindex failed");
+    } finally {
+      btn.textContent = "Reindex";
+      btn.disabled = false;
+    }
+  });
 
   // ─── Helpers ──────────────────────────────────────────────────────────
   function escapeHtml(str) {

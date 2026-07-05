@@ -858,7 +858,12 @@
   function getSelectedItems() {
     var items = [];
     document.querySelectorAll(".js-entry-row.selected").forEach(function (r) {
-      items.push({ name: r.dataset.name, type: r.dataset.type });
+      items.push({
+        name: r.dataset.name,
+        type: r.dataset.type,
+        repoId: r.dataset.repoId,
+        path: r.dataset.path,
+      });
     });
     return items;
   }
@@ -1467,6 +1472,42 @@
     })();
 
     zipDownload(repoId, parentDir, Array.from(selectedPaths));
+  });
+
+  // ─── Batch reindex (.js-batch-reindex) ────────────────────────────────
+  document.addEventListener("click", async function (e) {
+    var btn = e.target.closest(".js-batch-reindex");
+    if (!btn) return;
+
+    var rows = document.querySelectorAll(".js-entry-row.selected");
+    var files = [];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].dataset.type === "dir") continue;
+      files.push({ repoId: rows[i].dataset.repoId, path: rows[i].dataset.path });
+    }
+    if (files.length === 0) {
+      window.Toast && Toast.warning("No files selected");
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Indexing...";
+
+    try {
+      for (var j = 0; j < files.length; j++) {
+        await window.apiFetch("/api2/repos/" + encodeURIComponent(files[j].repoId) + "/file/reindex/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ p: files[j].path }),
+        });
+      }
+      window.Toast && Toast.success("Reindex completed");
+    } catch (e) {
+      window.Toast && Toast.error("Reindex failed");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Reindex Selected";
+    }
   });
 
   // ─── Response time display ────────────────────────────────────

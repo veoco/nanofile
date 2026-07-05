@@ -37,6 +37,14 @@ pub fn file_routes() -> Router<Arc<AppState>> {
         .route("/{repo_id}/file/rename/", axum::routing::post(rename_file))
         .route("/{repo_id}/file/move/", axum::routing::post(move_file))
         .route("/{repo_id}/file/detail/", axum::routing::get(file_detail))
+        .route(
+            "/{repo_id}/file/index-text/",
+            axum::routing::get(file_index_text),
+        )
+        .route(
+            "/{repo_id}/file/reindex/",
+            axum::routing::post(reindex_file_handler),
+        )
 }
 
 pub async fn download_file(
@@ -343,6 +351,75 @@ pub async fn file_detail(
     let result = svc.file_detail(&repo_id, &path).await?;
 
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+pub struct FileIndexTextQuery {
+    pub p: Option<String>,
+}
+
+/// GET /api2/repos/{repo_id}/file/index-text/?p=/path
+///
+/// Retrieve the stored full-text search index content for a file.
+/// Returns `{"content": "..."}` or `{"content": null}` if not indexed.
+pub async fn file_index_text(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
+    Query(query): Query<FileIndexTextQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
+    let path = safe_normalize_path(
+        &query
+            .p
+            .ok_or_else(|| AppError::BadRequest("path (p) is required".into()))?,
+    )
+    .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+
+    let indexer = state
+        .indexer
+        .as_ref()
+        .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
+
+    let content = indexer.get_indexed_content(&repo_id, &path)?;
+
+    Ok(Json(serde_json::json!({"content": content})))
+}
+
+#[derive(Deserialize)]
+pub struct ReindexFileRequest {
+    pub p: Option<String>,
+}
+
+/// POST /api2/repos/{repo_id}/file/reindex/
+///
+/// Re-index a single file's content from block storage.
+/// Body: `{"p": "/dir/file.txt"}`
+pub async fn reindex_file_handler(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
+    Json(req): Json<ReindexFileRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+
+    let path = safe_normalize_path(
+        &req.p
+            .ok_or_else(|| AppError::BadRequest("path (p) is required".into()))?,
+    )
+    .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+
+    let indexer = state
+        .indexer
+        .as_ref()
+        .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
+
+    indexer
+        .reindex_file(state.db.as_ref(), &repo_id, &path, &state.block_store)
+        .await?;
+
+    Ok(Json(serde_json::json!({"status": "ok"})))
 }
 
 pub async fn lock_file_via_api_handler(

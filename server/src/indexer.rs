@@ -549,6 +549,70 @@ impl TextIndexer {
 
         Ok(())
     }
+
+    /// Retrieve the stored indexed text content for a `(repo_id, fullpath)` pair.
+    ///
+    /// Returns `Some(content)` if the file is in the index, or `None` if it
+    /// hasn't been indexed (e.g. binary file or not yet processed).
+    pub fn get_indexed_content(
+        &self,
+        repo_id: &str,
+        fullpath: &str,
+    ) -> Result<Option<String>, AppError> {
+        use tantivy::query::{BooleanQuery, Occur, TermQuery};
+        use tantivy::schema::IndexRecordOption;
+
+        let repo_id_field = self
+            .schema
+            .get_field(FIELD_REPO_ID)
+            .expect("repo_id field defined");
+        let fullpath_field = self
+            .schema
+            .get_field(FIELD_FULLPATH)
+            .expect("fullpath field defined");
+        let content_field = self
+            .schema
+            .get_field(FIELD_CONTENT)
+            .expect("content field defined");
+
+        let subqueries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    tantivy::Term::from_field_text(repo_id_field, repo_id),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    tantivy::Term::from_field_text(fullpath_field, fullpath),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+        ];
+        let query = BooleanQuery::new(subqueries);
+
+        let searcher = self.reader.searcher();
+        let top_docs = searcher
+            .search(&query, &TopDocs::with_limit(1).order_by_score())
+            .map_err(|e| AppError::internal(format!("get_indexed_content search: {e}")))?;
+
+        let Some((_score, doc_address)) = top_docs.into_iter().next() else {
+            return Ok(None);
+        };
+
+        let doc = searcher
+            .doc::<TantivyDocument>(doc_address)
+            .map_err(|e| AppError::internal(format!("get_indexed_content retrieve doc: {e}")))?;
+
+        let content = doc
+            .get_first(content_field)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        Ok(content)
+    }
 }
 
 /// Determine whether a file should be indexed as plain text.
