@@ -270,6 +270,9 @@ impl TextIndexer {
 
     /// Re-index a file by reading its content from block storage.
     ///
+    /// Returns `true` if the file was indexed, or `false` if it was skipped
+    /// (binary or otherwise non-indexable file).
+    ///
     /// Used after rename/move operations (the content is still in storage but
     /// the path has changed), and by the re-index API for backfilling existing
     /// files.
@@ -279,7 +282,7 @@ impl TextIndexer {
         repo_id: &str,
         fullpath: &str,
         block_store: &DynBlockStorage,
-    ) -> Result<(), AppError> {
+    ) -> Result<bool, AppError> {
         let filename = fullpath
             .rsplit_once('/')
             .map(|(_, name)| name)
@@ -307,12 +310,12 @@ impl TextIndexer {
         if is_indexable_text(filename, &data) {
             let content = String::from_utf8_lossy(&data);
             self.index_file(repo_id, fullpath, filename, &content)?;
+            Ok(true)
         } else {
             // Not indexable — clean up any old index entry.
             self.delete_file(repo_id, fullpath)?;
+            Ok(false)
         }
-
-        Ok(())
     }
 
     /// Search the full-text index.

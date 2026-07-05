@@ -1494,14 +1494,27 @@
     btn.textContent = "Indexing...";
 
     try {
+      var indexedCount = 0;
+      var skippedCount = 0;
       for (var j = 0; j < files.length; j++) {
-        await window.apiFetch("/api2/repos/" + encodeURIComponent(files[j].repoId) + "/file/reindex/", {
+        var resp = await window.apiFetch("/api2/repos/" + encodeURIComponent(files[j].repoId) + "/file/reindex/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ p: files[j].path }),
         });
+        var result = await resp.json();
+        if (result.indexed) {
+          indexedCount++;
+        } else {
+          skippedCount++;
+        }
       }
-      window.Toast && Toast.success("Reindex completed");
+      if (indexedCount > 0) {
+        window.Toast && Toast.success("Reindexed " + indexedCount + " file(s)");
+      }
+      if (skippedCount > 0) {
+        window.Toast && Toast.warning(skippedCount + " file(s) skipped (unsupported type)");
+      }
     } catch (e) {
       window.Toast && Toast.error("Reindex failed");
     } finally {

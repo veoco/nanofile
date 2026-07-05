@@ -415,11 +415,13 @@ pub async fn reindex_file_handler(
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
 
-    indexer
+    let indexed = indexer
         .reindex_file(state.db.as_ref(), &repo_id, &path, &state.block_store)
         .await?;
 
-    Ok(Json(serde_json::json!({"status": "ok"})))
+    Ok(Json(
+        serde_json::json!({"status": "ok", "indexed": indexed}),
+    ))
 }
 
 pub async fn lock_file_via_api_handler(

@@ -507,12 +507,17 @@
     try {
       btn.disabled = true;
       btn.textContent = "Indexing...";
-      await window.apiFetch("/api2/repos/" + encodeURIComponent(repoId) + "/file/reindex/", {
+      var resp = await window.apiFetch("/api2/repos/" + encodeURIComponent(repoId) + "/file/reindex/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ p: path }),
       });
-      window.Toast && Toast.success("Reindexed");
+      var result = await resp.json();
+      if (result.indexed) {
+        window.Toast && Toast.success("Reindexed");
+      } else {
+        window.Toast && Toast.warning("File type not supported for indexing");
+      }
       // Reload the indexed content display
       var ct = document.querySelector(".js-rp-content");
       if (ct) {

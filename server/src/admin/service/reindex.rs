@@ -106,7 +106,8 @@ impl<'a> AdminService<'a> {
                 .reindex_file(self.db, repo_id, fullpath, block_store)
                 .await
             {
-                Ok(()) => indexed += 1,
+                Ok(true) => indexed += 1,
+                Ok(false) => skipped += 1,
                 Err(_) => skipped += 1,
             }
         }
