@@ -48,29 +48,17 @@
                     </div>
                 </a>
                 <div class="ml-4 flex-shrink-0 flex items-center gap-1">
-                    <button onclick="showRenameDialog(this)"
-                            data-id="{{ r.id }}"
-                            data-name="{{ r.name }}"
-                            class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-800 transition-colors"
-                            title="Rename">
-                        <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                        </svg>
-                        Rename
-                    </button>
-                    <button onclick="showSettingsDialog(this)"
+                    <button onclick="showEditDialog(this)"
                             data-id="{{ r.id }}"
                             data-name="{{ r.name }}"
                             data-description="{{ r.description }}"
                             data-size="{{ r.size_display }}"
-                            data-is-owner="{{ r.owner_id == user_id }}"
                             class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-800 transition-colors"
-                            title="Settings">
+                            title="Edit library">
                         <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                         </svg>
-                        Settings
+                        Edit
                     </button>
                     <button onclick="deleteRepo(this)"
                             data-repo-id="{{ r.id }}"
@@ -115,20 +103,33 @@
     </div>
 </div>
 
-{# ─── Rename Library Dialog ─── #}
-<div id="rename-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="rename-dialog-title" onclick="if(event.target===this)hideRenameDialog()">
+{# ─── Edit Library Dialog ─── #}
+<div id="edit-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="edit-dialog-title" onclick="if(event.target===this)hideEditDialog()">
     <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-        <h3 id="rename-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Rename Library</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Enter a new name.</p>
-        <form id="rename-form" action="" method="POST" onsubmit="return submitRename(this)">
+        <h3 id="edit-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">Edit Library</h3>
+        <form id="edit-form" action="" method="POST" onsubmit="return submitEdit(this)">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" id="rename-repo-id" name="id" value="">
-            <input id="rename-input" type="text" name="name" placeholder="New name"
-                   class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5"
-                   onkeydown="if(event.key==='Escape'){event.preventDefault();hideRenameDialog();}if(event.key==='Enter'){event.preventDefault();this.form.querySelector('button[type=submit]').click();}"
-                   autofocus>
-            <div class="mt-4 flex justify-end gap-2">
-                <button type="button" onclick="hideRenameDialog()"
+            <input type="hidden" id="edit-repo-id" name="id" value="">
+            <div class="space-y-4">
+                <div>
+                    <label for="edit-name" class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Name</label>
+                    <input id="edit-name" type="text" name="name"
+                           class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5"
+                           onkeydown="if(event.key==='Escape'){event.preventDefault();hideEditDialog();}"
+                           autofocus>
+                </div>
+                <div>
+                    <label for="edit-description" class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Description</label>
+                    <textarea id="edit-description" name="description" rows="3"
+                              class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5 resize-none"></textarea>
+                </div>
+                <div>
+                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Size</p>
+                    <p class="text-sm text-gray-900 dark:text-gray-100" id="edit-size"></p>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end gap-2">
+                <button type="button" onclick="hideEditDialog()"
                         class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
                     Cancel
                 </button>
@@ -138,33 +139,6 @@
                 </button>
             </div>
         </form>
-    </div>
-</div>
-
-{# ─── Settings Dialog ─── #}
-<div id="settings-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title" onclick="if(event.target===this)hideSettingsDialog()">
-    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-        <h3 id="settings-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Library Settings</h3>
-        <div class="space-y-3 mt-3">
-            <div>
-                <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Name</p>
-                <p class="text-sm text-gray-900 dark:text-gray-100" id="settings-name"></p>
-            </div>
-            <div>
-                <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Size</p>
-                <p class="text-sm text-gray-900 dark:text-gray-100" id="settings-size"></p>
-            </div>
-            <div>
-                <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Description</p>
-                <p class="text-sm text-gray-900 dark:text-gray-100" id="settings-description"></p>
-            </div>
-        </div>
-        <div class="mt-6 flex justify-end gap-2">
-            <button type="button" onclick="hideSettingsDialog()"
-                    class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
-                Close
-            </button>
-        </div>
     </div>
 </div>
 
@@ -181,7 +155,6 @@ function submitCreate(form) {
     var name = document.getElementById('create-input').value.trim();
     if (!name) return false;
     hideCreateDialog();
-    // Use Seafile API to create repo
     var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
     fetch('/api2/repos/', {
         method: 'POST',
@@ -203,36 +176,37 @@ function submitCreate(form) {
     return false;
 }
 
-function showRenameDialog(btn) {
-    var id = btn.getAttribute('data-id');
-    var name = btn.getAttribute('data-name');
-    document.getElementById('rename-repo-id').value = id;
-    document.getElementById('rename-input').value = name;
-    document.getElementById('rename-overlay').classList.remove('hidden');
-    setTimeout(function() { document.getElementById('rename-input').focus(); document.getElementById('rename-input').select(); }, 100);
+function showEditDialog(btn) {
+    document.getElementById('edit-repo-id').value = btn.getAttribute('data-id');
+    document.getElementById('edit-name').value = btn.getAttribute('data-name');
+    document.getElementById('edit-description').value = btn.getAttribute('data-description') || '';
+    document.getElementById('edit-size').textContent = btn.getAttribute('data-size');
+    document.getElementById('edit-overlay').classList.remove('hidden');
+    setTimeout(function() { document.getElementById('edit-name').focus(); document.getElementById('edit-name').select(); }, 100);
 }
-function hideRenameDialog() {
-    document.getElementById('rename-overlay').classList.add('hidden');
+function hideEditDialog() {
+    document.getElementById('edit-overlay').classList.add('hidden');
 }
-function submitRename(form) {
-    var newName = document.getElementById('rename-input').value.trim();
-    if (!newName) return false;
-    hideRenameDialog();
-    var repoId = document.getElementById('rename-repo-id').value;
+function submitEdit(form) {
+    var repoId = document.getElementById('edit-repo-id').value;
+    var newName = document.getElementById('edit-name').value.trim();
+    var newDesc = document.getElementById('edit-description').value.trim();
+    if (!newName) { alert('Library name cannot be empty.'); return false; }
+    hideEditDialog();
     var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
-    fetch('/api2/repos/' + repoId + '/?op=rename', {
+    fetch('/api2/repos/' + repoId + '/?op=update', {
         method: 'POST',
         credentials: 'same-origin',
         headers: {
             'Content-Type': 'application/json;charset=utf-8',
             'X-CSRFToken': csrfToken,
         },
-        body: JSON.stringify({ repo_name: newName }),
+        body: JSON.stringify({ repo_name: newName, description: newDesc }),
     }).then(function (resp) {
         if (resp.ok) {
             window.location.reload();
         } else {
-            alert('Failed to rename library: ' + resp.status);
+            alert('Failed to update library: ' + resp.status);
         }
     }).catch(function () {
         alert('Network error');
@@ -266,16 +240,6 @@ function deleteRepo(btn) {
 function getCookie(name) {
     var match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
     return match ? match.pop() : '';
-}
-
-function showSettingsDialog(btn) {
-    document.getElementById('settings-name').textContent = btn.getAttribute('data-name');
-    document.getElementById('settings-size').textContent = btn.getAttribute('data-size');
-    document.getElementById('settings-description').textContent = btn.getAttribute('data-description') || '(none)';
-    document.getElementById('settings-overlay').classList.remove('hidden');
-}
-function hideSettingsDialog() {
-    document.getElementById('settings-overlay').classList.add('hidden');
 }
 </script>
 {% endblock %}

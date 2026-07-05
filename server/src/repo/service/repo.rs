@@ -443,6 +443,62 @@ impl RepoService {
         Ok(())
     }
 
+    /// Update a repo's name and/or description. Only the owner can update.
+    pub async fn update_repo(
+        db: &DatabaseConnection,
+        repos: &Repositories,
+        repo_id: &str,
+        user_id: i32,
+        new_name: Option<String>,
+        new_description: Option<String>,
+    ) -> Result<(), AppError> {
+        let r = repos
+            .repo
+            .find_by_id(repo_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+        if r.owner_id != user_id {
+            return Err(AppError::Forbidden);
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        let mut active: crate::entity::repo::ActiveModel = r.clone().into();
+
+        if let Some(ref name) = new_name {
+            let name = name.trim().to_string();
+            if name.is_empty() || name.contains('/') {
+                return Err(AppError::BadRequest("invalid repo name".into()));
+            }
+            active.name = Set(name.clone());
+
+            // Log rename activity (before update, so detail captures the old name)
+            activity_log::log_activity(
+                db,
+                repo_id,
+                "rename",
+                "repo",
+                "/",
+                user_id,
+                None,
+                None,
+                None,
+                Some(&r.name),
+                None,
+            )
+            .await;
+        }
+
+        if let Some(ref desc) = new_description {
+            active.description = Set(desc.clone());
+        }
+
+        active.updated_at = Set(now);
+        repos.repo.update(active).await?;
+
+        Ok(())
+    }
+
     /// Delete a repo. Only the owner can delete.
     pub async fn delete_repo(
         db: &DatabaseConnection,

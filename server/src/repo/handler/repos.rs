@@ -164,6 +164,42 @@ pub async fn rename_repo(
     Ok(Json(serde_json::Value::String("success".to_string())))
 }
 
+#[derive(Deserialize)]
+struct UpdateRepoRequest {
+    repo_name: Option<String>,
+    description: Option<String>,
+}
+
+/// `POST /api2/repos/{repo_id}/?op=update`
+///
+/// Updates repo name and/or description. Only the owner can update.
+pub async fn update_repo(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
+    req: axum::http::Request<Body>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_parts, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let update: UpdateRepoRequest = serde_json::from_slice(&bytes)
+        .map_err(|e| AppError::BadRequest(format!("invalid JSON: {e}")))?;
+
+    repo::RepoService::update_repo(
+        state.db.as_ref(),
+        &state.repos,
+        &repo_id,
+        auth.user_id,
+        update.repo_name,
+        update.description,
+    )
+    .await?;
+
+    Ok(Json(serde_json::Value::String("success".to_string())))
+}
+
 /// `POST /api2/repos/{repo_id}/`
 ///
 /// Dispatches to the appropriate handler based on the `op` query parameter.
@@ -176,10 +212,11 @@ pub async fn repo_post_handler(
 ) -> Result<Json<serde_json::Value>, AppError> {
     match params.get("op").map(|s| s.as_str()) {
         Some("rename") => rename_repo(auth, state, Path(repo_id), Query(params), req).await,
+        Some("update") => update_repo(auth, state, Path(repo_id), req).await,
         Some("setpassword") => set_repo_password_v2(auth, state, Path(repo_id), req).await,
         Some("checkpassword") => check_repo_password_v2(auth, state, Path(repo_id), req).await,
         _ => Err(AppError::BadRequest(
-            "invalid operation; use rename, setpassword, or checkpassword".into(),
+            "invalid operation; use rename, update, setpassword, or checkpassword".into(),
         )),
     }
 }
