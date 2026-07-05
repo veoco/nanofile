@@ -152,9 +152,8 @@
 
   // ─── Right panel ─────────────────────────────────────────────────────
   window.openRightPanel = function (d) {
-    // d = { name, type, size, sizeDisplay, mtime, mtimeDisplay, starred,
-    //       extension, path, repoId, modifierEmail, thumbnailUrl, isPreviewable,
-    //       downloadUrl, isVideo }
+    // d = { name, type, starred, extension, path, repoId, modifierEmail,
+    //       thumbnailUrl, thumbnailUrlLarge, isPreviewable, downloadUrl, isVideo }
 
     var ph = document.querySelector(".js-rp-placeholder");
     var ct = document.querySelector(".js-rp-content");
@@ -180,8 +179,8 @@
 
     if (d.type === "dir") {
       if (folderIcon) folderIcon.classList.remove("hidden");
-    } else if (d.thumbnailUrl) {
-      if (thumbImg) { thumbImg.src = d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
+    } else if (d.thumbnailUrlLarge || d.thumbnailUrl) {
+      if (thumbImg) { thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
     } else if (d.isVideo && videoIcon) {
       if (videoIcon) videoIcon.classList.remove("hidden");
     } else if (d.extension && extBadge) {
@@ -195,13 +194,6 @@
     // ── Basic Info ──
     setText(ct, ".js-rp-name", d.name || "");
     setText(ct, ".js-rp-type", humanType(d.type, d.extension));
-    setText(ct, ".js-rp-size", d.sizeDisplay || "");
-
-    // Show/hide size row (files only)
-    var sizeRow = ct.querySelector(".js-rp-size-row");
-    if (sizeRow) sizeRow.classList.toggle("hidden", d.type === "dir");
-
-    setText(ct, ".js-rp-mtime", d.mtimeDisplay || "");
 
     // ── Starred ──
     var starBtn = ct.querySelector(".js-rp-starred");
@@ -226,11 +218,6 @@
 
     // ── Details ──
     setText(ct, ".js-rp-path", d.path || "");
-    setText(ct, ".js-rp-extension", d.extension || "");
-
-    // Show/hide extension row (files only)
-    var extRow = ct.querySelector(".js-rp-extension-row");
-    if (extRow) extRow.classList.toggle("hidden", d.type === "dir" || !d.extension);
 
     // ── Actions ──
     // Download

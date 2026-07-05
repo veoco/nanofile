@@ -209,11 +209,12 @@ fn is_thumbnail_image(name: &str) -> bool {
     std::path::Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
-        .map(crate::thumbnail_util::is_supported_image_ext)
+        .map(|e| crate::thumbnail_util::is_supported_image_ext(&e.to_lowercase()))
         .unwrap_or(false)
 }
 
 pub fn is_previewable_file(name: &str) -> bool {
+    let name = &name.to_ascii_lowercase();
     // Images
     if name.ends_with(".png")
         || name.ends_with(".jpg")

@@ -884,16 +884,13 @@
         window.openRightPanel({
           name: selRow.dataset.name,
           type: selRow.dataset.type,
-          size: selRow.dataset.size,
-          sizeDisplay: selRow.dataset.sizeDisplay,
-          mtime: selRow.dataset.mtime,
-          mtimeDisplay: selRow.dataset.mtimeDisplay,
           starred: selRow.dataset.starred === "true",
           extension: selRow.dataset.extension,
           path: selRow.dataset.path,
           repoId: selRow.dataset.repoId,
           modifierEmail: selRow.dataset.modifierEmail,
           thumbnailUrl: selRow.dataset.thumbnailUrl,
+          thumbnailUrlLarge: selRow.dataset.thumbnailUrlLarge,
           isPreviewable: selRow.dataset.isPreviewable === "true",
           downloadUrl: dlUrl,
         });

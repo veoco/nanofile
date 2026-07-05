@@ -20,14 +20,14 @@
         <!-- Scrollable info area -->
         <div class="flex-1 overflow-y-auto">
             <!-- Preview -->
-            <div class="js-rp-preview flex items-center justify-center py-6 px-4 bg-gray-50/50 dark:bg-surface-800/50">
-                <div class="w-24 h-24 rounded-xl flex items-center justify-center overflow-hidden bg-gray-100 dark:bg-surface-700">
+            <div class="js-rp-preview flex items-center justify-center">
+                <div class="w-full aspect-[4/3] flex items-center justify-center overflow-hidden bg-gray-100 dark:bg-surface-700">
                     <img class="js-rp-thumb-img hidden w-full h-full object-contain" src="" alt="">
-                    <span class="js-rp-ext-badge hidden text-2xl font-bold"></span>
-                    <svg class="js-rp-folder-icon hidden h-14 w-14 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
+                    <span class="js-rp-ext-badge hidden text-4xl font-bold"></span>
+                    <svg class="js-rp-folder-icon hidden h-20 w-20 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
                     </svg>
-                    <svg class="js-rp-video-icon hidden h-10 w-10 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <svg class="js-rp-video-icon hidden h-14 w-14 text-white" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M8 5v14l11-7z"/>
                     </svg>
                 </div>
@@ -44,25 +44,10 @@
                     <span class="text-xs text-gray-500 dark:text-gray-400">Type</span>
                     <span class="js-rp-type text-xs font-medium text-gray-900 dark:text-gray-100 text-right"></span>
                 </div>
-                <!-- Size (file only) -->
-                <div class="js-rp-size-row flex items-center justify-between">
-                    <span class="text-xs text-gray-500 dark:text-gray-400">Size</span>
-                    <span class="js-rp-size text-xs font-medium text-gray-900 dark:text-gray-100 text-right"></span>
-                </div>
-                <!-- Modified -->
-                <div class="flex items-center justify-between">
-                    <span class="text-xs text-gray-500 dark:text-gray-400">Modified</span>
-                    <span class="js-rp-mtime text-xs font-medium text-gray-900 dark:text-gray-100 text-right"></span>
-                </div>
                 <!-- Path -->
                 <div class="flex items-start justify-between gap-2">
                     <span class="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">Path</span>
                     <span class="js-rp-path text-xs font-medium text-gray-900 dark:text-gray-100 text-right break-all leading-snug"></span>
-                </div>
-                <!-- Extension (file only) -->
-                <div class="js-rp-extension-row flex items-center justify-between">
-                    <span class="text-xs text-gray-500 dark:text-gray-400">Extension</span>
-                    <span class="js-rp-extension text-xs font-medium text-gray-900 dark:text-gray-100 text-right"></span>
                 </div>
                 <!-- Starred -->
                 <div class="flex items-center justify-between">

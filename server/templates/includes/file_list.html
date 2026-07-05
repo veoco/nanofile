@@ -122,6 +122,7 @@
          data-repo-id="{{ repo_id }}"
          data-modifier-email="{{ entry.modifier_email }}"
          data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
+         data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
          data-is-previewable="{{ entry.is_previewable }}">
         {% if entry.entry_type == "dir" %}
         <!-- Folder icon -->
@@ -298,6 +299,7 @@
          data-repo-id="{{ repo_id }}"
          data-modifier-email="{{ entry.modifier_email }}"
          data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
+         data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
          data-is-previewable="{{ entry.is_previewable }}">
         {% if entry.entry_type == "dir" %}
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
@@ -352,6 +354,7 @@
                  data-repo-id="{{ repo_id }}"
                  data-modifier-email="{{ entry.modifier_email }}"
                  data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
+                 data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
                  data-is-previewable="{{ entry.is_previewable }}">
                 {% if entry.is_video %}
                 <div class="w-full h-full flex items-center justify-center bg-gray-800 dark:bg-gray-900 pointer-events-none">
