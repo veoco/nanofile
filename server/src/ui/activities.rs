@@ -36,6 +36,12 @@ pub struct ActivityView {
     pub author_email: String,
     pub time_display: String,
     pub time_iso: String,
+    /// Number of items in a batch operation (1 for single operations).
+    pub batch_count: usize,
+    /// File names extracted from detail JSON (empty for single operations).
+    pub detail_items: Vec<String>,
+    /// Old repo name for repo rename operations.
+    pub old_repo_name: Option<String>,
 }
 
 impl ActivityView {
@@ -111,6 +117,37 @@ pub async fn activities_page(
 
         let old_path_display = e.old_path.as_deref().unwrap_or("").to_string();
 
+        // Parse detail JSON for batch item names and repo rename info.
+        let (batch_count, detail_items, old_repo_name) =
+            match serde_json::from_str::<serde_json::Value>(&e.detail) {
+                Ok(serde_json::Value::Array(arr)) => {
+                    let items: Vec<String> = arr
+                        .iter()
+                        .filter_map(|d| d.get("path").and_then(|p| p.as_str()))
+                        .map(|p| {
+                            p.rsplit_once('/')
+                                .map(|(_, n)| n.to_string())
+                                .unwrap_or_else(|| p.to_string())
+                        })
+                        .collect();
+                    let count = items.len();
+                    let orn = arr
+                        .first()
+                        .and_then(|d| d.get("old_repo_name"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    (count, items, orn)
+                }
+                Ok(serde_json::Value::Object(obj)) => {
+                    let orn = obj
+                        .get("old_repo_name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    (1, vec![], orn)
+                }
+                _ => (1, vec![], None),
+            };
+
         activities.push(ActivityView {
             op_type: e.op_type.clone(),
             obj_type: e.obj_type.clone(),
@@ -123,6 +160,9 @@ pub async fn activities_page(
             author_email: email,
             time_display: formatted,
             time_iso,
+            batch_count,
+            detail_items,
+            old_repo_name,
         });
     }
 

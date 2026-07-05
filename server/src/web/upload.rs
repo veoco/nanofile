@@ -117,7 +117,6 @@ async fn try_handle_chunked(
     file_data: &[u8],
     content_range: Option<&str>,
     modifier: &str,
-    replace: bool,
     user_id: Option<i32>,
 ) -> Result<Option<Json<serde_json::Value>>, AppError> {
     let Some(range_header) = content_range else {
@@ -182,7 +181,7 @@ async fn try_handle_chunked(
     }
 
     let result = upload_and_build_response(
-        state, repo_id, target_dir, file_name, &full_data, modifier, replace, user_id, None,
+        state, repo_id, target_dir, file_name, &full_data, modifier, user_id, None,
     )
     .await;
 
@@ -252,6 +251,10 @@ async fn ensure_dir_recursive(
 /// Create a file via `FileOps::create_file` and return the standard JSON
 /// array response expected by the Seafile frontend:
 /// `[{"id": "<fs_id>", "name": "<filename>", "size": <bytes>}]`
+///
+/// Dynamically determines whether the file already exists and sets the
+/// `replace` flag (for `FileOps::create_file`) and `op_type` (for activity
+/// logging) accordingly — upload handlers should NOT hardcode `replace`.
 #[allow(clippy::too_many_arguments)]
 async fn upload_and_build_response(
     state: &AppState,
@@ -260,24 +263,19 @@ async fn upload_and_build_response(
     filename: &str,
     data: &[u8],
     modifier: &str,
-    replace: bool,
     user_id: Option<i32>,
     enc_key: Option<(&[u8], &[u8])>,
 ) -> Result<serde_json::Value, AppError> {
-    // Get old file size for incremental repo size adjustment when overwriting.
-    let old_size = if replace {
-        let fp = if target_dir == "/" {
-            format!("/{}", filename)
-        } else {
-            format!("{}/{}", target_dir.trim_end_matches('/'), filename)
-        };
-        crate::repo::get_entry_total_size(state.db.as_ref(), repo_id, &fp)
-            .await
-            .ok()
-            .unwrap_or(0)
+    let fp = if target_dir == "/" {
+        format!("/{}", filename)
     } else {
-        0
+        format!("{}/{}", target_dir.trim_end_matches('/'), filename)
     };
+
+    // Check if the file already exists to determine replace flag and op_type.
+    let size_result = crate::repo::get_entry_total_size(state.db.as_ref(), repo_id, &fp).await;
+    let file_exists = size_result.is_ok();
+    let old_size = size_result.ok().unwrap_or(0);
 
     // Ensure the target directory exists before creating the file.
     // This is needed for folder uploads where subdirectories don't exist yet.
@@ -292,7 +290,7 @@ async fn upload_and_build_response(
         filename,
         data,
         modifier,
-        replace,
+        file_exists,
         &state.block_store,
         enc_key,
     )
@@ -304,12 +302,7 @@ async fn upload_and_build_response(
 
     // Log activity if a user_id was provided.
     if let Some(uid) = user_id {
-        let fp = if target_dir == "/" {
-            format!("/{}", filename)
-        } else {
-            format!("{}/{}", target_dir.trim_end_matches('/'), filename)
-        };
-        let op_type = if replace { "edit" } else { "create" };
+        let op_type = if file_exists { "edit" } else { "create" };
         activity_log::log_activity(
             state.db.as_ref(),
             repo_id,
@@ -318,8 +311,8 @@ async fn upload_and_build_response(
             &fp,
             uid,
             None,
-            None,
-            None,
+            Some(data.len() as i64),
+            Some(&fs_id),
             None,
             None,
         )
@@ -499,7 +492,6 @@ pub async fn upload_aj(
             &file_data,
             content_range,
             &user.email,
-            false,
             Some(user.user_id),
         )
         .await?
@@ -515,7 +507,6 @@ pub async fn upload_aj(
             &filename,
             &file_data,
             &user.email,
-            false,
             Some(user.user_id),
             None,
         )
@@ -584,7 +575,6 @@ pub async fn update_api(
             name,
             &file_data,
             &user.email,
-            true,
             Some(user.user_id),
             None,
         )
@@ -661,7 +651,6 @@ pub async fn update_aj(
             &file_data,
             content_range,
             &user.email,
-            true,
             Some(user.user_id),
         )
         .await?
@@ -676,7 +665,6 @@ pub async fn update_aj(
             name,
             &file_data,
             &user.email,
-            true,
             Some(user.user_id),
             None,
         )
@@ -763,7 +751,6 @@ pub async fn upload_aj_token(
             &file_data,
             content_range,
             &info.username,
-            true,
             None,
         )
         .await?
@@ -779,7 +766,6 @@ pub async fn upload_aj_token(
             &filename,
             &file_data,
             &info.username,
-            true,
             uid,
             None,
         )
@@ -870,7 +856,6 @@ pub async fn upload_api(
             &filename,
             &data,
             &info.username,
-            true,
             uid,
             None,
         )
@@ -957,10 +942,10 @@ pub async fn update_api_handler(
             } else {
                 format!("{}/{}", target_dir.trim_end_matches('/'), name)
             };
-            let old_size = crate::repo::get_entry_total_size(state.db.as_ref(), &info.repo_id, &fp)
-                .await
-                .ok()
-                .unwrap_or(0);
+            let size_result =
+                crate::repo::get_entry_total_size(state.db.as_ref(), &info.repo_id, &fp).await;
+            let file_exists = size_result.is_ok();
+            let old_size = size_result.ok().unwrap_or(0);
 
             let fs_id = FileOps::create_file(
                 state.db.as_ref(),
@@ -969,7 +954,7 @@ pub async fn update_api_handler(
                 &name,
                 &data,
                 &info.username,
-                true,
+                file_exists,
                 &state.block_store,
                 None,
             )
@@ -986,16 +971,17 @@ pub async fn update_api_handler(
 
             // Log activity
             if let Some(uid) = uid {
+                let op_type = if file_exists { "edit" } else { "create" };
                 activity_log::log_activity(
                     state.db.as_ref(),
                     &info.repo_id,
-                    "edit",
+                    op_type,
                     "file",
                     &fp,
                     uid,
                     None,
-                    None,
-                    None,
+                    Some(data.len() as i64),
+                    Some(&fs_id),
                     None,
                     None,
                 )
@@ -1024,7 +1010,6 @@ pub async fn update_api_handler(
                 &filename,
                 &data,
                 &info.username,
-                true,
                 uid,
                 None,
             )
@@ -1106,10 +1091,10 @@ pub async fn update_aj_token(
         } else {
             format!("{}/{}", target_dir.trim_end_matches('/'), name)
         };
-        let old_size = crate::repo::get_entry_total_size(state.db.as_ref(), &info.repo_id, &fp)
-            .await
-            .ok()
-            .unwrap_or(0);
+        let size_result =
+            crate::repo::get_entry_total_size(state.db.as_ref(), &info.repo_id, &fp).await;
+        let file_exists = size_result.is_ok();
+        let old_size = size_result.ok().unwrap_or(0);
 
         let fs_id = FileOps::create_file(
             state.db.as_ref(),
@@ -1118,7 +1103,7 @@ pub async fn update_aj_token(
             &name,
             &file_data,
             &info.username,
-            true,
+            file_exists,
             &state.block_store,
             None,
         )
@@ -1135,16 +1120,17 @@ pub async fn update_aj_token(
 
         // Log activity
         if let Some(uid) = uid {
+            let op_type = if file_exists { "edit" } else { "create" };
             activity_log::log_activity(
                 state.db.as_ref(),
                 &info.repo_id,
-                "edit",
+                op_type,
                 "file",
                 &fp,
                 uid,
                 None,
-                None,
-                None,
+                Some(file_data.len() as i64),
+                Some(&fs_id),
                 None,
                 None,
             )
@@ -1278,19 +1264,16 @@ pub async fn upload_blks_api(
         let now = chrono::Utc::now().timestamp();
 
         // Get old file size for incremental size adjustment
+        // and determine if the file already exists (for activity logging op_type).
         let fp = if target_dir == "/" {
             format!("/{}", file_name)
         } else {
             format!("{}/{}", target_dir.trim_end_matches('/'), file_name)
         };
-        let old_size = if replace {
-            crate::repo::get_entry_total_size(state.db.as_ref(), &info.repo_id, &fp)
-                .await
-                .ok()
-                .unwrap_or(0)
-        } else {
-            0
-        };
+        let size_result =
+            crate::repo::get_entry_total_size(state.db.as_ref(), &info.repo_id, &fp).await;
+        let file_exists = size_result.is_ok();
+        let old_size = size_result.ok().unwrap_or(0);
 
         // Resolve parent directory and capture ancestor chain for the
         // subsequent walk_up_ancestors (avoids O(d²) re-resolution).
@@ -1349,8 +1332,8 @@ pub async fn upload_blks_api(
         crate::repo::adjust_repo_size(state.db.as_ref(), &info.repo_id, file_size - old_size)
             .await?;
 
-        // Log activity
-        let op_type = if replace { "edit" } else { "create" };
+        // Log activity — op_type based on actual file existence, not client's replace flag
+        let op_type = if file_exists { "edit" } else { "create" };
         if let Some(uid) = uid {
             activity_log::log_activity(
                 state.db.as_ref(),
@@ -1360,8 +1343,8 @@ pub async fn upload_blks_api(
                 &fp,
                 uid,
                 None,
-                None,
-                None,
+                Some(file_size),
+                Some(&file_fs_id),
                 None,
                 None,
             )
