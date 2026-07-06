@@ -91,8 +91,6 @@ impl ShareLinkRepository for DbShareLinkRepository {
         expire_at: Option<Option<i64>>,
         description: Option<Option<String>>,
     ) -> Result<bool, AppError> {
-        use sea_orm::EntityTrait;
-
         let link = share_link::Entity::find()
             .filter(share_link::Column::Token.eq(token))
             .filter(share_link::Column::CreatorId.eq(user_id))

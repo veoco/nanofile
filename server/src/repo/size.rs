@@ -1,4 +1,5 @@
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use std::collections::VecDeque;
 
 use crate::common::EMPTY_SHA1;
 use crate::entity::{commit, repo};
@@ -39,8 +40,6 @@ pub async fn compute_tree_size(
     repo_id: &str,
     root_fs_id: &str,
 ) -> Result<i64, AppError> {
-    use std::collections::VecDeque;
-
     if root_fs_id == EMPTY_SHA1 {
         return Ok(0);
     }

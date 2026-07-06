@@ -14,7 +14,7 @@ use crate::AppState;
 use crate::auth::password::{hash_password, validate_password, verify_password};
 use crate::auth::token::generate_api_token;
 use crate::auth::totp::TotpManager;
-use crate::entity::{api_token, invitation_code, user, user_2fa};
+use crate::entity::{api_token, invitation_code, password_reset_token, user, user_2fa};
 use crate::error::AppError;
 
 // ─── Templates ───────────────────────────────────────────────────────────────
@@ -963,9 +963,6 @@ async fn validate_reset_token(
     db: &sea_orm::DatabaseConnection,
     raw_token: &str,
 ) -> Result<Option<crate::entity::password_reset_token::Model>, AppError> {
-    use crate::entity::password_reset_token;
-    use sea_orm::ColumnTrait;
-
     let token_hash = crate::auth::password_reset::hash_token(raw_token);
     let record = password_reset_token::Entity::find()
         .filter(password_reset_token::Column::TokenHash.eq(&token_hash))

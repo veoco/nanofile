@@ -1,6 +1,7 @@
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::common::EMPTY_SHA1;
+use crate::entity::fs_object;
 use crate::serialization::fs_json::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 
 /// Read and parse a directory fs_object (FsDirData) from the database.
@@ -19,7 +20,6 @@ pub async fn read_fs_dir_data(
             version: 1,
         });
     }
-    use crate::entity::fs_object;
     let obj = fs_object::Entity::find()
         .filter(fs_object::Column::RepoId.eq(repo_id))
         .filter(fs_object::Column::FsId.eq(fs_id))
@@ -36,7 +36,6 @@ pub async fn read_fs_file_data(
     repo_id: &str,
     fs_id: &str,
 ) -> Result<FsFileData, Box<dyn std::error::Error>> {
-    use crate::entity::fs_object;
     let obj = fs_object::Entity::find()
         .filter(fs_object::Column::RepoId.eq(repo_id))
         .filter(fs_object::Column::FsId.eq(fs_id))

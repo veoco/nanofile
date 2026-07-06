@@ -183,7 +183,6 @@ pub async fn log_activity(
 ///
 /// Returns `None` if the user is not found or the query fails.
 pub async fn user_id_by_email(db: &DatabaseConnection, email: &str) -> Option<i32> {
-    use sea_orm::QueryFilter;
     crate::entity::user::Entity::find()
         .filter(crate::entity::user::Column::Email.eq(email))
         .one(db)

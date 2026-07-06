@@ -1,6 +1,8 @@
 use sea_orm::DatabaseConnection;
 
+use crate::common::EMPTY_SHA1;
 use crate::error::AppError;
+use crate::serialization::S_IFDIR;
 
 mod reindex;
 mod users;
@@ -14,9 +16,6 @@ pub(crate) async fn collect_file_paths(
     repo_id: &str,
     root_fs_id: &str,
 ) -> Result<Vec<String>, AppError> {
-    use crate::common::EMPTY_SHA1;
-    use crate::serialization::S_IFDIR;
-
     let mut results = Vec::new();
     let mut stack = vec![(root_fs_id.to_string(), String::new())];
 

@@ -794,8 +794,6 @@ pub async fn load_left_panel_repos(
     db: &DatabaseConnection,
     user_id: i32,
 ) -> Result<Vec<LeftPanelRepo>, AppError> {
-    use sea_orm::EntityTrait;
-
     let members = repo_member::Entity::find()
         .filter(repo_member::Column::UserId.eq(user_id))
         .all(db)

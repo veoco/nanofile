@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
 use crate::entity::thumbnail;
@@ -90,7 +90,6 @@ impl ThumbnailRepository for DbThumbnailRepository {
         file_modified_at: i64,
         now: i64,
     ) -> Result<(), AppError> {
-        use sea_orm::ActiveModelTrait;
         if let Some(record) = thumbnail::Entity::find()
             .filter(thumbnail::Column::RepoId.eq(repo_id))
             .filter(thumbnail::Column::Path.eq(path))

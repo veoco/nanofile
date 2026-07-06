@@ -308,7 +308,6 @@ pub async fn update_share_link_v21(
     expire_days: Option<Option<i64>>,
     description: Option<Option<String>>,
 ) -> Result<ShareLinkInfo, AppError> {
-    use crate::auth::password::hash_password;
     let now = chrono::Utc::now().timestamp();
 
     // Find and validate ownership

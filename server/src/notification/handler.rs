@@ -1,5 +1,6 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{Json, extract::State, response::IntoResponse};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -286,8 +287,6 @@ pub async fn post_event(
 
 /// Validate a JWT token for the POST /events endpoint.
 fn validate_event_jwt(token: &str, private_key: &str) -> bool {
-    use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
     validation.sub = Some("nanofile-events".to_string());

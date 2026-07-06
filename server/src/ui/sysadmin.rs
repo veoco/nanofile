@@ -6,6 +6,7 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -113,7 +114,6 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
 }
 
 fn format_ts(ts: i64) -> String {
-    use chrono::{DateTime, Utc};
     let dt: DateTime<Utc> = DateTime::from_timestamp(ts, 0).unwrap_or_default();
     dt.format("%Y-%m-%d %H:%M").to_string()
 }

@@ -1,8 +1,8 @@
+use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-use serde_json::Value;
 use std::sync::{PoisonError, RwLock};
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 use tokio::sync::mpsc;
@@ -386,8 +386,6 @@ pub fn validate_notification_jwt(
     private_key: &str,
     expected_repo_id: &str,
 ) -> Option<NotificationJwtClaims> {
-    use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
     validation.required_spec_claims = std::collections::HashSet::new();
