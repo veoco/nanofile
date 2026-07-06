@@ -173,7 +173,10 @@ pub async fn get_block_map(
             let store = block_store.clone();
             let block_dir = state.block_dir.clone();
             async move {
-                let path = block_dir.as_path().join(&bid[..bid.len().min(2)]).join(&bid);
+                let path = block_dir
+                    .as_path()
+                    .join(&bid[..bid.len().min(2)])
+                    .join(&bid);
                 if store.has_block(&bid).await {
                     tokio::fs::metadata(&path)
                         .await

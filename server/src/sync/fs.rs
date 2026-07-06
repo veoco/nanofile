@@ -155,19 +155,28 @@ async fn filter_collected(
         let result: Vec<String> = collected.into_iter().collect();
         return Ok(result);
     }
-    let mut dir_ids = Vec::new();
-    for id in collected {
-        let obj = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.eq(&id))
-            .one(db)
-            .await?;
-        if let Some(obj) = obj
-            && obj.obj_type == SEAF_METADATA_TYPE_DIR as i8
-        {
-            dir_ids.push(id);
-        }
-    }
+
+    // Batch query all fs_objects to check their types
+    let ids: Vec<String> = collected.iter().cloned().collect();
+    let objects = fs_object::Entity::find()
+        .filter(fs_object::Column::RepoId.eq(repo_id))
+        .filter(fs_object::Column::FsId.is_in(ids))
+        .all(db)
+        .await?;
+
+    // Build a set of directory fs_ids
+    let dir_set: std::collections::HashSet<String> = objects
+        .iter()
+        .filter(|obj| obj.obj_type == SEAF_METADATA_TYPE_DIR as i8)
+        .map(|obj| obj.fs_id.clone())
+        .collect();
+
+    // Filter collected to only include directories
+    let dir_ids: Vec<String> = collected
+        .into_iter()
+        .filter(|id| dir_set.contains(id))
+        .collect();
+
     Ok(dir_ids)
 }
 
@@ -216,19 +225,25 @@ pub async fn pack_fs_handler(
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let fs_ids = parse_fs_ids_from_bytes(&body_data);
 
+    // Batch query all fs_objects at once
+    let objects = fs_object::Entity::find()
+        .filter(fs_object::Column::RepoId.eq(&repo_id))
+        .filter(fs_object::Column::FsId.is_in(fs_ids.clone()))
+        .all(state.db.as_ref())
+        .await?;
+
+    // Build a map for O(1) lookup while preserving request order
+    let obj_map: std::collections::HashMap<&str, &fs_object::Model> = objects
+        .iter()
+        .map(|obj| (obj.fs_id.as_str(), obj))
+        .collect();
+
     let mut entries = Vec::new();
     for fs_id in &fs_ids {
-        let obj = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(&repo_id))
-            .filter(fs_object::Column::FsId.eq(fs_id))
-            .one(state.db.as_ref())
-            .await?;
-
-        if let Some(obj) = obj {
-            // Compress JSON to zlib for wire format compatibility
+        if let Some(obj) = obj_map.get(fs_id.as_str()) {
             let compressed = pack_fs::compress_fs_data(obj.data.as_bytes())
                 .map_err(|e| AppError::Internal(e.to_string()))?;
-            entries.push((obj.fs_id, compressed));
+            entries.push((obj.fs_id.clone(), compressed));
         }
     }
     let packed = pack_fs::encode_pack_fs_entries(&entries);
@@ -257,19 +272,22 @@ pub async fn check_fs(
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let fs_ids = parse_fs_ids_from_bytes(&body_data);
 
-    let mut missing = Vec::new();
-    for fs_id in &fs_ids {
-        let exists = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(&repo_id))
-            .filter(fs_object::Column::FsId.eq(fs_id))
-            .one(state.db.as_ref())
-            .await?
-            .is_some();
+    // Batch query all existing fs_ids
+    let existing = fs_object::Entity::find()
+        .filter(fs_object::Column::RepoId.eq(&repo_id))
+        .filter(fs_object::Column::FsId.is_in(fs_ids.clone()))
+        .all(state.db.as_ref())
+        .await?;
 
-        if !exists {
-            missing.push(fs_id.clone());
-        }
-    }
+    // Build a set of existing fs_ids for O(1) lookup
+    let existing_set: std::collections::HashSet<&str> =
+        existing.iter().map(|obj| obj.fs_id.as_str()).collect();
+
+    let missing: Vec<String> = fs_ids
+        .iter()
+        .filter(|fs_id| !existing_set.contains(fs_id.as_str()))
+        .cloned()
+        .collect();
 
     Ok(Json(missing))
 }
