@@ -1,7 +1,7 @@
 use axum::{
     Json,
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::Request,
 };
 use serde::Deserialize;
@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
+use crate::auth::{RepoPathRead, RepoPathWrite};
 use crate::error::AppError;
 use crate::fs::service::trash::FsTrashService;
 
@@ -55,29 +56,27 @@ pub struct RestoreDeletedRepoBody {
 }
 
 pub async fn list_trash2(
-    auth: AuthUser,
+    access: RepoPathRead,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<Trash2Query>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(50);
 
     let svc = FsTrashService::new(state.repos.clone(), state.db.clone());
-    let result = svc.list_trash2(&repo_id, page, per_page).await?;
+    let result = svc.list_trash2(repo_id, page, per_page).await?;
 
     Ok(Json(result))
 }
 
 pub async fn search_trash(
-    auth: AuthUser,
+    access: RepoPathRead,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<SearchTrashQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(50);
@@ -85,7 +84,7 @@ pub async fn search_trash(
     let svc = FsTrashService::new(state.repos.clone(), state.db.clone());
     let result = svc
         .search_trash(
-            &repo_id,
+            repo_id,
             query.q.as_deref().unwrap_or(""),
             page,
             per_page,
@@ -100,28 +99,26 @@ pub async fn search_trash(
 }
 
 pub async fn revert_trash(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Json(body): Json<RevertTrashBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let svc = FsTrashService::new(state.repos.clone(), state.db.clone());
     let result = svc
-        .revert_trash(&repo_id, &auth.email, auth.user_id, body)
+        .revert_trash(repo_id, &access.user.email, access.user.user_id, body)
         .await?;
 
     Ok(Json(result))
 }
 
 pub async fn revert_dirents(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     req: Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let (_, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
@@ -147,24 +144,30 @@ pub async fn revert_dirents(
 
     let svc = FsTrashService::new(state.repos.clone(), state.db.clone());
     let result = svc
-        .revert_dirents(&repo_id, &auth.email, auth.user_id, commit_id, paths)
+        .revert_dirents(
+            repo_id,
+            &access.user.email,
+            access.user.user_id,
+            commit_id,
+            paths,
+        )
         .await?;
 
     Ok(Json(result))
 }
 
 pub async fn clean_trash(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     req: Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let keep_days = parse_clean_trash_body(req).await;
 
     let svc = FsTrashService::new(state.repos.clone(), state.db.clone());
-    svc.clean_trash(&repo_id, auth.user_id, keep_days).await?;
+    svc.clean_trash(repo_id, access.user.user_id, keep_days)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -178,17 +181,16 @@ async fn parse_clean_trash_body(req: Request<Body>) -> Option<i64> {
 }
 
 pub async fn list_trash(
-    auth: AuthUser,
+    access: RepoPathRead,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<TrashQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let limit = query.limit.unwrap_or(50);
 
     let svc = FsTrashService::new(state.repos.clone(), state.db.clone());
-    let result = svc.list_trash_cursor(&repo_id, query.cursor, limit).await?;
+    let result = svc.list_trash_cursor(repo_id, query.cursor, limit).await?;
 
     Ok(Json(result))
 }

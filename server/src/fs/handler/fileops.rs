@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::middleware::AuthUser;
+use crate::auth::RepoPathWrite;
 use crate::error::AppError;
 use crate::fs::service::fileops::{self as fops_svc, FileOpsService};
 use crate::repository::Repositories;
@@ -148,13 +148,12 @@ async fn parse_form_body(
 // ─── Batch Delete ────────────────────────────────────────────
 
 pub async fn batch_delete_handler(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<FileOpsQuery>,
     req: Request<axum::body::Body>,
 ) -> Result<Response, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let form = parse_form_body(req).await?;
     let file_names_str = form.get("file_names").map(|s| s.as_str()).unwrap_or("");
@@ -173,18 +172,18 @@ pub async fn batch_delete_handler(
         state.indexer.clone(),
     );
     svc.batch_delete(
-        &repo_id,
+        repo_id,
         &parent_dir,
         &file_names,
-        &auth.email,
-        auth.user_id,
+        &access.user.email,
+        access.user.user_id,
     )
     .await?;
 
     // Handle reloaddir=true
     if query.reloaddir.as_deref() == Some("true") {
         let (_, entries) =
-            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, &repo_id, &parent_dir).await?;
+            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, repo_id, &parent_dir).await?;
         return Ok(Json(json!({"dir_listing": entries})).into_response());
     }
 
@@ -194,12 +193,13 @@ pub async fn batch_delete_handler(
 // ─── Batch Copy ──────────────────────────────────────────────
 
 pub async fn batch_copy_handler(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<FileOpsQuery>,
     req: Request<axum::body::Body>,
 ) -> Result<Response, AppError> {
+    let repo_id = &access.repo_id;
+
     let form = parse_form_body(req).await?;
     let file_names_str = form.get("file_names").map(|s| s.as_str()).unwrap_or("");
     let file_names = fops_svc::parse_file_names(file_names_str);
@@ -214,11 +214,9 @@ pub async fn batch_copy_handler(
     let dst_dir = safe_normalize_path(form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/"))
         .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
 
-    if *dst_repo != repo_id {
+    if *dst_repo != *repo_id {
         return Err(AppError::BadRequest("cross-repo copy not supported".into()));
     }
-
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let src_parent_dir = safe_normalize_path(query.p.as_deref().unwrap_or("/"))
         .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
@@ -230,12 +228,12 @@ pub async fn batch_copy_handler(
     );
     let results = svc
         .batch_copy(
-            &repo_id,
+            repo_id,
             &src_parent_dir,
             &dst_dir,
             &file_names,
-            &auth.email,
-            auth.user_id,
+            &access.user.email,
+            access.user.user_id,
         )
         .await?;
 
@@ -251,7 +249,7 @@ pub async fn batch_copy_handler(
 
     if query.reloaddir.as_deref() == Some("true") {
         let (_, entries) =
-            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, &repo_id, &dst_dir).await?;
+            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, repo_id, &dst_dir).await?;
         return Ok(Json(json!({
             "results": json_results,
             "dir_listing": entries,
@@ -265,12 +263,13 @@ pub async fn batch_copy_handler(
 // ─── Batch Move ──────────────────────────────────────────────
 
 pub async fn batch_move_handler(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<FileOpsQuery>,
     req: Request<axum::body::Body>,
 ) -> Result<Response, AppError> {
+    let repo_id = &access.repo_id;
+
     let form = parse_form_body(req).await?;
     let file_names_str = form.get("file_names").map(|s| s.as_str()).unwrap_or("");
     let file_names = fops_svc::parse_file_names(file_names_str);
@@ -285,11 +284,9 @@ pub async fn batch_move_handler(
     let dst_dir = safe_normalize_path(form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/"))
         .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
 
-    if *dst_repo != repo_id {
+    if *dst_repo != *repo_id {
         return Err(AppError::BadRequest("cross-repo move not supported".into()));
     }
-
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let src_parent_dir = safe_normalize_path(query.p.as_deref().unwrap_or("/"))
         .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
@@ -301,12 +298,12 @@ pub async fn batch_move_handler(
     );
     let results = svc
         .batch_move(
-            &repo_id,
+            repo_id,
             &src_parent_dir,
             &dst_dir,
             &file_names,
-            &auth.email,
-            auth.user_id,
+            &access.user.email,
+            access.user.user_id,
         )
         .await?;
 
@@ -321,7 +318,7 @@ pub async fn batch_move_handler(
 
     if query.reloaddir.as_deref() == Some("true") {
         let (_, entries) =
-            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, &repo_id, &dst_dir).await?;
+            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, repo_id, &dst_dir).await?;
         return Ok(Json(json!({
             "results": json_results,
             "dir_listing": entries,

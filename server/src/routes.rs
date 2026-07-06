@@ -5,7 +5,7 @@
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::routing::{delete, get, post, put};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -350,9 +350,8 @@ fn v2_routes() -> Router<Arc<AppState>> {
 // ── Inline handlers for v2.1 routes that need extra logic ─────────────────
 
 async fn v2_delete_dir(
-    auth: crate::auth::middleware::AuthUser,
+    access: crate::auth::RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<axum::Json<serde_json::Value>, AppError> {
     let p = query
@@ -365,9 +364,8 @@ async fn v2_delete_dir(
         recursive: None,
     };
     crate::fs::handler::dir::delete_dir(
-        auth,
+        access,
         axum::extract::State(state),
-        axum::extract::Path(repo_id),
         axum::extract::Query(v2_query),
     )
     .await?;
@@ -375,9 +373,8 @@ async fn v2_delete_dir(
 }
 
 async fn v2_delete_file(
-    auth: crate::auth::middleware::AuthUser,
+    access: crate::auth::RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<axum::Json<serde_json::Value>, AppError> {
     let p = query
@@ -389,9 +386,8 @@ async fn v2_delete_file(
         reuse: None,
     };
     crate::fs::handler::file::delete_file(
-        auth,
+        access,
         axum::extract::State(state),
-        axum::extract::Path(repo_id),
         axum::extract::Query(v2_query),
     )
     .await?;

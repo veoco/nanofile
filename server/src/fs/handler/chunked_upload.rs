@@ -1,12 +1,12 @@
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Query, State},
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::middleware::AuthUser;
+use crate::auth::RepoPathWrite;
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -27,19 +27,17 @@ pub fn chunked_upload_routes() -> Router<Arc<AppState>> {
 }
 
 pub async fn upload_blks_link(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<BlksLinkQuery>,
 ) -> Result<Json<String>, AppError> {
     let parent_dir = query.p.as_deref().unwrap_or("/");
-
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let token = state.token_manager.generate(
-        &repo_id,
-        auth.user_id,
-        &auth.email,
+        repo_id,
+        access.user.user_id,
+        &access.user.email,
         "upload-blks",
         parent_dir,
     );
@@ -50,19 +48,17 @@ pub async fn upload_blks_link(
 }
 
 pub async fn update_blks_link(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<BlksLinkQuery>,
 ) -> Result<Json<String>, AppError> {
     let parent_dir = query.p.as_deref().unwrap_or("/");
-
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let token = state.token_manager.generate(
-        &repo_id,
-        auth.user_id,
-        &auth.email,
+        repo_id,
+        access.user.user_id,
+        &access.user.email,
         "update-blks",
         parent_dir,
     );

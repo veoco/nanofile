@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
+use crate::auth::{RepoPathRead, RepoPathWrite};
 use crate::error::AppError;
 use crate::fs::handler::exif::get_exif;
 use crate::fs::service::file::{self as file_svc, FileService};
@@ -50,13 +51,12 @@ pub fn file_routes() -> Router<Arc<AppState>> {
 }
 
 pub async fn download_file(
-    auth: AuthUser,
+    access: RepoPathRead,
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Path(repo_id): Path<String>,
     Query(query): Query<FileQuery>,
 ) -> Result<Response, AppError> {
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let path = safe_normalize_path(&query.p.unwrap_or_else(|| "/".to_string()))
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
@@ -73,7 +73,13 @@ pub async fn download_file(
 
     let host_header = headers.get("host").and_then(|v| v.to_str().ok());
     let (file_fs_id, url) = svc
-        .get_download_info(&repo_id, &path, auth.user_id, &auth.email, host_header)
+        .get_download_info(
+            repo_id,
+            &path,
+            access.user.user_id,
+            &access.user.email,
+            host_header,
+        )
         .await?;
 
     let mut resp_headers = HeaderMap::new();
@@ -88,13 +94,12 @@ pub async fn download_file(
 }
 
 pub async fn file_post_handler(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<FileQuery>,
     req: Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let (parts, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
@@ -129,11 +134,11 @@ pub async fn file_post_handler(
                 .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
             rename_file_entry(
                 state.db.as_ref(),
-                &repo_id,
+                repo_id,
                 &path,
                 &newname,
-                &auth.email,
-                auth.user_id,
+                &access.user.email,
+                access.user.user_id,
             )
             .await?;
             Ok(Json(serde_json::Value::String("success".to_string())))
@@ -191,7 +196,7 @@ pub async fn file_post_handler(
                 }
             }
 
-            svc.upload_file(&repo_id, upload, &auth.email, auth.user_id)
+            svc.upload_file(repo_id, upload, &access.user.email, access.user.user_id)
                 .await?;
             Ok(Json(serde_json::json!({"success": true})))
         }
@@ -206,8 +211,14 @@ pub async fn file_post_handler(
                 let newname = form
                     .get("newname")
                     .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
-                svc.rename_file(&repo_id, &path, newname, &auth.email, auth.user_id)
-                    .await?;
+                svc.rename_file(
+                    repo_id,
+                    &path,
+                    newname,
+                    &access.user.email,
+                    access.user.user_id,
+                )
+                .await?;
                 Ok(Json(serde_json::json!({"success": true})))
             }
             Some("move") => {
@@ -215,8 +226,14 @@ pub async fn file_post_handler(
                     .get("dst_repo")
                     .ok_or_else(|| AppError::BadRequest("dst_repo required".into()))?;
                 let dst_dir = form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/");
-                svc.move_file(&repo_id, &path, dst_dir, &auth.email, auth.user_id)
-                    .await?;
+                svc.move_file(
+                    repo_id,
+                    &path,
+                    dst_dir,
+                    &access.user.email,
+                    access.user.user_id,
+                )
+                .await?;
                 Ok(Json(serde_json::json!({"success": true})))
             }
             _ => Err(AppError::BadRequest("unknown operation".into())),
@@ -225,12 +242,11 @@ pub async fn file_post_handler(
 }
 
 pub async fn delete_file(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<FileQuery>,
 ) -> Result<(), AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let path = safe_normalize_path(
         &query
@@ -248,7 +264,7 @@ pub async fn delete_file(
         state.config.clone(),
         state.notification_manager.clone(),
     );
-    svc.delete_file(&repo_id, &path, &auth.email, auth.user_id)
+    svc.delete_file(repo_id, &path, &access.user.email, access.user.user_id)
         .await
 }
 
@@ -327,12 +343,11 @@ pub async fn rename_file(
 }
 
 pub async fn file_detail(
-    auth: AuthUser,
+    access: RepoPathRead,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<FileQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let path = safe_normalize_path(
         &query
@@ -350,7 +365,7 @@ pub async fn file_detail(
         state.config.clone(),
         state.notification_manager.clone(),
     );
-    let result = svc.file_detail(&repo_id, &path).await?;
+    let result = svc.file_detail(repo_id, &path).await?;
 
     Ok(Json(result))
 }
@@ -365,12 +380,11 @@ pub struct FileIndexTextQuery {
 /// Retrieve the stored full-text search index content for a file.
 /// Returns `{"content": "..."}` or `{"content": null}` if not indexed.
 pub async fn file_index_text(
-    auth: AuthUser,
+    access: RepoPathRead,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<FileIndexTextQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let path = safe_normalize_path(
         &query
@@ -384,7 +398,7 @@ pub async fn file_index_text(
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
 
-    let content = indexer.get_indexed_content(&repo_id, &path)?;
+    let content = indexer.get_indexed_content(repo_id, &path)?;
 
     Ok(Json(serde_json::json!({"content": content})))
 }
@@ -399,12 +413,11 @@ pub struct ReindexFileRequest {
 /// Re-index a single file's content from block storage.
 /// Body: `{"p": "/dir/file.txt"}`
 pub async fn reindex_file_handler(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Json(req): Json<ReindexFileRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let path = safe_normalize_path(
         &req.p
@@ -418,7 +431,7 @@ pub async fn reindex_file_handler(
         .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
 
     let indexed = indexer
-        .reindex_file(state.db.as_ref(), &repo_id, &path, &state.block_store)
+        .reindex_file(state.db.as_ref(), repo_id, &path, &state.block_store)
         .await?;
 
     Ok(Json(
@@ -427,12 +440,12 @@ pub async fn reindex_file_handler(
 }
 
 pub async fn lock_file_via_api_handler(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<FileQuery>,
     req: Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_id = &access.repo_id;
     let (_parts, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
         .await
@@ -448,10 +461,6 @@ pub async fn lock_file_via_api_handler(
     let path = safe_normalize_path(&query.p.unwrap_or_default())
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let db = state.db.as_ref();
-
-    crate::storage::check_repo_write_permission(db, &repo_id, auth.user_id).await?;
-
     let svc = FileService::new(
         state.repos.clone(),
         state.db.clone(),
@@ -461,8 +470,14 @@ pub async fn lock_file_via_api_handler(
         state.config.clone(),
         state.notification_manager.clone(),
     );
-    svc.lock_file(&repo_id, &path, operation, &auth.email, auth.user_id)
-        .await?;
+    svc.lock_file(
+        repo_id,
+        &path,
+        operation,
+        &access.user.email,
+        access.user.user_id,
+    )
+    .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -473,13 +488,12 @@ pub struct CreateFileRequest {
 }
 
 pub async fn create_file_v21(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
     req: Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    let repo_id = &access.repo_id;
 
     let (parts, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
@@ -513,11 +527,11 @@ pub async fn create_file_v21(
             .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
         self::rename_file_entry(
             state.db.as_ref(),
-            &repo_id,
+            repo_id,
             &path,
             &newname,
-            &auth.email,
-            auth.user_id,
+            &access.user.email,
+            access.user.user_id,
         )
         .await?;
         return Ok(Json(serde_json::json!({"success": true})));
@@ -532,7 +546,7 @@ pub async fn create_file_v21(
         state.config.clone(),
         state.notification_manager.clone(),
     );
-    svc.create_empty_file(&repo_id, &path, &auth.email, auth.user_id)
+    svc.create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
         .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
@@ -546,19 +560,17 @@ pub struct UploadedBytesQuery {
 }
 
 pub async fn file_uploaded_bytes(
-    auth: AuthUser,
+    access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<UploadedBytesQuery>,
 ) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
+    let repo_id = &access.repo_id;
     if query.file_name.as_deref().is_none_or(|s| s.is_empty()) {
         return Err(AppError::BadRequest("file_name invalid.".into()));
     }
     if query.parent_dir.as_deref().is_none_or(|s| s.is_empty()) {
         return Err(AppError::BadRequest("parent_dir invalid.".into()));
     }
-
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let svc = FileService::new(
         state.repos.clone(),
@@ -582,7 +594,7 @@ pub async fn file_uploaded_bytes(
         };
         if let Some(bytes) = state
             .temp_file_manager
-            .get_uploaded_bytes(&repo_id, &file_path)
+            .get_uploaded_bytes(repo_id, &file_path)
             .await
             && bytes > uploaded_bytes as u64
         {

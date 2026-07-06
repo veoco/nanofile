@@ -5,7 +5,10 @@ pub mod handler;
 pub mod middleware;
 pub mod password;
 pub mod password_reset;
+pub mod repo_extractor;
 pub mod s2fa;
 pub mod service;
 pub mod token;
 pub mod totp;
+
+pub use repo_extractor::{RepoPathRead, RepoPathWrite};
