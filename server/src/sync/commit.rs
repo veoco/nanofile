@@ -729,7 +729,8 @@ async fn full_check_blocks(
             *size_total += file_data.size;
 
             // Concurrent block existence check
-            let has_missing = check_blocks_concurrent(block_store.clone(), &file_data.block_ids).await;
+            let has_missing =
+                check_blocks_concurrent(block_store.clone(), &file_data.block_ids).await;
 
             if has_missing {
                 missing.push(path.clone());
