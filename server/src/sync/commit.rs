@@ -251,7 +251,7 @@ pub async fn update_branch(
 
     let check_result = check_commit_blocks(
         state.db.as_ref(),
-        state.block_store.as_ref(),
+        state.block_store.clone(),
         &repo_id,
         &new_commit.root_id,
         base_root_id.as_deref(),
@@ -508,7 +508,7 @@ struct DiffFrame {
 /// for files whose IDs differ.
 async fn check_commit_blocks(
     db: &sea_orm::DatabaseConnection,
-    block_store: &dyn crate::storage::BlockStorageBackend,
+    block_store: crate::storage::DynBlockStorage,
     repo_id: &str,
     new_root_id: &str,
     base_root_id: Option<&str>,
@@ -562,7 +562,7 @@ async fn check_commit_blocks(
                     } else {
                         size_delta += entry.size;
                         check_file_blocks(
-                            block_store,
+                            block_store.clone(),
                             db,
                             repo_id,
                             &entry.id,
@@ -630,7 +630,7 @@ async fn check_commit_blocks(
                         } else {
                             size_delta += new_entry.size;
                             check_file_blocks(
-                                block_store,
+                                block_store.clone(),
                                 db,
                                 repo_id,
                                 &new_entry.id,
@@ -657,7 +657,7 @@ async fn check_commit_blocks(
                             // File modified, or file↔dir type change.
                             size_delta += new_entry.size - base_entry.size;
                             check_file_blocks(
-                                block_store,
+                                block_store.clone(),
                                 db,
                                 repo_id,
                                 &new_entry.id,
@@ -679,7 +679,7 @@ async fn check_commit_blocks(
         // No base commit (first commit) — full traversal fallback.
         full_check_blocks(
             db,
-            block_store,
+            block_store.clone(),
             repo_id,
             new_root_id,
             &mut missing,
@@ -699,7 +699,7 @@ async fn check_commit_blocks(
 /// repos that haven't been sized yet.
 async fn full_check_blocks(
     db: &sea_orm::DatabaseConnection,
-    block_store: &dyn crate::storage::BlockStorageBackend,
+    block_store: crate::storage::DynBlockStorage,
     repo_id: &str,
     root_id: &str,
     missing: &mut Vec<String>,
@@ -727,11 +727,12 @@ async fn full_check_blocks(
             let file_data: FsFileData = serde_json::from_str(&obj.data)
                 .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
             *size_total += file_data.size;
-            for block_id in &file_data.block_ids {
-                if !block_store.has_block(block_id).await {
-                    missing.push(path.clone());
-                    break;
-                }
+
+            // Concurrent block existence check
+            let has_missing = check_blocks_concurrent(block_store.clone(), &file_data.block_ids).await;
+
+            if has_missing {
+                missing.push(path.clone());
             }
         } else if obj.obj_type == 3 {
             // Directory — push children.
@@ -754,7 +755,7 @@ async fn full_check_blocks(
 /// Check blocks for a single file identified by its fs_id.
 /// If any block is missing, the file's relative path is appended to `missing`.
 async fn check_file_blocks(
-    block_store: &dyn crate::storage::BlockStorageBackend,
+    block_store: crate::storage::DynBlockStorage,
     db: &sea_orm::DatabaseConnection,
     repo_id: &str,
     fs_id: &str,
@@ -778,12 +779,40 @@ async fn check_file_blocks(
     let file_data: FsFileData = serde_json::from_str(&obj.data)
         .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
 
-    for block_id in &file_data.block_ids {
-        if !block_store.has_block(block_id).await {
-            missing.push(path.to_string());
-            break;
-        }
+    // Concurrent block existence check, record if any missing
+    let block_ids = file_data.block_ids;
+    let has_missing = check_blocks_concurrent(block_store, &block_ids).await;
+
+    if has_missing {
+        missing.push(path.to_string());
     }
 
     Ok(())
+}
+
+/// Check block existence concurrently with bounded parallelism
+async fn check_blocks_concurrent(
+    block_store: crate::storage::DynBlockStorage,
+    block_ids: &[String],
+) -> bool {
+    // Process in batches of 8 to limit concurrent I/O
+    const BATCH_SIZE: usize = 8;
+
+    for chunk in block_ids.chunks(BATCH_SIZE) {
+        let futures: Vec<_> = chunk
+            .iter()
+            .map(|block_id| {
+                let store = block_store.clone();
+                let id = block_id.clone();
+                async move { !store.has_block(&id).await }
+            })
+            .collect();
+
+        let results = futures::future::join_all(futures).await;
+        if results.into_iter().any(|missing| missing) {
+            return true;
+        }
+    }
+
+    false
 }
