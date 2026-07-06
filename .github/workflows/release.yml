@@ -263,14 +263,45 @@ jobs:
           TAG_COUNT=$(git tag --list 'v*' --sort=-v:refname | wc -l)
           if [ "$TAG_COUNT" -gt 1 ]; then
             PREV_TAG=$(git tag --list 'v*' --sort=-v:refname | head -2 | tail -1)
-            CHANGELOG="$(git log --oneline --no-decorate "$PREV_TAG"..HEAD \
-              | sed 's/^/* /')"
+            LOG_RANGE="$PREV_TAG"..HEAD
             COMPARE_LINK="https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${RELEASE_TAG}"
           else
-            CHANGELOG="$(git log --oneline --no-decorate HEAD \
-              | sed 's/^/* /')"
+            LOG_RANGE=HEAD
             COMPARE_LINK="https://github.com/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}"
           fi
+
+          # ── Filter and categorize commits ───────────────────────────
+          ALL_COMMITS=$(git log --oneline --no-decorate "$LOG_RANGE" \
+            | grep -v -E "^[a-f0-9]+ (chore|style|test|ci):" || true)
+
+          # Extract function: get commits of specified type, remove hash, type and scope
+          extract_commits() {
+            local type="$1"
+            echo "$ALL_COMMITS" | grep -E "^[a-f0-9]+ ${type}(\([^)]+\))?:" \
+              | sed -E 's/^[a-f0-9]+ [a-z]+(\([^)]+\))?: /- /' || true
+          }
+
+          FEATS=$(extract_commits "feat")
+          FIXES=$(extract_commits "fix")
+          PERFS=$(extract_commits "perf")
+          SECURITY=$(extract_commits "security")
+          REFACTORS=$(extract_commits "refactor")
+          DOCS=$(extract_commits "docs")
+
+          # Unmatched commits go to Other
+          OTHER=$(echo "$ALL_COMMITS" \
+            | grep -v -E "^[a-f0-9]+ (feat|fix|perf|security|refactor|docs)(\([^)]+\))?:" \
+            | sed 's/^[a-f0-9]* /- /' || true)
+
+          # Build categorized changelog
+          CHANGELOG=""
+          [ -n "$FEATS" ] && CHANGELOG="${CHANGELOG}### New Features\n${FEATS}\n\n"
+          [ -n "$FIXES" ] && CHANGELOG="${CHANGELOG}### Bug Fixes\n${FIXES}\n\n"
+          [ -n "$PERFS" ] && CHANGELOG="${CHANGELOG}### Performance Improvements\n${PERFS}\n\n"
+          [ -n "$SECURITY" ] && CHANGELOG="${CHANGELOG}### Security Fixes\n${SECURITY}\n\n"
+          [ -n "$REFACTORS" ] && CHANGELOG="${CHANGELOG}### Refactoring\n${REFACTORS}\n\n"
+          [ -n "$DOCS" ] && CHANGELOG="${CHANGELOG}### Documentation\n${DOCS}\n\n"
+          [ -n "$OTHER" ] && CHANGELOG="${CHANGELOG}### Other Changes\n${OTHER}\n\n"
 
           # ── Write release notes ──────────────────────────────────────
           cat > release-notes.md <<-EOF
