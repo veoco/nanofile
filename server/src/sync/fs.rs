@@ -305,36 +305,43 @@ pub async fn recv_fs(
 
     let entries = pack_fs::decode_pack_fs_entries(&data).map_err(AppError::Internal)?;
 
-    for (fs_id, obj_data) in entries {
-        let existing = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(&repo_id))
-            .filter(fs_object::Column::FsId.eq(&fs_id))
-            .one(state.db.as_ref())
-            .await?;
-
-        if existing.is_none() {
+    // Process all entries and build ActiveModels
+    let models: Vec<fs_object::ActiveModel> = entries
+        .into_iter()
+        .filter_map(|(fs_id, obj_data)| {
             // Decompress incoming zlib and store as JSON text
-            let decompressed = pack_fs::decompress_fs_data(&obj_data)
-                .map_err(|e| AppError::Internal(e.to_string()))?;
-            let json_str =
-                String::from_utf8(decompressed).map_err(|e| AppError::Internal(e.to_string()))?;
+            let decompressed = pack_fs::decompress_fs_data(&obj_data).ok()?;
+            let json_str = String::from_utf8(decompressed).ok()?;
 
-            let json_val: serde_json::Value =
-                serde_json::from_str(&json_str).map_err(|e| AppError::Internal(e.to_string()))?;
+            let json_val: serde_json::Value = serde_json::from_str(&json_str).ok()?;
             let obj_type = json_val.get("type").and_then(|v| v.as_i64()).unwrap_or(1) as i8;
 
-            let fs_obj = fs_object::ActiveModel {
+            Some(fs_object::ActiveModel {
                 id: sea_orm::NotSet,
                 repo_id: sea_orm::Set(repo_id.clone()),
                 fs_id: sea_orm::Set(fs_id),
                 obj_type: sea_orm::Set(obj_type),
                 data: sea_orm::Set(json_str),
-            };
-            fs_object::Entity::insert(fs_obj)
-                .exec(state.db.as_ref())
-                .await?;
-        }
+            })
+        })
+        .collect();
+
+    if models.is_empty() {
+        return Ok(StatusCode::OK);
     }
+
+    // Batch insert with ON CONFLICT DO NOTHING
+    fs_object::Entity::insert_many(models)
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::columns([
+                fs_object::Column::RepoId,
+                fs_object::Column::FsId,
+            ])
+            .do_nothing()
+            .to_owned(),
+        )
+        .exec(state.db.as_ref())
+        .await?;
 
     Ok(StatusCode::OK)
 }
