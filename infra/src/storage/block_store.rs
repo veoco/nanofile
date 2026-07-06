@@ -47,7 +47,8 @@ impl BlockStorage {
 #[async_trait]
 impl BlockStorageBackend for BlockStorage {
     async fn has_block(&self, block_id: &str) -> bool {
-        self.block_path(block_id).exists()
+        let path = self.block_path(block_id);
+        tokio::fs::try_exists(&path).await.unwrap_or(false)
     }
 
     async fn read_block(&self, block_id: &str) -> Result<Vec<u8>, std::io::Error> {

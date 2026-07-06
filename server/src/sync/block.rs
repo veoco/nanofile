@@ -3,6 +3,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use futures::stream::{self, StreamExt};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
@@ -73,12 +74,21 @@ pub async fn check_blocks(
 
     let block_store = state.block_store.clone();
 
-    let mut missing = Vec::new();
-    for block_id in &block_ids {
-        if !block_store.has_block(block_id).await {
-            missing.push(block_id.clone());
-        }
-    }
+    let missing: Vec<String> = stream::iter(block_ids)
+        .map(move |block_id| {
+            let store = block_store.clone();
+            async move {
+                if !store.has_block(&block_id).await {
+                    Some(block_id)
+                } else {
+                    None
+                }
+            }
+        })
+        .buffered(8)
+        .filter_map(|x| async move { x })
+        .collect()
+        .await;
 
     Ok(Json(missing))
 }
@@ -152,24 +162,31 @@ pub async fn get_block_map(
 
     let block_store = state.block_store.clone();
 
-    let mut block_sizes = Vec::new();
-    for bid_val in block_ids {
-        if let Some(bid) = bid_val.as_str() {
-            let path = state
-                .block_dir
-                .as_path()
-                .join(&bid[..bid.len().min(2)])
-                .join(bid);
-            let size = if block_store.has_block(bid).await {
-                std::fs::metadata(&path)
-                    .map(|m| m.len() as i64)
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-            block_sizes.push(size);
-        }
-    }
+    // Extract block IDs as strings for concurrent processing
+    let block_id_strs: Vec<String> = block_ids
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+
+    let block_sizes: Vec<i64> = stream::iter(block_id_strs)
+        .map(move |bid| {
+            let store = block_store.clone();
+            let block_dir = state.block_dir.clone();
+            async move {
+                let path = block_dir.as_path().join(&bid[..bid.len().min(2)]).join(&bid);
+                if store.has_block(&bid).await {
+                    tokio::fs::metadata(&path)
+                        .await
+                        .map(|m| m.len() as i64)
+                        .unwrap_or(0)
+                } else {
+                    0
+                }
+            }
+        })
+        .buffered(8)
+        .collect()
+        .await;
 
     Ok(Json(block_sizes))
 }
