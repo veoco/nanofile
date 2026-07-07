@@ -12,6 +12,7 @@ pub trait SyncTokenRepository: Send + Sync {
         repo_id: &str,
         user_id: i32,
     ) -> Result<Option<sync_token::Model>, AppError>;
+    async fn find_by_token(&self, token: &str) -> Result<Option<sync_token::Model>, AppError>;
     async fn create(
         &self,
         repo_id: &str,
@@ -44,6 +45,13 @@ impl SyncTokenRepository for DbSyncTokenRepository {
         Ok(sync_token::Entity::find()
             .filter(sync_token::Column::RepoId.eq(repo_id))
             .filter(sync_token::Column::UserId.eq(user_id))
+            .one(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_token(&self, token: &str) -> Result<Option<sync_token::Model>, AppError> {
+        Ok(sync_token::Entity::find()
+            .filter(sync_token::Column::Token.eq(token))
             .one(self.db.as_ref())
             .await?)
     }

@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
 };
 use rand::RngExt;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use crate::AppState;
 use crate::activity_log;
 use crate::auth::middleware::SyncAuth;
 use crate::common::EMPTY_SHA1;
-use crate::entity::{commit, fs_object, repo, wiki};
+use crate::entity::{commit, fs_object, repo};
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData};
@@ -62,8 +62,10 @@ pub async fn get_head_commit(
     _auth: SyncAuth,
     Path(repo_id): Path<String>,
 ) -> Result<Json<HeadCommitResponse>, AppError> {
-    let repo_model = repo::Entity::find_by_id(&repo_id)
-        .one(state.db.as_ref())
+    let repo_model = state
+        .repos
+        .repo
+        .find_by_id(&repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
@@ -85,8 +87,10 @@ pub async fn get_commit(
     // Fetch repo metadata early — the seaf-daemon uses repo_name/repo_desc
     // from the commit JSON (via seaf_repo_from_commit) to populate the local
     // library name. Without these fields the library shows as "(unnamed)".
-    let repo_model = repo::Entity::find_by_id(&repo_id)
-        .one(state.db.as_ref())
+    let repo_model = state
+        .repos
+        .repo
+        .find_by_id(&repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
@@ -122,10 +126,10 @@ pub async fn get_commit(
         return Ok(json.into_bytes());
     }
 
-    let commit_model = commit::Entity::find()
-        .filter(commit::Column::RepoId.eq(&repo_id))
-        .filter(commit::Column::CommitId.eq(&commit_id))
-        .one(state.db.as_ref())
+    let commit_model = state
+        .repos
+        .commit
+        .find_by_repo_and_commit_id(&repo_id, &commit_id)
         .await?
         .ok_or_else(|| AppError::NotFound("commit not found".into()))?;
 
@@ -175,10 +179,10 @@ pub async fn put_commit(
         return Err(AppError::BadRequest("repo_id mismatch".into()));
     }
 
-    let existing = commit::Entity::find()
-        .filter(commit::Column::RepoId.eq(&repo_id))
-        .filter(commit::Column::CommitId.eq(&commit_id))
-        .one(state.db.as_ref())
+    let existing = state
+        .repos
+        .commit
+        .find_by_repo_and_commit_id(&repo_id, &commit_id)
         .await?;
 
     if existing.is_none() {
@@ -194,9 +198,7 @@ pub async fn put_commit(
             ctime: sea_orm::Set(commit_data.ctime),
             version: sea_orm::Set(commit_data.version as i8),
         };
-        commit::Entity::insert(commit_model)
-            .exec(state.db.as_ref())
-            .await?;
+        state.repos.commit.insert(commit_model).await?;
     }
 
     Ok(StatusCode::OK)
@@ -225,10 +227,10 @@ pub async fn update_branch(
     crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, _auth.user_id).await?;
 
     // Read the new commit (checks existence + gets parent_id for conflict detection).
-    let new_commit = commit::Entity::find()
-        .filter(commit::Column::RepoId.eq(&repo_id))
-        .filter(commit::Column::CommitId.eq(new_head))
-        .one(state.db.as_ref())
+    let new_commit = state
+        .repos
+        .commit
+        .find_by_repo_and_commit_id(&repo_id, new_head)
         .await?
         .ok_or_else(|| AppError::Internal("commit not found".into()))?;
 
@@ -239,10 +241,10 @@ pub async fn update_branch(
     let base_root_id: Option<String> = if let Some(ref parent_id) = new_commit.parent_id
         && parent_id != "0000000000000000000000000000000000000000"
     {
-        commit::Entity::find()
-            .filter(commit::Column::RepoId.eq(&repo_id))
-            .filter(commit::Column::CommitId.eq(parent_id))
-            .one(state.db.as_ref())
+        state
+            .repos
+            .commit
+            .find_by_repo_and_commit_id(&repo_id, parent_id)
             .await?
             .map(|c| c.root_id)
     } else {
@@ -276,10 +278,10 @@ pub async fn update_branch(
     if let Some(ref parent_id) = new_commit.parent_id
         && parent_id != "0000000000000000000000000000000000000000"
     {
-        let parent_exists = commit::Entity::find()
-            .filter(commit::Column::RepoId.eq(&repo_id))
-            .filter(commit::Column::CommitId.eq(parent_id))
-            .one(state.db.as_ref())
+        let parent_exists = state
+            .repos
+            .commit
+            .find_by_repo_and_commit_id(&repo_id, parent_id)
             .await?
             .is_some();
         if !parent_exists {
@@ -296,8 +298,10 @@ pub async fn update_branch(
     loop {
         attempt += 1;
 
-        let current_head = repo::Entity::find_by_id(&repo_id)
-            .one(state.db.as_ref())
+        let current_head = state
+            .repos
+            .repo
+            .find_by_id(&repo_id)
             .await?
             .ok_or_else(|| AppError::Internal("repo not found".into()))?
             .head_commit_id;
@@ -334,8 +338,10 @@ pub async fn update_branch(
             ));
         }
 
-        let mut repo_active: repo::ActiveModel = repo::Entity::find_by_id(&repo_id)
-            .one(state.db.as_ref())
+        let mut repo_active: repo::ActiveModel = state
+            .repos
+            .repo
+            .find_by_id(&repo_id)
             .await?
             .ok_or_else(|| AppError::Internal("repo not found".into()))?
             .into();
@@ -353,22 +359,17 @@ pub async fn update_branch(
         // matching the original seafevents commit-diff behaviour so that
         // sync-protocol file operations show up in the activity history.
         // Skip for wiki repos (seafevents excludes them entirely).
-        let is_wiki = wiki::Entity::find()
-            .filter(wiki::Column::RepoId.eq(&repo_id))
-            .count(state.db.as_ref())
-            .await
-            .unwrap_or(0)
-            > 0;
+        let is_wiki = state.repos.wiki.find_by_repo_id(&repo_id).await?.is_some();
 
         // Compute tree diff between old and new commits.
         // Always computed (even for wiki repos) — needed for indexing.
         let old_root = if let Some(ref parent_id) = new_commit.parent_id
             && parent_id != "0000000000000000000000000000000000000000"
         {
-            commit::Entity::find()
-                .filter(commit::Column::RepoId.eq(&repo_id))
-                .filter(commit::Column::CommitId.eq(parent_id))
-                .one(state.db.as_ref())
+            state
+                .repos
+                .commit
+                .find_by_repo_and_commit_id(&repo_id, parent_id)
                 .await?
                 .map(|c| c.root_id)
         } else {

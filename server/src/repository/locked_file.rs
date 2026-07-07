@@ -12,6 +12,7 @@ pub trait LockedFileRepository: Send + Sync {
         repo_id: &str,
         path: &str,
     ) -> Result<Option<locked_file::Model>, AppError>;
+    async fn find_by_repo(&self, repo_id: &str) -> Result<Vec<locked_file::Model>, AppError>;
     async fn create(
         &self,
         repo_id: &str,
@@ -44,6 +45,13 @@ impl LockedFileRepository for DbLockedFileRepository {
             .filter(locked_file::Column::RepoId.eq(repo_id))
             .filter(locked_file::Column::Path.eq(path))
             .one(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_repo(&self, repo_id: &str) -> Result<Vec<locked_file::Model>, AppError> {
+        Ok(locked_file::Entity::find()
+            .filter(locked_file::Column::RepoId.eq(repo_id))
+            .all(self.db.as_ref())
             .await?)
     }
 

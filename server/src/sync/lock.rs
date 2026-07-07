@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::entity::{file_lock_timestamp, locked_file, sync_token, user};
+use crate::entity::{file_lock_timestamp, locked_file};
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -38,10 +38,10 @@ pub async fn lock_file(
         .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     let now = chrono::Utc::now().timestamp();
 
-    let existing = locked_file::Entity::find()
-        .filter(locked_file::Column::RepoId.eq(&repo_id))
-        .filter(locked_file::Column::Path.eq(path))
-        .one(state.db.as_ref())
+    let existing = state
+        .repos
+        .locked_file
+        .find_by_repo_and_path(&repo_id, path)
         .await?;
 
     match existing {
@@ -52,16 +52,11 @@ pub async fn lock_file(
             active.update(state.db.as_ref()).await?;
         }
         None => {
-            locked_file::Entity::insert(locked_file::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: Set(repo_id.clone()),
-                path: Set(path.to_string()),
-                user_id: Set(_auth.user_id),
-                locked_at: Set(now),
-                lock_owner_name: Set(String::new()),
-            })
-            .exec(state.db.as_ref())
-            .await?;
+            state
+                .repos
+                .locked_file
+                .create(&repo_id, path, _auth.user_id, now, "")
+                .await?;
         }
     }
 
@@ -70,8 +65,10 @@ pub async fn lock_file(
 
     // Send file-lock-changed WebSocket notification to all subscribers.
     if let Some(mgr) = &state.notification_manager {
-        let email = user::Entity::find_by_id(_auth.user_id)
-            .one(state.db.as_ref())
+        let email = state
+            .repos
+            .user
+            .find_by_id(_auth.user_id)
             .await?
             .map(|u| u.email)
             .unwrap_or_default();
@@ -102,10 +99,10 @@ pub async fn unlock_file(
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("path required".into()))?;
 
-    locked_file::Entity::delete_many()
-        .filter(locked_file::Column::RepoId.eq(&repo_id))
-        .filter(locked_file::Column::Path.eq(path))
-        .exec(state.db.as_ref())
+    state
+        .repos
+        .locked_file
+        .delete_by_repo_and_path(&repo_id, path)
         .await?;
 
     // Update the lock timestamp for client cache invalidation.
@@ -113,8 +110,10 @@ pub async fn unlock_file(
 
     // Send file-lock-changed WebSocket notification to all subscribers.
     if let Some(mgr) = &state.notification_manager {
-        let email = user::Entity::find_by_id(_auth.user_id)
-            .one(state.db.as_ref())
+        let email = state
+            .repos
+            .user
+            .find_by_id(_auth.user_id)
             .await?
             .map(|u| u.email)
             .unwrap_or_default();
@@ -168,13 +167,12 @@ pub async fn list_locked_files_post(
     let mut results = Vec::new();
     for req in &requests {
         // Look up the sync token to get the token user_id for `by_me` computation.
-        let token_record = sync_token::Entity::find()
-            .filter(sync_token::Column::Token.eq(&req.token))
-            .filter(sync_token::Column::RepoId.eq(&req.repo_id))
-            .one(state.db.as_ref())
-            .await?;
+        let token_record = state.repos.sync_token.find_by_token(&req.token).await?;
 
-        let token_valid = token_record.is_some();
+        let token_valid = token_record
+            .as_ref()
+            .map(|t| t.repo_id == req.repo_id)
+            .unwrap_or(false);
         let token_user_id = token_record.as_ref().map(|t| t.user_id);
 
         // Get the actual lock timestamp for this repo (used for client cache invalidation).
@@ -190,10 +188,7 @@ pub async fn list_locked_files_post(
         };
 
         let files = if token_valid {
-            let locked = locked_file::Entity::find()
-                .filter(locked_file::Column::RepoId.eq(&req.repo_id))
-                .all(state.db.as_ref())
-                .await?;
+            let locked = state.repos.locked_file.find_by_repo(&req.repo_id).await?;
 
             locked
                 .into_iter()

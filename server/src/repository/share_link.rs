@@ -17,6 +17,7 @@ pub trait ShareLinkRepository: Send + Sync {
     async fn find_by_creator_id(&self, creator_id: i32)
     -> Result<Vec<share_link::Model>, AppError>;
     async fn find_by_token(&self, token: &str) -> Result<Option<share_link::Model>, AppError>;
+    async fn insert(&self, model: share_link::ActiveModel) -> Result<share_link::Model, AppError>;
     async fn delete_by_token_and_user(
         &self,
         token: &str,
@@ -70,6 +71,10 @@ impl ShareLinkRepository for DbShareLinkRepository {
             .filter(share_link::Column::Token.eq(token))
             .one(self.db.as_ref())
             .await?)
+    }
+
+    async fn insert(&self, model: share_link::ActiveModel) -> Result<share_link::Model, AppError> {
+        Ok(model.insert(self.db.as_ref()).await?)
     }
 
     async fn delete_by_token_and_user(

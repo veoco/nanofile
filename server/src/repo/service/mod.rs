@@ -1,3 +1,10 @@
+pub mod download;
+pub mod file_ops;
+pub mod gc;
 pub mod history;
 pub mod password;
 pub mod repo;
+pub mod size;
+pub mod trash;
+pub mod tree_diff;
+pub mod versioning;

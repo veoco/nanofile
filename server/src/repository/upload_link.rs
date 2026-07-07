@@ -21,6 +21,8 @@ pub trait UploadLinkRepository: Send + Sync {
     async fn find_by_token(&self, token: &str) -> Result<Option<upload_link::Model>, AppError>;
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<upload_link::Model>, AppError>;
     async fn find_expired(&self) -> Result<Vec<upload_link::Model>, AppError>;
+    async fn insert(&self, model: upload_link::ActiveModel)
+    -> Result<upload_link::Model, AppError>;
     async fn delete_by_token_and_user(
         &self,
         token: &str,
@@ -92,6 +94,13 @@ impl UploadLinkRepository for DbUploadLinkRepository {
             .filter(upload_link::Column::ExpiresAt.lte(now))
             .all(self.db.as_ref())
             .await?)
+    }
+
+    async fn insert(
+        &self,
+        model: upload_link::ActiveModel,
+    ) -> Result<upload_link::Model, AppError> {
+        Ok(model.insert(self.db.as_ref()).await?)
     }
 
     async fn delete_by_token_and_user(
