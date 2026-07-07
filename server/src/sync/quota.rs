@@ -3,13 +3,11 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use sea_orm::EntityTrait;
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::entity::repo;
 use crate::error::AppError;
 
 /// GET /seafhttp/repo/{repo_id}/quota-check/?delta={delta}
@@ -46,8 +44,10 @@ async fn check_quota(
     }
 
     // Look up the repo owner to check their quota.
-    let repo_record = repo::Entity::find_by_id(&repo_id)
-        .one(state.db.as_ref())
+    let repo_record = state
+        .repos
+        .repo
+        .find_by_id(&repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 

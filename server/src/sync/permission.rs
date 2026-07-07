@@ -3,13 +3,11 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use sea_orm::EntityTrait;
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::entity::repo;
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -37,8 +35,10 @@ pub async fn permission_check(
     Query(query): Query<PermissionQuery>,
 ) -> Result<StatusCode, AppError> {
     // Verify repo exists — if not, return 444 (repo deleted) as seaf-daemon expects
-    repo::Entity::find_by_id(&repo_id)
-        .one(state.db.as_ref())
+    state
+        .repos
+        .repo
+        .find_by_id(&repo_id)
         .await?
         .ok_or(AppError::RepoDeleted)?;
 

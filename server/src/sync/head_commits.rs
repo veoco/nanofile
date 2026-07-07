@@ -1,10 +1,8 @@
 use axum::{Json, extract::State};
-use sea_orm::EntityTrait;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::repo;
 use crate::error::AppError;
 
 /// POST `/seafhttp/repo/head-commits-multi/`
@@ -28,9 +26,7 @@ pub async fn head_commits_multi(
     let mut commits = HashMap::new();
 
     for repo_id in &repo_id_list {
-        let repo_model = repo::Entity::find_by_id(repo_id)
-            .one(state.db.as_ref())
-            .await?;
+        let repo_model = state.repos.repo.find_by_id(repo_id).await?;
 
         if let Some(r) = repo_model
             && let Some(head_id) = &r.head_commit_id

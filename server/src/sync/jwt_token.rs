@@ -2,7 +2,6 @@ use axum::{
     Json, Router,
     extract::{Path, State},
 };
-use sea_orm::EntityTrait;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -43,10 +42,11 @@ pub async fn get_jwt_token(
     }
 
     // Get the user's email from the database.
-    let user = crate::entity::user::Entity::find_by_id(auth.user_id)
-        .one(state.db.as_ref())
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?
+    let user = state
+        .repos
+        .user
+        .find_by_id(auth.user_id)
+        .await?
         .ok_or_else(|| AppError::NotFound("user not found".into()))?;
 
     let now = chrono::Utc::now().timestamp();

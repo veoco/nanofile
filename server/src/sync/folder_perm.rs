@@ -1,10 +1,8 @@
 use axum::{Json, Router, extract::State, http::StatusCode};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::{repo_member, sync_token};
 use crate::error::AppError;
 
 /// Individual permission entry (path + permission level).
@@ -48,18 +46,15 @@ pub async fn folder_perm_post(
 
     let mut results = Vec::new();
     for req in &requests {
-        let token_valid = sync_token::Entity::find()
-            .filter(sync_token::Column::Token.eq(&req.token))
-            .filter(sync_token::Column::RepoId.eq(&req.repo_id))
-            .one(state.db.as_ref())
+        let token_valid = state
+            .repos
+            .sync_token
+            .find_by_token_and_repo(&req.token, &req.repo_id)
             .await?
             .is_some();
 
         let user_perms = if token_valid {
-            let memberships = repo_member::Entity::find()
-                .filter(repo_member::Column::RepoId.eq(&req.repo_id))
-                .all(state.db.as_ref())
-                .await?;
+            let memberships = state.repos.member.find_by_repo_id(&req.repo_id).await?;
 
             let permission = memberships
                 .first()

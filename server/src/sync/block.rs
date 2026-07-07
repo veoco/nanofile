@@ -4,13 +4,11 @@ use axum::{
     http::StatusCode,
 };
 use futures::stream::{self, StreamExt};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
 use crate::crypto::fs_id::sha1_hex;
-use crate::entity::fs_object;
 use crate::error::AppError;
 
 pub fn block_routes() -> Router<Arc<AppState>> {
@@ -145,10 +143,10 @@ pub async fn get_block_map(
     _auth: SyncAuth,
     Path((repo_id, file_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<i64>>, AppError> {
-    let fs_obj = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(&repo_id))
-        .filter(fs_object::Column::FsId.eq(&file_id))
-        .one(state.db.as_ref())
+    let fs_obj = state
+        .repos
+        .fs_object
+        .find_by_repo_and_fs_id(&repo_id, &file_id)
         .await?
         .ok_or_else(|| AppError::NotFound("file not found".into()))?;
 

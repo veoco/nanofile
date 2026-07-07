@@ -4,16 +4,18 @@ use axum::{
     http::StatusCode,
 };
 use rand::RngExt;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::ActiveModelTrait;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use crate::repository::FsObjectRepository;
 
 use crate::AppState;
 use crate::activity_log;
 use crate::auth::middleware::SyncAuth;
 use crate::common::EMPTY_SHA1;
-use crate::entity::{commit, fs_object, repo};
+use crate::entity::{commit, repo};
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData};
@@ -252,6 +254,7 @@ pub async fn update_branch(
     };
 
     let check_result = check_commit_blocks(
+        state.repos.fs_object.clone(),
         state.db.as_ref(),
         state.block_store.clone(),
         &repo_id,
@@ -508,6 +511,7 @@ struct DiffFrame {
 /// `diff_trees(base_root, remote_root)` and only invokes `check_file_blocks`
 /// for files whose IDs differ.
 async fn check_commit_blocks(
+    fs_object_repo: Arc<dyn FsObjectRepository>,
     db: &sea_orm::DatabaseConnection,
     block_store: crate::storage::DynBlockStorage,
     repo_id: &str,
@@ -563,8 +567,8 @@ async fn check_commit_blocks(
                     } else {
                         size_delta += entry.size;
                         check_file_blocks(
+                            fs_object_repo.clone(),
                             block_store.clone(),
-                            db,
                             repo_id,
                             &entry.id,
                             &child,
@@ -631,8 +635,8 @@ async fn check_commit_blocks(
                         } else {
                             size_delta += new_entry.size;
                             check_file_blocks(
+                                fs_object_repo.clone(),
                                 block_store.clone(),
-                                db,
                                 repo_id,
                                 &new_entry.id,
                                 &child,
@@ -658,8 +662,8 @@ async fn check_commit_blocks(
                             // File modified, or file↔dir type change.
                             size_delta += new_entry.size - base_entry.size;
                             check_file_blocks(
+                                fs_object_repo.clone(),
                                 block_store.clone(),
-                                db,
                                 repo_id,
                                 &new_entry.id,
                                 &child,
@@ -679,7 +683,7 @@ async fn check_commit_blocks(
     } else {
         // No base commit (first commit) — full traversal fallback.
         full_check_blocks(
-            db,
+            fs_object_repo.clone(),
             block_store.clone(),
             repo_id,
             new_root_id,
@@ -699,7 +703,7 @@ async fn check_commit_blocks(
 /// to diff against (first commit). Also accumulates the total size for
 /// repos that haven't been sized yet.
 async fn full_check_blocks(
-    db: &sea_orm::DatabaseConnection,
+    fs_object_repo: Arc<dyn FsObjectRepository>,
     block_store: crate::storage::DynBlockStorage,
     repo_id: &str,
     root_id: &str,
@@ -713,10 +717,8 @@ async fn full_check_blocks(
             continue;
         }
 
-        let obj = match fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.eq(&fs_id))
-            .one(db)
+        let obj = match fs_object_repo
+            .find_by_repo_and_fs_id(repo_id, &fs_id)
             .await?
         {
             Some(o) => o,
@@ -757,17 +759,15 @@ async fn full_check_blocks(
 /// Check blocks for a single file identified by its fs_id.
 /// If any block is missing, the file's relative path is appended to `missing`.
 async fn check_file_blocks(
+    fs_object_repo: Arc<dyn FsObjectRepository>,
     block_store: crate::storage::DynBlockStorage,
-    db: &sea_orm::DatabaseConnection,
     repo_id: &str,
     fs_id: &str,
     path: &str,
     missing: &mut Vec<String>,
 ) -> Result<(), AppError> {
-    let obj = match fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(repo_id))
-        .filter(fs_object::Column::FsId.eq(fs_id))
-        .one(db)
+    let obj = match fs_object_repo
+        .find_by_repo_and_fs_id(repo_id, fs_id)
         .await?
     {
         Some(o) => o,

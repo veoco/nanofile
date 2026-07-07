@@ -4,15 +4,15 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::entity::{commit, fs_object};
 use crate::error::AppError;
+use crate::repository::FsObjectRepository;
 use crate::serialization::fs_json::SEAF_METADATA_TYPE_DIR;
 use crate::serialization::pack_fs;
 
@@ -101,10 +101,10 @@ pub async fn fs_id_list(
         return Ok(Json(vec![]));
     }
 
-    let server_commit = commit::Entity::find()
-        .filter(commit::Column::RepoId.eq(&repo_id))
-        .filter(commit::Column::CommitId.eq(&server_head))
-        .one(state.db.as_ref())
+    let server_commit = state
+        .repos
+        .commit
+        .find_by_repo_and_commit_id(&repo_id, &server_head)
         .await?
         .ok_or_else(|| AppError::NotFound("server commit not found".into()))?;
 
@@ -113,16 +113,24 @@ pub async fn fs_id_list(
     if let Some(ref client_head) = query.client_head {
         if client_head == "0000000000000000000000000000000000000000" {
             let mut collected = HashSet::new();
-            collect_fs_ids_recursive(state.db.as_ref(), &repo_id, &server_root, &mut collected)
-                .await?;
-            let result = filter_collected(collected, dir_only, state.db.as_ref(), &repo_id).await?;
+            collect_fs_ids_recursive(
+                state.repos.fs_object.clone(),
+                state.db.as_ref(),
+                &repo_id,
+                &server_root,
+                &mut collected,
+            )
+            .await?;
+            let result =
+                filter_collected(state.repos.fs_object.clone(), &repo_id, collected, dir_only)
+                    .await?;
             return Ok(Json(result));
         }
 
-        let client_commit = commit::Entity::find()
-            .filter(commit::Column::RepoId.eq(&repo_id))
-            .filter(commit::Column::CommitId.eq(client_head.as_str()))
-            .one(state.db.as_ref())
+        let client_commit = state
+            .repos
+            .commit
+            .find_by_repo_and_commit_id(&repo_id, client_head)
             .await?;
 
         if let Some(client_commit) = client_commit
@@ -132,13 +140,29 @@ pub async fn fs_id_list(
         }
 
         let mut collected = HashSet::new();
-        collect_fs_ids_recursive(state.db.as_ref(), &repo_id, &server_root, &mut collected).await?;
-        let result = filter_collected(collected, dir_only, state.db.as_ref(), &repo_id).await?;
+        collect_fs_ids_recursive(
+            state.repos.fs_object.clone(),
+            state.db.as_ref(),
+            &repo_id,
+            &server_root,
+            &mut collected,
+        )
+        .await?;
+        let result =
+            filter_collected(state.repos.fs_object.clone(), &repo_id, collected, dir_only).await?;
         Ok(Json(result))
     } else {
         let mut collected = HashSet::new();
-        collect_fs_ids_recursive(state.db.as_ref(), &repo_id, &server_root, &mut collected).await?;
-        let result = filter_collected(collected, dir_only, state.db.as_ref(), &repo_id).await?;
+        collect_fs_ids_recursive(
+            state.repos.fs_object.clone(),
+            state.db.as_ref(),
+            &repo_id,
+            &server_root,
+            &mut collected,
+        )
+        .await?;
+        let result =
+            filter_collected(state.repos.fs_object.clone(), &repo_id, collected, dir_only).await?;
         Ok(Json(result))
     }
 }
@@ -146,10 +170,10 @@ pub async fn fs_id_list(
 /// When dir_only is true, filter to only include directory object IDs
 /// (obj_type == SEAF_METADATA_TYPE_DIR). When false, return all IDs as-is.
 async fn filter_collected(
+    fs_object_repo: Arc<dyn FsObjectRepository>,
+    repo_id: &str,
     collected: HashSet<String>,
     dir_only: bool,
-    db: &DatabaseConnection,
-    repo_id: &str,
 ) -> Result<Vec<String>, AppError> {
     if !dir_only {
         let result: Vec<String> = collected.into_iter().collect();
@@ -158,10 +182,8 @@ async fn filter_collected(
 
     // Batch query all fs_objects to check their types
     let ids: Vec<String> = collected.iter().cloned().collect();
-    let objects = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(repo_id))
-        .filter(fs_object::Column::FsId.is_in(ids))
-        .all(db)
+    let objects = fs_object_repo
+        .find_by_repo_and_fs_ids(repo_id, &ids)
         .await?;
 
     // Build a set of directory fs_ids
@@ -181,6 +203,7 @@ async fn filter_collected(
 }
 
 async fn collect_fs_ids_recursive(
+    fs_object_repo: Arc<dyn FsObjectRepository>,
     db: &DatabaseConnection,
     repo_id: &str,
     fs_id: &str,
@@ -190,10 +213,8 @@ async fn collect_fs_ids_recursive(
         return Ok(());
     }
 
-    let fs_obj = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(repo_id))
-        .filter(fs_object::Column::FsId.eq(fs_id))
-        .one(db)
+    let fs_obj = fs_object_repo
+        .find_by_repo_and_fs_id(repo_id, fs_id)
         .await?;
 
     if let Some(fs_obj) = fs_obj {
@@ -205,7 +226,14 @@ async fn collect_fs_ids_recursive(
                     .map_err(|e| AppError::Internal(format!("invalid dir data: {}", e)))?;
 
             for entry in &dir_data.dirents {
-                Box::pin(collect_fs_ids_recursive(db, repo_id, &entry.id, collected)).await?;
+                Box::pin(collect_fs_ids_recursive(
+                    fs_object_repo.clone(),
+                    db,
+                    repo_id,
+                    &entry.id,
+                    collected,
+                ))
+                .await?;
             }
         }
     }
@@ -226,14 +254,14 @@ pub async fn pack_fs_handler(
     let fs_ids = parse_fs_ids_from_bytes(&body_data);
 
     // Batch query all fs_objects at once
-    let objects = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(&repo_id))
-        .filter(fs_object::Column::FsId.is_in(fs_ids.clone()))
-        .all(state.db.as_ref())
+    let objects = state
+        .repos
+        .fs_object
+        .find_by_repo_and_fs_ids(&repo_id, &fs_ids)
         .await?;
 
     // Build a map for O(1) lookup while preserving request order
-    let obj_map: std::collections::HashMap<&str, &fs_object::Model> = objects
+    let obj_map: std::collections::HashMap<&str, &crate::entity::fs_object::Model> = objects
         .iter()
         .map(|obj| (obj.fs_id.as_str(), obj))
         .collect();
@@ -273,10 +301,10 @@ pub async fn check_fs(
     let fs_ids = parse_fs_ids_from_bytes(&body_data);
 
     // Batch query all existing fs_ids
-    let existing = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(&repo_id))
-        .filter(fs_object::Column::FsId.is_in(fs_ids.clone()))
-        .all(state.db.as_ref())
+    let existing = state
+        .repos
+        .fs_object
+        .find_by_repo_and_fs_ids(&repo_id, &fs_ids)
         .await?;
 
     // Build a set of existing fs_ids for O(1) lookup
@@ -306,7 +334,7 @@ pub async fn recv_fs(
     let entries = pack_fs::decode_pack_fs_entries(&data).map_err(AppError::Internal)?;
 
     // Process all entries and build ActiveModels
-    let models: Vec<fs_object::ActiveModel> = entries
+    let models: Vec<crate::entity::fs_object::ActiveModel> = entries
         .into_iter()
         .filter_map(|(fs_id, obj_data)| {
             // Decompress incoming zlib and store as JSON text
@@ -316,7 +344,7 @@ pub async fn recv_fs(
             let json_val: serde_json::Value = serde_json::from_str(&json_str).ok()?;
             let obj_type = json_val.get("type").and_then(|v| v.as_i64()).unwrap_or(1) as i8;
 
-            Some(fs_object::ActiveModel {
+            Some(crate::entity::fs_object::ActiveModel {
                 id: sea_orm::NotSet,
                 repo_id: sea_orm::Set(repo_id.clone()),
                 fs_id: sea_orm::Set(fs_id),
@@ -331,17 +359,7 @@ pub async fn recv_fs(
     }
 
     // Batch insert with ON CONFLICT DO NOTHING
-    fs_object::Entity::insert_many(models)
-        .on_conflict(
-            sea_orm::sea_query::OnConflict::columns([
-                fs_object::Column::RepoId,
-                fs_object::Column::FsId,
-            ])
-            .do_nothing()
-            .to_owned(),
-        )
-        .exec(state.db.as_ref())
-        .await?;
+    state.repos.fs_object.insert_many(models).await?;
 
     Ok(StatusCode::OK)
 }
