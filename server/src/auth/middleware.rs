@@ -2,10 +2,9 @@ use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::AppState;
-use crate::entity::{api_token, sync_token, user};
+use crate::repository::Repositories;
 
 #[derive(Debug, Clone)]
 pub struct AuthUser {
@@ -27,16 +26,12 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         state: &std::sync::Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
         let token = extract_sync_token(&parts.headers)?;
-        let db = state.db.as_ref();
+        let repos = &state.repos;
 
         // First try to authenticate via sync token (primary sync protocol path).
         // We look up sync_tokens directly here (rather than delegating to from_token)
         // so we can capture client_id from the request URI and store peer info.
-        let sync_record = sync_token::Entity::find()
-            .filter(sync_token::Column::Token.eq(&token))
-            .one(db)
-            .await
-            .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
+        let sync_record = repos.sync_token.find_by_token(&token).await?;
 
         if let Some(record) = sync_record {
             // Check token expiry.
@@ -59,28 +54,30 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
                 && let Some(client_id) = params.get("client_id")
             {
                 let now = chrono::Utc::now().timestamp();
-                let mut active: sync_token::ActiveModel = record.into();
-                active.peer_id = sea_orm::Set(Some(client_id.clone()));
-                active.peer_name = sea_orm::Set(params.get("client_name").cloned());
-                active.client_version = sea_orm::Set(params.get("client_ver").cloned());
-                // Try to capture client IP from common proxy headers.
-                active.peer_ip = sea_orm::Set(
-                    parts
-                        .headers
-                        .get("x-forwarded-for")
-                        .and_then(|v| v.to_str().ok())
-                        .or_else(|| parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok()))
-                        .map(|s| s.to_string()),
-                );
-                active.last_sync_time = sea_orm::Set(Some(now));
-                let _ = active.update(db).await;
+                let peer_ip = parts
+                    .headers
+                    .get("x-forwarded-for")
+                    .and_then(|v| v.to_str().ok())
+                    .or_else(|| parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok()))
+                    .map(|s| s.to_string());
+                let _ = repos
+                    .sync_token
+                    .update_peer_info(
+                        record,
+                        Some(client_id.clone()),
+                        params.get("client_name").cloned(),
+                        peer_ip,
+                        params.get("client_ver").cloned(),
+                        Some(now),
+                    )
+                    .await;
             }
 
             return Ok(SyncAuth { user_id, repo_id });
         }
 
         // Fall back to API token (for requests using Bearer/Token auth).
-        SyncAuth::from_token(db, &token)
+        SyncAuth::from_token(repos, &token)
             .await
             .map_err(|_| crate::error::AppError::Unauthorized)
     }
@@ -93,7 +90,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         parts: &mut Parts,
         state: &std::sync::Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let db = state.db.as_ref();
+        let repos = &state.repos;
 
         // ── Path 1: Authorization header (external API clients) ──────────────
         let token_str = extract_auth_header_token(&parts.headers);
@@ -110,12 +107,8 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         };
 
         // Query both token tables concurrently.
-        let api_fut = api_token::Entity::find()
-            .filter(api_token::Column::Token.eq(&token_str))
-            .one(db);
-        let sync_fut = sync_token::Entity::find()
-            .filter(sync_token::Column::Token.eq(&token_str))
-            .one(db);
+        let api_fut = repos.api_token.find_by_token(&token_str);
+        let sync_fut = repos.sync_token.find_by_token(&token_str);
 
         let (api_result, sync_result) = tokio::join!(api_fut, sync_fut);
 
@@ -143,8 +136,9 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             return Err(StatusCode::UNAUTHORIZED);
         };
 
-        let user_record = user::Entity::find_by_id(user_id)
-            .one(db)
+        let user_record = repos
+            .user
+            .find_by_id(user_id)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::UNAUTHORIZED)?;
@@ -210,14 +204,10 @@ fn try_extract_cookie_session(
 
 impl SyncAuth {
     /// Authenticate via sync token or API token.
-    pub async fn from_token(db: &DatabaseConnection, token_str: &str) -> Result<Self, StatusCode> {
+    pub async fn from_token(repos: &Repositories, token_str: &str) -> Result<Self, StatusCode> {
         // Query both token tables concurrently.
-        let sync_fut = sync_token::Entity::find()
-            .filter(sync_token::Column::Token.eq(token_str))
-            .one(db);
-        let api_fut = api_token::Entity::find()
-            .filter(api_token::Column::Token.eq(token_str))
-            .one(db);
+        let sync_fut = repos.sync_token.find_by_token(token_str);
+        let api_fut = repos.api_token.find_by_token(token_str);
 
         let (sync_result, api_result) = tokio::join!(sync_fut, api_fut);
 

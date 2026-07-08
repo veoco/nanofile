@@ -28,6 +28,15 @@ pub trait SyncTokenRepository: Send + Sync {
     ) -> Result<(), AppError>;
     async fn delete_by_repo(&self, repo_id: &str) -> Result<(), AppError>;
     async fn delete_by_user_and_peer(&self, user_id: i32, peer_id: &str) -> Result<u64, AppError>;
+    async fn update_peer_info(
+        &self,
+        model: sync_token::Model,
+        peer_id: Option<String>,
+        peer_name: Option<String>,
+        peer_ip: Option<String>,
+        client_version: Option<String>,
+        last_sync_time: Option<i64>,
+    ) -> Result<(), AppError>;
 }
 
 pub struct DbSyncTokenRepository {
@@ -114,5 +123,24 @@ impl SyncTokenRepository for DbSyncTokenRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(result.rows_affected)
+    }
+
+    async fn update_peer_info(
+        &self,
+        model: sync_token::Model,
+        peer_id: Option<String>,
+        peer_name: Option<String>,
+        peer_ip: Option<String>,
+        client_version: Option<String>,
+        last_sync_time: Option<i64>,
+    ) -> Result<(), AppError> {
+        let mut active: sync_token::ActiveModel = model.into();
+        active.peer_id = Set(peer_id);
+        active.peer_name = Set(peer_name);
+        active.peer_ip = Set(peer_ip);
+        active.client_version = Set(client_version);
+        active.last_sync_time = Set(last_sync_time);
+        active.update(self.db.as_ref()).await?;
+        Ok(())
     }
 }

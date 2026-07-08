@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+};
 use std::sync::Arc;
 
 use crate::entity::commit;
@@ -15,6 +17,7 @@ pub trait CommitRepository: Send + Sync {
     ) -> Result<Option<commit::Model>, AppError>;
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<commit::Model>, AppError>;
     async fn insert(&self, model: commit::ActiveModel) -> Result<commit::Model, AppError>;
+    async fn find_all_ordered_by_ctime_desc(&self) -> Result<Vec<commit::Model>, AppError>;
 }
 
 pub struct DbCommitRepository {
@@ -57,5 +60,12 @@ impl CommitRepository for DbCommitRepository {
 
     async fn insert(&self, model: commit::ActiveModel) -> Result<commit::Model, AppError> {
         Ok(model.insert(self.db.as_ref()).await?)
+    }
+
+    async fn find_all_ordered_by_ctime_desc(&self) -> Result<Vec<commit::Model>, AppError> {
+        Ok(commit::Entity::find()
+            .order_by_desc(commit::Column::Ctime)
+            .all(self.db.as_ref())
+            .await?)
     }
 }

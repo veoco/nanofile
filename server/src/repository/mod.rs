@@ -11,6 +11,8 @@ pub mod api_token;
 pub mod avatar;
 pub mod client_login_token;
 pub mod commit;
+pub mod deleted_repo;
+pub mod file_lock_timestamp;
 pub mod file_tag;
 pub mod fs_object;
 pub mod group;
@@ -20,8 +22,10 @@ pub mod locked_file;
 pub mod member;
 pub mod metadata_config;
 pub mod metadata_record;
+pub mod password_reset_token;
 pub mod repo;
 pub mod s2fa_token;
+pub mod sdoc_comment;
 pub mod share_link;
 pub mod sso_login_token;
 pub mod starred;
@@ -30,6 +34,7 @@ pub mod thumbnail;
 pub mod upload_link;
 pub mod user;
 pub mod user_2fa;
+pub mod user_2fa_backup_code;
 pub mod user_contact;
 pub mod wiki;
 
@@ -38,6 +43,8 @@ pub use api_token::*;
 pub use avatar::*;
 pub use client_login_token::*;
 pub use commit::*;
+pub use deleted_repo::*;
+pub use file_lock_timestamp::*;
 pub use file_tag::*;
 pub use fs_object::*;
 pub use group::*;
@@ -47,8 +54,10 @@ pub use locked_file::*;
 pub use member::*;
 pub use metadata_config::*;
 pub use metadata_record::*;
+pub use password_reset_token::*;
 pub use repo::*;
 pub use s2fa_token::*;
+pub use sdoc_comment::*;
 pub use share_link::*;
 pub use sso_login_token::*;
 pub use starred::*;
@@ -57,6 +66,7 @@ pub use thumbnail::*;
 pub use upload_link::*;
 pub use user::*;
 pub use user_2fa::*;
+pub use user_2fa_backup_code::*;
 pub use user_contact::*;
 pub use wiki::*;
 
@@ -92,6 +102,11 @@ pub struct Repositories {
     pub metadata_config: Arc<dyn MetadataConfigRepository>,
     pub metadata_record: Arc<dyn MetadataRecordRepository>,
     pub file_tag: Arc<dyn FileTagRepository>,
+    pub deleted_repo: Arc<dyn DeletedRepoRepository>,
+    pub password_reset_token: Arc<dyn PasswordResetTokenRepository>,
+    pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
+    pub file_lock_timestamp: Arc<dyn FileLockTimestampRepository>,
+    pub sdoc_comment: Arc<dyn SdocCommentRepository>,
 }
 
 impl Repositories {
@@ -123,6 +138,11 @@ impl Repositories {
             metadata_config: Arc::new(DbMetadataConfigRepository::new(db.clone())),
             metadata_record: Arc::new(DbMetadataRecordRepository::new(db.clone())),
             file_tag: Arc::new(DbFileTagRepository::new(db.clone())),
+            deleted_repo: Arc::new(DbDeletedRepoRepository::new(db.clone())),
+            password_reset_token: Arc::new(DbPasswordResetTokenRepository::new(db.clone())),
+            user_2fa_backup_code: Arc::new(DbUser2faBackupCodeRepository::new(db.clone())),
+            file_lock_timestamp: Arc::new(DbFileLockTimestampRepository::new(db.clone())),
+            sdoc_comment: Arc::new(DbSdocCommentRepository::new(db.clone())),
         }
     }
 }

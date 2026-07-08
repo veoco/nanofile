@@ -7,6 +7,7 @@ use crate::error::AppError;
 
 #[async_trait]
 pub trait ApiTokenRepository: Send + Sync {
+    async fn find_by_token(&self, token: &str) -> Result<Option<api_token::Model>, AppError>;
     async fn find_by_user_id_with_platform(
         &self,
         user_id: i32,
@@ -35,6 +36,13 @@ impl DbApiTokenRepository {
 
 #[async_trait]
 impl ApiTokenRepository for DbApiTokenRepository {
+    async fn find_by_token(&self, token: &str) -> Result<Option<api_token::Model>, AppError> {
+        Ok(api_token::Entity::find()
+            .filter(api_token::Column::Token.eq(token))
+            .one(self.db.as_ref())
+            .await?)
+    }
+
     async fn find_by_user_id_with_platform(
         &self,
         user_id: i32,
