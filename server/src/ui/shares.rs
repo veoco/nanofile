@@ -5,7 +5,7 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse},
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::Set;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,9 +14,7 @@ use chrono::TimeZone;
 
 use crate::AppState;
 use crate::auth::token::generate_share_link_token;
-use crate::entity::repo;
 use crate::entity::share_link;
-use crate::entity::upload_link;
 use crate::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -98,20 +96,16 @@ pub async fn list_shares(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SharesQuery>,
 ) -> Result<Html<String>, AppError> {
-    let db = state.db.as_ref();
-
-    let links = share_link::Entity::find()
-        .filter(share_link::Column::CreatorId.eq(user.user_id))
-        .all(db)
-        .await
-        .map_err(|e| AppError::internal(format!("db error: {e}")))?;
-
-    // Query upload links
-    let upload_models = upload_link::Entity::find()
-        .filter(upload_link::Column::CreatorId.eq(user.user_id))
-        .all(db)
-        .await
-        .map_err(|e| AppError::internal(format!("db error: {e}")))?;
+    let links = state
+        .repos
+        .share_link
+        .find_by_creator_id(user.user_id)
+        .await?;
+    let upload_models = state
+        .repos
+        .upload_link
+        .find_by_creator_id(user.user_id)
+        .await?;
 
     // Build repo name lookup
     let mut repo_ids: Vec<String> = Vec::new();
@@ -127,7 +121,7 @@ pub async fn list_shares(
     }
     let mut repo_names: HashMap<String, String> = HashMap::new();
     for rid in &repo_ids {
-        let r = repo::Entity::find_by_id(rid).one(db).await?;
+        let r = state.repos.repo.find_by_id(rid).await?;
         repo_names.insert(rid.clone(), r.map(|r| r.name).unwrap_or_default());
     }
 
@@ -243,9 +237,7 @@ pub async fn create_share(
         description: Set(None),
     };
 
-    link.insert(db)
-        .await
-        .map_err(|e| AppError::internal(format!("create share failed: {e}")))?;
+    state.repos.share_link.insert(link).await?;
     Ok((StatusCode::FOUND, [("Location", "/shares/")]).into_response())
 }
 
@@ -261,24 +253,23 @@ pub async fn delete_share(
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
-    let db = state.db.as_ref();
 
-    let link = share_link::Entity::find()
-        .filter(share_link::Column::Token.eq(&token))
-        .one(db)
-        .await
-        .map_err(|e| AppError::internal(format!("db error: {e}")))?
+    let link = state
+        .repos
+        .share_link
+        .find_by_token(&token)
+        .await?
         .ok_or_else(|| AppError::NotFound("Share link not found".to_string()))?;
 
     if link.creator_id != user.user_id {
         return Err(AppError::Forbidden);
     }
 
-    share_link::Entity::delete_many()
-        .filter(share_link::Column::Token.eq(&token))
-        .exec(db)
-        .await
-        .map_err(|e| AppError::internal(format!("delete failed: {e}")))?;
+    state
+        .repos
+        .share_link
+        .delete_by_token_and_user(&token, user.user_id)
+        .await?;
 
     let redirect = match form.get("tab").map(|s| s.as_str()) {
         Some("upload-links") => "/shares/?tab=upload-links",
@@ -300,22 +291,22 @@ pub async fn delete_upload(
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
-    let link = upload_link::Entity::find()
-        .filter(upload_link::Column::Token.eq(&token))
-        .one(state.db.as_ref())
-        .await
-        .map_err(|e| AppError::internal(format!("db error: {e}")))?
+    let link = state
+        .repos
+        .upload_link
+        .find_by_token(&token)
+        .await?
         .ok_or_else(|| AppError::NotFound("Upload link not found".to_string()))?;
 
     if link.creator_id != user.user_id {
         return Err(AppError::Forbidden);
     }
 
-    upload_link::Entity::delete_many()
-        .filter(upload_link::Column::Token.eq(&token))
-        .exec(state.db.as_ref())
-        .await
-        .map_err(|e| AppError::internal(format!("delete failed: {e}")))?;
+    state
+        .repos
+        .upload_link
+        .delete_by_token_and_user(&token, user.user_id)
+        .await?;
 
     let redirect = match form.get("tab").map(|s| s.as_str()) {
         Some("upload-links") => "/shares/?tab=upload-links",

@@ -2,12 +2,10 @@
 use askama::Template;
 use axum::{extract::State, response::Html};
 use chrono::DateTime;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::{activity, repo, user};
 use crate::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -55,33 +53,30 @@ pub async fn activities_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    let db = state.db.as_ref();
-
     // Fetch latest 50 activities for this user
-    let events = activity::Entity::find()
-        .filter(activity::Column::UserId.eq(user.user_id))
-        .order_by_desc(activity::Column::CreatedAt)
-        .limit(50)
-        .all(db)
+    let events = state
+        .repos
+        .activity
+        .find_recent_by_user(user.user_id, 50)
         .await?;
 
     // Batch-load repo names
-    let mut repo_cache: HashMap<String, Option<repo::Model>> = HashMap::new();
+    let mut repo_cache: HashMap<String, Option<String>> = HashMap::new();
     for e in &events {
         #[allow(clippy::map_entry)]
         if !repo_cache.contains_key(&e.repo_id) {
-            let r = repo::Entity::find_by_id(&e.repo_id).one(db).await?;
-            repo_cache.insert(e.repo_id.clone(), r);
+            let r = state.repos.repo.find_by_id(&e.repo_id).await?;
+            repo_cache.insert(e.repo_id.clone(), r.map(|r| r.name));
         }
     }
 
     // Batch-load user emails
-    let mut user_cache: HashMap<i32, Option<user::Model>> = HashMap::new();
+    let mut user_cache: HashMap<i32, Option<String>> = HashMap::new();
     for e in &events {
         #[allow(clippy::map_entry)]
         if !user_cache.contains_key(&e.user_id) {
-            let u = user::Entity::find_by_id(e.user_id).one(db).await?;
-            user_cache.insert(e.user_id, u);
+            let u = state.repos.user.find_by_id(e.user_id).await?;
+            user_cache.insert(e.user_id, u.map(|u| u.email));
         }
     }
 
@@ -90,14 +85,14 @@ pub async fn activities_page(
     for e in &events {
         let repo_name = repo_cache
             .get(&e.repo_id)
-            .and_then(|o| o.as_ref())
-            .map(|r| r.name.clone())
+            .cloned()
+            .flatten()
             .unwrap_or_default();
 
         let email = user_cache
             .get(&e.user_id)
-            .and_then(|o| o.as_ref())
-            .map(|u| u.email.clone())
+            .cloned()
+            .flatten()
             .unwrap_or_default();
 
         let name = if e.obj_type == "repo" {

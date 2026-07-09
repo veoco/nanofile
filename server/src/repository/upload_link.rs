@@ -19,6 +19,7 @@ pub trait UploadLinkRepository: Send + Sync {
         creator_id: i32,
     ) -> Result<Vec<upload_link::Model>, AppError>;
     async fn find_by_token(&self, token: &str) -> Result<Option<upload_link::Model>, AppError>;
+    async fn find_all(&self) -> Result<Vec<upload_link::Model>, AppError>;
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<upload_link::Model>, AppError>;
     async fn find_expired(&self) -> Result<Vec<upload_link::Model>, AppError>;
     async fn insert(&self, model: upload_link::ActiveModel)
@@ -28,6 +29,7 @@ pub trait UploadLinkRepository: Send + Sync {
         token: &str,
         user_id: i32,
     ) -> Result<DeleteResult, AppError>;
+    async fn delete_by_token(&self, token: &str) -> Result<DeleteResult, AppError>;
     async fn delete_by_id_and_user(&self, id: i32, user_id: i32) -> Result<DeleteResult, AppError>;
     async fn update(
         &self,
@@ -80,6 +82,10 @@ impl UploadLinkRepository for DbUploadLinkRepository {
             .await?)
     }
 
+    async fn find_all(&self) -> Result<Vec<upload_link::Model>, AppError> {
+        Ok(upload_link::Entity::find().all(self.db.as_ref()).await?)
+    }
+
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<upload_link::Model>, AppError> {
         Ok(upload_link::Entity::find()
             .filter(upload_link::Column::RepoId.eq(repo_id))
@@ -111,6 +117,13 @@ impl UploadLinkRepository for DbUploadLinkRepository {
         Ok(upload_link::Entity::delete_many()
             .filter(upload_link::Column::Token.eq(token))
             .filter(upload_link::Column::CreatorId.eq(user_id))
+            .exec(self.db.as_ref())
+            .await?)
+    }
+
+    async fn delete_by_token(&self, token: &str) -> Result<DeleteResult, AppError> {
+        Ok(upload_link::Entity::delete_many()
+            .filter(upload_link::Column::Token.eq(token))
             .exec(self.db.as_ref())
             .await?)
     }

@@ -26,6 +26,11 @@ pub trait ActivityRepository: Send + Sync {
         repo_id: Option<&str>,
         direct_user_id: Option<i32>,
     ) -> Result<u64, AppError>;
+    async fn find_recent_by_user(
+        &self,
+        user_id: i32,
+        limit: u64,
+    ) -> Result<Vec<activity::Model>, AppError>;
 }
 
 pub struct DbActivityRepository {
@@ -105,5 +110,18 @@ impl ActivityRepository for DbActivityRepository {
         }
 
         Ok(query.count(self.db.as_ref()).await?)
+    }
+
+    async fn find_recent_by_user(
+        &self,
+        user_id: i32,
+        limit: u64,
+    ) -> Result<Vec<activity::Model>, AppError> {
+        Ok(activity::Entity::find()
+            .filter(activity::Column::UserId.eq(user_id))
+            .order_by_desc(activity::Column::CreatedAt)
+            .limit(limit)
+            .all(self.db.as_ref())
+            .await?)
     }
 }

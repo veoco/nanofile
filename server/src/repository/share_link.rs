@@ -17,12 +17,14 @@ pub trait ShareLinkRepository: Send + Sync {
     async fn find_by_creator_id(&self, creator_id: i32)
     -> Result<Vec<share_link::Model>, AppError>;
     async fn find_by_token(&self, token: &str) -> Result<Option<share_link::Model>, AppError>;
+    async fn find_all(&self) -> Result<Vec<share_link::Model>, AppError>;
     async fn insert(&self, model: share_link::ActiveModel) -> Result<share_link::Model, AppError>;
     async fn delete_by_token_and_user(
         &self,
         token: &str,
         user_id: i32,
     ) -> Result<DeleteResult, AppError>;
+    async fn delete_by_token(&self, token: &str) -> Result<DeleteResult, AppError>;
     async fn update_expire_and_description(
         &self,
         token: &str,
@@ -73,6 +75,10 @@ impl ShareLinkRepository for DbShareLinkRepository {
             .await?)
     }
 
+    async fn find_all(&self) -> Result<Vec<share_link::Model>, AppError> {
+        Ok(share_link::Entity::find().all(self.db.as_ref()).await?)
+    }
+
     async fn insert(&self, model: share_link::ActiveModel) -> Result<share_link::Model, AppError> {
         Ok(model.insert(self.db.as_ref()).await?)
     }
@@ -85,6 +91,13 @@ impl ShareLinkRepository for DbShareLinkRepository {
         Ok(share_link::Entity::delete_many()
             .filter(share_link::Column::Token.eq(token))
             .filter(share_link::Column::CreatorId.eq(user_id))
+            .exec(self.db.as_ref())
+            .await?)
+    }
+
+    async fn delete_by_token(&self, token: &str) -> Result<DeleteResult, AppError> {
+        Ok(share_link::Entity::delete_many()
+            .filter(share_link::Column::Token.eq(token))
             .exec(self.db.as_ref())
             .await?)
     }

@@ -5,7 +5,6 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,10 +12,6 @@ use std::sync::Arc;
 use chrono::TimeZone;
 
 use crate::AppState;
-use crate::entity::repo;
-use crate::entity::share_link;
-use crate::entity::upload_link;
-use crate::entity::user;
 use crate::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -97,13 +92,11 @@ pub async fn list_all_shares(
         return Redirect::to("/libraries/").into_response();
     }
 
-    let db = state.db.as_ref();
-
-    let share_models = match share_link::Entity::find().all(db).await {
+    let share_models = match state.repos.share_link.find_all().await {
         Ok(m) => m,
         Err(e) => return AppError::internal(format!("db error: {e}")).into_response(),
     };
-    let upload_models = match upload_link::Entity::find().all(db).await {
+    let upload_models = match state.repos.upload_link.find_all().await {
         Ok(m) => m,
         Err(e) => return AppError::internal(format!("db error: {e}")).into_response(),
     };
@@ -122,7 +115,7 @@ pub async fn list_all_shares(
     }
     let mut creator_emails: HashMap<i32, String> = HashMap::new();
     for cid in &creator_ids {
-        let u = user::Entity::find_by_id(*cid).one(db).await.unwrap_or(None);
+        let u = state.repos.user.find_by_id(*cid).await.unwrap_or(None);
         creator_emails.insert(*cid, u.map(|u| u.email).unwrap_or_default());
     }
 
@@ -140,7 +133,7 @@ pub async fn list_all_shares(
     }
     let mut repo_names: HashMap<String, String> = HashMap::new();
     for rid in &repo_ids {
-        let r = repo::Entity::find_by_id(rid).one(db).await.unwrap_or(None);
+        let r = state.repos.repo.find_by_id(rid).await.unwrap_or(None);
         repo_names.insert(rid.clone(), r.map(|r| r.name).unwrap_or_default());
     }
 
@@ -216,10 +209,11 @@ pub async fn list_all_shares(
         &user.session_token,
     ));
 
-    let left_panel_repos = match crate::repo::load_left_panel_repos(db, user.user_id).await {
-        Ok(r) => r,
-        Err(e) => return AppError::internal(e.to_string()).into_response(),
-    };
+    let left_panel_repos =
+        match crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await {
+            Ok(r) => r,
+            Err(e) => return AppError::internal(e.to_string()).into_response(),
+        };
 
     let tpl = AdminSharesTemplate {
         urls: crate::static_assets::template_urls(),
@@ -258,10 +252,7 @@ pub async fn delete_share(
     )?;
 
     // Admin delete — no creator_id check.
-    share_link::Entity::delete_many()
-        .filter(share_link::Column::Token.eq(&token))
-        .exec(state.db.as_ref())
-        .await?;
+    state.repos.share_link.delete_by_token(&token).await?;
 
     let redirect = match form.get("tab").map(|s| s.as_str()) {
         Some("upload-links") => "/sysadmin/shares/?tab=upload-links",
@@ -288,10 +279,7 @@ pub async fn delete_upload(
     )?;
 
     // Admin delete — no creator_id check.
-    upload_link::Entity::delete_many()
-        .filter(upload_link::Column::Token.eq(&token))
-        .exec(state.db.as_ref())
-        .await?;
+    state.repos.upload_link.delete_by_token(&token).await?;
 
     let redirect = match form.get("tab").map(|s| s.as_str()) {
         Some("upload-links") => "/sysadmin/shares/?tab=upload-links",
