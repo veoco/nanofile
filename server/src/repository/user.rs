@@ -32,6 +32,17 @@ pub trait UserRepository: Send + Sync {
     async fn update_is_active(&self, user_id: i32, is_active: bool) -> Result<(), AppError>;
     async fn update_storage_quota(&self, user_id: i32, quota: Option<i64>) -> Result<(), AppError>;
     async fn delete_user(&self, user_id: i32) -> Result<(), AppError>;
+
+    // ── Methods for UI layer refactoring ───────────────────────────────
+    /// Update the user's password hash.
+    async fn update_password(&self, user_id: i32, password_hash: String) -> Result<(), AppError>;
+    /// Create a new user with an inviter.
+    async fn create_with_inviter(
+        &self,
+        email: String,
+        password_hash: String,
+        invited_by: Option<i32>,
+    ) -> Result<user::Model, AppError>;
 }
 
 pub struct DbUserRepository {
@@ -185,5 +196,39 @@ impl UserRepository for DbUserRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(())
+    }
+
+    async fn update_password(&self, user_id: i32, password_hash: String) -> Result<(), AppError> {
+        let user_record = self.find_by_id(user_id).await?;
+        if let Some(u) = user_record {
+            let mut active: user::ActiveModel = u.into();
+            active.password_hash = Set(password_hash);
+            active.update(self.db.as_ref()).await?;
+        }
+        Ok(())
+    }
+
+    async fn create_with_inviter(
+        &self,
+        email: String,
+        password_hash: String,
+        invited_by: Option<i32>,
+    ) -> Result<user::Model, AppError> {
+        let now = chrono::Utc::now().timestamp();
+        let model = user::ActiveModel {
+            id: sea_orm::NotSet,
+            email: Set(email),
+            password_hash: Set(password_hash),
+            is_active: Set(true),
+            is_admin: Set(false),
+            created_at: Set(now),
+            last_login_at: sea_orm::NotSet,
+            invited_by: Set(invited_by),
+            storage_quota: sea_orm::NotSet,
+            name: sea_orm::NotSet,
+            display_name: sea_orm::NotSet,
+        };
+        let result = model.insert(self.db.as_ref()).await?;
+        Ok(result)
     }
 }

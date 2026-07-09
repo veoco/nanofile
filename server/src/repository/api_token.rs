@@ -1,9 +1,21 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set};
 use std::sync::Arc;
 
 use crate::entity::api_token;
 use crate::error::AppError;
+
+/// Parameters for creating a session token.
+pub struct CreateSessionTokenParams {
+    pub user_id: i32,
+    pub token: String,
+    pub created_at: i64,
+    pub expires_at: Option<i64>,
+    pub device_id: Option<String>,
+    pub platform: Option<String>,
+    pub device_name: Option<String>,
+    pub client_version: Option<String>,
+}
 
 #[async_trait]
 pub trait ApiTokenRepository: Send + Sync {
@@ -22,6 +34,13 @@ pub trait ApiTokenRepository: Send + Sync {
     async fn delete_by_token(&self, token: &str) -> Result<(), AppError>;
     async fn insert(&self, model: api_token::ActiveModel) -> Result<(), AppError>;
     async fn delete_many_by_user_id(&self, user_id: i32) -> Result<(), AppError>;
+
+    // ── Methods for UI layer refactoring ───────────────────────────────
+    /// Create a session token and return the model.
+    async fn create_session_token(
+        &self,
+        params: CreateSessionTokenParams,
+    ) -> Result<api_token::Model, AppError>;
 }
 
 pub struct DbApiTokenRepository {
@@ -99,5 +118,23 @@ impl ApiTokenRepository for DbApiTokenRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(())
+    }
+
+    async fn create_session_token(
+        &self,
+        params: CreateSessionTokenParams,
+    ) -> Result<api_token::Model, AppError> {
+        let model = api_token::ActiveModel {
+            id: sea_orm::NotSet,
+            user_id: Set(params.user_id),
+            token: Set(params.token),
+            created_at: Set(params.created_at),
+            expires_at: Set(params.expires_at),
+            device_id: Set(params.device_id),
+            platform: Set(params.platform),
+            device_name: Set(params.device_name),
+            client_version: Set(params.client_version),
+        };
+        Ok(model.insert(self.db.as_ref()).await?)
     }
 }

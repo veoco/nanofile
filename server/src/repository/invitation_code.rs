@@ -21,6 +21,12 @@ pub trait InvitationCodeRepository: Send + Sync {
         now: i64,
     ) -> Result<(), AppError>;
     async fn delete_by_id_and_creator(&self, id: i32, creator_id: i32) -> Result<(), AppError>;
+
+    // ── Methods for UI layer refactoring ───────────────────────────────
+    /// Find an invitation code by its code string.
+    async fn find_by_code(&self, code: &str) -> Result<Option<invitation_code::Model>, AppError>;
+    /// Mark an invitation code as used by a specific user.
+    async fn mark_as_used(&self, id: i32, used_by: i32, used_at: i64) -> Result<(), AppError>;
 }
 
 pub struct DbInvitationCodeRepository {
@@ -77,6 +83,32 @@ impl InvitationCodeRepository for DbInvitationCodeRepository {
         if result.rows_affected == 0 {
             return Err(AppError::NotFound("Invitation code not found.".to_string()));
         }
+        Ok(())
+    }
+
+    async fn find_by_code(&self, code: &str) -> Result<Option<invitation_code::Model>, AppError> {
+        Ok(invitation_code::Entity::find()
+            .filter(invitation_code::Column::Code.eq(code))
+            .one(self.db.as_ref())
+            .await?)
+    }
+
+    async fn mark_as_used(&self, id: i32, used_by: i32, used_at: i64) -> Result<(), AppError> {
+        let model = invitation_code::Entity::find_by_id(id)
+            .one(self.db.as_ref())
+            .await?
+            .ok_or_else(|| AppError::NotFound("Invitation code not found.".to_string()))?;
+
+        if model.used_by.is_some() {
+            return Err(AppError::BadRequest(
+                "This invitation code has already been used.".to_string(),
+            ));
+        }
+
+        let mut active: invitation_code::ActiveModel = model.into();
+        active.used_by = Set(Some(used_by));
+        active.used_at = Set(Some(used_at));
+        active.update(self.db.as_ref()).await?;
         Ok(())
     }
 }
