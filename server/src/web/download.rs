@@ -5,13 +5,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::{Stream, StreamExt};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::entity::{fs_object, repo, share_link};
 use crate::error::AppError;
 use crate::repo::download::Downloader;
 use crate::serialization::fs_json::FsFileData;
@@ -56,9 +54,10 @@ pub async fn shared_file_download(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = share_link::Entity::find()
-        .filter(share_link::Column::Token.eq(&token))
-        .one(state.db.as_ref())
+    let link = state
+        .repos
+        .share_link
+        .find_by_token(&token)
         .await?
         .ok_or_else(|| AppError::NotFound("link not found".into()))?;
 
@@ -94,18 +93,10 @@ pub async fn shared_file_download(
     let stream = stream_blocks(block_ids, state.block_store.clone(), None);
 
     // Increment view_cnt asynchronously (fire-and-forget)
-    let db = state.db.clone();
+    let share_link_repo = state.repos.share_link.clone();
     let link_id = link.id;
     tokio::spawn(async move {
-        if let Ok(Some(link)) = share_link::Entity::find_by_id(link_id).one(&*db).await {
-            let mut active: share_link::ActiveModel = link.into();
-            let current = match &active.view_cnt {
-                Set(v) => *v,
-                _ => 0,
-            };
-            active.view_cnt = Set(current + 1);
-            let _ = share_link::Entity::update(active).exec(&*db).await;
-        }
+        let _ = share_link_repo.increment_view_cnt(link_id).await;
     });
 
     Ok((
@@ -126,8 +117,10 @@ async fn get_decryption_key_for_repo(
     repo_id: &str,
     user_id: i32,
 ) -> Result<Option<(Vec<u8>, Vec<u8>)>, AppError> {
-    let repo_model = repo::Entity::find_by_id(repo_id)
-        .one(state.db.as_ref())
+    let repo_model = state
+        .repos
+        .repo
+        .find_by_id(repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
@@ -259,10 +252,10 @@ pub async fn block_download(
     let repo_id = &info.repo_id;
 
     // Look up the file by its fs_id in the fs_objects table.
-    let file_obj = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(repo_id))
-        .filter(fs_object::Column::FsId.eq(&file_id))
-        .one(state.db.as_ref())
+    let file_obj = state
+        .repos
+        .fs_object
+        .find_by_repo_and_fs_id(repo_id, &file_id)
         .await?
         .ok_or_else(|| AppError::NotFound("file not found".into()))?;
 

@@ -7,13 +7,11 @@ use axum::{
 };
 use chrono::TimeZone;
 use futures::{Stream, StreamExt};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::common::{EMPTY_SHA1, S_IFDIR};
-use crate::entity::share_link;
 use crate::error::AppError;
 use crate::repo::download::Downloader;
 use crate::repo::fs_tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
@@ -98,12 +96,13 @@ fn format_timestamp(ts: i64) -> String {
 
 /// Look up share link, check expiry, return the link model or error.
 async fn resolve_share_link(
-    db: &sea_orm::DatabaseConnection,
+    state: &AppState,
     token: &str,
-) -> Result<share_link::Model, AppError> {
-    let link = share_link::Entity::find()
-        .filter(share_link::Column::Token.eq(token))
-        .one(db)
+) -> Result<crate::entity::share_link::Model, AppError> {
+    let link = state
+        .repos
+        .share_link
+        .find_by_token(token)
         .await?
         .ok_or_else(|| AppError::NotFound("Link not found".into()))?;
 
@@ -119,7 +118,7 @@ async fn resolve_share_link(
 
 /// Check whether the password in the request matches the stored hash.
 fn check_password(
-    link: &share_link::Model,
+    link: &crate::entity::share_link::Model,
     headers: &HeaderMap,
     params: &HashMap<String, String>,
     password_hash_iterations: u32,
@@ -145,17 +144,12 @@ fn check_password(
 }
 
 /// Increment view count asynchronously.
-fn increment_view_cnt(db: Arc<sea_orm::DatabaseConnection>, link_id: i32) {
+fn increment_view_cnt(
+    share_link_repo: Arc<dyn crate::repository::ShareLinkRepository>,
+    link_id: i32,
+) {
     tokio::spawn(async move {
-        if let Ok(Some(link)) = share_link::Entity::find_by_id(link_id).one(&*db).await {
-            let mut active: share_link::ActiveModel = link.into();
-            let current = match &active.view_cnt {
-                Set(v) => *v,
-                _ => 0,
-            };
-            active.view_cnt = Set(current + 1);
-            let _ = share_link::Entity::update(active).exec(&*db).await;
-        }
+        let _ = share_link_repo.increment_view_cnt(link_id).await;
     });
 }
 
@@ -179,7 +173,7 @@ pub async fn shared_file_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = resolve_share_link(state.db.as_ref(), &token).await?;
+    let link = resolve_share_link(&state, &token).await?;
 
     // Password check
     let pw_ok = check_password(
@@ -220,7 +214,7 @@ pub async fn shared_file_view(
             .unwrap_or(&link.path);
         let stream = stream_blocks(block_ids, state.block_store.clone(), None);
 
-        increment_view_cnt(state.db.clone(), link.id);
+        increment_view_cnt(state.repos.share_link.clone(), link.id);
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -240,7 +234,7 @@ pub async fn shared_file_view(
     let (_file_data, _block_ids) =
         resolve_file_meta(state.db.as_ref(), &link.repo_id, &link.path).await?;
 
-    increment_view_cnt(state.db.clone(), link.id);
+    increment_view_cnt(state.repos.share_link.clone(), link.id);
 
     let file_name = link
         .path
@@ -290,7 +284,7 @@ pub async fn shared_file_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = resolve_share_link(state.db.as_ref(), &token).await?;
+    let link = resolve_share_link(&state, &token).await?;
 
     let password = form
         .get("password")
@@ -447,7 +441,7 @@ pub async fn shared_dir_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = resolve_share_link(state.db.as_ref(), &token).await?;
+    let link = resolve_share_link(&state, &token).await?;
 
     // Only handle directory shares
     if link.s_type != "d" {
@@ -480,16 +474,19 @@ pub async fn shared_dir_view(
     }
 
     // Get repo head commit
-    let repo_model = crate::entity::repo::Entity::find_by_id(&link.repo_id)
-        .one(state.db.as_ref())
+    let repo_model = state
+        .repos
+        .repo
+        .find_by_id(&link.repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Repo not found".into()))?;
     let head_commit_id = repo_model
         .head_commit_id
         .ok_or_else(|| AppError::BadRequest("Repo has no commits".into()))?;
-    let head_commit = crate::entity::commit::Entity::find()
-        .filter(crate::entity::commit::Column::CommitId.eq(&head_commit_id))
-        .one(state.db.as_ref())
+    let head_commit = state
+        .repos
+        .commit
+        .find_by_id(&head_commit_id)
         .await?
         .ok_or_else(|| AppError::Internal("Head commit not found".into()))?;
 
@@ -515,7 +512,7 @@ pub async fn shared_dir_view(
         )
         .await?;
 
-        increment_view_cnt(state.db.clone(), link.id);
+        increment_view_cnt(state.repos.share_link.clone(), link.id);
         let stream = stream_zip(state.block_store.clone(), files);
 
         let mut headers = HeaderMap::new();
@@ -531,7 +528,7 @@ pub async fn shared_dir_view(
         return Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response());
     }
 
-    increment_view_cnt(state.db.clone(), link.id);
+    increment_view_cnt(state.repos.share_link.clone(), link.id);
 
     // Resolve the current directory path using safe path joining
     // to prevent path traversal attacks (e.g., ?p=../other-dir)
@@ -540,16 +537,19 @@ pub async fn shared_dir_view(
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     // Get repo head commit and resolve directory
-    let repo_model = crate::entity::repo::Entity::find_by_id(&link.repo_id)
-        .one(state.db.as_ref())
+    let repo_model = state
+        .repos
+        .repo
+        .find_by_id(&link.repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Repo not found".into()))?;
     let head_commit_id = repo_model
         .head_commit_id
         .ok_or_else(|| AppError::BadRequest("Repo has no commits".into()))?;
-    let head_commit = crate::entity::commit::Entity::find()
-        .filter(crate::entity::commit::Column::CommitId.eq(&head_commit_id))
-        .one(state.db.as_ref())
+    let head_commit = state
+        .repos
+        .commit
+        .find_by_id(&head_commit_id)
         .await?
         .ok_or_else(|| AppError::Internal("Head commit not found".into()))?;
 
@@ -682,7 +682,7 @@ pub async fn shared_dir_file_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = resolve_share_link(state.db.as_ref(), &token).await?;
+    let link = resolve_share_link(&state, &token).await?;
 
     if link.s_type != "d" {
         return Err(AppError::NotFound("Not a directory share link".into()));
@@ -713,7 +713,7 @@ pub async fn shared_dir_file_view(
     let (_file_data, block_ids) =
         resolve_file_meta(state.db.as_ref(), &link.repo_id, &full_path).await?;
 
-    increment_view_cnt(state.db.clone(), link.id);
+    increment_view_cnt(state.repos.share_link.clone(), link.id);
 
     let filename = full_path
         .rsplit_once('/')
@@ -743,7 +743,7 @@ pub async fn shared_dir_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = resolve_share_link(state.db.as_ref(), &token).await?;
+    let link = resolve_share_link(&state, &token).await?;
 
     let password = form
         .get("password")

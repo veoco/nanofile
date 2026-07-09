@@ -18,7 +18,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::io::AsyncWriteExt;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -27,7 +27,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::common::{EMPTY_SHA1, S_IFDIR};
-use crate::entity::{commit, repo};
 use crate::error::AppError;
 use crate::repo::fs_tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
 
@@ -94,9 +93,11 @@ pub struct ZipTaskResponse {
 // ── Helpers ────────────────────────────────────────────────────────────
 
 /// Look up the repo head commit's root fs_id.
-async fn resolve_head_root(db: &DatabaseConnection, repo_id: &str) -> Result<String, AppError> {
-    let repo_model = repo::Entity::find_by_id(repo_id)
-        .one(db)
+async fn resolve_head_root(state: &AppState, repo_id: &str) -> Result<String, AppError> {
+    let repo_model = state
+        .repos
+        .repo
+        .find_by_id(repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
 
@@ -104,9 +105,10 @@ async fn resolve_head_root(db: &DatabaseConnection, repo_id: &str) -> Result<Str
         .head_commit_id
         .ok_or_else(|| AppError::NotFound("Repository has no commits".into()))?;
 
-    let head_commit = commit::Entity::find()
-        .filter(commit::Column::CommitId.eq(&head_commit_id))
-        .one(db)
+    let head_commit = state
+        .repos
+        .commit
+        .find_by_id(&head_commit_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
@@ -337,7 +339,7 @@ pub async fn zip_task_handler(
     }
 
     // Resolve head commit root
-    let root_fs_id = resolve_head_root(db, &repo_id).await?;
+    let root_fs_id = resolve_head_root(&state, &repo_id).await?;
 
     // Collect files (recursively for directories)
     let files = collect_selected_files(
@@ -391,8 +393,10 @@ pub async fn zip_download_handler(
     // The token-based download doesn't carry user identity, so encrypted repos
     // without cached password will fail here.
     let dec_key: Option<(Vec<u8>, Vec<u8>)> = {
-        let repo_model = repo::Entity::find_by_id(&task.repo_id)
-            .one(state.db.as_ref())
+        let repo_model = state
+            .repos
+            .repo
+            .find_by_id(&task.repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
 

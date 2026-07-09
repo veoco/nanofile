@@ -17,6 +17,7 @@ pub trait ShareLinkRepository: Send + Sync {
     async fn find_by_creator_id(&self, creator_id: i32)
     -> Result<Vec<share_link::Model>, AppError>;
     async fn find_by_token(&self, token: &str) -> Result<Option<share_link::Model>, AppError>;
+    async fn find_by_id(&self, id: i32) -> Result<Option<share_link::Model>, AppError>;
     async fn find_all(&self) -> Result<Vec<share_link::Model>, AppError>;
     async fn insert(&self, model: share_link::ActiveModel) -> Result<share_link::Model, AppError>;
     async fn delete_by_token_and_user(
@@ -32,6 +33,8 @@ pub trait ShareLinkRepository: Send + Sync {
         expire_at: Option<Option<i64>>,
         description: Option<Option<String>>,
     ) -> Result<bool, AppError>;
+    /// Increment the view count for a share link by its ID.
+    async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError>;
 }
 
 pub struct DbShareLinkRepository {
@@ -71,6 +74,12 @@ impl ShareLinkRepository for DbShareLinkRepository {
     async fn find_by_token(&self, token: &str) -> Result<Option<share_link::Model>, AppError> {
         Ok(share_link::Entity::find()
             .filter(share_link::Column::Token.eq(token))
+            .one(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_id(&self, id: i32) -> Result<Option<share_link::Model>, AppError> {
+        Ok(share_link::Entity::find_by_id(id)
             .one(self.db.as_ref())
             .await?)
     }
@@ -127,5 +136,17 @@ impl ShareLinkRepository for DbShareLinkRepository {
 
         active.update(self.db.as_ref()).await?;
         Ok(true)
+    }
+
+    async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError> {
+        if let Some(link) = share_link::Entity::find_by_id(id)
+            .one(self.db.as_ref())
+            .await?
+        {
+            let mut active: share_link::ActiveModel = link.into();
+            active.view_cnt = Set(active.view_cnt.unwrap() + 1);
+            active.update(self.db.as_ref()).await?;
+        }
+        Ok(())
     }
 }
