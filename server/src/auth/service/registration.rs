@@ -42,7 +42,10 @@ impl RegistrationService {
     /// 3. Validates password strength
     /// 4. Creates the user
     /// 5. Marks the invitation code as used
-    pub async fn register(&self, params: RegistrationParams) -> Result<RegistrationResult, AppError> {
+    pub async fn register(
+        &self,
+        params: RegistrationParams,
+    ) -> Result<RegistrationResult, AppError> {
         // 1. Validate invitation code
         let code_record = self
             .repos

@@ -8,14 +8,13 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Redirect},
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::token::generate_api_token;
-use crate::entity::{client_login_token, user};
 use crate::error::AppError;
+use crate::repository::CreateSessionTokenParams;
 
 const TOKEN_TTL_SECS: i64 = 30;
 
@@ -23,8 +22,6 @@ pub async fn client_token_login(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let db = state.db.as_ref();
-
     let token_str = match params.get("token") {
         Some(t) if t.len() == 32 => t,
         _ => {
@@ -33,9 +30,10 @@ pub async fn client_token_login(
     };
 
     // Look up the token
-    let record = client_login_token::Entity::find()
-        .filter(client_login_token::Column::Token.eq(token_str))
-        .one(db)
+    let record = state
+        .repos
+        .client_login_token
+        .find_by_token(token_str)
         .await
         .map_err(|_| AppError::internal("database error"))?;
 
@@ -51,7 +49,7 @@ pub async fn client_token_login(
     let now = chrono::Utc::now().timestamp();
     let elapsed = now - record.created_at;
     if !(0..=TOKEN_TTL_SECS).contains(&elapsed) {
-        let _ = record.delete(db).await;
+        let _ = state.repos.client_login_token.delete(record).await;
         let next = resolve_next(params.get("next").map(String::as_str));
         return Ok(Redirect::to(&next).into_response());
     }
@@ -60,12 +58,13 @@ pub async fn client_token_login(
     let username = record.username.clone();
 
     // Delete the token (one-time use)
-    let _ = record.delete(db).await;
+    let _ = state.repos.client_login_token.delete(record).await;
 
     // Look up the user
-    let user_record = user::Entity::find()
-        .filter(user::Column::Email.eq(&username))
-        .one(db)
+    let user_record = state
+        .repos
+        .user
+        .find_by_email(&username)
         .await
         .map_err(|_| AppError::internal("database error"))?;
 
@@ -82,20 +81,19 @@ pub async fn client_token_login(
     let ttl_days = state.config.auth.api_token_ttl_days;
     let expires_at = now + (ttl_days as i64 * 86400);
 
-    let token_record = crate::entity::api_token::ActiveModel {
-        id: sea_orm::NotSet,
-        user_id: Set(user_record.id),
-        token: Set(api_token.clone()),
-        created_at: Set(now),
-        expires_at: Set(Some(expires_at)),
-        device_id: Set(None),
-        platform: Set(None),
-        device_name: Set(None),
-        client_version: Set(None),
-    };
-
-    token_record
-        .insert(db)
+    state
+        .repos
+        .api_token
+        .create_session_token(CreateSessionTokenParams {
+            user_id: user_record.id,
+            token: api_token.clone(),
+            created_at: now,
+            expires_at: Some(expires_at),
+            device_id: None,
+            platform: None,
+            device_name: None,
+            client_version: None,
+        })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 

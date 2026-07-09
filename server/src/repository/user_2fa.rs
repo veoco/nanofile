@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
 use crate::entity::user_2fa;
@@ -14,6 +14,7 @@ pub trait User2faRepository: Send + Sync {
         totp_secret: String,
     ) -> Result<user_2fa::Model, AppError>;
     async fn set_enabled(&self, user_id: i32, enabled: bool, now: i64) -> Result<(), AppError>;
+    async fn delete_by_user_id(&self, user_id: i32) -> Result<(), AppError>;
 }
 
 pub struct DbUser2faRepository {
@@ -67,6 +68,14 @@ impl User2faRepository for DbUser2faRepository {
         active.enabled = Set(enabled);
         active.enabled_at = Set(if enabled { Some(now) } else { None });
         active.update(self.db.as_ref()).await?;
+        Ok(())
+    }
+
+    async fn delete_by_user_id(&self, user_id: i32) -> Result<(), AppError> {
+        user_2fa::Entity::delete_many()
+            .filter(user_2fa::Column::UserId.eq(user_id))
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 }

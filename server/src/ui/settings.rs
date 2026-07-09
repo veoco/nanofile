@@ -6,13 +6,11 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Response},
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::password::{hash_password, verify_password};
-use crate::entity::{api_token, s2fa_token, sync_token, user, user_2fa};
 use crate::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -85,14 +83,14 @@ pub async fn settings_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    let db = state.db.as_ref();
-
-    let user_record = user::Entity::find_by_id(user.user_id)
-        .one(db)
+    let user_record = state
+        .repos
+        .user
+        .find_by_id(user.user_id)
         .await?
         .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
-    let two_fa = user_2fa::Entity::find_by_id(user.user_id).one(db).await?;
+    let two_fa = state.repos.user_2fa.find_by_user_id(user.user_id).await?;
     let two_fa_enabled = two_fa.as_ref().map(|tf| tf.enabled).unwrap_or(false);
 
     let csrf_token = Some(crate::auth::csrf::generate_csrf_token(
@@ -137,10 +135,10 @@ pub async fn change_password(
         }
     }
 
-    let db = state.db.as_ref();
-
-    let user_record = user::Entity::find_by_id(user.user_id)
-        .one(db)
+    let user_record = state
+        .repos
+        .user
+        .find_by_id(user.user_id)
         .await
         .map_err(|e| AppError::internal(format!("db error: {e}")))?
         .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
@@ -179,10 +177,10 @@ pub async fn change_password(
         &form.new_password,
         state.config.auth.password_hash_iterations,
     );
-    let mut active: user::ActiveModel = user_record.into();
-    active.password_hash = Set(new_hash);
-    active
-        .update(db)
+    state
+        .repos
+        .user
+        .update_password(user.user_id, new_hash)
         .await
         .map_err(|e| AppError::internal(format!("update failed: {e}")))?;
 
@@ -204,20 +202,16 @@ pub async fn update_display_name(
         }
     }
 
-    let db = state.db.as_ref();
-
-    let user_record = user::Entity::find_by_id(user.user_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
-
-    let mut active: user::ActiveModel = user_record.into();
-    active.display_name = sea_orm::Set(if form.display_name.trim().is_empty() {
+    let display_name = if form.display_name.trim().is_empty() {
         None
     } else {
         Some(form.display_name.trim().to_string())
-    });
-    active.update(db).await?;
+    };
+    state
+        .repos
+        .user
+        .update_display_name(user.user_id, display_name)
+        .await?;
 
     Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }
@@ -227,13 +221,10 @@ pub async fn devices_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    let db = state.db.as_ref();
-
-    let tokens = api_token::Entity::find()
-        .filter(api_token::Column::UserId.eq(user.user_id))
-        .filter(api_token::Column::Platform.is_not_null())
-        .order_by_desc(api_token::Column::CreatedAt)
-        .all(db)
+    let tokens = state
+        .repos
+        .api_token
+        .find_by_user_id_with_platform(user.user_id)
         .await?;
 
     let mut seen = std::collections::HashSet::new();
@@ -298,28 +289,25 @@ pub async fn unlink_device(
         }
     }
 
-    let db = state.db.as_ref();
-
     // 1. Delete API tokens for this device (identified by platform + device_id).
-    api_token::Entity::delete_many()
-        .filter(api_token::Column::UserId.eq(user.user_id))
-        .filter(api_token::Column::Platform.eq(&form.platform))
-        .filter(api_token::Column::DeviceId.eq(&form.device_id))
-        .exec(db)
+    state
+        .repos
+        .api_token
+        .delete_many_by_user_platform_device(user.user_id, &form.platform, &form.device_id)
         .await?;
 
     // 2. Delete S2FA device trust tokens (identified by device_id).
-    s2fa_token::Entity::delete_many()
-        .filter(s2fa_token::Column::UserId.eq(user.user_id))
-        .filter(s2fa_token::Column::DeviceId.eq(&form.device_id))
-        .exec(db)
+    state
+        .repos
+        .s2fa_token
+        .delete_by_user_and_device(user.user_id, &form.device_id)
         .await?;
 
     // 3. Delete sync tokens linked to this device via peer_id (= client_id).
-    sync_token::Entity::delete_many()
-        .filter(sync_token::Column::UserId.eq(user.user_id))
-        .filter(sync_token::Column::PeerId.eq(&form.device_id))
-        .exec(db)
+    state
+        .repos
+        .sync_token
+        .delete_by_user_and_peer(user.user_id, &form.device_id)
         .await?;
 
     Ok((StatusCode::FOUND, [("Location", "/settings/devices/")]).into_response())

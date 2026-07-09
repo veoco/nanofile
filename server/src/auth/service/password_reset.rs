@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use crate::auth::password::hash_password;
-use crate::auth::password_reset::{generate_reset_token, hash_token, RESET_TOKEN_TTL_SECONDS};
+use crate::auth::password_reset::{RESET_TOKEN_TTL_SECONDS, generate_reset_token, hash_token};
 use crate::entity::password_reset_token;
 use crate::error::AppError;
 use crate::repository::Repositories;
@@ -43,12 +43,7 @@ impl PasswordResetService {
 
             self.repos
                 .password_reset_token
-                .create(
-                    user.id,
-                    token_hash,
-                    now,
-                    now + RESET_TOKEN_TTL_SECONDS,
-                )
+                .create(user.id, token_hash, now, now + RESET_TOKEN_TTL_SECONDS)
                 .await?;
 
             let base = site_url.trim_end_matches('/');

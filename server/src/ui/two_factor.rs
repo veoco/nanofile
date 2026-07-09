@@ -11,14 +11,12 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse},
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::password::verify_password;
 use crate::auth::totp::TotpManager;
-use crate::entity::user_2fa;
 use crate::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -71,8 +69,7 @@ async fn render_page(
     success: Option<String>,
     backup_codes: Option<Vec<String>>,
 ) -> Result<Html<String>, AppError> {
-    let db = state.db.as_ref();
-    let two_fa = user_2fa::Entity::find_by_id(user.user_id).one(db).await?;
+    let two_fa = state.repos.user_2fa.find_by_user_id(user.user_id).await?;
     let enabled = two_fa.as_ref().map(|tf| tf.enabled).unwrap_or(false);
     let setup_pending = two_fa.is_some() && !enabled;
 
@@ -122,38 +119,44 @@ pub async fn setup_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    let db = state.db.as_ref();
-
     // Check if already enabled — if so, just show the enabled page.
-    let existing = user_2fa::Entity::find_by_id(user.user_id).one(db).await?;
+    let existing = state.repos.user_2fa.find_by_user_id(user.user_id).await?;
     if existing.as_ref().is_some_and(|tf| tf.enabled) {
         return render_page(&user, &state, None, None, None).await;
     }
 
     // No record or setup-pending → regenerate a fresh secret every time.
     // Delete any old record so we start clean.
-    user_2fa::Entity::delete_many()
-        .filter(user_2fa::Column::UserId.eq(user.user_id))
-        .exec(db)
-        .await?;
+    state.repos.user_2fa.delete_by_user_id(user.user_id).await?;
 
-    crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(db, user.user_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(
+        state.db.as_ref(),
+        user.user_id,
+    )
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?;
 
-    TotpManager::get_or_create_2fa(db, user.user_id)
+    TotpManager::get_or_create_2fa(state.db.as_ref(), user.user_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
     // Generate backup codes for the post-verify display
     let raw_codes = crate::auth::backup_codes::BackupCodeManager::generate_codes(10);
-    crate::auth::backup_codes::BackupCodeManager::store_codes(db, user.user_id, &raw_codes)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    crate::auth::backup_codes::BackupCodeManager::store_codes(
+        state.db.as_ref(),
+        user.user_id,
+        &raw_codes,
+    )
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?;
 
-    render_page(&user, &state,
+    render_page(
+        &user,
+        &state,
         None,
-        Some("Scan the QR code with your authenticator app, then enter the verification code below to enable.".to_string()),
+        Some(
+            "Scan the QR code with your authenticator app, then enter the verification code below to enable.".to_string(),
+        ),
         None, // backup codes shown only after successful verification
     )
     .await
@@ -170,25 +173,35 @@ pub async fn setup_2fa(
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
-    let db = state.db.as_ref();
 
-    TotpManager::get_or_create_2fa(db, user.user_id)
+    TotpManager::get_or_create_2fa(state.db.as_ref(), user.user_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
     // Regenerate backup codes
-    crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(db, user.user_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(
+        state.db.as_ref(),
+        user.user_id,
+    )
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?;
 
     let raw_codes = crate::auth::backup_codes::BackupCodeManager::generate_codes(10);
-    crate::auth::backup_codes::BackupCodeManager::store_codes(db, user.user_id, &raw_codes)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    crate::auth::backup_codes::BackupCodeManager::store_codes(
+        state.db.as_ref(),
+        user.user_id,
+        &raw_codes,
+    )
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?;
 
-    render_page(&user, &state,
+    render_page(
+        &user,
+        &state,
         None,
-        Some("Scan the QR code with your authenticator app, then enter the verification code below to enable.".to_string()),
+        Some(
+            "Scan the QR code with your authenticator app, then enter the verification code below to enable.".to_string(),
+        ),
         Some(raw_codes),
     )
     .await
@@ -202,10 +215,11 @@ pub async fn verify_2fa(
     Form(form): Form<VerifyForm>,
 ) -> Result<impl IntoResponse, AppError> {
     crate::auth::csrf::check_form_csrf(&state, &user.session_token, form.csrf_token.as_deref())?;
-    let db = state.db.as_ref();
 
-    let two_fa = user_2fa::Entity::find_by_id(user.user_id)
-        .one(db)
+    let two_fa = state
+        .repos
+        .user_2fa
+        .find_by_user_id(user.user_id)
         .await?
         .ok_or_else(|| AppError::BadRequest("2FA not set up. Click 'Set Up' first.".into()))?;
 
@@ -214,28 +228,40 @@ pub async fn verify_2fa(
 
     let code_valid = TotpManager::verify_code(&totp, &form.code);
     let backup_valid = if !code_valid {
-        crate::auth::backup_codes::BackupCodeManager::verify_code(db, user.user_id, &form.code)
-            .await
-            .unwrap_or(false)
+        crate::auth::backup_codes::BackupCodeManager::verify_code(
+            state.db.as_ref(),
+            user.user_id,
+            &form.code,
+        )
+        .await
+        .unwrap_or(false)
     } else {
         false
     };
 
     if code_valid || backup_valid {
         let now = chrono::Utc::now().timestamp();
-        let mut active: user_2fa::ActiveModel = two_fa.into();
-        active.enabled = Set(true);
-        active.enabled_at = Set(Some(now));
-        active.update(db).await?;
+        state
+            .repos
+            .user_2fa
+            .set_enabled(user.user_id, true, now)
+            .await?;
 
         // Generate a fresh set of backup codes for the user to save one last time
-        crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(db, user.user_id)
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
+        crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(
+            state.db.as_ref(),
+            user.user_id,
+        )
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
         let fresh_codes = crate::auth::backup_codes::BackupCodeManager::generate_codes(10);
-        crate::auth::backup_codes::BackupCodeManager::store_codes(db, user.user_id, &fresh_codes)
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
+        crate::auth::backup_codes::BackupCodeManager::store_codes(
+            state.db.as_ref(),
+            user.user_id,
+            &fresh_codes,
+        )
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
 
         render_page(
             &user,
@@ -274,10 +300,10 @@ pub async fn disable_2fa(
         }
     }
 
-    let db = state.db.as_ref();
-
-    let user_record = crate::entity::user::Entity::find_by_id(user.user_id)
-        .one(db)
+    let user_record = state
+        .repos
+        .user
+        .find_by_id(user.user_id)
         .await?
         .ok_or(AppError::Unauthorized)?;
 
@@ -298,20 +324,22 @@ pub async fn disable_2fa(
     }
 
     // Verify 2FA is set up, then delete for a fresh secret on next setup
-    user_2fa::Entity::find_by_id(user.user_id)
-        .one(db)
+    state
+        .repos
+        .user_2fa
+        .find_by_user_id(user.user_id)
         .await?
         .ok_or_else(|| AppError::BadRequest("2FA is not set up.".into()))?;
 
-    user_2fa::Entity::delete_many()
-        .filter(user_2fa::Column::UserId.eq(user.user_id))
-        .exec(db)
-        .await?;
+    state.repos.user_2fa.delete_by_user_id(user.user_id).await?;
 
     // Also clean up backup codes
-    crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(db, user.user_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(
+        state.db.as_ref(),
+        user.user_id,
+    )
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?;
 
     Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }
@@ -321,10 +349,10 @@ pub async fn qr_code_image(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let db = state.db.as_ref();
-
-    let two_fa = user_2fa::Entity::find_by_id(user.user_id)
-        .one(db)
+    let two_fa = state
+        .repos
+        .user_2fa
+        .find_by_user_id(user.user_id)
         .await?
         .ok_or_else(|| AppError::BadRequest("2FA not set up.".into()))?;
 

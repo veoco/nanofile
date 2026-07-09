@@ -6,16 +6,17 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::password::{hash_password, validate_password, verify_password};
+use crate::auth::password::verify_password;
+use crate::auth::service::password_reset::PasswordResetService;
+use crate::auth::service::registration::{RegistrationParams, RegistrationService};
 use crate::auth::token::generate_api_token;
 use crate::auth::totp::TotpManager;
-use crate::entity::{api_token, invitation_code, password_reset_token, user, user_2fa};
 use crate::error::AppError;
+use crate::repository::CreateSessionTokenParams;
 
 // ─── Templates ───────────────────────────────────────────────────────────────
 
@@ -85,7 +86,7 @@ fn session_cookie(name: &str, value: &str, max_age: Option<u64>, secure: bool) -
 
 /// Create a short-lived pending token for the 2FA login flow.
 async fn create_pending_token(
-    db: &sea_orm::DatabaseConnection,
+    repos: &crate::repository::Repositories,
     user_id: i32,
 ) -> Result<String, AppError> {
     let token = generate_api_token();
@@ -93,20 +94,18 @@ async fn create_pending_token(
     // 5-minute TTL for the pending token
     let expires_at = now + 300;
 
-    let token_record = api_token::ActiveModel {
-        id: sea_orm::NotSet,
-        user_id: Set(user_id),
-        token: Set(token.clone()),
-        created_at: Set(now),
-        expires_at: Set(Some(expires_at)),
-        device_id: Set(None),
-        platform: Set(None),
-        device_name: Set(None),
-        client_version: Set(None),
-    };
-
-    token_record
-        .insert(db)
+    repos
+        .api_token
+        .create_session_token(CreateSessionTokenParams {
+            user_id,
+            token: token.clone(),
+            created_at: now,
+            expires_at: Some(expires_at),
+            device_id: None,
+            platform: None,
+            device_name: None,
+            client_version: None,
+        })
         .await
         .map_err(|e| AppError::internal(format!("failed to create pending token: {e}")))?;
 
@@ -143,8 +142,6 @@ pub async fn login(
             .map(|html| (StatusCode::FORBIDDEN, Html(html)).into_response());
     }
 
-    let db = state.db.as_ref();
-
     // Extract client IP for rate limiting.
     let client_ip = headers
         .get("x-forwarded-for")
@@ -177,13 +174,7 @@ pub async fn login(
         .map(|html| (StatusCode::TOO_MANY_REQUESTS, Html(html)).into_response());
     }
 
-    let user_record = user::Entity::find()
-        .filter(user::Column::Email.eq(&form.email))
-        .one(db)
-        .await
-        .map_err(|_| AppError::internal("database error"))?;
-
-    let user_record = match user_record {
+    let user_record = match state.repos.user.find_by_email(&form.email).await? {
         Some(u) => u,
         None => {
             state.login_rate_limiter.record_failure(&rate_limit_key_ip);
@@ -236,13 +227,13 @@ pub async fn login(
     state.login_rate_limiter.clear(&rate_limit_key_global);
 
     // ── Check for 2FA ─────────────────────────────────────────────────
-    let two_fa = user_2fa::Entity::find_by_id(user_record.id).one(db).await?;
+    let two_fa = state.repos.user_2fa.find_by_user_id(user_record.id).await?;
 
     if let Some(tfa) = two_fa
         && tfa.enabled
     {
         // User has 2FA enabled — create a pending token and redirect to TOTP page
-        let pending_token = create_pending_token(db, user_record.id).await?;
+        let pending_token = create_pending_token(&state.repos, user_record.id).await?;
         let cookie = session_cookie(
             "seahub-session-pending",
             &pending_token,
@@ -278,20 +269,19 @@ pub async fn login(
         Some(now + 86400)
     };
 
-    let token_record = api_token::ActiveModel {
-        id: sea_orm::NotSet,
-        user_id: Set(user_record.id),
-        token: Set(session_token.clone()),
-        created_at: Set(now),
-        expires_at: Set(token_expires_at),
-        device_id: Set(None),
-        platform: Set(None),
-        device_name: Set(None),
-        client_version: Set(None),
-    };
-
-    token_record
-        .insert(db)
+    state
+        .repos
+        .api_token
+        .create_session_token(CreateSessionTokenParams {
+            user_id: user_record.id,
+            token: session_token.clone(),
+            created_at: now,
+            expires_at: token_expires_at,
+            device_id: None,
+            platform: None,
+            device_name: None,
+            client_version: None,
+        })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
@@ -371,7 +361,6 @@ pub async fn two_factor_auth(
     if !crate::auth::csrf::validate_origin(&headers, &origin) {
         return Err(AppError::BadRequest("Invalid request origin.".to_string()));
     }
-    let db = state.db.as_ref();
 
     // Extract client IP for rate limiting.
     let client_ip = headers
@@ -402,9 +391,10 @@ pub async fn two_factor_auth(
         })?;
 
     // Look up the pending token
-    let token_record = api_token::Entity::find()
-        .filter(api_token::Column::Token.eq(pending_token))
-        .one(db)
+    let token_record = state
+        .repos
+        .api_token
+        .find_by_token(pending_token)
         .await
         .map_err(|_| AppError::internal("database error"))?
         .ok_or_else(|| {
@@ -417,7 +407,7 @@ pub async fn two_factor_auth(
     if let Some(expires_at) = token_record.expires_at {
         let now = chrono::Utc::now().timestamp();
         if now > expires_at {
-            let _ = token_record.delete(db).await;
+            let _ = state.repos.api_token.delete_by_token(pending_token).await;
             return Err(AppError::BadRequest(
                 "Authentication session expired. Please log in again.".into(),
             ));
@@ -430,28 +420,32 @@ pub async fn two_factor_auth(
     let totp_key = format!("totp:{}:{}", user_id, client_ip);
     if state.totp_limiter.is_limited(&totp_key) {
         // Delete pending token to force re-login
-        let _ = token_record.delete(db).await;
+        let _ = state.repos.api_token.delete_by_token(pending_token).await;
         return Err(AppError::BadRequest(
             "Too many verification attempts. Please log in again.".into(),
         ));
     }
 
     // Fetch user's 2FA config
-    let two_fa = user_2fa::Entity::find_by_id(user_id)
-        .one(db)
+    let two_fa = state
+        .repos
+        .user_2fa
+        .find_by_user_id(user_id)
         .await?
         .ok_or_else(|| AppError::BadRequest("2FA is not configured for this account.".into()))?;
 
     if !two_fa.enabled {
         // 2FA was disabled since the pending token was created — proceed to login
         // Delete pending token, redirect to login page
-        let _ = token_record.delete(db).await;
+        let _ = state.repos.api_token.delete_by_token(pending_token).await;
         return Ok((StatusCode::FOUND, [("Location", "/accounts/login/")]).into_response());
     }
 
     // Fetch user record for email
-    let user_record = user::Entity::find_by_id(user_id)
-        .one(db)
+    let user_record = state
+        .repos
+        .user
+        .find_by_id(user_id)
         .await?
         .ok_or(AppError::Unauthorized)?;
 
@@ -463,9 +457,13 @@ pub async fn two_factor_auth(
 
     // Try backup code if TOTP failed
     let backup_valid = if !code_valid {
-        crate::auth::backup_codes::BackupCodeManager::verify_code(db, user_id, &form.code)
-            .await
-            .unwrap_or(false)
+        crate::auth::backup_codes::BackupCodeManager::verify_code(
+            state.db.as_ref(),
+            user_id,
+            &form.code,
+        )
+        .await
+        .unwrap_or(false)
     } else {
         false
     };
@@ -485,27 +483,26 @@ pub async fn two_factor_auth(
     // ── TOTP verified — create real session ────────────────────────
     state.totp_limiter.clear(&totp_key);
     // Delete the pending token
-    let _ = token_record.delete(db).await;
+    let _ = state.repos.api_token.delete_by_token(pending_token).await;
 
     let session_token = generate_api_token();
     let now = chrono::Utc::now().timestamp();
     let ttl_days = state.config.auth.api_token_ttl_days;
     let expires_at = now + (ttl_days as i64 * 86400);
 
-    let new_token = api_token::ActiveModel {
-        id: sea_orm::NotSet,
-        user_id: Set(user_id),
-        token: Set(session_token.clone()),
-        created_at: Set(now),
-        expires_at: Set(Some(expires_at)),
-        device_id: Set(None),
-        platform: Set(None),
-        device_name: Set(None),
-        client_version: Set(None),
-    };
-
-    new_token
-        .insert(db)
+    state
+        .repos
+        .api_token
+        .create_session_token(CreateSessionTokenParams {
+            user_id,
+            token: session_token.clone(),
+            created_at: now,
+            expires_at: Some(expires_at),
+            device_id: None,
+            platform: None,
+            device_name: None,
+            client_version: None,
+        })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
@@ -569,10 +566,7 @@ pub async fn logout(
             .find(|s| s.starts_with("seahub-session="))
             .and_then(|s| s.strip_prefix("seahub-session="))
     {
-        let _ = api_token::Entity::delete_many()
-            .filter(api_token::Column::Token.eq(token))
-            .exec(state.db.as_ref())
-            .await;
+        let _ = state.repos.api_token.delete_by_token(token).await;
     }
 
     let secure_cookies = state.config.server.secure_cookies();
@@ -667,113 +661,52 @@ pub async fn register(
     }
     state.registration_limiter.record_attempt(&rl_key);
 
-    let db = state.db.as_ref();
-
-    // 1. Validate invitation code.
-    let code_record = invitation_code::Entity::find()
-        .filter(invitation_code::Column::Code.eq(&form.invitation_code))
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::BadRequest("Invalid invitation code.".to_string()))?;
-
-    if code_record.used_by.is_some() {
-        return Err(AppError::BadRequest(
-            "This invitation code has already been used.".to_string(),
-        ));
-    }
-
-    // 2. Check email binding (if the code is bound to a specific email).
-    if let Some(ref bound_email) = code_record.email
-        && bound_email.to_lowercase() != form.email.to_lowercase()
-    {
-        return Err(AppError::BadRequest(
-            "This invitation code is bound to a different email address.".to_string(),
-        ));
-    }
-
-    // 3. Validate email format.
-    if !form.email.contains('@') || form.email.len() > 254 {
-        return Err(AppError::BadRequest("Invalid email address.".to_string()));
-    }
-
-    // 4. Validate email uniqueness.
-    let existing = user::Entity::find()
-        .filter(user::Column::Email.eq(&form.email))
-        .one(db)
-        .await?;
-    if existing.is_some() {
-        return Err(AppError::BadRequest(
-            "A user with this email already exists.".to_string(),
-        ));
-    }
-
-    // 5. Validate passwords match.
+    // Validate passwords match before delegating to service.
     if form.password1 != form.password2 {
         return Err(AppError::BadRequest("Passwords do not match.".to_string()));
     }
 
-    // 6. Validate password strength.
     let cfg = &state.config.auth;
-    if let Err(msg) = validate_password(
-        &form.password1,
-        cfg.password_min_length,
-        cfg.require_strong_password,
-    ) {
-        return Err(AppError::BadRequest(msg));
-    }
 
-    // 7. Create the user.
+    // Use RegistrationService for the core logic.
+    let reg_service = RegistrationService::new(state.repos.clone());
+    let result = reg_service
+        .register(RegistrationParams {
+            email: form.email,
+            password: form.password1,
+            invitation_code: form.invitation_code,
+            password_min_length: cfg.password_min_length as usize,
+            require_strong_password: cfg.require_strong_password,
+            password_hash_iterations: cfg.password_hash_iterations,
+        })
+        .await?;
+
+    // Auto-login — create session token and cookie.
     let now = chrono::Utc::now().timestamp();
-    let iterations = state.config.auth.password_hash_iterations;
-    let password_hash = hash_password(&form.password1, iterations);
-
-    let new_user = user::ActiveModel {
-        id: sea_orm::NotSet,
-        email: Set(form.email),
-        password_hash: Set(password_hash),
-        is_active: Set(true),
-        is_admin: Set(false),
-        created_at: Set(now),
-        last_login_at: Set(None),
-        invited_by: Set(Some(code_record.creator_id)),
-        storage_quota: sea_orm::NotSet,
-        name: sea_orm::NotSet,
-        display_name: sea_orm::NotSet,
-    };
-
-    let new_user = new_user
-        .insert(db)
-        .await
-        .map_err(|e| AppError::internal(format!("failed to create user: {e}")))?;
-
-    // 8. Mark invitation code as used.
-    let mut active_code: invitation_code::ActiveModel = code_record.into();
-    active_code.used_by = Set(Some(new_user.id));
-    active_code.used_at = Set(Some(now));
-    active_code.update(db).await?;
-
-    // 9. Auto-login — create session token and cookie.
     let session_token = generate_api_token();
     let ttl_days = cfg.api_token_ttl_days;
 
-    let token_record = api_token::ActiveModel {
-        id: sea_orm::NotSet,
-        user_id: Set(new_user.id),
-        token: Set(session_token.clone()),
-        created_at: Set(now),
-        expires_at: Set(Some(now + (ttl_days as i64 * 86400))),
-        device_id: Set(None),
-        platform: Set(None),
-        device_name: Set(None),
-        client_version: Set(None),
-    };
-
-    token_record
-        .insert(db)
+    state
+        .repos
+        .api_token
+        .create_session_token(CreateSessionTokenParams {
+            user_id: result.user.id,
+            token: session_token.clone(),
+            created_at: now,
+            expires_at: Some(now + (ttl_days as i64 * 86400)),
+            device_id: None,
+            platform: None,
+            device_name: None,
+            client_version: None,
+        })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
-    state.repos.user.touch_last_login(new_user.id, now).await?;
+    state
+        .repos
+        .user
+        .touch_last_login(result.user.id, now)
+        .await?;
 
     let secure_cookies = state.config.server.secure_cookies();
     let cookie = session_cookie(
@@ -903,42 +836,15 @@ pub async fn password_reset(
     }
     state.password_reset_limiter.record_attempt(&rl_key);
 
-    let db = state.db.as_ref();
-
-    // Look up the user (fail silently to prevent enumeration).
-    let user_record = user::Entity::find()
-        .filter(user::Column::Email.eq(&form.email))
-        .one(db)
+    // Use PasswordResetService.
+    let reset_service = PasswordResetService::new(state.repos.clone());
+    let result = reset_service
+        .create_reset_token(&form.email, &state.config.server.site_url)
         .await?;
-
-    let reset_url = if let Some(user) = user_record {
-        let now = chrono::Utc::now().timestamp();
-        let (raw_token, token_hash) = crate::auth::password_reset::generate_reset_token();
-
-        let token_model = crate::entity::password_reset_token::ActiveModel {
-            id: sea_orm::NotSet,
-            user_id: Set(user.id),
-            token_hash: Set(token_hash),
-            created_at: Set(now),
-            expires_at: Set(now + crate::auth::password_reset::RESET_TOKEN_TTL_SECONDS),
-            used: Set(false),
-        };
-
-        token_model.insert(db).await?;
-
-        let base = state.config.server.site_url.trim_end_matches('/');
-        let link = format!("{}/accounts/password/reset/{}/", base, raw_token);
-        tracing::info!("Password reset link generated for user {}", user.email);
-        Some(link)
-    } else {
-        // User not found — still show the same success page (no enumeration).
-        tracing::info!("Password reset requested for unknown email: {}", form.email);
-        None
-    };
 
     let tpl = PasswordResetDoneTemplate {
         urls: crate::static_assets::template_urls(),
-        reset_url,
+        reset_url: result.reset_url,
     };
     let html = tpl
         .render()
@@ -958,38 +864,13 @@ pub async fn password_reset_done() -> Result<Html<String>, AppError> {
     Ok(Html(html))
 }
 
-/// Validate a raw reset token, returning the token record if valid.
-async fn validate_reset_token(
-    db: &sea_orm::DatabaseConnection,
-    raw_token: &str,
-) -> Result<Option<crate::entity::password_reset_token::Model>, AppError> {
-    let token_hash = crate::auth::password_reset::hash_token(raw_token);
-    let record = password_reset_token::Entity::find()
-        .filter(password_reset_token::Column::TokenHash.eq(&token_hash))
-        .one(db)
-        .await?;
-
-    let record = match record {
-        Some(r) => r,
-        None => return Ok(None),
-    };
-
-    let now = chrono::Utc::now().timestamp();
-
-    if record.used || record.expires_at <= now {
-        return Ok(None);
-    }
-
-    Ok(Some(record))
-}
-
 /// GET /accounts/password/reset/{token}/ — show the new password form or error.
 pub async fn password_reset_confirm_page(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Html<String>, AppError> {
-    let db = state.db.as_ref();
-    let valid = validate_reset_token(db, &token).await?.is_some();
+    let reset_service = PasswordResetService::new(state.repos.clone());
+    let valid = reset_service.validate_token(&token).await?.is_some();
 
     let tpl = PasswordResetConfirmTemplate {
         urls: crate::static_assets::template_urls(),
@@ -1015,25 +896,9 @@ pub async fn password_reset_confirm(
         return Ok(StatusCode::FORBIDDEN.into_response());
     }
 
-    let db = state.db.as_ref();
+    let cfg = &state.config.auth;
 
-    // Validate the token.
-    let record = match validate_reset_token(db, &token).await? {
-        Some(r) => r,
-        None => {
-            let tpl = PasswordResetConfirmTemplate {
-                urls: crate::static_assets::template_urls(),
-                error: Some("This reset link is invalid or has expired.".to_string()),
-                valid: false,
-            };
-            let html = tpl
-                .render()
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            return Ok((StatusCode::OK, Html(html)).into_response());
-        }
-    };
-
-    // Validate passwords match.
+    // Validate passwords match before delegating to service.
     if form.password1 != form.password2 {
         let tpl = PasswordResetConfirmTemplate {
             urls: crate::static_assets::template_urls(),
@@ -1046,49 +911,32 @@ pub async fn password_reset_confirm(
         return Ok((StatusCode::OK, Html(html)).into_response());
     }
 
-    // Validate password strength.
-    let cfg = &state.config.auth;
-    if let Err(msg) = validate_password(
-        &form.password1,
-        cfg.password_min_length,
-        cfg.require_strong_password,
-    ) {
-        let tpl = PasswordResetConfirmTemplate {
-            urls: crate::static_assets::template_urls(),
-            error: Some(msg),
-            valid: true,
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok((StatusCode::OK, Html(html)).into_response());
+    // Use PasswordResetService.
+    let reset_service = PasswordResetService::new(state.repos.clone());
+    match reset_service
+        .reset_password(
+            &token,
+            &form.password1,
+            cfg.password_min_length as usize,
+            cfg.require_strong_password,
+            cfg.password_hash_iterations,
+        )
+        .await
+    {
+        Ok(()) => {}
+        Err(AppError::BadRequest(msg)) => {
+            let tpl = PasswordResetConfirmTemplate {
+                urls: crate::static_assets::template_urls(),
+                error: Some(msg),
+                valid: true,
+            };
+            let html = tpl
+                .render()
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            return Ok((StatusCode::OK, Html(html)).into_response());
+        }
+        Err(e) => return Err(e),
     }
-
-    // Update the user's password.
-    let new_hash = crate::auth::password::hash_password(
-        &form.password1,
-        state.config.auth.password_hash_iterations,
-    );
-    let mut user_active: user::ActiveModel = user::Entity::find_by_id(record.user_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::Internal("User not found.".to_string()))?
-        .into();
-    user_active.password_hash = Set(new_hash);
-    user_active.update(db).await?;
-
-    let user_id = record.user_id;
-
-    // Mark token as used.
-    let mut token_active: crate::entity::password_reset_token::ActiveModel = record.into();
-    token_active.used = Set(true);
-    token_active.update(db).await?;
-
-    // Delete all session tokens for this user (force re-login).
-    api_token::Entity::delete_many()
-        .filter(api_token::Column::UserId.eq(user_id))
-        .exec(db)
-        .await?;
 
     Ok((
         StatusCode::FOUND,
