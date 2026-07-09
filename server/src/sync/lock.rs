@@ -3,13 +3,13 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, Set};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::entity::{file_lock_timestamp, locked_file};
+use crate::entity::locked_file;
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -177,9 +177,10 @@ pub async fn list_locked_files_post(
 
         // Get the actual lock timestamp for this repo (used for client cache invalidation).
         let lock_ts = if token_valid {
-            file_lock_timestamp::Entity::find()
-                .filter(file_lock_timestamp::Column::RepoId.eq(&req.repo_id))
-                .one(state.db.as_ref())
+            state
+                .repos
+                .file_lock_timestamp
+                .find_by_repo(&req.repo_id)
                 .await?
                 .map(|t| t.update_time)
                 .unwrap_or(0)

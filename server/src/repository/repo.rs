@@ -11,6 +11,11 @@ pub trait RepoRepository: Send + Sync {
     async fn find_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError>;
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
     async fn update(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
+    async fn update_head_commit(
+        &self,
+        repo_id: &str,
+        head_commit_id: Option<String>,
+    ) -> Result<(), AppError>;
     async fn delete_by_id(&self, repo_id: &str) -> Result<(), AppError>;
 }
 
@@ -54,6 +59,21 @@ impl RepoRepository for DbRepoRepository {
     async fn update(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError> {
         let result = model.update(self.db.as_ref()).await?;
         Ok(result)
+    }
+
+    async fn update_head_commit(
+        &self,
+        repo_id: &str,
+        head_commit_id: Option<String>,
+    ) -> Result<(), AppError> {
+        let repo_model = self
+            .find_by_id(repo_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Repo not found".into()))?;
+        let mut active: repo::ActiveModel = repo_model.into();
+        active.head_commit_id = sea_orm::Set(head_commit_id);
+        active.update(self.db.as_ref()).await?;
+        Ok(())
     }
 
     async fn delete_by_id(&self, repo_id: &str) -> Result<(), AppError> {

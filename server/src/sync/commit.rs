@@ -4,7 +4,6 @@ use axum::{
     http::StatusCode,
 };
 use rand::RngExt;
-use sea_orm::ActiveModelTrait;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,7 +14,7 @@ use crate::AppState;
 use crate::activity_log;
 use crate::auth::middleware::SyncAuth;
 use crate::common::EMPTY_SHA1;
-use crate::entity::{commit, repo};
+use crate::entity::commit;
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData};
@@ -341,16 +340,11 @@ pub async fn update_branch(
             ));
         }
 
-        let mut repo_active: repo::ActiveModel = state
+        state
             .repos
             .repo
-            .find_by_id(&repo_id)
-            .await?
-            .ok_or_else(|| AppError::Internal("repo not found".into()))?
-            .into();
-
-        repo_active.head_commit_id = sea_orm::Set(Some(new_head.clone()));
-        repo_active.update(state.db.as_ref()).await?;
+            .update_head_commit(&repo_id, Some(new_head.clone()))
+            .await?;
 
         // Compute repo size delta from the tree-diff result, avoiding a
         // full BFS traversal of every file.  When `size_delta` is 0 and
