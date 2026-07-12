@@ -12,13 +12,11 @@ impl TotpManager {
         secret.to_encoded().to_string()
     }
 
-    pub fn create_totp(
-        secret: &str,
-        account_name: &str,
-        issuer: &str,
-    ) -> Result<TOTP, Box<dyn std::error::Error>> {
+    pub fn create_totp(secret: &str, account_name: &str, issuer: &str) -> Result<TOTP, AppError> {
         let secret_obj = Secret::Encoded(secret.to_string());
-        let secret_bytes = secret_obj.to_bytes()?;
+        let secret_bytes = secret_obj
+            .to_bytes()
+            .map_err(|e| AppError::internal(e.to_string()))?;
         let totp = TOTP::new(
             Algorithm::SHA1,
             6,
@@ -27,7 +25,8 @@ impl TotpManager {
             secret_bytes,
             Some(issuer.to_string()),
             account_name.to_string(),
-        )?;
+        )
+        .map_err(|e| AppError::internal(e.to_string()))?;
         Ok(totp)
     }
 

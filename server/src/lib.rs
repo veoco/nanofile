@@ -338,20 +338,20 @@ impl AppState {
         )
     }
 
-    pub fn admin_user_service(&self) -> crate::admin::service::AdminUserService<'_> {
-        crate::admin::service::AdminUserService::new(&self.db, &self.repos)
+    pub fn admin_user_service(&self) -> crate::admin::service::AdminUserService {
+        crate::admin::service::AdminUserService::new(self.repos.clone())
     }
 
-    pub fn admin_service(&self) -> crate::admin::service::AdminService<'_> {
-        crate::admin::service::AdminService::new(&self.db, &self.repos)
+    pub fn admin_service(&self) -> crate::admin::service::AdminService {
+        crate::admin::service::AdminService::new(self.db.clone(), self.repos.clone())
     }
 
-    pub fn device_service(&self) -> crate::user::service::DeviceService<'_> {
-        crate::user::service::DeviceService::new(&self.db, &self.repos)
+    pub fn device_service(&self) -> crate::user::service::DeviceService {
+        crate::user::service::DeviceService::new(self.repos.clone())
     }
 
-    pub fn invitation_service(&self) -> crate::user::service::InvitationService<'_> {
-        crate::user::service::InvitationService::new(&self.db, &self.repos)
+    pub fn invitation_service(&self) -> crate::user::service::InvitationService {
+        crate::user::service::InvitationService::new(self.repos.clone())
     }
 }
 

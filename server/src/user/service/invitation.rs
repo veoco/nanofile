@@ -1,4 +1,4 @@
-use sea_orm::DatabaseConnection;
+use std::sync::Arc;
 
 use crate::entity::invitation_code;
 use crate::error::AppError;
@@ -14,14 +14,13 @@ pub struct InvitationInfo {
     pub id: i32,
 }
 
-pub struct InvitationService<'a> {
-    pub db: &'a DatabaseConnection,
-    pub repos: &'a Repositories,
+pub struct InvitationService {
+    repos: Arc<Repositories>,
 }
 
-impl<'a> InvitationService<'a> {
-    pub fn new(db: &'a DatabaseConnection, repos: &'a Repositories) -> Self {
-        Self { db, repos }
+impl InvitationService {
+    pub fn new(repos: Arc<Repositories>) -> Self {
+        Self { repos }
     }
 
     /// List invitation codes created by a user (admin only).

@@ -1,4 +1,5 @@
 use crate::common::EMPTY_SHA1;
+use crate::error::AppError;
 use crate::repository::Repositories;
 use crate::serialization::fs_json::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 
@@ -7,7 +8,7 @@ pub async fn read_fs_dir_data(
     repos: &Repositories,
     repo_id: &str,
     fs_id: &str,
-) -> Result<FsDirData, Box<dyn std::error::Error>> {
+) -> Result<FsDirData, AppError> {
     // The zero hash (all zeros) is a sentinel in seafile's protocol,
     // used for empty/incomplete directories or when an fs_object
     // hasn't been fully committed yet. Treat it as an empty directory.
@@ -21,10 +22,10 @@ pub async fn read_fs_dir_data(
     let obj = repos
         .fs_object
         .find_by_repo_and_fs_id(repo_id, fs_id)
-        .await
-        .map_err(Box::new)?
-        .ok_or_else(|| format!("fs_object not found: {fs_id}"))?;
-    let data: FsDirData = serde_json::from_str(&obj.data)?;
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("fs_object not found: {fs_id}")))?;
+    let data: FsDirData =
+        serde_json::from_str(&obj.data).map_err(|e| AppError::internal(e.to_string()))?;
     Ok(data)
 }
 
@@ -33,14 +34,14 @@ pub async fn read_fs_file_data(
     repos: &Repositories,
     repo_id: &str,
     fs_id: &str,
-) -> Result<FsFileData, Box<dyn std::error::Error>> {
+) -> Result<FsFileData, AppError> {
     let obj = repos
         .fs_object
         .find_by_repo_and_fs_id(repo_id, fs_id)
-        .await
-        .map_err(Box::new)?
-        .ok_or_else(|| format!("fs_object not found: {fs_id}"))?;
-    let data: FsFileData = serde_json::from_str(&obj.data)?;
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("fs_object not found: {fs_id}")))?;
+    let data: FsFileData =
+        serde_json::from_str(&obj.data).map_err(|e| AppError::internal(e.to_string()))?;
     Ok(data)
 }
 
@@ -54,7 +55,7 @@ pub async fn resolve_fs_id(
     repo_id: &str,
     root_fs_id: &str,
     path: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, AppError> {
     let segments: Vec<&str> = path
         .trim_start_matches('/')
         .split('/')
@@ -73,7 +74,7 @@ pub async fn resolve_fs_id(
             .dirents
             .iter()
             .find(|d| d.name == segment)
-            .ok_or_else(|| format!("path segment not found: {segment}"))?;
+            .ok_or_else(|| AppError::NotFound(format!("path segment not found: {segment}")))?;
 
         current_fs_id = entry.id.clone();
     }

@@ -1,12 +1,10 @@
+use crate::error::AppError;
 use crate::repository::Repositories;
 
 pub struct GcManager;
 
 impl GcManager {
-    pub async fn garbage_collect(
-        repos: &Repositories,
-        keep_commits: u64,
-    ) -> Result<u64, Box<dyn std::error::Error>> {
+    pub async fn garbage_collect(repos: &Repositories, keep_commits: u64) -> Result<u64, AppError> {
         let all_fs_ids = repos.fs_object.find_all().await?;
 
         let mut active_fs_ids = std::collections::HashSet::new();
@@ -45,7 +43,7 @@ impl GcManager {
         repos: &Repositories,
         fs_id: &str,
         collected: &mut std::collections::HashSet<String>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), AppError> {
         if collected.contains(fs_id) {
             return Ok(());
         }
@@ -58,7 +56,7 @@ impl GcManager {
             && obj.obj_type == 3
         {
             let dir_data: crate::serialization::fs_json::FsDirData =
-                serde_json::from_str(&obj.data)?;
+                serde_json::from_str(&obj.data).map_err(|e| AppError::internal(e.to_string()))?;
             for entry in &dir_data.dirents {
                 Box::pin(Self::collect_fs_ids(repos, &entry.id, collected)).await?;
             }

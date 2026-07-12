@@ -49,8 +49,7 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
         return Redirect::to("/libraries/").into_response();
     }
 
-    let db = state.db.as_ref();
-    let svc = AdminUserService::new(db, &state.repos);
+    let svc = AdminUserService::new(state.repos.clone());
     let users_data = match svc.list_users().await {
         Ok(u) => u,
         Err(e) => return AppError::internal(e.to_string()).into_response(),
@@ -150,7 +149,7 @@ pub async fn create_user(
         }
     }
 
-    let svc = AdminUserService::new(state.db.as_ref(), &state.repos);
+    let svc = AdminUserService::new(state.repos.clone());
 
     let storage_quota = parse_quota(form.storage_quota.as_deref());
     let is_admin = form.is_admin.is_some();
@@ -203,7 +202,7 @@ pub async fn update_user(
         }
     }
 
-    let svc = AdminUserService::new(state.db.as_ref(), &state.repos);
+    let svc = AdminUserService::new(state.repos.clone());
 
     let storage_quota = parse_quota(form.storage_quota.as_deref());
     let is_admin = form.is_admin.is_some();
@@ -229,7 +228,7 @@ pub async fn delete_user(
         return Err(AppError::Forbidden);
     }
 
-    let svc = AdminUserService::new(state.db.as_ref(), &state.repos);
+    let svc = AdminUserService::new(state.repos.clone());
 
     if let Err(e) = svc.delete_user(user_id).await {
         return Ok(render_sysadmin_error(&state, e).await);

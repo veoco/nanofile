@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use sea_orm::DatabaseConnection;
 
 use super::collect_file_paths;
@@ -8,13 +10,13 @@ use crate::repository::Repositories;
 use crate::storage::DynBlockStorage;
 
 /// Service for index/reindex administration operations.
-pub struct AdminService<'a> {
-    pub db: &'a DatabaseConnection,
-    pub repos: &'a Repositories,
+pub struct AdminService {
+    db: Arc<DatabaseConnection>,
+    repos: Arc<Repositories>,
 }
 
-impl<'a> AdminService<'a> {
-    pub fn new(db: &'a DatabaseConnection, repos: &'a Repositories) -> Self {
+impl AdminService {
+    pub fn new(db: Arc<DatabaseConnection>, repos: Arc<Repositories>) -> Self {
         Self { db, repos }
     }
 
@@ -96,14 +98,14 @@ impl<'a> AdminService<'a> {
             return Ok((0, 0));
         }
 
-        let file_paths = collect_file_paths(self.repos, repo_id, &head.root_id).await?;
+        let file_paths = collect_file_paths(&self.repos, repo_id, &head.root_id).await?;
 
         let mut indexed = 0u64;
         let mut skipped = 0u64;
 
         for fullpath in &file_paths {
             match indexer
-                .reindex_file(self.db, repo_id, fullpath, block_store)
+                .reindex_file(self.db.as_ref(), repo_id, fullpath, block_store)
                 .await
             {
                 Ok(true) => indexed += 1,

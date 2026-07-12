@@ -1,5 +1,6 @@
 use crate::crypto::random_key::encrypt_block;
 use crate::entity::{commit, repo};
+use crate::error::AppError;
 use crate::events;
 use crate::repository::Repositories;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
@@ -30,12 +31,13 @@ impl FileOps {
         // Optional encryption key (key, iv) — when set, blocks are encrypted
         // before writing. Used for encrypted repos during web upload.
         enc_key: Option<(&[u8], &[u8])>,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, AppError> {
         let now = chrono::Utc::now().timestamp();
 
         // Validate input — name may contain '/' for nested paths.
-        crate::sanitize::validate_path(parent_path)?;
-        crate::sanitize::validate_name(name)?;
+        crate::sanitize::validate_path(parent_path)
+            .map_err(|e| AppError::BadRequest(e.to_string()))?;
+        crate::sanitize::validate_name(name).map_err(|e| AppError::BadRequest(e.to_string()))?;
 
         let file_chunks = crate::storage::cdc::file_chunk_cdc(data);
 
@@ -74,7 +76,7 @@ impl FileOps {
                     .commit
                     .find_by_repo_and_commit_id(repo_id, &commit_id)
                     .await?
-                    .ok_or_else(|| Box::<dyn std::error::Error>::from("head commit not found"))?;
+                    .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
                 (commit_ent.root_id, Vec::new())
             } else {
                 let empty_dir = FsDirData {
@@ -166,7 +168,7 @@ impl FileOps {
         };
         repos.commit.insert(commit_model).await?;
 
-        let repo = repo_model.ok_or("repo not found")?;
+        let repo = repo_model.ok_or_else(|| AppError::NotFound("repo not found".into()))?;
         let mut repo_active: repo::ActiveModel = repo.into();
         repo_active.head_commit_id = sea_orm::Set(Some(commit_id.clone()));
         repo_active.updated_at = sea_orm::Set(now);
@@ -195,7 +197,7 @@ impl FileOps {
         immediate_parent_path: &str,
         new_immediate_parent_fs_id: &str,
         ancestor_chain: &[(String, String)],
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, AppError> {
         let mut current_child_fs_id = new_immediate_parent_fs_id.to_string();
         let mut current_child_path = immediate_parent_path.to_string();
 
@@ -273,23 +275,20 @@ impl FileOps {
     }
 
     /// Find the root fs_id via the repo's head commit.
-    async fn resolve_root_fs_id(
-        repos: &Repositories,
-        repo_id: &str,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    async fn resolve_root_fs_id(repos: &Repositories, repo_id: &str) -> Result<String, AppError> {
         let repo_model = repos
             .repo
             .find_by_id(repo_id)
             .await?
-            .ok_or_else(|| "repo not found".to_string())?;
+            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
         let head_commit_id = repo_model
             .head_commit_id
-            .ok_or_else(|| "repo has no head commit".to_string())?;
+            .ok_or_else(|| AppError::NotFound("repo has no head commit".into()))?;
         let commit_ent = repos
             .commit
             .find_by_repo_and_commit_id(repo_id, &head_commit_id)
             .await?
-            .ok_or_else(|| "head commit not found".to_string())?;
+            .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
         Ok(commit_ent.root_id)
     }
 
@@ -298,7 +297,7 @@ impl FileOps {
         repos: &Repositories,
         repo_id: &str,
         path: &str,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, AppError> {
         if path == "/" {
             return Self::resolve_root_fs_id(repos, repo_id).await;
         }
@@ -313,7 +312,9 @@ impl FileOps {
                 .dirents
                 .iter()
                 .find(|e| e.name == part)
-                .ok_or_else(|| format!("path component '{}' not found in '{}'", part, path))?;
+                .ok_or_else(|| {
+                    AppError::NotFound(format!("path component '{}' not found in '{}'", part, path))
+                })?;
             current_fs_id = found.id.clone();
         }
 
@@ -332,7 +333,7 @@ impl FileOps {
         repos: &Repositories,
         repo_id: &str,
         path: &str,
-    ) -> Result<(String, Vec<(String, String)>), Box<dyn std::error::Error>> {
+    ) -> Result<(String, Vec<(String, String)>), AppError> {
         let root_fs_id = Self::resolve_root_fs_id(repos, repo_id).await?;
         if path == "/" || path.is_empty() {
             return Ok((root_fs_id, Vec::new()));
@@ -352,7 +353,9 @@ impl FileOps {
                 .dirents
                 .iter()
                 .find(|e| e.name == *part)
-                .ok_or_else(|| format!("path component '{}' not found in '{}'", part, path))?;
+                .ok_or_else(|| {
+                    AppError::NotFound(format!("path component '{}' not found in '{}'", part, path))
+                })?;
             current_fs_id = found.id.clone();
             chain.push((accumulated.clone(), current_fs_id.clone()));
         }
@@ -380,8 +383,8 @@ impl FileOps {
         modifier: &str,
         description: &str,
         ancestor_chain: &[(String, String)],
-        update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), Box<dyn std::error::Error>>,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+        update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
+    ) -> Result<String, AppError> {
         let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
@@ -419,8 +422,8 @@ impl FileOps {
         parent_path: &str,
         parent_fs_id: &str,
         ancestor_chain: &[(String, String)],
-        update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), Box<dyn std::error::Error>>,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+        update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
+    ) -> Result<String, AppError> {
         let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
@@ -451,7 +454,7 @@ impl FileOps {
         root_fs_id: &str,
         creator_name: &str,
         description: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), AppError> {
         let now = chrono::Utc::now().timestamp();
 
         let repo_model = repos.repo.find_by_id(repo_id).await?;
@@ -492,7 +495,7 @@ impl FileOps {
         };
         repos.commit.insert(commit_model).await?;
 
-        let repo = repo_model.ok_or("repo not found")?;
+        let repo = repo_model.ok_or_else(|| AppError::NotFound("repo not found".into()))?;
         let mut repo_active: repo::ActiveModel = repo.into();
         let commit_id_clone = commit_id.clone();
         repo_active.head_commit_id = sea_orm::Set(Some(commit_id));
@@ -509,7 +512,7 @@ impl FileOps {
         repos: &Repositories,
         repo_id: &str,
         fs_id: &str,
-    ) -> Result<FsDirData, Box<dyn std::error::Error>> {
+    ) -> Result<FsDirData, AppError> {
         crate::repo::read_fs_dir_data(repos, repo_id, fs_id).await
     }
 
@@ -517,7 +520,7 @@ impl FileOps {
         repos: &Repositories,
         repo_id: &str,
         fs_id: &str,
-    ) -> Result<FsFileData, Box<dyn std::error::Error>> {
+    ) -> Result<FsFileData, AppError> {
         crate::repo::read_fs_file_data(repos, repo_id, fs_id).await
     }
 }

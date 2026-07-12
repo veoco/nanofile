@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::common::EMPTY_SHA1;
+use crate::error::AppError;
 use crate::repo::fs_tree::read_fs_dir_data;
 use crate::repository::Repositories;
 use crate::serialization::fs_json::DirEntryData;
@@ -31,7 +32,7 @@ async fn collect_entries(
     root_fs_id: &str,
     prefix: &str,
     out: &mut HashMap<String, DirEntryData>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), AppError> {
     struct StackFrame {
         fs_id: String,
         prefix: String,
@@ -74,7 +75,7 @@ pub async fn diff_trees(
     repo_id: &str,
     old_root_id: Option<&str>,
     new_root_id: &str,
-) -> Result<Vec<FsChange>, Box<dyn std::error::Error>> {
+) -> Result<Vec<FsChange>, AppError> {
     // If there is no old tree or it is the empty sentinel, everything is new.
     let no_old_tree = old_root_id.is_none()
         || old_root_id == Some(EMPTY_SHA1)

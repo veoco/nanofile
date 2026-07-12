@@ -29,7 +29,7 @@ pub async fn list_devices(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    let svc = DeviceService::new(state.db.as_ref(), &state.repos);
+    let svc = DeviceService::new(state.repos.clone());
     let devices = svc.list_devices(auth.user_id).await?;
     Ok(Json(devices))
 }
@@ -44,7 +44,7 @@ pub async fn unlink_device(
     State(state): State<Arc<AppState>>,
     Form(form): Form<UnlinkDeviceForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    let svc = DeviceService::new(state.db.as_ref(), &state.repos);
+    let svc = DeviceService::new(state.repos.clone());
     let result = svc
         .unlink_device(auth.user_id, &form.platform, &form.device_id)
         .await?;

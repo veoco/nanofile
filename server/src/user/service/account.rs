@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::Serialize;
 
 use crate::error::AppError;
@@ -17,12 +19,12 @@ pub struct AccountInfo {
     pub total: i64,
 }
 
-pub struct AccountService<'a> {
-    pub repos: &'a Repositories,
+pub struct AccountService {
+    repos: Arc<Repositories>,
 }
 
-impl<'a> AccountService<'a> {
-    pub fn new(repos: &'a Repositories) -> Self {
+impl AccountService {
+    pub fn new(repos: Arc<Repositories>) -> Self {
         Self { repos }
     }
 

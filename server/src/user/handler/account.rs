@@ -36,7 +36,7 @@ pub async fn get_account_info(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<AccountInfo>, AppError> {
-    let svc = AccountService::new(&state.repos);
+    let svc = AccountService::new(state.repos.clone());
     let info = svc
         .get_account_info(auth.user_id, state.config.storage.max_storage_bytes)
         .await?;
@@ -52,7 +52,7 @@ pub async fn update_account_info(
     State(state): State<Arc<AppState>>,
     Json(body): Json<UpdateAccountInfo>,
 ) -> Result<Json<AccountInfo>, AppError> {
-    let svc = AccountService::new(&state.repos);
+    let svc = AccountService::new(state.repos.clone());
     let info = svc
         .update_account_info(
             auth.user_id,
@@ -70,7 +70,7 @@ pub async fn register_user(
     let iterations = state.config.auth.password_hash_iterations;
     let password_hash = crate::auth::password::hash_password(&form.password, iterations);
 
-    let svc = AccountService::new(&state.repos);
+    let svc = AccountService::new(state.repos.clone());
     svc.register_user(form.email, password_hash).await?;
 
     Ok(StatusCode::OK)

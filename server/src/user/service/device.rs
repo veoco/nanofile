@@ -1,16 +1,15 @@
-use sea_orm::DatabaseConnection;
+use std::sync::Arc;
 
 use crate::error::AppError;
 use crate::repository::Repositories;
 
-pub struct DeviceService<'a> {
-    pub db: &'a DatabaseConnection,
-    pub repos: &'a Repositories,
+pub struct DeviceService {
+    repos: Arc<Repositories>,
 }
 
-impl<'a> DeviceService<'a> {
-    pub fn new(db: &'a DatabaseConnection, repos: &'a Repositories) -> Self {
-        Self { db, repos }
+impl DeviceService {
+    pub fn new(repos: Arc<Repositories>) -> Self {
+        Self { repos }
     }
 
     /// List all devices connected to a user's account.

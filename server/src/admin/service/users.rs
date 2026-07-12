@@ -1,4 +1,4 @@
-use sea_orm::DatabaseConnection;
+use std::sync::Arc;
 
 use crate::error::AppError;
 use crate::repository::Repositories;
@@ -17,14 +17,13 @@ pub struct UserAdminInfo {
 }
 
 /// Service for admin user management operations.
-pub struct AdminUserService<'a> {
-    pub db: &'a DatabaseConnection,
-    pub repos: &'a Repositories,
+pub struct AdminUserService {
+    repos: Arc<Repositories>,
 }
 
-impl<'a> AdminUserService<'a> {
-    pub fn new(db: &'a DatabaseConnection, repos: &'a Repositories) -> Self {
-        Self { db, repos }
+impl AdminUserService {
+    pub fn new(repos: Arc<Repositories>) -> Self {
+        Self { repos }
     }
 
     /// List all users with their storage usage.

@@ -47,7 +47,7 @@ pub async fn list_invitations(
         return Err(AppError::Forbidden);
     }
 
-    let svc = InvitationService::new(state.db.as_ref(), &state.repos);
+    let svc = InvitationService::new(state.repos.clone());
     let invitations = svc.list_invitations(user.user_id).await?;
 
     let csrf_token =
@@ -84,7 +84,7 @@ pub async fn generate_invitation(
         return Err(AppError::Forbidden);
     }
 
-    let svc = InvitationService::new(state.db.as_ref(), &state.repos);
+    let svc = InvitationService::new(state.repos.clone());
     svc.generate_invitation(user.user_id, form.email).await?;
 
     Ok((StatusCode::FOUND, [("Location", "/profile/invitations/")]).into_response())
@@ -106,7 +106,7 @@ pub async fn delete_invitation(
         return Err(AppError::Forbidden);
     }
 
-    let svc = InvitationService::new(state.db.as_ref(), &state.repos);
+    let svc = InvitationService::new(state.repos.clone());
     svc.delete_invitation(user.user_id, id).await?;
 
     Ok((StatusCode::FOUND, [("Location", "/profile/invitations/")]).into_response())
