@@ -1,4 +1,3 @@
-use sea_orm::DatabaseConnection;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -148,7 +147,6 @@ pub async fn list_share_links_for_path(
 }
 
 pub async fn create_share_link(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     config: &Config,
     repo_id: &str,
@@ -239,7 +237,6 @@ pub struct CreateShareLinkResult {
 }
 
 pub async fn create_share_link_v21(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     config: &Config,
     repo_id: &str,
@@ -305,7 +302,6 @@ pub async fn delete_share_link_v21(
 }
 
 pub async fn update_share_link_v21(
-    _db: &DatabaseConnection,
     config: &Config,
     repos: &Repositories,
     token: &str,
@@ -371,7 +367,6 @@ pub async fn update_share_link_v21(
 
 /// Share (beshare) a repo with another user.
 pub async fn beshare_repo(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     notification_manager: Option<&crate::notification::manager::NotificationManager>,
     repo_id: &str,
@@ -466,7 +461,6 @@ pub async fn list_share_members(
 
 /// Modify a user's share permission on a repo.
 pub async fn modify_share_permission(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     notification_manager: Option<&crate::notification::manager::NotificationManager>,
     repo_id: &str,
@@ -528,7 +522,6 @@ pub async fn modify_share_permission(
 
 /// Remove a user's share from a repo.
 pub async fn delete_share(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     notification_manager: Option<&crate::notification::manager::NotificationManager>,
     repo_id: &str,

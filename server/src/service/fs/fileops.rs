@@ -79,9 +79,7 @@ impl FileOpsService {
             } else {
                 format!("{parent_dir}/{name}")
             };
-            if let Ok(sz) =
-                crate::fs::core::get_entry_total_size(db, &self.repos, repo_id, &fp).await
-            {
+            if let Ok(sz) = crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await {
                 total_deleted += sz;
             }
         }
@@ -126,7 +124,6 @@ impl FileOpsService {
                 .collect();
             if !trash_items.is_empty()
                 && let Err(e) = crate::fs::core::trash::add_batch_to_trash(
-                    db,
                     &self.repos,
                     repo_id,
                     trash_items,
@@ -195,7 +192,7 @@ impl FileOpsService {
             }
         }
 
-        crate::fs::core::adjust_repo_size(db, &self.repos, repo_id, -total_deleted).await?;
+        crate::fs::core::adjust_repo_size(&self.repos, repo_id, -total_deleted).await?;
 
         Ok(())
     }
@@ -354,17 +351,14 @@ impl FileOpsService {
                 } else {
                     format!("{dst_dir}/{}", entry.name)
                 };
-                if let Err(e) = indexer
-                    .reindex_file(db, repo_id, &fp, &self.block_store)
-                    .await
-                {
+                if let Err(e) = indexer.reindex_file(repo_id, &fp, &self.block_store).await {
                     tracing::warn!("Failed to index copied file {}: {e}", entry.name);
                 }
             }
         }
 
         let total_copied: i64 = entries_to_add.iter().map(|e| e.size).sum();
-        crate::fs::core::adjust_repo_size(db, &self.repos, repo_id, total_copied).await?;
+        crate::fs::core::adjust_repo_size(&self.repos, repo_id, total_copied).await?;
 
         Ok(results)
     }
@@ -422,10 +416,9 @@ impl FileOpsService {
             });
         }
 
-        let _dst_parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, dst_dir)
-                .await
-                .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
+        let _ = crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, dst_dir)
+            .await
+            .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
 
         // Step 1: Remove entries from source
         let src_names_for_closure: Vec<String> =
@@ -457,7 +450,6 @@ impl FileOpsService {
         };
 
         FileOps::create_commit(
-            db,
             &self.repos,
             repo_id,
             &intermediate_root,
@@ -580,7 +572,7 @@ impl FileOpsService {
                     tracing::warn!("Failed to delete old index on batch move: {e}");
                 }
                 if let Err(e) = indexer
-                    .reindex_file(db, repo_id, &new_fp, &self.block_store)
+                    .reindex_file(repo_id, &new_fp, &self.block_store)
                     .await
                 {
                     tracing::warn!("Failed to reindex on batch move: {e}");

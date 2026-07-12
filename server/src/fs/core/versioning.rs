@@ -33,7 +33,7 @@ impl Versioning {
                 crate::fs::core::file_ops::FileOps::read_dir_fs_object(repos, repo_id, &c.root_id)
                     .await?;
 
-            if Self::path_exists_in_dir(db, repos, &root_data, path).await? {
+            if Self::path_exists_in_dir(repos, &root_data, path).await? {
                 history.push(c);
             }
         }
@@ -42,7 +42,6 @@ impl Versioning {
     }
 
     async fn path_exists_in_dir(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         dir_data: &FsDirData,
         path: &str,

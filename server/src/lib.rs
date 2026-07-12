@@ -160,7 +160,7 @@ impl AppState {
                 db.clone(),
                 shutdown_token.child_token(),
                 "share link",
-                move |_conn, now| {
+                move |_, now| {
                     let repos = repos.clone();
                     Box::pin(async move { repos.share_link.delete_expired(now).await })
                 },
@@ -174,7 +174,7 @@ impl AppState {
                 db.clone(),
                 shutdown_token.child_token(),
                 "upload link",
-                move |_conn, now| {
+                move |_, now| {
                     let repos = repos.clone();
                     Box::pin(async move { repos.upload_link.delete_expired(now).await })
                 },
@@ -262,32 +262,23 @@ impl AppState {
     }
 
     pub fn starred_service(&self) -> crate::service::fs::starred::StarredService {
-        crate::service::fs::starred::StarredService::new(self.repos.clone(), self.db.clone())
+        crate::service::fs::starred::StarredService::new(self.repos.clone())
     }
 
     pub fn search_service(&self) -> crate::service::fs::search::SearchService {
-        crate::service::fs::search::SearchService::new(
-            self.repos.clone(),
-            self.db.clone(),
-            self.indexer.clone(),
-        )
+        crate::service::fs::search::SearchService::new(self.repos.clone(), self.indexer.clone())
     }
 
     pub fn thumbnail_service(&self) -> crate::service::fs::thumbnail::ThumbnailService {
         crate::service::fs::thumbnail::ThumbnailService::new(
             self.repos.clone(),
-            self.db.clone(),
             self.block_store.clone(),
             self.block_dir.clone(),
         )
     }
 
     pub fn exif_service(&self) -> crate::service::fs::exif::ExifService {
-        crate::service::fs::exif::ExifService::new(
-            self.db.clone(),
-            self.repos.clone(),
-            self.block_store.clone(),
-        )
+        crate::service::fs::exif::ExifService::new(self.repos.clone(), self.block_store.clone())
     }
 
     pub fn login_service(&self) -> crate::service::auth::login::LoginService {
@@ -316,7 +307,7 @@ impl AppState {
     }
 
     pub fn admin_service(&self) -> crate::service::admin::AdminService {
-        crate::service::admin::AdminService::new(self.db.clone(), self.repos.clone())
+        crate::service::admin::AdminService::new(self.repos.clone())
     }
 
     pub fn device_service(&self) -> crate::service::user::DeviceService {

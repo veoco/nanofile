@@ -273,8 +273,7 @@ async fn upload_and_build_response(
     };
 
     // Check if the file already exists to determine replace flag and op_type.
-    let size_result =
-        crate::fs::core::get_entry_total_size(state.db.as_ref(), &state.repos, repo_id, &fp).await;
+    let size_result = crate::fs::core::get_entry_total_size(&state.repos, repo_id, &fp).await;
     let file_exists = size_result.is_ok();
     let old_size = size_result.ok().unwrap_or(0);
 
@@ -311,13 +310,7 @@ async fn upload_and_build_response(
     .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
 
     // Adjust repo size (delta = new_size - old_size).
-    crate::fs::core::adjust_repo_size(
-        state.db.as_ref(),
-        &state.repos,
-        repo_id,
-        data.len() as i64 - old_size,
-    )
-    .await?;
+    crate::fs::core::adjust_repo_size(&state.repos, repo_id, data.len() as i64 - old_size).await?;
 
     // Log activity if a user_id was provided.
     if let Some(uid) = user_id {
@@ -961,13 +954,8 @@ pub async fn update_api_handler(
             } else {
                 format!("{}/{}", target_dir.trim_end_matches('/'), name)
             };
-            let size_result = crate::fs::core::get_entry_total_size(
-                state.db.as_ref(),
-                &state.repos,
-                &info.repo_id,
-                &fp,
-            )
-            .await;
+            let size_result =
+                crate::fs::core::get_entry_total_size(&state.repos, &info.repo_id, &fp).await;
             let file_exists = size_result.is_ok();
             let old_size = size_result.ok().unwrap_or(0);
 
@@ -988,7 +976,6 @@ pub async fn update_api_handler(
 
             // Adjust repo size.
             crate::fs::core::adjust_repo_size(
-                state.db.as_ref(),
                 &state.repos,
                 &info.repo_id,
                 data.len() as i64 - old_size,
@@ -1117,13 +1104,8 @@ pub async fn update_aj_token(
         } else {
             format!("{}/{}", target_dir.trim_end_matches('/'), name)
         };
-        let size_result = crate::fs::core::get_entry_total_size(
-            state.db.as_ref(),
-            &state.repos,
-            &info.repo_id,
-            &fp,
-        )
-        .await;
+        let size_result =
+            crate::fs::core::get_entry_total_size(&state.repos, &info.repo_id, &fp).await;
         let file_exists = size_result.is_ok();
         let old_size = size_result.ok().unwrap_or(0);
 
@@ -1144,7 +1126,6 @@ pub async fn update_aj_token(
 
         // Adjust repo size.
         crate::fs::core::adjust_repo_size(
-            state.db.as_ref(),
             &state.repos,
             &info.repo_id,
             file_data.len() as i64 - old_size,
@@ -1303,13 +1284,8 @@ pub async fn upload_blks_api(
         } else {
             format!("{}/{}", target_dir.trim_end_matches('/'), file_name)
         };
-        let size_result = crate::fs::core::get_entry_total_size(
-            state.db.as_ref(),
-            &state.repos,
-            &info.repo_id,
-            &fp,
-        )
-        .await;
+        let size_result =
+            crate::fs::core::get_entry_total_size(&state.repos, &info.repo_id, &fp).await;
         let file_exists = size_result.is_ok();
         let old_size = size_result.ok().unwrap_or(0);
 
@@ -1369,13 +1345,8 @@ pub async fn upload_blks_api(
         .map_err(|e| AppError::Internal(format!("commit blocks failed: {e}")))?;
 
         // Adjust repo size
-        crate::fs::core::adjust_repo_size(
-            state.db.as_ref(),
-            &state.repos,
-            &info.repo_id,
-            file_size - old_size,
-        )
-        .await?;
+        crate::fs::core::adjust_repo_size(&state.repos, &info.repo_id, file_size - old_size)
+            .await?;
 
         // Log activity — op_type based on actual file existence, not client's replace flag
         let op_type = if file_exists { "edit" } else { "create" };

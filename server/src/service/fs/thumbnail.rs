@@ -2,8 +2,6 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection;
-
 use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
@@ -12,7 +10,6 @@ use base::error::AppError;
 
 pub struct ThumbnailService {
     repos: Arc<Repositories>,
-    db: Arc<DatabaseConnection>,
     block_store: infra::storage::DynBlockStorage,
     block_dir: Arc<PathBuf>,
 }
@@ -20,20 +17,14 @@ pub struct ThumbnailService {
 impl ThumbnailService {
     pub fn new(
         repos: Arc<Repositories>,
-        db: Arc<DatabaseConnection>,
         block_store: infra::storage::DynBlockStorage,
         block_dir: Arc<PathBuf>,
     ) -> Self {
         Self {
             repos,
-            db,
             block_store,
             block_dir,
         }
-    }
-
-    fn db(&self) -> &DatabaseConnection {
-        self.db.as_ref()
     }
 
     /// Path to the repo-level thumbnail cache directory.
@@ -151,7 +142,6 @@ impl ThumbnailService {
         // Download file content and generate thumbnail
         let content = Downloader::download_file(
             &self.repos,
-            self.db(),
             repo_id,
             &normalized_path,
             &self.block_store,

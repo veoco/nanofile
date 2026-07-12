@@ -1,10 +1,8 @@
 //! Activity and notification services.
 
-use chrono::DateTime;
-use sea_orm::DatabaseConnection;
-
 use crate::repository::Repositories;
 use base::error::AppError;
+use chrono::DateTime;
 
 /// Service for activity-related operations.
 pub struct ActivityService;
@@ -12,14 +10,12 @@ pub struct ActivityService;
 impl ActivityService {
     /// Get activity logs with optional repo_id and user_id filtering.
     pub async fn get_activities(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         user_id: i32,
         page: u32,
         per_page: u32,
         repo_id: Option<&str>,
         op_user: Option<&str>,
-        _avatar_size: u32,
     ) -> Result<serde_json::Value, AppError> {
         let offset = ((page.saturating_sub(1)) * per_page) as u64;
 

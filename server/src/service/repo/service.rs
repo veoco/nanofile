@@ -175,7 +175,6 @@ fn build_repo_info_from_model(
 impl RepoService {
     /// List all repos accessible to the given user (v2 API).
     pub async fn list_repos(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         user_id: i32,
         email: &str,
@@ -292,7 +291,6 @@ impl RepoService {
 
     /// Get a single repo's details (v2 API).
     pub async fn get_repo(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
         user_id: i32,
@@ -497,7 +495,6 @@ impl RepoService {
 
         // Record deleted repo in trash before cascade-delete
         if let Err(e) = crate::fs::core::trash::add_deleted_repo(
-            db,
             repos,
             repo_id,
             &r.name,
@@ -529,7 +526,6 @@ impl RepoService {
 
     /// Get download info for a repo.
     pub async fn download_info(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
         user_id: i32,
@@ -576,7 +572,6 @@ impl RepoService {
 
     /// Get an upload link URL for the given repo.
     pub async fn get_upload_link(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         token_manager: &AccessTokenManager,
         site_url: &str,
@@ -617,7 +612,6 @@ impl RepoService {
 
     /// Get an update link URL for the given repo.
     pub async fn get_update_link(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         token_manager: &AccessTokenManager,
         site_url: &str,
@@ -656,7 +650,6 @@ impl RepoService {
 
     /// Batch get sync tokens for multiple repos.
     pub async fn repo_tokens(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         repo_ids: &[&str],
         user_id: i32,
@@ -671,7 +664,6 @@ impl RepoService {
 
     /// List repos with v2.1 response format.
     pub async fn list_repos_v21(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         user_id: i32,
         email: &str,
@@ -718,7 +710,6 @@ impl RepoService {
 
     /// Get a single repo with v2.1 response format.
     pub async fn get_repo_v21(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
         user_id: i32,

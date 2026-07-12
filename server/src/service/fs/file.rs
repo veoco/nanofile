@@ -255,7 +255,7 @@ impl FileService {
         };
 
         let old_size = if replace {
-            crate::fs::core::get_entry_total_size(self.db(), &self.repos, repo_id, &file_path)
+            crate::fs::core::get_entry_total_size(&self.repos, repo_id, &file_path)
                 .await
                 .ok()
                 .unwrap_or(0)
@@ -294,13 +294,8 @@ impl FileService {
         )
         .await;
 
-        crate::fs::core::adjust_repo_size(
-            db,
-            &self.repos,
-            repo_id,
-            file_data.len() as i64 - old_size,
-        )
-        .await?;
+        crate::fs::core::adjust_repo_size(&self.repos, repo_id, file_data.len() as i64 - old_size)
+            .await?;
 
         if let Some(indexer) = &self.indexer {
             let full_path = if parent_dir.ends_with('/') {
@@ -335,7 +330,7 @@ impl FileService {
         let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
         let parent_path = parent_path_from(path);
 
-        let deleted_size = crate::fs::core::get_entry_total_size(db, &self.repos, repo_id, path)
+        let deleted_size = crate::fs::core::get_entry_total_size(&self.repos, repo_id, path)
             .await
             .ok()
             .unwrap_or(0);
@@ -372,7 +367,7 @@ impl FileService {
             tracing::warn!("Failed to delete index for {path}: {e}");
         }
 
-        crate::fs::core::adjust_repo_size(db, &self.repos, repo_id, -deleted_size).await?;
+        crate::fs::core::adjust_repo_size(&self.repos, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
             db, repo_id, "delete", "file", path, user_id, None, None, None, None, None,
@@ -413,7 +408,7 @@ impl FileService {
                 tracing::warn!("Failed to delete old index on rename: {e}");
             }
             if let Err(e) = indexer
-                .reindex_file(self.db(), repo_id, &new_fullpath, &self.block_store)
+                .reindex_file(repo_id, &new_fullpath, &self.block_store)
                 .await
             {
                 tracing::warn!("Failed to reindex renamed file: {e}");
@@ -461,7 +456,7 @@ impl FileService {
         // for defensive programming. If it fails, it's an internal error (handler bug).
         let new_parent_path = base::sanitize::safe_normalize_path(dst_dir)
             .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
-        let _new_parent_fs_id =
+        let _ =
             crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, &new_parent_path)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve dest parent failed: {e}")))?;
@@ -482,7 +477,6 @@ impl FileService {
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
         FileOps::create_commit(
-            db,
             &self.repos,
             repo_id,
             &intermediate_root,
@@ -555,7 +549,7 @@ impl FileService {
                 tracing::warn!("Failed to delete old index on move: {e}");
             }
             if let Err(e) = indexer
-                .reindex_file(db, repo_id, &new_path, &self.block_store)
+                .reindex_file(repo_id, &new_path, &self.block_store)
                 .await
             {
                 tracing::warn!("Failed to reindex moved file: {e}");
@@ -637,9 +631,7 @@ impl FileService {
         path: &str,
         operation: &str,
         email: &str,
-        _user_id: i32,
     ) -> Result<(), AppError> {
-        let _db = self.db();
         let user_record = self
             .repos
             .user
@@ -961,7 +953,6 @@ async fn record_delete_file_trash(
         None => return,
     };
     if let Err(e) = trash::add_to_trash(
-        db,
         repos,
         repo_id,
         path,

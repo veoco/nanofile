@@ -1,5 +1,3 @@
-use sea_orm::DatabaseConnection;
-
 use crate::repository::Repositories;
 use base::common::FsFileData;
 use base::error::AppError;
@@ -11,7 +9,6 @@ pub struct Downloader;
 impl Downloader {
     pub async fn download_file(
         repos: &Repositories,
-        db: &DatabaseConnection,
         repo_id: &str,
         path: &str,
         block_store: &DynBlockStorage,
@@ -19,7 +16,7 @@ impl Downloader {
         // after reading. Used for encrypted repos during web download.
         dec_key: Option<(&[u8], &[u8])>,
     ) -> Result<Vec<u8>, AppError> {
-        let (file_data, block_ids) = Self::download_file_stream(repos, db, repo_id, path).await?;
+        let (file_data, block_ids) = Self::download_file_stream(repos, repo_id, path).await?;
 
         let mut file_content = Vec::with_capacity(file_data.size as usize);
         for block_id in &block_ids {
@@ -46,16 +43,14 @@ impl Downloader {
     /// blocks individually without loading the entire file into memory.
     pub async fn resolve_blocks(
         repos: &Repositories,
-        db: &DatabaseConnection,
         repo_id: &str,
         path: &str,
     ) -> Result<(FsFileData, Vec<String>), AppError> {
-        Self::download_file_stream(repos, db, repo_id, path).await
+        Self::download_file_stream(repos, repo_id, path).await
     }
 
     pub async fn download_file_stream(
         repos: &Repositories,
-        _db: &DatabaseConnection,
         repo_id: &str,
         path: &str,
     ) -> Result<(FsFileData, Vec<String>), AppError> {

@@ -56,13 +56,7 @@ pub async fn list_repos(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<RepoInfo>>, AppError> {
-    let repos = service::RepoService::list_repos(
-        state.db.as_ref(),
-        &state.repos,
-        auth.user_id,
-        &auth.email,
-    )
-    .await?;
+    let repos = service::RepoService::list_repos(&state.repos, auth.user_id, &auth.email).await?;
     Ok(Json(repos))
 }
 
@@ -120,14 +114,8 @@ pub async fn get_repo(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<RepoInfo>, AppError> {
-    let repo_info = service::RepoService::get_repo(
-        state.db.as_ref(),
-        &state.repos,
-        &repo_id,
-        auth.user_id,
-        &auth.email,
-    )
-    .await?;
+    let repo_info =
+        service::RepoService::get_repo(&state.repos, &repo_id, auth.user_id, &auth.email).await?;
     Ok(Json(repo_info))
 }
 
@@ -325,13 +313,7 @@ pub async fn download_info(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<DownloadInfoResponse>, AppError> {
-    let info = service::RepoService::download_info(
-        state.db.as_ref(),
-        &state.repos,
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
+    let info = service::RepoService::download_info(&state.repos, &repo_id, auth.user_id).await?;
     Ok(Json(info))
 }
 
@@ -352,7 +334,6 @@ pub async fn get_upload_link(
     let parent_dir = query.p.as_deref().unwrap_or("/");
 
     let url = service::RepoService::get_upload_link(
-        state.db.as_ref(),
         &state.repos,
         &state.token_manager,
         &state.config.server.site_url,
@@ -378,7 +359,6 @@ pub async fn get_update_link(
     let parent_dir = query.p.as_deref().unwrap_or("/");
 
     let url = service::RepoService::get_update_link(
-        state.db.as_ref(),
         &state.repos,
         &state.token_manager,
         &state.config.server.site_url,
@@ -410,9 +390,7 @@ pub async fn repo_tokens(
         .filter(|s| !s.is_empty())
         .collect();
 
-    let result =
-        service::RepoService::repo_tokens(state.db.as_ref(), &state.repos, &repo_ids, auth.user_id)
-            .await?;
+    let result = service::RepoService::repo_tokens(&state.repos, &repo_ids, auth.user_id).await?;
 
     Ok(Json(result))
 }
@@ -422,13 +400,8 @@ pub async fn list_repos_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<V21RepoListResponse>, AppError> {
-    let response = service::RepoService::list_repos_v21(
-        state.db.as_ref(),
-        &state.repos,
-        auth.user_id,
-        &auth.email,
-    )
-    .await?;
+    let response =
+        service::RepoService::list_repos_v21(&state.repos, auth.user_id, &auth.email).await?;
     Ok(Json(response))
 }
 
@@ -438,14 +411,9 @@ pub async fn get_repo_v21(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<V21RepoInfo>, AppError> {
-    let repo_info = service::RepoService::get_repo_v21(
-        state.db.as_ref(),
-        &state.repos,
-        &repo_id,
-        auth.user_id,
-        &auth.email,
-    )
-    .await?;
+    let repo_info =
+        service::RepoService::get_repo_v21(&state.repos, &repo_id, auth.user_id, &auth.email)
+            .await?;
     Ok(Json(repo_info))
 }
 

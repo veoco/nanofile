@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection;
-
 use super::collect_file_paths;
 use crate::indexer::TextIndexer;
 use crate::repository::Repositories;
@@ -11,13 +9,12 @@ use infra::storage::DynBlockStorage;
 
 /// Service for index/reindex administration operations.
 pub struct AdminService {
-    db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
 }
 
 impl AdminService {
-    pub fn new(db: Arc<DatabaseConnection>, repos: Arc<Repositories>) -> Self {
-        Self { db, repos }
+    pub fn new(repos: Arc<Repositories>) -> Self {
+        Self { repos }
     }
 
     /// Verify that the authenticated user can access a repository.
@@ -104,10 +101,7 @@ impl AdminService {
         let mut skipped = 0u64;
 
         for fullpath in &file_paths {
-            match indexer
-                .reindex_file(self.db.as_ref(), repo_id, fullpath, block_store)
-                .await
-            {
+            match indexer.reindex_file(repo_id, fullpath, block_store).await {
                 Ok(true) => indexed += 1,
                 Ok(false) => skipped += 1,
                 Err(_) => skipped += 1,

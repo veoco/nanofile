@@ -66,9 +66,8 @@ pub async fn list_trash2(
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(50);
 
-    let result = serde_json::to_value(
-        trash::list_trash2(state.db.as_ref(), &state.repos, repo_id, page, per_page).await?,
-    )?;
+    let result =
+        serde_json::to_value(trash::list_trash2(&state.repos, repo_id, page, per_page).await?)?;
 
     Ok(Json(result))
 }
@@ -177,7 +176,7 @@ pub async fn clean_trash(
 
     let keep_days = parse_clean_trash_body(req).await;
 
-    trash::clean_trash(state.db.as_ref(), &state.repos, repo_id, keep_days).await?;
+    trash::clean_trash(&state.repos, repo_id, keep_days).await?;
 
     activity_log::log_activity(
         state.db.as_ref(),
@@ -215,14 +214,7 @@ pub async fn list_trash(
     let limit = query.limit.unwrap_or(50);
 
     let result = serde_json::to_value(
-        trash::list_trash_cursor(
-            state.db.as_ref(),
-            &state.repos,
-            repo_id,
-            query.cursor,
-            limit,
-        )
-        .await?,
+        trash::list_trash_cursor(&state.repos, repo_id, query.cursor, limit).await?,
     )?;
 
     Ok(Json(result))

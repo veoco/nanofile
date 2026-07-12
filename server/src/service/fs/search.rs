@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection;
-
 use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::EMPTY_SHA1;
@@ -25,21 +23,12 @@ pub struct FileSearchResult {
 
 pub struct SearchService {
     repos: Arc<Repositories>,
-    db: Arc<DatabaseConnection>,
     indexer: Option<crate::indexer::TextIndexer>,
 }
 
 impl SearchService {
-    pub fn new(
-        repos: Arc<Repositories>,
-        db: Arc<DatabaseConnection>,
-        indexer: Option<crate::indexer::TextIndexer>,
-    ) -> Self {
-        Self { repos, db, indexer }
-    }
-
-    fn db(&self) -> &DatabaseConnection {
-        self.db.as_ref()
+    pub fn new(repos: Arc<Repositories>, indexer: Option<crate::indexer::TextIndexer>) -> Self {
+        Self { repos, indexer }
     }
 
     /// Search files across all accessible repos.
@@ -58,8 +47,6 @@ impl SearchService {
 
         let per_page = per_page.max(1);
         let page = page.max(1);
-        let db = self.db();
-
         let repo_ids = self.get_accessible_repo_ids(user_id, search_repo).await?;
 
         let mut seen = std::collections::HashSet::new();
@@ -114,7 +101,6 @@ impl SearchService {
             }
 
             search_fs_tree(
-                db,
                 &self.repos,
                 repo_id,
                 &repo_record.name,
@@ -179,7 +165,6 @@ impl SearchService {
         repo_id: &str,
         fullpath: &str,
     ) -> Option<FileSearchResult> {
-        let _db = self.db();
         let repo_record = self.repos.repo.find_by_id(repo_id).await.ok()??;
         let head_commit_id = repo_record.head_commit_id.as_ref()?;
         let head = self
@@ -250,7 +235,6 @@ impl SearchService {
 /// Recursively search the FS tree for files/directories whose name contains the keyword.
 #[allow(clippy::too_many_arguments)]
 async fn search_fs_tree(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     repo_name: &str,

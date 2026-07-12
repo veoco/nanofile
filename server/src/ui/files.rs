@@ -398,7 +398,6 @@ async fn file_browser_inner(
     path: String,
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
-    let db = state.db.as_ref();
     let repos = &state.repos;
     verify_repo_access(state.repos.member.as_ref(), user.user_id, &repo_id).await?;
 
@@ -413,7 +412,7 @@ async fn file_browser_inner(
     // If the path points to a file (not a directory), fall through to file serving.
     // For the root path `/`, treat errors as an empty directory (repo may be empty).
     let entries_result =
-        crate::service::fs::dir::list_dir_from_fs_tree(db, repos, &repo_id, &path).await;
+        crate::service::fs::dir::list_dir_from_fs_tree(repos, &repo_id, &path).await;
 
     let entries_data = match entries_result {
         Ok(data) => data,
@@ -659,7 +658,6 @@ async fn serve_file(
     path: String,
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
-    let db = state.db.as_ref();
     let path = base::sanitize::safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
     let file_name = path.rsplit('/').next().unwrap_or("file").to_string();
@@ -667,7 +665,7 @@ async fn serve_file(
     // ?dl=1 → force download
     if query.dl.as_deref() == Some("1") {
         let data =
-            Downloader::download_file(&state.repos, db, &repo_id, &path, &state.block_store, None)
+            Downloader::download_file(&state.repos, &repo_id, &path, &state.block_store, None)
                 .await
                 .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
         let content_type = mime_guess(&file_name);
@@ -737,7 +735,7 @@ async fn serve_file(
 
     if is_text {
         let data =
-            Downloader::download_file(&state.repos, db, &repo_id, &path, &state.block_store, None)
+            Downloader::download_file(&state.repos, &repo_id, &path, &state.block_store, None)
                 .await
                 .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
         let content = String::from_utf8_lossy(&data).to_string();
@@ -783,10 +781,9 @@ async fn serve_file(
     }
 
     // Binary files — serve raw bytes inline
-    let data =
-        Downloader::download_file(&state.repos, db, &repo_id, &path, &state.block_store, None)
-            .await
-            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+    let data = Downloader::download_file(&state.repos, &repo_id, &path, &state.block_store, None)
+        .await
+        .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
     let content_type = mime_guess(&file_name);
     Ok((StatusCode::OK, [(header::CONTENT_TYPE, content_type)], data).into_response())
 }

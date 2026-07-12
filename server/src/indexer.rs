@@ -20,7 +20,6 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use sea_orm::DatabaseConnection;
 use std::sync::Arc;
 use tantivy::Index;
 use tantivy::ReloadPolicy;
@@ -299,7 +298,6 @@ impl TextIndexer {
     /// files.
     pub async fn reindex_file(
         &self,
-        db: &DatabaseConnection,
         repo_id: &str,
         fullpath: &str,
         block_store: &DynBlockStorage,
@@ -312,7 +310,6 @@ impl TextIndexer {
         // Read file content from block storage.
         let data = match crate::fs::core::download::Downloader::download_file(
             self.repos(),
-            db,
             repo_id,
             fullpath,
             block_store,

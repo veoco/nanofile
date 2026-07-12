@@ -392,7 +392,7 @@ pub async fn reindex_file_handler(
         .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
 
     let indexed = indexer
-        .reindex_file(state.db.as_ref(), repo_id, &path, &state.block_store)
+        .reindex_file(repo_id, &path, &state.block_store)
         .await?;
 
     Ok(Json(
@@ -423,14 +423,8 @@ pub async fn lock_file_via_api_handler(
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let svc = state.file_service();
-    svc.lock_file(
-        repo_id,
-        &path,
-        operation,
-        &access.user.email,
-        access.user.user_id,
-    )
-    .await?;
+    svc.lock_file(repo_id, &path, operation, &access.user.email)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

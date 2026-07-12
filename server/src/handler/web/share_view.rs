@@ -97,11 +97,10 @@ fn format_timestamp(ts: i64) -> String {
 /// Resolve file metadata from the repo.
 async fn resolve_file_meta(
     repos: &crate::repository::Repositories,
-    db: &sea_orm::DatabaseConnection,
     repo_id: &str,
     path: &str,
 ) -> Result<(FsFileData, Vec<String>), AppError> {
-    Downloader::resolve_blocks(repos, db, repo_id, path)
+    Downloader::resolve_blocks(repos, repo_id, path)
         .await
         .map_err(|_| AppError::NotFound("File not found".into()))
 }
@@ -150,7 +149,7 @@ pub async fn shared_file_view(
     // Handle ?dl=1 — download the file directly
     if params.get("dl").map(|s| s.as_str()) == Some("1") {
         let (_file_data, block_ids) =
-            resolve_file_meta(&state.repos, state.db.as_ref(), &link.repo_id, &link.path).await?;
+            resolve_file_meta(&state.repos, &link.repo_id, &link.path).await?;
 
         let filename = link
             .path
@@ -177,7 +176,7 @@ pub async fn shared_file_view(
 
     // Show HTML preview page
     let (_file_data, _block_ids) =
-        resolve_file_meta(&state.repos, state.db.as_ref(), &link.repo_id, &link.path).await?;
+        resolve_file_meta(&state.repos, &link.repo_id, &link.path).await?;
 
     crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
@@ -662,7 +661,7 @@ pub async fn shared_dir_file_view(
     };
 
     let (_file_data, block_ids) =
-        resolve_file_meta(&state.repos, state.db.as_ref(), &link.repo_id, &full_path).await?;
+        resolve_file_meta(&state.repos, &link.repo_id, &full_path).await?;
 
     crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 

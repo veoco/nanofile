@@ -114,8 +114,6 @@ impl HistoryService {
         let mut deleted_files = Vec::new();
         let mut modified_files = Vec::new();
         let renamed_files = Vec::new();
-        let _new_dirs: Vec<DirChange> = Vec::new();
-        let _deleted_dirs: Vec<DirChange> = Vec::new();
 
         // Collect files from the current commit
         let mut current_files: HashMap<String, i64> = HashMap::new();

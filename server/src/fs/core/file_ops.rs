@@ -411,7 +411,7 @@ impl FileOps {
             .await?
         };
 
-        Self::create_commit(db, repos, repo_id, &root_fs_id, modifier, description).await?;
+        Self::create_commit(repos, repo_id, &root_fs_id, modifier, description).await?;
 
         Ok(root_fs_id)
     }
@@ -456,7 +456,6 @@ impl FileOps {
 
     /// Create a commit with the given root_fs_id and update the repo's HEAD.
     pub(crate) async fn create_commit(
-        _db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
         root_fs_id: &str,

@@ -16,7 +16,6 @@ use infra::serialization::S_IFDIR;
 
 /// List directory entries by traversing the FS object tree from the head commit.
 pub(crate) async fn list_dir_from_fs_tree(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     path: &str,
@@ -80,7 +79,6 @@ pub(crate) async fn list_dir_from_fs_tree(
 
 /// Recursively list all directory entries from the FS object tree.
 pub(crate) async fn list_dir_recursive_from_fs_tree(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     path: &str,
@@ -378,7 +376,7 @@ impl DirService {
         repo_id: &str,
         path: &str,
     ) -> Result<(String, Vec<DirEntry>), AppError> {
-        list_dir_from_fs_tree(self.db(), &self.repos, repo_id, path).await
+        list_dir_from_fs_tree(&self.repos, repo_id, path).await
     }
 
     /// Recursive directory listing.
@@ -387,7 +385,7 @@ impl DirService {
         repo_id: &str,
         path: &str,
     ) -> Result<(String, Vec<DirEntry>), AppError> {
-        list_dir_recursive_from_fs_tree(self.db(), &self.repos, repo_id, path).await
+        list_dir_recursive_from_fs_tree(&self.repos, repo_id, path).await
     }
 
     /// Create a directory.
@@ -434,7 +432,7 @@ impl DirService {
         let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
         let parent_path = parent_path_from(path);
 
-        let deleted_size = crate::fs::core::get_entry_total_size(db, &self.repos, repo_id, path)
+        let deleted_size = crate::fs::core::get_entry_total_size(&self.repos, repo_id, path)
             .await
             .ok()
             .unwrap_or(0);
@@ -465,7 +463,7 @@ impl DirService {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        crate::fs::core::adjust_repo_size(db, &self.repos, repo_id, -deleted_size).await?;
+        crate::fs::core::adjust_repo_size(&self.repos, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
             db, repo_id, "delete", "dir", path, user_id, None, None, None, None, None,
@@ -513,7 +511,7 @@ impl DirService {
         // for defensive programming. If it fails, it's an internal error (handler bug).
         let new_parent_path = base::sanitize::safe_normalize_path(new_parent_dir)
             .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
-        let _new_parent_fs_id =
+        let _ =
             crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, &new_parent_path)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve dest parent failed: {e}")))?;
@@ -534,7 +532,6 @@ impl DirService {
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
         FileOps::create_commit(
-            db,
             &self.repos,
             repo_id,
             &intermediate_root,
@@ -685,7 +682,6 @@ impl DirService {
         copy_fs_tree(&self.repos, repo_id, &new_repo_id, &source_dir_fs_id).await?;
 
         FileOps::create_commit(
-            db,
             &self.repos,
             &new_repo_id,
             &source_dir_fs_id,
@@ -743,10 +739,9 @@ impl DirService {
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
-        let deleted_size: i64 =
-            crate::fs::core::get_entry_total_size(db, &self.repos, repo_id, path)
-                .await
-                .unwrap_or_default();
+        let deleted_size: i64 = crate::fs::core::get_entry_total_size(&self.repos, repo_id, path)
+            .await
+            .unwrap_or_default();
 
         // Trash: record deleted entry before tree update
         if let Ok(parent_dir_data) =
@@ -759,7 +754,6 @@ impl DirService {
                 "file"
             };
             if let Err(e) = crate::fs::core::trash::add_to_trash(
-                db,
                 &self.repos,
                 repo_id,
                 path,
@@ -800,7 +794,7 @@ impl DirService {
             tracing::warn!("Failed to delete index for {path}: {e}");
         }
 
-        crate::fs::core::adjust_repo_size(db, &self.repos, repo_id, -deleted_size).await?;
+        crate::fs::core::adjust_repo_size(&self.repos, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
             db, repo_id, "delete", obj, path, user_id, None, None, None, None, None,
@@ -820,8 +814,6 @@ impl DirService {
         entries: Vec<DirEntry>,
         dir_id: String,
     ) -> Result<serde_json::Value, AppError> {
-        let _db = self.db();
-
         let user_perm = self
             .repos
             .member
@@ -928,7 +920,6 @@ impl DirService {
         path: &str,
         user_id: i32,
     ) -> Result<serde_json::Value, AppError> {
-        let _db = self.db();
         let repo_record = self
             .repos
             .repo
@@ -1095,7 +1086,6 @@ async fn record_delete_trash(
         "file"
     };
     if let Err(e) = crate::fs::core::trash::add_to_trash(
-        db,
         repos,
         repo_id,
         path,

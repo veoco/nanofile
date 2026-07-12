@@ -28,14 +28,12 @@ pub async fn get_activities(
     Query(query): Query<ActivitiesQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let result = ActivityService::get_activities(
-        state.db.as_ref(),
         &state.repos,
         auth.user_id,
         query.page.unwrap_or(1),
         query.per_page.unwrap_or(25),
         query.repo_id.as_deref(),
         query.op_user.as_deref(),
-        query.avatar_size.unwrap_or(256),
     )
     .await?;
 

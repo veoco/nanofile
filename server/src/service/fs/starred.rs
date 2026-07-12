@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
-use sea_orm::DatabaseConnection;
-
 use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
 use base::error::AppError;
+use chrono::{DateTime, Utc};
 use infra::serialization::S_IFDIR;
 
 #[derive(serde::Serialize)]
@@ -20,16 +18,11 @@ pub struct StarredFileEntry {
 
 pub struct StarredService {
     repos: Arc<Repositories>,
-    db: Arc<DatabaseConnection>,
 }
 
 impl StarredService {
-    pub fn new(repos: Arc<Repositories>, db: Arc<DatabaseConnection>) -> Self {
-        Self { repos, db }
-    }
-
-    fn db(&self) -> &DatabaseConnection {
-        self.db.as_ref()
+    pub fn new(repos: Arc<Repositories>) -> Self {
+        Self { repos }
     }
 
     /// List starred files (legacy v2 API).
@@ -57,8 +50,6 @@ impl StarredService {
         user_id: i32,
         email: &str,
     ) -> Result<serde_json::Value, AppError> {
-        let db = self.db();
-
         let user_nickname = self
             .repos
             .user
@@ -83,8 +74,7 @@ impl StarredService {
 
         for entry in &entries {
             let repo_opt = repo_cache.get(&entry.repo_id).and_then(|o| o.as_ref());
-            let item =
-                build_item_json(db, &self.repos, entry, repo_opt, email, &user_nickname).await;
+            let item = build_item_json(&self.repos, entry, repo_opt, email, &user_nickname).await;
 
             if entry.path == "/" {
                 starred_repos.push(item);
@@ -121,8 +111,6 @@ impl StarredService {
         repo_id: &str,
         path: &str,
     ) -> Result<serde_json::Value, AppError> {
-        let db = self.db();
-
         if repo_id.is_empty() {
             return Err(AppError::BadRequest("repo_id invalid.".into()));
         }
@@ -194,7 +182,6 @@ impl StarredService {
 
         if let Some(ref entry) = existing {
             return Ok(build_item_json(
-                db,
                 &self.repos,
                 entry,
                 Some(&repo_record),
@@ -227,7 +214,6 @@ impl StarredService {
             })?;
 
         Ok(build_item_json(
-            db,
             &self.repos,
             &new_entry,
             Some(&repo_record),
@@ -270,7 +256,6 @@ fn timestamp_to_iso(ts: i64) -> String {
 }
 
 async fn build_item_json(
-    db: &DatabaseConnection,
     repos: &Repositories,
     entry: &infra::entity::starred_file::Model,
     repo_opt: Option<&infra::entity::repo::Model>,
@@ -293,7 +278,7 @@ async fn build_item_json(
             .map(|(_, n)| n.to_string())
             .unwrap_or_default();
         let (m, d) = if let Some(repo) = repo_opt {
-            get_entry_mtime_or_deleted(db, repos, repo, entry).await
+            get_entry_mtime_or_deleted(repos, repo, entry).await
         } else {
             (0, true)
         };
@@ -316,7 +301,6 @@ async fn build_item_json(
 }
 
 async fn get_entry_mtime_or_deleted(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo: &infra::entity::repo::Model,
     entry: &infra::entity::starred_file::Model,

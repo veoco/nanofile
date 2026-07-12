@@ -81,7 +81,6 @@ pub struct CursorTrashResult {
 /// Best-effort: logs and swallows errors.
 #[allow(clippy::too_many_arguments)]
 pub async fn add_to_trash(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     full_path: &str,
@@ -123,7 +122,6 @@ pub async fn add_to_trash(
 ///
 /// Best-effort: logs and swallows errors.
 pub async fn add_batch_to_trash(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     items: Vec<TrashItem>,
@@ -161,7 +159,6 @@ pub async fn add_batch_to_trash(
 
 /// Page-based trash listing for the `/trash2/` endpoint.
 pub async fn list_trash2(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     page: u32,
@@ -318,7 +315,6 @@ pub async fn search_trash(
 /// the previous page. Returns items with `delete_time <= cursor`. When
 /// `cursor` is `None`, returns the most recent items.
 pub async fn list_trash_cursor(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     cursor: Option<i64>,
@@ -362,7 +358,6 @@ async fn delete_trash_records(repos: &Repositories, ids: &[i32]) -> Result<(), A
 /// Check whether a path exists in the current FS tree (i.e. the resolved
 /// fs_id from the repo's head commit actually exists).
 async fn path_exists_in_tree(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     path: &str,
@@ -395,7 +390,6 @@ async fn path_exists_in_tree(
 /// Check whether a file/dir name already exists in a parent directory in
 /// the current FS tree.
 async fn name_exists_in_parent(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     parent_path: &str,
@@ -503,7 +497,7 @@ pub async fn restore_trash_items(
             }
 
             // Verify parent directory exists in current tree
-            if parent_dir != "/" && !path_exists_in_tree(db, repos, repo_id, parent_dir).await? {
+            if parent_dir != "/" && !path_exists_in_tree(repos, repo_id, parent_dir).await? {
                 failed.push(RevertFailedItem {
                     commit_id: commit_id.clone(),
                     path: full_path.to_string(),
@@ -513,7 +507,7 @@ pub async fn restore_trash_items(
             }
 
             // Check for name collision
-            if name_exists_in_parent(db, repos, repo_id, parent_dir, obj_name).await? {
+            if name_exists_in_parent(repos, repo_id, parent_dir, obj_name).await? {
                 failed.push(RevertFailedItem {
                     commit_id: commit_id.clone(),
                     path: full_path.to_string(),
@@ -659,7 +653,6 @@ pub async fn restore_dirents(
 /// Clean trash items for a repo, optionally keeping items newer than
 /// `keep_days`. Returns the number of deleted rows.
 pub async fn clean_trash(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     keep_days: Option<i64>,
@@ -889,7 +882,6 @@ pub async fn search_trash_for_user(
 
 /// Add a deleted repo to the trash table.
 pub async fn add_deleted_repo(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     repo_name: &str,

@@ -53,8 +53,6 @@ pub async fn list_dir(
 
     let path = safe_normalize_path(&query.p.unwrap_or_else(|| "/".to_string()))
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-    let _db = state.db.as_ref();
-
     if let Some(ref r) = query.recursive
         && r != "0"
         && r != "1"
@@ -350,8 +348,6 @@ pub async fn list_dir_v21(
     let path = query.p.as_deref().unwrap_or("/");
     let normalized = safe_normalize_path(path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-    let _db = state.db.as_ref();
-
     if let Some(ref r) = query.recursive
         && r != "0"
         && r != "1"

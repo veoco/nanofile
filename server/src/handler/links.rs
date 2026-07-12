@@ -96,7 +96,6 @@ pub async fn create_share_link_v21(
     Json(req): Json<CreateLinkRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let result = share::create_share_link_v21(
-        state.db.as_ref(),
         &state.repos,
         &state.config,
         &req.repo_id,
@@ -134,7 +133,6 @@ pub async fn update_share_link_v21(
     Json(req): Json<UpdateLinkRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let info = share::update_share_link_v21(
-        state.db.as_ref(),
         &state.config,
         &state.repos,
         &token,

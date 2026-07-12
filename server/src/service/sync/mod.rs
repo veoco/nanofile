@@ -651,8 +651,7 @@ impl SyncService {
             self.update_head_commit(repo_id, Some(new_head.to_string()))
                 .await?;
 
-            crate::fs::core::adjust_repo_size(self.db.as_ref(), &self.repos, repo_id, size_delta)
-                .await?;
+            crate::fs::core::adjust_repo_size(&self.repos, repo_id, size_delta).await?;
 
             let is_wiki = self.is_wiki_repo(repo_id).await?;
 
@@ -716,12 +715,7 @@ impl SyncService {
                     match change.op_type {
                         "create" | "edit" | "recover" => {
                             if let Err(e) = indexer
-                                .reindex_file(
-                                    self.db.as_ref(),
-                                    repo_id,
-                                    &change.path,
-                                    &self.block_store,
-                                )
+                                .reindex_file(repo_id, &change.path, &self.block_store)
                                 .await
                             {
                                 tracing::warn!("sync index file {}: {e}", change.path);
@@ -737,12 +731,7 @@ impl SyncService {
                                 let _ = indexer.delete_file(repo_id, old_path);
                             }
                             if let Err(e) = indexer
-                                .reindex_file(
-                                    self.db.as_ref(),
-                                    repo_id,
-                                    &change.path,
-                                    &self.block_store,
-                                )
+                                .reindex_file(repo_id, &change.path, &self.block_store)
                                 .await
                             {
                                 tracing::warn!("sync reindex {}: {e}", change.path);

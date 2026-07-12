@@ -86,7 +86,7 @@ pub async fn shared_file_download(
     }
 
     let (_file_data, block_ids) =
-        Downloader::resolve_blocks(&state.repos, state.db.as_ref(), &link.repo_id, &link.path)
+        Downloader::resolve_blocks(&state.repos, &link.repo_id, &link.path)
             .await
             .map_err(|_| AppError::NotFound("file not found".into()))?;
 
@@ -166,10 +166,9 @@ pub async fn repo_file_download(
     // Check if repo is encrypted and if password is set
     let dec_key = get_decryption_key_for_repo(&state, &repo_id, auth.user_id).await?;
 
-    let (_file_data, block_ids) =
-        Downloader::resolve_blocks(&state.repos, state.db.as_ref(), &repo_id, &normalized)
-            .await
-            .map_err(|_| AppError::NotFound("file not found".into()))?;
+    let (_file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &normalized)
+        .await
+        .map_err(|_| AppError::NotFound("file not found".into()))?;
 
     let stream = stream_blocks(block_ids, state.block_store.clone(), dec_key);
 
@@ -215,10 +214,9 @@ pub async fn download_api(
     // Check if repo is encrypted and if password is set
     let dec_key = get_decryption_key_for_repo(&state, &repo_id, info.user_id).await?;
 
-    let (_file_data, block_ids) =
-        Downloader::resolve_blocks(&state.repos, state.db.as_ref(), &repo_id, &path)
-            .await
-            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+    let (_file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
+        .await
+        .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
 
     // We don't know the size upfront when streaming, so use
     // Transfer-Encoding: chunked (omit Content-Length).

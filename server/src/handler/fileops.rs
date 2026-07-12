@@ -13,15 +13,8 @@ use crate::AppState;
 use crate::middleware::repo_extractor::RepoPathWrite;
 use crate::repository::Repositories;
 use crate::service::fs::fileops::{self as fops_svc};
-use base::common::DirEntryData;
 use base::error::AppError;
 use base::sanitize::safe_normalize_path;
-
-/// Read and parse an FsDirData object from the fs_objects table.
-#[allow(dead_code)]
-async fn read_fs_dir_data_helper(_repo_id: &str, _fs_id: &str) -> Result<DirEntryData, AppError> {
-    Err(AppError::Internal("not used".into()))
-}
 
 /// Get the directory listing for a path (reloaddir=true support).
 #[derive(Serialize)]

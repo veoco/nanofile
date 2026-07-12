@@ -1,4 +1,3 @@
-use sea_orm::DatabaseConnection;
 use std::collections::VecDeque;
 
 use crate::repository::Repositories;
@@ -12,11 +11,7 @@ use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
 /// traversing the FS tree from the repo's head commit.
 ///
 /// Returns 0 if the repo has no commits yet or the tree is empty.
-pub async fn compute_repo_size(
-    _db: &DatabaseConnection,
-    repos: &Repositories,
-    repo_id: &str,
-) -> Result<i64, AppError> {
+pub async fn compute_repo_size(repos: &Repositories, repo_id: &str) -> Result<i64, AppError> {
     let repo_record = repos
         .repo
         .find_by_id(repo_id)
@@ -80,7 +75,6 @@ pub async fn compute_tree_size(
 /// via `compute_repo_size()` to get a correct baseline.  Otherwise
 /// applies the delta incrementally.
 pub async fn adjust_repo_size(
-    db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     delta: i64,
@@ -93,7 +87,7 @@ pub async fn adjust_repo_size(
 
     let current_size = r.size;
     if current_size == 0 {
-        let size = compute_repo_size(db, repos, repo_id).await?;
+        let size = compute_repo_size(repos, repo_id).await?;
         repos.repo.adjust_size(repo_id, size).await?;
     } else {
         repos.repo.adjust_size(repo_id, delta).await?;
@@ -105,7 +99,6 @@ pub async fn adjust_repo_size(
 /// size.  For a file this is the `DirEntryData.size` field; for a
 /// directory the subtree is walked recursively via `compute_tree_size`.
 pub async fn get_entry_total_size(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     path: &str,

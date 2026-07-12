@@ -55,7 +55,6 @@ pub async fn create_share_link(
     Json(req): Json<CreateShareLinkRequest>,
 ) -> Result<Json<share::ShareLinkInfo>, AppError> {
     let info = share::create_share_link(
-        state.db.as_ref(),
         &state.repos,
         &state.config,
         &req.repo_id,
@@ -87,7 +86,6 @@ pub async fn beshare_repo(
     Json(req): Json<BeshareRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let result = share::beshare_repo(
-        state.db.as_ref(),
         &state.repos,
         state.notification_manager.as_ref(),
         &repo_id,
@@ -137,7 +135,6 @@ pub async fn modify_share_permission(
         .ok_or_else(|| AppError::BadRequest("permission is required".into()))?;
 
     share::modify_share_permission(
-        state.db.as_ref(),
         &state.repos,
         state.notification_manager.as_ref(),
         &repo_id,
@@ -158,7 +155,6 @@ pub async fn delete_share(
     Json(req): Json<ModifyShareRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     share::delete_share(
-        state.db.as_ref(),
         &state.repos,
         state.notification_manager.as_ref(),
         &repo_id,
