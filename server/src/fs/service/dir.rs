@@ -3,15 +3,15 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
-use crate::activity_log;
-use crate::common::DirEntry;
-use crate::common::util::{get_head_commit_id, get_head_root_id, parent_path_from};
-use crate::entity::{repo, repo_member};
-use crate::error::AppError;
 use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
-use crate::serialization::S_IFDIR;
 use base::common::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
+use base::error::AppError;
+use infra::activity_log;
+use infra::common::DirEntry;
+use infra::common::util::{get_head_commit_id, get_head_root_id, parent_path_from};
+use infra::entity::{repo, repo_member};
+use infra::serialization::S_IFDIR;
 
 // ── Free-standing pub(crate) helpers (used by src/ui/files.rs) ──────────
 
@@ -185,7 +185,7 @@ pub(crate) async fn create_dir_by_path(
     path: &str,
 ) -> Result<(), AppError> {
     // Validate and canonicalize the path to prevent directory traversal attacks
-    let path = crate::sanitize::canonicalize_path(path).map_err(|e| {
+    let path = base::sanitize::canonicalize_path(path).map_err(|e| {
         AppError::BadRequest(format!(
             "Invalid directory path: {}. Please ensure the path does not contain '..' components that would escape the repository.",
             e
@@ -512,7 +512,7 @@ impl DirService {
 
         // new_parent_dir should already be validated by handler, but we use safe_normalize_path
         // for defensive programming. If it fails, it's an internal error (handler bug).
-        let new_parent_path = crate::sanitize::safe_normalize_path(new_parent_dir)
+        let new_parent_path = base::sanitize::safe_normalize_path(new_parent_dir)
             .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
         let _new_parent_fs_id =
             crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, &new_parent_path)
@@ -1048,7 +1048,7 @@ async fn copy_fs_tree(
         if !exists {
             repos
                 .fs_object
-                .insert_many(vec![crate::entity::fs_object::ActiveModel {
+                .insert_many(vec![infra::entity::fs_object::ActiveModel {
                     id: sea_orm::NotSet,
                     repo_id: sea_orm::Set(dst_repo_id.to_string()),
                     fs_id: sea_orm::Set(fs_id.clone()),

@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::events::{JwtExpiredEvent, NotificationJwtClaims, NotificationMessage};
-use crate::events;
+use infra::events;
 
 /// Channel capacity for outgoing WebSocket messages per client.
 /// A connected WebSocket client.

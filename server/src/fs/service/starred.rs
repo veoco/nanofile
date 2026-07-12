@@ -4,10 +4,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use sea_orm::{DatabaseConnection, Set};
 
-use crate::error::AppError;
 use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
-use crate::serialization::S_IFDIR;
+use base::error::AppError;
+use infra::serialization::S_IFDIR;
 
 #[derive(serde::Serialize)]
 pub struct StarredFileEntry {
@@ -69,7 +69,7 @@ impl StarredService {
 
         let entries = self.repos.starred.find_by_user_id(user_id).await?;
 
-        let mut repo_cache: HashMap<String, Option<crate::entity::repo::Model>> = HashMap::new();
+        let mut repo_cache: HashMap<String, Option<infra::entity::repo::Model>> = HashMap::new();
         for entry in &entries {
             if !repo_cache.contains_key(&entry.repo_id) {
                 let r = self.repos.repo.find_by_id(&entry.repo_id).await?;
@@ -208,7 +208,7 @@ impl StarredService {
         let now = Utc::now().timestamp();
         self.repos
             .starred
-            .insert(crate::entity::starred_file::ActiveModel {
+            .insert(infra::entity::starred_file::ActiveModel {
                 id: sea_orm::NotSet,
                 repo_id: Set(repo_id.to_string()),
                 path: Set(normalized_path.clone()),
@@ -273,8 +273,8 @@ fn timestamp_to_iso(ts: i64) -> String {
 async fn build_item_json(
     db: &DatabaseConnection,
     repos: &Repositories,
-    entry: &crate::entity::starred_file::Model,
-    repo_opt: Option<&crate::entity::repo::Model>,
+    entry: &infra::entity::starred_file::Model,
+    repo_opt: Option<&infra::entity::repo::Model>,
     auth_email: &str,
     user_nickname: &str,
 ) -> serde_json::Value {
@@ -319,8 +319,8 @@ async fn build_item_json(
 async fn get_entry_mtime_or_deleted(
     _db: &DatabaseConnection,
     repos: &Repositories,
-    repo: &crate::entity::repo::Model,
-    entry: &crate::entity::starred_file::Model,
+    repo: &infra::entity::repo::Model,
+    entry: &infra::entity::starred_file::Model,
 ) -> (i64, bool) {
     let head_cid = match repo.head_commit_id.as_ref() {
         Some(c) => c.clone(),

@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
 use crate::user::service::AvatarService;
+use base::error::AppError;
 
 // ─── Upload handler ──────────────────────────────────────────────────────────
 

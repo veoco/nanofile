@@ -99,7 +99,7 @@ async fn test_login_disabled_user_returns_error() {
     let db = &*server.db;
     use sea_orm::ActiveModelTrait;
     let user_id = create_test_user(db, "disabled@test.com", "password").await;
-    let user = server::entity::user::ActiveModel {
+    let user = infra::entity::user::ActiveModel {
         id: sea_orm::Set(user_id),
         is_active: sea_orm::Set(false),
         ..Default::default()
@@ -994,8 +994,8 @@ async fn test_client_login_expired_token_redirects() {
     // Create an expired token directly in DB
     use sea_orm::EntityTrait;
     let now = chrono::Utc::now().timestamp();
-    server::entity::client_login_token::Entity::insert(
-        server::entity::client_login_token::ActiveModel {
+    infra::entity::client_login_token::Entity::insert(
+        infra::entity::client_login_token::ActiveModel {
             token: sea_orm::Set("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
             username: sea_orm::Set("test@example.com".to_string()),
             created_at: sea_orm::Set(now - 60), // 60 seconds ago (past 30s TTL)

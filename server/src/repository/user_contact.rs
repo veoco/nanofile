@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
-use crate::entity::user_contact;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::user_contact;
 
 #[async_trait]
 pub trait UserContactRepository: Send + Sync {

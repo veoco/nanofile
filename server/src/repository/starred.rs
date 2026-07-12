@@ -5,8 +5,8 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::starred_file;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::starred_file;
 
 #[async_trait]
 pub trait StarredRepository: Send + Sync {

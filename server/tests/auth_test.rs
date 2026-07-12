@@ -106,7 +106,7 @@ async fn test_login_2fa_required_no_otp() {
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
 
     // Manually enable 2FA for the user
-    let user_2fa = server::entity::user_2fa::ActiveModel {
+    let user_2fa = infra::entity::user_2fa::ActiveModel {
         user_id: sea_orm::Set(1),
         totp_secret: sea_orm::Set("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP".to_string()),
         algorithm: sea_orm::Set("SHA1".to_string()),
@@ -139,7 +139,7 @@ async fn test_login_2fa_invalid_otp() {
 
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
 
-    let user_2fa = server::entity::user_2fa::ActiveModel {
+    let user_2fa = infra::entity::user_2fa::ActiveModel {
         user_id: sea_orm::Set(1),
         totp_secret: sea_orm::Set("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP".to_string()),
         algorithm: sea_orm::Set("SHA1".to_string()),
@@ -195,7 +195,7 @@ fn totp_secret() -> &'static str {
 }
 
 async fn enable_2fa(db: &sea_orm::DatabaseConnection, user_id: i32) {
-    let user_2fa = server::entity::user_2fa::ActiveModel {
+    let user_2fa = infra::entity::user_2fa::ActiveModel {
         user_id: sea_orm::Set(user_id),
         totp_secret: sea_orm::Set(totp_secret().to_string()),
         algorithm: sea_orm::Set("SHA1".to_string()),
@@ -279,7 +279,7 @@ async fn test_s2fa_expired_token() {
     // Insert an expired S2FA token directly into the database
     let now = chrono::Utc::now().timestamp();
     let expired_token = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let expired_model = server::entity::s2fa_token::ActiveModel {
+    let expired_model = infra::entity::s2fa_token::ActiveModel {
         id: sea_orm::NotSet,
         user_id: sea_orm::Set(1),
         token: sea_orm::Set(expired_token.to_string()),
@@ -301,8 +301,8 @@ async fn test_s2fa_expired_token() {
     );
 
     // Verify the expired token was cleaned up
-    let count = server::entity::s2fa_token::Entity::find()
-        .filter(server::entity::s2fa_token::Column::Token.eq(expired_token))
+    let count = infra::entity::s2fa_token::Entity::find()
+        .filter(infra::entity::s2fa_token::Column::Token.eq(expired_token))
         .count(server.db.as_ref())
         .await
         .unwrap();

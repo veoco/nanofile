@@ -1,10 +1,10 @@
 use sea_orm::DatabaseConnection;
 
-use crate::crypto::random_key::decrypt_block;
-use crate::error::AppError;
 use crate::repository::Repositories;
-use crate::storage::DynBlockStorage;
 use base::common::FsFileData;
+use base::error::AppError;
+use infra::crypto::random_key::decrypt_block;
+use infra::storage::DynBlockStorage;
 
 pub struct Downloader;
 

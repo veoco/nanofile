@@ -3,7 +3,7 @@ mod common;
 use base::common::CommitData;
 use base::common::{DirEntryData, FsDirData, FsFileData};
 use common::{TestServer, create_test_user, get_sync_token};
-use server::serialization::pack_fs;
+use infra::serialization::pack_fs;
 
 fn random_hex_id() -> String {
     use sha1::{Digest, Sha1};
@@ -107,7 +107,7 @@ async fn test_fs_dir_serialization_roundtrip() {
     }]);
 
     let fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
     assert_eq!(fs_id.len(), 40);
 
     let json = serde_json::to_string(&dir_data).unwrap();
@@ -128,7 +128,7 @@ async fn test_fs_file_serialization_roundtrip() {
     let file_data = make_file_fs_data(vec![block_id.clone()], 4096);
 
     let fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     assert_eq!(fs_id.len(), 40);
 
     let json = serde_json::to_string(&file_data).unwrap();
@@ -147,7 +147,7 @@ async fn test_fs_file_serialization_roundtrip() {
 async fn test_recv_fs_binary_format() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
-    use server::crypto::fs_id::sha1_hex;
+    use infra::crypto::fs_id::sha1_hex;
 
     // Upload a real block so the block integrity check passes.
     let block_data = b"hello world this is test block data";
@@ -160,7 +160,7 @@ async fn test_recv_fs_binary_format() {
     // Create a file fs_object referencing the real block.
     let file_data = make_file_fs_data(vec![block_id.clone()], 512);
     let fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
 
@@ -183,7 +183,7 @@ async fn test_recv_fs_binary_format() {
     let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
     let root_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
 
     let mut root_packed = Vec::new();
     root_packed.extend_from_slice(root_fs_id.as_bytes());
@@ -228,7 +228,7 @@ async fn test_pack_fs_returns_packed_binary() {
 
     let file_data = make_file_fs_data(vec![random_hex_id()], 256);
     let fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
 
@@ -257,7 +257,7 @@ async fn test_check_fs_partial_exists() {
 
     let file_data = make_file_fs_data(vec![random_hex_id()], 100);
     let fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
 
@@ -293,7 +293,7 @@ async fn test_fs_id_list_with_server_head() {
         size: 100,
     }]);
     let root_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
     let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -320,7 +320,7 @@ async fn test_fs_id_list_with_matching_client_head() {
 
     let root_dir = make_dir_fs_data(vec![]);
     let root_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
     let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -398,7 +398,7 @@ async fn test_regression_recv_fs_stores_correct_dir_type() {
     let dir_json = serde_json::to_string(&dir_data).unwrap();
     let dir_compressed = pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
     let dir_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
 
     let mut packed = Vec::new();
     packed.extend_from_slice(dir_fs_id.as_bytes());
@@ -437,7 +437,7 @@ async fn test_regression_recv_fs_stores_correct_file_type() {
     let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
     let file_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
 
     let mut packed = Vec::new();
     packed.extend_from_slice(file_fs_id.as_bytes());
@@ -557,9 +557,9 @@ async fn test_regression_fs_id_is_stable() {
     };
 
     let fs_id_1 =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
     let fs_id_2 =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
 
     // Same data must produce same fs_id
     assert_eq!(fs_id_1, fs_id_2, "fs_id must be deterministic");
@@ -571,7 +571,7 @@ async fn test_regression_fs_id_is_stable() {
         obj_type: 2, // wrong type (SEAF_METADATA_TYPE_LINK)
         version: 1,
     };
-    let fs_id_wrong = server::crypto::fs_id::sha1_hex(
+    let fs_id_wrong = infra::crypto::fs_id::sha1_hex(
         serde_json::to_string(&dir_data_wrong_type)
             .unwrap()
             .as_bytes(),
@@ -682,7 +682,7 @@ async fn test_regression_pack_fs_binary_format() {
     // Upload a file fs object
     let file_data = make_file_fs_data(vec![random_hex_id()], 128);
     let fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
 
@@ -723,13 +723,13 @@ async fn test_regression_pack_fs_binary_format() {
 async fn test_regression_check_endpoints_accept_json_array() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
-    use server::crypto::fs_id::sha1_hex;
+    use infra::crypto::fs_id::sha1_hex;
 
     // check-fs with JSON array
     let _existing = random_hex_id();
     let file_data = make_file_fs_data(vec![random_hex_id()], 64);
     let fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
 
@@ -766,7 +766,7 @@ async fn test_regression_check_endpoints_accept_json_array() {
 async fn test_resolve_fs_id_root_path() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
-    use server::crypto::fs_id::sha1_hex;
+    use infra::crypto::fs_id::sha1_hex;
 
     // Upload a real block so the block integrity check passes.
     let block_data = b"block data for resolve_fs_id_root_path";
@@ -779,7 +779,7 @@ async fn test_resolve_fs_id_root_path() {
     // Upload a file to create a real FS tree
     let file_data = make_file_fs_data(vec![block_id.clone()], 64);
     let file_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
@@ -792,7 +792,7 @@ async fn test_resolve_fs_id_root_path() {
         size: 64,
     }]);
     let root_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
     let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -830,7 +830,7 @@ async fn test_resolve_fs_id_root_path() {
 async fn test_resolve_fs_id_deep_path() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
-    use server::crypto::fs_id::sha1_hex;
+    use infra::crypto::fs_id::sha1_hex;
 
     // Upload a real block so the block integrity check passes.
     let block_data = b"block data for resolve_fs_id_deep_path";
@@ -843,7 +843,7 @@ async fn test_resolve_fs_id_deep_path() {
     // Build: root -> sub/ -> nested.txt
     let file_data = make_file_fs_data(vec![block_id.clone()], 32);
     let file_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
@@ -856,20 +856,20 @@ async fn test_resolve_fs_id_deep_path() {
         size: 32,
     }]);
     let sub_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&sub_dir).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&sub_dir).unwrap().as_bytes());
     let sub_json = serde_json::to_string(&sub_dir).unwrap();
     let sub_compressed = pack_fs::compress_fs_data(sub_json.as_bytes()).unwrap();
 
     let root_dir = make_dir_fs_data(vec![DirEntryData {
         id: sub_fs_id.clone(),
-        mode: server::serialization::S_IFDIR,
+        mode: infra::serialization::S_IFDIR,
         modifier: "test@example.com".to_string(),
         mtime: chrono::Utc::now().timestamp(),
         name: "sub".to_string(),
         size: 0,
     }]);
     let root_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
     let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -918,7 +918,7 @@ async fn test_resolve_fs_id_nonexistent_segment() {
 
     let root_dir = make_dir_fs_data(vec![]);
     let root_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
     let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
+use base::error::AppError;
 
 pub fn admin_user_routes() -> Router<Arc<AppState>> {
     Router::new()

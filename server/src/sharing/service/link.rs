@@ -5,9 +5,9 @@ use std::sync::Arc;
 use crate::Config;
 use crate::auth::password::hash_password;
 use crate::auth::token::{generate_share_link_token, generate_upload_link_token};
-use crate::entity::upload_link;
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
+use infra::entity::upload_link;
 
 // ── Response types ────────────────────────────────────────────────────
 

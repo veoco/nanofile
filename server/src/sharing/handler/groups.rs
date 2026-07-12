@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
 use crate::sharing::service::group;
+use base::error::AppError;
 
 /// GET /api2/groups/
 pub async fn list_groups(

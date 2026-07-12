@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::entity::invitation_code;
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
+use infra::entity::invitation_code;
 
 /// Invitation code info returned by the service.
 pub struct InvitationInfo {

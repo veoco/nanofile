@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use crate::common::EMPTY_SHA1;
-use crate::error::AppError;
 use crate::fs::core::tree::read_fs_dir_data;
 use crate::repository::Repositories;
 use base::common::DirEntryData;
+use base::error::AppError;
+use infra::common::EMPTY_SHA1;
 
 /// A single file-system change detected by diffing two tree snapshots.
 #[derive(Debug, Clone)]

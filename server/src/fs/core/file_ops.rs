@@ -1,11 +1,11 @@
-use crate::crypto::random_key::encrypt_block;
 use crate::domain;
-use crate::entity::{commit, repo};
-use crate::error::AppError;
-use crate::events;
 use crate::repository::Repositories;
-use crate::storage::DynBlockStorage;
 use base::common::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+use base::error::AppError;
+use infra::crypto::random_key::encrypt_block;
+use infra::entity::{commit, repo};
+use infra::events;
+use infra::storage::DynBlockStorage;
 use sea_orm::DatabaseConnection;
 
 /// Sentinel value indicating that no ancestor chain was pre-computed.
@@ -36,11 +36,11 @@ impl FileOps {
         let now = chrono::Utc::now().timestamp();
 
         // Validate input — name may contain '/' for nested paths.
-        crate::sanitize::validate_path(parent_path)
+        base::sanitize::validate_path(parent_path)
             .map_err(|e| AppError::BadRequest(e.to_string()))?;
-        crate::sanitize::validate_name(name).map_err(|e| AppError::BadRequest(e.to_string()))?;
+        base::sanitize::validate_name(name).map_err(|e| AppError::BadRequest(e.to_string()))?;
 
-        let file_chunks = crate::storage::cdc::file_chunk_cdc(data);
+        let file_chunks = infra::storage::cdc::file_chunk_cdc(data);
 
         let mut block_ids = Vec::new();
         let mut total_size: i64 = 0;
@@ -105,7 +105,7 @@ impl FileOps {
 
         dirents.push(DirEntryData {
             id: file_fs_id.clone(),
-            mode: crate::serialization::S_IFREG,
+            mode: infra::serialization::S_IFREG,
             modifier: modifier.to_string(),
             mtime: now,
             name: name.to_string(),
@@ -256,7 +256,7 @@ impl FileOps {
                 // with S_IFDIR defaults.
                 ancestor_data.dirents.push(DirEntryData {
                     id: current_child_fs_id.clone(),
-                    mode: crate::serialization::S_IFDIR,
+                    mode: infra::serialization::S_IFDIR,
                     modifier: String::new(),
                     mtime: chrono::Utc::now().timestamp(),
                     name: child_name.clone(),

@@ -19,7 +19,7 @@ pub struct SyncAuth {
 }
 
 impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
-    type Rejection = crate::error::AppError;
+    type Rejection = base::error::AppError;
 
     async fn from_request_parts(
         parts: &mut Parts,
@@ -38,7 +38,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             if let Some(expires_at) = record.expires_at {
                 let now = chrono::Utc::now().timestamp();
                 if now > expires_at {
-                    return Err(crate::error::AppError::Unauthorized);
+                    return Err(base::error::AppError::Unauthorized);
                 }
             }
 
@@ -79,7 +79,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         // Fall back to API token (for requests using Bearer/Token auth).
         SyncAuth::from_token(repos, &token)
             .await
-            .map_err(|_| crate::error::AppError::Unauthorized)
+            .map_err(|_| base::error::AppError::Unauthorized)
     }
 }
 
@@ -250,8 +250,8 @@ impl SyncAuth {
 /// Checks the Seafile-Repo-Token header first, then the Authorization header.
 pub fn extract_sync_token(
     headers: &axum::http::HeaderMap,
-) -> Result<String, crate::error::AppError> {
-    use crate::error::AppError;
+) -> Result<String, base::error::AppError> {
+    use base::error::AppError;
 
     if let Some(token) = headers
         .get("Seafile-Repo-Token")

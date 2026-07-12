@@ -7,12 +7,12 @@ use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
 /// Helper: set a user's storage_quota directly in the database.
 async fn set_user_quota(f: &TestFixture, quota: Option<i64>) {
-    let user_record = server::entity::user::Entity::find_by_id(f.user_id)
+    let user_record = infra::entity::user::Entity::find_by_id(f.user_id)
         .one(&*f.server.db)
         .await
         .unwrap()
         .unwrap();
-    let mut active: server::entity::user::ActiveModel = user_record.into();
+    let mut active: infra::entity::user::ActiveModel = user_record.into();
     active.storage_quota = Set(quota);
     active.update(&*f.server.db).await.unwrap();
 }

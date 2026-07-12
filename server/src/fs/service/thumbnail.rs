@@ -4,16 +4,16 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
-use crate::error::AppError;
 use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
 use base::common::SEAF_METADATA_TYPE_DIR;
+use base::error::AppError;
 
 pub struct ThumbnailService {
     repos: Arc<Repositories>,
     db: Arc<DatabaseConnection>,
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     block_dir: Arc<PathBuf>,
 }
 
@@ -21,7 +21,7 @@ impl ThumbnailService {
     pub fn new(
         repos: Arc<Repositories>,
         db: Arc<DatabaseConnection>,
-        block_store: crate::storage::DynBlockStorage,
+        block_store: infra::storage::DynBlockStorage,
         block_dir: Arc<PathBuf>,
     ) -> Self {
         Self {

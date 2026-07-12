@@ -3,21 +3,21 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
-use crate::error::AppError;
 use crate::fs::core::download::Downloader;
 use crate::repository::Repositories;
+use base::error::AppError;
 
 pub struct ExifService {
     db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
 }
 
 impl ExifService {
     pub fn new(
         db: Arc<DatabaseConnection>,
         repos: Arc<Repositories>,
-        block_store: crate::storage::DynBlockStorage,
+        block_store: infra::storage::DynBlockStorage,
     ) -> Self {
         Self {
             db,

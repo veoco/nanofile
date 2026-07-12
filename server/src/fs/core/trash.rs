@@ -5,13 +5,13 @@ use sea_orm::{
 use serde::Serialize;
 use std::collections::HashMap;
 
-use crate::activity_log;
-use crate::entity::{deleted_repo, file_trash, repo, repo_member};
-use crate::error::AppError;
 use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
-use crate::serialization::S_IFDIR;
 use base::common::DirEntryData;
+use base::error::AppError;
+use infra::activity_log;
+use infra::entity::{deleted_repo, file_trash, repo, repo_member};
+use infra::serialization::S_IFDIR;
 
 /// A single item recorded during batch delete.
 #[derive(Debug, Clone)]
@@ -438,7 +438,7 @@ async fn fs_object_exists(
     repo_id: &str,
     fs_id: &str,
 ) -> Result<bool, AppError> {
-    if fs_id == crate::common::EMPTY_SHA1 {
+    if fs_id == infra::common::EMPTY_SHA1 {
         return Ok(true);
     }
     repos
@@ -555,7 +555,7 @@ pub async fn restore_trash_items(
                 }
             };
 
-            if parent_fs_id == crate::common::EMPTY_SHA1 {
+            if parent_fs_id == infra::common::EMPTY_SHA1 {
                 failed.push(RevertFailedItem {
                     commit_id: commit_id.clone(),
                     path: full_path.to_string(),
@@ -588,7 +588,7 @@ pub async fn restore_trash_items(
                         mode: if is_dir {
                             S_IFDIR
                         } else {
-                            crate::serialization::S_IFREG
+                            infra::serialization::S_IFREG
                         },
                         modifier: modifier.to_string(),
                         mtime: now,

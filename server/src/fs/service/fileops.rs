@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
-use crate::activity_log;
-use crate::common::util::{generate_unique_filename, get_head_root_id};
-use crate::error::AppError;
 use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
-use crate::serialization::S_IFDIR;
 use base::common::DirEntryData;
+use base::error::AppError;
+use infra::activity_log;
+use infra::common::util::{generate_unique_filename, get_head_root_id};
+use infra::serialization::S_IFDIR;
 
 /// Parse colon-separated file_names into a Vec<String>.
 pub fn parse_file_names(s: &str) -> Vec<String> {
@@ -26,7 +26,7 @@ pub fn parse_file_names(s: &str) -> Vec<String> {
 pub struct FileOpsService {
     db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     indexer: Option<crate::indexer::TextIndexer>,
 }
 
@@ -34,7 +34,7 @@ impl FileOpsService {
     pub fn new(
         db: Arc<DatabaseConnection>,
         repos: Arc<Repositories>,
-        block_store: crate::storage::DynBlockStorage,
+        block_store: infra::storage::DynBlockStorage,
         indexer: Option<crate::indexer::TextIndexer>,
     ) -> Self {
         Self {

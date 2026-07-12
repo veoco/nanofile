@@ -5,8 +5,8 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::activity;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::activity;
 
 #[async_trait]
 pub trait ActivityRepository: Send + Sync {

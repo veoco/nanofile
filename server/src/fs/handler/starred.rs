@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
+use base::error::AppError;
 
 pub use crate::fs::service::starred::StarredFileEntry;
 
@@ -62,15 +62,15 @@ pub async fn star_item(
         serde_json::from_slice::<StarOrUnstarRequest>(&bytes)?
     } else {
         StarOrUnstarRequest {
-            repo_id: crate::common::util::extract_multipart_field(&bytes, "repo_id")
+            repo_id: infra::common::util::extract_multipart_field(&bytes, "repo_id")
                 .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?,
-            path: crate::common::util::extract_multipart_field(&bytes, "path")
+            path: infra::common::util::extract_multipart_field(&bytes, "path")
                 .ok_or_else(|| AppError::BadRequest("path required".into()))?,
         }
     };
 
     // Permission check
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+    infra::storage::check_repo_read_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
         .await?;
 
     let svc = state.starred_service();

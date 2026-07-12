@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
-use crate::sanitize::safe_normalize_path;
+use base::error::AppError;
+use base::sanitize::safe_normalize_path;
 
 #[derive(Deserialize)]
 pub struct ExifQuery {

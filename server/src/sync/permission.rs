@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::error::AppError;
+use base::error::AppError;
 
 #[derive(Deserialize)]
 pub struct PermissionQuery {
@@ -46,12 +46,12 @@ pub async fn permission_check(
     // seaf-daemon sends op=upload or op=download.
     match query.op.as_deref() {
         Some("upload") => {
-            crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, _auth.user_id)
+            infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, _auth.user_id)
                 .await?;
         }
         _ => {
             // Default to read permission check (covers download + unknown ops).
-            crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, _auth.user_id)
+            infra::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, _auth.user_id)
                 .await?;
         }
     }

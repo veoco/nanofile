@@ -4,8 +4,8 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::sdoc_comment;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::sdoc_comment;
 
 #[async_trait]
 pub trait SdocCommentRepository: Send + Sync {

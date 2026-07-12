@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::error::AppError;
+use base::error::AppError;
 
 /// GET /seafhttp/repo/{repo_id}/quota-check/?delta={delta}
 ///

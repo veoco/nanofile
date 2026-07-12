@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::activity::service::activity::ActivityService;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
+use base::error::AppError;
 
 #[derive(Deserialize)]
 pub struct ActivitiesQuery {

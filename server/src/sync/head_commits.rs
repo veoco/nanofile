@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::error::AppError;
+use base::error::AppError;
 
 /// POST `/seafhttp/repo/head-commits-multi/`
 ///

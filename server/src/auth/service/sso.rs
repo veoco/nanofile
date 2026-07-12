@@ -4,9 +4,9 @@ use sea_orm::Set;
 
 use rand::Rng;
 
-use crate::entity::{client_login_token, sso_login_token};
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
+use infra::entity::{client_login_token, sso_login_token};
 
 /// Service for SSO login flows, client login tokens, and device-wipe reporting.
 pub struct SsoService {

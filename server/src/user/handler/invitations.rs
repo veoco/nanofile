@@ -13,9 +13,9 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::error::AppError;
 use crate::ui::auth_extractor::WebUser;
 use crate::user::service::{InvitationInfo, InvitationService};
+use base::error::AppError;
 
 #[derive(Template)]
 #[template(path = "settings/invitations.html")]

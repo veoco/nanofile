@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
-use crate::common::EMPTY_SHA1;
-use crate::error::AppError;
 use crate::repository::Repositories;
-use crate::serialization::S_IFDIR;
+use base::error::AppError;
+use infra::common::EMPTY_SHA1;
+use infra::serialization::S_IFDIR;
 
 /// A single file search result entry.
 #[derive(serde::Serialize, Clone)]

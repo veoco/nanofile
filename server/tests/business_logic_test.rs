@@ -397,7 +397,7 @@ async fn test_disable_2fa_rate_limited() {
 
     // Enable 2FA for the user directly (bypass setup/verify).
     let totp_secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
-    let user_2fa = server::entity::user_2fa::ActiveModel {
+    let user_2fa = infra::entity::user_2fa::ActiveModel {
         user_id: sea_orm::Set(f.user_id),
         totp_secret: sea_orm::Set(totp_secret.to_string()),
         algorithm: sea_orm::Set("SHA1".to_string()),
@@ -454,7 +454,7 @@ async fn test_disable_2fa_rate_limit_cleared_on_success() {
 
     // Enable 2FA for the user directly.
     let totp_secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
-    let user_2fa = server::entity::user_2fa::ActiveModel {
+    let user_2fa = infra::entity::user_2fa::ActiveModel {
         user_id: sea_orm::Set(f.user_id),
         totp_secret: sea_orm::Set(totp_secret.to_string()),
         algorithm: sea_orm::Set("SHA1".to_string()),
@@ -498,7 +498,7 @@ async fn test_disable_2fa_rate_limit_cleared_on_success() {
     );
 
     // Verify 2FA is now disabled by checking the DB.
-    let twofa = server::entity::user_2fa::Entity::find_by_id(f.user_id)
+    let twofa = infra::entity::user_2fa::Entity::find_by_id(f.user_id)
         .one(f.server.db.as_ref())
         .await
         .unwrap();

@@ -618,9 +618,9 @@ async fn test_activity_own_visible_without_membership() {
     // Remove the user from the repo's member list directly.
     let db = &*f.server.db;
     use sea_orm::QueryFilter;
-    server::entity::repo_member::Entity::delete_many()
-        .filter(server::entity::repo_member::Column::RepoId.eq(&f.repo_id))
-        .filter(server::entity::repo_member::Column::UserId.eq(f.user_id))
+    infra::entity::repo_member::Entity::delete_many()
+        .filter(infra::entity::repo_member::Column::RepoId.eq(&f.repo_id))
+        .filter(infra::entity::repo_member::Column::UserId.eq(f.user_id))
         .exec(db)
         .await
         .unwrap();

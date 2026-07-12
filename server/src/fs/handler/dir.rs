@@ -13,10 +13,10 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::auth::{RepoPathRead, RepoPathWrite};
-use crate::common::DirEntry;
-use crate::error::AppError;
 use crate::fs::service::dir::{self as dir_svc};
-use crate::sanitize::safe_normalize_path;
+use base::error::AppError;
+use base::sanitize::safe_normalize_path;
+use infra::common::DirEntry;
 
 // Re-export pub(crate) functions that are used by src/ui/files.rs
 pub(crate) use dir_svc::list_dir_from_fs_tree;
@@ -141,9 +141,9 @@ pub async fn dir_post_handler(
                 form.get("newname").cloned(),
             )
         } else {
-            let op = crate::common::util::extract_multipart_field(&bytes, "operation");
-            let p = crate::common::util::extract_multipart_field(&bytes, "p");
-            let newname = crate::common::util::extract_multipart_field(&bytes, "newname");
+            let op = infra::common::util::extract_multipart_field(&bytes, "operation");
+            let p = infra::common::util::extract_multipart_field(&bytes, "p");
+            let newname = infra::common::util::extract_multipart_field(&bytes, "newname");
             (op, p, newname)
         };
 
@@ -207,7 +207,7 @@ pub async fn move_dir(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MoveDirRequest>,
 ) -> Result<(), AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
         .await?;
 
     let svc = state.dir_service();
@@ -233,7 +233,7 @@ pub async fn rename_dir(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RenameDirRequest>,
 ) -> Result<(), AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
         .await?;
 
     let path = safe_normalize_path(&req.p)
@@ -309,7 +309,7 @@ pub async fn delete_dirent_v21(
     Path((repo_id, obj)): Path<(String, String)>,
     Query(query): Query<V21DirQuery>,
 ) -> Result<Json<serde_json::value::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let path = query
         .p

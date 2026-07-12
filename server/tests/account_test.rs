@@ -10,12 +10,12 @@ async fn test_account_info_returns_display_name() {
 
     // Set a display name directly in DB
     use sea_orm::{ActiveModelTrait, EntityTrait, Set};
-    let user_record = server::entity::user::Entity::find_by_id(f.user_id)
+    let user_record = infra::entity::user::Entity::find_by_id(f.user_id)
         .one(&*f.server.db)
         .await
         .unwrap()
         .unwrap();
-    let mut active: server::entity::user::ActiveModel = user_record.into();
+    let mut active: infra::entity::user::ActiveModel = user_record.into();
     active.display_name = Set(Some("Alice".to_string()));
     active.update(&*f.server.db).await.unwrap();
 
@@ -62,8 +62,8 @@ async fn test_account_info_uses_name_when_display_name_unset() {
     let server = TestServer::start().await;
     let client = server.client();
 
+    use infra::entity::user;
     use sea_orm::{ActiveModelTrait, EntityTrait, Set};
-    use server::entity::user;
 
     let user_id = create_test_user(&server.db, "bob@example.com", "password").await;
     let user_record = user::Entity::find_by_id(user_id)
@@ -174,12 +174,12 @@ async fn test_account_info_quota_unlimited() {
 
     // Set storage_quota to 0 (explicitly unlimited)
     use sea_orm::{ActiveModelTrait, EntityTrait, Set};
-    let user_record = server::entity::user::Entity::find_by_id(f.user_id)
+    let user_record = infra::entity::user::Entity::find_by_id(f.user_id)
         .one(&*f.server.db)
         .await
         .unwrap()
         .unwrap();
-    let mut active: server::entity::user::ActiveModel = user_record.into();
+    let mut active: infra::entity::user::ActiveModel = user_record.into();
     active.storage_quota = Set(Some(0));
     active.update(&*f.server.db).await.unwrap();
 
@@ -200,12 +200,12 @@ async fn test_account_info_quota_user_specific() {
 
     // Set storage_quota to 1 GB
     use sea_orm::{ActiveModelTrait, EntityTrait, Set};
-    let user_record = server::entity::user::Entity::find_by_id(f.user_id)
+    let user_record = infra::entity::user::Entity::find_by_id(f.user_id)
         .one(&*f.server.db)
         .await
         .unwrap()
         .unwrap();
-    let mut active: server::entity::user::ActiveModel = user_record.into();
+    let mut active: infra::entity::user::ActiveModel = user_record.into();
     active.storage_quota = Set(Some(1_073_741_824)); // 1 GB
     active.update(&*f.server.db).await.unwrap();
 

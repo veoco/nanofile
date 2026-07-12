@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
+use base::error::AppError;
 
 /// Local query type for the v2.1 dir delete endpoint.
 /// Only needs `p` (path) — avoids sharing `V21DirQuery` which has more fields.
@@ -23,7 +23,7 @@ pub async fn v21_delete_dir(
     Path(repo_id): Path<String>,
     Query(query): Query<DeleteQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let path = query
         .p

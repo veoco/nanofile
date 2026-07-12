@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
 
 /// Information about a user for the admin user management page.
 #[derive(serde::Serialize)]

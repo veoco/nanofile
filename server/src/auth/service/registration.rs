@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use crate::auth::password::{hash_password, validate_password};
-use crate::entity::user;
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
+use infra::entity::user;
 
 /// Parameters for user registration.
 pub struct RegistrationParams {

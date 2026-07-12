@@ -10,7 +10,7 @@ use base::common::{FsDirData, FsFileData};
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use sha1::{Digest, Sha1};
 
-use crate::error::AppError;
+use base::error::AppError;
 
 /// Serialize a directory FS object to compact JSON (no extra whitespace).
 pub fn dir_to_compact_json(data: &FsDirData) -> String {

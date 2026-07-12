@@ -7,23 +7,6 @@
 
 #![allow(clippy::too_many_arguments)]
 
-// ── Domain crate re-exports ─────────────────────────────────────────────────
-pub use base::error;
-pub use base::sanitize;
-
-// ── Infra crate re-exports ──────────────────────────────────────────────────
-pub use infra::activity_log;
-pub use infra::common;
-pub use infra::config;
-pub use infra::crypto;
-pub use infra::db;
-pub use infra::entity;
-pub use infra::events;
-pub use infra::permission;
-pub use infra::rate_limit;
-pub use infra::serialization;
-pub use infra::storage;
-
 // ── Server crate modules ────────────────────────────────────────────────────
 pub mod activity;
 pub mod admin;
@@ -54,14 +37,14 @@ use sha2::Digest;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::access_token::AccessTokenManager;
-use crate::config::Config;
-use crate::crypto::password_manager::PasswordManager;
 use crate::fs::task_manager::TaskManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
-use crate::rate_limit::{GenericRateLimiter, LoginRateLimiter};
-use crate::storage::DynBlockStorage;
 use crate::web::temp_file::TempFileManager;
+use infra::config::Config;
+use infra::crypto::password_manager::PasswordManager;
+use infra::rate_limit::{GenericRateLimiter, LoginRateLimiter};
+use infra::storage::DynBlockStorage;
 
 /// Unified application state injected into all axum handlers.
 #[derive(Clone)]
@@ -107,7 +90,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(db: DatabaseConnection, config: Config, temp_file_manager: TempFileManager) -> Self {
         let block_dir = Arc::new(PathBuf::from(&config.storage.block_dir));
-        let block_store = crate::storage::new_block_store(&block_dir);
+        let block_store = infra::storage::new_block_store(&block_dir);
         let shutdown_token = CancellationToken::new();
         let notification_manager =
             if config.notification.enabled && !config.notification.private_key.is_empty() {

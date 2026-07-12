@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
-use crate::entity::{commit, repo};
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::{commit, repo};
 
 #[async_trait]
 pub trait RepoRepository: Send + Sync {

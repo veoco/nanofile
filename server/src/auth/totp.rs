@@ -1,8 +1,8 @@
 use totp_rs::{Algorithm, Secret, TOTP};
 
-use crate::entity::user_2fa;
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
+use infra::entity::user_2fa;
 
 pub struct TotpManager;
 

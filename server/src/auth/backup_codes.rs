@@ -1,8 +1,8 @@
 use sha2::{Digest, Sha256};
 
-use crate::entity::user_2fa_backup_code;
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
+use infra::entity::user_2fa_backup_code;
 
 pub struct BackupCodeManager;
 

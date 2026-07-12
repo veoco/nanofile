@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::error::AppError;
+use base::error::AppError;
 
 /// Individual permission entry (path + permission level).
 #[derive(Serialize, Deserialize)]

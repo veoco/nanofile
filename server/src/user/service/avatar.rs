@@ -2,8 +2,8 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ impl AvatarService {
     pub async fn find_avatar(
         &self,
         email: &str,
-    ) -> Result<Option<crate::entity::avatar::Model>, AppError> {
+    ) -> Result<Option<infra::entity::avatar::Model>, AppError> {
         self.repos.avatar.find_by_email(email).await
     }
 
@@ -131,7 +131,7 @@ impl AvatarService {
     /// existing avatar at the requested thumbnail size, or `None` for default.
     pub async fn read_avatar_bytes(
         &self,
-        avatar: &crate::entity::avatar::Model,
+        avatar: &infra::entity::avatar::Model,
         size: u32,
     ) -> Option<(Vec<u8>, &'static str)> {
         let storage_dir = avatar_storage_dir(&avatar.email);

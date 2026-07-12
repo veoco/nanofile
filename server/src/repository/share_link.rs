@@ -4,8 +4,8 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::share_link;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::share_link;
 
 #[async_trait]
 pub trait ShareLinkRepository: Send + Sync {

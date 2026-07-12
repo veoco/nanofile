@@ -2,7 +2,7 @@ mod common;
 
 use base::common::CommitData;
 use common::{TestFixture, TestServer, create_test_user, get_sync_token};
-use server::serialization::pack_fs;
+use infra::serialization::pack_fs;
 
 /// Root-level file/folder leak test — directly tests the FS tree after
 /// nested file creation via the API (which calls the same FileOps functions
@@ -491,10 +491,10 @@ async fn test_regression_commit_root_contains_full_tree() {
     // Fetch the root fs_object and verify it contains all top-level entries
     let resp = client.pack_fs(&sync_token, &repo_id, &[root_id]).await;
     let packed = resp.bytes().await.unwrap();
-    let entries = server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
+    let entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
     assert_eq!(entries.len(), 1);
 
-    let decompressed = server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let decompressed = infra::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let root_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let dirent_names: Vec<&str> = root_data["dirents"]
         .as_array()
@@ -564,8 +564,8 @@ async fn test_regression_root_upload_preserves_subdirs() {
 
     let resp = client.pack_fs(&sync_token, &repo_id, &[root_id]).await;
     let packed = resp.bytes().await.unwrap();
-    let entries = server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
-    let decompressed = server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
+    let decompressed = infra::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let root_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let names: Vec<&str> = root_data["dirents"]
         .as_array()
@@ -803,10 +803,10 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
     // Fetch the root FS object and unpack its dirents
     let resp = client.pack_fs(&sync_token, &repo_id, &[root_id]).await;
     let packed = resp.bytes().await.unwrap();
-    let entries = server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
+    let entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
     assert_eq!(entries.len(), 1, "root pack-fs must return 1 entry");
 
-    let decompressed = server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let decompressed = infra::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let root_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let root_names: Vec<&str> = root_data["dirents"]
         .as_array()
@@ -858,8 +858,8 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         .pack_fs(&sync_token, &repo_id, &[docs_id.as_str()])
         .await;
     let packed = resp.bytes().await.unwrap();
-    let entries = server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
-    let decompressed = server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
+    let decompressed = infra::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let docs_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let docs_names: Vec<&str> = docs_data["dirents"]
         .as_array()
@@ -891,8 +891,8 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         .pack_fs(&sync_token, &repo_id, &[api_id.as_str()])
         .await;
     let packed = resp.bytes().await.unwrap();
-    let entries = server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
-    let decompressed = server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
+    let decompressed = infra::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let api_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let api_names: Vec<&str> = api_data["dirents"]
         .as_array()
@@ -913,8 +913,8 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         .pack_fs(&sync_token, &repo_id, &[src_id.as_str()])
         .await;
     let packed = resp.bytes().await.unwrap();
-    let entries = server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
-    let decompressed = server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
+    let entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
+    let decompressed = infra::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap();
     let src_data: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     let src_names: Vec<&str> = src_data["dirents"]
         .as_array()
@@ -975,9 +975,9 @@ async fn test_regression_cdc_determinism() {
 
     let resp = client.pack_fs(&sync_token, &repo_id, &[root_id]).await;
     let packed = resp.bytes().await.unwrap();
-    let entries = server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
+    let entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
     let root_data: serde_json::Value = serde_json::from_slice(
-        &server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap(),
+        &infra::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap(),
     )
     .unwrap();
 
@@ -987,10 +987,9 @@ async fn test_regression_cdc_determinism() {
         let child_id = d["id"].as_str().unwrap();
         let resp = client.pack_fs(&sync_token, &repo_id, &[child_id]).await;
         let packed = resp.bytes().await.unwrap();
-        let child_entries =
-            server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
+        let child_entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
         let child_data: serde_json::Value = serde_json::from_slice(
-            &server::serialization::pack_fs::decompress_fs_data(&child_entries[0].1).unwrap(),
+            &infra::serialization::pack_fs::decompress_fs_data(&child_entries[0].1).unwrap(),
         )
         .unwrap();
         if child_data["type"].as_i64() == Some(1) {
@@ -1052,9 +1051,9 @@ async fn test_regression_cdc_chunk_size_bounds() {
 
     let resp = client.pack_fs(&sync_token, &repo_id, &[root_id]).await;
     let packed = resp.bytes().await.unwrap();
-    let entries = server::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
+    let entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
     let root_data: serde_json::Value = serde_json::from_slice(
-        &server::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap(),
+        &infra::serialization::pack_fs::decompress_fs_data(&entries[0].1).unwrap(),
     )
     .unwrap();
 
@@ -1064,9 +1063,9 @@ async fn test_regression_cdc_chunk_size_bounds() {
     let resp = client.pack_fs(&sync_token, &repo_id, &[child_id]).await;
     let child_packed = resp.bytes().await.unwrap();
     let child_entries =
-        server::serialization::pack_fs::decode_pack_fs_entries(&child_packed).unwrap();
+        infra::serialization::pack_fs::decode_pack_fs_entries(&child_packed).unwrap();
     let file_data: serde_json::Value = serde_json::from_slice(
-        &server::serialization::pack_fs::decompress_fs_data(&child_entries[0].1).unwrap(),
+        &infra::serialization::pack_fs::decompress_fs_data(&child_entries[0].1).unwrap(),
     )
     .unwrap();
 
@@ -1967,9 +1966,9 @@ async fn test_empty_directory_uses_emtpysha1() {
 
     // Verify no fs_object was created for the empty dir
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-    let api_fs_obj = server::entity::fs_object::Entity::find()
+    let api_fs_obj = infra::entity::fs_object::Entity::find()
         .filter(
-            server::entity::fs_object::Column::FsId.eq("0000000000000000000000000000000000000000"),
+            infra::entity::fs_object::Column::FsId.eq("0000000000000000000000000000000000000000"),
         )
         .one(f.server.db.as_ref())
         .await

@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::error::AppError;
 use crate::ui::files::format_size;
+use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
@@ -224,7 +224,7 @@ async fn resolve_file_metadata(
         .ok()?;
     let entry = dir_data.dirents.iter().find(|d| d.name == *name)?;
 
-    let is_dir = entry.mode & crate::serialization::S_IFDIR != 0;
+    let is_dir = entry.mode & infra::serialization::S_IFDIR != 0;
 
     // Compute the directory URL: for files, point to the parent directory;
     // for directories, point to the directory itself.
@@ -314,7 +314,7 @@ async fn search_fs_tree(
                 if !seen.insert(key) {
                     continue; // Already seen from full-text search
                 }
-                let is_dir = entry.mode & crate::serialization::S_IFDIR != 0;
+                let is_dir = entry.mode & infra::serialization::S_IFDIR != 0;
                 let dir_url = if is_dir {
                     format!("/libraries/{}/files{}", repo_id, full_path)
                 } else {
@@ -341,7 +341,7 @@ async fn search_fs_tree(
                 });
             }
 
-            if entry.mode & crate::serialization::S_IFDIR != 0 {
+            if entry.mode & infra::serialization::S_IFDIR != 0 {
                 stack.push((entry.id.clone(), full_path));
             }
         }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
 use crate::auth::token::generate_sync_token;
-use crate::error::AppError;
+use base::error::AppError;
 
 #[derive(Serialize)]
 pub struct AccessibleRepo {

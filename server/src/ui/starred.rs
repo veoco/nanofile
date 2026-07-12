@@ -4,8 +4,8 @@ use axum::{extract::State, response::Html};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::repo;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::repo;
 
 use super::auth_extractor::WebUser;
 

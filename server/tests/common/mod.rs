@@ -75,8 +75,8 @@ impl TestServer {
             .expect("failed to run migrations");
 
         // Build minimal config for AppState — only block_dir matters for tests.
-        let config = server::config::Config {
-            server: server::config::ServerConfig {
+        let config = infra::config::Config {
+            server: infra::config::ServerConfig {
                 addr: "127.0.0.1".to_string(),
                 port,
                 site_url: format!("http://127.0.0.1:{}", port),
@@ -86,10 +86,10 @@ impl TestServer {
                 cors_max_age_secs: 86400,
                 secret_key: String::new(),
             },
-            database: server::config::DatabaseConfig {
+            database: infra::config::DatabaseConfig {
                 url: "sqlite::memory:".to_string(),
             },
-            storage: server::config::StorageConfig {
+            storage: infra::config::StorageConfig {
                 block_dir: std::env::temp_dir()
                     .join(format!("nf-test-{}", port))
                     .join("blocks"),
@@ -98,7 +98,7 @@ impl TestServer {
                     .join("tmp"),
                 max_storage_bytes: 10_737_418_240,
             },
-            auth: server::config::AuthConfig {
+            auth: infra::config::AuthConfig {
                 password_hash_iterations: 1000,
                 api_token_ttl_days: 180,
                 sync_token_ttl_days: 180,
@@ -112,15 +112,15 @@ impl TestServer {
                 registration_max_per_hour: 10,
                 totp_max_attempts: 10,
             },
-            logging: server::config::LoggingConfig {
+            logging: infra::config::LoggingConfig {
                 level: "debug".to_string(),
             },
-            gc: server::config::GcConfig {
+            gc: infra::config::GcConfig {
                 enabled: false,
                 interval_hours: 24,
                 keep_commits: 10,
             },
-            notification: server::config::NotificationConfig {
+            notification: infra::config::NotificationConfig {
                 enabled: enable_notification,
                 private_key: if enable_notification {
                     "test-notification-secret".to_string()
@@ -130,7 +130,7 @@ impl TestServer {
                 ping_interval,
                 client_timeout,
             },
-            index: server::config::IndexConfig {
+            index: infra::config::IndexConfig {
                 enabled: enable_index,
                 index_dir: std::env::temp_dir().join(format!("nf-test-{}-index", port)),
             },
@@ -220,7 +220,7 @@ pub async fn create_test_user(db: &DatabaseConnection, email: &str, password: &s
     let password_hash = cached_hash_password(password);
     let now = chrono::Utc::now().timestamp();
 
-    let user = server::entity::user::ActiveModel {
+    let user = infra::entity::user::ActiveModel {
         id: sea_orm::NotSet,
         email: sea_orm::Set(email.to_string()),
         password_hash: sea_orm::Set(password_hash),
@@ -241,7 +241,7 @@ pub async fn create_test_admin(db: &DatabaseConnection, email: &str, password: &
     let password_hash = server::auth::password::hash_password(password, TEST_PBKDF2_ITERATIONS);
     let now = chrono::Utc::now().timestamp();
 
-    let user = server::entity::user::ActiveModel {
+    let user = infra::entity::user::ActiveModel {
         id: sea_orm::NotSet,
         email: sea_orm::Set(email.to_string()),
         password_hash: sea_orm::Set(password_hash),

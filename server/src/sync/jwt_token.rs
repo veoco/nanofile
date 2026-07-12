@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::error::AppError;
+use base::error::AppError;
 
 /// Response for the JWT token endpoint.
 /// Seafile format: `{"jwt_token": "..."}`

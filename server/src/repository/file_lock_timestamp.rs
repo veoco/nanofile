@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
-use crate::entity::file_lock_timestamp;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::file_lock_timestamp;
 
 #[async_trait]
 pub trait FileLockTimestampRepository: Send + Sync {

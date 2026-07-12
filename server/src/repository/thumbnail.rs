@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
-use crate::entity::thumbnail;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::thumbnail;
 
 #[async_trait]
 pub trait ThumbnailRepository: Send + Sync {

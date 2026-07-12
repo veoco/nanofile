@@ -7,16 +7,16 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
 use crate::fs::task_manager::TaskState;
-use crate::sanitize::safe_normalize_path;
+use base::error::AppError;
+use base::sanitize::safe_normalize_path;
 
 pub async fn async_batch_copy_item(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::batch::SyncBatchCopyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
         .await?;
 
     let src_dir = safe_normalize_path(&body.src_parent_dir)
@@ -94,7 +94,7 @@ pub async fn async_batch_move_item(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::batch::BatchMoveRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
         .await?;
 
     let src_dir = safe_normalize_path(&body.src_parent_dir)
@@ -182,7 +182,7 @@ pub async fn copy_move_task(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CopyMoveTaskRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
         .await?;
 
     let src_dir = safe_normalize_path(&body.src_parent_dir)

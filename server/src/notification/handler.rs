@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use super::events::{NotificationMessage, SubscribeRequest, UnsubscribeRequest};
 use super::manager::validate_notification_jwt;
 use crate::AppState;
-use crate::error::AppError;
+use base::error::AppError;
 
 /// GET /notification/ — WebSocket upgrade endpoint.
 ///

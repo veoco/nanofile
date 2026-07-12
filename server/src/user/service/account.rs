@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
 
 #[derive(Serialize)]
 pub struct AccountInfo {

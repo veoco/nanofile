@@ -1,5 +1,5 @@
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
 
 /// Service for encrypted repo password operations.
 pub struct PasswordService;
@@ -10,7 +10,7 @@ impl PasswordService {
     /// Verifies the password against the stored magic, derives the file
     /// encryption key, and caches it.
     pub async fn set_password(
-        password_manager: &crate::crypto::password_manager::PasswordManager,
+        password_manager: &infra::crypto::password_manager::PasswordManager,
         repos: &Repositories,
         repo_id: &str,
         user_id: i32,
@@ -66,7 +66,7 @@ impl PasswordService {
     /// 4. Re-encrypt secret_key with new password -> new random_key
     /// 5. Update repo's magic and random_key in DB
     pub async fn change_password(
-        password_manager: &crate::crypto::password_manager::PasswordManager,
+        password_manager: &infra::crypto::password_manager::PasswordManager,
         repos: &Repositories,
         repo_id: &str,
         user_id: i32,
@@ -114,13 +114,13 @@ impl PasswordService {
 
         // 2. Generate new magic
         let new_magic =
-            crate::crypto::key_derivation::generate_magic(repo_id, new_password, enc_version, salt)
+            infra::crypto::key_derivation::generate_magic(repo_id, new_password, enc_version, salt)
                 .map_err(|e| AppError::BadRequest(format!("magic generation failed: {e}")))?;
 
         // 3. Decrypt the old random_key to get the secret key (the actual file key).
         use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
         let old_derived =
-            crate::crypto::key_derivation::derive_key(old_password, enc_version, salt)
+            infra::crypto::key_derivation::derive_key(old_password, enc_version, salt)
                 .map_err(|e| AppError::BadRequest(format!("key derivation failed: {e}")))?;
         let random_key_bytes = hex::decode(random_key)
             .map_err(|_| AppError::BadRequest("invalid random_key hex".into()))?;
@@ -133,7 +133,7 @@ impl PasswordService {
 
         // 4. Re-encrypt with new password (same format: raw AES-CBC with PKCS7 padding).
         let new_derived =
-            crate::crypto::key_derivation::derive_key(new_password, enc_version, salt)
+            infra::crypto::key_derivation::derive_key(new_password, enc_version, salt)
                 .map_err(|e| AppError::BadRequest(format!("key derivation failed: {e}")))?;
         let new_cipher =
             cbc::Encryptor::<aes::Aes256>::new_from_slices(&new_derived.0, &new_derived.1)

@@ -1,7 +1,7 @@
 mod common;
 
 use common::TestFixture;
-use server::crypto::key_derivation;
+use infra::crypto::key_derivation;
 
 /// Pre-compute encrypted repo params using the Rust crypto module directly.
 fn make_encrypted_params(repo_id: &str, password: &str) -> (String, String) {

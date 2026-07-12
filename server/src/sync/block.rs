@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::crypto::fs_id::sha1_hex;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::crypto::fs_id::sha1_hex;
 
 pub fn block_routes() -> Router<Arc<AppState>> {
     Router::new()

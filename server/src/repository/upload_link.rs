@@ -4,8 +4,8 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::upload_link;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::upload_link;
 
 #[async_trait]
 pub trait UploadLinkRepository: Send + Sync {

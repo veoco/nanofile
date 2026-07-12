@@ -6,10 +6,10 @@ use crate::auth::password::verify_password;
 use crate::auth::s2fa::{S2FA_TTL_SECONDS, generate_s2fa_token};
 use crate::auth::token::generate_api_token;
 use crate::auth::totp::TotpManager;
-use crate::entity::{api_token, s2fa_token};
-use crate::error::AppError;
-use crate::rate_limit::LoginRateLimiter;
 use crate::repository::Repositories;
+use base::error::AppError;
+use infra::entity::{api_token, s2fa_token};
+use infra::rate_limit::LoginRateLimiter;
 
 /// Represents all possible outcomes of a login attempt.
 pub enum LoginResult {

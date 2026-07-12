@@ -1,10 +1,10 @@
 use sea_orm::DatabaseConnection;
 use std::collections::VecDeque;
 
-use crate::common::EMPTY_SHA1;
-use crate::error::AppError;
 use crate::repository::Repositories;
-use crate::serialization::S_IFDIR;
+use base::error::AppError;
+use infra::common::EMPTY_SHA1;
+use infra::serialization::S_IFDIR;
 
 use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
 

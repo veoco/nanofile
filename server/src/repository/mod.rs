@@ -76,7 +76,7 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
-use crate::error::AppError;
+use base::error::AppError;
 
 /// Bundles all repository implementations for convenient injection into services.
 pub struct Repositories {

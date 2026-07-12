@@ -398,7 +398,7 @@ async fn test_form_pages_include_csrf_tokens() {
     // 5. 2FA page — create user_2fa record to trigger setup_pending state
     use sea_orm::ActiveModelTrait;
     use sea_orm::Set;
-    let _ = server::entity::user_2fa::ActiveModel {
+    let _ = infra::entity::user_2fa::ActiveModel {
         user_id: Set(user_id),
         totp_secret: Set("JBSWY3DPEHPK3PXP".to_string()),
         algorithm: Set("SHA1".to_string()),

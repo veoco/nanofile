@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
+use base::error::AppError;
 
 pub async fn get_metadata_config(
     _auth: AuthUser,

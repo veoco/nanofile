@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
-use crate::entity::s2fa_token;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::s2fa_token;
 
 #[async_trait]
 pub trait S2faTokenRepository: Send + Sync {

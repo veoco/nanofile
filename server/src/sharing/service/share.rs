@@ -4,12 +4,12 @@ use serde::Serialize;
 use crate::Config;
 use crate::auth::password::hash_password;
 use crate::auth::token::generate_share_link_token;
-use crate::entity::{repo_member, share_link};
-use crate::error::AppError;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
 use crate::notification::events::FolderPermEvent;
 use crate::repository::Repositories;
-use crate::storage;
+use base::error::AppError;
+use infra::entity::{repo_member, share_link};
+use infra::storage;
 
 /// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
@@ -54,7 +54,7 @@ pub async fn resolve_entry_type_raw(
         .dirents
         .iter()
         .find(|d| d.name == entry_name)
-        .map(|d| d.mode == crate::common::S_IFDIR)
+        .map(|d| d.mode == infra::common::S_IFDIR)
         .unwrap_or(false);
 
     Ok(if is_dir {

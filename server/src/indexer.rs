@@ -31,9 +31,9 @@ use tantivy::schema::*;
 use tantivy::tokenizer::TextAnalyzer;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::AppError;
 use crate::repository::Repositories;
-use crate::storage::DynBlockStorage;
+use base::error::AppError;
+use infra::storage::DynBlockStorage;
 
 // ── Schema field names ────────────────────────────────────────────────
 const FIELD_REPO_ID: &str = "repo_id";

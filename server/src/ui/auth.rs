@@ -15,8 +15,8 @@ use crate::auth::service::password_reset::PasswordResetService;
 use crate::auth::service::registration::{RegistrationParams, RegistrationService};
 use crate::auth::token::generate_api_token;
 use crate::auth::totp::TotpManager;
-use crate::error::AppError;
 use crate::repository::CreateSessionTokenParams;
+use base::error::AppError;
 
 // ─── Templates ───────────────────────────────────────────────────────────────
 

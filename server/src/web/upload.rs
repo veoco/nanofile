@@ -8,11 +8,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::activity_log;
-use crate::error::AppError;
 use crate::fs::core::file_ops::FileOps;
 use crate::sharing::service::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
+use base::error::AppError;
+use infra::activity_log;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -58,7 +58,7 @@ async fn get_encryption_key_for_repo(
 /// components that would escape the repository root, or if the path contains
 /// invalid characters.
 fn compute_target_dir(parent_dir: &str, relative_path: &str) -> Result<String, AppError> {
-    crate::sanitize::safe_join_path(parent_dir, relative_path).map_err(|e| {
+    base::sanitize::safe_join_path(parent_dir, relative_path).map_err(|e| {
         AppError::BadRequest(format!(
             "Invalid path: {}. Please ensure the path does not contain '..' components that would escape the repository.",
             e
@@ -205,7 +205,7 @@ async fn ensure_dir_recursive(
     }
 
     // Quick check: if the head commit root can't be resolved, the repo is empty.
-    if crate::common::util::get_head_root_id(state.db.as_ref(), repo_id)
+    if infra::common::util::get_head_root_id(state.db.as_ref(), repo_id)
         .await
         .is_err()
     {
@@ -227,7 +227,7 @@ async fn ensure_dir_recursive(
         };
 
         // Check if this component already exists
-        let root_id = crate::common::util::get_head_root_id(state.db.as_ref(), repo_id).await?;
+        let root_id = infra::common::util::get_head_root_id(state.db.as_ref(), repo_id).await?;
         if crate::fs::core::tree::resolve_fs_id(&state.repos, repo_id, &root_id, &next)
             .await
             .is_err()
@@ -1343,10 +1343,10 @@ pub async fn upload_blks_api(
                 // Handle name collision
                 if dirents.iter().any(|d| d.name == entry_name) {
                     let unique_name =
-                        crate::common::util::generate_unique_filename(dirents, &entry_name);
+                        infra::common::util::generate_unique_filename(dirents, &entry_name);
                     dirents.push(base::common::DirEntryData {
                         id: file_fs_id.clone(),
-                        mode: crate::serialization::S_IFREG,
+                        mode: infra::serialization::S_IFREG,
                         modifier: modifier_name.clone(),
                         mtime: now,
                         name: unique_name,
@@ -1355,7 +1355,7 @@ pub async fn upload_blks_api(
                 } else {
                     dirents.push(base::common::DirEntryData {
                         id: file_fs_id.clone(),
-                        mode: crate::serialization::S_IFREG,
+                        mode: infra::serialization::S_IFREG,
                         modifier: modifier_name.clone(),
                         mtime: now,
                         name: entry_name.clone(),

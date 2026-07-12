@@ -2,9 +2,9 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
 };
 
-use crate::entity::{commit, repo};
 use crate::repository::Repositories;
 use base::common::FsDirData;
+use infra::entity::{commit, repo};
 
 #[allow(dead_code)]
 pub struct Versioning;
@@ -16,7 +16,7 @@ impl Versioning {
         repo_id: &str,
         path: &str,
         limit: u64,
-    ) -> Result<Vec<crate::entity::commit::Model>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<infra::entity::commit::Model>, Box<dyn std::error::Error>> {
         let commits = commit::Entity::find()
             .filter(commit::Column::RepoId.eq(repo_id))
             .order_by_desc(commit::Column::Ctime)
@@ -60,7 +60,7 @@ impl Versioning {
             let next_id = match current_dir
                 .dirents
                 .iter()
-                .find(|e| e.name == *part && e.mode == crate::serialization::S_IFDIR)
+                .find(|e| e.name == *part && e.mode == infra::serialization::S_IFDIR)
                 .map(|e| e.id.clone())
             {
                 Some(id) => id,
@@ -112,7 +112,7 @@ impl Versioning {
         let current_repo = repo::Entity::find_by_id(repo_id).one(db).await?;
         let current_head = current_repo.as_ref().and_then(|r| r.head_commit_id.clone());
 
-        let new_commit_id = crate::crypto::fs_id::compute_commit_id(
+        let new_commit_id = infra::crypto::fs_id::compute_commit_id(
             repo_id,
             &target_commit.root_id,
             current_head.as_deref(),

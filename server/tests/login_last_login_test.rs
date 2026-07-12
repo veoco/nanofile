@@ -19,7 +19,7 @@ async fn test_api_login_records_last_login() {
     let client = server.client();
 
     // Verify last_login_at is None before login.
-    let user_before = server::entity::user::Entity::find_by_id(user_id)
+    let user_before = infra::entity::user::Entity::find_by_id(user_id)
         .one(&*server.db)
         .await
         .unwrap()
@@ -34,7 +34,7 @@ async fn test_api_login_records_last_login() {
     assert_eq!(resp.status(), 200, "API login should succeed");
 
     // Verify last_login_at is now set.
-    let user_after = server::entity::user::Entity::find_by_id(user_id)
+    let user_after = infra::entity::user::Entity::find_by_id(user_id)
         .one(&*server.db)
         .await
         .unwrap()
@@ -68,7 +68,7 @@ async fn test_web_login_records_last_login() {
     );
 
     // Verify last_login_at is now set.
-    let user_after = server::entity::user::Entity::find_by_id(user_id)
+    let user_after = infra::entity::user::Entity::find_by_id(user_id)
         .one(db)
         .await
         .unwrap()
@@ -90,7 +90,7 @@ async fn test_registration_records_last_login() {
     // Directly insert an invitation code into the database.
     let now = chrono::Utc::now().timestamp();
     let code = "TEST-INVITE-CODE-123";
-    let invite = server::entity::invitation_code::ActiveModel {
+    let invite = infra::entity::invitation_code::ActiveModel {
         id: sea_orm::NotSet,
         code: Set(code.to_string()),
         email: Set(Some("newuser@test.com".to_string())),
@@ -123,8 +123,8 @@ async fn test_registration_records_last_login() {
     );
 
     // Verify the new user has last_login_at set.
-    let new_user = server::entity::user::Entity::find()
-        .filter(server::entity::user::Column::Email.eq("newuser@test.com"))
+    let new_user = infra::entity::user::Entity::find()
+        .filter(infra::entity::user::Column::Email.eq("newuser@test.com"))
         .one(db)
         .await
         .unwrap()

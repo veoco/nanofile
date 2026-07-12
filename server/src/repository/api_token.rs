@@ -4,8 +4,8 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::api_token;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::api_token;
 
 /// Parameters for creating a session token.
 pub struct CreateSessionTokenParams {

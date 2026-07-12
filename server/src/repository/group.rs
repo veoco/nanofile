@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use std::sync::Arc;
 
-use crate::entity::group;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::group;
 
 #[async_trait]
 pub trait GroupRepository: Send + Sync {

@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{DatabaseConnection, EntityTrait, ModelTrait};
 use std::sync::Arc;
 
-use crate::entity::client_login_token;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::client_login_token;
 
 #[async_trait]
 pub trait ClientLoginTokenRepository: Send + Sync {

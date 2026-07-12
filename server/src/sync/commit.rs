@@ -11,13 +11,13 @@ use std::sync::Arc;
 use crate::repository::FsObjectRepository;
 
 use crate::AppState;
-use crate::activity_log;
 use crate::auth::middleware::SyncAuth;
-use crate::common::EMPTY_SHA1;
-use crate::entity::commit;
-use crate::error::AppError;
-use crate::serialization::S_IFDIR;
 use base::common::{DirEntryData, FsDirData, FsFileData};
+use base::error::AppError;
+use infra::activity_log;
+use infra::common::EMPTY_SHA1;
+use infra::entity::commit;
+use infra::serialization::S_IFDIR;
 
 /// Result of block checking and size delta computation.
 struct CheckResult {
@@ -225,7 +225,7 @@ pub async fn update_branch(
     // Permission check: verify write access to the repo.
     // SyncAuth confirms the token is valid; this checks repo-level
     // write permission (seafile-server put_update_branch_cb line 1323-1328).
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, _auth.user_id).await?;
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, _auth.user_id).await?;
 
     // Read the new commit (checks existence + gets parent_id for conflict detection).
     let new_commit = state
@@ -267,7 +267,7 @@ pub async fn update_branch(
 
     // File lock check: verify no file in the commit is locked by another user.
     // The daemon parses 403 + "File <path> is locked" as SYNC_ERROR_ID_FILE_LOCKED.
-    crate::storage::check_commit_file_locks(
+    infra::storage::check_commit_file_locks(
         state.db.as_ref(),
         &repo_id,
         &new_commit.root_id,
@@ -513,7 +513,7 @@ struct DiffFrame {
 async fn check_commit_blocks(
     fs_object_repo: Arc<dyn FsObjectRepository>,
     repos: &crate::repository::Repositories,
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     repo_id: &str,
     new_root_id: &str,
     base_root_id: Option<&str>,
@@ -705,7 +705,7 @@ async fn check_commit_blocks(
 /// repos that haven't been sized yet.
 async fn full_check_blocks(
     fs_object_repo: Arc<dyn FsObjectRepository>,
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     repo_id: &str,
     root_id: &str,
     missing: &mut Vec<String>,
@@ -761,7 +761,7 @@ async fn full_check_blocks(
 /// If any block is missing, the file's relative path is appended to `missing`.
 async fn check_file_blocks(
     fs_object_repo: Arc<dyn FsObjectRepository>,
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     repo_id: &str,
     fs_id: &str,
     path: &str,
@@ -795,7 +795,7 @@ async fn check_file_blocks(
 
 /// Check block existence concurrently with bounded parallelism
 async fn check_blocks_concurrent(
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     block_ids: &[String],
 ) -> bool {
     // Process in batches of 8 to limit concurrent I/O

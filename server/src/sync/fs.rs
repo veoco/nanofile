@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::SyncAuth;
-use crate::error::AppError;
 use crate::repository::FsObjectRepository;
-use crate::serialization::pack_fs;
 use base::common::SEAF_METADATA_TYPE_DIR;
+use base::error::AppError;
+use infra::serialization::pack_fs;
 
 /// Parse fs_ids from the request body. The seaf-daemon may send either:
 /// 1. JSON array: ["id1", "id2"] (newer versions)
@@ -260,7 +260,7 @@ pub async fn pack_fs_handler(
         .await?;
 
     // Build a map for O(1) lookup while preserving request order
-    let obj_map: std::collections::HashMap<&str, &crate::entity::fs_object::Model> = objects
+    let obj_map: std::collections::HashMap<&str, &infra::entity::fs_object::Model> = objects
         .iter()
         .map(|obj| (obj.fs_id.as_str(), obj))
         .collect();
@@ -333,7 +333,7 @@ pub async fn recv_fs(
     let entries = pack_fs::decode_pack_fs_entries(&data).map_err(AppError::Internal)?;
 
     // Process all entries and build ActiveModels
-    let models: Vec<crate::entity::fs_object::ActiveModel> = entries
+    let models: Vec<infra::entity::fs_object::ActiveModel> = entries
         .into_iter()
         .filter_map(|(fs_id, obj_data)| {
             // Decompress incoming zlib and store as JSON text
@@ -343,7 +343,7 @@ pub async fn recv_fs(
             let json_val: serde_json::Value = serde_json::from_str(&json_str).ok()?;
             let obj_type = json_val.get("type").and_then(|v| v.as_i64()).unwrap_or(1) as i8;
 
-            Some(crate::entity::fs_object::ActiveModel {
+            Some(infra::entity::fs_object::ActiveModel {
                 id: sea_orm::NotSet,
                 repo_id: sea_orm::Set(repo_id.clone()),
                 fs_id: sea_orm::Set(fs_id),

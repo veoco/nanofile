@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
-use crate::entity::locked_file;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::locked_file;
 
 #[async_trait]
 pub trait LockedFileRepository: Send + Sync {

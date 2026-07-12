@@ -2,8 +2,8 @@ use chrono::DateTime;
 use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
 
 /// Service for activity-related operations.
 pub struct ActivityService;
@@ -109,7 +109,7 @@ impl ActivityService {
             .await?;
 
         // Batch-load user models for nickname, email, etc.
-        let mut user_cache: HashMap<i32, crate::entity::user::Model> = HashMap::new();
+        let mut user_cache: HashMap<i32, infra::entity::user::Model> = HashMap::new();
         let mut user_ids: Vec<i32> = events.iter().map(|e| e.user_id).collect();
         user_ids.sort();
         user_ids.dedup();

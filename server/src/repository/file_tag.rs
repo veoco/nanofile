@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
-use crate::entity::file_tag;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::file_tag;
 
 #[async_trait]
 pub trait FileTagRepository: Send + Sync {

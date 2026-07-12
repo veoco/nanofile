@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
 use crate::sharing::service::share;
+use base::error::AppError;
 
 #[derive(Deserialize)]
 pub struct CreateShareLinkRequest {
@@ -113,7 +113,7 @@ pub async fn list_share_members(
     Path(repo_id): Path<String>,
 ) -> Result<Json<Vec<share::ShareMember>>, AppError> {
     // Only the repo owner can list share members.
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let members = share::list_share_members(&state.repos, &repo_id).await?;
     Ok(Json(members))

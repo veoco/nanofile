@@ -10,10 +10,10 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::common::util::extract_multipart_field;
-use crate::error::AppError;
 use crate::repo::service::password::PasswordService;
 use crate::repo::service::repo;
+use base::error::AppError;
+use infra::common::util::extract_multipart_field;
 // Re-export response types for api module re-exports
 pub use crate::repo::service::repo::{
     DownloadInfoResponse, RepoInfo, V21RepoInfo, V21RepoListResponse,
@@ -259,7 +259,7 @@ pub async fn check_repo_password_v2(
     req: axum::http::Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Check user has access to this repo (matching seahub's check_folder_permission).
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    infra::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let (_parts, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
@@ -285,7 +285,7 @@ pub async fn check_repo_password_v2(
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("repo has no stored magic".into()))?;
 
-    use crate::crypto::verify::verify_magic;
+    use infra::crypto::verify::verify_magic;
     if verify_magic(stored_magic, &magic) {
         Ok(Json(serde_json::json!({"success": true})))
     } else {
@@ -296,7 +296,7 @@ pub async fn check_repo_password_v2(
 /// Extract a field from a POST body using the standard triple probe
 /// (JSON → form-urlencoded → multipart/form-data).
 fn parse_body_field(bytes: &[u8], field: &str, error_msg: &str) -> Result<String, AppError> {
-    crate::common::util::extract_body_field(bytes, field)
+    infra::common::util::extract_body_field(bytes, field)
         .ok_or_else(|| AppError::BadRequest(error_msg.into()))
 }
 

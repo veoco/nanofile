@@ -14,8 +14,8 @@ use chrono::TimeZone;
 
 use crate::AppState;
 use crate::auth::token::generate_share_link_token;
-use crate::entity::share_link;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::share_link;
 
 use super::auth_extractor::WebUser;
 

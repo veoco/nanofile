@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::RepoPathWrite;
-use crate::error::AppError;
+use base::error::AppError;
 
 #[derive(Deserialize)]
 pub struct BlksLinkQuery {

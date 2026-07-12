@@ -25,10 +25,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::common::{EMPTY_SHA1, S_IFDIR};
-use crate::error::AppError;
 use crate::fs::core::tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
 use crate::repository::Repositories;
+use base::error::AppError;
+use infra::common::{EMPTY_SHA1, S_IFDIR};
 
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -259,7 +259,7 @@ fn determine_zip_name(parent_dir: &str, dirents: &[String]) -> String {
 /// back is needed — the local file header has zero CRC/size, and the real
 /// values are emitted after the compressed data.
 fn stream_zip(
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     files: Vec<ZipFileEntry>,
     enc_key: Option<(Vec<u8>, Vec<u8>)>,
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
@@ -284,7 +284,7 @@ fn stream_zip(
             for block_id in &entry.block_ids {
                 let data = block_store.read_block(block_id).await?;
                 let data = if let Some((ref key, ref iv)) = enc_key {
-                    crate::crypto::random_key::decrypt_block(&data, key, iv)
+                    infra::crypto::random_key::decrypt_block(&data, key, iv)
                         .map_err(|e| std::io::Error::other(e.to_string()))?
                 } else {
                     data
@@ -330,7 +330,7 @@ pub async fn zip_task_handler(
     let db = state.db.as_ref();
 
     // Verify read permission
-    crate::storage::check_repo_read_permission(db, &repo_id, auth.user_id).await?;
+    infra::storage::check_repo_read_permission(db, &repo_id, auth.user_id).await?;
 
     if payload.dirents.is_empty() {
         return Err(AppError::BadRequest(

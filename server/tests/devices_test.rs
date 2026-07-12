@@ -94,7 +94,7 @@ async fn test_list_devices_with_data() {
 
     // Insert a S2FA token for the android device to verify cleanup.
     let now = chrono::Utc::now().timestamp();
-    let s2fa = server::entity::s2fa_token::ActiveModel {
+    let s2fa = infra::entity::s2fa_token::ActiveModel {
         id: sea_orm::NotSet,
         user_id: sea_orm::Set(1),
         token: sea_orm::Set("cccccccccccccccccccccccccccccccccccccccc".to_string()),
@@ -108,8 +108,8 @@ async fn test_list_devices_with_data() {
     // Create a repo via API (this generates a sync token). Then update its
     // peer_id to simulate the sync protocol having stored peer info.
     let repo_id = common::create_test_repo(&client, token1, "Device Test").await;
-    let sync_tokens = server::entity::sync_token::Entity::find()
-        .filter(server::entity::sync_token::Column::RepoId.eq(&repo_id))
+    let sync_tokens = infra::entity::sync_token::Entity::find()
+        .filter(infra::entity::sync_token::Column::RepoId.eq(&repo_id))
         .all(server.db.as_ref())
         .await
         .unwrap();
@@ -118,19 +118,19 @@ async fn test_list_devices_with_data() {
         1,
         "should have one sync token after repo creation"
     );
-    let mut sync_active: server::entity::sync_token::ActiveModel = sync_tokens[0].clone().into();
+    let mut sync_active: infra::entity::sync_token::ActiveModel = sync_tokens[0].clone().into();
     sync_active.peer_id = Set(Some("phone-001".to_string()));
     sync_active.last_sync_time = Set(Some(now));
     sync_active.update(server.db.as_ref()).await.unwrap();
 
     // Verify tokens exist before unlink
-    let count = server::entity::s2fa_token::Entity::find()
+    let count = infra::entity::s2fa_token::Entity::find()
         .count(server.db.as_ref())
         .await
         .unwrap();
     assert_eq!(count, 1, "S2FA token should exist before unlink");
-    let count = server::entity::sync_token::Entity::find()
-        .filter(server::entity::sync_token::Column::PeerId.eq("phone-001"))
+    let count = infra::entity::sync_token::Entity::find()
+        .filter(infra::entity::sync_token::Column::PeerId.eq("phone-001"))
         .count(server.db.as_ref())
         .await
         .unwrap();
@@ -160,13 +160,13 @@ async fn test_list_devices_with_data() {
     );
 
     // Verify tokens were cleaned up
-    let count = server::entity::s2fa_token::Entity::find()
+    let count = infra::entity::s2fa_token::Entity::find()
         .count(server.db.as_ref())
         .await
         .unwrap();
     assert_eq!(count, 0, "S2FA token should be deleted after unlink");
-    let count = server::entity::sync_token::Entity::find()
-        .filter(server::entity::sync_token::Column::PeerId.eq("phone-001"))
+    let count = infra::entity::sync_token::Entity::find()
+        .filter(infra::entity::sync_token::Column::PeerId.eq("phone-001"))
         .count(server.db.as_ref())
         .await
         .unwrap();

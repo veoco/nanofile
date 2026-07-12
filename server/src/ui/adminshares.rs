@@ -12,7 +12,7 @@ use std::sync::Arc;
 use chrono::TimeZone;
 
 use crate::AppState;
-use crate::error::AppError;
+use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 

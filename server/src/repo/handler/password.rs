@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
 use crate::repo::service::password::PasswordService;
+use base::error::AppError;
 
 /// Request body for setting a repo password.
 #[derive(Deserialize)]
@@ -34,7 +34,7 @@ pub async fn set_password_v21(
     Json(body): Json<SetPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Check user has access to this repo (matching seahub's check_folder_permission).
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    infra::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let password = body
         .password

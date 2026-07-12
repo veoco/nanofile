@@ -120,7 +120,7 @@ async fn test_head_commits_multi_with_updates() {
     let commit_id = "a".repeat(40);
     let root_id = "b".repeat(40);
     let now = chrono::Utc::now().timestamp();
-    let commit = server::entity::commit::ActiveModel {
+    let commit = infra::entity::commit::ActiveModel {
         id: sea_orm::NotSet,
         repo_id: sea_orm::Set(repo_id.clone()),
         commit_id: sea_orm::Set(commit_id.clone()),
@@ -135,8 +135,8 @@ async fn test_head_commits_multi_with_updates() {
     commit.insert(server.db.as_ref()).await.unwrap();
 
     // Update repo HEAD
-    let mut repo: server::entity::repo::ActiveModel =
-        server::entity::repo::Entity::find_by_id(&repo_id)
+    let mut repo: infra::entity::repo::ActiveModel =
+        infra::entity::repo::Entity::find_by_id(&repo_id)
             .one(server.db.as_ref())
             .await
             .unwrap()
@@ -356,9 +356,9 @@ async fn test_pack_fs_accepts_json_array() {
         version: 1,
     };
     let dir_json = serde_json::to_string(&empty_dir).unwrap();
-    let dir_fs_id = server::crypto::fs_id::sha1_hex(dir_json.as_bytes());
+    let dir_fs_id = infra::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
-        server::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
+        infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
     packed.extend_from_slice(dir_fs_id.as_bytes());
@@ -376,7 +376,7 @@ async fn test_pack_fs_accepts_json_array() {
     assert!(!data.is_empty());
 
     // Decode and verify the entry
-    let decoded = server::serialization::pack_fs::decode_pack_fs_entries(&data).unwrap();
+    let decoded = infra::serialization::pack_fs::decode_pack_fs_entries(&data).unwrap();
     assert_eq!(decoded.len(), 1);
     assert_eq!(decoded[0].0, dir_fs_id);
 }
@@ -402,9 +402,9 @@ async fn test_pack_fs_accepts_form_encoded() {
         version: 1,
     };
     let dir_json = serde_json::to_string(&empty_dir).unwrap();
-    let dir_fs_id = server::crypto::fs_id::sha1_hex(dir_json.as_bytes());
+    let dir_fs_id = infra::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
-        server::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
+        infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
     packed.extend_from_slice(dir_fs_id.as_bytes());
@@ -544,9 +544,9 @@ async fn test_check_fs_accepts_form_encoded() {
         version: 1,
     };
     let dir_json = serde_json::to_string(&empty_dir).unwrap();
-    let dir_fs_id = server::crypto::fs_id::sha1_hex(dir_json.as_bytes());
+    let dir_fs_id = infra::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
-        server::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
+        infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
     packed.extend_from_slice(dir_fs_id.as_bytes());
@@ -657,7 +657,7 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
     let sync_token = get_sync_token(&client, api_token, &repo_id).await;
 
     use base::common::{FsDirData, FsFileData};
-    use server::serialization::pack_fs;
+    use infra::serialization::pack_fs;
 
     // Create a directory with type=3 (what seaf-daemon actually sends)
     let file_data = FsFileData {
@@ -667,7 +667,7 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
         version: 1,
     };
     let file_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
@@ -684,7 +684,7 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
         version: 1,
     };
     let dir_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
     let dir_json = serde_json::to_string(&dir_data).unwrap();
     let dir_compressed = pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 

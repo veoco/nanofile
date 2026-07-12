@@ -11,11 +11,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::common::{EMPTY_SHA1, S_IFDIR};
-use crate::error::AppError;
 use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
 use base::common::FsFileData;
+use base::error::AppError;
+use infra::common::{EMPTY_SHA1, S_IFDIR};
 
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -26,7 +26,7 @@ use tokio_util::io::ReaderStream;
 
 fn stream_blocks(
     block_ids: Vec<String>,
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     enc_key: Option<(Vec<u8>, Vec<u8>)>,
 ) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static {
     futures::stream::iter(block_ids.into_iter().map(move |block_id| {
@@ -38,7 +38,7 @@ fn stream_blocks(
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             let data = match &key {
-                Some((k, iv)) => crate::crypto::random_key::decrypt_block(&data, k, iv)
+                Some((k, iv)) => infra::crypto::random_key::decrypt_block(&data, k, iv)
                     .map_err(|e| std::io::Error::other(e.to_string()))?,
                 None => data,
             };
@@ -98,7 +98,7 @@ fn format_timestamp(ts: i64) -> String {
 async fn resolve_share_link(
     state: &AppState,
     token: &str,
-) -> Result<crate::entity::share_link::Model, AppError> {
+) -> Result<infra::entity::share_link::Model, AppError> {
     let link = state
         .repos
         .share_link
@@ -118,7 +118,7 @@ async fn resolve_share_link(
 
 /// Check whether the password in the request matches the stored hash.
 fn check_password(
-    link: &crate::entity::share_link::Model,
+    link: &infra::entity::share_link::Model,
     headers: &HeaderMap,
     params: &HashMap<String, String>,
     password_hash_iterations: u32,
@@ -403,7 +403,7 @@ async fn collect_zip_entries(
 
 /// Stream a ZIP archive over HTTP using async_zip duplex.
 fn stream_zip(
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     files: Vec<ZipEntry>,
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
     let (duplex_writer, duplex_reader) = tokio::io::duplex(64 * 1024);
@@ -534,7 +534,7 @@ pub async fn shared_dir_view(
     // Resolve the current directory path using safe path joining
     // to prevent path traversal attacks (e.g., ?p=../other-dir)
     let sub_path = params.get("p").map(|s| s.as_str()).unwrap_or("/");
-    let current_path = crate::sanitize::safe_join_path(&link.path, sub_path)
+    let current_path = base::sanitize::safe_join_path(&link.path, sub_path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     // Get repo head commit and resolve directory

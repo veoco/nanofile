@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::activity::service::notification;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
+use base::error::AppError;
 
 #[derive(Serialize)]
 pub struct UnseenMessagesResponse {

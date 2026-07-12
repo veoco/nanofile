@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
 use crate::fs::core::download::Downloader;
 use base::common::FsFileData;
+use base::error::AppError;
 
 /// Build a streaming body that reads and yields blocks one at a time.
 ///
@@ -21,7 +21,7 @@ use base::common::FsFileData;
 /// `enc_key` — optional decryption key (None = plaintext blocks).
 fn stream_blocks(
     block_ids: Vec<String>,
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     enc_key: Option<(Vec<u8>, Vec<u8>)>,
 ) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static {
     futures::stream::iter(block_ids.into_iter().map(move |block_id| {
@@ -33,7 +33,7 @@ fn stream_blocks(
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             let data = match &key {
-                Some((k, iv)) => crate::crypto::random_key::decrypt_block(&data, k, iv)
+                Some((k, iv)) => infra::crypto::random_key::decrypt_block(&data, k, iv)
                     .map_err(|e| std::io::Error::other(e.to_string()))?,
                 None => data,
             };
@@ -156,7 +156,7 @@ pub async fn repo_file_download(
     };
 
     // Check read permission (matching seahub's check_folder_permission behavior).
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    infra::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     // Check if repo is encrypted and if password is set
     let dec_key = get_decryption_key_for_repo(&state, &repo_id, auth.user_id).await?;
@@ -196,7 +196,7 @@ pub async fn download_api(
 
     // Re-check that user still has read permission on the repo.
     // Permissions may have been revoked between token issuance and use.
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &info.repo_id, info.user_id)
+    infra::storage::check_repo_read_permission(state.db.as_ref(), &info.repo_id, info.user_id)
         .await?;
 
     let repo_id = info.repo_id.clone();

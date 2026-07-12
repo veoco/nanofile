@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
 use crate::user::service::{AccountInfo, AccountService};
+use base::error::AppError;
 
 #[derive(Deserialize)]
 pub struct RegisterForm {

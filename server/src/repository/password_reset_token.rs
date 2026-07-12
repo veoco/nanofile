@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
-use crate::entity::password_reset_token;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::password_reset_token;
 
 #[async_trait]
 pub trait PasswordResetTokenRepository: Send + Sync {

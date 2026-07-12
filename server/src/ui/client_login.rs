@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::token::generate_api_token;
-use crate::error::AppError;
 use crate::repository::CreateSessionTokenParams;
+use base::error::AppError;
 
 const TOKEN_TTL_SECS: i64 = 30;
 

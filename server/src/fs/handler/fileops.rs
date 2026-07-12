@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::RepoPathWrite;
-use crate::error::AppError;
 use crate::fs::service::fileops::{self as fops_svc};
 use crate::repository::Repositories;
-use crate::sanitize::safe_normalize_path;
 use base::common::DirEntryData;
+use base::error::AppError;
+use base::sanitize::safe_normalize_path;
 
 /// Read and parse an FsDirData object from the fs_objects table.
 #[allow(dead_code)]
@@ -72,7 +72,7 @@ async fn list_dir_from_fs_tree(
             .into_iter()
             .map(|d| DirEntry {
                 id: d.id,
-                entry_type: if d.mode & crate::serialization::S_IFDIR != 0 {
+                entry_type: if d.mode & infra::serialization::S_IFDIR != 0 {
                     "dir".to_string()
                 } else {
                     "file".to_string()

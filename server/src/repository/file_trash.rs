@@ -5,8 +5,8 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::file_trash;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::file_trash;
 
 #[async_trait]
 pub trait FileTrashRepository: Send + Sync {

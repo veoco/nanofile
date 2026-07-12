@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
-use crate::activity_log;
-use crate::common::util::{get_head_commit_id, get_head_root_id, parent_path_from};
-use crate::error::AppError;
 use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::trash;
 use crate::notification::events::FileLockEvent;
 use crate::repository::Repositories;
-use crate::serialization::S_IFREG;
 use base::common::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+use base::error::AppError;
+use infra::activity_log;
+use infra::common::util::{get_head_commit_id, get_head_root_id, parent_path_from};
+use infra::serialization::S_IFREG;
 
 /// Parsed upload data, extracted from multipart at the handler layer.
 pub struct UploadedFile {
@@ -31,7 +31,7 @@ pub(crate) async fn rename_file_entry(
     modifier: &str,
     user_id: i32,
 ) -> Result<(), AppError> {
-    crate::sanitize::validate_filename(new_name)
+    base::sanitize::validate_filename(new_name)
         .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
     let parent_path = parent_path_from(path);
@@ -108,10 +108,10 @@ pub(crate) async fn rename_file_entry(
 pub struct FileService {
     repos: Arc<Repositories>,
     db: Arc<DatabaseConnection>,
-    block_store: crate::storage::DynBlockStorage,
+    block_store: infra::storage::DynBlockStorage,
     indexer: Option<crate::indexer::TextIndexer>,
     token_manager: Arc<crate::AccessTokenManager>,
-    config: Arc<crate::config::Config>,
+    config: Arc<infra::config::Config>,
     notification_manager: Option<crate::notification::manager::NotificationManager>,
 }
 
@@ -119,10 +119,10 @@ impl FileService {
     pub fn new(
         repos: Arc<Repositories>,
         db: Arc<DatabaseConnection>,
-        block_store: crate::storage::DynBlockStorage,
+        block_store: infra::storage::DynBlockStorage,
         indexer: Option<crate::indexer::TextIndexer>,
         token_manager: Arc<crate::AccessTokenManager>,
-        config: Arc<crate::config::Config>,
+        config: Arc<infra::config::Config>,
         notification_manager: Option<crate::notification::manager::NotificationManager>,
     ) -> Self {
         Self {
@@ -245,7 +245,7 @@ impl FileService {
             return Err(AppError::BadRequest("no file provided".into()));
         }
 
-        crate::sanitize::validate_filename(&file_name)
+        base::sanitize::validate_filename(&file_name)
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
         let file_path = if parent_dir == "/" {
@@ -459,7 +459,7 @@ impl FileService {
 
         // dst_dir should already be validated by handler, but we use safe_normalize_path
         // for defensive programming. If it fails, it's an internal error (handler bug).
-        let new_parent_path = crate::sanitize::safe_normalize_path(dst_dir)
+        let new_parent_path = base::sanitize::safe_normalize_path(dst_dir)
             .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
         let _new_parent_fs_id =
             crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, &new_parent_path)

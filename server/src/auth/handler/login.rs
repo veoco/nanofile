@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::auth::service::login::LoginResult;
-use crate::error::AppError;
+use base::error::AppError;
 
 #[derive(Deserialize)]
 pub struct LoginForm {

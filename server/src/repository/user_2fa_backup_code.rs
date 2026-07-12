@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
-use crate::entity::user_2fa_backup_code;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::user_2fa_backup_code;
 
 #[async_trait]
 pub trait User2faBackupCodeRepository: Send + Sync {
@@ -76,7 +76,7 @@ impl User2faBackupCodeRepository for DbUser2faBackupCodeRepository {
             .exec(self.db.as_ref())
             .await?;
         if result.rows_affected == 0 {
-            return Err(crate::error::AppError::NotFound(
+            return Err(base::error::AppError::NotFound(
                 "backup code not found".into(),
             ));
         }

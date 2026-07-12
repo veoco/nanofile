@@ -10,9 +10,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::common::util::parent_path_from;
-use crate::error::AppError;
 use crate::fs::core::download::Downloader;
+use base::error::AppError;
+use infra::common::util::parent_path_from;
 
 use super::auth_extractor::WebUser;
 
@@ -363,7 +363,7 @@ async fn verify_repo_access(
     user_id: i32,
     repo_id: &str,
 ) -> Result<(), AppError> {
-    crate::storage::check_repo_read_permission(db, repo_id, user_id).await?;
+    infra::storage::check_repo_read_permission(db, repo_id, user_id).await?;
     Ok(())
 }
 
@@ -386,7 +386,7 @@ pub async fn file_browser(
     Path((repo_id, path)): Path<(String, String)>,
     Query(query): Query<FileBrowserQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let path = crate::sanitize::safe_normalize_path(&path)
+    let path = base::sanitize::safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
     file_browser_inner(user, state, repo_id, path, query).await
 }
@@ -659,7 +659,7 @@ async fn serve_file(
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
     let db = state.db.as_ref();
-    let path = crate::sanitize::safe_normalize_path(&path)
+    let path = base::sanitize::safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
     let file_name = path.rsplit('/').next().unwrap_or("file").to_string();
 

@@ -3,7 +3,7 @@ mod common;
 use base::common::CommitData;
 use base::common::{DirEntryData, FsDirData, FsFileData};
 use common::{TestServer, create_test_user, get_sync_token};
-use server::serialization::pack_fs;
+use infra::serialization::pack_fs;
 
 fn random_hex_id() -> String {
     use sha1::{Digest, Sha1};
@@ -28,7 +28,7 @@ async fn setup_repo() -> (TestServer, String, String, String) {
 async fn test_full_upload_flow() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
-    use server::crypto::fs_id::sha1_hex;
+    use infra::crypto::fs_id::sha1_hex;
 
     let resp = client
         .permission_check(&sync_token, &repo_id, "upload")
@@ -59,7 +59,7 @@ async fn test_full_upload_flow() {
         version: 1,
     };
     let file_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
@@ -76,7 +76,7 @@ async fn test_full_upload_flow() {
         version: 1,
     };
     let root_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
     let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
@@ -221,7 +221,7 @@ async fn test_full_download_flow() {
 async fn test_incremental_upload() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
-    use server::crypto::fs_id::sha1_hex;
+    use infra::crypto::fs_id::sha1_hex;
 
     // Upload a real block so the block integrity check passes.
     let block_data = b"block data for incremental upload test";
@@ -238,7 +238,7 @@ async fn test_incremental_upload() {
         version: 1,
     };
     let file_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
@@ -255,7 +255,7 @@ async fn test_incremental_upload() {
         version: 1,
     };
     let root_fs_id =
-        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
     let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 

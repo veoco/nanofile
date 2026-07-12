@@ -3,11 +3,11 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use super::collect_file_paths;
-use crate::common::EMPTY_SHA1;
-use crate::error::AppError;
 use crate::indexer::TextIndexer;
 use crate::repository::Repositories;
-use crate::storage::DynBlockStorage;
+use base::error::AppError;
+use infra::common::EMPTY_SHA1;
+use infra::storage::DynBlockStorage;
 
 /// Service for index/reindex administration operations.
 pub struct AdminService {
@@ -25,7 +25,7 @@ impl AdminService {
         &self,
         repo_id: &str,
         user_id: i32,
-    ) -> Result<crate::entity::repo::Model, AppError> {
+    ) -> Result<infra::entity::repo::Model, AppError> {
         let repo_model = self
             .repos
             .repo

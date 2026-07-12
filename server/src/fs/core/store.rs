@@ -1,8 +1,8 @@
 use sea_orm::DatabaseConnection;
 
 use crate::domain;
-use crate::error::AppError;
 use base::common::{FsDirData, FsFileData};
+use base::error::AppError;
 
 /// Serialize an FsFileData to JSON, compute its SHA1 ID, check the DB,
 /// and insert if the object does not already exist. Returns the fs_id.

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::password::verify_password;
 use crate::auth::totp::TotpManager;
-use crate::error::AppError;
+use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 

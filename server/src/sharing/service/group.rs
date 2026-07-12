@@ -1,5 +1,5 @@
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
 
 /// List all groups for a user.
 pub async fn list_groups(

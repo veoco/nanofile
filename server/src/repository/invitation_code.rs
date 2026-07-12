@@ -4,8 +4,8 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::invitation_code;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::invitation_code;
 
 #[async_trait]
 pub trait InvitationCodeRepository: Send + Sync {

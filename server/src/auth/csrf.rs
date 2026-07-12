@@ -50,18 +50,18 @@ pub fn check_form_csrf(
     state: &crate::AppState,
     session_token: &str,
     csrf_token: Option<&str>,
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), base::error::AppError> {
     match csrf_token {
         Some(token) => {
             if validate_csrf_token(&state.csrf_secret, session_token, token) {
                 Ok(())
             } else {
-                Err(crate::error::AppError::BadRequest(
+                Err(base::error::AppError::BadRequest(
                     "Invalid CSRF token.".to_string(),
                 ))
             }
         }
-        None => Err(crate::error::AppError::BadRequest(
+        None => Err(base::error::AppError::BadRequest(
             "CSRF token is required.".to_string(),
         )),
     }

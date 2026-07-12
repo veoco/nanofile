@@ -1,5 +1,3 @@
-use crate::common::util::extract_multipart_field;
-use crate::sanitize::safe_normalize_path;
 use axum::{
     Json, Router,
     body::Body,
@@ -7,6 +5,8 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, Request},
     response::{IntoResponse, Response},
 };
+use base::sanitize::safe_normalize_path;
+use infra::common::util::extract_multipart_field;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,9 +14,9 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::auth::{RepoPathRead, RepoPathWrite};
-use crate::error::AppError;
 use crate::fs::handler::exif::get_exif;
 use crate::fs::service::file as file_svc;
+use base::error::AppError;
 
 // Re-export pub(crate) rename function for create_file_v21 use
 pub(crate) use file_svc::rename_file_entry;
@@ -257,7 +257,7 @@ pub async fn move_file(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MoveRequest>,
 ) -> Result<(), AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
         .await?;
 
     let path = safe_normalize_path(&req.p)
@@ -286,7 +286,7 @@ pub async fn rename_file(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RenameRequest>,
 ) -> Result<(), AppError> {
-    crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
+    infra::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
         .await?;
 
     let path = safe_normalize_path(&req.p)
@@ -549,7 +549,7 @@ pub async fn get_block_download_link(
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<String>, AppError> {
     let parent_dir = query.get("p").map(|s| s.as_str()).unwrap_or("/");
-    crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    infra::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
     let svc = state.file_service();
 

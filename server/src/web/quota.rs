@@ -1,5 +1,5 @@
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
 
 /// Check whether a user has enough remaining storage quota for an upload of
 /// `delta` bytes.

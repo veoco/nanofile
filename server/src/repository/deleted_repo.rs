@@ -4,8 +4,8 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::deleted_repo;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::deleted_repo;
 
 #[async_trait]
 pub trait DeletedRepoRepository: Send + Sync {

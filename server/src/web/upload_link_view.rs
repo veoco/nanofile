@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::error::AppError;
+use base::error::AppError;
 
 // ── Templates ─────────────────────────────────────────────────────────────
 
@@ -58,7 +58,7 @@ fn urlencoding(s: &str) -> String {
 async fn validate_upload_link(
     state: &Arc<AppState>,
     token: &str,
-) -> Result<crate::entity::upload_link::Model, AppError> {
+) -> Result<infra::entity::upload_link::Model, AppError> {
     let link = state
         .repos
         .upload_link
@@ -84,7 +84,7 @@ async fn validate_upload_link(
 
 /// Check whether the password in the request matches the stored hash.
 fn check_password(
-    link: &crate::entity::upload_link::Model,
+    link: &infra::entity::upload_link::Model,
     params: &HashMap<String, String>,
     password_hash_iterations: u32,
 ) -> bool {

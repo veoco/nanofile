@@ -3,9 +3,9 @@ use std::sync::Arc;
 use crate::auth::backup_codes::BackupCodeManager;
 use crate::auth::password::verify_password;
 use crate::auth::totp::TotpManager;
-use crate::error::AppError;
-use crate::rate_limit::GenericRateLimiter;
 use crate::repository::Repositories;
+use base::error::AppError;
+use infra::rate_limit::GenericRateLimiter;
 
 /// Result from a successful 2FA setup.
 pub struct Setup2faResult {

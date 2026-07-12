@@ -4,8 +4,8 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-use crate::entity::user;
-use crate::error::AppError;
+use base::error::AppError;
+use infra::entity::user;
 
 #[async_trait]
 pub trait UserRepository: Send + Sync {

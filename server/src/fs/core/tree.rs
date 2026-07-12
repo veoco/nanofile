@@ -1,7 +1,7 @@
-use crate::common::EMPTY_SHA1;
-use crate::error::AppError;
 use crate::repository::Repositories;
 use base::common::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+use base::error::AppError;
+use infra::common::EMPTY_SHA1;
 
 /// Read and parse a directory fs_object (FsDirData) from the database.
 pub async fn read_fs_dir_data(

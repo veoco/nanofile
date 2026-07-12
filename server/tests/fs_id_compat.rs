@@ -64,8 +64,8 @@ fn test_fs_data_id_is_deterministic() {
     let json2 = serde_json::to_string(&data).unwrap();
     assert_eq!(json1, json2, "to_compact_json must be deterministic");
 
-    let id1 = server::crypto::fs_id::sha1_hex(json1.as_bytes());
-    let id2 = server::crypto::fs_id::sha1_hex(json2.as_bytes());
+    let id1 = infra::crypto::fs_id::sha1_hex(json1.as_bytes());
+    let id2 = infra::crypto::fs_id::sha1_hex(json2.as_bytes());
     assert_eq!(id1, id2, "FS ID from identical data must match");
 }
 
@@ -84,7 +84,7 @@ fn test_store_fs_dir_object_empty_dir_returns_emty_sha1() {
         version: 1,
     };
     let json = serde_json::to_string(&empty_dir).unwrap();
-    let json_hash = server::crypto::fs_id::sha1_hex(json.as_bytes());
+    let json_hash = infra::crypto::fs_id::sha1_hex(json.as_bytes());
     // Proving the point: the hash of empty dir JSON is NOT all zeros
     assert_ne!(
         json_hash, "0000000000000000000000000000000000000000",
@@ -104,8 +104,8 @@ fn test_file_data_compute_fs_id_matches_json_hash() {
         version: 1,
     };
     let json = serde_json::to_string(&data).unwrap();
-    let expected = server::crypto::fs_id::sha1_hex(json.as_bytes());
-    let actual = server::crypto::fs_id::sha1_hex(serde_json::to_string(&data).unwrap().as_bytes());
+    let expected = infra::crypto::fs_id::sha1_hex(json.as_bytes());
+    let actual = infra::crypto::fs_id::sha1_hex(serde_json::to_string(&data).unwrap().as_bytes());
     assert_eq!(
         actual, expected,
         "compute_fs_id must match sha1_hex of JSON"
@@ -120,8 +120,8 @@ fn test_dir_data_compute_fs_id_matches_json_hash() {
         version: 1,
     };
     let json = serde_json::to_string(&data).unwrap();
-    let expected = server::crypto::fs_id::sha1_hex(json.as_bytes());
-    let actual = server::crypto::fs_id::sha1_hex(serde_json::to_string(&data).unwrap().as_bytes());
+    let expected = infra::crypto::fs_id::sha1_hex(json.as_bytes());
+    let actual = infra::crypto::fs_id::sha1_hex(serde_json::to_string(&data).unwrap().as_bytes());
     assert_eq!(
         actual, expected,
         "compute_fs_id must match sha1_hex of JSON"

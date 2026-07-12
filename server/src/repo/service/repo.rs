@@ -3,11 +3,11 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::AccessTokenManager;
-use crate::activity_log;
 use crate::auth::token::generate_sync_token;
-use crate::entity::repo;
-use crate::error::AppError;
 use crate::repository::Repositories;
+use base::error::AppError;
+use infra::activity_log;
+use infra::entity::repo;
 
 // ── Response types ──────────────────────────────────────────────────────
 
@@ -217,7 +217,7 @@ impl RepoService {
         let repo_id = repo_id_opt.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let now = chrono::Utc::now().timestamp();
 
-        let model = crate::entity::repo::ActiveModel {
+        let model = infra::entity::repo::ActiveModel {
             id: Set(repo_id.clone()),
             name: Set(name.to_string()),
             description: Set(desc.to_string()),
@@ -236,7 +236,7 @@ impl RepoService {
         };
         repos.repo.create(model).await?;
 
-        let member = crate::entity::repo_member::ActiveModel {
+        let member = infra::entity::repo_member::ActiveModel {
             id: sea_orm::NotSet,
             repo_id: Set(repo_id.clone()),
             user_id: Set(user_id),
@@ -410,7 +410,7 @@ impl RepoService {
         .await;
 
         let now = chrono::Utc::now().timestamp();
-        let mut active: crate::entity::repo::ActiveModel = r.into();
+        let mut active: infra::entity::repo::ActiveModel = r.into();
         active.name = Set(new_name);
         active.updated_at = Set(now);
         repos.repo.update(active).await?;
@@ -438,7 +438,7 @@ impl RepoService {
         }
 
         let now = chrono::Utc::now().timestamp();
-        let mut active: crate::entity::repo::ActiveModel = r.clone().into();
+        let mut active: infra::entity::repo::ActiveModel = r.clone().into();
 
         if let Some(ref name) = new_name {
             let name = name.trim().to_string();
@@ -591,7 +591,7 @@ impl RepoService {
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
         // Verify caller has write permission on the repo
-        crate::permission::repo::check_repo_write_permission(db, repo_id, user_id).await?;
+        infra::permission::repo::check_repo_write_permission(db, repo_id, user_id).await?;
 
         let token = token_manager.generate(repo_id, user_id, email, "upload", parent_dir);
 
@@ -626,7 +626,7 @@ impl RepoService {
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
         // Verify caller has write permission on the repo
-        crate::permission::repo::check_repo_write_permission(db, repo_id, user_id).await?;
+        infra::permission::repo::check_repo_write_permission(db, repo_id, user_id).await?;
 
         let token = token_manager.generate(repo_id, user_id, email, "update", parent_dir);
 

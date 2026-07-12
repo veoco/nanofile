@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::error::AppError;
 use crate::sharing::service::{link, share};
+use base::error::AppError;
 
 /// Custom deserializer that maps JSON `null` to `Some(None)` and a present
 /// value to `Some(Some(v))`, while a missing field remains `None` (via
