@@ -32,11 +32,6 @@ pub struct FolderPermRes {
 }
 
 /// `POST /seafhttp/repo/folder-perm`
-///
-/// The seaf-daemon sends a POST with a JSON body containing a list of
-/// `{repo_id, token, ts}` objects. Uses curl defaults (no Content-Type
-/// header), so we parse the raw body manually rather than relying on
-/// axum's Json extractor.
 pub async fn folder_perm_post(
     State(state): State<Arc<AppState>>,
     body: String,
@@ -44,26 +39,14 @@ pub async fn folder_perm_post(
     let requests: Vec<FolderPermReq> = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("invalid JSON: {}", e)))?;
 
+    let svc = state.sync_service();
     let mut results = Vec::new();
     for req in &requests {
-        let token_valid = state
-            .repos
-            .sync_token
-            .find_by_token_and_repo(&req.token, &req.repo_id)
-            .await?
-            .is_some();
-
-        let user_perms = if token_valid {
-            let memberships = state.repos.member.find_by_repo_id(&req.repo_id).await?;
-
-            let permission = memberships
-                .first()
-                .map(|m| m.permission.clone())
-                .unwrap_or_else(|| "rw".to_string());
-
+        let result = svc.folder_perm_for_repo(&req.repo_id, &req.token).await?;
+        let user_perms = if result.valid {
             vec![PermEntry {
                 path: "/".to_string(),
-                permission,
+                permission: result.permission,
             }]
         } else {
             vec![]

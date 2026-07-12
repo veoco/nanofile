@@ -8,10 +8,8 @@ use base::error::AppError;
 /// POST `/seafhttp/repo/head-commits-multi/`
 ///
 /// Accepts a JSON array of repo IDs and returns `{repo_id: head_commit_id}` map.
-///
 /// Uses raw body (not `Json` extractor) because the C sync client sends JSON
-/// body without a `Content-Type` header, causing axum's `Json` extractor to
-/// reject with 415.
+/// body without a `Content-Type` header.
 pub async fn head_commits_multi(
     State(state): State<Arc<AppState>>,
     body: axum::body::Body,
@@ -23,17 +21,9 @@ pub async fn head_commits_multi(
     let repo_id_list: Vec<String> = serde_json::from_slice(&bytes)
         .map_err(|_| AppError::BadRequest("expected JSON array of repo IDs".into()))?;
 
-    let mut commits = HashMap::new();
-
-    for repo_id in &repo_id_list {
-        let repo_model = state.repos.repo.find_by_id(repo_id).await?;
-
-        if let Some(r) = repo_model
-            && let Some(head_id) = &r.head_commit_id
-        {
-            commits.insert(repo_id.clone(), head_id.clone());
-        }
-    }
-
+    let commits = state
+        .sync_service()
+        .head_commits_multi(&repo_id_list)
+        .await?;
     Ok(Json(commits))
 }

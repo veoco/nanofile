@@ -4,15 +4,11 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::middleware::auth::SyncAuth;
-use crate::repository::FsObjectRepository;
-use base::common::SEAF_METADATA_TYPE_DIR;
 use base::error::AppError;
 use infra::serialization::pack_fs;
 
@@ -20,14 +16,12 @@ use infra::serialization::pack_fs;
 /// 1. JSON array: ["id1", "id2"] (newer versions)
 /// 2. URL-encoded form: fs_ids=id1&fs_ids=id2 (older versions)
 fn parse_fs_ids_from_bytes(data: &[u8]) -> Vec<String> {
-    // Try JSON array first
     if let Ok(arr) = serde_json::from_slice::<Vec<String>>(data)
         && !arr.is_empty()
     {
         return arr;
     }
 
-    // Fall back to URL-encoded form
     let body_str = String::from_utf8_lossy(data);
     let mut fs_ids = Vec::new();
     for pair in body_str.split('&') {
@@ -35,8 +29,7 @@ fn parse_fs_ids_from_bytes(data: &[u8]) -> Vec<String> {
         let key = parts.next().unwrap_or("");
         let value = parts.next().unwrap_or("");
         if key == "fs_ids" && !value.is_empty() {
-            let decoded = percent_decode(value);
-            fs_ids.push(decoded);
+            fs_ids.push(percent_decode(value));
         }
     }
     fs_ids
@@ -71,11 +64,6 @@ pub struct FsIdListQuery {
     pub dir_only: Option<String>,
 }
 
-#[derive(Deserialize)]
-pub struct PackFsRequest {
-    pub fs_ids: Vec<String>,
-}
-
 pub fn fs_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/{repo_id}/fs-id-list/", axum::routing::get(fs_id_list))
@@ -95,149 +83,42 @@ pub async fn fs_id_list(
         .ok_or_else(|| AppError::BadRequest("missing server-head parameter".into()))?;
 
     let dir_only = !query.dir_only.as_deref().unwrap_or("").is_empty();
-
     let empty_hash = "0000000000000000000000000000000000000000";
     if server_head == empty_hash {
         return Ok(Json(vec![]));
     }
 
-    let server_commit = state
-        .repos
-        .commit
-        .find_by_repo_and_commit_id(&repo_id, &server_head)
+    let svc = state.sync_service();
+    let server_root = svc
+        .get_commit_root(&repo_id, &server_head)
         .await?
         .ok_or_else(|| AppError::NotFound("server commit not found".into()))?;
 
-    let server_root = server_commit.root_id;
-
     if let Some(ref client_head) = query.client_head {
-        if client_head == "0000000000000000000000000000000000000000" {
-            let mut collected = HashSet::new();
-            collect_fs_ids_recursive(
-                state.repos.fs_object.clone(),
-                state.db.as_ref(),
-                &repo_id,
-                &server_root,
-                &mut collected,
-            )
-            .await?;
-            let result =
-                filter_collected(state.repos.fs_object.clone(), &repo_id, collected, dir_only)
-                    .await?;
+        if client_head == empty_hash {
+            let collected = svc.collect_fs_ids(&repo_id, &server_root).await?;
+            let result = if dir_only {
+                svc.filter_dir_ids(&repo_id, &collected).await?
+            } else {
+                collected.into_iter().collect()
+            };
             return Ok(Json(result));
         }
 
-        let client_commit = state
-            .repos
-            .commit
-            .find_by_repo_and_commit_id(&repo_id, client_head)
-            .await?;
-
-        if let Some(client_commit) = client_commit
-            && client_commit.root_id == server_root
+        if let Some(client_root) = svc.get_commit_root(&repo_id, client_head).await?
+            && client_root == server_root
         {
             return Ok(Json(vec![]));
         }
+    }
 
-        let mut collected = HashSet::new();
-        collect_fs_ids_recursive(
-            state.repos.fs_object.clone(),
-            state.db.as_ref(),
-            &repo_id,
-            &server_root,
-            &mut collected,
-        )
-        .await?;
-        let result =
-            filter_collected(state.repos.fs_object.clone(), &repo_id, collected, dir_only).await?;
-        Ok(Json(result))
+    let collected = svc.collect_fs_ids(&repo_id, &server_root).await?;
+    let result = if dir_only {
+        svc.filter_dir_ids(&repo_id, &collected).await?
     } else {
-        let mut collected = HashSet::new();
-        collect_fs_ids_recursive(
-            state.repos.fs_object.clone(),
-            state.db.as_ref(),
-            &repo_id,
-            &server_root,
-            &mut collected,
-        )
-        .await?;
-        let result =
-            filter_collected(state.repos.fs_object.clone(), &repo_id, collected, dir_only).await?;
-        Ok(Json(result))
-    }
-}
-
-/// When dir_only is true, filter to only include directory object IDs
-/// (obj_type == SEAF_METADATA_TYPE_DIR). When false, return all IDs as-is.
-async fn filter_collected(
-    fs_object_repo: Arc<dyn FsObjectRepository>,
-    repo_id: &str,
-    collected: HashSet<String>,
-    dir_only: bool,
-) -> Result<Vec<String>, AppError> {
-    if !dir_only {
-        let result: Vec<String> = collected.into_iter().collect();
-        return Ok(result);
-    }
-
-    // Batch query all fs_objects to check their types
-    let ids: Vec<String> = collected.iter().cloned().collect();
-    let objects = fs_object_repo
-        .find_by_repo_and_fs_ids(repo_id, &ids)
-        .await?;
-
-    // Build a set of directory fs_ids
-    let dir_set: std::collections::HashSet<String> = objects
-        .iter()
-        .filter(|obj| obj.obj_type == SEAF_METADATA_TYPE_DIR as i8)
-        .map(|obj| obj.fs_id.clone())
-        .collect();
-
-    // Filter collected to only include directories
-    let dir_ids: Vec<String> = collected
-        .into_iter()
-        .filter(|id| dir_set.contains(id))
-        .collect();
-
-    Ok(dir_ids)
-}
-
-async fn collect_fs_ids_recursive(
-    fs_object_repo: Arc<dyn FsObjectRepository>,
-    db: &DatabaseConnection,
-    repo_id: &str,
-    fs_id: &str,
-    collected: &mut HashSet<String>,
-) -> Result<(), AppError> {
-    if collected.contains(fs_id) {
-        return Ok(());
-    }
-
-    let fs_obj = fs_object_repo
-        .find_by_repo_and_fs_id(repo_id, fs_id)
-        .await?;
-
-    if let Some(fs_obj) = fs_obj {
-        collected.insert(fs_id.to_string());
-
-        if fs_obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 {
-            let dir_data: base::common::FsDirData = serde_json::from_str(&fs_obj.data)
-                .map_err(|e| AppError::Internal(format!("invalid dir data: {}", e)))?;
-
-            for entry in &dir_data.dirents {
-                Box::pin(collect_fs_ids_recursive(
-                    fs_object_repo.clone(),
-                    db,
-                    repo_id,
-                    &entry.id,
-                    collected,
-                ))
-                .await?;
-            }
-        }
-    }
-
-    Ok(())
+        collected.into_iter().collect()
+    };
+    Ok(Json(result))
 }
 
 pub async fn pack_fs_handler(
@@ -246,20 +127,16 @@ pub async fn pack_fs_handler(
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<axum::response::Response, AppError> {
-    // Read body bytes
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let fs_ids = parse_fs_ids_from_bytes(&body_data);
 
-    // Batch query all fs_objects at once
     let objects = state
-        .repos
-        .fs_object
-        .find_by_repo_and_fs_ids(&repo_id, &fs_ids)
+        .sync_service()
+        .fetch_fs_objects(&repo_id, &fs_ids)
         .await?;
 
-    // Build a map for O(1) lookup while preserving request order
     let obj_map: std::collections::HashMap<&str, &infra::entity::fs_object::Model> = objects
         .iter()
         .map(|obj| (obj.fs_id.as_str(), obj))
@@ -279,7 +156,6 @@ pub async fn pack_fs_handler(
         .header("Content-Type", "application/octet-stream")
         .body(Body::from(packed))
         .map_err(|e| AppError::Internal(e.to_string()))?;
-
     Ok(response)
 }
 
@@ -299,14 +175,11 @@ pub async fn check_fs(
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let fs_ids = parse_fs_ids_from_bytes(&body_data);
 
-    // Batch query all existing fs_ids
     let existing = state
-        .repos
-        .fs_object
-        .find_by_repo_and_fs_ids(&repo_id, &fs_ids)
+        .sync_service()
+        .fetch_fs_objects(&repo_id, &fs_ids)
         .await?;
 
-    // Build a set of existing fs_ids for O(1) lookup
     let existing_set: std::collections::HashSet<&str> =
         existing.iter().map(|obj| obj.fs_id.as_str()).collect();
 
@@ -331,34 +204,9 @@ pub async fn recv_fs(
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
     let entries = pack_fs::decode_pack_fs_entries(&data).map_err(AppError::Internal)?;
-
-    // Process all entries and build ActiveModels
-    let models: Vec<infra::entity::fs_object::ActiveModel> = entries
-        .into_iter()
-        .filter_map(|(fs_id, obj_data)| {
-            // Decompress incoming zlib and store as JSON text
-            let decompressed = pack_fs::decompress_fs_data(&obj_data).ok()?;
-            let json_str = String::from_utf8(decompressed).ok()?;
-
-            let json_val: serde_json::Value = serde_json::from_str(&json_str).ok()?;
-            let obj_type = json_val.get("type").and_then(|v| v.as_i64()).unwrap_or(1) as i8;
-
-            Some(infra::entity::fs_object::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: sea_orm::Set(repo_id.clone()),
-                fs_id: sea_orm::Set(fs_id),
-                obj_type: sea_orm::Set(obj_type),
-                data: sea_orm::Set(json_str),
-            })
-        })
-        .collect();
-
-    if models.is_empty() {
-        return Ok(StatusCode::OK);
-    }
-
-    // Batch insert with ON CONFLICT DO NOTHING
-    state.repos.fs_object.insert_many(models).await?;
-
+    state
+        .sync_service()
+        .insert_fs_objects(&repo_id, entries)
+        .await?;
     Ok(StatusCode::OK)
 }
