@@ -242,14 +242,7 @@ pub async fn update_branch(
 
         let is_same_commit = current_head.as_deref() == Some(new_head.as_str());
         if is_same_commit {
-            if let Some(ref notif_mgr) = state.notification_manager {
-                notif_mgr
-                    .notify(crate::notification::events::RepoUpdateEvent::new(
-                        repo_id.clone(),
-                        new_head.clone(),
-                    ))
-                    .await;
-            }
+            infra::events::publish_repo_update(&repo_id, new_head.clone());
             break Ok(StatusCode::OK);
         }
 
@@ -375,14 +368,7 @@ pub async fn update_branch(
             }
         }
 
-        if let Some(ref notif_mgr) = state.notification_manager {
-            notif_mgr
-                .notify(crate::notification::events::RepoUpdateEvent::new(
-                    repo_id.clone(),
-                    new_head.clone(),
-                ))
-                .await;
-        }
+        infra::events::publish_repo_update(&repo_id, new_head.clone());
         break Ok(StatusCode::OK);
     }
 }
