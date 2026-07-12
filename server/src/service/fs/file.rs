@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, Set};
 
 use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::trash;
@@ -702,6 +702,116 @@ impl FileService {
         }
 
         Ok(())
+    }
+
+    /// Lock a file via the sync protocol (includes lock timestamp update).
+    pub async fn lock_file_sync(
+        &self,
+        repo_id: &str,
+        path: &str,
+        user_id: i32,
+    ) -> Result<(), AppError> {
+        let now = chrono::Utc::now().timestamp();
+        let existing = self
+            .repos
+            .locked_file
+            .find_by_repo_and_path(repo_id, path)
+            .await?;
+
+        match existing {
+            Some(record) => {
+                let mut active: infra::entity::locked_file::ActiveModel = record.into();
+                active.user_id = Set(user_id);
+                active.locked_at = Set(now);
+                self.repos.locked_file.update(active).await?;
+            }
+            None => {
+                self.repos
+                    .locked_file
+                    .create(repo_id, path, user_id, now, "")
+                    .await?;
+            }
+        }
+
+        infra::storage::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
+        self.notify_file_lock(repo_id, path, "locked", user_id)
+            .await;
+        Ok(())
+    }
+
+    /// Unlock a file via the sync protocol (includes lock timestamp update).
+    pub async fn unlock_file_sync(
+        &self,
+        repo_id: &str,
+        path: &str,
+        user_id: i32,
+    ) -> Result<(), AppError> {
+        self.repos
+            .locked_file
+            .delete_by_repo_and_path(repo_id, path)
+            .await?;
+
+        infra::storage::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
+        self.notify_file_lock(repo_id, path, "unlocked", user_id)
+            .await;
+        Ok(())
+    }
+
+    async fn notify_file_lock(&self, repo_id: &str, path: &str, change_event: &str, user_id: i32) {
+        if let Some(mgr) = &self.notification_manager
+            && let Ok(Some(user)) = self.repos.user.find_by_id(user_id).await
+        {
+            let event = FileLockEvent {
+                repo_id: repo_id.to_string(),
+                path: path.to_string(),
+                change_event: change_event.to_string(),
+                lock_user: user.email,
+            };
+            mgr.notify(event).await;
+        }
+    }
+
+    /// Batch query locked files for a single repo + token pair.
+    pub async fn get_locked_files_for_repo(
+        &self,
+        repo_id: &str,
+        token: &str,
+    ) -> Result<(Vec<(String, i32)>, i64), AppError> {
+        let token_record = self.repos.sync_token.find_by_token(token).await?;
+        let token_valid = token_record
+            .as_ref()
+            .map(|t| t.repo_id == repo_id)
+            .unwrap_or(false);
+        let token_user_id = token_record.as_ref().map(|t| t.user_id);
+
+        let lock_ts = if token_valid {
+            self.repos
+                .file_lock_timestamp
+                .find_by_repo(repo_id)
+                .await?
+                .map(|t| t.update_time)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let files = if token_valid {
+            let locked = self.repos.locked_file.find_by_repo(repo_id).await?;
+            locked
+                .into_iter()
+                .map(|entry| {
+                    let by_me = match token_user_id {
+                        Some(tuid) if tuid == entry.user_id => 1,
+                        _ => 0,
+                    };
+                    (entry.path, by_me)
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        Ok((files, lock_ts))
     }
 
     /// Create an empty file (v21 API).
