@@ -252,8 +252,8 @@ pub async fn logout_device(
         })
         .ok_or(AppError::Unauthorized)?;
 
-    // Delete the api_token record
-    state.repos.api_token.delete_by_token(token_str).await?;
+    // Invalidate device session via service
+    state.login_service().logout_device(token_str).await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

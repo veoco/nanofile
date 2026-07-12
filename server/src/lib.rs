@@ -326,6 +326,10 @@ impl AppState {
     pub fn invitation_service(&self) -> crate::service::user::InvitationService {
         crate::service::user::InvitationService::new(self.repos.clone())
     }
+
+    pub fn sdoc_service(&self) -> crate::service::sdoc::SdocService {
+        crate::service::sdoc::SdocService::new(self.repos.clone())
+    }
 }
 
 /// Spawn a background task that periodically deletes expired records.

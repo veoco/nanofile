@@ -222,4 +222,10 @@ impl LoginService {
             s2fa_token: issued_s2fa_token,
         })
     }
+
+    /// Invalidate a device session by deleting the API token.
+    pub async fn logout_device(&self, token_str: &str) -> Result<(), AppError> {
+        self.repos.api_token.delete_by_token(token_str).await?;
+        Ok(())
+    }
 }

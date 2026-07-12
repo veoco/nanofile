@@ -9,5 +9,6 @@ pub mod admin;
 pub mod auth;
 pub mod fs;
 pub mod repo;
+pub mod sdoc;
 pub mod sharing;
 pub mod user;
