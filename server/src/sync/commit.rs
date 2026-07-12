@@ -254,7 +254,7 @@ pub async fn update_branch(
 
     let check_result = check_commit_blocks(
         state.repos.fs_object.clone(),
-        state.db.as_ref(),
+        &state.repos,
         state.block_store.clone(),
         &repo_id,
         &new_commit.root_id,
@@ -380,7 +380,7 @@ pub async fn update_branch(
         };
 
         let mut changes = crate::repo::tree_diff::diff_trees(
-            state.db.as_ref(),
+            &state.repos,
             &repo_id,
             old_root.as_deref(),
             &new_commit.root_id,
@@ -512,7 +512,7 @@ struct DiffFrame {
 /// for files whose IDs differ.
 async fn check_commit_blocks(
     fs_object_repo: Arc<dyn FsObjectRepository>,
-    db: &sea_orm::DatabaseConnection,
+    repos: &crate::repository::Repositories,
     block_store: crate::storage::DynBlockStorage,
     repo_id: &str,
     new_root_id: &str,
@@ -548,7 +548,7 @@ async fn check_commit_blocks(
             let Some(ref base_fs) = frame.base_fs_id else {
                 // Entirely new subtree — walk all files.
                 let new_dir: FsDirData =
-                    match crate::repo::read_fs_dir_data(db, repo_id, &frame.new_fs_id).await {
+                    match crate::repo::read_fs_dir_data(repos, repo_id, &frame.new_fs_id).await {
                         Ok(d) => d,
                         Err(_) => continue,
                     };
@@ -597,12 +597,12 @@ async fn check_commit_blocks(
 
             // Load both directories.
             let base_dir: FsDirData =
-                match crate::repo::read_fs_dir_data(db, repo_id, base_fs).await {
+                match crate::repo::read_fs_dir_data(repos, repo_id, base_fs).await {
                     Ok(d) => d,
                     Err(_) => continue,
                 };
             let new_dir: FsDirData =
-                match crate::repo::read_fs_dir_data(db, repo_id, &frame.new_fs_id).await {
+                match crate::repo::read_fs_dir_data(repos, repo_id, &frame.new_fs_id).await {
                     Ok(d) => d,
                     Err(_) => continue,
                 };

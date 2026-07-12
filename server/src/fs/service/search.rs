@@ -115,6 +115,7 @@ impl SearchService {
 
             search_fs_tree(
                 db,
+                &self.repos,
                 repo_id,
                 &repo_record.name,
                 &head.root_id,
@@ -178,7 +179,7 @@ impl SearchService {
         repo_id: &str,
         fullpath: &str,
     ) -> Option<FileSearchResult> {
-        let db = self.db();
+        let _db = self.db();
         let repo_record = self.repos.repo.find_by_id(repo_id).await.ok()??;
         let head_commit_id = repo_record.head_commit_id.as_ref()?;
         let head = self
@@ -210,12 +211,12 @@ impl SearchService {
         let parent_fs_id = if parent_path == "/" {
             root_id.clone()
         } else {
-            crate::repo::resolve_fs_id(db, repo_id, root_id, parent_path)
+            crate::repo::resolve_fs_id(&self.repos, repo_id, root_id, parent_path)
                 .await
                 .ok()?
         };
 
-        let dir_data = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id)
+        let dir_data = crate::repo::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
             .await
             .ok()?;
         let entry = dir_data.dirents.iter().find(|d| d.name == *name)?;
@@ -249,7 +250,8 @@ impl SearchService {
 /// Recursively search the FS tree for files/directories whose name contains the keyword.
 #[allow(clippy::too_many_arguments)]
 async fn search_fs_tree(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     repo_name: &str,
     root_fs_id: &str,
@@ -266,7 +268,7 @@ async fn search_fs_tree(
             continue;
         }
 
-        let dir_data = match crate::repo::read_fs_dir_data(db, repo_id, &fs_id).await {
+        let dir_data = match crate::repo::read_fs_dir_data(repos, repo_id, &fs_id).await {
             Ok(data) => data,
             Err(_) => continue,
         };

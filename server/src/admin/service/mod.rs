@@ -1,7 +1,6 @@
-use sea_orm::DatabaseConnection;
-
 use crate::common::EMPTY_SHA1;
 use crate::error::AppError;
+use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
 
 mod reindex;
@@ -12,7 +11,7 @@ pub use users::AdminUserService;
 
 /// Collect all file paths from a FS tree recursively.
 pub(crate) async fn collect_file_paths(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     root_fs_id: &str,
 ) -> Result<Vec<String>, AppError> {
@@ -24,7 +23,7 @@ pub(crate) async fn collect_file_paths(
             continue;
         }
 
-        let dir_data = match crate::repo::read_fs_dir_data(db, repo_id, &fs_id).await {
+        let dir_data = match crate::repo::read_fs_dir_data(repos, repo_id, &fs_id).await {
             Ok(data) => data,
             Err(_) => continue,
         };

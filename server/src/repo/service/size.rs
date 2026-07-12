@@ -14,7 +14,7 @@ use crate::repo::{read_fs_dir_data, resolve_fs_id};
 ///
 /// Returns 0 if the repo has no commits yet or the tree is empty.
 pub async fn compute_repo_size(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
 ) -> Result<i64, AppError> {
@@ -35,13 +35,13 @@ pub async fn compute_repo_size(
         .await?
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-    compute_tree_size(db, repo_id, &head.root_id).await
+    compute_tree_size(repos, repo_id, &head.root_id).await
 }
 
 /// Recursively walk a directory tree (starting at root_fs_id) and sum
 /// up all file sizes.
 pub async fn compute_tree_size(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     root_fs_id: &str,
 ) -> Result<i64, AppError> {
@@ -58,7 +58,7 @@ pub async fn compute_tree_size(
             continue;
         }
 
-        let dir_data = match read_fs_dir_data(db, repo_id, &fs_id).await {
+        let dir_data = match read_fs_dir_data(repos, repo_id, &fs_id).await {
             Ok(d) => d,
             Err(_) => continue,
         };
@@ -111,7 +111,7 @@ pub async fn adjust_repo_size(
 /// size.  For a file this is the `DirEntryData.size` field; for a
 /// directory the subtree is walked recursively via `compute_tree_size`.
 pub async fn get_entry_total_size(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     path: &str,
@@ -137,11 +137,11 @@ pub async fn get_entry_total_size(
         .await?
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-    let parent_fs_id = resolve_fs_id(db, repo_id, &head.root_id, parent_path)
+    let parent_fs_id = resolve_fs_id(repos, repo_id, &head.root_id, parent_path)
         .await
         .map_err(|e| AppError::internal(format!("resolve parent failed: {e}")))?;
 
-    let dir_data = read_fs_dir_data(db, repo_id, &parent_fs_id)
+    let dir_data = read_fs_dir_data(repos, repo_id, &parent_fs_id)
         .await
         .map_err(|e| AppError::internal(format!("read dir failed: {e}")))?;
 
@@ -152,7 +152,7 @@ pub async fn get_entry_total_size(
         .ok_or_else(|| AppError::NotFound("entry not found".into()))?;
 
     if entry.mode & S_IFDIR != 0 {
-        compute_tree_size(db, repo_id, &entry.id).await
+        compute_tree_size(repos, repo_id, &entry.id).await
     } else {
         Ok(entry.size)
     }

@@ -228,7 +228,7 @@ async fn ensure_dir_recursive(
 
         // Check if this component already exists
         let root_id = crate::common::util::get_head_root_id(state.db.as_ref(), repo_id).await?;
-        if crate::repo::fs_tree::resolve_fs_id(state.db.as_ref(), repo_id, &root_id, &next)
+        if crate::repo::fs_tree::resolve_fs_id(&state.repos, repo_id, &root_id, &next)
             .await
             .is_err()
         {
@@ -1308,7 +1308,7 @@ pub async fn upload_blks_api(
         // Resolve parent directory and capture ancestor chain for the
         // subsequent walk_up_ancestors (avoids O(d²) re-resolution).
         let (parent_fs_id, ancestor_chain) = crate::repo::file_ops::FileOps::resolve_fs_id_chain(
-            state.db.as_ref(),
+            &state.repos,
             &info.repo_id,
             &target_dir,
         )

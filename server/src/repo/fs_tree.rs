@@ -1,12 +1,10 @@
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
-
 use crate::common::EMPTY_SHA1;
-use crate::entity::fs_object;
+use crate::repository::Repositories;
 use crate::serialization::fs_json::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 
 /// Read and parse a directory fs_object (FsDirData) from the database.
 pub async fn read_fs_dir_data(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     fs_id: &str,
 ) -> Result<FsDirData, Box<dyn std::error::Error>> {
@@ -20,11 +18,11 @@ pub async fn read_fs_dir_data(
             version: 1,
         });
     }
-    let obj = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(repo_id))
-        .filter(fs_object::Column::FsId.eq(fs_id))
-        .one(db)
-        .await?
+    let obj = repos
+        .fs_object
+        .find_by_repo_and_fs_id(repo_id, fs_id)
+        .await
+        .map_err(Box::new)?
         .ok_or_else(|| format!("fs_object not found: {fs_id}"))?;
     let data: FsDirData = serde_json::from_str(&obj.data)?;
     Ok(data)
@@ -32,15 +30,15 @@ pub async fn read_fs_dir_data(
 
 /// Read and parse a file fs_object (FsFileData) from the database.
 pub async fn read_fs_file_data(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     fs_id: &str,
 ) -> Result<FsFileData, Box<dyn std::error::Error>> {
-    let obj = fs_object::Entity::find()
-        .filter(fs_object::Column::RepoId.eq(repo_id))
-        .filter(fs_object::Column::FsId.eq(fs_id))
-        .one(db)
-        .await?
+    let obj = repos
+        .fs_object
+        .find_by_repo_and_fs_id(repo_id, fs_id)
+        .await
+        .map_err(Box::new)?
         .ok_or_else(|| format!("fs_object not found: {fs_id}"))?;
     let data: FsFileData = serde_json::from_str(&obj.data)?;
     Ok(data)
@@ -52,7 +50,7 @@ pub async fn read_fs_file_data(
 /// Path should be absolute (e.g. `/dir/subdir/file.txt`).
 /// Returns the root_fs_id itself if path is "/" or empty.
 pub async fn resolve_fs_id(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     root_fs_id: &str,
     path: &str,
@@ -69,7 +67,7 @@ pub async fn resolve_fs_id(
     let mut current_fs_id = root_fs_id.to_string();
 
     for segment in segments {
-        let dir_data = read_fs_dir_data(db, repo_id, &current_fs_id).await?;
+        let dir_data = read_fs_dir_data(repos, repo_id, &current_fs_id).await?;
 
         let entry = dir_data
             .dirents

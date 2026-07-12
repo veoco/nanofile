@@ -3,13 +3,16 @@ use sea_orm::{
 };
 
 use crate::entity::{commit, repo};
+use crate::repository::Repositories;
 use crate::serialization::fs_json::FsDirData;
 
+#[allow(dead_code)]
 pub struct Versioning;
 
 impl Versioning {
     pub async fn get_file_history(
         db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         path: &str,
         limit: u64,
@@ -27,9 +30,10 @@ impl Versioning {
             }
 
             let root_data =
-                crate::repo::file_ops::FileOps::read_dir_fs_object(db, repo_id, &c.root_id).await?;
+                crate::repo::file_ops::FileOps::read_dir_fs_object(repos, repo_id, &c.root_id)
+                    .await?;
 
-            if Self::path_exists_in_dir(db, &root_data, path).await? {
+            if Self::path_exists_in_dir(db, repos, &root_data, path).await? {
                 history.push(c);
             }
         }
@@ -38,7 +42,8 @@ impl Versioning {
     }
 
     async fn path_exists_in_dir(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
+        repos: &Repositories,
         dir_data: &FsDirData,
         path: &str,
     ) -> Result<bool, Box<dyn std::error::Error>> {
@@ -61,13 +66,14 @@ impl Versioning {
                 Some(id) => id,
                 None => return Ok(false),
             };
-            current_dir = crate::repo::read_fs_dir_data(db, "", &next_id).await?;
+            current_dir = crate::repo::read_fs_dir_data(repos, "", &next_id).await?;
         }
         Ok(false)
     }
 
     pub async fn revert_to_commit(
         db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         commit_id: &str,
         file_path: &str,
@@ -85,13 +91,13 @@ impl Versioning {
         // Get the parent directory fs_id
         let parent_fs_id = if parts.len() > 1 {
             let parent_path = format!("/{}", parts[..parts.len() - 1].join("/"));
-            crate::repo::resolve_fs_id(db, repo_id, &target_commit.root_id, &parent_path).await?
+            crate::repo::resolve_fs_id(repos, repo_id, &target_commit.root_id, &parent_path).await?
         } else {
             target_commit.root_id.clone()
         };
 
         // Validate the file exists in the parent directory
-        let parent_dir_data = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id).await?;
+        let parent_dir_data = crate::repo::read_fs_dir_data(repos, repo_id, &parent_fs_id).await?;
         let _target_fs_id = parent_dir_data
             .dirents
             .iter()

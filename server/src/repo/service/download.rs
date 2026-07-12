@@ -50,7 +50,7 @@ impl Downloader {
 
     pub async fn download_file_stream(
         repos: &Repositories,
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
         repo_id: &str,
         path: &str,
     ) -> Result<(FsFileData, Vec<String>), Box<dyn std::error::Error>> {
@@ -70,10 +70,10 @@ impl Downloader {
             .await?
             .ok_or_else(|| "head commit not found".to_string())?;
 
-        let fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_commit.root_id, path).await?;
+        let fs_id = crate::repo::resolve_fs_id(repos, repo_id, &head_commit.root_id, path).await?;
 
         let file_data =
-            crate::repo::file_ops::FileOps::read_file_fs_object(db, repo_id, &fs_id).await?;
+            crate::repo::file_ops::FileOps::read_file_fs_object(repos, repo_id, &fs_id).await?;
 
         Ok((file_data.clone(), file_data.block_ids))
     }

@@ -96,7 +96,7 @@ impl<'a> AdminService<'a> {
             return Ok((0, 0));
         }
 
-        let file_paths = collect_file_paths(self.db, repo_id, &head.root_id).await?;
+        let file_paths = collect_file_paths(self.repos, repo_id, &head.root_id).await?;
 
         let mut indexed = 0u64;
         let mut skipped = 0u64;

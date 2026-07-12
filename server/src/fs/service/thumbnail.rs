@@ -88,9 +88,10 @@ impl ThumbnailService {
             .await?
             .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-        let file_fs_id = resolve_fs_id(self.db(), repo_id, &head_commit.root_id, &normalized_path)
-            .await
-            .map_err(|_| AppError::NotFound("file not found".into()))?;
+        let file_fs_id =
+            resolve_fs_id(&self.repos, repo_id, &head_commit.root_id, &normalized_path)
+                .await
+                .map_err(|_| AppError::NotFound("file not found".into()))?;
 
         if file_fs_id == "0000000000000000000000000000000000000000" {
             return Err(AppError::BadRequest("path is a directory".into()));
@@ -251,11 +252,11 @@ impl ThumbnailService {
             .map(|(p, n)| (if p.is_empty() { "/" } else { p }, n))
             .unwrap_or(("/", ""));
 
-        let parent_fs_id = resolve_fs_id(self.db(), repo_id, root_fs_id, parent_path)
+        let parent_fs_id = resolve_fs_id(&self.repos, repo_id, root_fs_id, parent_path)
             .await
             .map_err(|_| AppError::NotFound("parent path not found".into()))?;
 
-        let dir_data = read_fs_dir_data(self.db(), repo_id, &parent_fs_id)
+        let dir_data = read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
             .await
             .map_err(|e| AppError::Internal(format!("failed to read parent dir: {e}")))?;
 

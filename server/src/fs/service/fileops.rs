@@ -67,9 +67,10 @@ impl FileOpsService {
         let db = self.db();
         let head_root_id = get_head_root_id(db, repo_id).await?;
 
-        let parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_dir)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
+        let parent_fs_id =
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_dir)
+                .await
+                .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
 
         let mut total_deleted: i64 = 0;
         for name in file_names {
@@ -83,7 +84,7 @@ impl FileOpsService {
             }
         }
 
-        let parent_data = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id)
+        let parent_data = crate::repo::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
             .await
             .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
 
@@ -214,13 +215,14 @@ impl FileOpsService {
         let head_root_id = get_head_root_id(db, repo_id).await?;
 
         let src_parent_fs_id =
-            crate::repo::resolve_fs_id(db, repo_id, &head_root_id, src_parent_dir)
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, src_parent_dir)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve source dir failed: {e}")))?;
 
-        let src_parent_data = crate::repo::read_fs_dir_data(db, repo_id, &src_parent_fs_id)
-            .await
-            .map_err(|e| AppError::Internal(format!("read source dir failed: {e}")))?;
+        let src_parent_data =
+            crate::repo::read_fs_dir_data(&self.repos, repo_id, &src_parent_fs_id)
+                .await
+                .map_err(|e| AppError::Internal(format!("read source dir failed: {e}")))?;
 
         let mut new_entries: Vec<DirEntryData> = Vec::new();
         let now = chrono::Utc::now().timestamp();
@@ -242,13 +244,15 @@ impl FileOpsService {
             });
         }
 
-        let dst_parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, dst_dir)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
+        let dst_parent_fs_id =
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, dst_dir)
+                .await
+                .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
 
-        let dst_parent_data = crate::repo::read_fs_dir_data(db, repo_id, &dst_parent_fs_id)
-            .await
-            .map_err(|e| AppError::Internal(format!("read dest dir failed: {e}")))?;
+        let dst_parent_data =
+            crate::repo::read_fs_dir_data(&self.repos, repo_id, &dst_parent_fs_id)
+                .await
+                .map_err(|e| AppError::Internal(format!("read dest dir failed: {e}")))?;
 
         let mut results: Vec<BatchOpResult> = Vec::new();
         let mut entries_to_add: Vec<DirEntryData> = Vec::new();
@@ -384,13 +388,14 @@ impl FileOpsService {
         let head_root_id = get_head_root_id(db, repo_id).await?;
 
         let src_parent_fs_id =
-            crate::repo::resolve_fs_id(db, repo_id, &head_root_id, src_parent_dir)
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, src_parent_dir)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve source dir failed: {e}")))?;
 
-        let src_parent_data = crate::repo::read_fs_dir_data(db, repo_id, &src_parent_fs_id)
-            .await
-            .map_err(|e| AppError::Internal(format!("read source dir failed: {e}")))?;
+        let src_parent_data =
+            crate::repo::read_fs_dir_data(&self.repos, repo_id, &src_parent_fs_id)
+                .await
+                .map_err(|e| AppError::Internal(format!("read source dir failed: {e}")))?;
 
         let mut entries_to_move: Vec<DirEntryData> = Vec::new();
         let now = chrono::Utc::now().timestamp();
@@ -412,9 +417,10 @@ impl FileOpsService {
             });
         }
 
-        let _dst_parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, dst_dir)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
+        let _dst_parent_fs_id =
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, dst_dir)
+                .await
+                .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
 
         // Step 1: Remove entries from source
         let src_names_for_closure: Vec<String> =
@@ -459,13 +465,14 @@ impl FileOpsService {
         // Step 2: Add entries to destination
         let new_head_root = get_head_root_id(db, repo_id).await?;
 
-        let new_dst_fs_id = crate::repo::resolve_fs_id(db, repo_id, &new_head_root, dst_dir)
-            .await
-            .map_err(|e| {
-                AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
-            })?;
+        let new_dst_fs_id =
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &new_head_root, dst_dir)
+                .await
+                .map_err(|e| {
+                    AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
+                })?;
 
-        let new_dst_data = crate::repo::read_fs_dir_data(db, repo_id, &new_dst_fs_id)
+        let new_dst_data = crate::repo::read_fs_dir_data(&self.repos, repo_id, &new_dst_fs_id)
             .await
             .map_err(|e| AppError::Internal(format!("read dest dir failed: {e}")))?;
 

@@ -38,11 +38,11 @@ pub(crate) async fn rename_file_entry(
     let old_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
 
     let head_root_id = get_head_root_id(db, repo_id).await?;
-    let parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
+    let parent_fs_id = crate::repo::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
         .await
         .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
-    let parent_data = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id)
+    let parent_data = crate::repo::read_fs_dir_data(repos, repo_id, &parent_fs_id)
         .await
         .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
     let child_id = parent_data
@@ -159,7 +159,7 @@ impl FileService {
     ) -> Result<(String, String), AppError> {
         let db = self.db();
         let head_root_id = get_head_root_id(db, repo_id).await?;
-        let file_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, path)
+        let file_fs_id = crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, path)
             .await
             .map_err(|_| AppError::NotFound("file not found".into()))?;
 
@@ -344,12 +344,13 @@ impl FileService {
             .unwrap_or(0);
 
         let head_root_id = get_head_root_id(db, repo_id).await?;
-        let parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+        let parent_fs_id =
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
+                .await
+                .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
         // Record deleted entry to trash before tree update
-        record_delete_file_trash(db, repo_id, path, name, email, &parent_fs_id).await;
+        record_delete_file_trash(db, &self.repos, repo_id, path, name, email, &parent_fs_id).await;
 
         FileOps::update_dir_tree_and_commit(
             db,
@@ -440,13 +441,15 @@ impl FileService {
         let file_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
         let parent_path = parent_path_from(path);
 
-        let old_parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve old parent failed: {e}")))?;
+        let old_parent_fs_id =
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
+                .await
+                .map_err(|e| AppError::Internal(format!("resolve old parent failed: {e}")))?;
 
-        let old_parent_data = crate::repo::read_fs_dir_data(db, repo_id, &old_parent_fs_id)
-            .await
-            .map_err(|e| AppError::Internal(format!("read old parent failed: {e}")))?;
+        let old_parent_data =
+            crate::repo::read_fs_dir_data(&self.repos, repo_id, &old_parent_fs_id)
+                .await
+                .map_err(|e| AppError::Internal(format!("read old parent failed: {e}")))?;
         let file_entry = old_parent_data
             .dirents
             .iter()
@@ -462,7 +465,7 @@ impl FileService {
         let new_parent_path = crate::sanitize::safe_normalize_path(dst_dir)
             .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
         let _new_parent_fs_id =
-            crate::repo::resolve_fs_id(db, repo_id, &head_root_id, &new_parent_path)
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, &new_parent_path)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve dest parent failed: {e}")))?;
 
@@ -494,7 +497,7 @@ impl FileService {
 
         let new_head_root = get_head_root_id(db, repo_id).await?;
         let new_dst_fs_id =
-            crate::repo::resolve_fs_id(db, repo_id, &new_head_root, &new_parent_path)
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &new_head_root, &new_parent_path)
                 .await
                 .map_err(|e| {
                     AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
@@ -573,7 +576,7 @@ impl FileService {
     ) -> Result<serde_json::Value, AppError> {
         let db = self.db();
         let head_root_id = get_head_root_id(db, repo_id).await?;
-        let file_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, path)
+        let file_fs_id = crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, path)
             .await
             .map_err(|_| AppError::NotFound("file not found".into()))?;
 
@@ -598,10 +601,11 @@ impl FileService {
         let parent_path = parent_path_from(path);
         let file_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
 
-        let parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
-        let parent_data = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id)
+        let parent_fs_id =
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
+                .await
+                .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+        let parent_data = crate::repo::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
             .await
             .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
         let entry = parent_data
@@ -747,7 +751,7 @@ impl FileService {
             let head_root_id = get_head_root_id_no_err(&self.repos, repo_id)
                 .await?
                 .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
-            crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
+            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?
         };
@@ -829,6 +833,7 @@ async fn get_head_root_id_no_err(
 /// Record a deleted entry to the trash table.
 async fn record_delete_file_trash(
     db: &sea_orm::DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     path: &str,
     name: &str,
@@ -839,7 +844,7 @@ async fn record_delete_file_trash(
         Ok(id) => id,
         Err(_) => return,
     };
-    let parent_dir_data = match crate::repo::read_fs_dir_data(db, repo_id, parent_fs_id).await {
+    let parent_dir_data = match crate::repo::read_fs_dir_data(repos, repo_id, parent_fs_id).await {
         Ok(d) => d,
         Err(_) => return,
     };

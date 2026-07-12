@@ -4,7 +4,6 @@ use axum::{
     extract::{Query, State},
     response::Html,
 };
-use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -73,7 +72,6 @@ pub async fn search_page(
     let (results, total, has_more) = if q.trim().is_empty() {
         (Vec::new(), 0, false)
     } else {
-        let db = state.db.as_ref();
         let repo_ids = get_accessible_repo_ids(&state.repos, user.user_id, None).await?;
         let mut seen = std::collections::HashSet::new();
         let mut all_results: Vec<SearchResultItem> = Vec::new();
@@ -94,7 +92,7 @@ pub async fn search_page(
                     continue;
                 }
                 if let Some(item) =
-                    resolve_file_metadata(&state.repos, db, found_repo_id, found_fullpath).await
+                    resolve_file_metadata(&state.repos, found_repo_id, found_fullpath).await
                 {
                     all_results.push(item);
                 }
@@ -129,7 +127,7 @@ pub async fn search_page(
             }
 
             search_fs_tree(
-                db,
+                &state.repos,
                 repo_id,
                 &repo_record.name,
                 &head.root_id,
@@ -184,7 +182,6 @@ pub async fn search_page(
 /// (repo_id, fullpath) pair discovered by full-text search.
 async fn resolve_file_metadata(
     repos: &crate::repository::Repositories,
-    db: &DatabaseConnection,
     repo_id: &str,
     fullpath: &str,
 ) -> Option<SearchResultItem> {
@@ -217,12 +214,12 @@ async fn resolve_file_metadata(
     let parent_fs_id = if parent_path == "/" {
         root_id.clone()
     } else {
-        crate::repo::resolve_fs_id(db, repo_id, root_id, parent_path)
+        crate::repo::resolve_fs_id(repos, repo_id, root_id, parent_path)
             .await
             .ok()?
     };
 
-    let dir_data = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id)
+    let dir_data = crate::repo::read_fs_dir_data(repos, repo_id, &parent_fs_id)
         .await
         .ok()?;
     let entry = dir_data.dirents.iter().find(|d| d.name == *name)?;
@@ -281,7 +278,7 @@ async fn get_accessible_repo_ids(
 
 #[allow(clippy::too_many_arguments)]
 async fn search_fs_tree(
-    db: &DatabaseConnection,
+    repos: &crate::repository::Repositories,
     repo_id: &str,
     repo_name: &str,
     root_fs_id: &str,
@@ -298,7 +295,7 @@ async fn search_fs_tree(
             continue;
         }
 
-        let dir_data = match crate::repo::read_fs_dir_data(db, repo_id, &fs_id).await {
+        let dir_data = match crate::repo::read_fs_dir_data(repos, repo_id, &fs_id).await {
             Ok(data) => data,
             Err(_) => continue,
         };

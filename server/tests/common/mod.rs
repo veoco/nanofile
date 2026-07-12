@@ -6,6 +6,7 @@ use axum::Router;
 use sea_orm::{ActiveModelTrait, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 use server::AppState;
+use server::repository::Repositories;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -32,6 +33,7 @@ fn cached_hash_password(password: &str) -> String {
 pub struct TestServer {
     pub base_url: String,
     pub db: Arc<DatabaseConnection>,
+    pub repos: Arc<Repositories>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -191,6 +193,7 @@ impl TestServer {
         Self {
             base_url,
             db: state.db.clone(),
+            repos: state.repos.clone(),
             shutdown_tx: Some(shutdown_tx),
         }
     }

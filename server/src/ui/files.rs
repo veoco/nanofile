@@ -695,7 +695,7 @@ async fn serve_file(
     let is_text = is_previewable_file(&file_name);
 
     if is_image {
-        let size_display = get_file_size(&state.repos, db, &repo_id, &path)
+        let size_display = get_file_size(&state.repos, &repo_id, &path)
             .await
             .map(format_size)
             .unwrap_or_else(|_| "?".to_string());
@@ -751,7 +751,7 @@ async fn serve_file(
         let raw_parent = parent_path_from(&path);
         let parent_path = raw_parent.trim_start_matches('/').to_string();
 
-        let size_display = get_file_size(&state.repos, db, &repo_id, &path)
+        let size_display = get_file_size(&state.repos, &repo_id, &path)
             .await
             .map(format_size)
             .unwrap_or_else(|_| "?".to_string());
@@ -791,7 +791,6 @@ async fn serve_file(
 /// Resolve a file's size from the FS tree without downloading its content.
 async fn get_file_size(
     repos: &crate::repository::Repositories,
-    db: &sea_orm::DatabaseConnection,
     repo_id: &str,
     path: &str,
 ) -> Result<i64, AppError> {
@@ -801,7 +800,7 @@ async fn get_file_size(
 
     if parent_path == "/" {
         // Root-level file: resolve from root's directory listing
-        let dir_data = crate::repo::read_fs_dir_data(db, repo_id, &head_root_id)
+        let dir_data = crate::repo::read_fs_dir_data(repos, repo_id, &head_root_id)
             .await
             .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
         return dir_data
@@ -812,11 +811,11 @@ async fn get_file_size(
             .ok_or_else(|| AppError::NotFound("File not found".to_string()));
     }
 
-    let parent_fs_id = crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
+    let parent_fs_id = crate::repo::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
         .await
         .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
-    let dir_data = crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id)
+    let dir_data = crate::repo::read_fs_dir_data(repos, repo_id, &parent_fs_id)
         .await
         .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
     dir_data

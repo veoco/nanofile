@@ -351,7 +351,7 @@ struct ZipEntry {
 }
 
 async fn collect_zip_entries(
-    db: &sea_orm::DatabaseConnection,
+    repos: &crate::repository::Repositories,
     repo_id: &str,
     root_fs_id: &str,
     dir_path: &str,
@@ -360,7 +360,7 @@ async fn collect_zip_entries(
     let dir_id = if dir_path == "/" {
         root_fs_id.to_string()
     } else {
-        resolve_fs_id(db, repo_id, root_fs_id, dir_path)
+        resolve_fs_id(repos, repo_id, root_fs_id, dir_path)
             .await
             .map_err(|_| AppError::NotFound("Directory not found".into()))?
     };
@@ -372,7 +372,7 @@ async fn collect_zip_entries(
         if fs_id == EMPTY_SHA1 {
             continue;
         }
-        let dir_data = match read_fs_dir_data(db, repo_id, &fs_id).await {
+        let dir_data = match read_fs_dir_data(repos, repo_id, &fs_id).await {
             Ok(d) => d,
             Err(_) => continue,
         };
@@ -386,7 +386,7 @@ async fn collect_zip_entries(
             if is_dir {
                 stack.push((dirent.id.clone(), entry_path));
             } else {
-                let file_data = match read_fs_file_data(db, repo_id, &dirent.id).await {
+                let file_data = match read_fs_file_data(repos, repo_id, &dirent.id).await {
                     Ok(f) => f,
                     Err(_) => continue,
                 };
@@ -505,7 +505,7 @@ pub async fn shared_dir_view(
             dir_name
         };
         let files = collect_zip_entries(
-            state.db.as_ref(),
+            &state.repos,
             &link.repo_id,
             &head_commit.root_id,
             &link.path,
@@ -555,7 +555,7 @@ pub async fn shared_dir_view(
         .ok_or_else(|| AppError::Internal("Head commit not found".into()))?;
 
     let dir_id = resolve_fs_id(
-        state.db.as_ref(),
+        &state.repos,
         &link.repo_id,
         &head_commit.root_id,
         &current_path,
@@ -563,7 +563,7 @@ pub async fn shared_dir_view(
     .await
     .map_err(|_| AppError::NotFound("Directory not found".into()))?;
 
-    let dir_data = read_fs_dir_data(state.db.as_ref(), &link.repo_id, &dir_id)
+    let dir_data = read_fs_dir_data(&state.repos, &link.repo_id, &dir_id)
         .await
         .map_err(|_| AppError::NotFound("Directory not found".into()))?;
 

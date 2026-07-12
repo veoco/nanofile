@@ -36,7 +36,6 @@ pub struct DirEntry {
 }
 
 async fn list_dir_from_fs_tree(
-    db: &sea_orm::DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     path: &str,
@@ -58,11 +57,11 @@ async fn list_dir_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    let dir_id = crate::repo::resolve_fs_id(db, repo_id, &head.root_id, path)
+    let dir_id = crate::repo::resolve_fs_id(repos, repo_id, &head.root_id, path)
         .await
         .map_err(|e| AppError::internal(format!("resolve_fs_id failed: {e}")))?;
 
-    let dir_data = crate::repo::read_fs_dir_data(db, repo_id, &dir_id)
+    let dir_data = crate::repo::read_fs_dir_data(repos, repo_id, &dir_id)
         .await
         .map_err(|e| AppError::internal(format!("read fs_dir_data failed: {e}")))?;
 
@@ -174,8 +173,7 @@ pub async fn batch_delete_handler(
 
     // Handle reloaddir=true
     if query.reloaddir.as_deref() == Some("true") {
-        let (_, entries) =
-            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, repo_id, &parent_dir).await?;
+        let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &parent_dir).await?;
         return Ok(Json(json!({"dir_listing": entries})).into_response());
     }
 
@@ -236,8 +234,7 @@ pub async fn batch_copy_handler(
         .collect();
 
     if query.reloaddir.as_deref() == Some("true") {
-        let (_, entries) =
-            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, repo_id, &dst_dir).await?;
+        let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &dst_dir).await?;
         return Ok(Json(json!({
             "results": json_results,
             "dir_listing": entries,
@@ -301,8 +298,7 @@ pub async fn batch_move_handler(
         .collect();
 
     if query.reloaddir.as_deref() == Some("true") {
-        let (_, entries) =
-            list_dir_from_fs_tree(state.db.as_ref(), &state.repos, repo_id, &dst_dir).await?;
+        let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &dst_dir).await?;
         return Ok(Json(json!({
             "results": json_results,
             "dir_listing": entries,

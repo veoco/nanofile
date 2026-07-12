@@ -4,7 +4,7 @@ use crate::events;
 use crate::repository::Repositories;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use crate::storage::DynBlockStorage;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::DatabaseConnection;
 
 /// Sentinel value indicating that no ancestor chain was pre-computed.
 /// Callers that don't have an ancestor chain pass this to
@@ -85,10 +85,10 @@ impl FileOps {
                 (empty_dir.compute_and_store(db, repo_id).await?, Vec::new())
             }
         } else {
-            Self::resolve_fs_id_chain(db, repo_id, parent_path).await?
+            Self::resolve_fs_id_chain(repos, repo_id, parent_path).await?
         };
 
-        let parent_data = Self::read_dir_fs_object(db, repo_id, &parent_fs_id).await?;
+        let parent_data = Self::read_dir_fs_object(repos, repo_id, &parent_fs_id).await?;
 
         let mut dirents = parent_data.dirents;
 
@@ -117,8 +117,15 @@ impl FileOps {
         let root_fs_id = if parent_path == "/" {
             new_dir_fs_id.clone()
         } else {
-            Self::walk_up_ancestors(db, repo_id, parent_path, &new_dir_fs_id, &ancestor_chain)
-                .await?
+            Self::walk_up_ancestors(
+                repos,
+                db,
+                repo_id,
+                parent_path,
+                &new_dir_fs_id,
+                &ancestor_chain,
+            )
+            .await?
         };
 
         let repo_model = repos.repo.find_by_id(repo_id).await?;
@@ -182,6 +189,7 @@ impl FileOps {
     /// `immediate_parent_path`'s parent. When provided, `resolve_fs_id` is
     /// avoided for each level, reducing O(d²) resolve to O(d).
     pub(crate) async fn walk_up_ancestors(
+        repos: &Repositories,
         db: &DatabaseConnection,
         repo_id: &str,
         immediate_parent_path: &str,
@@ -214,16 +222,17 @@ impl FileOps {
             // When ancestor_chain was provided, look up the parent_path
             // from the chain instead of re-resolving from root.
             let ancestor_fs_id = if parent_path == "/" {
-                Self::resolve_root_fs_id(db, repo_id).await?
+                Self::resolve_root_fs_id(repos, repo_id).await?
             } else {
                 match chain_map.get(parent_path.as_str()) {
                     Some(id) => id.to_string(),
-                    None => Self::resolve_fs_id(db, repo_id, &parent_path).await?,
+                    None => Self::resolve_fs_id(repos, repo_id, &parent_path).await?,
                 }
             };
 
             // Read ancestor's FsDirData
-            let mut ancestor_data = Self::read_dir_fs_object(db, repo_id, &ancestor_fs_id).await?;
+            let mut ancestor_data =
+                Self::read_dir_fs_object(repos, repo_id, &ancestor_fs_id).await?;
 
             // Find and update the child entry, or add if not present
             let mut found = false;
@@ -265,19 +274,20 @@ impl FileOps {
 
     /// Find the root fs_id via the repo's head commit.
     async fn resolve_root_fs_id(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let repo_model = repo::Entity::find_by_id(repo_id)
-            .one(db)
+        let repo_model = repos
+            .repo
+            .find_by_id(repo_id)
             .await?
             .ok_or_else(|| "repo not found".to_string())?;
         let head_commit_id = repo_model
             .head_commit_id
             .ok_or_else(|| "repo has no head commit".to_string())?;
-        let commit_ent = commit::Entity::find()
-            .filter(commit::Column::CommitId.eq(&head_commit_id))
-            .one(db)
+        let commit_ent = repos
+            .commit
+            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
             .await?
             .ok_or_else(|| "head commit not found".to_string())?;
         Ok(commit_ent.root_id)
@@ -285,20 +295,20 @@ impl FileOps {
 
     /// Resolve a path to its fs_id by walking the FS tree from root.
     async fn resolve_fs_id(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         path: &str,
     ) -> Result<String, Box<dyn std::error::Error>> {
         if path == "/" {
-            return Self::resolve_root_fs_id(db, repo_id).await;
+            return Self::resolve_root_fs_id(repos, repo_id).await;
         }
 
-        let root_fs_id = Self::resolve_root_fs_id(db, repo_id).await?;
+        let root_fs_id = Self::resolve_root_fs_id(repos, repo_id).await?;
         let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
         let mut current_fs_id = root_fs_id;
 
         for part in parts {
-            let dir_data = Self::read_dir_fs_object(db, repo_id, &current_fs_id).await?;
+            let dir_data = Self::read_dir_fs_object(repos, repo_id, &current_fs_id).await?;
             let found = dir_data
                 .dirents
                 .iter()
@@ -319,11 +329,11 @@ impl FileOps {
     /// This can be passed to `walk_up_ancestors` to avoid re-resolving
     /// each ancestor from root, reducing O(d²) to O(d).
     pub(crate) async fn resolve_fs_id_chain(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         path: &str,
     ) -> Result<(String, Vec<(String, String)>), Box<dyn std::error::Error>> {
-        let root_fs_id = Self::resolve_root_fs_id(db, repo_id).await?;
+        let root_fs_id = Self::resolve_root_fs_id(repos, repo_id).await?;
         if path == "/" || path.is_empty() {
             return Ok((root_fs_id, Vec::new()));
         }
@@ -337,7 +347,7 @@ impl FileOps {
             accumulated.push('/');
             accumulated.push_str(part);
 
-            let dir_data = Self::read_dir_fs_object(db, repo_id, &current_fs_id).await?;
+            let dir_data = Self::read_dir_fs_object(repos, repo_id, &current_fs_id).await?;
             let found = dir_data
                 .dirents
                 .iter()
@@ -372,7 +382,7 @@ impl FileOps {
         ancestor_chain: &[(String, String)],
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), Box<dyn std::error::Error>>,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let mut parent_data = Self::read_dir_fs_object(db, repo_id, parent_fs_id).await?;
+        let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
         let new_parent_fs_id = parent_data.compute_and_store(db, repo_id).await?;
@@ -380,8 +390,15 @@ impl FileOps {
         let root_fs_id = if parent_path == "/" {
             new_parent_fs_id.clone()
         } else {
-            Self::walk_up_ancestors(db, repo_id, parent_path, &new_parent_fs_id, ancestor_chain)
-                .await?
+            Self::walk_up_ancestors(
+                repos,
+                db,
+                repo_id,
+                parent_path,
+                &new_parent_fs_id,
+                ancestor_chain,
+            )
+            .await?
         };
 
         Self::create_commit(db, repos, repo_id, &root_fs_id, modifier, description).await?;
@@ -397,14 +414,14 @@ impl FileOps {
     /// to update several parts of the tree before creating a single commit.
     pub(crate) async fn update_dir_tree_no_commit(
         db: &DatabaseConnection,
-        _repos: &Repositories,
+        repos: &Repositories,
         repo_id: &str,
         parent_path: &str,
         parent_fs_id: &str,
         ancestor_chain: &[(String, String)],
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), Box<dyn std::error::Error>>,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let mut parent_data = Self::read_dir_fs_object(db, repo_id, parent_fs_id).await?;
+        let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
         let new_parent_fs_id = parent_data.compute_and_store(db, repo_id).await?;
@@ -412,8 +429,15 @@ impl FileOps {
         let root_fs_id = if parent_path == "/" {
             new_parent_fs_id.clone()
         } else {
-            Self::walk_up_ancestors(db, repo_id, parent_path, &new_parent_fs_id, ancestor_chain)
-                .await?
+            Self::walk_up_ancestors(
+                repos,
+                db,
+                repo_id,
+                parent_path,
+                &new_parent_fs_id,
+                ancestor_chain,
+            )
+            .await?
         };
 
         Ok(root_fs_id)
@@ -482,18 +506,18 @@ impl FileOps {
     }
 
     pub async fn read_dir_fs_object(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         fs_id: &str,
     ) -> Result<FsDirData, Box<dyn std::error::Error>> {
-        crate::repo::read_fs_dir_data(db, repo_id, fs_id).await
+        crate::repo::read_fs_dir_data(repos, repo_id, fs_id).await
     }
 
     pub async fn read_file_fs_object(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         fs_id: &str,
     ) -> Result<FsFileData, Box<dyn std::error::Error>> {
-        crate::repo::read_fs_file_data(db, repo_id, fs_id).await
+        crate::repo::read_fs_file_data(repos, repo_id, fs_id).await
     }
 }

@@ -1416,9 +1416,10 @@ async fn test_root_entry_child_id_stays_in_sync() {
     let root_fs_id = get_root_fs_id(&f).await;
 
     // Read the FsDirData at root_fs_id — must contain a, b, README.md
-    let root_data = server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_fs_id)
-        .await
-        .unwrap();
+    let root_data =
+        server::repo::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_fs_id)
+            .await
+            .unwrap();
     let root_names: Vec<&str> = root_data.dirents.iter().map(|d| d.name.as_str()).collect();
     assert!(
         root_names.contains(&"a"),
@@ -1459,7 +1460,7 @@ async fn test_root_entry_child_id_stays_in_sync() {
 
     // Verify new root contains all 5 entries
     let root_data_v2 =
-        server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_fs_id_v2)
+        server::repo::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_fs_id_v2)
             .await
             .unwrap();
     let root_names_v2: Vec<&str> = root_data_v2
@@ -1536,9 +1537,10 @@ async fn test_regression_rename_file_creates_new_commit() {
         "root fs_id must change after rename — FsDirData must be re-computed"
     );
 
-    let root_data = server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_after)
-        .await
-        .unwrap();
+    let root_data =
+        server::repo::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_after)
+            .await
+            .unwrap();
     let renamed_in_tree = root_data.dirents.iter().any(|d| d.name == "renamed.txt");
     let old_in_tree = root_data.dirents.iter().any(|d| d.name == "old_name.txt");
     assert!(
@@ -1620,9 +1622,10 @@ async fn test_regression_delete_file_creates_new_commit() {
 
     // CRITICAL: Verify root FsDirData no longer has the deleted file
     let root_fs_id = get_root_fs_id(&f).await;
-    let root_data = server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_fs_id)
-        .await
-        .unwrap();
+    let root_data =
+        server::repo::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_fs_id)
+            .await
+            .unwrap();
     assert!(
         !root_data.dirents.iter().any(|d| d.name == "delete_me.txt"),
         "root FsDirData must not contain 'delete_me.txt', got: {:?}",
@@ -1683,9 +1686,10 @@ async fn test_regression_rename_dir_creates_new_commit() {
     );
 
     // CRITICAL: Verify root FsDirData has the renamed directory name
-    let root_data = server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_after)
-        .await
-        .unwrap();
+    let root_data =
+        server::repo::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_after)
+            .await
+            .unwrap();
     let renamed_in_tree = root_data.dirents.iter().any(|d| d.name == "renamed_folder");
     let old_in_tree = root_data.dirents.iter().any(|d| d.name == "my_folder");
     assert!(
@@ -1764,9 +1768,10 @@ async fn test_regression_delete_dir_creates_new_commit() {
 
     // CRITICAL: Verify root FsDirData no longer has the deleted directory
     let root_fs_id = get_root_fs_id(&f).await;
-    let root_data = server::repo::read_fs_dir_data(f.server.db.as_ref(), &f.repo_id, &root_fs_id)
-        .await
-        .unwrap();
+    let root_data =
+        server::repo::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_fs_id)
+            .await
+            .unwrap();
     assert!(
         !root_data.dirents.iter().any(|d| d.name == "my_folder"),
         "root FsDirData must not contain 'my_folder', got: {:?}",

@@ -484,7 +484,7 @@ impl<'a> TrashService<'a> {
     /// Check whether a path exists in the current FS tree (i.e. the resolved
     /// fs_id from the repo's head commit actually exists).
     async fn path_exists_in_tree(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
         path: &str,
@@ -508,7 +508,7 @@ impl<'a> TrashService<'a> {
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-        match crate::repo::resolve_fs_id(db, repo_id, &head.root_id, path).await {
+        match crate::repo::resolve_fs_id(repos, repo_id, &head.root_id, path).await {
             Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
@@ -517,7 +517,7 @@ impl<'a> TrashService<'a> {
     /// Check whether a file/dir name already exists in a parent directory in
     /// the current FS tree.
     async fn name_exists_in_parent(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
         parent_path: &str,
@@ -540,13 +540,13 @@ impl<'a> TrashService<'a> {
 
         // Resolve parent directory fs_id
         let parent_fs_id =
-            match crate::repo::resolve_fs_id(db, repo_id, &head.root_id, parent_path).await {
+            match crate::repo::resolve_fs_id(repos, repo_id, &head.root_id, parent_path).await {
                 Ok(id) => id,
                 Err(_) => return Ok(false),
             };
 
         // Read parent directory entries
-        let parent_data = match crate::repo::read_fs_dir_data(db, repo_id, &parent_fs_id).await {
+        let parent_data = match crate::repo::read_fs_dir_data(repos, repo_id, &parent_fs_id).await {
             Ok(data) => data,
             Err(_) => return Ok(false),
         };
@@ -675,7 +675,9 @@ impl<'a> TrashService<'a> {
                 let parent_fs_id = if parent_dir == "/" {
                     head.root_id.clone()
                 } else {
-                    match crate::repo::resolve_fs_id(db, repo_id, &head.root_id, parent_dir).await {
+                    match crate::repo::resolve_fs_id(repos, repo_id, &head.root_id, parent_dir)
+                        .await
+                    {
                         Ok(id) => id,
                         Err(_) => {
                             failed.push(RevertFailedItem {

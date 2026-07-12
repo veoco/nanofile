@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use sea_orm::DatabaseConnection;
-
 use crate::common::EMPTY_SHA1;
 use crate::repo::fs_tree::read_fs_dir_data;
+use crate::repository::Repositories;
 use crate::serialization::fs_json::DirEntryData;
 
 /// A single file-system change detected by diffing two tree snapshots.
@@ -27,7 +26,7 @@ pub struct FsChange {
 /// and populate `out` with every entry's path → (DirEntryData).
 /// Directories are included too.
 async fn collect_entries(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     root_fs_id: &str,
     prefix: &str,
@@ -44,7 +43,7 @@ async fn collect_entries(
     }];
 
     while let Some(frame) = stack.pop() {
-        let dir = read_fs_dir_data(db, repo_id, &frame.fs_id).await?;
+        let dir = read_fs_dir_data(repos, repo_id, &frame.fs_id).await?;
         for entry in &dir.dirents {
             let entry_path = if frame.prefix.is_empty() {
                 format!("/{}", entry.name)
@@ -71,7 +70,7 @@ async fn collect_entries(
 /// commit or empty repo) – in that case every entry in the new tree is
 /// reported as `"create"`.
 pub async fn diff_trees(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     old_root_id: Option<&str>,
     new_root_id: &str,
@@ -83,7 +82,7 @@ pub async fn diff_trees(
 
     if no_old_tree {
         let mut entries = HashMap::new();
-        collect_entries(db, repo_id, new_root_id, "", &mut entries).await?;
+        collect_entries(repos, repo_id, new_root_id, "", &mut entries).await?;
         let mut changes: Vec<FsChange> = entries
             .into_iter()
             .map(|(path, entry)| {
@@ -107,8 +106,8 @@ pub async fn diff_trees(
 
     let mut old_entries: HashMap<String, DirEntryData> = HashMap::new();
     let mut new_entries: HashMap<String, DirEntryData> = HashMap::new();
-    collect_entries(db, repo_id, old_root, "", &mut old_entries).await?;
-    collect_entries(db, repo_id, new_root_id, "", &mut new_entries).await?;
+    collect_entries(repos, repo_id, old_root, "", &mut old_entries).await?;
+    collect_entries(repos, repo_id, new_root_id, "", &mut new_entries).await?;
 
     let mut changes = Vec::new();
 

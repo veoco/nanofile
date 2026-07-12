@@ -159,11 +159,11 @@ impl StarredService {
                 .await?
                 .ok_or_else(|| AppError::NotFound("Head commit not found.".into()))?;
 
-            let parent_fs_id = resolve_fs_id(db, repo_id, &head.root_id, parent_path)
+            let parent_fs_id = resolve_fs_id(&self.repos, repo_id, &head.root_id, parent_path)
                 .await
                 .map_err(|_| AppError::NotFound(format!("Item {path} not found.")))?;
 
-            let parent_data = read_fs_dir_data(db, repo_id, &parent_fs_id)
+            let parent_data = read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
                 .await
                 .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
 
@@ -317,7 +317,7 @@ async fn build_item_json(
 }
 
 async fn get_entry_mtime_or_deleted(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     repo: &crate::entity::repo::Model,
     entry: &crate::entity::starred_file::Model,
@@ -347,12 +347,13 @@ async fn get_entry_mtime_or_deleted(
         None => return (0, true),
     };
 
-    let parent_fs_id = match resolve_fs_id(db, &entry.repo_id, &head.root_id, parent_path).await {
+    let parent_fs_id = match resolve_fs_id(repos, &entry.repo_id, &head.root_id, parent_path).await
+    {
         Ok(id) => id,
         Err(_) => return (0, true),
     };
 
-    let parent_data = match read_fs_dir_data(db, &entry.repo_id, &parent_fs_id).await {
+    let parent_data = match read_fs_dir_data(repos, &entry.repo_id, &parent_fs_id).await {
         Ok(d) => d,
         Err(_) => return (0, true),
     };

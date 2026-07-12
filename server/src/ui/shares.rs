@@ -217,10 +217,14 @@ pub async fn create_share(
     let now = chrono::Utc::now().timestamp();
 
     // Determine s_type by walking the FS tree
-    let s_type =
-        crate::sharing::service::share::resolve_entry_type_raw(db, &form.repo_id, &form.path)
-            .await
-            .unwrap_or_else(|_| "f".to_string());
+    let s_type = crate::sharing::service::share::resolve_entry_type_raw(
+        db,
+        &state.repos,
+        &form.repo_id,
+        &form.path,
+    )
+    .await
+    .unwrap_or_else(|_| "f".to_string());
 
     let link = share_link::ActiveModel {
         id: sea_orm::NotSet,

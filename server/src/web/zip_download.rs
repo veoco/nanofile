@@ -18,7 +18,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::io::AsyncWriteExt;
-use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -29,6 +28,7 @@ use crate::auth::middleware::AuthUser;
 use crate::common::{EMPTY_SHA1, S_IFDIR};
 use crate::error::AppError;
 use crate::repo::fs_tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
+use crate::repository::Repositories;
 
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -120,7 +120,7 @@ async fn resolve_head_root(state: &AppState, repo_id: &str) -> Result<String, Ap
 /// `zip_prefix` is the path prefix that entries will have within the zip archive.
 /// For a top-level directory `/myfolder`, `zip_prefix` would be `"myfolder"`.
 async fn collect_files(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     root_fs_id: &str,
     dir_path: &str,
@@ -129,7 +129,7 @@ async fn collect_files(
     let dir_id = if dir_path == "/" {
         root_fs_id.to_string()
     } else {
-        resolve_fs_id(db, repo_id, root_fs_id, dir_path)
+        resolve_fs_id(repos, repo_id, root_fs_id, dir_path)
             .await
             .map_err(|e| AppError::NotFound(format!("Path not found: {e}")))?
     };
@@ -142,7 +142,7 @@ async fn collect_files(
             continue;
         }
 
-        let dir_data = match read_fs_dir_data(db, repo_id, &fs_id).await {
+        let dir_data = match read_fs_dir_data(repos, repo_id, &fs_id).await {
             Ok(d) => d,
             Err(_) => continue,
         };
@@ -162,7 +162,7 @@ async fn collect_files(
                 stack.push((dirent.id.clone(), entry_path));
             } else {
                 // Read file block IDs
-                let file_data = match read_fs_file_data(db, repo_id, &dirent.id).await {
+                let file_data = match read_fs_file_data(repos, repo_id, &dirent.id).await {
                     Ok(f) => f,
                     Err(_) => continue,
                 };
@@ -183,18 +183,18 @@ async fn collect_files(
 ///
 /// For each name, if it is a directory the whole subtree is included.
 async fn collect_selected_files(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     root_fs_id: &str,
     parent_dir: &str,
     dirents: &[String],
 ) -> Result<Vec<ZipFileEntry>, AppError> {
     // Resolve parent_dir to get the listing of items within it
-    let parent_dir_id = resolve_fs_id(db, repo_id, root_fs_id, parent_dir)
+    let parent_dir_id = resolve_fs_id(repos, repo_id, root_fs_id, parent_dir)
         .await
         .map_err(|e| AppError::NotFound(format!("Parent dir not found: {e}")))?;
 
-    let dir_data = read_fs_dir_data(db, repo_id, &parent_dir_id)
+    let dir_data = read_fs_dir_data(repos, repo_id, &parent_dir_id)
         .await
         .map_err(|e| AppError::NotFound(format!("Not a directory: {e}")))?;
 
@@ -217,11 +217,11 @@ async fn collect_selected_files(
             } else {
                 format!("{parent_dir}/{name}")
             };
-            let sub_files = collect_files(db, repo_id, root_fs_id, &dir_path, name).await?;
+            let sub_files = collect_files(repos, repo_id, root_fs_id, &dir_path, name).await?;
             all_files.extend(sub_files);
         } else {
             // Single file
-            let file_data = read_fs_file_data(db, repo_id, &entry.id)
+            let file_data = read_fs_file_data(repos, repo_id, &entry.id)
                 .await
                 .map_err(|_| AppError::NotFound(format!("File data not found: {name}")))?;
 
@@ -343,7 +343,7 @@ pub async fn zip_task_handler(
 
     // Collect files (recursively for directories)
     let files = collect_selected_files(
-        db,
+        &state.repos,
         &repo_id,
         &root_fs_id,
         &payload.parent_dir,

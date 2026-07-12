@@ -14,6 +14,7 @@ use crate::storage;
 /// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
     db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     path: &str,
 ) -> Result<String, AppError> {
@@ -40,12 +41,12 @@ pub async fn resolve_entry_type_raw(
     let parent_fs_id = if parent_path.is_empty() {
         head_commit.root_id.clone()
     } else {
-        resolve_fs_id(db, repo_id, &head_commit.root_id, parent_path)
+        resolve_fs_id(repos, repo_id, &head_commit.root_id, parent_path)
             .await
             .map_err(|_| AppError::NotFound("path not found".into()))?
     };
 
-    let dir_data = read_fs_dir_data(db, repo_id, &parent_fs_id)
+    let dir_data = read_fs_dir_data(repos, repo_id, &parent_fs_id)
         .await
         .map_err(|_| AppError::NotFound("path not found".into()))?;
 
@@ -172,7 +173,7 @@ pub async fn create_share_link(
     // Verify caller has read permission on the repo
     storage::check_repo_read_permission(db, repo_id, creator_id).await?;
 
-    let s_type = resolve_entry_type_raw(db, repo_id, path).await?;
+    let s_type = resolve_entry_type_raw(db, repos, repo_id, path).await?;
 
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
@@ -261,7 +262,7 @@ pub async fn create_share_link_v21(
     // Verify caller has read permission on the repo
     storage::check_repo_read_permission(db, repo_id, creator_id).await?;
 
-    let s_type = resolve_entry_type_raw(db, repo_id, path).await?;
+    let s_type = resolve_entry_type_raw(db, repos, repo_id, path).await?;
 
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
