@@ -70,15 +70,15 @@ impl MigrationTrait for Migration {
             use std::io::Write;
             let mut encoder =
                 flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-            if encoder.write_all(data.as_bytes()).is_ok() {
-                if let Ok(compressed) = encoder.finish() {
-                    db.execute(Statement::from_sql_and_values(
-                        backend,
-                        "UPDATE fs_objects SET data = ? WHERE id = ?",
-                        [compressed.into(), id.into()],
-                    ))
-                    .await?;
-                }
+            if encoder.write_all(data.as_bytes()).is_ok()
+                && let Ok(compressed) = encoder.finish()
+            {
+                db.execute(Statement::from_sql_and_values(
+                    backend,
+                    "UPDATE fs_objects SET data = ? WHERE id = ?",
+                    [compressed.into(), id.into()],
+                ))
+                .await?;
             }
         }
 
