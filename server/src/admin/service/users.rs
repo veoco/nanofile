@@ -51,8 +51,7 @@ impl<'a> AdminUserService<'a> {
 
     /// Compute the total storage used by a user (sum of owned repo sizes).
     pub async fn compute_usage(&self, user_id: i32) -> Result<i64, AppError> {
-        let owned_repos = self.repos.repo.find_by_owner_id(user_id).await?;
-        Ok(owned_repos.iter().map(|r| r.size).sum())
+        self.repos.compute_user_usage(user_id).await
     }
 
     /// Create a new user (password should already be hashed).

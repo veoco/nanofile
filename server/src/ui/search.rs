@@ -4,7 +4,7 @@ use axum::{
     extract::{Query, State},
     response::Html,
 };
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -74,7 +74,7 @@ pub async fn search_page(
         (Vec::new(), 0, false)
     } else {
         let db = state.db.as_ref();
-        let repo_ids = get_accessible_repo_ids(db, user.user_id, None).await?;
+        let repo_ids = get_accessible_repo_ids(&state.repos, user.user_id, None).await?;
         let mut seen = std::collections::HashSet::new();
         let mut all_results: Vec<SearchResultItem> = Vec::new();
 
@@ -93,7 +93,9 @@ pub async fn search_page(
                 if !seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
                     continue;
                 }
-                if let Some(item) = resolve_file_metadata(db, found_repo_id, found_fullpath).await {
+                if let Some(item) =
+                    resolve_file_metadata(&state.repos, db, found_repo_id, found_fullpath).await
+                {
                     all_results.push(item);
                 }
             }
@@ -102,10 +104,7 @@ pub async fn search_page(
         // Phase 2: Filename search via FS tree walk (fallback for repos
         // not covered by the index, or when the indexer is disabled).
         for repo_id in &repo_ids {
-            let repo_record = match crate::entity::repo::Entity::find_by_id(repo_id)
-                .one(db)
-                .await
-            {
+            let repo_record = match state.repos.repo.find_by_id(repo_id).await {
                 Ok(Some(r)) => r,
                 _ => continue,
             };
@@ -115,10 +114,10 @@ pub async fn search_page(
                 None => continue,
             };
 
-            let head = match crate::entity::commit::Entity::find()
-                .filter(crate::entity::commit::Column::RepoId.eq(repo_id))
-                .filter(crate::entity::commit::Column::CommitId.eq(&head_commit_id))
-                .one(db)
+            let head = match state
+                .repos
+                .commit
+                .find_by_repo_and_commit_id(repo_id, &head_commit_id)
                 .await
             {
                 Ok(Some(h)) => h,
@@ -159,8 +158,7 @@ pub async fn search_page(
         (results, total, has_more)
     };
 
-    let left_panel_repos =
-        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+    let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = SearchTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email.clone(),
@@ -185,19 +183,16 @@ pub async fn search_page(
 /// Resolve file metadata from DB to build a SearchResultItem for a
 /// (repo_id, fullpath) pair discovered by full-text search.
 async fn resolve_file_metadata(
+    repos: &crate::repository::Repositories,
     db: &DatabaseConnection,
     repo_id: &str,
     fullpath: &str,
 ) -> Option<SearchResultItem> {
-    let repo_record = crate::entity::repo::Entity::find_by_id(repo_id)
-        .one(db)
-        .await
-        .ok()??;
+    let repo_record = repos.repo.find_by_id(repo_id).await.ok()??;
     let head_commit_id = repo_record.head_commit_id.as_ref()?;
-    let head = crate::entity::commit::Entity::find()
-        .filter(crate::entity::commit::Column::RepoId.eq(repo_id))
-        .filter(crate::entity::commit::Column::CommitId.eq(head_commit_id))
-        .one(db)
+    let head = repos
+        .commit
+        .find_by_repo_and_commit_id(repo_id, head_commit_id)
         .await
         .ok()??;
     let root_id = &head.root_id;
@@ -264,19 +259,13 @@ async fn resolve_file_metadata(
 }
 
 async fn get_accessible_repo_ids(
-    db: &DatabaseConnection,
+    repos: &crate::repository::Repositories,
     user_id: i32,
     _repo_id_filter: Option<&str>,
 ) -> Result<Vec<String>, AppError> {
-    let member_repos = crate::entity::repo_member::Entity::find()
-        .filter(crate::entity::repo_member::Column::UserId.eq(user_id))
-        .all(db)
-        .await?;
+    let member_repos = repos.member.find_by_user_id(user_id).await?;
 
-    let owned_repos = crate::entity::repo::Entity::find()
-        .filter(crate::entity::repo::Column::OwnerId.eq(user_id))
-        .all(db)
-        .await?;
+    let owned_repos = repos.repo.find_by_owner_id(user_id).await?;
 
     let mut ids: Vec<String> = member_repos
         .into_iter()

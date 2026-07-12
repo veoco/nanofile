@@ -32,6 +32,7 @@ use tantivy::tokenizer::TextAnalyzer;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::AppError;
+use crate::repository::Repositories;
 use crate::storage::DynBlockStorage;
 
 // ── Schema field names ────────────────────────────────────────────────
@@ -77,6 +78,7 @@ pub struct TextIndexer {
     writer: Arc<Mutex<tantivy::IndexWriter<TantivyDocument>>>,
     schema: Schema,
     reader: tantivy::IndexReader,
+    repos: Option<Arc<Repositories>>,
 }
 
 impl TextIndexer {
@@ -84,7 +86,7 @@ impl TextIndexer {
     ///
     /// Registers the `jieba` Chinese tokenizer. Returns an error if the
     /// directory cannot be created or the index is incompatible.
-    pub fn new(index_dir: &Path) -> Result<Self, AppError> {
+    pub fn new(index_dir: &Path, repos: Option<Arc<Repositories>>) -> Result<Self, AppError> {
         std::fs::create_dir_all(index_dir)
             .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
 
@@ -157,7 +159,14 @@ impl TextIndexer {
             writer: writer_arc,
             schema,
             reader,
+            repos,
         })
+    }
+
+    fn repos(&self) -> &Repositories {
+        self.repos
+            .as_ref()
+            .expect("TextIndexer::repos: Repositories not set (did you use the test constructor?)")
     }
 
     /// Index a file's text content.
@@ -302,6 +311,7 @@ impl TextIndexer {
 
         // Read file content from block storage.
         let data = match crate::repo::download::Downloader::download_file(
+            self.repos(),
             db,
             repo_id,
             fullpath,
@@ -720,7 +730,7 @@ mod tests {
     #[tokio::test]
     async fn test_index_and_search() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path())?;
+        let indexer = TextIndexer::new(dir.path(), None)?;
 
         indexer.index_file(
             "repo-1",
@@ -752,7 +762,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_filter_by_repo() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path())?;
+        let indexer = TextIndexer::new(dir.path(), None)?;
 
         indexer.index_file("repo-1", "/a.txt", "a.txt", "alpha")?;
         indexer.index_file("repo-2", "/b.txt", "b.txt", "beta")?;
@@ -774,7 +784,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_file() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path())?;
+        let indexer = TextIndexer::new(dir.path(), None)?;
 
         indexer.index_file("repo-1", "/hello.txt", "hello.txt", "Hello World")?;
         indexer.commit()?;
@@ -791,7 +801,7 @@ mod tests {
     #[tokio::test]
     async fn test_index_update_replaces() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path())?;
+        let indexer = TextIndexer::new(dir.path(), None)?;
 
         indexer.index_file("repo-1", "/file.txt", "file.txt", "old content")?;
         indexer.commit()?;
@@ -814,7 +824,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_pagination() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path())?;
+        let indexer = TextIndexer::new(dir.path(), None)?;
 
         for i in 0..10 {
             let name = format!("file-{}.txt", i);

@@ -350,7 +350,13 @@ pub async fn update_branch(
         // full BFS traversal of every file.  When `size_delta` is 0 and
         // there's no prior size (first commit), `adjust_repo_size` falls
         // back to `compute_repo_size()` automatically.
-        crate::repo::adjust_repo_size(state.db.as_ref(), &repo_id, check_result.size_delta).await?;
+        crate::repo::adjust_repo_size(
+            state.db.as_ref(),
+            &state.repos,
+            &repo_id,
+            check_result.size_delta,
+        )
+        .await?;
 
         // Compute tree diff and log activities for changed files/dirs,
         // matching the original seafevents commit-diff behaviour so that

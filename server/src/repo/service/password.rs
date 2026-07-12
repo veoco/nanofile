@@ -1,4 +1,4 @@
-use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
+use sea_orm::Set;
 
 use crate::error::AppError;
 use crate::repository::Repositories;
@@ -70,7 +70,6 @@ impl PasswordService {
     pub async fn change_password(
         password_manager: &crate::crypto::password_manager::PasswordManager,
         repos: &Repositories,
-        db: &DatabaseConnection,
         repo_id: &str,
         user_id: i32,
         old_password: &str,
@@ -149,7 +148,7 @@ impl PasswordService {
         active.magic = Set(Some(new_magic));
         active.random_key = Set(Some(new_random_key_hex));
         active.updated_at = Set(chrono::Utc::now().timestamp());
-        active.update(db).await?;
+        repos.repo.update(active).await?;
 
         // Remove cached old password
         password_manager.remove_password(repo_id, user_id).await;

@@ -1,4 +1,3 @@
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -30,7 +29,7 @@ pub struct DirChange {
 
 /// Walk an FS tree and collect all file paths with their size info.
 async fn collect_files(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     root_id: &str,
     prefix: &str,
@@ -45,10 +44,9 @@ async fn collect_files(
         return Ok(()); // Already visited this dir
     }
 
-    let obj = crate::entity::fs_object::Entity::find()
-        .filter(crate::entity::fs_object::Column::RepoId.eq(repo_id))
-        .filter(crate::entity::fs_object::Column::FsId.eq(root_id))
-        .one(db)
+    let obj = repos
+        .fs_object
+        .find_by_repo_and_fs_id(repo_id, root_id)
         .await?
         .ok_or_else(|| AppError::NotFound("fs object not found".into()))?;
 
@@ -75,7 +73,7 @@ async fn collect_files(
             } else if entry.mode == S_IFDIR {
                 // Directory entry - recurse
                 Box::pin(collect_files(
-                    db,
+                    repos,
                     repo_id,
                     &entry.id,
                     &child_path,
@@ -101,7 +99,6 @@ impl HistoryService {
     /// This compares the FS objects of the commit's root directory against
     /// those of its parent commit (or returns all files for the initial commit).
     pub async fn get_history_changes(
-        db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
         commit_id: &str,
@@ -123,7 +120,7 @@ impl HistoryService {
         // Collect files from the current commit
         let mut current_files: HashMap<String, i64> = HashMap::new();
         Box::pin(collect_files(
-            db,
+            repos,
             repo_id,
             &c.root_id,
             "/",
@@ -142,7 +139,7 @@ impl HistoryService {
 
             let mut parent_files: HashMap<String, i64> = HashMap::new();
             Box::pin(collect_files(
-                db,
+                repos,
                 repo_id,
                 &parent_commit.root_id,
                 "/",

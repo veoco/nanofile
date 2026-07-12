@@ -40,8 +40,7 @@ pub async fn check_upload_quota(
     }
 
     // Compute current usage (sum of owned repo sizes).
-    let owned_repos = repos.repo.find_by_owner_id(user_id).await?;
-    let usage: i64 = owned_repos.iter().map(|r| r.size).sum();
+    let usage = repos.compute_user_usage(user_id).await?;
 
     if usage + delta > quota {
         return Err(AppError::QuotaExceeded);

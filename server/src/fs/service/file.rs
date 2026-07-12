@@ -24,6 +24,7 @@ pub struct UploadedFile {
 
 pub(crate) async fn rename_file_entry(
     db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     path: &str,
     new_name: &str,
@@ -53,6 +54,7 @@ pub(crate) async fn rename_file_entry(
 
     FileOps::update_dir_tree_and_commit(
         db,
+        repos,
         repo_id,
         parent_path,
         &parent_fs_id,
@@ -261,7 +263,7 @@ impl FileService {
         };
 
         let old_size = if replace {
-            crate::repo::get_entry_total_size(self.db(), repo_id, &file_path)
+            crate::repo::get_entry_total_size(self.db(), &self.repos, repo_id, &file_path)
                 .await
                 .ok()
                 .unwrap_or(0)
@@ -281,6 +283,7 @@ impl FileService {
         let db = self.db();
         FileOps::create_file(
             db,
+            &self.repos,
             repo_id,
             &parent_dir,
             &file_name,
@@ -299,7 +302,8 @@ impl FileService {
         )
         .await;
 
-        crate::repo::adjust_repo_size(db, repo_id, file_data.len() as i64 - old_size).await?;
+        crate::repo::adjust_repo_size(db, &self.repos, repo_id, file_data.len() as i64 - old_size)
+            .await?;
 
         if let Some(indexer) = &self.indexer {
             let full_path = if parent_dir.ends_with('/') {
@@ -334,7 +338,7 @@ impl FileService {
         let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
         let parent_path = parent_path_from(path);
 
-        let deleted_size = crate::repo::get_entry_total_size(db, repo_id, path)
+        let deleted_size = crate::repo::get_entry_total_size(db, &self.repos, repo_id, path)
             .await
             .ok()
             .unwrap_or(0);
@@ -349,6 +353,7 @@ impl FileService {
 
         FileOps::update_dir_tree_and_commit(
             db,
+            &self.repos,
             repo_id,
             parent_path,
             &parent_fs_id,
@@ -369,7 +374,7 @@ impl FileService {
             tracing::warn!("Failed to delete index for {path}: {e}");
         }
 
-        crate::repo::adjust_repo_size(db, repo_id, -deleted_size).await?;
+        crate::repo::adjust_repo_size(db, &self.repos, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
             db, repo_id, "delete", "file", path, user_id, None, None, None, None, None,
@@ -388,7 +393,16 @@ impl FileService {
         email: &str,
         user_id: i32,
     ) -> Result<(), AppError> {
-        rename_file_entry(self.db(), repo_id, path, new_name, email, user_id).await?;
+        rename_file_entry(
+            self.db(),
+            &self.repos,
+            repo_id,
+            path,
+            new_name,
+            email,
+            user_id,
+        )
+        .await?;
 
         if let Some(indexer) = &self.indexer {
             let new_fullpath = if path == "/" || path.is_empty() {
@@ -454,6 +468,7 @@ impl FileService {
 
         let intermediate_root = FileOps::update_dir_tree_no_commit(
             db,
+            &self.repos,
             repo_id,
             parent_path,
             &old_parent_fs_id,
@@ -468,6 +483,7 @@ impl FileService {
 
         FileOps::create_commit(
             db,
+            &self.repos,
             repo_id,
             &intermediate_root,
             email,
@@ -489,6 +505,7 @@ impl FileService {
         let file_name_clone = file_name.to_string();
         FileOps::update_dir_tree_and_commit(
             db,
+            &self.repos,
             repo_id,
             &new_parent_path,
             &new_dst_fs_id,
@@ -715,7 +732,7 @@ impl FileService {
         let file_fs_id = file_fs_data.compute_and_store(db, repo_id).await?;
 
         let parent_fs_id = if parent_path == "/" {
-            match get_head_root_id_no_err(db, &self.repos, repo_id).await? {
+            match get_head_root_id_no_err(&self.repos, repo_id).await? {
                 Some(root_id) => root_id,
                 None => {
                     let empty_dir = FsDirData {
@@ -727,7 +744,7 @@ impl FileService {
                 }
             }
         } else {
-            let head_root_id = get_head_root_id_no_err(db, &self.repos, repo_id)
+            let head_root_id = get_head_root_id_no_err(&self.repos, repo_id)
                 .await?
                 .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
             crate::repo::resolve_fs_id(db, repo_id, &head_root_id, parent_path)
@@ -739,6 +756,7 @@ impl FileService {
         let file_name_clone = file_name.to_string();
         FileOps::update_dir_tree_and_commit(
             db,
+            &self.repos,
             repo_id,
             parent_path,
             &parent_fs_id,
@@ -788,7 +806,6 @@ impl FileService {
 
 /// Like get_head_root_id but returns None instead of error on empty repo.
 async fn get_head_root_id_no_err(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
 ) -> Result<Option<String>, AppError> {

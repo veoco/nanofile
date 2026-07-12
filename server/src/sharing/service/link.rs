@@ -210,7 +210,7 @@ pub async fn delete_upload_link_v21_by_token(
 }
 
 pub async fn get_upload_link_v21(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     token: &str,
 ) -> Result<serde_json::Value, AppError> {
@@ -221,8 +221,9 @@ pub async fn get_upload_link_v21(
         .ok_or_else(|| AppError::NotFound("Upload link not found".into()))?;
 
     // Check if repo still exists
-    let repo_model = crate::entity::repo::Entity::find_by_id(&link.repo_id)
-        .one(db)
+    let repo_model = repos
+        .repo
+        .find_by_id(&link.repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Upload link not found".into()))?;
 
@@ -288,15 +289,16 @@ pub async fn update_upload_link_v21(
 }
 
 pub async fn list_upload_links_for_repo_v21(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let links = repos.upload_link.find_by_repo_id(repo_id).await?;
 
     // Look up repo name
-    let repo_name = crate::entity::repo::Entity::find_by_id(repo_id)
-        .one(db)
+    let repo_name = repos
+        .repo
+        .find_by_id(repo_id)
         .await?
         .map(|r| r.name)
         .unwrap_or_default();
@@ -335,7 +337,7 @@ pub async fn list_upload_links_for_repo_v21(
 }
 
 pub async fn clean_invalid_upload_links_v21(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     user_id: i32,
 ) -> Result<i32, AppError> {
@@ -354,10 +356,7 @@ pub async fn clean_invalid_upload_links_v21(
 
         // Check if repo still exists
         if !should_delete {
-            let repo_exists = crate::entity::repo::Entity::find_by_id(&link.repo_id)
-                .one(db)
-                .await?
-                .is_some();
+            let repo_exists = repos.repo.find_by_id(&link.repo_id).await?.is_some();
             if !repo_exists {
                 should_delete = true;
             }

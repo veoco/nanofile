@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait};
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::activity_log;
 use crate::common::DirEntry;
@@ -178,7 +178,7 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
 /// Create a directory at the given path.
 pub(crate) async fn create_dir_by_path(
     db: &DatabaseConnection,
-    _repos: &Repositories,
+    repos: &Repositories,
     email: &str,
     user_id: i32,
     repo_id: &str,
@@ -230,6 +230,7 @@ pub(crate) async fn create_dir_by_path(
     let dir_name_clone = dir_name.to_string();
     FileOps::update_dir_tree_and_commit(
         db,
+        repos,
         repo_id,
         &parent_path,
         &parent_fs_id,
@@ -275,6 +276,7 @@ async fn read_fs_dir_data(
 
 async fn rename_dir_entry(
     db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     path: &str,
     new_name: &str,
@@ -301,6 +303,7 @@ async fn rename_dir_entry(
 
     FileOps::update_dir_tree_and_commit(
         db,
+        repos,
         repo_id,
         parent_path,
         &parent_fs_id,
@@ -416,7 +419,16 @@ impl DirService {
         modifier: &str,
         user_id: i32,
     ) -> Result<(), AppError> {
-        rename_dir_entry(self.db(), repo_id, path, new_name, modifier, user_id).await
+        rename_dir_entry(
+            self.db(),
+            &self.repos,
+            repo_id,
+            path,
+            new_name,
+            modifier,
+            user_id,
+        )
+        .await
     }
 
     /// Delete a directory.
@@ -431,7 +443,7 @@ impl DirService {
         let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
         let parent_path = parent_path_from(path);
 
-        let deleted_size = crate::repo::get_entry_total_size(db, repo_id, path)
+        let deleted_size = crate::repo::get_entry_total_size(db, &self.repos, repo_id, path)
             .await
             .ok()
             .unwrap_or(0);
@@ -446,6 +458,7 @@ impl DirService {
 
         FileOps::update_dir_tree_and_commit(
             db,
+            &self.repos,
             repo_id,
             parent_path,
             &parent_fs_id,
@@ -460,7 +473,7 @@ impl DirService {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        crate::repo::adjust_repo_size(db, repo_id, -deleted_size).await?;
+        crate::repo::adjust_repo_size(db, &self.repos, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
             db, repo_id, "delete", "dir", path, user_id, None, None, None, None, None,
@@ -513,6 +526,7 @@ impl DirService {
 
         let intermediate_root = FileOps::update_dir_tree_no_commit(
             db,
+            &self.repos,
             repo_id,
             parent_path,
             &old_parent_fs_id,
@@ -527,6 +541,7 @@ impl DirService {
 
         FileOps::create_commit(
             db,
+            &self.repos,
             repo_id,
             &intermediate_root,
             email,
@@ -548,6 +563,7 @@ impl DirService {
         let dir_name_clone = dir_name.to_string();
         FileOps::update_dir_tree_and_commit(
             db,
+            &self.repos,
             repo_id,
             &new_parent_path,
             &new_dst_fs_id,
@@ -660,22 +676,24 @@ impl DirService {
             created_at: sea_orm::Set(now),
             updated_at: sea_orm::Set(now),
         };
-        repo::Entity::insert(model).exec(db).await?;
+        self.repos.repo.create(model).await?;
 
-        repo_member::Entity::insert(repo_member::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: sea_orm::Set(new_repo_id.clone()),
-            user_id: sea_orm::Set(user_id),
-            permission: sea_orm::Set("rw".to_string()),
-            created_at: sea_orm::Set(now),
-        })
-        .exec(db)
-        .await?;
+        self.repos
+            .member
+            .create(repo_member::ActiveModel {
+                id: sea_orm::NotSet,
+                repo_id: sea_orm::Set(new_repo_id.clone()),
+                user_id: sea_orm::Set(user_id),
+                permission: sea_orm::Set("rw".to_string()),
+                created_at: sea_orm::Set(now),
+            })
+            .await?;
 
-        copy_fs_tree(db, &self.repos, repo_id, &new_repo_id, &source_dir_fs_id).await?;
+        copy_fs_tree(&self.repos, repo_id, &new_repo_id, &source_dir_fs_id).await?;
 
         FileOps::create_commit(
             db,
+            &self.repos,
             &new_repo_id,
             &source_dir_fs_id,
             email,
@@ -732,7 +750,7 @@ impl DirService {
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
-        let deleted_size: i64 = crate::repo::get_entry_total_size(db, repo_id, path)
+        let deleted_size: i64 = crate::repo::get_entry_total_size(db, &self.repos, repo_id, path)
             .await
             .unwrap_or_default();
 
@@ -764,6 +782,7 @@ impl DirService {
 
         FileOps::update_dir_tree_and_commit(
             db,
+            &self.repos,
             repo_id,
             parent_path,
             &parent_fs_id,
@@ -785,7 +804,7 @@ impl DirService {
             tracing::warn!("Failed to delete index for {path}: {e}");
         }
 
-        crate::repo::adjust_repo_size(db, repo_id, -deleted_size).await?;
+        crate::repo::adjust_repo_size(db, &self.repos, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
             db, repo_id, "delete", obj, path, user_id, None, None, None, None, None,
@@ -1001,7 +1020,6 @@ impl DirService {
 
 /// Copy all reachable fs_objects from one repo to another.
 async fn copy_fs_tree(
-    db: &DatabaseConnection,
     repos: &Repositories,
     src_repo_id: &str,
     dst_repo_id: &str,
@@ -1023,15 +1041,16 @@ async fn copy_fs_tree(
             .exists_by_repo_and_fs_id(dst_repo_id, &fs_id)
             .await?;
         if !exists {
-            crate::entity::fs_object::Entity::insert(crate::entity::fs_object::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: sea_orm::Set(dst_repo_id.to_string()),
-                fs_id: sea_orm::Set(fs_id.clone()),
-                obj_type: sea_orm::Set(obj.obj_type),
-                data: sea_orm::Set(obj.data.clone()),
-            })
-            .exec(db)
-            .await?;
+            repos
+                .fs_object
+                .insert_many(vec![crate::entity::fs_object::ActiveModel {
+                    id: sea_orm::NotSet,
+                    repo_id: sea_orm::Set(dst_repo_id.to_string()),
+                    fs_id: sea_orm::Set(fs_id.clone()),
+                    obj_type: sea_orm::Set(obj.obj_type),
+                    data: sea_orm::Set(obj.data.clone()),
+                }])
+                .await?;
         }
 
         if obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 {

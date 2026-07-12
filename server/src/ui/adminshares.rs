@@ -210,7 +210,7 @@ pub async fn list_all_shares(
     ));
 
     let left_panel_repos =
-        match crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await {
+        match crate::repo::load_left_panel_repos(&state.repos, user.user_id).await {
             Ok(r) => r,
             Err(e) => return AppError::internal(e.to_string()).into_response(),
         };

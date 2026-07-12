@@ -192,7 +192,7 @@ pub async fn create_share_link(
         view_cnt: Set(0i64),
         description: Set(None),
     };
-    share_link::Entity::insert(model).exec(db).await?;
+    repos.share_link.insert(model).await?;
 
     let link = if s_type == "d" {
         format!("/d/{}/", token)
@@ -266,21 +266,22 @@ pub async fn create_share_link_v21(
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
 
-    share_link::Entity::insert(share_link::ActiveModel {
-        id: sea_orm::NotSet,
-        repo_id: Set(repo_id.to_string()),
-        creator_id: Set(creator_id),
-        path: Set(path.to_string()),
-        token: Set(token.clone()),
-        password: Set(password.map(|p| hash_password(p, config.auth.password_hash_iterations))),
-        expires_at: Set(expire_days.map(|d| now + d * 86400)),
-        created_at: Set(now),
-        s_type: Set(s_type.clone()),
-        view_cnt: Set(0i64),
-        description: Set(description.map(|s| s.to_string())),
-    })
-    .exec(db)
-    .await?;
+    repos
+        .share_link
+        .insert(share_link::ActiveModel {
+            id: sea_orm::NotSet,
+            repo_id: Set(repo_id.to_string()),
+            creator_id: Set(creator_id),
+            path: Set(path.to_string()),
+            token: Set(token.clone()),
+            password: Set(password.map(|p| hash_password(p, config.auth.password_hash_iterations))),
+            expires_at: Set(expire_days.map(|d| now + d * 86400)),
+            created_at: Set(now),
+            s_type: Set(s_type.clone()),
+            view_cnt: Set(0i64),
+            description: Set(description.map(|s| s.to_string())),
+        })
+        .await?;
 
     Ok(CreateShareLinkResult { token, s_type })
 }
@@ -301,7 +302,7 @@ pub async fn delete_share_link_v21(
 pub async fn update_share_link_v21(
     db: &DatabaseConnection,
     config: &Config,
-    _repos: &Repositories,
+    repos: &Repositories,
     token: &str,
     user_id: i32,
     password: Option<Option<String>>,
@@ -311,12 +312,14 @@ pub async fn update_share_link_v21(
     let now = chrono::Utc::now().timestamp();
 
     // Find and validate ownership
-    let link = share_link::Entity::find()
-        .filter(share_link::Column::Token.eq(token))
-        .filter(share_link::Column::CreatorId.eq(user_id))
-        .one(db)
+    let link = repos
+        .share_link
+        .find_by_token(token)
         .await?
         .ok_or_else(|| AppError::NotFound("Share link not found".into()))?;
+    if link.creator_id != user_id {
+        return Err(AppError::NotFound("Share link not found".into()));
+    }
 
     let mut active: share_link::ActiveModel = link.into();
 
@@ -394,15 +397,16 @@ pub async fn beshare_repo(
     let now = chrono::Utc::now().timestamp();
     let perm = permission.unwrap_or("rw").to_string();
 
-    repo_member::Entity::insert(repo_member::ActiveModel {
-        id: sea_orm::NotSet,
-        repo_id: Set(repo_id.to_string()),
-        user_id: Set(target_user.id),
-        permission: Set(perm.clone()),
-        created_at: Set(now),
-    })
-    .exec(db)
-    .await?;
+    repos
+        .member
+        .create(repo_member::ActiveModel {
+            id: sea_orm::NotSet,
+            repo_id: Set(repo_id.to_string()),
+            user_id: Set(target_user.id),
+            permission: Set(perm.clone()),
+            created_at: Set(now),
+        })
+        .await?;
 
     // Send WebSocket notification about the share change.
     if let Some(mgr) = notification_manager {

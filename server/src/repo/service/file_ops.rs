@@ -1,9 +1,10 @@
 use crate::crypto::random_key::encrypt_block;
 use crate::entity::{commit, repo};
 use crate::events;
+use crate::repository::Repositories;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use crate::storage::DynBlockStorage;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 /// Sentinel value indicating that no ancestor chain was pre-computed.
 /// Callers that don't have an ancestor chain pass this to
@@ -18,6 +19,7 @@ impl FileOps {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_file(
         db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         parent_path: &str,
         name: &str,
@@ -66,11 +68,11 @@ impl FileOps {
         // walk_up_ancestors to avoid O(d²) re-resolution.
         let (parent_fs_id, ancestor_chain) = if parent_path == "/" {
             // Find root via repo head commit, or create empty root fs_object for empty repo
-            let repo_model = repo::Entity::find_by_id(repo_id).one(db).await?;
+            let repo_model = repos.repo.find_by_id(repo_id).await?;
             if let Some(commit_id) = repo_model.as_ref().and_then(|r| r.head_commit_id.clone()) {
-                let commit_ent = commit::Entity::find()
-                    .filter(commit::Column::CommitId.eq(&commit_id))
-                    .one(db)
+                let commit_ent = repos
+                    .commit
+                    .find_by_repo_and_commit_id(repo_id, &commit_id)
                     .await?
                     .ok_or_else(|| Box::<dyn std::error::Error>::from("head commit not found"))?;
                 (commit_ent.root_id, Vec::new())
@@ -119,7 +121,7 @@ impl FileOps {
                 .await?
         };
 
-        let repo_model = repo::Entity::find_by_id(repo_id).one(db).await?;
+        let repo_model = repos.repo.find_by_id(repo_id).await?;
         let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
 
         let commit_data = crate::serialization::commit_json::CommitData {
@@ -155,13 +157,13 @@ impl FileOps {
             ctime: sea_orm::Set(now),
             version: sea_orm::Set(1i8),
         };
-        commit::Entity::insert(commit_model).exec(db).await?;
+        repos.commit.insert(commit_model).await?;
 
         let repo = repo_model.ok_or("repo not found")?;
         let mut repo_active: repo::ActiveModel = repo.into();
         repo_active.head_commit_id = sea_orm::Set(Some(commit_id.clone()));
         repo_active.updated_at = sea_orm::Set(now);
-        repo_active.update(db).await?;
+        repos.repo.update(repo_active).await?;
 
         // Fire repo-update notification through the global broadcast channel.
         // Without this, the Seafile client won't know about the new file until
@@ -361,6 +363,7 @@ impl FileOps {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn update_dir_tree_and_commit(
         db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         parent_path: &str,
         parent_fs_id: &str,
@@ -381,7 +384,7 @@ impl FileOps {
                 .await?
         };
 
-        Self::create_commit(db, repo_id, &root_fs_id, modifier, description).await?;
+        Self::create_commit(db, repos, repo_id, &root_fs_id, modifier, description).await?;
 
         Ok(root_fs_id)
     }
@@ -394,6 +397,7 @@ impl FileOps {
     /// to update several parts of the tree before creating a single commit.
     pub(crate) async fn update_dir_tree_no_commit(
         db: &DatabaseConnection,
+        _repos: &Repositories,
         repo_id: &str,
         parent_path: &str,
         parent_fs_id: &str,
@@ -417,7 +421,8 @@ impl FileOps {
 
     /// Create a commit with the given root_fs_id and update the repo's HEAD.
     pub(crate) async fn create_commit(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         root_fs_id: &str,
         creator_name: &str,
@@ -425,7 +430,7 @@ impl FileOps {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let now = chrono::Utc::now().timestamp();
 
-        let repo_model = repo::Entity::find_by_id(repo_id).one(db).await?;
+        let repo_model = repos.repo.find_by_id(repo_id).await?;
         let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
 
         let commit_data = crate::serialization::commit_json::CommitData {
@@ -461,14 +466,14 @@ impl FileOps {
             ctime: sea_orm::Set(now),
             version: sea_orm::Set(1i8),
         };
-        commit::Entity::insert(commit_model).exec(db).await?;
+        repos.commit.insert(commit_model).await?;
 
         let repo = repo_model.ok_or("repo not found")?;
         let mut repo_active: repo::ActiveModel = repo.into();
         let commit_id_clone = commit_id.clone();
         repo_active.head_commit_id = sea_orm::Set(Some(commit_id));
         repo_active.updated_at = sea_orm::Set(now);
-        repo_active.update(db).await?;
+        repos.repo.update(repo_active).await?;
 
         // Fire repo-update notification through the global broadcast channel.
         events::publish_repo_update(repo_id, commit_id_clone);

@@ -78,8 +78,15 @@ impl FsTrashService {
         user_id: i32,
         body: std::collections::HashMap<String, Vec<String>>,
     ) -> Result<serde_json::Value, AppError> {
-        let result =
-            TrashService::restore_trash_items(self.db(), repo_id, email, user_id, body).await?;
+        let result = TrashService::restore_trash_items(
+            self.db(),
+            &self.repos,
+            repo_id,
+            email,
+            user_id,
+            body,
+        )
+        .await?;
         Ok(serde_json::to_value(result)?)
     }
 
@@ -92,9 +99,16 @@ impl FsTrashService {
         commit_id: &str,
         paths: Vec<String>,
     ) -> Result<serde_json::Value, AppError> {
-        let result =
-            TrashService::restore_dirents(self.db(), repo_id, email, user_id, commit_id, paths)
-                .await?;
+        let result = TrashService::restore_dirents(
+            self.db(),
+            &self.repos,
+            repo_id,
+            email,
+            user_id,
+            commit_id,
+            paths,
+        )
+        .await?;
         Ok(serde_json::to_value(result)?)
     }
 
@@ -131,7 +145,7 @@ impl FsTrashService {
         user_id: i32,
         email: &str,
     ) -> Result<Vec<serde_json::Value>, AppError> {
-        let repos = TrashService::list_deleted_repos(self.db(), user_id).await?;
+        let repos = TrashService::list_deleted_repos(&self.repos, user_id).await?;
 
         let owner_name = self
             .repos
@@ -166,7 +180,7 @@ impl FsTrashService {
 
     /// Restore a deleted repo.
     pub async fn restore_deleted_repo(&self, repo_id: &str, user_id: i32) -> Result<(), AppError> {
-        TrashService::restore_deleted_repo(self.db(), repo_id, user_id).await?;
+        TrashService::restore_deleted_repo(self.db(), &self.repos, repo_id, user_id).await?;
         Ok(())
     }
 }

@@ -1,9 +1,10 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{DatabaseConnection, Set};
 use std::collections::VecDeque;
 
 use crate::common::EMPTY_SHA1;
-use crate::entity::{commit, repo};
+use crate::entity::repo;
 use crate::error::AppError;
+use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
 
 use crate::repo::{read_fs_dir_data, resolve_fs_id};
@@ -12,9 +13,14 @@ use crate::repo::{read_fs_dir_data, resolve_fs_id};
 /// traversing the FS tree from the repo's head commit.
 ///
 /// Returns 0 if the repo has no commits yet or the tree is empty.
-pub async fn compute_repo_size(db: &DatabaseConnection, repo_id: &str) -> Result<i64, AppError> {
-    let repo_record = repo::Entity::find_by_id(repo_id)
-        .one(db)
+pub async fn compute_repo_size(
+    db: &DatabaseConnection,
+    repos: &Repositories,
+    repo_id: &str,
+) -> Result<i64, AppError> {
+    let repo_record = repos
+        .repo
+        .find_by_id(repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
@@ -23,10 +29,9 @@ pub async fn compute_repo_size(db: &DatabaseConnection, repo_id: &str) -> Result
         None => return Ok(0),
     };
 
-    let head = commit::Entity::find()
-        .filter(commit::Column::RepoId.eq(repo_id))
-        .filter(commit::Column::CommitId.eq(&head_commit_id))
-        .one(db)
+    let head = repos
+        .commit
+        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
         .await?
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
@@ -77,25 +82,27 @@ pub async fn compute_tree_size(
 /// applies the delta incrementally.
 pub async fn adjust_repo_size(
     db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     delta: i64,
 ) -> Result<(), AppError> {
-    let r = repo::Entity::find_by_id(repo_id)
-        .one(db)
+    let r = repos
+        .repo
+        .find_by_id(repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
     let current_size = r.size;
     if current_size == 0 {
-        let size = compute_repo_size(db, repo_id).await?;
+        let size = compute_repo_size(db, repos, repo_id).await?;
         let mut active: repo::ActiveModel = r.into();
         active.size = Set(size);
-        active.update(db).await?;
+        repos.repo.update(active).await?;
     } else {
         let new_size = (current_size + delta).max(0);
         let mut active: repo::ActiveModel = r.into();
         active.size = Set(new_size);
-        active.update(db).await?;
+        repos.repo.update(active).await?;
     }
     Ok(())
 }
@@ -105,6 +112,7 @@ pub async fn adjust_repo_size(
 /// directory the subtree is walked recursively via `compute_tree_size`.
 pub async fn get_entry_total_size(
     db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     path: &str,
 ) -> Result<i64, AppError> {
@@ -115,17 +123,17 @@ pub async fn get_entry_total_size(
     };
     let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
 
-    let repo_record = repo::Entity::find_by_id(repo_id)
-        .one(db)
+    let repo_record = repos
+        .repo
+        .find_by_id(repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
     let head_commit_id = repo_record
         .head_commit_id
         .ok_or_else(|| AppError::NotFound("no commits yet".into()))?;
-    let head = commit::Entity::find()
-        .filter(commit::Column::RepoId.eq(repo_id))
-        .filter(commit::Column::CommitId.eq(&head_commit_id))
-        .one(db)
+    let head = repos
+        .commit
+        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
         .await?
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 

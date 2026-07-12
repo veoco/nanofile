@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use sea_orm::{ActiveModelTrait, Set};
+use sea_orm::Set;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -49,7 +49,7 @@ pub async fn lock_file(
             let mut active: locked_file::ActiveModel = record.into();
             active.user_id = Set(_auth.user_id);
             active.locked_at = Set(now);
-            active.update(state.db.as_ref()).await?;
+            state.repos.locked_file.update(active).await?;
         }
         None => {
             state

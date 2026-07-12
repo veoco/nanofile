@@ -4,7 +4,6 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Response},
 };
-use sea_orm::EntityTrait;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -75,10 +74,7 @@ async fn validate_upload_link(
     }
 
     // Check repo exists
-    let repo_exists = crate::entity::repo::Entity::find_by_id(&link.repo_id)
-        .one(state.db.as_ref())
-        .await?
-        .is_some();
+    let repo_exists = state.repos.repo.find_by_id(&link.repo_id).await?.is_some();
     if !repo_exists {
         return Err(AppError::NotFound("Upload link not found".into()));
     }

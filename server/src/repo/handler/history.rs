@@ -24,13 +24,8 @@ pub async fn repo_history_changes(
     Path(repo_id): Path<String>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<crate::repo::service::history::HistoryChangesResponse>, AppError> {
-    let response = HistoryService::get_history_changes(
-        state.db.as_ref(),
-        &state.repos,
-        &repo_id,
-        &query.commit_id,
-    )
-    .await?;
+    let response =
+        HistoryService::get_history_changes(&state.repos, &repo_id, &query.commit_id).await?;
 
     Ok(Json(response))
 }

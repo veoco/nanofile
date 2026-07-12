@@ -5,15 +5,25 @@ use sea_orm::DatabaseConnection;
 
 use crate::error::AppError;
 use crate::repo::download::Downloader;
+use crate::repository::Repositories;
 
 pub struct ExifService {
     db: Arc<DatabaseConnection>,
+    repos: Arc<Repositories>,
     block_store: crate::storage::DynBlockStorage,
 }
 
 impl ExifService {
-    pub fn new(db: Arc<DatabaseConnection>, block_store: crate::storage::DynBlockStorage) -> Self {
-        Self { db, block_store }
+    pub fn new(
+        db: Arc<DatabaseConnection>,
+        repos: Arc<Repositories>,
+        block_store: crate::storage::DynBlockStorage,
+    ) -> Self {
+        Self {
+            db,
+            repos,
+            block_store,
+        }
     }
 
     fn db(&self) -> &DatabaseConnection {
@@ -25,9 +35,16 @@ impl ExifService {
     /// Returns a JSON object with EXIF fields that were found, or `null` if
     /// the file contains no EXIF data.
     pub async fn get_exif(&self, repo_id: &str, path: &str) -> Result<serde_json::Value, AppError> {
-        let content = Downloader::download_file(self.db(), repo_id, path, &self.block_store, None)
-            .await
-            .map_err(|_| AppError::NotFound("file not found".into()))?;
+        let content = Downloader::download_file(
+            &self.repos,
+            self.db(),
+            repo_id,
+            path,
+            &self.block_store,
+            None,
+        )
+        .await
+        .map_err(|_| AppError::NotFound("file not found".into()))?;
 
         let exif_data = tokio::task::spawn_blocking(move || Self::extract_exif(&content))
             .await

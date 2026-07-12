@@ -1,11 +1,11 @@
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{DatabaseConnection, Set};
 use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::AccessTokenManager;
 use crate::activity_log;
 use crate::auth::token::generate_sync_token;
-use crate::entity::{repo, repo_member};
+use crate::entity::repo;
 use crate::error::AppError;
 use crate::repository::Repositories;
 
@@ -763,30 +763,22 @@ pub struct LeftPanelRepo {
 
 /// Query all repos for the given user, returning left-panel data.
 pub async fn load_left_panel_repos(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     user_id: i32,
 ) -> Result<Vec<LeftPanelRepo>, AppError> {
-    let members = repo_member::Entity::find()
-        .filter(repo_member::Column::UserId.eq(user_id))
-        .all(db)
-        .await
-        .map_err(|e| AppError::internal(format!("db error: {e}")))?;
+    let members = repos.member.find_by_user_id(user_id).await?;
 
-    let mut repos = Vec::with_capacity(members.len());
+    let mut repo_list = Vec::with_capacity(members.len());
     for m in members {
-        if let Some(r) = repo::Entity::find_by_id(m.repo_id)
-            .one(db)
-            .await
-            .map_err(|e| AppError::internal(format!("db error: {e}")))?
-        {
-            repos.push(LeftPanelRepo {
+        if let Some(r) = repos.repo.find_by_id(&m.repo_id).await? {
+            repo_list.push(LeftPanelRepo {
                 id: r.id,
                 name: r.name,
                 size_display: format_repo_size(r.size),
             });
         }
     }
-    Ok(repos)
+    Ok(repo_list)
 }
 
 fn format_repo_size(bytes: i64) -> String {

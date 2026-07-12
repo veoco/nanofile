@@ -1,7 +1,8 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use sha2::{Digest, Sha256};
 
 use crate::entity::user_2fa_backup_code;
+use crate::error::AppError;
+use crate::repository::Repositories;
 
 pub struct BackupCodeManager;
 
@@ -19,10 +20,10 @@ impl BackupCodeManager {
     }
 
     pub async fn store_codes(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         user_id: i32,
         codes: &[String],
-    ) -> Result<(), sea_orm::DbErr> {
+    ) -> Result<(), AppError> {
         let now = chrono::Utc::now().timestamp();
         for code in codes {
             let model = user_2fa_backup_code::ActiveModel {
@@ -33,42 +34,31 @@ impl BackupCodeManager {
                 used_at: sea_orm::NotSet,
                 created_at: sea_orm::Set(now),
             };
-            user_2fa_backup_code::Entity::insert(model).exec(db).await?;
+            repos.user_2fa_backup_code.insert(model).await?;
         }
         Ok(())
     }
 
-    pub async fn delete_all_for_user(
-        db: &DatabaseConnection,
-        user_id: i32,
-    ) -> Result<(), sea_orm::DbErr> {
-        user_2fa_backup_code::Entity::delete_many()
-            .filter(user_2fa_backup_code::Column::UserId.eq(user_id))
-            .exec(db)
-            .await?;
-        Ok(())
+    pub async fn delete_all_for_user(repos: &Repositories, user_id: i32) -> Result<(), AppError> {
+        repos.user_2fa_backup_code.delete_by_user(user_id).await
     }
 
     pub async fn verify_code(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         user_id: i32,
         code: &str,
-    ) -> Result<bool, sea_orm::DbErr> {
+    ) -> Result<bool, AppError> {
         let hash = Self::hash_code(code);
-        let record = user_2fa_backup_code::Entity::find()
-            .filter(user_2fa_backup_code::Column::UserId.eq(user_id))
-            .filter(user_2fa_backup_code::Column::CodeHash.eq(&hash))
-            .filter(user_2fa_backup_code::Column::Used.eq(false))
-            .one(db)
-            .await?;
+        let codes = repos.user_2fa_backup_code.find_by_user(user_id).await?;
+        let record = codes.into_iter().find(|c| c.code_hash == hash && !c.used);
 
         match record {
             Some(model) => {
                 let now = chrono::Utc::now().timestamp();
-                let mut active: user_2fa_backup_code::ActiveModel = model.into();
-                active.used = sea_orm::Set(true);
-                active.used_at = sea_orm::Set(Some(now));
-                active.update(db).await?;
+                repos
+                    .user_2fa_backup_code
+                    .mark_as_used(&model.code_hash, now)
+                    .await?;
                 Ok(true)
             }
             None => Ok(false),

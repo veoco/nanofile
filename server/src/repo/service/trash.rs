@@ -1,14 +1,12 @@
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, Statement,
-};
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::activity_log;
-use crate::entity::{commit, deleted_repo, fs_object, repo};
+use crate::entity::deleted_repo;
 use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
+use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::DirEntryData;
 
@@ -72,9 +70,15 @@ pub struct CursorTrashResult {
     pub has_more: bool,
 }
 
-pub struct TrashService;
+pub struct TrashService<'a> {
+    pub db: &'a DatabaseConnection,
+    pub repos: &'a Repositories,
+}
 
-impl TrashService {
+impl<'a> TrashService<'a> {
+    pub fn new(db: &'a DatabaseConnection, repos: &'a Repositories) -> Self {
+        Self { db, repos }
+    }
     /// Insert a single deleted file/dir into `file_trash`.
     ///
     /// `path` is the full path (`/dir/file.txt`). `parent_commit_id` is the
@@ -481,6 +485,7 @@ impl TrashService {
     /// fs_id from the repo's head commit actually exists).
     async fn path_exists_in_tree(
         db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         path: &str,
     ) -> Result<bool, AppError> {
@@ -488,17 +493,18 @@ impl TrashService {
             return Ok(true);
         }
 
-        let repo_record = repo::Entity::find_by_id(repo_id)
-            .one(db)
+        let repo_record = repos
+            .repo
+            .find_by_id(repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
         let head_commit_id = match repo_record.head_commit_id {
             Some(id) => id,
             None => return Ok(false),
         };
-        let head = commit::Entity::find()
-            .filter(commit::Column::CommitId.eq(&head_commit_id))
-            .one(db)
+        let head = repos
+            .commit
+            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
@@ -512,21 +518,23 @@ impl TrashService {
     /// the current FS tree.
     async fn name_exists_in_parent(
         db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         parent_path: &str,
         name: &str,
     ) -> Result<bool, AppError> {
-        let repo_record = repo::Entity::find_by_id(repo_id)
-            .one(db)
+        let repo_record = repos
+            .repo
+            .find_by_id(repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
         let head_commit_id = match repo_record.head_commit_id {
             Some(id) => id,
             None => return Ok(false),
         };
-        let head = commit::Entity::find()
-            .filter(commit::Column::CommitId.eq(&head_commit_id))
-            .one(db)
+        let head = repos
+            .commit
+            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
@@ -548,19 +556,17 @@ impl TrashService {
 
     /// Verify that an fs_object exists in the database.
     async fn fs_object_exists(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         fs_id: &str,
     ) -> Result<bool, AppError> {
         if fs_id == crate::common::EMPTY_SHA1 {
             return Ok(true);
         }
-        let obj = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.eq(fs_id))
-            .one(db)
-            .await?;
-        Ok(obj.is_some())
+        repos
+            .fs_object
+            .exists_by_repo_and_fs_id(repo_id, fs_id)
+            .await
     }
 
     /// Core restore logic. Takes a map of `commit_id -> [paths]` where paths
@@ -569,6 +575,7 @@ impl TrashService {
     /// Returns a `RevertResult` with success and failed items.
     pub async fn restore_trash_items(
         db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         modifier: &str,
         user_id: i32,
@@ -619,7 +626,7 @@ impl TrashService {
                 let is_dir = obj_type == "dir";
 
                 // Verify fs_object exists
-                if !Self::fs_object_exists(db, repo_id, &obj_id).await? {
+                if !Self::fs_object_exists(repos, repo_id, &obj_id).await? {
                     failed.push(RevertFailedItem {
                         commit_id: commit_id.clone(),
                         path: full_path.to_string(),
@@ -629,7 +636,9 @@ impl TrashService {
                 }
 
                 // Verify parent directory exists in current tree
-                if parent_dir != "/" && !Self::path_exists_in_tree(db, repo_id, parent_dir).await? {
+                if parent_dir != "/"
+                    && !Self::path_exists_in_tree(db, repos, repo_id, parent_dir).await?
+                {
                     failed.push(RevertFailedItem {
                         commit_id: commit_id.clone(),
                         path: full_path.to_string(),
@@ -639,7 +648,7 @@ impl TrashService {
                 }
 
                 // Check for name collision
-                if Self::name_exists_in_parent(db, repo_id, parent_dir, obj_name).await? {
+                if Self::name_exists_in_parent(db, repos, repo_id, parent_dir, obj_name).await? {
                     failed.push(RevertFailedItem {
                         commit_id: commit_id.clone(),
                         path: full_path.to_string(),
@@ -649,16 +658,17 @@ impl TrashService {
                 }
 
                 // Resolve parent fs_id from current tree
-                let repo_record = repo::Entity::find_by_id(repo_id)
-                    .one(db)
+                let repo_record = repos
+                    .repo
+                    .find_by_id(repo_id)
                     .await?
                     .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
                 let head_commit_id = repo_record
                     .head_commit_id
                     .ok_or_else(|| AppError::NotFound("no commits".into()))?;
-                let head = commit::Entity::find()
-                    .filter(commit::Column::CommitId.eq(&head_commit_id))
-                    .one(db)
+                let head = repos
+                    .commit
+                    .find_by_repo_and_commit_id(repo_id, &head_commit_id)
                     .await?
                     .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
@@ -698,6 +708,7 @@ impl TrashService {
 
                 let result = FileOps::update_dir_tree_and_commit(
                     db,
+                    repos,
                     repo_id,
                     parent_dir,
                     &parent_fs_id,
@@ -766,6 +777,7 @@ impl TrashService {
     /// Old API restore: single commit_id, multiple paths.
     pub async fn restore_dirents(
         db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         modifier: &str,
         user_id: i32,
@@ -774,7 +786,7 @@ impl TrashService {
     ) -> Result<RevertResult, AppError> {
         let mut map = HashMap::new();
         map.insert(commit_id.to_string(), paths);
-        Self::restore_trash_items(db, repo_id, modifier, user_id, map).await
+        Self::restore_trash_items(db, repos, repo_id, modifier, user_id, map).await
     }
 
     /// Clean trash items for a repo, optionally keeping items newer than
@@ -1058,15 +1070,10 @@ impl TrashService {
 
     /// List repos that a user has deleted.
     pub async fn list_deleted_repos(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         user_id: i32,
     ) -> Result<Vec<deleted_repo::Model>, AppError> {
-        let repos = deleted_repo::Entity::find()
-            .filter(deleted_repo::Column::OwnerId.eq(user_id))
-            .order_by_desc(deleted_repo::Column::DelTime)
-            .all(db)
-            .await?;
-        Ok(repos)
+        repos.deleted_repo.find_by_owner(user_id).await
     }
 
     /// Restore a repo from trash.
@@ -1074,11 +1081,13 @@ impl TrashService {
     /// Re-inserts the repo, creates owner membership, and removes from trash.
     pub async fn restore_deleted_repo(
         db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         user_id: i32,
     ) -> Result<(), AppError> {
-        let trashed = deleted_repo::Entity::find_by_id(repo_id)
-            .one(db)
+        let trashed = repos
+            .deleted_repo
+            .find_by_id(repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("repo not found in trash".into()))?;
 
@@ -1120,7 +1129,7 @@ impl TrashService {
             .await?;
 
         // Remove from trash
-        deleted_repo::Entity::delete_by_id(repo_id).exec(db).await?;
+        repos.deleted_repo.delete_by_id(repo_id).await?;
 
         // Log activity
         activity_log::log_activity(
@@ -1133,10 +1142,10 @@ impl TrashService {
 
     /// Permanently delete a repo from trash (admin).
     pub async fn permanently_delete_deleted_repo(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
     ) -> Result<(), AppError> {
-        deleted_repo::Entity::delete_by_id(repo_id).exec(db).await?;
+        repos.deleted_repo.delete_by_id(repo_id).await?;
         Ok(())
     }
 }

@@ -61,10 +61,11 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
         &user.session_token,
     ));
 
-    let left_panel_repos = match crate::repo::load_left_panel_repos(db, user.user_id).await {
-        Ok(r) => r,
-        Err(e) => return AppError::internal(e.to_string()).into_response(),
-    };
+    let left_panel_repos =
+        match crate::repo::load_left_panel_repos(&state.repos, user.user_id).await {
+            Ok(r) => r,
+            Err(e) => return AppError::internal(e.to_string()).into_response(),
+        };
 
     let users: Vec<UserRow> = users_data
         .into_iter()

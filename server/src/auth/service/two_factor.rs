@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection;
-
 use crate::auth::backup_codes::BackupCodeManager;
 use crate::auth::password::verify_password;
 use crate::auth::totp::TotpManager;
@@ -18,7 +16,6 @@ pub struct Setup2faResult {
 
 /// Service for two-factor authentication setup, verification, and disabling.
 pub struct TwoFactorService {
-    db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
     password_hash_iterations: u32,
     disable_2fa_limiter: Arc<GenericRateLimiter>,
@@ -26,13 +23,11 @@ pub struct TwoFactorService {
 
 impl TwoFactorService {
     pub fn new(
-        db: Arc<DatabaseConnection>,
         repos: Arc<Repositories>,
         password_hash_iterations: u32,
         disable_2fa_limiter: Arc<GenericRateLimiter>,
     ) -> Self {
         Self {
-            db,
             repos,
             password_hash_iterations,
             disable_2fa_limiter,
@@ -52,9 +47,7 @@ impl TwoFactorService {
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
         let backup_codes = BackupCodeManager::generate_codes(10);
-        BackupCodeManager::store_codes(self.db.as_ref(), user_id, &backup_codes)
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        BackupCodeManager::store_codes(&self.repos, user_id, &backup_codes).await?;
 
         Ok(Setup2faResult {
             secret: model.totp_secret,

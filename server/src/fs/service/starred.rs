@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{DatabaseConnection, Set};
 
 use crate::error::AppError;
 use crate::repo::{read_fs_dir_data, resolve_fs_id};
@@ -83,7 +83,8 @@ impl StarredService {
 
         for entry in &entries {
             let repo_opt = repo_cache.get(&entry.repo_id).and_then(|o| o.as_ref());
-            let item = build_item_json(db, entry, repo_opt, email, &user_nickname).await;
+            let item =
+                build_item_json(db, &self.repos, entry, repo_opt, email, &user_nickname).await;
 
             if entry.path == "/" {
                 starred_repos.push(item);
@@ -192,23 +193,49 @@ impl StarredService {
             .await?;
 
         if let Some(ref entry) = existing {
-            return Ok(build_item_json(db, entry, Some(&repo_record), email, &user_nickname).await);
+            return Ok(build_item_json(
+                db,
+                &self.repos,
+                entry,
+                Some(&repo_record),
+                email,
+                &user_nickname,
+            )
+            .await);
         }
 
         // Insert
         let now = Utc::now().timestamp();
-        let new_entry = crate::entity::starred_file::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: Set(repo_id.to_string()),
-            path: Set(normalized_path),
-            user_id: Set(user_id),
-            is_dir: Set(is_dir),
-            created_at: Set(now),
-        }
-        .insert(db)
-        .await?;
+        self.repos
+            .starred
+            .insert(crate::entity::starred_file::ActiveModel {
+                id: sea_orm::NotSet,
+                repo_id: Set(repo_id.to_string()),
+                path: Set(normalized_path.clone()),
+                user_id: Set(user_id),
+                is_dir: Set(is_dir),
+                created_at: Set(now),
+            })
+            .await?;
 
-        Ok(build_item_json(db, &new_entry, Some(&repo_record), email, &user_nickname).await)
+        let new_entry = self
+            .repos
+            .starred
+            .find_by_user_repo_and_path(user_id, repo_id, &normalized_path)
+            .await?
+            .ok_or_else(|| {
+                AppError::Internal("failed to find starred entry after insert".into())
+            })?;
+
+        Ok(build_item_json(
+            db,
+            &self.repos,
+            &new_entry,
+            Some(&repo_record),
+            email,
+            &user_nickname,
+        )
+        .await)
     }
 
     /// Unstar an item.
@@ -245,6 +272,7 @@ fn timestamp_to_iso(ts: i64) -> String {
 
 async fn build_item_json(
     db: &DatabaseConnection,
+    repos: &Repositories,
     entry: &crate::entity::starred_file::Model,
     repo_opt: Option<&crate::entity::repo::Model>,
     auth_email: &str,
@@ -266,7 +294,7 @@ async fn build_item_json(
             .map(|(_, n)| n.to_string())
             .unwrap_or_default();
         let (m, d) = if let Some(repo) = repo_opt {
-            get_entry_mtime_or_deleted(db, repo, entry).await
+            get_entry_mtime_or_deleted(db, repos, repo, entry).await
         } else {
             (0, true)
         };
@@ -290,6 +318,7 @@ async fn build_item_json(
 
 async fn get_entry_mtime_or_deleted(
     db: &DatabaseConnection,
+    repos: &Repositories,
     repo: &crate::entity::repo::Model,
     entry: &crate::entity::starred_file::Model,
 ) -> (i64, bool) {
@@ -298,9 +327,9 @@ async fn get_entry_mtime_or_deleted(
         None => return (0, true),
     };
 
-    let head = match crate::entity::commit::Entity::find()
-        .filter(crate::entity::commit::Column::CommitId.eq(&head_cid))
-        .one(db)
+    let head = match repos
+        .commit
+        .find_by_repo_and_commit_id(&repo.id, &head_cid)
         .await
     {
         Ok(Some(h)) => h,

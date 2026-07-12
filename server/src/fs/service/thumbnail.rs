@@ -149,6 +149,7 @@ impl ThumbnailService {
 
         // Download file content and generate thumbnail
         let content = Downloader::download_file(
+            &self.repos,
             self.db(),
             repo_id,
             &normalized_path,

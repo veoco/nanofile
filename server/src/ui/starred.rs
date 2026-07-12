@@ -1,11 +1,10 @@
 /// Web UI starred-items page.
 use askama::Template;
 use axum::{extract::State, response::Html};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::{repo, starred_file};
+use crate::entity::repo;
 use crate::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -40,19 +39,14 @@ pub async fn starred_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    let db = state.db.as_ref();
-
-    let entries = starred_file::Entity::find()
-        .filter(starred_file::Column::UserId.eq(user.user_id))
-        .all(db)
-        .await?;
+    let entries = state.repos.starred.find_by_user_id(user.user_id).await?;
 
     // Cache repo lookups to avoid N+1
     let mut repo_cache: std::collections::HashMap<String, Option<repo::Model>> =
         std::collections::HashMap::new();
     for entry in &entries {
         if !repo_cache.contains_key(&entry.repo_id) {
-            let r = repo::Entity::find_by_id(&entry.repo_id).one(db).await?;
+            let r = state.repos.repo.find_by_id(&entry.repo_id).await?;
             repo_cache.insert(entry.repo_id.clone(), r);
         }
     }
@@ -106,8 +100,7 @@ pub async fn starred_page(
 
     let csrf_token =
         crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
-    let left_panel_repos =
-        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+    let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = StarredTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,

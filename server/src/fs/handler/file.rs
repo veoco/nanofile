@@ -118,6 +118,7 @@ pub async fn file_post_handler(
                 .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
             rename_file_entry(
                 state.db.as_ref(),
+                &state.repos,
                 repo_id,
                 &path,
                 &newname,
@@ -471,6 +472,7 @@ pub async fn create_file_v21(
             .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
         self::rename_file_entry(
             state.db.as_ref(),
+            &state.repos,
             repo_id,
             &path,
             &newname,

@@ -98,8 +98,7 @@ pub async fn settings_page(
         &user.session_token,
     ));
 
-    let left_panel_repos =
-        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+    let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = SettingsTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
@@ -153,7 +152,7 @@ pub async fn change_password(
             &user.session_token,
         ));
         let left_panel_repos =
-            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+            crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
         let tpl = SettingsTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email.clone(),
@@ -252,8 +251,7 @@ pub async fn devices_page(
         &state.csrf_secret,
         &user.session_token,
     ));
-    let left_panel_repos =
-        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+    let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
 
     let tpl = DevicesTemplate {
         urls: crate::static_assets::template_urls(),
@@ -381,8 +379,7 @@ async fn render_settings_error(
         &state.csrf_secret,
         &user.session_token,
     ));
-    let left_panel_repos =
-        crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+    let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = SettingsTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email.clone(),

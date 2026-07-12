@@ -167,8 +167,7 @@ pub async fn activities_page(
         is_admin: user.is_admin,
         activities,
         active_page: "activities",
-        left_panel_repos: crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id)
-            .await?,
+        left_panel_repos: crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?,
         current_repo_id: None,
     };
 

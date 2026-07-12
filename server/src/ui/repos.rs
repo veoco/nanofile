@@ -1,11 +1,9 @@
 /// Web UI repo handlers — list repos.
 use askama::Template;
 use axum::{extract::State, response::Html};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::{repo, repo_member};
 use crate::error::AppError;
 use crate::ui::files::format_size;
 
@@ -47,22 +45,12 @@ pub async fn list_repos(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    let db = state.db.as_ref();
-
     // Find repos where user is a member
-    let memberships = repo_member::Entity::find()
-        .filter(repo_member::Column::UserId.eq(user.user_id))
-        .all(db)
-        .await
-        .map_err(|e| AppError::internal(format!("db error: {e}")))?;
+    let memberships = state.repos.member.find_by_user_id(user.user_id).await?;
 
     let mut repos = Vec::new();
     for membership in memberships {
-        if let Some(r) = repo::Entity::find_by_id(membership.repo_id)
-            .one(db)
-            .await
-            .map_err(|e| AppError::internal(format!("db error: {e}")))?
-        {
+        if let Some(r) = state.repos.repo.find_by_id(&membership.repo_id).await? {
             repos.push(RepoInfo {
                 id: r.id,
                 name: r.name,

@@ -74,6 +74,8 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
+use crate::error::AppError;
+
 /// Bundles all repository implementations for convenient injection into services.
 pub struct Repositories {
     pub user: Arc<dyn UserRepository>,
@@ -144,5 +146,11 @@ impl Repositories {
             file_lock_timestamp: Arc::new(DbFileLockTimestampRepository::new(db.clone())),
             sdoc_comment: Arc::new(DbSdocCommentRepository::new(db.clone())),
         }
+    }
+
+    /// Compute total storage usage for a user (sum of all owned repo sizes).
+    pub async fn compute_user_usage(&self, user_id: i32) -> Result<i64, AppError> {
+        let owned_repos = self.repo.find_by_owner_id(user_id).await?;
+        Ok(owned_repos.iter().map(|r| r.size).sum())
     }
 }

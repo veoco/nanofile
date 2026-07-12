@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter,
+};
 use std::sync::Arc;
 
 use crate::entity::starred_file;
@@ -25,6 +27,7 @@ pub trait StarredRepository: Send + Sync {
         repo_id: &str,
         path: &str,
     ) -> Result<DeleteResult, AppError>;
+    async fn insert(&self, model: starred_file::ActiveModel) -> Result<(), AppError>;
 }
 
 pub struct DbStarredRepository {
@@ -84,5 +87,10 @@ impl StarredRepository for DbStarredRepository {
             .filter(starred_file::Column::Path.eq(path))
             .exec(self.db.as_ref())
             .await?)
+    }
+
+    async fn insert(&self, model: starred_file::ActiveModel) -> Result<(), AppError> {
+        model.insert(self.db.as_ref()).await?;
+        Ok(())
     }
 }

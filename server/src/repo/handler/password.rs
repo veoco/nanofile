@@ -76,7 +76,6 @@ pub async fn change_password_v21(
             PasswordService::change_password(
                 &state.password_manager,
                 &state.repos,
-                state.db.as_ref(),
                 &repo_id,
                 auth.user_id,
                 &old_password,

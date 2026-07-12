@@ -19,11 +19,7 @@ use crate::serialization::fs_json::DirEntryData;
 
 /// Read and parse an FsDirData object from the fs_objects table.
 #[allow(dead_code)]
-async fn read_fs_dir_data_helper(
-    _db: &sea_orm::DatabaseConnection,
-    _repo_id: &str,
-    _fs_id: &str,
-) -> Result<DirEntryData, AppError> {
+async fn read_fs_dir_data_helper(_repo_id: &str, _fs_id: &str) -> Result<DirEntryData, AppError> {
     Err(AppError::Internal("not used".into()))
 }
 

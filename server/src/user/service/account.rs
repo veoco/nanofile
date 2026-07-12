@@ -132,7 +132,6 @@ impl<'a> AccountService<'a> {
 
     /// Sum of repo sizes owned by a user.
     async fn compute_usage(&self, user_id: i32) -> Result<i64, AppError> {
-        let owned_repos = self.repos.repo.find_by_owner_id(user_id).await?;
-        Ok(owned_repos.iter().map(|r| r.size).sum())
+        self.repos.compute_user_usage(user_id).await
     }
 }

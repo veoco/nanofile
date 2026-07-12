@@ -1,25 +1,17 @@
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
-
-use crate::entity::{commit, fs_object};
+use crate::repository::Repositories;
 
 pub struct GcManager;
 
 impl GcManager {
     pub async fn garbage_collect(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         keep_commits: u64,
     ) -> Result<u64, Box<dyn std::error::Error>> {
-        let all_fs_ids = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.ne(""))
-            .all(db)
-            .await?;
+        let all_fs_ids = repos.fs_object.find_all().await?;
 
         let mut active_fs_ids = std::collections::HashSet::new();
 
-        let commits = commit::Entity::find()
-            .order_by_desc(commit::Column::Ctime)
-            .all(db)
-            .await?;
+        let commits = repos.commit.find_all_ordered_by_ctime_desc().await?;
 
         let mut commits_to_check = Vec::new();
         for c in &commits {
@@ -29,7 +21,7 @@ impl GcManager {
         }
 
         for c in &commits_to_check {
-            Self::collect_fs_ids(db, &c.root_id, &mut active_fs_ids).await?;
+            Self::collect_fs_ids(repos, &c.root_id, &mut active_fs_ids).await?;
         }
 
         // Batch delete inactive objects with a single SQL statement
@@ -43,17 +35,14 @@ impl GcManager {
         let removed = inactive_ids.len() as u64;
 
         if !inactive_ids.is_empty() {
-            fs_object::Entity::delete_many()
-                .filter(fs_object::Column::Id.is_in(inactive_ids))
-                .exec(db)
-                .await?;
+            repos.fs_object.delete_many_by_ids(inactive_ids).await?;
         }
 
         Ok(removed)
     }
 
     async fn collect_fs_ids(
-        db: &DatabaseConnection,
+        repos: &Repositories,
         fs_id: &str,
         collected: &mut std::collections::HashSet<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -63,10 +52,7 @@ impl GcManager {
 
         collected.insert(fs_id.to_string());
 
-        let fs_obj = fs_object::Entity::find()
-            .filter(fs_object::Column::FsId.eq(fs_id))
-            .one(db)
-            .await?;
+        let fs_obj = repos.fs_object.find_by_fs_id(fs_id).await?;
 
         if let Some(obj) = fs_obj
             && obj.obj_type == 3
@@ -74,7 +60,7 @@ impl GcManager {
             let dir_data: crate::serialization::fs_json::FsDirData =
                 serde_json::from_str(&obj.data)?;
             for entry in &dir_data.dirents {
-                Box::pin(Self::collect_fs_ids(db, &entry.id, collected)).await?;
+                Box::pin(Self::collect_fs_ids(repos, &entry.id, collected)).await?;
             }
         }
 

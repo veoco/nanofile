@@ -5,14 +5,12 @@ use axum::{
     http::{StatusCode, header},
     response::{Html, IntoResponse},
 };
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::common::util::parent_path_from;
-use crate::entity::{commit, repo};
 use crate::error::AppError;
 use crate::repo::download::Downloader;
 
@@ -408,8 +406,7 @@ async fn file_browser_inner(
     let repo_record = repos
         .repo
         .find_by_id(&repo_id)
-        .await
-        .map_err(|e| AppError::internal(format!("db error: {e}")))?
+        .await?
         .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
 
     // Try to list directory entries from the FS object tree.
@@ -621,7 +618,7 @@ async fn file_browser_inner(
         Ok(Html(html).into_response())
     } else {
         let left_panel_repos =
-            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+            crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
         let current_repo_id = Some(repo_id.clone());
         let tpl = FileBrowserTemplate {
             urls: crate::static_assets::template_urls(),
@@ -668,9 +665,10 @@ async fn serve_file(
 
     // ?dl=1 → force download
     if query.dl.as_deref() == Some("1") {
-        let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
-            .await
-            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+        let data =
+            Downloader::download_file(&state.repos, db, &repo_id, &path, &state.block_store, None)
+                .await
+                .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
         let content_type = mime_guess(&file_name);
         let disposition = format!("attachment; filename=\"{}\"", file_name);
         return Ok((
@@ -697,7 +695,7 @@ async fn serve_file(
     let is_text = is_previewable_file(&file_name);
 
     if is_image {
-        let size_display = get_file_size(db, &repo_id, &path)
+        let size_display = get_file_size(&state.repos, db, &repo_id, &path)
             .await
             .map(format_size)
             .unwrap_or_else(|_| "?".to_string());
@@ -706,8 +704,7 @@ async fn serve_file(
             .repos
             .repo
             .find_by_id(&repo_id)
-            .await
-            .map_err(|e| AppError::internal(format!("db error: {e}")))?
+            .await?
             .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?
             .name;
 
@@ -715,7 +712,7 @@ async fn serve_file(
         let parent_path = raw_parent.trim_start_matches('/').to_string();
 
         let left_panel_repos =
-            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+            crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
         let tpl = PreviewImageTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email,
@@ -737,30 +734,30 @@ async fn serve_file(
     }
 
     if is_text {
-        let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
-            .await
-            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+        let data =
+            Downloader::download_file(&state.repos, db, &repo_id, &path, &state.block_store, None)
+                .await
+                .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
         let content = String::from_utf8_lossy(&data).to_string();
 
         let repo_name = state
             .repos
             .repo
             .find_by_id(&repo_id)
-            .await
-            .map_err(|e| AppError::internal(format!("db error: {e}")))?
+            .await?
             .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?
             .name;
 
         let raw_parent = parent_path_from(&path);
         let parent_path = raw_parent.trim_start_matches('/').to_string();
 
-        let size_display = get_file_size(db, &repo_id, &path)
+        let size_display = get_file_size(&state.repos, db, &repo_id, &path)
             .await
             .map(format_size)
             .unwrap_or_else(|_| "?".to_string());
 
         let left_panel_repos =
-            crate::repo::load_left_panel_repos(state.db.as_ref(), user.user_id).await?;
+            crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
         let tpl = PreviewTextTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email,
@@ -783,20 +780,22 @@ async fn serve_file(
     }
 
     // Binary files — serve raw bytes inline
-    let data = Downloader::download_file(db, &repo_id, &path, &state.block_store, None)
-        .await
-        .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+    let data =
+        Downloader::download_file(&state.repos, db, &repo_id, &path, &state.block_store, None)
+            .await
+            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
     let content_type = mime_guess(&file_name);
     Ok((StatusCode::OK, [(header::CONTENT_TYPE, content_type)], data).into_response())
 }
 
 /// Resolve a file's size from the FS tree without downloading its content.
 async fn get_file_size(
+    repos: &crate::repository::Repositories,
     db: &sea_orm::DatabaseConnection,
     repo_id: &str,
     path: &str,
 ) -> Result<i64, AppError> {
-    let head_root_id = get_head_root_id(db, repo_id).await?;
+    let head_root_id = get_head_root_id(repos, repo_id).await?;
     let parent_path = parent_path_from(path);
     let file_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
 
@@ -831,23 +830,24 @@ async fn get_file_size(
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
 /// Get the root fs_id from the repo's head commit for path resolution.
-async fn get_head_root_id(db: &DatabaseConnection, repo_id: &str) -> Result<String, AppError> {
-    let repo_record = repo::Entity::find_by_id(repo_id)
-        .one(db)
-        .await
-        .map_err(|e| AppError::Internal(format!("db error: {e}")))?
+async fn get_head_root_id(
+    repos: &crate::repository::Repositories,
+    repo_id: &str,
+) -> Result<String, AppError> {
+    let repo_record = repos
+        .repo
+        .find_by_id(repo_id)
+        .await?
         .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
 
     let head_commit_id = repo_record
         .head_commit_id
         .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))?;
 
-    let head = commit::Entity::find()
-        .filter(commit::Column::RepoId.eq(repo_id))
-        .filter(commit::Column::CommitId.eq(&head_commit_id))
-        .one(db)
-        .await
-        .map_err(|e| AppError::Internal(format!("db error: {e}")))?
+    let head = repos
+        .commit
+        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
+        .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".to_string()))?;
 
     Ok(head.root_id)

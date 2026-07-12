@@ -13,11 +13,9 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use axum_extra::{TypedHeader, headers::Cookie};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::entity::{api_token, user};
 
 #[derive(Debug, Clone)]
 pub struct WebUser {
@@ -31,10 +29,13 @@ pub struct WebUser {
 
 impl WebUser {
     /// Authenticate from a raw token string (used by test helpers).
-    pub async fn from_token(db: &DatabaseConnection, token_str: &str) -> Result<Self, ()> {
-        let token_record = api_token::Entity::find()
-            .filter(api_token::Column::Token.eq(token_str))
-            .one(db)
+    pub async fn from_token(
+        repos: &crate::repository::Repositories,
+        token_str: &str,
+    ) -> Result<Self, ()> {
+        let token_record = repos
+            .api_token
+            .find_by_token(token_str)
             .await
             .map_err(|_| ())?
             .ok_or(())?;
@@ -48,8 +49,9 @@ impl WebUser {
         }
 
         // Look up user
-        let user_record = user::Entity::find_by_id(token_record.user_id)
-            .one(db)
+        let user_record = repos
+            .user
+            .find_by_id(token_record.user_id)
             .await
             .map_err(|_| ())?
             .ok_or(())?;
@@ -95,12 +97,11 @@ impl FromRequestParts<Arc<AppState>> for WebUser {
             .get("seahub-session")
             .ok_or(WebUserRejection::RedirectLogin)?;
 
-        let db = state.db.as_ref();
-
         // Look up the API token
-        let token_record = api_token::Entity::find()
-            .filter(api_token::Column::Token.eq(session_token))
-            .one(db)
+        let token_record = state
+            .repos
+            .api_token
+            .find_by_token(session_token)
             .await
             .map_err(|_| WebUserRejection::RedirectLogin)?
             .ok_or(WebUserRejection::RedirectLogin)?;
@@ -114,8 +115,10 @@ impl FromRequestParts<Arc<AppState>> for WebUser {
         }
 
         // Look up user
-        let user_record = user::Entity::find_by_id(token_record.user_id)
-            .one(db)
+        let user_record = state
+            .repos
+            .user
+            .find_by_id(token_record.user_id)
             .await
             .map_err(|_| WebUserRejection::RedirectLogin)?
             .ok_or(WebUserRejection::RedirectLogin)?;

@@ -132,29 +132,6 @@ impl AppState {
                 mgr.start_token_expiry_checker(token).await;
             });
         }
-        let indexer = if config.index.enabled {
-            match TextIndexer::new(&config.index.index_dir) {
-                Ok(idx) => {
-                    tracing::info!(
-                        "Full-text indexer initialized at {:?}",
-                        config.index.index_dir
-                    );
-                    // Spawn the background committer so uncommitted index
-                    // documents are persisted periodically.
-                    idx.spawn_background_committer(shutdown_token.child_token());
-                    Some(idx)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to initialize full-text indexer: {e}. Search will use filename-only mode."
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         let login_rate_limiter = Arc::new(LoginRateLimiter::new(
             config.auth.max_login_attempts,
             config.auth.lockout_duration_secs,
@@ -226,6 +203,29 @@ impl AppState {
             );
         }
 
+        let indexer = if config.index.enabled {
+            match TextIndexer::new(&config.index.index_dir, Some(repos.clone())) {
+                Ok(idx) => {
+                    tracing::info!(
+                        "Full-text indexer initialized at {:?}",
+                        config.index.index_dir
+                    );
+                    // Spawn the background committer so uncommitted index
+                    // documents are persisted periodically.
+                    idx.spawn_background_committer(shutdown_token.child_token());
+                    Some(idx)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to initialize full-text indexer: {e}. Search will use filename-only mode."
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             repos,
             db,
@@ -281,6 +281,7 @@ impl AppState {
     pub fn fileops_service(&self) -> crate::fs::service::fileops::FileOpsService {
         crate::fs::service::fileops::FileOpsService::new(
             self.db.clone(),
+            self.repos.clone(),
             self.block_store.clone(),
             self.indexer.clone(),
         )
@@ -308,7 +309,11 @@ impl AppState {
     }
 
     pub fn exif_service(&self) -> crate::fs::service::exif::ExifService {
-        crate::fs::service::exif::ExifService::new(self.db.clone(), self.block_store.clone())
+        crate::fs::service::exif::ExifService::new(
+            self.db.clone(),
+            self.repos.clone(),
+            self.block_store.clone(),
+        )
     }
 
     pub fn login_service(&self) -> crate::auth::service::login::LoginService {
@@ -327,7 +332,6 @@ impl AppState {
 
     pub fn two_factor_service(&self) -> crate::auth::service::two_factor::TwoFactorService {
         crate::auth::service::two_factor::TwoFactorService::new(
-            self.db.clone(),
             self.repos.clone(),
             self.config.auth.password_hash_iterations,
             self.disable_2fa_limiter.clone(),

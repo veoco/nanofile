@@ -457,13 +457,9 @@ pub async fn two_factor_auth(
 
     // Try backup code if TOTP failed
     let backup_valid = if !code_valid {
-        crate::auth::backup_codes::BackupCodeManager::verify_code(
-            state.db.as_ref(),
-            user_id,
-            &form.code,
-        )
-        .await
-        .unwrap_or(false)
+        crate::auth::backup_codes::BackupCodeManager::verify_code(&state.repos, user_id, &form.code)
+            .await
+            .unwrap_or(false)
     } else {
         false
     };

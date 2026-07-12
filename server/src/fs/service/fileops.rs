@@ -6,6 +6,7 @@ use crate::activity_log;
 use crate::common::util::{generate_unique_filename, get_head_root_id};
 use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
+use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::DirEntryData;
 
@@ -24,6 +25,7 @@ pub fn parse_file_names(s: &str) -> Vec<String> {
 
 pub struct FileOpsService {
     db: Arc<DatabaseConnection>,
+    repos: Arc<Repositories>,
     block_store: crate::storage::DynBlockStorage,
     indexer: Option<crate::indexer::TextIndexer>,
 }
@@ -31,11 +33,13 @@ pub struct FileOpsService {
 impl FileOpsService {
     pub fn new(
         db: Arc<DatabaseConnection>,
+        repos: Arc<Repositories>,
         block_store: crate::storage::DynBlockStorage,
         indexer: Option<crate::indexer::TextIndexer>,
     ) -> Self {
         Self {
             db,
+            repos,
             block_store,
             indexer,
         }
@@ -74,7 +78,7 @@ impl FileOpsService {
             } else {
                 format!("{parent_dir}/{name}")
             };
-            if let Ok(sz) = crate::repo::get_entry_total_size(db, repo_id, &fp).await {
+            if let Ok(sz) = crate::repo::get_entry_total_size(db, &self.repos, repo_id, &fp).await {
                 total_deleted += sz;
             }
         }
@@ -131,6 +135,7 @@ impl FileOpsService {
 
         FileOps::update_dir_tree_and_commit(
             db,
+            &self.repos,
             repo_id,
             parent_dir,
             &parent_fs_id,
@@ -184,7 +189,7 @@ impl FileOpsService {
             }
         }
 
-        crate::repo::adjust_repo_size(db, repo_id, -total_deleted).await?;
+        crate::repo::adjust_repo_size(db, &self.repos, repo_id, -total_deleted).await?;
 
         Ok(())
     }
@@ -279,6 +284,7 @@ impl FileOpsService {
 
         FileOps::update_dir_tree_and_commit(
             db,
+            &self.repos,
             repo_id,
             dst_dir,
             &dst_parent_fs_id,
@@ -349,7 +355,7 @@ impl FileOpsService {
         }
 
         let total_copied: i64 = entries_to_add.iter().map(|e| e.size).sum();
-        crate::repo::adjust_repo_size(db, repo_id, total_copied).await?;
+        crate::repo::adjust_repo_size(db, &self.repos, repo_id, total_copied).await?;
 
         Ok(results)
     }
@@ -416,6 +422,7 @@ impl FileOpsService {
 
         let intermediate_root = FileOps::update_dir_tree_no_commit(
             db,
+            &self.repos,
             repo_id,
             src_parent_dir,
             &src_parent_fs_id,
@@ -438,9 +445,16 @@ impl FileOpsService {
             )
         };
 
-        FileOps::create_commit(db, repo_id, &intermediate_root, email, &remove_desc)
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        FileOps::create_commit(
+            db,
+            &self.repos,
+            repo_id,
+            &intermediate_root,
+            email,
+            &remove_desc,
+        )
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
 
         // Step 2: Add entries to destination
         let new_head_root = get_head_root_id(db, repo_id).await?;
@@ -479,6 +493,7 @@ impl FileOpsService {
 
         FileOps::update_dir_tree_and_commit(
             db,
+            &self.repos,
             repo_id,
             dst_dir,
             &new_dst_fs_id,
