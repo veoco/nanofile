@@ -94,65 +94,6 @@ fn format_timestamp(ts: i64) -> String {
     dt.format("%Y-%m-%d %H:%M").to_string()
 }
 
-/// Look up share link, check expiry, return the link model or error.
-async fn resolve_share_link(
-    state: &AppState,
-    token: &str,
-) -> Result<infra::entity::share_link::Model, AppError> {
-    let link = state
-        .repos
-        .share_link
-        .find_by_token(token)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Link not found".into()))?;
-
-    // Check expiry
-    if let Some(expires_at) = link.expires_at
-        && chrono::Utc::now().timestamp() > expires_at
-    {
-        return Err(AppError::NotFound("Link has expired".into()));
-    }
-
-    Ok(link)
-}
-
-/// Check whether the password in the request matches the stored hash.
-fn check_password(
-    link: &infra::entity::share_link::Model,
-    headers: &HeaderMap,
-    params: &HashMap<String, String>,
-    password_hash_iterations: u32,
-) -> Result<bool, AppError> {
-    let stored_hash = match link.password {
-        Some(ref h) => h,
-        None => return Ok(true), // no password required
-    };
-
-    let provided = headers
-        .get("X-Seafile-Sharelink-Password")
-        .and_then(|v| v.to_str().ok().map(|s| s.to_string()))
-        .or_else(|| params.get("password").cloned());
-
-    match provided {
-        Some(pwd) => Ok(crate::service::auth::password::verify_password(
-            &pwd,
-            stored_hash,
-            password_hash_iterations,
-        )),
-        None => Ok(false),
-    }
-}
-
-/// Increment view count asynchronously.
-fn increment_view_cnt(
-    share_link_repo: Arc<dyn crate::repository::ShareLinkRepository>,
-    link_id: i32,
-) {
-    tokio::spawn(async move {
-        let _ = share_link_repo.increment_view_cnt(link_id).await;
-    });
-}
-
 /// Resolve file metadata from the repo.
 async fn resolve_file_meta(
     repos: &crate::repository::Repositories,
@@ -174,13 +115,16 @@ pub async fn shared_file_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = resolve_share_link(&state, &token).await?;
+    let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
     // Password check
-    let pw_ok = check_password(
+    let provided_pwd = headers
+        .get("X-Seafile-Sharelink-Password")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| params.get("password").map(|s| s.as_str()));
+    let pw_ok = crate::service::sharing::share::check_share_link_password(
         &link,
-        &headers,
-        &params,
+        provided_pwd,
         state.config.auth.password_hash_iterations,
     )?;
 
@@ -215,7 +159,7 @@ pub async fn shared_file_view(
             .unwrap_or(&link.path);
         let stream = stream_blocks(block_ids, state.block_store.clone(), None);
 
-        increment_view_cnt(state.repos.share_link.clone(), link.id);
+        crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -235,7 +179,7 @@ pub async fn shared_file_view(
     let (_file_data, _block_ids) =
         resolve_file_meta(&state.repos, state.db.as_ref(), &link.repo_id, &link.path).await?;
 
-    increment_view_cnt(state.repos.share_link.clone(), link.id);
+    crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
     let file_name = link
         .path
@@ -285,7 +229,7 @@ pub async fn shared_file_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = resolve_share_link(&state, &token).await?;
+    let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
     let password = form
         .get("password")
@@ -442,7 +386,7 @@ pub async fn shared_dir_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = resolve_share_link(&state, &token).await?;
+    let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
     // Only handle directory shares
     if link.s_type != "d" {
@@ -450,10 +394,13 @@ pub async fn shared_dir_view(
     }
 
     // Password check (same as file share)
-    let pw_ok = check_password(
+    let provided_pwd = headers
+        .get("X-Seafile-Sharelink-Password")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| params.get("password").map(|s| s.as_str()));
+    let pw_ok = crate::service::sharing::share::check_share_link_password(
         &link,
-        &headers,
-        &params,
+        provided_pwd,
         state.config.auth.password_hash_iterations,
     )?;
 
@@ -513,7 +460,7 @@ pub async fn shared_dir_view(
         )
         .await?;
 
-        increment_view_cnt(state.repos.share_link.clone(), link.id);
+        crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
         let stream = stream_zip(state.block_store.clone(), files);
 
         let mut headers = HeaderMap::new();
@@ -529,7 +476,7 @@ pub async fn shared_dir_view(
         return Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response());
     }
 
-    increment_view_cnt(state.repos.share_link.clone(), link.id);
+    crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
     // Resolve the current directory path using safe path joining
     // to prevent path traversal attacks (e.g., ?p=../other-dir)
@@ -683,17 +630,20 @@ pub async fn shared_dir_file_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = resolve_share_link(&state, &token).await?;
+    let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
     if link.s_type != "d" {
         return Err(AppError::NotFound("Not a directory share link".into()));
     }
 
     // Password check
-    let pw_ok = check_password(
+    let provided_pwd = headers
+        .get("X-Seafile-Sharelink-Password")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| params.get("password").map(|s| s.as_str()));
+    let pw_ok = crate::service::sharing::share::check_share_link_password(
         &link,
-        &headers,
-        &params,
+        provided_pwd,
         state.config.auth.password_hash_iterations,
     )?;
     if link.password.is_some() && !pw_ok {
@@ -714,7 +664,7 @@ pub async fn shared_dir_file_view(
     let (_file_data, block_ids) =
         resolve_file_meta(&state.repos, state.db.as_ref(), &link.repo_id, &full_path).await?;
 
-    increment_view_cnt(state.repos.share_link.clone(), link.id);
+    crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
     let filename = full_path
         .rsplit_once('/')
@@ -744,7 +694,7 @@ pub async fn shared_dir_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let link = resolve_share_link(&state, &token).await?;
+    let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
     let password = form
         .get("password")

@@ -1,5 +1,6 @@
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde::Serialize;
+use std::sync::Arc;
 
 use crate::Config;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
@@ -581,4 +582,55 @@ pub async fn delete_share(
     }
 
     Ok(())
+}
+
+/// Look up a share link, check expiry, return the link model or error.
+pub async fn resolve_share_link(
+    repos: &Repositories,
+    token: &str,
+) -> Result<infra::entity::share_link::Model, AppError> {
+    let link = repos
+        .share_link
+        .find_by_token(token)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Link not found".into()))?;
+
+    if let Some(expires_at) = link.expires_at
+        && chrono::Utc::now().timestamp() > expires_at
+    {
+        return Err(AppError::NotFound("Link has expired".into()));
+    }
+
+    Ok(link)
+}
+
+/// Check whether the password in the request matches the stored hash.
+pub fn check_share_link_password(
+    link: &infra::entity::share_link::Model,
+    provided_password: Option<&str>,
+    password_hash_iterations: u32,
+) -> Result<bool, AppError> {
+    let stored_hash = match &link.password {
+        Some(h) => h,
+        None => return Ok(true),
+    };
+
+    match provided_password {
+        Some(pwd) => Ok(crate::service::auth::password::verify_password(
+            pwd,
+            stored_hash,
+            password_hash_iterations,
+        )),
+        None => Ok(false),
+    }
+}
+
+/// Fire-and-forget view count increment.
+pub fn increment_view_cnt(
+    share_link_repo: Arc<dyn crate::repository::ShareLinkRepository>,
+    link_id: i32,
+) {
+    tokio::spawn(async move {
+        let _ = share_link_repo.increment_view_cnt(link_id).await;
+    });
 }
