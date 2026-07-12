@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::error::AppError;
-use crate::repo::trash;
+use crate::fs::core::trash;
 use crate::ui::files::format_size;
 
 use super::auth_extractor::WebUser;

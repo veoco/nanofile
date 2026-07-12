@@ -6,8 +6,8 @@ use crate::auth::password::hash_password;
 use crate::auth::token::generate_share_link_token;
 use crate::entity::{repo_member, share_link};
 use crate::error::AppError;
+use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
 use crate::notification::events::FolderPermEvent;
-use crate::repo::fs_tree::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
 use crate::storage;
 

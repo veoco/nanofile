@@ -810,13 +810,13 @@ async fn test_resolve_fs_id_root_path() {
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
     // Test resolve_fs_id directly
-    let result = server::repo::resolve_fs_id(server.repos.as_ref(), &repo_id, &root_fs_id, "/")
+    let result = server::fs::core::resolve_fs_id(server.repos.as_ref(), &repo_id, &root_fs_id, "/")
         .await
         .unwrap();
     assert_eq!(result, root_fs_id, "root path must resolve to root_fs_id");
 
     let result_empty =
-        server::repo::resolve_fs_id(server.repos.as_ref(), &repo_id, &root_fs_id, "")
+        server::fs::core::resolve_fs_id(server.repos.as_ref(), &repo_id, &root_fs_id, "")
             .await
             .unwrap();
     assert_eq!(
@@ -890,13 +890,14 @@ async fn test_resolve_fs_id_deep_path() {
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
     // Resolve /sub -> should get sub_fs_id
-    let result = server::repo::resolve_fs_id(server.repos.as_ref(), &repo_id, &root_fs_id, "/sub")
-        .await
-        .unwrap();
+    let result =
+        server::fs::core::resolve_fs_id(server.repos.as_ref(), &repo_id, &root_fs_id, "/sub")
+            .await
+            .unwrap();
     assert_eq!(result, sub_fs_id, "/sub must resolve to sub_fs_id");
 
     // Resolve /sub/nested.txt -> should get file_fs_id
-    let result = server::repo::resolve_fs_id(
+    let result = server::fs::core::resolve_fs_id(
         server.repos.as_ref(),
         &repo_id,
         &root_fs_id,
@@ -930,9 +931,13 @@ async fn test_resolve_fs_id_nonexistent_segment() {
 
     push_commit(&server.client(), &sync_token, &repo_id, &root_fs_id, None).await;
 
-    let result =
-        server::repo::resolve_fs_id(server.repos.as_ref(), &repo_id, &root_fs_id, "/nonexistent")
-            .await;
+    let result = server::fs::core::resolve_fs_id(
+        server.repos.as_ref(),
+        &repo_id,
+        &root_fs_id,
+        "/nonexistent",
+    )
+    .await;
     assert!(result.is_err(), "non-existent path must return error");
 }
 
@@ -941,7 +946,7 @@ async fn test_resolve_fs_id_nonexistent_segment() {
 async fn test_read_fs_dir_data_invalid_fs_id() {
     let (server, _api_token, repo_id, _sync_token) = setup_repo().await;
 
-    let result = server::repo::read_fs_dir_data(
+    let result = server::fs::core::read_fs_dir_data(
         server.repos.as_ref(),
         &repo_id,
         "ffffffffffffffffffffffffffffffffffffffff",
@@ -959,7 +964,7 @@ async fn test_read_fs_dir_data_invalid_fs_id() {
 async fn test_read_fs_dir_data_zero_hash_is_empty_dir() {
     let (server, _api_token, repo_id, _sync_token) = setup_repo().await;
 
-    let result = server::repo::read_fs_dir_data(
+    let result = server::fs::core::read_fs_dir_data(
         server.repos.as_ref(),
         &repo_id,
         "0000000000000000000000000000000000000000",

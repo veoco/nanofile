@@ -518,7 +518,7 @@ impl FileOps {
         repo_id: &str,
         fs_id: &str,
     ) -> Result<FsDirData, AppError> {
-        crate::repo::read_fs_dir_data(repos, repo_id, fs_id).await
+        crate::fs::core::read_fs_dir_data(repos, repo_id, fs_id).await
     }
 
     pub async fn read_file_fs_object(
@@ -526,6 +526,6 @@ impl FileOps {
         repo_id: &str,
         fs_id: &str,
     ) -> Result<FsFileData, AppError> {
-        crate::repo::read_fs_file_data(repos, repo_id, fs_id).await
+        crate::fs::core::read_fs_file_data(repos, repo_id, fs_id).await
     }
 }

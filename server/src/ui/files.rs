@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::common::util::parent_path_from;
 use crate::error::AppError;
-use crate::repo::download::Downloader;
+use crate::fs::core::download::Downloader;
 
 use super::auth_extractor::WebUser;
 
@@ -800,7 +800,7 @@ async fn get_file_size(
 
     if parent_path == "/" {
         // Root-level file: resolve from root's directory listing
-        let dir_data = crate::repo::read_fs_dir_data(repos, repo_id, &head_root_id)
+        let dir_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &head_root_id)
             .await
             .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
         return dir_data
@@ -811,11 +811,11 @@ async fn get_file_size(
             .ok_or_else(|| AppError::NotFound("File not found".to_string()));
     }
 
-    let parent_fs_id = crate::repo::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
+    let parent_fs_id = crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
         .await
         .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
-    let dir_data = crate::repo::read_fs_dir_data(repos, repo_id, &parent_fs_id)
+    let dir_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &parent_fs_id)
         .await
         .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
     dir_data

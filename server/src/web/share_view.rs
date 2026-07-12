@@ -13,8 +13,8 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::common::{EMPTY_SHA1, S_IFDIR};
 use crate::error::AppError;
-use crate::repo::download::Downloader;
-use crate::repo::fs_tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
+use crate::fs::core::download::Downloader;
+use crate::fs::core::tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
 use base::common::FsFileData;
 
 use async_zip::tokio::write::ZipFileWriter;

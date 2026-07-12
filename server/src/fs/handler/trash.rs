@@ -13,7 +13,7 @@ use crate::activity_log;
 use crate::auth::middleware::AuthUser;
 use crate::auth::{RepoPathRead, RepoPathWrite};
 use crate::error::AppError;
-use crate::repo::trash;
+use crate::fs::core::trash;
 
 #[derive(Deserialize)]
 pub struct Trash2Query {

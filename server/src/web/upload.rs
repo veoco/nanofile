@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::activity_log;
 use crate::error::AppError;
-use crate::repo::file_ops::FileOps;
+use crate::fs::core::file_ops::FileOps;
 use crate::sharing::service::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
 
@@ -228,7 +228,7 @@ async fn ensure_dir_recursive(
 
         // Check if this component already exists
         let root_id = crate::common::util::get_head_root_id(state.db.as_ref(), repo_id).await?;
-        if crate::repo::fs_tree::resolve_fs_id(&state.repos, repo_id, &root_id, &next)
+        if crate::fs::core::tree::resolve_fs_id(&state.repos, repo_id, &root_id, &next)
             .await
             .is_err()
         {
@@ -274,7 +274,7 @@ async fn upload_and_build_response(
 
     // Check if the file already exists to determine replace flag and op_type.
     let size_result =
-        crate::repo::get_entry_total_size(state.db.as_ref(), &state.repos, repo_id, &fp).await;
+        crate::fs::core::get_entry_total_size(state.db.as_ref(), &state.repos, repo_id, &fp).await;
     let file_exists = size_result.is_ok();
     let old_size = size_result.ok().unwrap_or(0);
 
@@ -311,7 +311,7 @@ async fn upload_and_build_response(
     .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
 
     // Adjust repo size (delta = new_size - old_size).
-    crate::repo::adjust_repo_size(
+    crate::fs::core::adjust_repo_size(
         state.db.as_ref(),
         &state.repos,
         repo_id,
@@ -961,7 +961,7 @@ pub async fn update_api_handler(
             } else {
                 format!("{}/{}", target_dir.trim_end_matches('/'), name)
             };
-            let size_result = crate::repo::get_entry_total_size(
+            let size_result = crate::fs::core::get_entry_total_size(
                 state.db.as_ref(),
                 &state.repos,
                 &info.repo_id,
@@ -987,7 +987,7 @@ pub async fn update_api_handler(
             .map_err(|e| AppError::Internal(format!("update failed: {e}")))?;
 
             // Adjust repo size.
-            crate::repo::adjust_repo_size(
+            crate::fs::core::adjust_repo_size(
                 state.db.as_ref(),
                 &state.repos,
                 &info.repo_id,
@@ -1117,9 +1117,13 @@ pub async fn update_aj_token(
         } else {
             format!("{}/{}", target_dir.trim_end_matches('/'), name)
         };
-        let size_result =
-            crate::repo::get_entry_total_size(state.db.as_ref(), &state.repos, &info.repo_id, &fp)
-                .await;
+        let size_result = crate::fs::core::get_entry_total_size(
+            state.db.as_ref(),
+            &state.repos,
+            &info.repo_id,
+            &fp,
+        )
+        .await;
         let file_exists = size_result.is_ok();
         let old_size = size_result.ok().unwrap_or(0);
 
@@ -1139,7 +1143,7 @@ pub async fn update_aj_token(
         .map_err(|e| AppError::Internal(format!("update failed: {e}")))?;
 
         // Adjust repo size.
-        crate::repo::adjust_repo_size(
+        crate::fs::core::adjust_repo_size(
             state.db.as_ref(),
             &state.repos,
             &info.repo_id,
@@ -1299,26 +1303,31 @@ pub async fn upload_blks_api(
         } else {
             format!("{}/{}", target_dir.trim_end_matches('/'), file_name)
         };
-        let size_result =
-            crate::repo::get_entry_total_size(state.db.as_ref(), &state.repos, &info.repo_id, &fp)
-                .await;
+        let size_result = crate::fs::core::get_entry_total_size(
+            state.db.as_ref(),
+            &state.repos,
+            &info.repo_id,
+            &fp,
+        )
+        .await;
         let file_exists = size_result.is_ok();
         let old_size = size_result.ok().unwrap_or(0);
 
         // Resolve parent directory and capture ancestor chain for the
         // subsequent walk_up_ancestors (avoids O(d²) re-resolution).
-        let (parent_fs_id, ancestor_chain) = crate::repo::file_ops::FileOps::resolve_fs_id_chain(
-            &state.repos,
-            &info.repo_id,
-            &target_dir,
-        )
-        .await
-        .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
+        let (parent_fs_id, ancestor_chain) =
+            crate::fs::core::file_ops::FileOps::resolve_fs_id_chain(
+                &state.repos,
+                &info.repo_id,
+                &target_dir,
+            )
+            .await
+            .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
 
         // Add file entry to parent directory
         let entry_name = file_name.clone();
         let modifier_name = info.username.clone();
-        crate::repo::file_ops::FileOps::update_dir_tree_and_commit(
+        crate::fs::core::file_ops::FileOps::update_dir_tree_and_commit(
             state.db.as_ref(),
             &state.repos,
             &info.repo_id,
@@ -1360,7 +1369,7 @@ pub async fn upload_blks_api(
         .map_err(|e| AppError::Internal(format!("commit blocks failed: {e}")))?;
 
         // Adjust repo size
-        crate::repo::adjust_repo_size(
+        crate::fs::core::adjust_repo_size(
             state.db.as_ref(),
             &state.repos,
             &info.repo_id,

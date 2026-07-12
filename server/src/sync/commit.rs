@@ -350,7 +350,7 @@ pub async fn update_branch(
         // full BFS traversal of every file.  When `size_delta` is 0 and
         // there's no prior size (first commit), `adjust_repo_size` falls
         // back to `compute_repo_size()` automatically.
-        crate::repo::adjust_repo_size(
+        crate::fs::core::adjust_repo_size(
             state.db.as_ref(),
             &state.repos,
             &repo_id,
@@ -379,7 +379,7 @@ pub async fn update_branch(
             None
         };
 
-        let mut changes = crate::repo::tree_diff::diff_trees(
+        let mut changes = crate::fs::core::tree_diff::diff_trees(
             &state.repos,
             &repo_id,
             old_root.as_deref(),
@@ -548,7 +548,8 @@ async fn check_commit_blocks(
             let Some(ref base_fs) = frame.base_fs_id else {
                 // Entirely new subtree — walk all files.
                 let new_dir: FsDirData =
-                    match crate::repo::read_fs_dir_data(repos, repo_id, &frame.new_fs_id).await {
+                    match crate::fs::core::read_fs_dir_data(repos, repo_id, &frame.new_fs_id).await
+                    {
                         Ok(d) => d,
                         Err(_) => continue,
                     };
@@ -597,12 +598,12 @@ async fn check_commit_blocks(
 
             // Load both directories.
             let base_dir: FsDirData =
-                match crate::repo::read_fs_dir_data(repos, repo_id, base_fs).await {
+                match crate::fs::core::read_fs_dir_data(repos, repo_id, base_fs).await {
                     Ok(d) => d,
                     Err(_) => continue,
                 };
             let new_dir: FsDirData =
-                match crate::repo::read_fs_dir_data(repos, repo_id, &frame.new_fs_id).await {
+                match crate::fs::core::read_fs_dir_data(repos, repo_id, &frame.new_fs_id).await {
                     Ok(d) => d,
                     Err(_) => continue,
                 };

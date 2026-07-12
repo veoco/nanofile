@@ -5,8 +5,8 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::error::AppError;
-use crate::repo::download::Downloader;
-use crate::repo::fs_tree::{read_fs_dir_data, resolve_fs_id};
+use crate::fs::core::download::Downloader;
+use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
 use base::common::SEAF_METADATA_TYPE_DIR;
 

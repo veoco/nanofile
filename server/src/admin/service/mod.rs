@@ -23,7 +23,7 @@ pub(crate) async fn collect_file_paths(
             continue;
         }
 
-        let dir_data = match crate::repo::read_fs_dir_data(repos, repo_id, &fs_id).await {
+        let dir_data = match crate::fs::core::read_fs_dir_data(repos, repo_id, &fs_id).await {
             Ok(data) => data,
             Err(_) => continue,
         };

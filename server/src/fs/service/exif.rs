@@ -4,7 +4,7 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::error::AppError;
-use crate::repo::download::Downloader;
+use crate::fs::core::download::Downloader;
 use crate::repository::Repositories;
 
 pub struct ExifService {

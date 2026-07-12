@@ -8,7 +8,7 @@ use crate::common::DirEntry;
 use crate::common::util::{get_head_commit_id, get_head_root_id, parent_path_from};
 use crate::entity::{repo, repo_member};
 use crate::error::AppError;
-use crate::repo::file_ops::FileOps;
+use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
 use base::common::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
@@ -39,7 +39,7 @@ pub(crate) async fn list_dir_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    let dir_id = match crate::repo::resolve_fs_id(repos, repo_id, &head.root_id, path).await {
+    let dir_id = match crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, path).await {
         Ok(id) => id,
         Err(e) => {
             let msg = e.to_string();
@@ -103,7 +103,7 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    let dir_id = match crate::repo::resolve_fs_id(repos, repo_id, &head.root_id, path).await {
+    let dir_id = match crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, path).await {
         Ok(id) => id,
         Err(e) => {
             let msg = e.to_string();
@@ -122,7 +122,7 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
             continue;
         }
 
-        let dir_data = match crate::repo::read_fs_dir_data(repos, repo_id, &fs_id).await {
+        let dir_data = match crate::fs::core::read_fs_dir_data(repos, repo_id, &fs_id).await {
             Ok(d) => d,
             Err(_) => continue,
         };
@@ -221,7 +221,7 @@ pub(crate) async fn create_dir_by_path(
         }
     } else {
         let head_root_id = get_head_root_id(db, repo_id).await?;
-        crate::repo::resolve_fs_id(repos, repo_id, &head_root_id, &parent_path)
+        crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, &parent_path)
             .await
             .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?
     };
@@ -236,7 +236,7 @@ pub(crate) async fn create_dir_by_path(
         &parent_fs_id,
         email,
         &format!("Created directory {dir_name}"),
-        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if !dirents.iter().any(|d| d.name == dir_name_clone) {
                 dirents.push(DirEntryData {
@@ -269,7 +269,7 @@ async fn read_fs_dir_data(
     repo_id: &str,
     fs_id: &str,
 ) -> Result<FsDirData, AppError> {
-    crate::repo::read_fs_dir_data(repos, repo_id, fs_id)
+    crate::fs::core::read_fs_dir_data(repos, repo_id, fs_id)
         .await
         .map_err(|e| AppError::internal(format!("read fs_dir_data failed: {e}")))
 }
@@ -287,11 +287,11 @@ async fn rename_dir_entry(
     let old_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
 
     let head_root_id = get_head_root_id(db, repo_id).await?;
-    let parent_fs_id = crate::repo::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
+    let parent_fs_id = crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
         .await
         .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
-    let parent_data = crate::repo::read_fs_dir_data(repos, repo_id, &parent_fs_id)
+    let parent_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &parent_fs_id)
         .await
         .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
     let child_id = parent_data
@@ -309,7 +309,7 @@ async fn rename_dir_entry(
         &parent_fs_id,
         modifier,
         &format!("Renamed directory {old_name}"),
-        crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
+        crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if let Some(d) = dirents.iter_mut().find(|d| d.id == child_id) {
                 d.name = new_name.to_string();
@@ -435,14 +435,14 @@ impl DirService {
         let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
         let parent_path = parent_path_from(path);
 
-        let deleted_size = crate::repo::get_entry_total_size(db, &self.repos, repo_id, path)
+        let deleted_size = crate::fs::core::get_entry_total_size(db, &self.repos, repo_id, path)
             .await
             .ok()
             .unwrap_or(0);
 
         let head_root_id = get_head_root_id(db, repo_id).await?;
         let parent_fs_id =
-            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
+            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
@@ -457,7 +457,7 @@ impl DirService {
             &parent_fs_id,
             email,
             &format!("Deleted directory {name}"),
-            crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
+            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
             |dirents| {
                 dirents.retain(|d| d.name != name);
                 Ok(())
@@ -466,7 +466,7 @@ impl DirService {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        crate::repo::adjust_repo_size(db, &self.repos, repo_id, -deleted_size).await?;
+        crate::fs::core::adjust_repo_size(db, &self.repos, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
             db, repo_id, "delete", "dir", path, user_id, None, None, None, None, None,
@@ -492,12 +492,12 @@ impl DirService {
         let dir_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
 
         let old_parent_fs_id =
-            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
+            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve old parent failed: {e}")))?;
 
         let old_parent_data =
-            crate::repo::read_fs_dir_data(&self.repos, repo_id, &old_parent_fs_id)
+            crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &old_parent_fs_id)
                 .await
                 .map_err(|e| AppError::Internal(format!("read old parent failed: {e}")))?;
         let entry = old_parent_data
@@ -515,7 +515,7 @@ impl DirService {
         let new_parent_path = crate::sanitize::safe_normalize_path(new_parent_dir)
             .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
         let _new_parent_fs_id =
-            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, &new_parent_path)
+            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, &new_parent_path)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve dest parent failed: {e}")))?;
 
@@ -525,7 +525,7 @@ impl DirService {
             repo_id,
             parent_path,
             &old_parent_fs_id,
-            crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
+            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
             |dirents| {
                 dirents.retain(|d| d.name != dir_name);
                 Ok(())
@@ -547,7 +547,7 @@ impl DirService {
 
         let new_head_root = get_head_root_id(db, repo_id).await?;
         let new_dst_fs_id =
-            crate::repo::resolve_fs_id(&self.repos, repo_id, &new_head_root, &new_parent_path)
+            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &new_head_root, &new_parent_path)
                 .await
                 .map_err(|e| {
                     AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
@@ -564,7 +564,7 @@ impl DirService {
             &new_dst_fs_id,
             email,
             &format!("Moved directory {dir_name}"),
-            crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
+            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
             |dirents| {
                 if !dirents.iter().any(|d| d.name == dir_name_clone) {
                     dirents.push(DirEntryData {
@@ -643,7 +643,7 @@ impl DirService {
         let db = self.db();
         let head_root_id = get_head_root_id(db, repo_id).await?;
         let source_dir_fs_id =
-            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_root_id, path)
+            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, path)
                 .await
                 .map_err(|_| AppError::NotFound("directory not found".into()))?;
 
@@ -742,17 +742,18 @@ impl DirService {
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
         let parent_fs_id =
-            crate::repo::resolve_fs_id(&self.repos, repo_id, &head_commit.root_id, parent_path)
+            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_commit.root_id, parent_path)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
-        let deleted_size: i64 = crate::repo::get_entry_total_size(db, &self.repos, repo_id, path)
-            .await
-            .unwrap_or_default();
+        let deleted_size: i64 =
+            crate::fs::core::get_entry_total_size(db, &self.repos, repo_id, path)
+                .await
+                .unwrap_or_default();
 
         // Trash: record deleted entry before tree update
         if let Ok(parent_dir_data) =
-            crate::repo::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id).await
+            crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id).await
             && let Some(entry) = parent_dir_data.dirents.iter().find(|d| d.name == name)
         {
             let obj_type = if entry.mode & S_IFDIR != 0 {
@@ -760,7 +761,7 @@ impl DirService {
             } else {
                 "file"
             };
-            if let Err(e) = crate::repo::trash::add_to_trash(
+            if let Err(e) = crate::fs::core::trash::add_to_trash(
                 db,
                 &self.repos,
                 repo_id,
@@ -786,7 +787,7 @@ impl DirService {
             &parent_fs_id,
             email,
             &format!("Deleted {name}"),
-            crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
+            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
             |dirents| {
                 dirents.retain(|d| d.name != name);
                 Ok(())
@@ -802,7 +803,7 @@ impl DirService {
             tracing::warn!("Failed to delete index for {path}: {e}");
         }
 
-        crate::repo::adjust_repo_size(db, &self.repos, repo_id, -deleted_size).await?;
+        crate::fs::core::adjust_repo_size(db, &self.repos, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
             db, repo_id, "delete", obj, path, user_id, None, None, None, None, None,
@@ -947,7 +948,7 @@ impl DirService {
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-        crate::repo::resolve_fs_id(&self.repos, repo_id, &head_commit.root_id, path)
+        crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_commit.root_id, path)
             .await
             .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
 
@@ -965,7 +966,7 @@ impl DirService {
 
         let mtime = if parent_path == "/" {
             let root_data =
-                crate::repo::read_fs_dir_data(&self.repos, repo_id, &head_commit.root_id)
+                crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &head_commit.root_id)
                     .await
                     .unwrap_or_else(|_| FsDirData {
                         dirents: vec![],
@@ -979,7 +980,7 @@ impl DirService {
                 .map(|d| d.mtime)
                 .unwrap_or(0)
         } else {
-            let parent_fs_id = match crate::repo::resolve_fs_id(
+            let parent_fs_id = match crate::fs::core::resolve_fs_id(
                 &self.repos,
                 repo_id,
                 &head_commit.root_id,
@@ -990,9 +991,10 @@ impl DirService {
                 Ok(id) => id,
                 Err(_) => return Err(AppError::NotFound("Folder not found.".into())),
             };
-            let parent_data = crate::repo::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
-                .await
-                .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
+            let parent_data =
+                crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
             parent_data
                 .dirents
                 .iter()
@@ -1081,10 +1083,11 @@ async fn record_delete_trash(
         Ok(id) => id,
         Err(_) => return,
     };
-    let parent_dir_data = match crate::repo::read_fs_dir_data(repos, repo_id, parent_fs_id).await {
-        Ok(d) => d,
-        Err(_) => return,
-    };
+    let parent_dir_data =
+        match crate::fs::core::read_fs_dir_data(repos, repo_id, parent_fs_id).await {
+            Ok(d) => d,
+            Err(_) => return,
+        };
     let entry = match parent_dir_data.dirents.iter().find(|d| d.name == name) {
         Some(e) => e,
         None => return,
@@ -1094,7 +1097,7 @@ async fn record_delete_trash(
     } else {
         "file"
     };
-    if let Err(e) = crate::repo::trash::add_to_trash(
+    if let Err(e) = crate::fs::core::trash::add_to_trash(
         db,
         repos,
         repo_id,

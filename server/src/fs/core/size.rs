@@ -6,7 +6,7 @@ use crate::error::AppError;
 use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
 
-use crate::repo::{read_fs_dir_data, resolve_fs_id};
+use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
 
 /// Compute the total size of all files in a repository by recursively
 /// traversing the FS tree from the repo's head commit.

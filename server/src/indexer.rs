@@ -310,7 +310,7 @@ impl TextIndexer {
             .unwrap_or(fullpath);
 
         // Read file content from block storage.
-        let data = match crate::repo::download::Downloader::download_file(
+        let data = match crate::fs::core::download::Downloader::download_file(
             self.repos(),
             db,
             repo_id,

@@ -75,10 +75,11 @@ impl Downloader {
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-        let fs_id = crate::repo::resolve_fs_id(repos, repo_id, &head_commit.root_id, path).await?;
+        let fs_id =
+            crate::fs::core::resolve_fs_id(repos, repo_id, &head_commit.root_id, path).await?;
 
         let file_data =
-            crate::repo::file_ops::FileOps::read_file_fs_object(repos, repo_id, &fs_id).await?;
+            crate::fs::core::file_ops::FileOps::read_file_fs_object(repos, repo_id, &fs_id).await?;
 
         Ok((file_data.clone(), file_data.block_ids))
     }

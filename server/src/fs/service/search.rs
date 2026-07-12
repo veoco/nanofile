@@ -211,12 +211,12 @@ impl SearchService {
         let parent_fs_id = if parent_path == "/" {
             root_id.clone()
         } else {
-            crate::repo::resolve_fs_id(&self.repos, repo_id, root_id, parent_path)
+            crate::fs::core::resolve_fs_id(&self.repos, repo_id, root_id, parent_path)
                 .await
                 .ok()?
         };
 
-        let dir_data = crate::repo::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
+        let dir_data = crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
             .await
             .ok()?;
         let entry = dir_data.dirents.iter().find(|d| d.name == *name)?;
@@ -268,7 +268,7 @@ async fn search_fs_tree(
             continue;
         }
 
-        let dir_data = match crate::repo::read_fs_dir_data(repos, repo_id, &fs_id).await {
+        let dir_data = match crate::fs::core::read_fs_dir_data(repos, repo_id, &fs_id).await {
             Ok(data) => data,
             Err(_) => continue,
         };

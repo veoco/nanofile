@@ -492,7 +492,7 @@ impl RepoService {
         }
 
         // Record deleted repo in trash before cascade-delete
-        if let Err(e) = crate::repo::trash::add_deleted_repo(
+        if let Err(e) = crate::fs::core::trash::add_deleted_repo(
             db,
             repos,
             repo_id,

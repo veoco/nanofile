@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::repo::download::Downloader;
+use crate::fs::core::download::Downloader;
 use base::common::FsFileData;
 
 /// Build a streaming body that reads and yields blocks one at a time.

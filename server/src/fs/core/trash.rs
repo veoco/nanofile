@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::activity_log;
 use crate::entity::{deleted_repo, file_trash, repo, repo_member};
 use crate::error::AppError;
-use crate::repo::file_ops::FileOps;
+use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
 use base::common::DirEntryData;
@@ -386,7 +386,7 @@ async fn path_exists_in_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-    match crate::repo::resolve_fs_id(repos, repo_id, &head.root_id, path).await {
+    match crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, path).await {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }
@@ -418,13 +418,13 @@ async fn name_exists_in_parent(
 
     // Resolve parent directory fs_id
     let parent_fs_id =
-        match crate::repo::resolve_fs_id(repos, repo_id, &head.root_id, parent_path).await {
+        match crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, parent_path).await {
             Ok(id) => id,
             Err(_) => return Ok(false),
         };
 
     // Read parent directory entries
-    let parent_data = match crate::repo::read_fs_dir_data(repos, repo_id, &parent_fs_id).await {
+    let parent_data = match crate::fs::core::read_fs_dir_data(repos, repo_id, &parent_fs_id).await {
         Ok(data) => data,
         Err(_) => return Ok(false),
     };
@@ -540,7 +540,9 @@ pub async fn restore_trash_items(
             let parent_fs_id = if parent_dir == "/" {
                 head.root_id.clone()
             } else {
-                match crate::repo::resolve_fs_id(repos, repo_id, &head.root_id, parent_dir).await {
+                match crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, parent_dir)
+                    .await
+                {
                     Ok(id) => id,
                     Err(_) => {
                         failed.push(RevertFailedItem {
@@ -579,7 +581,7 @@ pub async fn restore_trash_items(
                 &parent_fs_id,
                 modifier,
                 &description,
-                crate::repo::file_ops::EMPTY_ANCESTOR_CHAIN,
+                crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
                 |dirents| {
                     dirents.push(DirEntryData {
                         id: obj_id.clone(),

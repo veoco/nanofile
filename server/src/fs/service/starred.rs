@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use sea_orm::{DatabaseConnection, Set};
 
 use crate::error::AppError;
-use crate::repo::{read_fs_dir_data, resolve_fs_id};
+use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
 
