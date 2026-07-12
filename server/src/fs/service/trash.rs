@@ -28,7 +28,8 @@ impl FsTrashService {
         page: u32,
         per_page: u32,
     ) -> Result<serde_json::Value, AppError> {
-        let result = TrashService::list_trash2(self.db(), repo_id, page, per_page).await?;
+        let result =
+            TrashService::list_trash2(self.db(), &self.repos, repo_id, page, per_page).await?;
         Ok(serde_json::to_value(result)?)
     }
 
@@ -39,7 +40,8 @@ impl FsTrashService {
         cursor: Option<i64>,
         limit: u32,
     ) -> Result<serde_json::Value, AppError> {
-        let result = TrashService::list_trash_cursor(self.db(), repo_id, cursor, limit).await?;
+        let result =
+            TrashService::list_trash_cursor(self.db(), &self.repos, repo_id, cursor, limit).await?;
         Ok(serde_json::to_value(result)?)
     }
 
@@ -119,7 +121,7 @@ impl FsTrashService {
         user_id: i32,
         keep_days: Option<i64>,
     ) -> Result<(), AppError> {
-        TrashService::clean_trash(self.db(), repo_id, keep_days).await?;
+        TrashService::clean_trash(self.db(), &self.repos, repo_id, keep_days).await?;
 
         activity_log::log_activity(
             self.db(),

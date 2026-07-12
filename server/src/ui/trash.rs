@@ -74,10 +74,20 @@ pub async fn trash_list_page(
 
     // Fetch trash items across all accessible repos
     let result = if q.is_empty() {
-        TrashService::list_trash_for_user(db, user.user_id, page, per_page).await?
+        TrashService::list_trash_for_user(db, &state.repos, user.user_id, page, per_page).await?
     } else {
-        TrashService::search_trash_for_user(db, user.user_id, &q, page, per_page, None, None, None)
-            .await?
+        TrashService::search_trash_for_user(
+            db,
+            &state.repos,
+            user.user_id,
+            &q,
+            page,
+            per_page,
+            None,
+            None,
+            None,
+        )
+        .await?
     };
 
     // Format items for display

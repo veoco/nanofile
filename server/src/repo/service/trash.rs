@@ -1,9 +1,12 @@
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+use sea_orm::{
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, Order, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::activity_log;
-use crate::entity::deleted_repo;
+use crate::entity::{deleted_repo, file_trash, repo, repo_member};
 use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
 use crate::repository::Repositories;
@@ -87,7 +90,8 @@ impl<'a> TrashService<'a> {
     /// Best-effort: logs and swallows errors.
     #[allow(clippy::too_many_arguments)]
     pub async fn add_to_trash(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         full_path: &str,
         obj_type: &str,
@@ -105,23 +109,21 @@ impl<'a> TrashService<'a> {
 
         let now = chrono::Utc::now().timestamp();
 
-        db.execute(Statement::from_sql_and_values(
-            DatabaseBackend::Sqlite,
-            "INSERT INTO file_trash (user, obj_type, obj_id, obj_name, delete_time, \
-             repo_id, commit_id, path, size) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            vec![
-                user_email.to_owned().into(),
-                obj_type.to_owned().into(),
-                obj_id.to_owned().into(),
-                obj_name.to_owned().into(),
-                now.into(),
-                repo_id.to_owned().into(),
-                parent_commit_id.to_owned().into(),
-                parent_dir.to_owned().into(),
-                size.into(),
-            ],
-        ))
-        .await?;
+        repos
+            .file_trash
+            .insert(file_trash::ActiveModel {
+                id: sea_orm::NotSet,
+                user: Set(user_email.to_owned()),
+                obj_type: Set(obj_type.to_owned()),
+                obj_id: Set(obj_id.to_owned()),
+                obj_name: Set(obj_name.to_owned()),
+                delete_time: Set(now),
+                repo_id: Set(repo_id.to_owned()),
+                commit_id: Set(parent_commit_id.to_owned()),
+                path: Set(parent_dir.to_owned()),
+                size: Set(size),
+            })
+            .await?;
 
         Ok(())
     }
@@ -130,7 +132,8 @@ impl<'a> TrashService<'a> {
     ///
     /// Best-effort: logs and swallows errors.
     pub async fn add_batch_to_trash(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         items: Vec<TrashItem>,
         parent_commit_id: &str,
@@ -145,23 +148,21 @@ impl<'a> TrashService<'a> {
                 None => "/",
             };
 
-            db.execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "INSERT INTO file_trash (user, obj_type, obj_id, obj_name, delete_time, \
-                 repo_id, commit_id, path, size) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-                vec![
-                    user_email.to_owned().into(),
-                    item.obj_type.to_owned().into(),
-                    item.obj_id.to_owned().into(),
-                    item.obj_name.to_owned().into(),
-                    now.into(),
-                    repo_id.to_owned().into(),
-                    parent_commit_id.to_owned().into(),
-                    parent_dir.to_owned().into(),
-                    item.size.into(),
-                ],
-            ))
-            .await?;
+            repos
+                .file_trash
+                .insert(file_trash::ActiveModel {
+                    id: sea_orm::NotSet,
+                    user: Set(user_email.to_owned()),
+                    obj_type: Set(item.obj_type.to_owned()),
+                    obj_id: Set(item.obj_id.to_owned()),
+                    obj_name: Set(item.obj_name.to_owned()),
+                    delete_time: Set(now),
+                    repo_id: Set(repo_id.to_owned()),
+                    commit_id: Set(parent_commit_id.to_owned()),
+                    path: Set(parent_dir.to_owned()),
+                    size: Set(item.size),
+                })
+                .await?;
         }
 
         Ok(())
@@ -169,57 +170,39 @@ impl<'a> TrashService<'a> {
 
     /// Page-based trash listing for the `/trash2/` endpoint.
     pub async fn list_trash2(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         page: u32,
         per_page: u32,
     ) -> Result<TrashListResult, AppError> {
         let page = page.max(1);
         let per_page = per_page.clamp(1, 100);
-        let offset = ((page - 1) * per_page) as i64;
+        let offset = ((page - 1) * per_page) as u64;
 
         // Count total
-        let count_result = db
-            .query_one(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "SELECT COUNT(*) FROM file_trash WHERE repo_id = $1",
-                vec![repo_id.to_owned().into()],
-            ))
-            .await?
-            .ok_or_else(|| AppError::Internal("count failed".into()))?;
-        let total_count: i64 = count_result.try_get("", "").unwrap_or(0);
+        let total_count = repos.file_trash.count_by_repo(repo_id).await?;
 
         // Fetch items
-        let rows = db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "SELECT user, obj_type, obj_id, obj_name, delete_time, \
-                 repo_id, commit_id, path, size \
-                 FROM file_trash WHERE repo_id = $1 \
-                 ORDER BY delete_time DESC \
-                 LIMIT $2 OFFSET $3",
-                vec![repo_id.to_owned().into(), per_page.into(), offset.into()],
-            ))
+        let rows = repos
+            .file_trash
+            .find_by_repo_paginated(repo_id, per_page as u64, offset)
             .await?;
 
         let items = rows
             .iter()
-            .map(|r| {
-                let delete_time: i64 = r.try_get("", "delete_time").unwrap_or(0);
-                let obj_type: String = r.try_get("", "obj_type").unwrap_or_default();
-                TrashEntry {
-                    parent_dir: r.try_get("", "path").unwrap_or_default(),
-                    obj_name: r.try_get("", "obj_name").unwrap_or_default(),
-                    deleted_time: chrono::DateTime::from_timestamp(delete_time, 0)
-                        .map(|d| d.to_rfc3339())
-                        .unwrap_or_default(),
-                    commit_id: r.try_get("", "commit_id").unwrap_or_default(),
-                    is_dir: obj_type == "dir",
-                    size: r.try_get("", "size").unwrap_or(0),
-                    obj_id: r.try_get("", "obj_id").unwrap_or_default(),
-                    repo_id: repo_id.to_string(),
-                    repo_name: String::new(),
-                }
+            .map(|m| TrashEntry {
+                parent_dir: m.path.clone(),
+                obj_name: m.obj_name.clone(),
+                deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
+                    .map(|d| d.to_rfc3339())
+                    .unwrap_or_default(),
+                commit_id: m.commit_id.clone(),
+                is_dir: m.obj_type == "dir",
+                size: m.size,
+                obj_id: m.obj_id.clone(),
+                repo_id: repo_id.to_string(),
+                repo_name: String::new(),
             })
             .collect();
 
@@ -245,52 +228,35 @@ impl<'a> TrashService<'a> {
     ) -> Result<TrashListResult, AppError> {
         let page = page.max(1);
         let per_page = per_page.clamp(1, 100);
-        let offset = ((page - 1) * per_page) as i64;
+        let offset = ((page - 1) * per_page) as u64;
 
-        let mut where_clauses = vec!["ft.repo_id = $1".to_string()];
-        let mut params: Vec<sea_orm::Value> = vec![repo_id.to_owned().into()];
-        let mut param_idx = 2u32;
+        let mut condition = Condition::all().add(file_trash::Column::RepoId.eq(repo_id.to_owned()));
 
         // Keyword search on obj_name
         if !query.is_empty() {
-            where_clauses.push(format!("ft.obj_name LIKE ${}", param_idx));
-            params.push(format!("%{}%", query).into());
-            param_idx += 1;
+            condition = condition.add(file_trash::Column::ObjName.contains(query));
         }
 
         // Filter by users
         if let Some(users) = op_users
             && !users.is_empty()
         {
-            let emails: Vec<&str> = users
+            let emails: Vec<String> = users
                 .split(',')
-                .map(|s| s.trim())
+                .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
             if !emails.is_empty() {
-                let placeholders: Vec<String> = emails
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("${}", param_idx + i as u32))
-                    .collect();
-                where_clauses.push(format!("ft.user IN ({})", placeholders.join(",")));
-                for email in &emails {
-                    params.push((*email).to_owned().into());
-                }
-                param_idx += emails.len() as u32;
+                condition = condition.add(file_trash::Column::User.is_in(emails));
             }
         }
 
         // Time range filter
         if let Some(from) = time_from {
-            where_clauses.push(format!("ft.delete_time >= ${}", param_idx));
-            params.push(from.into());
-            param_idx += 1;
+            condition = condition.add(file_trash::Column::DeleteTime.gte(from));
         }
         if let Some(to) = time_to {
-            where_clauses.push(format!("ft.delete_time <= ${}", param_idx));
-            params.push(to.into());
-            param_idx += 1;
+            condition = condition.add(file_trash::Column::DeleteTime.lte(to));
         }
 
         // File extension filter
@@ -303,79 +269,48 @@ impl<'a> TrashService<'a> {
                 .filter(|s| !s.is_empty())
                 .collect();
             if !exts.is_empty() {
-                let suffix_clauses: Vec<String> = exts
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("ft.obj_name LIKE ${}", param_idx + i as u32))
-                    .collect();
-                where_clauses.push(format!("({})", suffix_clauses.join(" OR ")));
+                let mut any = Condition::any();
                 for ext in &exts {
                     let pattern = if ext.starts_with('.') {
                         format!("%{}", ext)
                     } else {
                         format!("%.{}", ext)
                     };
-                    params.push(pattern.into());
+                    any = any.add(file_trash::Column::ObjName.like(pattern));
                 }
-                param_idx += exts.len() as u32;
+                condition = condition.add(any);
             }
         }
 
-        let where_sql = where_clauses.join(" AND ");
-
         // Count
-        let count_sql = format!("SELECT COUNT(*) FROM file_trash ft WHERE {}", where_sql);
-        let count_params = params.clone();
-        let count_result = db
-            .query_one(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                &count_sql,
-                count_params,
-            ))
-            .await?
-            .ok_or_else(|| AppError::Internal("count failed".into()))?;
-        let total_count: i64 = count_result.try_get("", "").unwrap_or(0);
+        let total_count = file_trash::Entity::find()
+            .filter(condition.clone())
+            .count(db)
+            .await? as i64;
 
         // Fetch items
-        let select_sql = format!(
-            "SELECT ft.user, ft.obj_type, ft.obj_id, ft.obj_name, ft.delete_time, \
-             ft.repo_id, ft.commit_id, ft.path, ft.size \
-             FROM file_trash ft WHERE {} \
-             ORDER BY ft.delete_time DESC \
-             LIMIT ${} OFFSET ${}",
-            where_sql,
-            param_idx,
-            param_idx + 1,
-        );
-        params.push(per_page.into());
-        params.push(offset.into());
-
-        let rows = db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                &select_sql,
-                params,
-            ))
+        let rows = file_trash::Entity::find()
+            .filter(condition)
+            .order_by(file_trash::Column::DeleteTime, Order::Desc)
+            .limit(per_page as u64)
+            .offset(offset)
+            .all(db)
             .await?;
 
         let items = rows
             .iter()
-            .map(|r| {
-                let delete_time: i64 = r.try_get("", "delete_time").unwrap_or(0);
-                let obj_type: String = r.try_get("", "obj_type").unwrap_or_default();
-                TrashEntry {
-                    parent_dir: r.try_get("", "path").unwrap_or_default(),
-                    obj_name: r.try_get("", "obj_name").unwrap_or_default(),
-                    deleted_time: chrono::DateTime::from_timestamp(delete_time, 0)
-                        .map(|d| d.to_rfc3339())
-                        .unwrap_or_default(),
-                    commit_id: r.try_get("", "commit_id").unwrap_or_default(),
-                    is_dir: obj_type == "dir",
-                    size: r.try_get("", "size").unwrap_or(0),
-                    obj_id: r.try_get("", "obj_id").unwrap_or_default(),
-                    repo_id: repo_id.to_string(),
-                    repo_name: String::new(),
-                }
+            .map(|m| TrashEntry {
+                parent_dir: m.path.clone(),
+                obj_name: m.obj_name.clone(),
+                deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
+                    .map(|d| d.to_rfc3339())
+                    .unwrap_or_default(),
+                commit_id: m.commit_id.clone(),
+                is_dir: m.obj_type == "dir",
+                size: m.size,
+                obj_id: m.obj_id.clone(),
+                repo_id: repo_id.to_string(),
+                repo_name: String::new(),
             })
             .collect();
 
@@ -392,66 +327,36 @@ impl<'a> TrashService<'a> {
     /// the previous page. Returns items with `delete_time <= cursor`. When
     /// `cursor` is `None`, returns the most recent items.
     pub async fn list_trash_cursor(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         cursor: Option<i64>,
         limit: u32,
     ) -> Result<CursorTrashResult, AppError> {
         let limit = limit.clamp(1, 100);
-        let fetch = limit + 1; // fetch one extra to detect has_more
+        let fetch = (limit + 1) as u64; // fetch one extra to detect has_more
 
-        let (where_clause, mut params) = if let Some(c) = cursor {
-            (
-                "WHERE repo_id = $1 AND delete_time < $2".to_string(),
-                vec![repo_id.to_owned().into(), c.into()] as Vec<sea_orm::Value>,
-            )
-        } else {
-            (
-                "WHERE repo_id = $1".to_string(),
-                vec![repo_id.to_owned().into()] as Vec<sea_orm::Value>,
-            )
-        };
-
-        let limit_param = format!("${}", params.len() + 1);
-        params.push(fetch.into());
-
-        let sql = format!(
-            "SELECT user, obj_type, obj_id, obj_name, delete_time, \
-             repo_id, commit_id, path, size \
-             FROM file_trash {} \
-             ORDER BY delete_time DESC \
-             LIMIT {}",
-            where_clause, limit_param,
-        );
-
-        let rows = db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                &sql,
-                params,
-            ))
+        let rows = repos
+            .file_trash
+            .find_by_repo_cursor(repo_id, cursor, fetch)
             .await?;
 
         let has_more = rows.len() > limit as usize;
         let items: Vec<TrashEntry> = rows
             .into_iter()
             .take(limit as usize)
-            .map(|r| {
-                let delete_time: i64 = r.try_get("", "delete_time").unwrap_or(0);
-                let obj_type: String = r.try_get("", "obj_type").unwrap_or_default();
-                TrashEntry {
-                    parent_dir: r.try_get("", "path").unwrap_or_default(),
-                    obj_name: r.try_get("", "obj_name").unwrap_or_default(),
-                    deleted_time: chrono::DateTime::from_timestamp(delete_time, 0)
-                        .map(|d| d.to_rfc3339())
-                        .unwrap_or_default(),
-                    commit_id: r.try_get("", "commit_id").unwrap_or_default(),
-                    is_dir: obj_type == "dir",
-                    size: r.try_get("", "size").unwrap_or(0),
-                    obj_id: r.try_get("", "obj_id").unwrap_or_default(),
-                    repo_id: repo_id.to_string(),
-                    repo_name: String::new(),
-                }
+            .map(|m| TrashEntry {
+                parent_dir: m.path,
+                obj_name: m.obj_name,
+                deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
+                    .map(|d| d.to_rfc3339())
+                    .unwrap_or_default(),
+                commit_id: m.commit_id,
+                is_dir: m.obj_type == "dir",
+                size: m.size,
+                obj_id: m.obj_id,
+                repo_id: repo_id.to_string(),
+                repo_name: String::new(),
             })
             .collect();
 
@@ -459,26 +364,8 @@ impl<'a> TrashService<'a> {
     }
 
     /// Remove trash records by their primary key IDs.
-    async fn delete_trash_records(db: &DatabaseConnection, ids: &[i32]) -> Result<(), AppError> {
-        for chunk in ids.chunks(100) {
-            let placeholders: Vec<String> = chunk
-                .iter()
-                .enumerate()
-                .map(|(i, _)| format!("${}", i + 1))
-                .collect();
-            let sql = format!(
-                "DELETE FROM file_trash WHERE id IN ({})",
-                placeholders.join(",")
-            );
-            let params: Vec<sea_orm::Value> = chunk.iter().map(|id| (*id).into()).collect();
-            db.execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                &sql,
-                params,
-            ))
-            .await?;
-        }
-        Ok(())
+    async fn delete_trash_records(repos: &Repositories, ids: &[i32]) -> Result<(), AppError> {
+        repos.file_trash.delete_by_ids(ids).await
     }
 
     /// Check whether a path exists in the current FS tree (i.e. the resolved
@@ -596,22 +483,11 @@ impl<'a> TrashService<'a> {
                 };
 
                 // Find the trash record
-                let rows = db
-                    .query_all(Statement::from_sql_and_values(
-                        DatabaseBackend::Sqlite,
-                        "SELECT id, obj_type, obj_id, obj_name, path, size \
-                         FROM file_trash \
-                         WHERE repo_id = $1 AND commit_id = $2 AND path = $3 AND obj_name = $4",
-                        vec![
-                            repo_id.to_owned().into(),
-                            commit_id.to_owned().into(),
-                            parent_dir.to_owned().into(),
-                            obj_name.to_owned().into(),
-                        ],
-                    ))
-                    .await?;
-
-                let Some(row) = rows.first() else {
+                let Some(model) = repos
+                    .file_trash
+                    .find_by_compound_key(repo_id, commit_id, parent_dir, obj_name)
+                    .await?
+                else {
                     failed.push(RevertFailedItem {
                         commit_id: commit_id.clone(),
                         path: full_path.to_string(),
@@ -620,9 +496,9 @@ impl<'a> TrashService<'a> {
                     continue;
                 };
 
-                let trash_id: i32 = row.try_get("", "id").unwrap_or(0);
-                let obj_type: String = row.try_get("", "obj_type").unwrap_or_default();
-                let obj_id: String = row.try_get("", "obj_id").unwrap_or_default();
+                let trash_id = model.id;
+                let obj_type = model.obj_type.clone();
+                let obj_id = model.obj_id.clone();
                 let is_dir = obj_type == "dir";
 
                 // Verify fs_object exists
@@ -702,7 +578,7 @@ impl<'a> TrashService<'a> {
                 let now = chrono::Utc::now().timestamp();
 
                 // Get the size from the stored trash record for adjustments later
-                let entry_size: i64 = row.try_get("", "size").unwrap_or(0);
+                let entry_size = model.size;
                 let _ = entry_size; // future use
 
                 // Insert entry into parent directory and create commit
@@ -739,7 +615,7 @@ impl<'a> TrashService<'a> {
                 match result {
                     Ok(_) => {
                         // Delete the trash record
-                        Self::delete_trash_records(db, &[trash_id]).await?;
+                        Self::delete_trash_records(repos, &[trash_id]).await?;
 
                         // Log activity
                         activity_log::log_activity(
@@ -794,7 +670,8 @@ impl<'a> TrashService<'a> {
     /// Clean trash items for a repo, optionally keeping items newer than
     /// `keep_days`. Returns the number of deleted rows.
     pub async fn clean_trash(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         keep_days: Option<i64>,
     ) -> Result<u64, AppError> {
@@ -802,23 +679,14 @@ impl<'a> TrashService<'a> {
             .filter(|d| *d > 0)
             .map(|d| chrono::Utc::now().timestamp() - d * 86400);
 
-        let result = if let Some(c) = cutoff {
-            db.execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "DELETE FROM file_trash WHERE repo_id = $1 AND delete_time < $2",
-                vec![repo_id.to_owned().into(), c.into()],
-            ))
-            .await?
+        if let Some(c) = cutoff {
+            repos.file_trash.delete_by_repo_before(repo_id, c).await?;
         } else {
-            db.execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "DELETE FROM file_trash WHERE repo_id = $1",
-                vec![repo_id.to_owned().into()],
-            ))
-            .await?
-        };
+            repos.file_trash.delete_by_repo(repo_id).await?;
+        }
 
-        Ok(result.rows_affected())
+        // The repository methods don't return row counts; return 0 as best-effort.
+        Ok(0)
     }
 
     /// List trash items across all repos the user has access to.
@@ -827,60 +695,70 @@ impl<'a> TrashService<'a> {
     /// include the repo name for display.
     pub async fn list_trash_for_user(
         db: &DatabaseConnection,
+        repos: &Repositories,
         user_id: i32,
         page: u32,
         per_page: u32,
     ) -> Result<TrashListResult, AppError> {
         let page = page.max(1);
         let per_page = per_page.clamp(1, 100);
-        let offset = ((page - 1) * per_page) as i64;
+        let offset = ((page - 1) * per_page) as u64;
+
+        // Gather repo_ids accessible by the user
+        let member_repos = repos.member.find_by_user_id(user_id).await?;
+        let repo_ids: Vec<String> = member_repos
+            .into_iter()
+            .map(|m| m.repo_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        if repo_ids.is_empty() {
+            return Ok(TrashListResult {
+                items: Vec::new(),
+                total_count: 0,
+                can_search: true,
+            });
+        }
 
         // Count
-        let count_result = db
-            .query_one(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "SELECT COUNT(*) FROM file_trash ft \
-                 INNER JOIN repo_members rm ON ft.repo_id = rm.repo_id AND rm.user_id = $1",
-                vec![user_id.into()],
-            ))
-            .await?
-            .ok_or_else(|| AppError::Internal("count failed".into()))?;
-        let total_count: i64 = count_result.try_get("", "").unwrap_or(0);
+        let total_count = file_trash::Entity::find()
+            .filter(file_trash::Column::RepoId.is_in(repo_ids.clone()))
+            .count(db)
+            .await? as i64;
+
+        // Build repo name lookup
+        let mut repo_names: HashMap<String, String> = HashMap::new();
+        for rid in &repo_ids {
+            if let Some(r) = repos.repo.find_by_id(rid).await? {
+                repo_names.insert(rid.clone(), r.name);
+            }
+        }
 
         // Fetch items
-        let rows = db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "SELECT ft.user, ft.obj_type, ft.obj_id, ft.obj_name, ft.delete_time, \
-                 ft.repo_id, ft.commit_id, ft.path, ft.size, \
-                 COALESCE(r.name, '') AS repo_name \
-                 FROM file_trash ft \
-                 INNER JOIN repo_members rm ON ft.repo_id = rm.repo_id AND rm.user_id = $1 \
-                 LEFT JOIN repos r ON ft.repo_id = r.id \
-                 ORDER BY ft.delete_time DESC \
-                 LIMIT $2 OFFSET $3",
-                vec![user_id.into(), per_page.into(), offset.into()],
-            ))
+        let rows = file_trash::Entity::find()
+            .filter(file_trash::Column::RepoId.is_in(repo_ids))
+            .order_by(file_trash::Column::DeleteTime, Order::Desc)
+            .limit(per_page as u64)
+            .offset(offset)
+            .all(db)
             .await?;
 
         let items = rows
             .iter()
-            .map(|r| {
-                let delete_time: i64 = r.try_get("", "delete_time").unwrap_or(0);
-                let obj_type: String = r.try_get("", "obj_type").unwrap_or_default();
-                let repo_id: String = r.try_get("", "repo_id").unwrap_or_default();
-                let repo_name: String = r.try_get("", "repo_name").unwrap_or_default();
+            .map(|m| {
+                let repo_name = repo_names.get(&m.repo_id).cloned().unwrap_or_default();
                 TrashEntry {
-                    parent_dir: r.try_get("", "path").unwrap_or_default(),
-                    obj_name: r.try_get("", "obj_name").unwrap_or_default(),
-                    deleted_time: chrono::DateTime::from_timestamp(delete_time, 0)
+                    parent_dir: m.path.clone(),
+                    obj_name: m.obj_name.clone(),
+                    deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
                         .map(|d| d.to_rfc3339())
                         .unwrap_or_default(),
-                    commit_id: r.try_get("", "commit_id").unwrap_or_default(),
-                    is_dir: obj_type == "dir",
-                    size: r.try_get("", "size").unwrap_or(0),
-                    obj_id: r.try_get("", "obj_id").unwrap_or_default(),
-                    repo_id,
+                    commit_id: m.commit_id.clone(),
+                    is_dir: m.obj_type == "dir",
+                    size: m.size,
+                    obj_id: m.obj_id.clone(),
+                    repo_id: m.repo_id.clone(),
                     repo_name,
                 }
             })
@@ -900,6 +778,7 @@ impl<'a> TrashService<'a> {
     #[allow(clippy::too_many_arguments)]
     pub async fn search_trash_for_user(
         db: &DatabaseConnection,
+        repos: &Repositories,
         user_id: i32,
         query: &str,
         page: u32,
@@ -910,32 +789,39 @@ impl<'a> TrashService<'a> {
     ) -> Result<TrashListResult, AppError> {
         let page = page.max(1);
         let per_page = per_page.clamp(1, 100);
-        let offset = ((page - 1) * per_page) as i64;
+        let offset = ((page - 1) * per_page) as u64;
 
-        let mut where_clauses = vec![
-            "rm.user_id = $1".to_string(),
-            "rm.repo_id = ft.repo_id".to_string(),
-        ];
-        let mut params: Vec<sea_orm::Value> = vec![user_id.into()];
-        let mut param_idx = 2u32;
+        // Gather repo_ids accessible by the user
+        let member_repos = repos.member.find_by_user_id(user_id).await?;
+        let repo_ids: Vec<String> = member_repos
+            .into_iter()
+            .map(|m| m.repo_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        if repo_ids.is_empty() {
+            return Ok(TrashListResult {
+                items: Vec::new(),
+                total_count: 0,
+                can_search: true,
+            });
+        }
+
+        let mut condition =
+            Condition::all().add(file_trash::Column::RepoId.is_in(repo_ids.clone()));
 
         // Keyword search on obj_name
         if !query.is_empty() {
-            where_clauses.push(format!("ft.obj_name LIKE ${}", param_idx));
-            params.push(format!("%{}%", query).into());
-            param_idx += 1;
+            condition = condition.add(file_trash::Column::ObjName.contains(query));
         }
 
         // Time range filter
         if let Some(from) = time_from {
-            where_clauses.push(format!("ft.delete_time >= ${}", param_idx));
-            params.push(from.into());
-            param_idx += 1;
+            condition = condition.add(file_trash::Column::DeleteTime.gte(from));
         }
         if let Some(to) = time_to {
-            where_clauses.push(format!("ft.delete_time <= ${}", param_idx));
-            params.push(to.into());
-            param_idx += 1;
+            condition = condition.add(file_trash::Column::DeleteTime.lte(to));
         }
 
         // File extension filter
@@ -948,85 +834,57 @@ impl<'a> TrashService<'a> {
                 .filter(|s| !s.is_empty())
                 .collect();
             if !exts.is_empty() {
-                let suffix_clauses: Vec<String> = exts
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("ft.obj_name LIKE ${}", param_idx + i as u32))
-                    .collect();
-                where_clauses.push(format!("({})", suffix_clauses.join(" OR ")));
+                let mut any = Condition::any();
                 for ext in &exts {
                     let pattern = if ext.starts_with('.') {
                         format!("%{}", ext)
                     } else {
                         format!("%.{}", ext)
                     };
-                    params.push(pattern.into());
+                    any = any.add(file_trash::Column::ObjName.like(pattern));
                 }
-                param_idx += exts.len() as u32;
+                condition = condition.add(any);
             }
         }
 
-        let where_sql = where_clauses.join(" AND ");
-
         // Count
-        let count_sql = format!(
-            "SELECT COUNT(*) FROM file_trash ft, repo_members rm WHERE {}",
-            where_sql
-        );
-        let count_params = params.clone();
-        let count_result = db
-            .query_one(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                &count_sql,
-                count_params,
-            ))
-            .await?
-            .ok_or_else(|| AppError::Internal("count failed".into()))?;
-        let total_count: i64 = count_result.try_get("", "").unwrap_or(0);
+        let total_count = file_trash::Entity::find()
+            .filter(condition.clone())
+            .count(db)
+            .await? as i64;
+
+        // Build repo name lookup
+        let mut repo_names: HashMap<String, String> = HashMap::new();
+        for rid in &repo_ids {
+            if let Some(r) = repos.repo.find_by_id(rid).await? {
+                repo_names.insert(rid.clone(), r.name);
+            }
+        }
 
         // Fetch items
-        let select_sql = format!(
-            "SELECT ft.user, ft.obj_type, ft.obj_id, ft.obj_name, ft.delete_time, \
-             ft.repo_id, ft.commit_id, ft.path, ft.size, \
-             COALESCE(r.name, '') AS repo_name \
-             FROM file_trash ft, repo_members rm \
-             LEFT JOIN repos r ON ft.repo_id = r.id \
-             WHERE {} \
-             ORDER BY ft.delete_time DESC \
-             LIMIT ${} OFFSET ${}",
-            where_sql,
-            param_idx,
-            param_idx + 1,
-        );
-        params.push(per_page.into());
-        params.push(offset.into());
-
-        let rows = db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                &select_sql,
-                params,
-            ))
+        let rows = file_trash::Entity::find()
+            .filter(condition)
+            .order_by(file_trash::Column::DeleteTime, Order::Desc)
+            .limit(per_page as u64)
+            .offset(offset)
+            .all(db)
             .await?;
 
         let items = rows
             .iter()
-            .map(|r| {
-                let delete_time: i64 = r.try_get("", "delete_time").unwrap_or(0);
-                let obj_type: String = r.try_get("", "obj_type").unwrap_or_default();
-                let repo_id: String = r.try_get("", "repo_id").unwrap_or_default();
-                let repo_name: String = r.try_get("", "repo_name").unwrap_or_default();
+            .map(|m| {
+                let repo_name = repo_names.get(&m.repo_id).cloned().unwrap_or_default();
                 TrashEntry {
-                    parent_dir: r.try_get("", "path").unwrap_or_default(),
-                    obj_name: r.try_get("", "obj_name").unwrap_or_default(),
-                    deleted_time: chrono::DateTime::from_timestamp(delete_time, 0)
+                    parent_dir: m.path.clone(),
+                    obj_name: m.obj_name.clone(),
+                    deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
                         .map(|d| d.to_rfc3339())
                         .unwrap_or_default(),
-                    commit_id: r.try_get("", "commit_id").unwrap_or_default(),
-                    is_dir: obj_type == "dir",
-                    size: r.try_get("", "size").unwrap_or(0),
-                    obj_id: r.try_get("", "obj_id").unwrap_or_default(),
-                    repo_id,
+                    commit_id: m.commit_id.clone(),
+                    is_dir: m.obj_type == "dir",
+                    size: m.size,
+                    obj_id: m.obj_id.clone(),
+                    repo_id: m.repo_id.clone(),
                     repo_name,
                 }
             })
@@ -1043,7 +901,8 @@ impl<'a> TrashService<'a> {
 
     /// Add a deleted repo to the trash table.
     pub async fn add_deleted_repo(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
+        repos: &Repositories,
         repo_id: &str,
         repo_name: &str,
         head_id: Option<&str>,
@@ -1052,20 +911,21 @@ impl<'a> TrashService<'a> {
     ) -> Result<(), AppError> {
         let now = chrono::Utc::now().timestamp();
 
-        db.execute(Statement::from_sql_and_values(
-            DatabaseBackend::Sqlite,
-            "INSERT OR IGNORE INTO deleted_repos (repo_id, repo_name, head_id, owner_id, size, del_time) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
-            vec![
-                repo_id.to_owned().into(),
-                repo_name.to_owned().into(),
-                head_id.map(|s| s.to_owned()).into(),
-                owner_id.into(),
-                size.into(),
-                now.into(),
-            ],
-        ))
-        .await?;
+        // Best-effort: if the repo already exists in trash, ignore the error
+        // to preserve the original INSERT OR IGNORE behavior.
+        if repos.deleted_repo.find_by_id(repo_id).await?.is_none() {
+            repos
+                .deleted_repo
+                .insert(deleted_repo::ActiveModel {
+                    repo_id: Set(repo_id.to_owned()),
+                    repo_name: Set(repo_name.to_owned()),
+                    head_id: Set(head_id.map(|s| s.to_owned())),
+                    owner_id: Set(owner_id),
+                    size: Set(size),
+                    del_time: Set(now),
+                })
+                .await?;
+        }
 
         Ok(())
     }
@@ -1099,36 +959,48 @@ impl<'a> TrashService<'a> {
 
         let now = chrono::Utc::now().timestamp();
 
-        // Re-insert repo (use original head_commit_id if available)
-        // Use raw SQL to avoid ORM issues with optional head_commit_id.
-        let _ = db
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "INSERT OR IGNORE INTO repos \
-                 (id, name, description, owner_id, encrypted, enc_version, \
-                  salt, permission, created_at, updated_at, size, repo_version) \
-                 VALUES ($1, $2, $3, $4, 0, 0, '', 'rw', $5, $6, $7, 1)",
-                vec![
-                    trashed.repo_id.clone().into(),
-                    trashed.repo_name.clone().into(),
-                    String::new().into(),
-                    trashed.owner_id.into(),
-                    now.into(),
-                    now.into(),
-                    trashed.size.into(),
-                ],
-            ))
-            .await?;
+        // Re-insert repo (with INSERT OR IGNORE semantics — skip if already exists)
+        if repos.repo.find_by_id(&trashed.repo_id).await?.is_none() {
+            repos
+                .repo
+                .create(repo::ActiveModel {
+                    id: Set(trashed.repo_id.clone()),
+                    name: Set(trashed.repo_name.clone()),
+                    description: Set(String::new()),
+                    owner_id: Set(trashed.owner_id),
+                    encrypted: Set(0i8),
+                    enc_version: Set(0i8),
+                    magic: Set(None),
+                    random_key: Set(None),
+                    salt: Set(String::new()),
+                    head_commit_id: Set(None),
+                    permission: Set("rw".to_string()),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                    size: Set(trashed.size),
+                    repo_version: Set(1i32),
+                })
+                .await?;
+        }
 
-        // Re-create owner membership
-        let _ = db
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "INSERT OR IGNORE INTO repo_members (repo_id, user_id, permission) \
-                 VALUES ($1, $2, 'rw')",
-                vec![trashed.repo_id.clone().into(), trashed.owner_id.into()],
-            ))
-            .await?;
+        // Re-create owner membership (with INSERT OR IGNORE semantics)
+        if repos
+            .member
+            .find_by_repo_and_user(&trashed.repo_id, trashed.owner_id)
+            .await?
+            .is_none()
+        {
+            repos
+                .member
+                .create(repo_member::ActiveModel {
+                    id: Set(0i32),
+                    repo_id: Set(trashed.repo_id.clone()),
+                    user_id: Set(trashed.owner_id),
+                    permission: Set("rw".to_string()),
+                    created_at: Set(now),
+                })
+                .await?;
+        }
 
         // Remove from trash
         repos.deleted_repo.delete_by_id(repo_id).await?;

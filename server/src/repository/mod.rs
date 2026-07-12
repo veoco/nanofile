@@ -14,6 +14,7 @@ pub mod commit;
 pub mod deleted_repo;
 pub mod file_lock_timestamp;
 pub mod file_tag;
+pub mod file_trash;
 pub mod fs_object;
 pub mod group;
 pub mod group_member;
@@ -46,6 +47,7 @@ pub use commit::*;
 pub use deleted_repo::*;
 pub use file_lock_timestamp::*;
 pub use file_tag::*;
+pub use file_trash::*;
 pub use fs_object::*;
 pub use group::*;
 pub use group_member::*;
@@ -104,6 +106,7 @@ pub struct Repositories {
     pub metadata_config: Arc<dyn MetadataConfigRepository>,
     pub metadata_record: Arc<dyn MetadataRecordRepository>,
     pub file_tag: Arc<dyn FileTagRepository>,
+    pub file_trash: Arc<dyn FileTrashRepository>,
     pub deleted_repo: Arc<dyn DeletedRepoRepository>,
     pub password_reset_token: Arc<dyn PasswordResetTokenRepository>,
     pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
@@ -140,6 +143,7 @@ impl Repositories {
             metadata_config: Arc::new(DbMetadataConfigRepository::new(db.clone())),
             metadata_record: Arc::new(DbMetadataRecordRepository::new(db.clone())),
             file_tag: Arc::new(DbFileTagRepository::new(db.clone())),
+            file_trash: Arc::new(DbFileTrashRepository::new(db.clone())),
             deleted_repo: Arc::new(DbDeletedRepoRepository::new(db.clone())),
             password_reset_token: Arc::new(DbPasswordResetTokenRepository::new(db.clone())),
             user_2fa_backup_code: Arc::new(DbUser2faBackupCodeRepository::new(db.clone())),

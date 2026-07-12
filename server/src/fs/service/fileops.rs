@@ -125,6 +125,7 @@ impl FileOpsService {
             if !trash_items.is_empty()
                 && let Err(e) = crate::repo::trash::TrashService::add_batch_to_trash(
                     db,
+                    &self.repos,
                     repo_id,
                     trash_items,
                     parent_commit_id,

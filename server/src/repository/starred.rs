@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DeleteResult, EntityTrait,
+    QueryFilter, Statement,
 };
 use std::sync::Arc;
 
@@ -28,6 +29,15 @@ pub trait StarredRepository: Send + Sync {
         path: &str,
     ) -> Result<DeleteResult, AppError>;
     async fn insert(&self, model: starred_file::ActiveModel) -> Result<(), AppError>;
+
+    /// After a file/dir rename, update all starred entries that had the old
+    /// path prefix to reflect the new path.
+    async fn update_paths_for_rename(
+        &self,
+        old_path: &str,
+        new_path: &str,
+        repo_id: &str,
+    ) -> Result<(), AppError>;
 }
 
 pub struct DbStarredRepository {
@@ -91,6 +101,24 @@ impl StarredRepository for DbStarredRepository {
 
     async fn insert(&self, model: starred_file::ActiveModel) -> Result<(), AppError> {
         model.insert(self.db.as_ref()).await?;
+        Ok(())
+    }
+
+    async fn update_paths_for_rename(
+        &self,
+        old_path: &str,
+        new_path: &str,
+        repo_id: &str,
+    ) -> Result<(), AppError> {
+        self.db
+            .as_ref()
+            .execute(Statement::from_sql_and_values(
+                self.db.as_ref().get_database_backend(),
+                "UPDATE starred_files SET path = $1 || substr(path, length($2) + 1) \
+                 WHERE repo_id = $3 AND (path = $2 OR path LIKE $2 || '/%')",
+                [new_path.into(), old_path.into(), repo_id.into()],
+            ))
+            .await?;
         Ok(())
     }
 }

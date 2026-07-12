@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::DatabaseConnection;
 
 use crate::activity_log;
 use crate::common::DirEntry;
@@ -341,17 +341,9 @@ async fn rename_dir_entry(
     .await;
 
     // Update starred items with the new path (dir and all items inside)
-    if let Err(e) = db
-        .execute(sea_orm::Statement::from_sql_and_values(
-            sea_orm::DatabaseBackend::Sqlite,
-            "UPDATE starred_files SET path = $1 || substr(path, length($2) + 1) \
-             WHERE repo_id = $3 AND (path = $2 OR path LIKE $2 || '/%')",
-            vec![
-                new_path.clone().into(),
-                path.to_owned().into(),
-                repo_id.to_owned().into(),
-            ],
-        ))
+    if let Err(e) = repos
+        .starred
+        .update_paths_for_rename(path, &new_path, repo_id)
         .await
     {
         tracing::warn!("Failed to update starred paths for directory {path}: {e}");
@@ -770,6 +762,7 @@ impl DirService {
             };
             if let Err(e) = crate::repo::trash::TrashService::add_to_trash(
                 db,
+                &self.repos,
                 repo_id,
                 path,
                 obj_type,
@@ -1103,6 +1096,7 @@ async fn record_delete_trash(
     };
     if let Err(e) = crate::repo::trash::TrashService::add_to_trash(
         db,
+        repos,
         repo_id,
         path,
         obj_type,
