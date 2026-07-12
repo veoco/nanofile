@@ -66,15 +66,20 @@ impl User2faBackupCodeRepository for DbUser2faBackupCodeRepository {
     }
 
     async fn mark_as_used(&self, code_hash: &str, used_at: i64) -> Result<(), AppError> {
-        let code = user_2fa_backup_code::Entity::find()
+        let result = user_2fa_backup_code::Entity::update_many()
             .filter(user_2fa_backup_code::Column::CodeHash.eq(code_hash))
-            .one(self.db.as_ref())
-            .await?
-            .ok_or_else(|| crate::error::AppError::NotFound("backup code not found".into()))?;
-        let mut active: user_2fa_backup_code::ActiveModel = code.into();
-        active.used = Set(true);
-        active.used_at = Set(Some(used_at));
-        active.update(self.db.as_ref()).await?;
+            .set(user_2fa_backup_code::ActiveModel {
+                used: Set(true),
+                used_at: Set(Some(used_at)),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(crate::error::AppError::NotFound(
+                "backup code not found".into(),
+            ));
+        }
         Ok(())
     }
 }

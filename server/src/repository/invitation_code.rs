@@ -94,21 +94,29 @@ impl InvitationCodeRepository for DbInvitationCodeRepository {
     }
 
     async fn mark_as_used(&self, id: i32, used_by: i32, used_at: i64) -> Result<(), AppError> {
-        let model = invitation_code::Entity::find_by_id(id)
-            .one(self.db.as_ref())
-            .await?
-            .ok_or_else(|| AppError::NotFound("Invitation code not found.".to_string()))?;
-
-        if model.used_by.is_some() {
-            return Err(AppError::BadRequest(
-                "This invitation code has already been used.".to_string(),
-            ));
+        let result = invitation_code::Entity::update_many()
+            .filter(invitation_code::Column::Id.eq(id))
+            .filter(invitation_code::Column::UsedBy.is_null())
+            .set(invitation_code::ActiveModel {
+                used_by: Set(Some(used_by)),
+                used_at: Set(Some(used_at)),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        if result.rows_affected == 0 {
+            // Check if the record exists to differentiate "not found" from "already used"
+            if invitation_code::Entity::find_by_id(id)
+                .one(self.db.as_ref())
+                .await?
+                .is_some()
+            {
+                return Err(AppError::BadRequest(
+                    "This invitation code has already been used.".to_string(),
+                ));
+            }
+            return Err(AppError::NotFound("Invitation code not found.".to_string()));
         }
-
-        let mut active: invitation_code::ActiveModel = model.into();
-        active.used_by = Set(Some(used_by));
-        active.used_at = Set(Some(used_at));
-        active.update(self.db.as_ref()).await?;
         Ok(())
     }
 }

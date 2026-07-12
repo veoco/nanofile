@@ -134,13 +134,18 @@ impl SyncTokenRepository for DbSyncTokenRepository {
         client_version: Option<String>,
         last_sync_time: Option<i64>,
     ) -> Result<(), AppError> {
-        let mut active: sync_token::ActiveModel = model.into();
-        active.peer_id = Set(peer_id);
-        active.peer_name = Set(peer_name);
-        active.peer_ip = Set(peer_ip);
-        active.client_version = Set(client_version);
-        active.last_sync_time = Set(last_sync_time);
-        active.update(self.db.as_ref()).await?;
+        sync_token::Entity::update_many()
+            .filter(sync_token::Column::Id.eq(model.id))
+            .set(sync_token::ActiveModel {
+                peer_id: Set(peer_id),
+                peer_name: Set(peer_name),
+                peer_ip: Set(peer_ip),
+                client_version: Set(client_version),
+                last_sync_time: Set(last_sync_time),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 }

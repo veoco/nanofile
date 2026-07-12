@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
 use crate::entity::thumbnail;
@@ -90,18 +90,17 @@ impl ThumbnailRepository for DbThumbnailRepository {
         file_modified_at: i64,
         now: i64,
     ) -> Result<(), AppError> {
-        if let Some(record) = thumbnail::Entity::find()
+        thumbnail::Entity::update_many()
             .filter(thumbnail::Column::RepoId.eq(repo_id))
             .filter(thumbnail::Column::Path.eq(path))
             .filter(thumbnail::Column::Size.eq(size))
-            .one(self.db.as_ref())
-            .await?
-        {
-            let mut active: thumbnail::ActiveModel = record.into();
-            active.file_modified_at = Set(file_modified_at);
-            active.created_at = Set(now);
-            active.update(self.db.as_ref()).await?;
-        }
+            .set(thumbnail::ActiveModel {
+                file_modified_at: Set(file_modified_at),
+                created_at: Set(now),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 

@@ -50,13 +50,18 @@ impl AvatarRepository for DbAvatarRepository {
             .one(self.db.as_ref())
             .await?;
 
-        if let Some(record) = existing {
-            let mut active: avatar::ActiveModel = record.into();
-            active.avatar_file_name = Set(file_name.to_string());
-            active.mime_type = Set(mime_type.to_string());
-            active.file_size = Set(file_size);
-            active.date_uploaded = Set(now);
-            active.update(self.db.as_ref()).await?;
+        if existing.is_some() {
+            avatar::Entity::update_many()
+                .filter(avatar::Column::Email.eq(email))
+                .set(avatar::ActiveModel {
+                    avatar_file_name: Set(file_name.to_string()),
+                    mime_type: Set(mime_type.to_string()),
+                    file_size: Set(file_size),
+                    date_uploaded: Set(now),
+                    ..Default::default()
+                })
+                .exec(self.db.as_ref())
+                .await?;
         } else {
             avatar::ActiveModel {
                 id: sea_orm::NotSet,

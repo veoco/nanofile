@@ -135,22 +135,26 @@ impl UserRepository for DbUserRepository {
         user_id: i32,
         name: Option<String>,
     ) -> Result<(), AppError> {
-        let user_record = self.find_by_id(user_id).await?;
-        if let Some(u) = user_record {
-            let mut active: user::ActiveModel = u.into();
-            active.display_name = Set(name);
-            active.update(self.db.as_ref()).await?;
-        }
+        user::Entity::update_many()
+            .filter(user::Column::Id.eq(user_id))
+            .set(user::ActiveModel {
+                display_name: Set(name),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 
     async fn touch_last_login(&self, user_id: i32, now: i64) -> Result<(), AppError> {
-        let user_record = self.find_by_id(user_id).await?;
-        if let Some(u) = user_record {
-            let mut active: user::ActiveModel = u.into();
-            active.last_login_at = Set(Some(now));
-            active.update(self.db.as_ref()).await?;
-        }
+        user::Entity::update_many()
+            .filter(user::Column::Id.eq(user_id))
+            .set(user::ActiveModel {
+                last_login_at: Set(Some(now)),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 
@@ -162,32 +166,38 @@ impl UserRepository for DbUserRepository {
     }
 
     async fn update_is_admin(&self, user_id: i32, is_admin: bool) -> Result<(), AppError> {
-        let user_record = self.find_by_id(user_id).await?;
-        if let Some(u) = user_record {
-            let mut active: user::ActiveModel = u.into();
-            active.is_admin = Set(is_admin);
-            active.update(self.db.as_ref()).await?;
-        }
+        user::Entity::update_many()
+            .filter(user::Column::Id.eq(user_id))
+            .set(user::ActiveModel {
+                is_admin: Set(is_admin),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 
     async fn update_is_active(&self, user_id: i32, is_active: bool) -> Result<(), AppError> {
-        let user_record = self.find_by_id(user_id).await?;
-        if let Some(u) = user_record {
-            let mut active: user::ActiveModel = u.into();
-            active.is_active = Set(is_active);
-            active.update(self.db.as_ref()).await?;
-        }
+        user::Entity::update_many()
+            .filter(user::Column::Id.eq(user_id))
+            .set(user::ActiveModel {
+                is_active: Set(is_active),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 
     async fn update_storage_quota(&self, user_id: i32, quota: Option<i64>) -> Result<(), AppError> {
-        let user_record = self.find_by_id(user_id).await?;
-        if let Some(u) = user_record {
-            let mut active: user::ActiveModel = u.into();
-            active.storage_quota = Set(quota);
-            active.update(self.db.as_ref()).await?;
-        }
+        user::Entity::update_many()
+            .filter(user::Column::Id.eq(user_id))
+            .set(user::ActiveModel {
+                storage_quota: Set(quota),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 
@@ -199,12 +209,14 @@ impl UserRepository for DbUserRepository {
     }
 
     async fn update_password(&self, user_id: i32, password_hash: String) -> Result<(), AppError> {
-        let user_record = self.find_by_id(user_id).await?;
-        if let Some(u) = user_record {
-            let mut active: user::ActiveModel = u.into();
-            active.password_hash = Set(password_hash);
-            active.update(self.db.as_ref()).await?;
-        }
+        user::Entity::update_many()
+            .filter(user::Column::Id.eq(user_id))
+            .set(user::ActiveModel {
+                password_hash: Set(password_hash),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 

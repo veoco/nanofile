@@ -88,14 +88,17 @@ impl PasswordResetTokenRepository for DbPasswordResetTokenRepository {
     }
 
     async fn mark_as_used(&self, id: i32) -> Result<(), AppError> {
-        let model = password_reset_token::Entity::find_by_id(id)
-            .one(self.db.as_ref())
-            .await?
-            .ok_or_else(|| AppError::NotFound("Token not found.".to_string()))?;
-
-        let mut active: password_reset_token::ActiveModel = model.into();
-        active.used = Set(true);
-        active.update(self.db.as_ref()).await?;
+        let result = password_reset_token::Entity::update_many()
+            .filter(password_reset_token::Column::Id.eq(id))
+            .set(password_reset_token::ActiveModel {
+                used: Set(true),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(AppError::NotFound("Token not found.".to_string()));
+        }
         Ok(())
     }
 }

@@ -1,5 +1,3 @@
-use sea_orm::Set;
-
 use crate::error::AppError;
 use crate::repository::Repositories;
 
@@ -144,11 +142,10 @@ impl PasswordService {
         let new_random_key_hex = hex::encode(&new_random_key);
 
         // 5. Update repo in DB
-        let mut active: crate::entity::repo::ActiveModel = repo_model.into();
-        active.magic = Set(Some(new_magic));
-        active.random_key = Set(Some(new_random_key_hex));
-        active.updated_at = Set(chrono::Utc::now().timestamp());
-        repos.repo.update(active).await?;
+        repos
+            .repo
+            .update_repo_keys(repo_id, Some(new_magic), Some(new_random_key_hex))
+            .await?;
 
         // Remove cached old password
         password_manager.remove_password(repo_id, user_id).await;

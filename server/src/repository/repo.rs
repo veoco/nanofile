@@ -21,6 +21,13 @@ pub trait RepoRepository: Send + Sync {
     async fn get_head_root_id(&self, repo_id: &str) -> Result<Option<String>, AppError>;
     /// Add a delta to the repo's size (can be negative).
     async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError>;
+    /// Update repo encryption keys (magic + random_key). Used by password change.
+    async fn update_repo_keys(
+        &self,
+        repo_id: &str,
+        magic: Option<String>,
+        random_key: Option<String>,
+    ) -> Result<(), AppError>;
 }
 
 pub struct DbRepoRepository {
@@ -70,13 +77,14 @@ impl RepoRepository for DbRepoRepository {
         repo_id: &str,
         head_commit_id: Option<String>,
     ) -> Result<(), AppError> {
-        let repo_model = self
-            .find_by_id(repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Repo not found".into()))?;
-        let mut active: repo::ActiveModel = repo_model.into();
-        active.head_commit_id = sea_orm::Set(head_commit_id);
-        active.update(self.db.as_ref()).await?;
+        repo::Entity::update_many()
+            .filter(repo::Column::Id.eq(repo_id))
+            .set(repo::ActiveModel {
+                head_commit_id: Set(head_commit_id),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 
@@ -111,9 +119,34 @@ impl RepoRepository for DbRepoRepository {
             .await?
             .ok_or_else(|| AppError::NotFound("Repo not found".into()))?;
         let new_size = (repo.size + delta).max(0);
-        let mut active: repo::ActiveModel = repo.into();
-        active.size = Set(new_size);
-        active.update(self.db.as_ref()).await?;
+        repo::Entity::update_many()
+            .filter(repo::Column::Id.eq(repo_id))
+            .set(repo::ActiveModel {
+                size: Set(new_size),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn update_repo_keys(
+        &self,
+        repo_id: &str,
+        magic: Option<String>,
+        random_key: Option<String>,
+    ) -> Result<(), AppError> {
+        let now = chrono::Utc::now().timestamp();
+        repo::Entity::update_many()
+            .filter(repo::Column::Id.eq(repo_id))
+            .set(repo::ActiveModel {
+                magic: Set(magic),
+                random_key: Set(random_key),
+                updated_at: Set(now),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 }

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
 use crate::entity::wiki;
@@ -46,24 +46,32 @@ impl WikiRepository for DbWikiRepository {
     }
 
     async fn rename(&self, id: i32, name: &str) -> Result<(), AppError> {
-        let w = wiki::Entity::find_by_id(id)
-            .one(self.db.as_ref())
-            .await?
-            .ok_or_else(|| AppError::NotFound("wiki not found".into()))?;
-        let mut active: wiki::ActiveModel = w.into();
-        active.name = Set(name.to_string());
-        active.update(self.db.as_ref()).await?;
+        let result = wiki::Entity::update_many()
+            .filter(wiki::Column::Id.eq(id))
+            .set(wiki::ActiveModel {
+                name: Set(name.to_string()),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(AppError::NotFound("wiki not found".into()));
+        }
         Ok(())
     }
 
     async fn set_published(&self, id: i32, published: bool) -> Result<(), AppError> {
-        let w = wiki::Entity::find_by_id(id)
-            .one(self.db.as_ref())
-            .await?
-            .ok_or_else(|| AppError::NotFound("wiki not found".into()))?;
-        let mut active: wiki::ActiveModel = w.into();
-        active.published = Set(Some(published));
-        active.update(self.db.as_ref()).await?;
+        let result = wiki::Entity::update_many()
+            .filter(wiki::Column::Id.eq(id))
+            .set(wiki::ActiveModel {
+                published: Set(Some(published)),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(AppError::NotFound("wiki not found".into()));
+        }
         Ok(())
     }
 

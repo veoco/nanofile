@@ -146,21 +146,12 @@ impl UploadLinkRepository for DbUploadLinkRepository {
         password: Option<Option<String>>,
         description: Option<Option<String>>,
     ) -> Result<bool, AppError> {
-        let link = upload_link::Entity::find()
-            .filter(upload_link::Column::Token.eq(token))
-            .filter(upload_link::Column::CreatorId.eq(user_id))
-            .one(self.db.as_ref())
-            .await?
-            .ok_or_else(|| AppError::NotFound("Upload link not found".into()))?;
-
-        let mut active: upload_link::ActiveModel = link.into();
+        let mut active = upload_link::ActiveModel {
+            ..Default::default()
+        };
 
         if let Some(val) = expire_at {
-            if let Some(ts) = val {
-                active.expires_at = Set(Some(ts));
-            } else {
-                active.expires_at = Set(None);
-            }
+            active.expires_at = Set(val);
         }
         if let Some(val) = password {
             active.password = Set(val);
@@ -169,7 +160,15 @@ impl UploadLinkRepository for DbUploadLinkRepository {
             active.description = Set(val);
         }
 
-        active.update(self.db.as_ref()).await?;
+        let result = upload_link::Entity::update_many()
+            .filter(upload_link::Column::Token.eq(token))
+            .filter(upload_link::Column::CreatorId.eq(user_id))
+            .set(active)
+            .exec(self.db.as_ref())
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(AppError::NotFound("Upload link not found".into()));
+        }
         Ok(true)
     }
 

@@ -60,14 +60,18 @@ impl User2faRepository for DbUser2faRepository {
     }
 
     async fn set_enabled(&self, user_id: i32, enabled: bool, now: i64) -> Result<(), AppError> {
-        let model = user_2fa::Entity::find_by_id(user_id)
-            .one(self.db.as_ref())
-            .await?
-            .ok_or_else(|| AppError::BadRequest("2FA not set up".into()))?;
-        let mut active: user_2fa::ActiveModel = model.into();
-        active.enabled = Set(enabled);
-        active.enabled_at = Set(if enabled { Some(now) } else { None });
-        active.update(self.db.as_ref()).await?;
+        let result = user_2fa::Entity::update_many()
+            .filter(user_2fa::Column::UserId.eq(user_id))
+            .set(user_2fa::ActiveModel {
+                enabled: Set(enabled),
+                enabled_at: Set(if enabled { Some(now) } else { None }),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(AppError::BadRequest("2FA not set up".into()));
+        }
         Ok(())
     }
 

@@ -120,15 +120,9 @@ impl ShareLinkRepository for DbShareLinkRepository {
         expire_at: Option<Option<i64>>,
         description: Option<Option<String>>,
     ) -> Result<bool, AppError> {
-        let link = share_link::Entity::find()
-            .filter(share_link::Column::Token.eq(token))
-            .filter(share_link::Column::CreatorId.eq(user_id))
-            .one(self.db.as_ref())
-            .await?
-            .ok_or_else(|| AppError::NotFound("Share link not found".into()))?;
-
-        let mut active: share_link::ActiveModel = link.into();
-
+        let mut active: share_link::ActiveModel = share_link::ActiveModel {
+            ..Default::default()
+        };
         if let Some(val) = expire_at {
             active.expires_at = Set(val);
         }
@@ -136,7 +130,12 @@ impl ShareLinkRepository for DbShareLinkRepository {
             active.description = Set(val);
         }
 
-        active.update(self.db.as_ref()).await?;
+        share_link::Entity::update_many()
+            .filter(share_link::Column::Token.eq(token))
+            .filter(share_link::Column::CreatorId.eq(user_id))
+            .set(active)
+            .exec(self.db.as_ref())
+            .await?;
         Ok(true)
     }
 
@@ -145,9 +144,15 @@ impl ShareLinkRepository for DbShareLinkRepository {
             .one(self.db.as_ref())
             .await?
         {
-            let mut active: share_link::ActiveModel = link.into();
-            active.view_cnt = Set(active.view_cnt.unwrap() + 1);
-            active.update(self.db.as_ref()).await?;
+            let new_cnt = link.view_cnt + 1;
+            share_link::Entity::update_many()
+                .filter(share_link::Column::Id.eq(id))
+                .set(share_link::ActiveModel {
+                    view_cnt: Set(new_cnt),
+                    ..Default::default()
+                })
+                .exec(self.db.as_ref())
+                .await?;
         }
         Ok(())
     }

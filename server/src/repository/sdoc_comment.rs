@@ -67,13 +67,17 @@ impl SdocCommentRepository for DbSdocCommentRepository {
     }
 
     async fn update_resolved(&self, id: i32, resolved: bool) -> Result<(), AppError> {
-        let comment = sdoc_comment::Entity::find_by_id(id)
-            .one(self.db.as_ref())
-            .await?
-            .ok_or_else(|| AppError::NotFound("comment not found".into()))?;
-        let mut active: sdoc_comment::ActiveModel = comment.into();
-        active.resolved = Set(Some(resolved));
-        active.update(self.db.as_ref()).await?;
+        let result = sdoc_comment::Entity::update_many()
+            .filter(sdoc_comment::Column::Id.eq(id))
+            .set(sdoc_comment::ActiveModel {
+                resolved: Set(Some(resolved)),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(AppError::NotFound("comment not found".into()));
+        }
         Ok(())
     }
 

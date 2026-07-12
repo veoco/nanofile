@@ -84,12 +84,15 @@ impl MemberRepository for DbMemberRepository {
         user_id: i32,
         permission: &str,
     ) -> Result<(), AppError> {
-        let member = self.find_by_repo_and_user(repo_id, user_id).await?;
-        if let Some(m) = member {
-            let mut active: repo_member::ActiveModel = m.into();
-            active.permission = Set(permission.to_string());
-            active.update(self.db.as_ref()).await?;
-        }
+        repo_member::Entity::update_many()
+            .filter(repo_member::Column::RepoId.eq(repo_id))
+            .filter(repo_member::Column::UserId.eq(user_id))
+            .set(repo_member::ActiveModel {
+                permission: Set(permission.to_string()),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 

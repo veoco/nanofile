@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
 use crate::entity::metadata_config;
@@ -46,10 +46,15 @@ impl MetadataConfigRepository for DbMetadataConfigRepository {
             .await?;
 
         match existing {
-            Some(c) => {
-                let mut active: metadata_config::ActiveModel = c.into();
-                active.enabled = Set(Some(enabled));
-                active.update(db).await?;
+            Some(_c) => {
+                metadata_config::Entity::update_many()
+                    .filter(metadata_config::Column::RepoId.eq(repo_id))
+                    .set(metadata_config::ActiveModel {
+                        enabled: Set(Some(enabled)),
+                        ..Default::default()
+                    })
+                    .exec(db)
+                    .await?;
             }
             None => {
                 metadata_config::Entity::insert(metadata_config::ActiveModel {

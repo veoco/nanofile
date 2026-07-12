@@ -1,8 +1,7 @@
-use sea_orm::{DatabaseConnection, Set};
+use sea_orm::DatabaseConnection;
 use std::collections::VecDeque;
 
 use crate::common::EMPTY_SHA1;
-use crate::entity::repo;
 use crate::error::AppError;
 use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
@@ -95,14 +94,9 @@ pub async fn adjust_repo_size(
     let current_size = r.size;
     if current_size == 0 {
         let size = compute_repo_size(db, repos, repo_id).await?;
-        let mut active: repo::ActiveModel = r.into();
-        active.size = Set(size);
-        repos.repo.update(active).await?;
+        repos.repo.adjust_size(repo_id, size).await?;
     } else {
-        let new_size = (current_size + delta).max(0);
-        let mut active: repo::ActiveModel = r.into();
-        active.size = Set(new_size);
-        repos.repo.update(active).await?;
+        repos.repo.adjust_size(repo_id, delta).await?;
     }
     Ok(())
 }
