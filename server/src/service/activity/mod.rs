@@ -2,7 +2,6 @@
 
 use chrono::DateTime;
 use sea_orm::DatabaseConnection;
-use std::collections::HashMap;
 
 use crate::repository::Repositories;
 use base::error::AppError;
@@ -19,14 +18,12 @@ impl ActivityService {
         page: u32,
         per_page: u32,
         repo_id: Option<&str>,
-        _op_user: Option<&str>,
+        op_user: Option<&str>,
         _avatar_size: u32,
     ) -> Result<serde_json::Value, AppError> {
         let offset = ((page.saturating_sub(1)) * per_page) as u64;
 
-        // Fetch activities visible to this user.
-        // Build a list of accessible repo IDs (owned + shared), then query
-        // with directuser_id so the user's own actions are always included.
+        // Build list of accessible repo IDs (owned + shared).
         let mut repo_ids: Vec<String> = repos
             .repo
             .find_by_owner_id(user_id)
@@ -40,11 +37,23 @@ impl ActivityService {
             }
         }
 
+        // Look up op_user by email if provided.
+        // If the email doesn't match any user, return empty immediately.
+        let op_user_id = match op_user {
+            Some(email) => match repos.user.find_by_email(email).await? {
+                Some(u) => Some(u.id),
+                None => {
+                    return Ok(serde_json::json!({"events": [], "total_count": 0}));
+                }
+            },
+            None => None,
+        };
+
         let activities = repos
             .activity
             .find_by_repo_ids_filtered(
                 repo_ids.clone(),
-                None,
+                op_user_id,
                 repo_id,
                 offset,
                 per_page as u64,
@@ -55,18 +64,13 @@ impl ActivityService {
         // Also fetch total count (separate query to avoid counting paginated results).
         let total = repos
             .activity
-            .count_by_repo_ids_filtered(
-                repo_ids,
-                None,
-                repo_id,
-                Some(user_id),
-            )
+            .count_by_repo_ids_filtered(repo_ids, op_user_id, repo_id, Some(user_id))
             .await?;
 
         let mut items: Vec<serde_json::Value> = Vec::new();
         for a in &activities {
-            let detail: HashMap<String, serde_json::Value> =
-                serde_json::from_str(&a.detail).unwrap_or_default();
+            let detail_value: serde_json::Value = serde_json::from_str(&a.detail)
+                .unwrap_or(serde_json::Value::Object(Default::default()));
 
             let user = repos.user.find_by_id(a.user_id).await?;
             let (user_name, user_email) = match user {
@@ -74,19 +78,79 @@ impl ActivityService {
                 None => (String::new(), String::new()),
             };
 
+            // Build details array, count, and extract old_repo_name.
+            // detail is an Object for single events and an Array for batch-aggregated events.
+            let (details, count, old_repo_name) = match &detail_value {
+                serde_json::Value::Array(arr) => {
+                    let orn = arr
+                        .first()
+                        .and_then(|d| d.get("old_repo_name"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    (detail_value.clone(), arr.len(), orn)
+                }
+                serde_json::Value::Object(_) => {
+                    let orn = detail_value
+                        .get("old_repo_name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    (serde_json::json!([detail_value]), 1, orn)
+                }
+                _ => (serde_json::json!([]), 0, None),
+            };
+
+            // Extract repo_name from detail (set at event time by log_activity,
+            // so it reflects the name when the activity occurred).
+            let repo_name = match &detail_value {
+                serde_json::Value::Object(obj) => obj
+                    .get("repo_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                serde_json::Value::Array(arr) => arr
+                    .first()
+                    .and_then(|d| d.get("repo_name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                _ => String::new(),
+            };
+
+            // name is the basename of path (or repo_name for repo-level events).
+            let name = if a.obj_type == "repo" {
+                repo_name.clone()
+            } else {
+                a.path
+                    .rsplit_once('/')
+                    .map(|(_, n)| n.to_string())
+                    .unwrap_or_default()
+            };
+
+            // old_name = basename of old_path.
+            let old_name = a
+                .old_path
+                .as_deref()
+                .and_then(|p| p.rsplit_once('/').map(|(_, n)| n.to_string()));
+
             items.push(serde_json::json!({
                 "id": a.id,
                 "op_type": a.op_type,
                 "obj_type": a.obj_type,
+                "repo_id": a.repo_id,
+                "repo_name": repo_name,
                 "path": a.path,
                 "old_path": a.old_path,
                 "commit_id": a.commit_id,
-                "name": detail.get("name").or_else(|| detail.get("file_name")).and_then(|v| v.as_str()).unwrap_or(""),
+                "name": name,
+                "old_name": old_name,
                 "author_email": user_email,
                 "author_name": user_name,
+                "author_contact_email": user_email,
                 "user_name": user_name,
                 "user_email": user_email,
-                "detail": detail,
+                "details": details,
+                "count": count,
+                "old_repo_name": old_repo_name,
                 "time": DateTime::from_timestamp(a.created_at, 0)
                     .map(|dt| dt.to_rfc3339())
                     .unwrap_or_default(),
