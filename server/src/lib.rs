@@ -270,10 +270,6 @@ impl AppState {
         )
     }
 
-    pub fn trash_service(&self) -> crate::fs::service::trash::FsTrashService {
-        crate::fs::service::trash::FsTrashService::new(self.repos.clone(), self.db.clone())
-    }
-
     pub fn metadata_service(&self) -> crate::fs::service::metadata::MetadataService {
         crate::fs::service::metadata::MetadataService::new(self.db.clone(), self.repos.clone())
     }
