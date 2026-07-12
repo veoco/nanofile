@@ -226,7 +226,7 @@ pub async fn update_branch(
     // SyncAuth confirms the token is valid; this checks repo-level
     // write permission (seafile-server put_update_branch_cb line 1323-1328).
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &repo_id,
         _auth.user_id,
     )

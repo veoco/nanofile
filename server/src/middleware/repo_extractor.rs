@@ -51,7 +51,7 @@ impl FromRequestParts<Arc<AppState>> for RepoPathRead {
 
         // Check read permission
         crate::domain::permission::check_repo_read_permission(
-            state.db.as_ref(),
+            state.repos.member.as_ref(),
             &repo_id,
             user.user_id,
         )
@@ -80,7 +80,7 @@ impl FromRequestParts<Arc<AppState>> for RepoPathWrite {
 
         // Check write permission
         crate::domain::permission::check_repo_write_permission(
-            state.db.as_ref(),
+            state.repos.member.as_ref(),
             &repo_id,
             user.user_id,
         )

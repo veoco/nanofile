@@ -114,7 +114,7 @@ pub async fn list_share_members(
 ) -> Result<Json<Vec<share::ShareMember>>, AppError> {
     // Only the repo owner can list share members.
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,
     )

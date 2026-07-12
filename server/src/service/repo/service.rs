@@ -572,7 +572,7 @@ impl RepoService {
 
     /// Get an upload link URL for the given repo.
     pub async fn get_upload_link(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
         repos: &Repositories,
         token_manager: &AccessTokenManager,
         site_url: &str,
@@ -591,7 +591,12 @@ impl RepoService {
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
         // Verify caller has write permission on the repo
-        crate::domain::permission::check_repo_write_permission(db, repo_id, user_id).await?;
+        crate::domain::permission::check_repo_write_permission(
+            repos.member.as_ref(),
+            repo_id,
+            user_id,
+        )
+        .await?;
 
         let token = token_manager.generate(repo_id, user_id, email, "upload", parent_dir);
 
@@ -608,7 +613,7 @@ impl RepoService {
 
     /// Get an update link URL for the given repo.
     pub async fn get_update_link(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
         repos: &Repositories,
         token_manager: &AccessTokenManager,
         site_url: &str,
@@ -626,7 +631,12 @@ impl RepoService {
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
         // Verify caller has write permission on the repo
-        crate::domain::permission::check_repo_write_permission(db, repo_id, user_id).await?;
+        crate::domain::permission::check_repo_write_permission(
+            repos.member.as_ref(),
+            repo_id,
+            user_id,
+        )
+        .await?;
 
         let token = token_manager.generate(repo_id, user_id, email, "update", parent_dir);
 

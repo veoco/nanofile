@@ -216,7 +216,7 @@ pub(crate) async fn create_dir_by_path(
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                crate::domain::fs::store_dir_data(db, repo_id, &empty_root).await?
+                crate::fs::core::store_fs_dir_object(db, repo_id, &empty_root).await?
             }
         }
     } else {

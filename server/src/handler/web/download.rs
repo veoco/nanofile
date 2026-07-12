@@ -157,7 +157,7 @@ pub async fn repo_file_download(
 
     // Check read permission (matching seahub's check_folder_permission behavior).
     crate::domain::permission::check_repo_read_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,
     )
@@ -202,7 +202,7 @@ pub async fn download_api(
     // Re-check that user still has read permission on the repo.
     // Permissions may have been revoked between token issuance and use.
     crate::domain::permission::check_repo_read_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &info.repo_id,
         info.user_id,
     )

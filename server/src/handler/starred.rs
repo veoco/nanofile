@@ -71,7 +71,7 @@ pub async fn star_item(
 
     // Permission check
     crate::domain::permission::check_repo_read_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &req.repo_id,
         auth.user_id,
     )

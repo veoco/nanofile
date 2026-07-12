@@ -204,7 +204,7 @@ pub async fn move_dir(
     Json(req): Json<MoveDirRequest>,
 ) -> Result<(), AppError> {
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &req.repo_id,
         auth.user_id,
     )
@@ -234,7 +234,7 @@ pub async fn rename_dir(
     Json(req): Json<RenameDirRequest>,
 ) -> Result<(), AppError> {
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &req.repo_id,
         auth.user_id,
     )
@@ -314,7 +314,7 @@ pub async fn delete_dirent_v21(
     Query(query): Query<V21DirQuery>,
 ) -> Result<Json<serde_json::value::Value>, AppError> {
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,
     )

@@ -730,7 +730,7 @@ impl FileService {
             obj_type: 1,
             version: 1,
         };
-        let file_fs_id = crate::domain::fs::store_file_data(db, repo_id, &file_fs_data).await?;
+        let file_fs_id = crate::fs::core::store_fs_file_object(db, repo_id, &file_fs_data).await?;
 
         let parent_fs_id = if parent_path == "/" {
             match get_head_root_id_no_err(&self.repos, repo_id).await? {
@@ -741,7 +741,7 @@ impl FileService {
                         obj_type: SEAF_METADATA_TYPE_DIR,
                         version: 1,
                     };
-                    crate::domain::fs::store_dir_data(db, repo_id, &empty_dir).await?
+                    crate::fs::core::store_fs_dir_object(db, repo_id, &empty_dir).await?
                 }
             }
         } else {

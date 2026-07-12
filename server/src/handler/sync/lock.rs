@@ -31,7 +31,7 @@ pub async fn lock_file(
 ) -> Result<Json<LockResponse>, AppError> {
     // Permission check: only users with write access can lock files.
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &repo_id,
         _auth.user_id,
     )
@@ -98,7 +98,7 @@ pub async fn unlock_file(
 ) -> Result<Json<LockResponse>, AppError> {
     // Permission check: only users with write access can unlock files.
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &repo_id,
         _auth.user_id,
     )

@@ -7,10 +7,7 @@
 
 use base::common::EMPTY_SHA1;
 use base::common::{FsDirData, FsFileData};
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use sha1::{Digest, Sha1};
-
-use base::error::AppError;
 
 /// Serialize a directory FS object to compact JSON (no extra whitespace).
 pub fn dir_to_compact_json(data: &FsDirData) -> String {
@@ -68,58 +65,7 @@ pub fn is_empty_fs_id(fs_id: &str) -> bool {
     fs_id == EMPTY_SHA1
 }
 
-// ── Persistence helpers (bridge domain + infra) ──────────────────────────
-//
-// These functions compute the fs_id and compact JSON, then INSERT the
-// object into fs_objects.  The `compute_*` functions above are the pure
-// domain logic; these convenience wrappers combine compute + store in a
-// single async call for callers that need both steps.
-
-/// Compute fs_id, serialize, and INSERT OR IGNORE into fs_objects.
-/// Returns the fs_id (or `EMPTY_SHA1` for empty directories).
-pub async fn store_dir_data(
-    db: &DatabaseConnection,
-    repo_id: &str,
-    data: &FsDirData,
-) -> Result<String, AppError> {
-    if data.dirents.is_empty() {
-        return Ok(EMPTY_SHA1.to_string());
-    }
-    let (fs_id, json) = compute_dir(data).expect("non-empty directory");
-    let _ = db
-        .execute(Statement::from_sql_and_values(
-            DatabaseBackend::Sqlite,
-            "INSERT OR IGNORE INTO fs_objects (repo_id, fs_id, obj_type, data) VALUES ($1, $2, $3, $4)",
-            vec![
-                repo_id.to_owned().into(),
-                fs_id.clone().into(),
-                (data.obj_type as i8).into(),
-                json.into(),
-            ],
-        ))
-        .await?;
-    Ok(fs_id)
-}
-
-/// Compute fs_id, serialize, and INSERT OR IGNORE into fs_objects.
-/// Returns the fs_id.
-pub async fn store_file_data(
-    db: &DatabaseConnection,
-    repo_id: &str,
-    data: &FsFileData,
-) -> Result<String, AppError> {
-    let (fs_id, json) = compute_file(data);
-    let _ = db
-        .execute(Statement::from_sql_and_values(
-            DatabaseBackend::Sqlite,
-            "INSERT OR IGNORE INTO fs_objects (repo_id, fs_id, obj_type, data) VALUES ($1, $2, $3, $4)",
-            vec![
-                repo_id.to_owned().into(),
-                fs_id.clone().into(),
-                (data.obj_type as i8).into(),
-                json.into(),
-            ],
-        ))
-        .await?;
-    Ok(fs_id)
-}
+// ── Note: store_dir_data / store_file_data moved to fs::core::store ─────
+// These were previously here but have been moved to `crate::fs::core::store`
+// (store_fs_dir_object / store_fs_file_object) to keep domain pure.
+// This module now contains only pure computation functions.

@@ -1285,7 +1285,7 @@ pub async fn upload_blks_api(
             version: 1,
         };
         let file_fs_id =
-            crate::domain::fs::store_file_data(state.db.as_ref(), &info.repo_id, &file_fs_data)
+            crate::fs::core::store_fs_file_object(state.db.as_ref(), &info.repo_id, &file_fs_data)
                 .await?;
 
         // Update directory tree and create commit

@@ -1,25 +1,54 @@
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
 use crate::domain;
-use base::common::{FsDirData, FsFileData};
+use base::common::{EMPTY_SHA1, FsDirData, FsFileData};
 use base::error::AppError;
 
-/// Serialize an FsFileData to JSON, compute its SHA1 ID, check the DB,
-/// and insert if the object does not already exist. Returns the fs_id.
-pub async fn store_fs_file_object(
-    db: &DatabaseConnection,
-    repo_id: &str,
-    file_data: FsFileData,
-) -> Result<String, AppError> {
-    domain::fs::store_file_data(db, repo_id, &file_data).await
-}
-
-/// Serialize an FsDirData to JSON, compute its SHA1 ID, check the DB,
-/// and insert if the object does not already exist. Returns the fs_id.
+/// Compute fs_id, serialize, and INSERT OR IGNORE into fs_objects.
+/// Returns the fs_id (or `EMPTY_SHA1` for empty directories).
 pub async fn store_fs_dir_object(
     db: &DatabaseConnection,
     repo_id: &str,
-    dir_data: FsDirData,
+    data: &FsDirData,
 ) -> Result<String, AppError> {
-    domain::fs::store_dir_data(db, repo_id, &dir_data).await
+    if data.dirents.is_empty() {
+        return Ok(EMPTY_SHA1.to_string());
+    }
+    let (fs_id, json) = domain::fs::compute_dir(data).expect("non-empty directory");
+    let _ = db
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT OR IGNORE INTO fs_objects (repo_id, fs_id, obj_type, data) VALUES ($1, $2, $3, $4)",
+            vec![
+                repo_id.to_owned().into(),
+                fs_id.clone().into(),
+                (data.obj_type as i8).into(),
+                json.into(),
+            ],
+        ))
+        .await?;
+    Ok(fs_id)
+}
+
+/// Compute fs_id, serialize, and INSERT OR IGNORE into fs_objects.
+/// Returns the fs_id.
+pub async fn store_fs_file_object(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    data: &FsFileData,
+) -> Result<String, AppError> {
+    let (fs_id, json) = domain::fs::compute_file(data);
+    let _ = db
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT OR IGNORE INTO fs_objects (repo_id, fs_id, obj_type, data) VALUES ($1, $2, $3, $4)",
+            vec![
+                repo_id.to_owned().into(),
+                fs_id.clone().into(),
+                (data.obj_type as i8).into(),
+                json.into(),
+            ],
+        ))
+        .await?;
+    Ok(fs_id)
 }

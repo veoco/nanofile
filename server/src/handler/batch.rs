@@ -26,9 +26,13 @@ pub async fn batch_move_items(
     }
 
     let repo_id = &req.src_repo_id;
-    let db = state.db.as_ref();
 
-    crate::domain::permission::check_repo_write_permission(db, repo_id, auth.user_id).await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     if req.src_dirents.is_empty() {
         return Ok(Json(serde_json::json!({"success": true})));
@@ -73,9 +77,13 @@ pub async fn sync_batch_copy_item(
     }
 
     let repo_id = &body.src_repo_id;
-    let db = state.db.as_ref();
 
-    crate::domain::permission::check_repo_write_permission(db, repo_id, auth.user_id).await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let svc = state.fileops_service();
 
@@ -114,10 +122,14 @@ pub async fn batch_delete_item(
         return Ok(Json(serde_json::json!({"success": true})));
     }
 
-    let db = state.db.as_ref();
     let repo_id = &body.repo_id;
 
-    crate::domain::permission::check_repo_write_permission(db, repo_id, auth.user_id).await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let parent_dir = safe_normalize_path(&body.parent_dir)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;

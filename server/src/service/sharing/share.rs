@@ -148,7 +148,7 @@ pub async fn list_share_links_for_path(
 }
 
 pub async fn create_share_link(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     config: &Config,
     repo_id: &str,
@@ -170,7 +170,12 @@ pub async fn create_share_link(
     }
 
     // Verify caller has read permission on the repo
-    crate::domain::permission::check_repo_read_permission(db, repo_id, creator_id).await?;
+    crate::domain::permission::check_repo_read_permission(
+        repos.member.as_ref(),
+        repo_id,
+        creator_id,
+    )
+    .await?;
 
     let s_type = resolve_entry_type_raw(repos, repo_id, path).await?;
 
@@ -234,7 +239,7 @@ pub struct CreateShareLinkResult {
 }
 
 pub async fn create_share_link_v21(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     config: &Config,
     repo_id: &str,
@@ -257,7 +262,12 @@ pub async fn create_share_link_v21(
     }
 
     // Verify caller has read permission on the repo
-    crate::domain::permission::check_repo_read_permission(db, repo_id, creator_id).await?;
+    crate::domain::permission::check_repo_read_permission(
+        repos.member.as_ref(),
+        repo_id,
+        creator_id,
+    )
+    .await?;
 
     let s_type = resolve_entry_type_raw(repos, repo_id, path).await?;
 
@@ -371,7 +381,7 @@ pub async fn update_share_link_v21(
 
 /// Share (beshare) a repo with another user.
 pub async fn beshare_repo(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     notification_manager: Option<&crate::notification::manager::NotificationManager>,
     repo_id: &str,
@@ -384,7 +394,12 @@ pub async fn beshare_repo(
     }
 
     // Verify caller has write permission on the repo
-    crate::domain::permission::check_repo_write_permission(db, repo_id, caller_user_id).await?;
+    crate::domain::permission::check_repo_write_permission(
+        repos.member.as_ref(),
+        repo_id,
+        caller_user_id,
+    )
+    .await?;
 
     // Find the target user
     let target_user = repos
@@ -462,7 +477,7 @@ pub async fn list_share_members(
 
 /// Modify a user's share permission on a repo.
 pub async fn modify_share_permission(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     notification_manager: Option<&crate::notification::manager::NotificationManager>,
     repo_id: &str,
@@ -480,7 +495,12 @@ pub async fn modify_share_permission(
     }
 
     // Only the repo owner can modify permissions.
-    crate::domain::permission::check_repo_write_permission(db, repo_id, caller_user_id).await?;
+    crate::domain::permission::check_repo_write_permission(
+        repos.member.as_ref(),
+        repo_id,
+        caller_user_id,
+    )
+    .await?;
 
     let target_user = repos
         .user
@@ -519,7 +539,7 @@ pub async fn modify_share_permission(
 
 /// Remove a user's share from a repo.
 pub async fn delete_share(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     notification_manager: Option<&crate::notification::manager::NotificationManager>,
     repo_id: &str,
@@ -531,7 +551,12 @@ pub async fn delete_share(
     }
 
     // Only the repo owner can delete shares.
-    crate::domain::permission::check_repo_write_permission(db, repo_id, caller_user_id).await?;
+    crate::domain::permission::check_repo_write_permission(
+        repos.member.as_ref(),
+        repo_id,
+        caller_user_id,
+    )
+    .await?;
 
     let target_user = repos
         .user

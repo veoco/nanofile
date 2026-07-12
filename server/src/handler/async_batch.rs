@@ -17,7 +17,7 @@ pub async fn async_batch_copy_item(
     Json(body): Json<super::batch::SyncBatchCopyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &body.src_repo_id,
         auth.user_id,
     )
@@ -99,7 +99,7 @@ pub async fn async_batch_move_item(
     Json(body): Json<super::batch::BatchMoveRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &body.src_repo_id,
         auth.user_id,
     )
@@ -191,7 +191,7 @@ pub async fn copy_move_task(
     Json(body): Json<CopyMoveTaskRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &body.src_repo_id,
         auth.user_id,
     )

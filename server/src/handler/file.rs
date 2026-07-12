@@ -258,7 +258,7 @@ pub async fn move_file(
     Json(req): Json<MoveRequest>,
 ) -> Result<(), AppError> {
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &req.repo_id,
         auth.user_id,
     )
@@ -291,7 +291,7 @@ pub async fn rename_file(
     Json(req): Json<RenameRequest>,
 ) -> Result<(), AppError> {
     crate::domain::permission::check_repo_write_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &req.repo_id,
         auth.user_id,
     )
@@ -558,7 +558,7 @@ pub async fn get_block_download_link(
 ) -> Result<Json<String>, AppError> {
     let parent_dir = query.get("p").map(|s| s.as_str()).unwrap_or("/");
     crate::domain::permission::check_repo_read_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,
     )

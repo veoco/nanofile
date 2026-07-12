@@ -35,7 +35,7 @@ pub async fn set_password_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Check user has access to this repo (matching seahub's check_folder_permission).
     crate::domain::permission::check_repo_read_permission(
-        state.db.as_ref(),
+        state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,
     )

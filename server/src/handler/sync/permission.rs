@@ -47,7 +47,7 @@ pub async fn permission_check(
     match query.op.as_deref() {
         Some("upload") => {
             crate::domain::permission::check_repo_write_permission(
-                state.db.as_ref(),
+                state.repos.member.as_ref(),
                 &repo_id,
                 _auth.user_id,
             )
@@ -56,7 +56,7 @@ pub async fn permission_check(
         _ => {
             // Default to read permission check (covers download + unknown ops).
             crate::domain::permission::check_repo_read_permission(
-                state.db.as_ref(),
+                state.repos.member.as_ref(),
                 &repo_id,
                 _auth.user_id,
             )

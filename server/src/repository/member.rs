@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
+    DeleteResult, EntityTrait, QueryFilter, Set, Statement,
 };
 use std::sync::Arc;
 
@@ -30,6 +31,17 @@ pub trait MemberRepository: Send + Sync {
         user_id: i32,
     ) -> Result<DeleteResult, AppError>;
     async fn delete_by_repo(&self, repo_id: &str) -> Result<DeleteResult, AppError>;
+
+    /// Look up a repo's owner and the user's membership permission in a single
+    /// LEFT JOIN query. Returns `(owner_id, permission)` where `permission` is
+    /// `None` if the user is not a member.
+    ///
+    /// This is the canonical permission check query used by `domain::permission`.
+    async fn find_repo_owner_and_permission(
+        &self,
+        repo_id: &str,
+        user_id: i32,
+    ) -> Result<Option<(i32, Option<String>)>, AppError>;
 }
 
 pub struct DbMemberRepository {
@@ -115,5 +127,28 @@ impl MemberRepository for DbMemberRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(result)
+    }
+
+    async fn find_repo_owner_and_permission(
+        &self,
+        repo_id: &str,
+        user_id: i32,
+    ) -> Result<Option<(i32, Option<String>)>, AppError> {
+        let row = self
+            .db
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "SELECT r.owner_id, m.permission FROM repos r \
+                 LEFT JOIN repo_members m ON r.id = m.repo_id AND m.user_id = $1 \
+                 WHERE r.id = $2",
+                vec![user_id.into(), repo_id.to_owned().into()],
+            ))
+            .await?
+            .map(|r| {
+                let owner_id: i32 = r.try_get("", "owner_id").unwrap_or(0);
+                let permission: Option<String> = r.try_get("", "permission").ok();
+                (owner_id, permission)
+            });
+        Ok(row)
     }
 }

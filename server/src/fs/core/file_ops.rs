@@ -65,7 +65,7 @@ impl FileOps {
             obj_type: 1,
             version: 1,
         };
-        let file_fs_id = domain::fs::store_file_data(db, repo_id, &file_fs_data).await?;
+        let file_fs_id = crate::fs::core::store_fs_file_object(db, repo_id, &file_fs_data).await?;
 
         // Resolve the parent directory and build an ancestor chain for
         // walk_up_ancestors to avoid O(d²) re-resolution.
@@ -86,7 +86,7 @@ impl FileOps {
                     version: 1,
                 };
                 (
-                    domain::fs::store_dir_data(db, repo_id, &empty_dir).await?,
+                    crate::fs::core::store_fs_dir_object(db, repo_id, &empty_dir).await?,
                     Vec::new(),
                 )
             }
@@ -117,7 +117,8 @@ impl FileOps {
             obj_type: SEAF_METADATA_TYPE_DIR,
             version: 1,
         };
-        let new_dir_fs_id = domain::fs::store_dir_data(db, repo_id, &new_dir_data).await?;
+        let new_dir_fs_id =
+            crate::fs::core::store_fs_dir_object(db, repo_id, &new_dir_data).await?;
 
         // Walk up to root, updating all ancestor directories
         let root_fs_id = if parent_path == "/" {
@@ -266,7 +267,7 @@ impl FileOps {
 
             // Create new fs_object for ancestor
             let new_ancestor_fs_id =
-                domain::fs::store_dir_data(db, repo_id, &ancestor_data).await?;
+                crate::fs::core::store_fs_dir_object(db, repo_id, &ancestor_data).await?;
 
             // If we reached root, return
             if parent_path == "/" {
@@ -393,7 +394,8 @@ impl FileOps {
         let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
-        let new_parent_fs_id = domain::fs::store_dir_data(db, repo_id, &parent_data).await?;
+        let new_parent_fs_id =
+            crate::fs::core::store_fs_dir_object(db, repo_id, &parent_data).await?;
 
         let root_fs_id = if parent_path == "/" {
             new_parent_fs_id.clone()
@@ -432,7 +434,8 @@ impl FileOps {
         let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
-        let new_parent_fs_id = domain::fs::store_dir_data(db, repo_id, &parent_data).await?;
+        let new_parent_fs_id =
+            crate::fs::core::store_fs_dir_object(db, repo_id, &parent_data).await?;
 
         let root_fs_id = if parent_path == "/" {
             new_parent_fs_id.clone()

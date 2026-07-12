@@ -327,10 +327,13 @@ pub async fn zip_task_handler(
     Path(repo_id): Path<String>,
     Json(payload): Json<ZipTaskRequest>,
 ) -> Result<JsonResponse<ZipTaskResponse>, AppError> {
-    let db = state.db.as_ref();
-
     // Verify read permission
-    crate::domain::permission::check_repo_read_permission(db, &repo_id, auth.user_id).await?;
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     if payload.dirents.is_empty() {
         return Err(AppError::BadRequest(
