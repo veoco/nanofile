@@ -1,12 +1,9 @@
 use std::sync::Arc;
 
-use sea_orm::Set;
-
 use rand::Rng;
 
-use crate::repository::Repositories;
+use crate::repository::{Repositories, client_login_token::CreateClientLoginTokenParams};
 use base::error::AppError;
-use infra::entity::{client_login_token, sso_login_token};
 
 /// Service for SSO login flows, client login tokens, and device-wipe reporting.
 pub struct SsoService {
@@ -23,22 +20,24 @@ impl SsoService {
     /// Generates a one-time token that a client can use to initiate the
     /// SSO browser-based authentication flow.
     pub async fn create_login_token(&self) -> Result<String, AppError> {
+        use crate::repository::sso_login_token::CreateSsoLoginTokenParams;
         let token = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
 
-        let model = sso_login_token::ActiveModel {
-            id: sea_orm::NotSet,
-            token: Set(token.clone()),
-            platform: Set(None),
-            device_id: Set(None),
-            device_name: Set(None),
-            status: Set("pending".to_string()),
-            username: Set(None),
-            api_token: Set(None),
-            created_at: Set(now),
-            expires_at: Set(Some(now + 3600)),
-        };
-        self.repos.sso_login_token.insert(model).await?;
+        self.repos
+            .sso_login_token
+            .create_sso_token(CreateSsoLoginTokenParams {
+                token: token.clone(),
+                platform: None,
+                device_id: None,
+                device_name: None,
+                status: "pending".to_string(),
+                username: None,
+                api_token: None,
+                created_at: now,
+                expires_at: Some(now + 3600),
+            })
+            .await?;
         Ok(token)
     }
 
@@ -52,22 +51,24 @@ impl SsoService {
         device_id: Option<String>,
         device_name: Option<String>,
     ) -> Result<SsoLinkResult, AppError> {
+        use crate::repository::sso_login_token::CreateSsoLoginTokenParams;
         let token = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
 
-        let model = sso_login_token::ActiveModel {
-            id: sea_orm::NotSet,
-            token: Set(token.clone()),
-            platform: Set(platform),
-            device_id: Set(device_id),
-            device_name: Set(device_name),
-            status: Set("pending".to_string()),
-            username: Set(None),
-            api_token: Set(None),
-            created_at: Set(now),
-            expires_at: Set(Some(now + 3600)),
-        };
-        self.repos.sso_login_token.insert(model).await?;
+        self.repos
+            .sso_login_token
+            .create_sso_token(CreateSsoLoginTokenParams {
+                token: token.clone(),
+                platform,
+                device_id,
+                device_name,
+                status: "pending".to_string(),
+                username: None,
+                api_token: None,
+                created_at: now,
+                expires_at: Some(now + 3600),
+            })
+            .await?;
 
         Ok(SsoLinkResult {
             link: format!("/api2/client-sso-link/{token}/"),
@@ -105,10 +106,10 @@ impl SsoService {
 
         self.repos
             .client_login_token
-            .insert(client_login_token::ActiveModel {
-                token: Set(token.clone()),
-                username: Set(email.to_string()),
-                created_at: Set(now),
+            .create_client_login_token(CreateClientLoginTokenParams {
+                token: token.clone(),
+                username: email.to_string(),
+                created_at: now,
             })
             .await?;
 

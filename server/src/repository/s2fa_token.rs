@@ -1,9 +1,18 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
 use base::error::AppError;
 use infra::entity::s2fa_token;
+
+pub struct CreateS2faTokenParams {
+    pub user_id: i32,
+    pub token: String,
+    pub device_id: Option<String>,
+    pub device_name: Option<String>,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
 
 #[async_trait]
 pub trait S2faTokenRepository: Send + Sync {
@@ -19,6 +28,10 @@ pub trait S2faTokenRepository: Send + Sync {
         device_id: &str,
     ) -> Result<u64, AppError>;
     async fn insert(&self, model: s2fa_token::ActiveModel) -> Result<(), AppError>;
+    async fn create_s2fa_token(
+        &self,
+        params: CreateS2faTokenParams,
+    ) -> Result<s2fa_token::Model, AppError>;
 }
 
 pub struct DbS2faTokenRepository {
@@ -72,5 +85,21 @@ impl S2faTokenRepository for DbS2faTokenRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(())
+    }
+
+    async fn create_s2fa_token(
+        &self,
+        params: CreateS2faTokenParams,
+    ) -> Result<s2fa_token::Model, AppError> {
+        let model = s2fa_token::ActiveModel {
+            id: sea_orm::NotSet,
+            user_id: Set(params.user_id),
+            token: Set(params.token),
+            device_id: Set(params.device_id),
+            device_name: Set(params.device_name),
+            created_at: Set(params.created_at),
+            expires_at: Set(params.expires_at),
+        };
+        Ok(model.insert(self.db.as_ref()).await?)
     }
 }

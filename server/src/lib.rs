@@ -332,7 +332,12 @@ impl AppState {
     }
 
     pub fn sync_service(&self) -> crate::service::sync::SyncService {
-        crate::service::sync::SyncService::new(self.repos.clone())
+        crate::service::sync::SyncService::new(
+            self.repos.clone(),
+            self.db.clone(),
+            self.block_store.clone(),
+            self.indexer.clone(),
+        )
     }
 }
 

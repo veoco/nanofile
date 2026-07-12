@@ -1,14 +1,11 @@
 use std::sync::Arc;
 
-use sea_orm::Set;
-
 use crate::repository::Repositories;
 use crate::service::auth::password::verify_password;
 use crate::service::auth::s2fa::{S2FA_TTL_SECONDS, generate_s2fa_token};
 use crate::service::auth::token::generate_api_token;
 use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
-use infra::entity::{api_token, s2fa_token};
 use infra::rate_limit::LoginRateLimiter;
 
 /// Represents all possible outcomes of a login attempt.
@@ -165,18 +162,20 @@ impl LoginService {
                         }
 
                         if trust_device {
+                            use crate::repository::s2fa_token::CreateS2faTokenParams;
                             let s2fa_token_value = generate_s2fa_token();
                             let now = chrono::Utc::now().timestamp();
-                            let s2fa_model = s2fa_token::ActiveModel {
-                                id: sea_orm::NotSet,
-                                user_id: Set(user_record.id),
-                                token: Set(s2fa_token_value.clone()),
-                                device_id: Set(device_id.clone()),
-                                device_name: Set(device_name.clone()),
-                                created_at: Set(now),
-                                expires_at: Set(now + S2FA_TTL_SECONDS),
-                            };
-                            self.repos.s2fa_token.insert(s2fa_model).await?;
+                            self.repos
+                                .s2fa_token
+                                .create_s2fa_token(CreateS2faTokenParams {
+                                    user_id: user_record.id,
+                                    token: s2fa_token_value.clone(),
+                                    device_id: device_id.clone(),
+                                    device_name: device_name.clone(),
+                                    created_at: now,
+                                    expires_at: now + S2FA_TTL_SECONDS,
+                                })
+                                .await?;
                             issued_s2fa_token = Some(s2fa_token_value);
                         }
                     }
@@ -195,22 +194,23 @@ impl LoginService {
         let token_value = generate_api_token();
         let now = chrono::Utc::now().timestamp();
 
-        let token_model = api_token::ActiveModel {
-            id: sea_orm::NotSet,
-            user_id: Set(user_record.id),
-            token: Set(token_value.clone()),
-            created_at: Set(now),
-            expires_at: Set(if self.api_token_ttl_days > 0 {
-                Some(now + self.api_token_ttl_days as i64 * 86400)
-            } else {
-                None
-            }),
-            device_id: Set(device_id),
-            platform: Set(platform),
-            device_name: Set(device_name),
-            client_version: Set(client_version),
-        };
-        self.repos.api_token.insert(token_model).await?;
+        self.repos
+            .api_token
+            .create_session_token(crate::repository::api_token::CreateSessionTokenParams {
+                user_id: user_record.id,
+                token: token_value.clone(),
+                created_at: now,
+                expires_at: if self.api_token_ttl_days > 0 {
+                    Some(now + self.api_token_ttl_days as i64 * 86400)
+                } else {
+                    None
+                },
+                device_id,
+                platform,
+                device_name,
+                client_version,
+            })
+            .await?;
 
         self.repos
             .user

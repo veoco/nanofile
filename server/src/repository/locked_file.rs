@@ -23,6 +23,12 @@ pub trait LockedFileRepository: Send + Sync {
     ) -> Result<(), AppError>;
     async fn delete_by_repo_and_path(&self, repo_id: &str, path: &str) -> Result<(), AppError>;
     async fn update(&self, model: locked_file::ActiveModel) -> Result<(), AppError>;
+    async fn update_locked_file_owner(
+        &self,
+        id: i32,
+        user_id: i32,
+        locked_at: i64,
+    ) -> Result<(), AppError>;
 }
 
 pub struct DbLockedFileRepository {
@@ -88,6 +94,24 @@ impl LockedFileRepository for DbLockedFileRepository {
 
     async fn update(&self, model: locked_file::ActiveModel) -> Result<(), AppError> {
         model.update(self.db.as_ref()).await?;
+        Ok(())
+    }
+
+    async fn update_locked_file_owner(
+        &self,
+        id: i32,
+        user_id: i32,
+        locked_at: i64,
+    ) -> Result<(), AppError> {
+        locked_file::Entity::update_many()
+            .filter(locked_file::Column::Id.eq(id))
+            .set(locked_file::ActiveModel {
+                user_id: Set(user_id),
+                locked_at: Set(locked_at),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 }

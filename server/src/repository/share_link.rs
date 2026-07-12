@@ -55,6 +55,15 @@ pub trait ShareLinkRepository: Send + Sync {
     async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError>;
     /// Delete expired share links (where expires_at < now).
     async fn delete_expired(&self, now: i64) -> Result<u64, AppError>;
+    /// Update share link fields (password, expire_at, description).
+    /// Each field uses `Option<Option<T>>` — None = no change, Some(None) = clear, Some(Some(v)) = set.
+    async fn update_share_link_fields(
+        &self,
+        id: i32,
+        password: Option<Option<String>>,
+        expires_at: Option<Option<i64>>,
+        description: Option<Option<String>>,
+    ) -> Result<(), AppError>;
 }
 
 pub struct DbShareLinkRepository {
@@ -201,5 +210,32 @@ impl ShareLinkRepository for DbShareLinkRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(result.rows_affected)
+    }
+
+    async fn update_share_link_fields(
+        &self,
+        id: i32,
+        password: Option<Option<String>>,
+        expires_at: Option<Option<i64>>,
+        description: Option<Option<String>>,
+    ) -> Result<(), AppError> {
+        let mut active: share_link::ActiveModel = share_link::ActiveModel {
+            ..Default::default()
+        };
+        if let Some(val) = password {
+            active.password = Set(val);
+        }
+        if let Some(val) = expires_at {
+            active.expires_at = Set(val);
+        }
+        if let Some(val) = description {
+            active.description = Set(val);
+        }
+        share_link::Entity::update_many()
+            .filter(share_link::Column::Id.eq(id))
+            .set(active)
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
     }
 }

@@ -74,8 +74,7 @@ async fn validate_upload_link(
     }
 
     // Check repo exists
-    let repo_exists = state.repos.repo.find_by_id(&link.repo_id).await?.is_some();
-    if !repo_exists {
+    if !state.sync_service().repo_exists(&link.repo_id).await? {
         return Err(AppError::NotFound("Upload link not found".into()));
     }
 

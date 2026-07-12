@@ -35,12 +35,9 @@ pub async fn permission_check(
     Query(query): Query<PermissionQuery>,
 ) -> Result<StatusCode, AppError> {
     // Verify repo exists — if not, return 444 (repo deleted) as seaf-daemon expects
-    state
-        .repos
-        .repo
-        .find_by_id(&repo_id)
-        .await?
-        .ok_or(AppError::RepoDeleted)?;
+    if !state.sync_service().repo_exists(&repo_id).await? {
+        return Err(AppError::RepoDeleted);
+    }
 
     // Check permission based on operation type.
     // seaf-daemon sends op=upload or op=download.

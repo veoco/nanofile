@@ -46,6 +46,17 @@ pub trait RepoRepository: Send + Sync {
         magic: Option<String>,
         random_key: Option<String>,
     ) -> Result<(), AppError>;
+    /// Rename a repo (owner-only).
+    async fn rename_repo(&self, repo_id: &str, name: &str, updated_at: i64)
+    -> Result<(), AppError>;
+    /// Update repo name and/or description (owner-only).
+    async fn update_repo_details(
+        &self,
+        repo_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        updated_at: i64,
+    ) -> Result<(), AppError>;
 }
 
 pub struct DbRepoRepository {
@@ -186,6 +197,50 @@ impl RepoRepository for DbRepoRepository {
                 updated_at: Set(now),
                 ..Default::default()
             })
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn rename_repo(
+        &self,
+        repo_id: &str,
+        name: &str,
+        updated_at: i64,
+    ) -> Result<(), AppError> {
+        repo::Entity::update_many()
+            .filter(repo::Column::Id.eq(repo_id))
+            .set(repo::ActiveModel {
+                name: Set(name.to_string()),
+                updated_at: Set(updated_at),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn update_repo_details(
+        &self,
+        repo_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        updated_at: i64,
+    ) -> Result<(), AppError> {
+        let mut active: repo::ActiveModel = repo::ActiveModel {
+            ..Default::default()
+        };
+        if let Some(n) = name {
+            active.name = Set(n.to_string());
+        }
+        if let Some(d) = description {
+            active.description = Set(d.to_string());
+        }
+        active.updated_at = Set(updated_at);
+
+        repo::Entity::update_many()
+            .filter(repo::Column::Id.eq(repo_id))
+            .set(active)
             .exec(self.db.as_ref())
             .await?;
         Ok(())

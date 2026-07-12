@@ -1,9 +1,15 @@
 use async_trait::async_trait;
-use sea_orm::{DatabaseConnection, EntityTrait, ModelTrait};
+use sea_orm::{DatabaseConnection, EntityTrait, ModelTrait, Set};
 use std::sync::Arc;
 
 use base::error::AppError;
 use infra::entity::client_login_token;
+
+pub struct CreateClientLoginTokenParams {
+    pub token: String,
+    pub username: String,
+    pub created_at: i64,
+}
 
 #[async_trait]
 pub trait ClientLoginTokenRepository: Send + Sync {
@@ -13,6 +19,10 @@ pub trait ClientLoginTokenRepository: Send + Sync {
         token: &str,
     ) -> Result<Option<client_login_token::Model>, AppError>;
     async fn delete(&self, model: client_login_token::Model) -> Result<(), AppError>;
+    async fn create_client_login_token(
+        &self,
+        params: CreateClientLoginTokenParams,
+    ) -> Result<client_login_token::Model, AppError>;
 }
 
 pub struct DbClientLoginTokenRepository {
@@ -50,5 +60,22 @@ impl ClientLoginTokenRepository for DbClientLoginTokenRepository {
     async fn delete(&self, model: client_login_token::Model) -> Result<(), AppError> {
         model.delete(self.db.as_ref()).await?;
         Ok(())
+    }
+
+    async fn create_client_login_token(
+        &self,
+        params: CreateClientLoginTokenParams,
+    ) -> Result<client_login_token::Model, AppError> {
+        let token = params.token.clone();
+        client_login_token::Entity::insert(client_login_token::ActiveModel {
+            token: Set(params.token),
+            username: Set(params.username),
+            created_at: Set(params.created_at),
+        })
+        .exec(self.db.as_ref())
+        .await?;
+        self.find_by_token(&token)
+            .await?
+            .ok_or_else(|| AppError::Internal("failed to find created client login token".into()))
     }
 }

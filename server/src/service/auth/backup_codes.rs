@@ -2,7 +2,6 @@ use sha2::{Digest, Sha256};
 
 use crate::repository::Repositories;
 use base::error::AppError;
-use infra::entity::user_2fa_backup_code;
 
 pub struct BackupCodeManager;
 
@@ -24,17 +23,17 @@ impl BackupCodeManager {
         user_id: i32,
         codes: &[String],
     ) -> Result<(), AppError> {
+        use crate::repository::user_2fa_backup_code::CreateBackupCodeParams;
         let now = chrono::Utc::now().timestamp();
         for code in codes {
-            let model = user_2fa_backup_code::ActiveModel {
-                id: sea_orm::NotSet,
-                user_id: sea_orm::Set(user_id),
-                code_hash: sea_orm::Set(Self::hash_code(code)),
-                used: sea_orm::Set(false),
-                used_at: sea_orm::NotSet,
-                created_at: sea_orm::Set(now),
-            };
-            repos.user_2fa_backup_code.insert(model).await?;
+            repos
+                .user_2fa_backup_code
+                .create_backup_code(CreateBackupCodeParams {
+                    user_id,
+                    code_hash: Self::hash_code(code),
+                    created_at: now,
+                })
+                .await?;
         }
         Ok(())
     }

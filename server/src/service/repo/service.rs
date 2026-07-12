@@ -1,4 +1,4 @@
-use sea_orm::{DatabaseConnection, Set};
+use sea_orm::DatabaseConnection;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -408,10 +408,7 @@ impl RepoService {
         .await;
 
         let now = chrono::Utc::now().timestamp();
-        let mut active: infra::entity::repo::ActiveModel = r.into();
-        active.name = Set(new_name);
-        active.updated_at = Set(now);
-        repos.repo.update(active).await?;
+        repos.repo.rename_repo(repo_id, &new_name, now).await?;
 
         Ok(())
     }
@@ -436,16 +433,22 @@ impl RepoService {
         }
 
         let now = chrono::Utc::now().timestamp();
-        let mut active: infra::entity::repo::ActiveModel = r.clone().into();
 
-        if let Some(ref name) = new_name {
-            let name = name.trim().to_string();
-            if name.is_empty() || name.contains('/') {
-                return Err(AppError::BadRequest("invalid repo name".into()));
-            }
-            active.name = Set(name.clone());
+        // Validate name if provided (must be non-empty and without slashes)
+        let validated_name = new_name
+            .as_ref()
+            .map(|n| {
+                let n = n.trim().to_string();
+                if n.is_empty() || n.contains('/') {
+                    Err(AppError::BadRequest("invalid repo name".into()))
+                } else {
+                    Ok(n)
+                }
+            })
+            .transpose()?;
 
-            // Log rename activity (before update, so detail captures the old name)
+        // Log rename activity (before update, so detail captures the old name)
+        if validated_name.is_some() {
             activity_log::log_activity(
                 db,
                 repo_id,
@@ -462,12 +465,15 @@ impl RepoService {
             .await;
         }
 
-        if let Some(ref desc) = new_description {
-            active.description = Set(desc.clone());
-        }
-
-        active.updated_at = Set(now);
-        repos.repo.update(active).await?;
+        repos
+            .repo
+            .update_repo_details(
+                repo_id,
+                validated_name.as_deref(),
+                new_description.as_deref(),
+                now,
+            )
+            .await?;
 
         Ok(())
     }

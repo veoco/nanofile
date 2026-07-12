@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sea_orm::{DatabaseConnection, Set};
+use sea_orm::DatabaseConnection;
 
 use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::trash;
@@ -720,10 +720,10 @@ impl FileService {
 
         match existing {
             Some(record) => {
-                let mut active: infra::entity::locked_file::ActiveModel = record.into();
-                active.user_id = Set(user_id);
-                active.locked_at = Set(now);
-                self.repos.locked_file.update(active).await?;
+                self.repos
+                    .locked_file
+                    .update_locked_file_owner(record.id, user_id, now)
+                    .await?;
             }
             None => {
                 self.repos

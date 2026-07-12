@@ -5,6 +5,12 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::user_2fa_backup_code;
 
+pub struct CreateBackupCodeParams {
+    pub user_id: i32,
+    pub code_hash: String,
+    pub created_at: i64,
+}
+
 #[async_trait]
 pub trait User2faBackupCodeRepository: Send + Sync {
     async fn find_by_user(
@@ -18,6 +24,10 @@ pub trait User2faBackupCodeRepository: Send + Sync {
     async fn delete_by_user(&self, user_id: i32) -> Result<(), AppError>;
     async fn insert(&self, model: user_2fa_backup_code::ActiveModel) -> Result<(), AppError>;
     async fn mark_as_used(&self, code_hash: &str, used_at: i64) -> Result<(), AppError>;
+    async fn create_backup_code(
+        &self,
+        params: CreateBackupCodeParams,
+    ) -> Result<user_2fa_backup_code::Model, AppError>;
 }
 
 pub struct DbUser2faBackupCodeRepository {
@@ -63,6 +73,21 @@ impl User2faBackupCodeRepository for DbUser2faBackupCodeRepository {
     async fn insert(&self, model: user_2fa_backup_code::ActiveModel) -> Result<(), AppError> {
         model.insert(self.db.as_ref()).await?;
         Ok(())
+    }
+
+    async fn create_backup_code(
+        &self,
+        params: CreateBackupCodeParams,
+    ) -> Result<user_2fa_backup_code::Model, AppError> {
+        let model = user_2fa_backup_code::ActiveModel {
+            id: sea_orm::NotSet,
+            user_id: Set(params.user_id),
+            code_hash: Set(params.code_hash),
+            used: Set(false),
+            used_at: Set(None),
+            created_at: Set(params.created_at),
+        };
+        Ok(model.insert(self.db.as_ref()).await?)
     }
 
     async fn mark_as_used(&self, code_hash: &str, used_at: i64) -> Result<(), AppError> {

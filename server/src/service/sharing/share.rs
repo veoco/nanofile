@@ -1,4 +1,4 @@
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::DatabaseConnection;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -9,7 +9,6 @@ use crate::repository::Repositories;
 use crate::service::auth::password::hash_password;
 use crate::service::auth::token::generate_share_link_token;
 use base::error::AppError;
-use infra::entity::share_link;
 
 /// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
@@ -306,7 +305,7 @@ pub async fn delete_share_link_v21(
 }
 
 pub async fn update_share_link_v21(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     config: &Config,
     repos: &Repositories,
     token: &str,
@@ -327,28 +326,20 @@ pub async fn update_share_link_v21(
         return Err(AppError::NotFound("Share link not found".into()));
     }
 
-    // Build conditional update (only set fields that were provided)
-    let mut active = share_link::ActiveModel {
-        ..Default::default()
-    };
+    // Prepare field updates (business logic: password hashing, expire_days conversion)
     let new_password =
         password.map(|pwd| pwd.map(|p| hash_password(&p, config.auth.password_hash_iterations)));
-    if let Some(ref pwd) = new_password {
-        active.password = Set(pwd.clone());
-    }
     let new_expire_at = expire_days.map(|days| days.map(|d| now + d * 86400));
-    if let Some(ref val) = new_expire_at {
-        active.expires_at = Set(*val);
-    }
     let new_description = description.clone();
-    if let Some(val) = new_description {
-        active.description = Set(val);
-    }
 
-    share_link::Entity::update_many()
-        .filter(share_link::Column::Id.eq(link.id))
-        .set(active)
-        .exec(db)
+    repos
+        .share_link
+        .update_share_link_fields(
+            link.id,
+            new_password.clone(),
+            new_expire_at,
+            new_description,
+        )
         .await?;
 
     // Compute effective values for the response using original + requested changes
