@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::auth::service::two_factor::TwoFactorService;
 use crate::error::AppError;
 
 #[derive(Serialize)]
@@ -40,12 +39,7 @@ pub async fn setup_2fa(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SetupResponse>, AppError> {
-    let svc = TwoFactorService::new(
-        state.db.clone(),
-        state.repos.clone(),
-        state.config.auth.password_hash_iterations,
-        state.disable_2fa_limiter.clone(),
-    );
+    let svc = state.two_factor_service();
 
     let result = svc.setup_2fa(auth.user_id, &auth.email).await?;
 
@@ -61,12 +55,7 @@ pub async fn verify_2fa(
     State(state): State<Arc<AppState>>,
     Json(req): Json<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
-    let svc = TwoFactorService::new(
-        state.db.clone(),
-        state.repos.clone(),
-        state.config.auth.password_hash_iterations,
-        state.disable_2fa_limiter.clone(),
-    );
+    let svc = state.two_factor_service();
 
     svc.verify_2fa(auth.user_id, &auth.email, &req.code).await?;
 
@@ -78,12 +67,7 @@ pub async fn disable_2fa(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DisableRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
-    let svc = TwoFactorService::new(
-        state.db.clone(),
-        state.repos.clone(),
-        state.config.auth.password_hash_iterations,
-        state.disable_2fa_limiter.clone(),
-    );
+    let svc = state.two_factor_service();
 
     svc.disable_2fa(auth.user_id, &req.password).await?;
 

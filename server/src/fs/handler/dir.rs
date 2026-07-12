@@ -15,7 +15,7 @@ use crate::auth::middleware::AuthUser;
 use crate::auth::{RepoPathRead, RepoPathWrite};
 use crate::common::DirEntry;
 use crate::error::AppError;
-use crate::fs::service::dir::{self as dir_svc, DirService};
+use crate::fs::service::dir::{self as dir_svc};
 use crate::sanitize::safe_normalize_path;
 
 // Re-export pub(crate) functions that are used by src/ui/files.rs
@@ -77,7 +77,7 @@ pub async fn list_dir(
         ));
     }
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
 
     if query.recursive.as_deref() == Some("1") {
         let (dir_id, all_entries) = svc.list_dir_recursive(repo_id, &path).await?;
@@ -153,7 +153,7 @@ pub async fn dir_post_handler(
     let path = safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
 
     match op.as_deref() {
         Some("rename") => {
@@ -190,7 +190,7 @@ pub async fn delete_dir(
     )
     .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
     svc.delete_dir(repo_id, &path, &access.user.email, access.user.user_id)
         .await
 }
@@ -210,7 +210,7 @@ pub async fn move_dir(
     crate::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
         .await?;
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
     svc.move_dir(
         &req.repo_id,
         &req.p,
@@ -238,7 +238,7 @@ pub async fn rename_dir(
 
     let path = safe_normalize_path(&req.p)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
     svc.rename_dir_entry(
         &req.repo_id,
         &path,
@@ -263,7 +263,7 @@ pub async fn dir_shared_items(
 
     let path = safe_normalize_path(&query.p.unwrap_or_else(|| "/".to_string()))
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
     let items = svc.get_dir_shared_items(repo_id, &path).await?;
 
     Ok(Json(DirSharedItemsResponse {
@@ -285,7 +285,7 @@ pub async fn create_sub_repo(
     )
     .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
     let result = svc
         .create_sub_repo(repo_id, &path, &access.user.email, access.user.user_id)
         .await?;
@@ -318,18 +318,13 @@ pub async fn delete_dirent_v21(
     let normalized = safe_normalize_path(path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
     svc.delete_dirent(&repo_id, &obj, &normalized, &auth.email, auth.user_id)
         .await?;
 
     // Clean up cached thumbnails for deleted files
     if obj == "file" {
-        let thumb_svc = crate::fs::service::thumbnail::ThumbnailService::new(
-            state.repos.clone(),
-            state.db.clone(),
-            state.block_store.clone(),
-            state.block_dir.clone(),
-        );
+        let thumb_svc = state.thumbnail_service();
         thumb_svc.cleanup(&repo_id, &normalized).await;
     }
 
@@ -350,7 +345,7 @@ pub async fn delete_dir_v21_handler(
     let normalized = safe_normalize_path(path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
     svc.delete_dirent(
         repo_id,
         "dir",
@@ -393,7 +388,7 @@ pub async fn list_dir_v21(
         ));
     }
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
 
     if query.recursive.as_deref() == Some("1") {
         let (dir_id, all_entries) = svc.list_dir_recursive(repo_id, &normalized).await?;
@@ -482,7 +477,7 @@ pub async fn create_dir_v21(
     let path = safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
     svc.create_dir(repo_id, &path, &access.user.email, access.user.user_id)
         .await?;
 
@@ -510,7 +505,7 @@ pub async fn dir_detail_v21(
     let normalized = safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
     let result = svc
         .dir_detail(repo_id, &normalized, access.user.user_id)
         .await?;

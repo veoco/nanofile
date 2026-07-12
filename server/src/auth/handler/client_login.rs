@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::auth::service::sso::SsoService;
 use crate::error::AppError;
 
 /// POST /api2/client-login/
@@ -17,7 +16,7 @@ pub async fn client_login(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let svc = SsoService::new(state.db.clone(), state.repos.clone());
+    let svc = state.sso_service();
     let token = svc.create_client_login_token(&auth.email).await?;
 
     Ok(Json(serde_json::json!({"token": token})))

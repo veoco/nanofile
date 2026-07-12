@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::admin::service::AdminService;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 
@@ -47,7 +46,7 @@ pub async fn index_file_text(
         return Err(AppError::BadRequest("text is required".into()));
     }
 
-    let svc = AdminService::new(state.db.as_ref(), &state.repos);
+    let svc = state.admin_service();
 
     // Verify access to the repo.
     svc.check_repo_access(&req.repo_id, auth.user_id).await?;
@@ -72,7 +71,7 @@ pub async fn reindex(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ReindexRequest>,
 ) -> Result<Json<ReindexResponse>, AppError> {
-    let svc = AdminService::new(state.db.as_ref(), &state.repos);
+    let svc = state.admin_service();
 
     // Verify the user has access to this repo.
     svc.check_repo_access(&req.repo_id, auth.user_id).await?;

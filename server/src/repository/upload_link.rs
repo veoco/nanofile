@@ -39,6 +39,8 @@ pub trait UploadLinkRepository: Send + Sync {
         password: Option<Option<String>>,
         description: Option<Option<String>>,
     ) -> Result<bool, AppError>;
+    /// Delete expired upload links (where expires_at < now).
+    async fn delete_expired(&self, now: i64) -> Result<u64, AppError>;
 }
 
 pub struct DbUploadLinkRepository {
@@ -169,5 +171,14 @@ impl UploadLinkRepository for DbUploadLinkRepository {
 
         active.update(self.db.as_ref()).await?;
         Ok(true)
+    }
+
+    async fn delete_expired(&self, now: i64) -> Result<u64, AppError> {
+        let result = upload_link::Entity::delete_many()
+            .filter(upload_link::Column::ExpiresAt.is_not_null())
+            .filter(upload_link::Column::ExpiresAt.lt(now))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
     }
 }

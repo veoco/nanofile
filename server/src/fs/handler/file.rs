@@ -16,7 +16,7 @@ use crate::auth::middleware::AuthUser;
 use crate::auth::{RepoPathRead, RepoPathWrite};
 use crate::error::AppError;
 use crate::fs::handler::exif::get_exif;
-use crate::fs::service::file::{self as file_svc, FileService};
+use crate::fs::service::file as file_svc;
 
 // Re-export pub(crate) rename function for create_file_v21 use
 pub(crate) use file_svc::rename_file_entry;
@@ -61,15 +61,7 @@ pub async fn download_file(
     let path = safe_normalize_path(&query.p.unwrap_or_else(|| "/".to_string()))
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = FileService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-        state.token_manager.clone(),
-        state.config.clone(),
-        state.notification_manager.clone(),
-    );
+    let svc = state.file_service();
 
     let host_header = headers.get("host").and_then(|v| v.to_str().ok());
     let (file_fs_id, url) = svc
@@ -113,15 +105,7 @@ pub async fn file_post_handler(
         .unwrap_or("")
         .to_string();
 
-    let svc = FileService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-        state.token_manager.clone(),
-        state.config.clone(),
-        state.notification_manager.clone(),
-    );
+    let svc = state.file_service();
 
     if content_type.starts_with("multipart/form-data") {
         // Check for rename operation in multipart body
@@ -255,15 +239,7 @@ pub async fn delete_file(
     )
     .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = FileService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-        state.token_manager.clone(),
-        state.config.clone(),
-        state.notification_manager.clone(),
-    );
+    let svc = state.file_service();
     svc.delete_file(repo_id, &path, &access.user.email, access.user.user_id)
         .await
 }
@@ -286,15 +262,7 @@ pub async fn move_file(
     let path = safe_normalize_path(&req.p)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = FileService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-        state.token_manager.clone(),
-        state.config.clone(),
-        state.notification_manager.clone(),
-    );
+    let svc = state.file_service();
     svc.move_file(
         &req.repo_id,
         &path,
@@ -323,15 +291,7 @@ pub async fn rename_file(
     let path = safe_normalize_path(&req.p)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = FileService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-        state.token_manager.clone(),
-        state.config.clone(),
-        state.notification_manager.clone(),
-    );
+    let svc = state.file_service();
     svc.rename_file(
         &req.repo_id,
         &path,
@@ -356,15 +316,7 @@ pub async fn file_detail(
     )
     .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = FileService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-        state.token_manager.clone(),
-        state.config.clone(),
-        state.notification_manager.clone(),
-    );
+    let svc = state.file_service();
     let result = svc.file_detail(repo_id, &path).await?;
 
     Ok(Json(result))
@@ -461,15 +413,7 @@ pub async fn lock_file_via_api_handler(
     let path = safe_normalize_path(&query.p.unwrap_or_default())
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = FileService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-        state.token_manager.clone(),
-        state.config.clone(),
-        state.notification_manager.clone(),
-    );
+    let svc = state.file_service();
     svc.lock_file(
         repo_id,
         &path,
@@ -537,15 +481,7 @@ pub async fn create_file_v21(
         return Ok(Json(serde_json::json!({"success": true})));
     }
 
-    let svc = FileService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-        state.token_manager.clone(),
-        state.config.clone(),
-        state.notification_manager.clone(),
-    );
+    let svc = state.file_service();
     svc.create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
         .await?;
 
@@ -572,15 +508,7 @@ pub async fn file_uploaded_bytes(
         return Err(AppError::BadRequest("parent_dir invalid.".into()));
     }
 
-    let svc = FileService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-        state.token_manager.clone(),
-        state.config.clone(),
-        state.notification_manager.clone(),
-    );
+    let svc = state.file_service();
     let mut uploaded_bytes = svc.check_uploaded_bytes(query.blockids.as_deref()).await;
 
     // For resumable upload: check if a temp file already exists and return
@@ -621,15 +549,7 @@ pub async fn get_block_download_link(
     let parent_dir = query.get("p").map(|s| s.as_str()).unwrap_or("/");
     crate::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
 
-    let svc = FileService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-        state.token_manager.clone(),
-        state.config.clone(),
-        state.notification_manager.clone(),
-    );
+    let svc = state.file_service();
 
     let host_header = headers.get("host").and_then(|v| v.to_str().ok());
     let url = svc

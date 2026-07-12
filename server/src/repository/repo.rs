@@ -1,8 +1,8 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
-use crate::entity::repo;
+use crate::entity::{commit, repo};
 use crate::error::AppError;
 
 #[async_trait]
@@ -17,6 +17,10 @@ pub trait RepoRepository: Send + Sync {
         head_commit_id: Option<String>,
     ) -> Result<(), AppError>;
     async fn delete_by_id(&self, repo_id: &str) -> Result<(), AppError>;
+    /// Get the root fs_id from the repo's head commit.
+    async fn get_head_root_id(&self, repo_id: &str) -> Result<Option<String>, AppError>;
+    /// Add a delta to the repo's size (can be negative).
+    async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError>;
 }
 
 pub struct DbRepoRepository {
@@ -80,6 +84,36 @@ impl RepoRepository for DbRepoRepository {
         repo::Entity::delete_by_id(repo_id)
             .exec(self.db.as_ref())
             .await?;
+        Ok(())
+    }
+
+    async fn get_head_root_id(&self, repo_id: &str) -> Result<Option<String>, AppError> {
+        let repo = self.find_by_id(repo_id).await?;
+        match repo {
+            Some(r) => match r.head_commit_id {
+                Some(head_id) => {
+                    let head = commit::Entity::find()
+                        .filter(commit::Column::RepoId.eq(repo_id))
+                        .filter(commit::Column::CommitId.eq(&head_id))
+                        .one(self.db.as_ref())
+                        .await?;
+                    Ok(head.map(|h| h.root_id))
+                }
+                None => Ok(None),
+            },
+            None => Ok(None),
+        }
+    }
+
+    async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError> {
+        let repo = self
+            .find_by_id(repo_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Repo not found".into()))?;
+        let new_size = (repo.size + delta).max(0);
+        let mut active: repo::ActiveModel = repo.into();
+        active.size = Set(new_size);
+        active.update(self.db.as_ref()).await?;
         Ok(())
     }
 }

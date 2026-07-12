@@ -3,14 +3,11 @@ use axum::{
     extract::{Path, State},
     routing::{get, put},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::admin::service::AdminUserService;
 use crate::auth::middleware::AuthUser;
-use crate::entity::user;
 use crate::error::AppError;
 
 pub fn admin_user_routes() -> Router<Arc<AppState>> {
@@ -21,8 +18,10 @@ pub fn admin_user_routes() -> Router<Arc<AppState>> {
 
 /// Check that the authenticated user is an admin.
 async fn require_admin(state: &Arc<AppState>, auth: &AuthUser) -> Result<(), AppError> {
-    let user_record = user::Entity::find_by_id(auth.user_id)
-        .one(state.db.as_ref())
+    let user_record = state
+        .repos
+        .user
+        .find_by_id(auth.user_id)
         .await?
         .ok_or(AppError::Unauthorized)?;
 
@@ -51,7 +50,7 @@ async fn list_users(
 ) -> Result<Json<Vec<UserAdminView>>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let svc = AdminUserService::new(state.db.as_ref(), &state.repos);
+    let svc = state.admin_user_service();
     let users = svc.list_users().await?;
 
     Ok(Json(
@@ -97,7 +96,7 @@ async fn create_user(
     let iterations = state.config.auth.password_hash_iterations;
     let password_hash = crate::auth::password::hash_password(&payload.password, iterations);
 
-    let svc = AdminUserService::new(state.db.as_ref(), &state.repos);
+    let svc = state.admin_user_service();
     svc.create_user(
         payload.email.clone(),
         password_hash,
@@ -108,9 +107,10 @@ async fn create_user(
     .await?;
 
     // Fetch the newly created user to return full info.
-    let created = user::Entity::find()
-        .filter(user::Column::Email.eq(&payload.email))
-        .one(state.db.as_ref())
+    let created = state
+        .repos
+        .user
+        .find_by_email(&payload.email)
         .await?
         .ok_or_else(|| AppError::Internal("user not found after creation".into()))?;
 
@@ -144,7 +144,7 @@ async fn update_user(
 ) -> Result<Json<UserAdminView>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let svc = AdminUserService::new(state.db.as_ref(), &state.repos);
+    let svc = state.admin_user_service();
     svc.update_user(
         user_id,
         payload.is_admin,
@@ -154,8 +154,10 @@ async fn update_user(
     .await?;
 
     // Fetch updated user
-    let updated = user::Entity::find_by_id(user_id)
-        .one(state.db.as_ref())
+    let updated = state
+        .repos
+        .user
+        .find_by_id(user_id)
         .await?
         .ok_or_else(|| AppError::NotFound("user not found".into()))?;
 
@@ -181,7 +183,7 @@ async fn delete_user(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let svc = AdminUserService::new(state.db.as_ref(), &state.repos);
+    let svc = state.admin_user_service();
     svc.delete_user(user_id).await?;
 
     Ok(Json(serde_json::json!({"success": true})))

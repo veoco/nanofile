@@ -1,11 +1,11 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::AccessTokenManager;
 use crate::activity_log;
 use crate::auth::token::generate_sync_token;
-use crate::entity::{repo, repo_member, sync_token};
+use crate::entity::{repo, repo_member};
 use crate::error::AppError;
 use crate::repository::Repositories;
 
@@ -100,14 +100,13 @@ fn build_op_url(site_url: &str, op: &str, token: &str) -> String {
 
 /// Ensure a sync token exists for the given user+repo pair.
 async fn ensure_sync_token(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     repo_id: &str,
     user_id: i32,
 ) -> Result<String, AppError> {
-    if let Some(existing) = sync_token::Entity::find()
-        .filter(sync_token::Column::RepoId.eq(repo_id))
-        .filter(sync_token::Column::UserId.eq(user_id))
-        .one(db)
+    if let Some(existing) = repos
+        .sync_token
+        .find_by_repo_and_user(repo_id, user_id)
         .await?
     {
         return Ok(existing.token);
@@ -115,22 +114,10 @@ async fn ensure_sync_token(
 
     let token_value = generate_sync_token();
     let now = chrono::Utc::now().timestamp();
-    sync_token::ActiveModel {
-        id: sea_orm::NotSet,
-        repo_id: Set(repo_id.to_string()),
-        user_id: Set(user_id),
-        token: Set(token_value.clone()),
-        created_at: Set(now),
-        expires_at: Set(None),
-        peer_id: sea_orm::NotSet,
-        peer_name: sea_orm::NotSet,
-        peer_ip: sea_orm::NotSet,
-        client_version: sea_orm::NotSet,
-        last_sync_time: sea_orm::NotSet,
-    }
-    .insert(db)
-    .await?;
-
+    repos
+        .sync_token
+        .create(repo_id, user_id, token_value.clone(), None, now)
+        .await?;
     Ok(token_value)
 }
 
@@ -260,21 +247,9 @@ impl RepoService {
 
         // Generate a sync token
         let token_value = generate_sync_token();
-        let sync_token_model = sync_token::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: Set(repo_id.clone()),
-            user_id: Set(user_id),
-            token: Set(token_value.clone()),
-            created_at: Set(now),
-            expires_at: Set(None),
-            peer_id: sea_orm::NotSet,
-            peer_name: sea_orm::NotSet,
-            peer_ip: sea_orm::NotSet,
-            client_version: sea_orm::NotSet,
-            last_sync_time: sea_orm::NotSet,
-        };
-        sync_token::Entity::insert(sync_token_model)
-            .exec(db)
+        repos
+            .sync_token
+            .create(&repo_id, user_id, token_value.clone(), None, now)
             .await?;
 
         let encrypted = encrypted_val == 1;
@@ -539,10 +514,7 @@ impl RepoService {
         // Cascade-delete related records
         repos.member.delete_by_repo(repo_id).await?;
 
-        crate::entity::sync_token::Entity::delete_many()
-            .filter(crate::entity::sync_token::Column::RepoId.eq(repo_id))
-            .exec(db)
-            .await?;
+        repos.sync_token.delete_by_repo(repo_id).await?;
 
         // Delete the repo itself
         repos.repo.delete_by_id(repo_id).await?;
@@ -552,7 +524,7 @@ impl RepoService {
 
     /// Get download info for a repo.
     pub async fn download_info(
-        db: &DatabaseConnection,
+        _db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
         user_id: i32,
@@ -569,7 +541,7 @@ impl RepoService {
             .await?
             .ok_or_else(|| AppError::NotFound("user not found".into()))?;
 
-        let token_value = ensure_sync_token(db, repo_id, user_id).await?;
+        let token_value = ensure_sync_token(repos, repo_id, user_id).await?;
 
         Ok(DownloadInfoResponse {
             repo_id: repo_id.to_string(),
@@ -669,14 +641,14 @@ impl RepoService {
 
     /// Batch get sync tokens for multiple repos.
     pub async fn repo_tokens(
-        db: &DatabaseConnection,
-        _repos: &Repositories,
+        _db: &DatabaseConnection,
+        repos: &Repositories,
         repo_ids: &[&str],
         user_id: i32,
     ) -> Result<HashMap<String, String>, AppError> {
         let mut result = HashMap::new();
         for repo_id in repo_ids {
-            let token = ensure_sync_token(db, repo_id, user_id).await?;
+            let token = ensure_sync_token(repos, repo_id, user_id).await?;
             result.insert(repo_id.to_string(), token);
         }
         Ok(result)

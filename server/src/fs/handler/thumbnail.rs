@@ -10,7 +10,6 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::fs::service::thumbnail::ThumbnailService;
 
 #[derive(Deserialize)]
 pub struct ThumbnailQuery {
@@ -30,12 +29,7 @@ pub async fn get_thumbnail(
         .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     let size = query.size.unwrap_or(48);
 
-    let svc = ThumbnailService::new(
-        state.repos.clone(),
-        state.db.clone(),
-        state.block_store.clone(),
-        state.block_dir.clone(),
-    );
+    let svc = state.thumbnail_service();
     let data = svc.get_thumbnail(&repo_id, path, size).await?;
 
     Ok((

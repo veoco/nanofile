@@ -10,7 +10,6 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::fs::service::starred::StarredService;
 
 pub use crate::fs::service::starred::StarredFileEntry;
 
@@ -18,7 +17,7 @@ pub async fn list_starred_files(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<StarredFileEntry>>, AppError> {
-    let svc = StarredService::new(state.repos.clone(), state.db.clone());
+    let svc = state.starred_service();
     let result = svc.list_starred_files(auth.user_id).await?;
     Ok(Json(result))
 }
@@ -43,7 +42,7 @@ pub async fn get_starred_items(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let svc = StarredService::new(state.repos.clone(), state.db.clone());
+    let svc = state.starred_service();
     let result = svc.get_starred_items(auth.user_id, &auth.email).await?;
     Ok(Json(result))
 }
@@ -74,7 +73,7 @@ pub async fn star_item(
     crate::storage::check_repo_read_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
         .await?;
 
-    let svc = StarredService::new(state.repos.clone(), state.db.clone());
+    let svc = state.starred_service();
     let result = svc
         .star_item(auth.user_id, &auth.email, &req.repo_id, &req.path)
         .await?;
@@ -87,7 +86,7 @@ pub async fn unstar_item(
     State(state): State<Arc<AppState>>,
     Query(query): Query<UnstarQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let svc = StarredService::new(state.repos.clone(), state.db.clone());
+    let svc = state.starred_service();
     svc.unstar_item(auth.user_id, &query.repo_id, &query.path)
         .await?;
 

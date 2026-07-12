@@ -150,7 +150,7 @@ pub async fn rename_repo(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let repo_name = parse_repo_name(&bytes)?;
+    let repo_name = parse_body_field(&bytes, "repo_name", "repo_name required")?;
 
     repo::RepoService::rename_repo(
         state.db.as_ref(),
@@ -235,7 +235,7 @@ pub async fn set_repo_password_v2(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let password = parse_password_field(&bytes)?;
+    let password = parse_body_field(&bytes, "password", "password required")?;
 
     PasswordService::set_password(
         &state.password_manager,
@@ -266,7 +266,7 @@ pub async fn check_repo_password_v2(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let magic = parse_magic_field(&bytes)?;
+    let magic = parse_body_field(&bytes, "magic", "magic required")?;
 
     // Load the repo
     let repo_model = state
@@ -293,77 +293,11 @@ pub async fn check_repo_password_v2(
     }
 }
 
-/// Extract the `password` field from a POST body (JSON, form-urlencoded, or
-/// multipart/form-data).
-fn parse_password_field(bytes: &[u8]) -> Result<String, AppError> {
-    if let Ok(map) = serde_json::from_slice::<HashMap<String, String>>(bytes)
-        && let Some(pw) = map.get("password")
-    {
-        return Ok(pw.clone());
-    }
-
-    if let Ok(map) = serde_urlencoded::from_bytes::<HashMap<String, String>>(bytes)
-        && let Some(pw) = map.get("password")
-    {
-        return Ok(pw.clone());
-    }
-
-    if let Some(pw) = extract_multipart_field(bytes, "password") {
-        return Ok(pw);
-    }
-
-    Err(AppError::BadRequest("password required".into()))
-}
-
-/// Extract the `magic` field from a POST body (JSON, form-urlencoded, or
-/// multipart/form-data).
-fn parse_magic_field(bytes: &[u8]) -> Result<String, AppError> {
-    if let Ok(map) = serde_json::from_slice::<HashMap<String, String>>(bytes)
-        && let Some(m) = map.get("magic")
-    {
-        return Ok(m.clone());
-    }
-
-    if let Ok(map) = serde_urlencoded::from_bytes::<HashMap<String, String>>(bytes)
-        && let Some(m) = map.get("magic")
-    {
-        return Ok(m.clone());
-    }
-
-    if let Some(m) = extract_multipart_field(bytes, "magic") {
-        return Ok(m);
-    }
-
-    Err(AppError::BadRequest("magic required".into()))
-}
-
-/// Extract `repo_name` from POST body bytes, probing JSON, form-urlencoded,
-/// then multipart/form-data in order.
-fn parse_repo_name(bytes: &[u8]) -> Result<String, AppError> {
-    if let Ok(map) = serde_json::from_slice::<HashMap<String, String>>(bytes)
-        && let Some(name) = map.get("repo_name")
-    {
-        return Ok(name.clone());
-    }
-
-    if let Ok(map) = serde_urlencoded::from_bytes::<HashMap<String, String>>(bytes)
-        && let Some(name) = map.get("repo_name")
-    {
-        return Ok(name.clone());
-    }
-
-    let body_str = String::from_utf8_lossy(bytes);
-    let pattern = "name=\"repo_name\"";
-    if let Some(rest) = body_str.split(pattern).nth(1)
-        && let Some(val_block) = rest.split("\r\n\r\n").nth(1)
-    {
-        let value = val_block.split("\r\n").next().unwrap_or("").trim();
-        if !value.is_empty() {
-            return Ok(value.to_string());
-        }
-    }
-
-    Err(AppError::BadRequest("repo_name required".into()))
+/// Extract a field from a POST body using the standard triple probe
+/// (JSON → form-urlencoded → multipart/form-data).
+fn parse_body_field(bytes: &[u8], field: &str, error_msg: &str) -> Result<String, AppError> {
+    crate::common::util::extract_body_field(bytes, field)
+        .ok_or_else(|| AppError::BadRequest(error_msg.into()))
 }
 
 pub async fn delete_repo(

@@ -1,8 +1,29 @@
+use std::collections::HashMap;
+
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::entity::{commit, repo};
 use crate::serialization::fs_json::DirEntryData;
 use base::AppError;
+
+/// Extract a field from a POST body probing JSON, form-urlencoded,
+/// then multipart/form-data in order.
+pub fn extract_body_field(bytes: &[u8], field_name: &str) -> Option<String> {
+    // Try JSON
+    if let Ok(map) = serde_json::from_slice::<HashMap<String, String>>(bytes)
+        && let Some(val) = map.get(field_name)
+    {
+        return Some(val.clone());
+    }
+    // Try form-urlencoded
+    if let Ok(map) = serde_urlencoded::from_bytes::<HashMap<String, String>>(bytes)
+        && let Some(val) = map.get(field_name)
+    {
+        return Some(val.clone());
+    }
+    // Try multipart
+    extract_multipart_field(bytes, field_name)
+}
 
 /// Extract a named field from a multipart/form-data body by scanning the
 /// raw body for `name="<field_name>"` and returning the value that follows
@@ -52,6 +73,16 @@ pub async fn get_head_commit_id(
     repo_record
         .head_commit_id
         .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))
+}
+
+/// Extract the parent directory path from a full path.
+/// `/dir/file.txt` → `/dir`,  `/file.txt` → `/`
+pub fn parent_path_from(path: &str) -> &str {
+    match path.rsplit_once('/') {
+        Some(("", _)) => "/",
+        Some((parent, _)) => parent,
+        None => "/",
+    }
 }
 
 /// Generate a unique filename when there's a name collision.

@@ -8,7 +8,6 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::fs::service::fileops::FileOpsService;
 use crate::fs::task_manager::TaskState;
 use crate::sanitize::safe_normalize_path;
 
@@ -79,11 +78,7 @@ async fn run_copy_task(
 ) {
     state.task_manager.start_processing(task_id);
 
-    let svc = FileOpsService::new(
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-    );
+    let svc = state.fileops_service();
 
     match svc
         .batch_copy(repo_id, src_dir, dst_dir, file_names, email, user_id)
@@ -161,11 +156,7 @@ async fn run_move_task(
 ) {
     state.task_manager.start_processing(task_id);
 
-    let svc = FileOpsService::new(
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-    );
+    let svc = state.fileops_service();
 
     match svc
         .batch_move(repo_id, src_dir, dst_dir, file_names, email, user_id)

@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::common::util::parent_path_from;
 use crate::entity::{commit, repo};
 use crate::error::AppError;
 use crate::repo::download::Downloader;
@@ -850,16 +851,6 @@ async fn get_head_root_id(db: &DatabaseConnection, repo_id: &str) -> Result<Stri
         .ok_or_else(|| AppError::NotFound("Head commit not found".to_string()))?;
 
     Ok(head.root_id)
-}
-
-/// Extract the parent directory path from a full path.
-/// `/dir/file.txt` → `/dir`,  `/file.txt` → `/`
-fn parent_path_from(path: &str) -> &str {
-    match path.rsplit_once('/') {
-        Some(("", _)) => "/",
-        Some((parent, _)) => parent,
-        None => "/",
-    }
 }
 
 fn mime_guess(filename: &str) -> &'static str {

@@ -8,7 +8,6 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::fs::service::exif::ExifService;
 use crate::sanitize::safe_normalize_path;
 
 #[derive(Deserialize)]
@@ -32,7 +31,7 @@ pub async fn get_exif(
     let path = safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = ExifService::new(state.db.clone(), state.block_store.clone());
+    let svc = state.exif_service();
     let result = svc.get_exif(&repo_id, &path).await?;
 
     Ok(Json(result))

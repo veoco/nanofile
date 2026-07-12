@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::auth::service::login::{LoginResult, LoginService};
+use crate::auth::service::login::LoginResult;
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -162,13 +162,7 @@ pub async fn login(
         == Some("1");
 
     // ── Call service ─────────────────────────────────────────────────
-    let svc = LoginService::new(
-        state.db.clone(),
-        state.repos.clone(),
-        state.config.auth.password_hash_iterations,
-        state.config.auth.api_token_ttl_days,
-        state.login_rate_limiter.clone(),
-    );
+    let svc = state.login_service();
     let login_result = svc
         .authenticate(
             &form.username,

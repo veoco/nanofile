@@ -2,7 +2,6 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use sea_orm::EntityTrait;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
@@ -284,14 +283,18 @@ pub async fn get_upload_link_upload_url_v21(
     }
 
     // Check repo still exists
-    let _repo = crate::entity::repo::Entity::find_by_id(&link.repo_id)
-        .one(state.db.as_ref())
+    let _repo = state
+        .repos
+        .repo
+        .find_by_id(&link.repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
 
     // Get the creator's username for the token
-    let creator = crate::entity::user::Entity::find_by_id(link.creator_id)
-        .one(state.db.as_ref())
+    let creator = state
+        .repos
+        .user
+        .find_by_id(link.creator_id)
         .await?
         .ok_or_else(|| AppError::Internal("Creator not found".into()))?;
 

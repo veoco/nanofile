@@ -45,6 +45,7 @@ pub mod user;
 pub mod web;
 
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
@@ -195,83 +196,38 @@ impl AppState {
         }
 
         let db = Arc::new(db);
+        let repos = Arc::new(crate::repository::Repositories::new(db.clone()));
 
         // Start background expired share link cleanup (runs hourly).
         {
-            let db_clone = db.clone();
-            let token = shutdown_token.child_token();
-            tokio::spawn(async move {
-                use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    tokio::select! {
-                        _ = token.cancelled() => {
-                            tracing::info!("Expired share link cleaner stopped");
-                            break;
-                        }
-                        _ = interval.tick() => {
-                            let now = chrono::Utc::now().timestamp();
-                            match crate::entity::share_link::Entity::delete_many()
-                                .filter(crate::entity::share_link::Column::ExpiresAt.is_not_null())
-                                .filter(crate::entity::share_link::Column::ExpiresAt.lt(now))
-                                .exec(db_clone.as_ref())
-                                .await
-                            {
-                                Ok(result) => {
-                                    if result.rows_affected > 0 {
-                                        tracing::info!("Cleaned up {} expired share link(s)", result.rows_affected);
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Failed to clean expired share links: {e}");
-                                }
-                            }
-                        }
-                    }
-                }
-            });
+            let repos = repos.clone();
+            start_expiry_cleaner(
+                db.clone(),
+                shutdown_token.child_token(),
+                "share link",
+                move |_conn, now| {
+                    let repos = repos.clone();
+                    Box::pin(async move { repos.share_link.delete_expired(now).await })
+                },
+            );
         }
 
         // Start background expired upload link cleanup (runs hourly).
         {
-            let db_clone = db.clone();
-            let token = shutdown_token.child_token();
-            tokio::spawn(async move {
-                use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    tokio::select! {
-                        _ = token.cancelled() => {
-                            tracing::info!("Expired upload link cleaner stopped");
-                            break;
-                        }
-                        _ = interval.tick() => {
-                            let now = chrono::Utc::now().timestamp();
-                            match crate::entity::upload_link::Entity::delete_many()
-                                .filter(crate::entity::upload_link::Column::ExpiresAt.is_not_null())
-                                .filter(crate::entity::upload_link::Column::ExpiresAt.lt(now))
-                                .exec(db_clone.as_ref())
-                                .await
-                            {
-                                Ok(result) => {
-                                    if result.rows_affected > 0 {
-                                        tracing::info!("Cleaned up {} expired upload link(s)", result.rows_affected);
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Failed to clean expired upload links: {e}");
-                                }
-                            }
-                        }
-                    }
-                }
-            });
+            let repos = repos.clone();
+            start_expiry_cleaner(
+                db.clone(),
+                shutdown_token.child_token(),
+                "upload link",
+                move |_conn, now| {
+                    let repos = repos.clone();
+                    Box::pin(async move { repos.upload_link.delete_expired(now).await })
+                },
+            );
         }
 
         Self {
-            repos: Arc::new(crate::repository::Repositories::new(db.clone())),
+            repos,
             db,
             config: Arc::new(config),
             block_store,
@@ -291,4 +247,148 @@ impl AppState {
             password_manager,
         }
     }
+
+    // ── Service factory methods ─────────────────────────────────────────
+
+    pub fn file_service(&self) -> crate::fs::service::file::FileService {
+        crate::fs::service::file::FileService::new(
+            self.repos.clone(),
+            self.db.clone(),
+            self.block_store.clone(),
+            self.indexer.clone(),
+            self.token_manager.clone(),
+            self.config.clone(),
+            self.notification_manager.clone(),
+        )
+    }
+
+    pub fn dir_service(&self) -> crate::fs::service::dir::DirService {
+        crate::fs::service::dir::DirService::new(
+            self.repos.clone(),
+            self.db.clone(),
+            self.indexer.clone(),
+        )
+    }
+
+    pub fn trash_service(&self) -> crate::fs::service::trash::FsTrashService {
+        crate::fs::service::trash::FsTrashService::new(self.repos.clone(), self.db.clone())
+    }
+
+    pub fn metadata_service(&self) -> crate::fs::service::metadata::MetadataService {
+        crate::fs::service::metadata::MetadataService::new(self.db.clone(), self.repos.clone())
+    }
+
+    pub fn fileops_service(&self) -> crate::fs::service::fileops::FileOpsService {
+        crate::fs::service::fileops::FileOpsService::new(
+            self.db.clone(),
+            self.block_store.clone(),
+            self.indexer.clone(),
+        )
+    }
+
+    pub fn starred_service(&self) -> crate::fs::service::starred::StarredService {
+        crate::fs::service::starred::StarredService::new(self.repos.clone(), self.db.clone())
+    }
+
+    pub fn search_service(&self) -> crate::fs::service::search::SearchService {
+        crate::fs::service::search::SearchService::new(
+            self.repos.clone(),
+            self.db.clone(),
+            self.indexer.clone(),
+        )
+    }
+
+    pub fn thumbnail_service(&self) -> crate::fs::service::thumbnail::ThumbnailService {
+        crate::fs::service::thumbnail::ThumbnailService::new(
+            self.repos.clone(),
+            self.db.clone(),
+            self.block_store.clone(),
+            self.block_dir.clone(),
+        )
+    }
+
+    pub fn exif_service(&self) -> crate::fs::service::exif::ExifService {
+        crate::fs::service::exif::ExifService::new(self.db.clone(), self.block_store.clone())
+    }
+
+    pub fn login_service(&self) -> crate::auth::service::login::LoginService {
+        crate::auth::service::login::LoginService::new(
+            self.db.clone(),
+            self.repos.clone(),
+            self.config.auth.password_hash_iterations,
+            self.config.auth.api_token_ttl_days,
+            self.login_rate_limiter.clone(),
+        )
+    }
+
+    pub fn sso_service(&self) -> crate::auth::service::sso::SsoService {
+        crate::auth::service::sso::SsoService::new(self.db.clone(), self.repos.clone())
+    }
+
+    pub fn two_factor_service(&self) -> crate::auth::service::two_factor::TwoFactorService {
+        crate::auth::service::two_factor::TwoFactorService::new(
+            self.db.clone(),
+            self.repos.clone(),
+            self.config.auth.password_hash_iterations,
+            self.disable_2fa_limiter.clone(),
+        )
+    }
+
+    pub fn admin_user_service(&self) -> crate::admin::service::AdminUserService<'_> {
+        crate::admin::service::AdminUserService::new(&self.db, &self.repos)
+    }
+
+    pub fn admin_service(&self) -> crate::admin::service::AdminService<'_> {
+        crate::admin::service::AdminService::new(&self.db, &self.repos)
+    }
+
+    pub fn device_service(&self) -> crate::user::service::DeviceService<'_> {
+        crate::user::service::DeviceService::new(&self.db, &self.repos)
+    }
+
+    pub fn invitation_service(&self) -> crate::user::service::InvitationService<'_> {
+        crate::user::service::InvitationService::new(&self.db, &self.repos)
+    }
+}
+
+/// Spawn a background task that periodically deletes expired records.
+///
+/// Runs on an hourly interval with graceful cancellation support.
+fn start_expiry_cleaner<F>(
+    db: Arc<DatabaseConnection>,
+    token: CancellationToken,
+    name: &'static str,
+    cleanup: F,
+) where
+    F: Fn(
+            Arc<DatabaseConnection>,
+            i64,
+        ) -> Pin<Box<dyn Future<Output = Result<u64, base::AppError>> + Send>>
+        + Send
+        + 'static,
+{
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => {
+                    tracing::info!("Expired {name} cleaner stopped");
+                    break;
+                }
+                _ = interval.tick() => {
+                    let now = chrono::Utc::now().timestamp();
+                    match cleanup(db.clone(), now).await {
+                        Ok(count) if count > 0 => {
+                            tracing::info!("Cleaned up {count} expired {name}(s)");
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to clean expired {name}s: {e}");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    });
 }

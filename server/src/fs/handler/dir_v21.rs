@@ -8,7 +8,6 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::fs::service::dir::DirService;
 
 /// Local query type for the v2.1 dir delete endpoint.
 /// Only needs `p` (path) — avoids sharing `V21DirQuery` which has more fields.
@@ -36,7 +35,7 @@ pub async fn v21_delete_dir(
         format!("/{}", path)
     };
 
-    let svc = DirService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.dir_service();
     let email = auth.email.clone();
     // Use a closure to isolate the async call from the handler signature
     let result = svc

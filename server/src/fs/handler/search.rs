@@ -8,7 +8,6 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::fs::service::search::SearchService;
 
 #[derive(Deserialize)]
 pub struct SearchQuery {
@@ -36,7 +35,7 @@ pub async fn search(
     let page = query.page.unwrap_or(1).max(1);
     let search_filename_only = query.search_filename_only.unwrap_or(true);
 
-    let svc = SearchService::new(state.repos.clone(), state.db.clone(), state.indexer.clone());
+    let svc = state.search_service();
     let (results, total, has_more) = svc
         .search(
             &q,

@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::auth::service::sso::SsoService;
 use crate::error::AppError;
 
 #[derive(Deserialize)]
@@ -22,7 +21,7 @@ pub async fn device_wiped(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DeviceWipeRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let svc = SsoService::new(state.db.clone(), state.repos.clone());
+    let svc = state.sso_service();
     svc.device_wiped(
         _auth.user_id,
         req.device_id.as_deref(),

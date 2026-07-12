@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::RepoPathWrite;
 use crate::error::AppError;
-use crate::fs::service::fileops::{self as fops_svc, FileOpsService};
+use crate::fs::service::fileops::{self as fops_svc};
 use crate::repository::Repositories;
 use crate::sanitize::safe_normalize_path;
 use crate::serialization::fs_json::DirEntryData;
@@ -166,11 +166,7 @@ pub async fn batch_delete_handler(
     let parent_dir = safe_normalize_path(query.p.as_deref().unwrap_or("/"))
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let svc = FileOpsService::new(
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-    );
+    let svc = state.fileops_service();
     svc.batch_delete(
         repo_id,
         &parent_dir,
@@ -221,11 +217,7 @@ pub async fn batch_copy_handler(
     let src_parent_dir = safe_normalize_path(query.p.as_deref().unwrap_or("/"))
         .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
 
-    let svc = FileOpsService::new(
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-    );
+    let svc = state.fileops_service();
     let results = svc
         .batch_copy(
             repo_id,
@@ -291,11 +283,7 @@ pub async fn batch_move_handler(
     let src_parent_dir = safe_normalize_path(query.p.as_deref().unwrap_or("/"))
         .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
 
-    let svc = FileOpsService::new(
-        state.db.clone(),
-        state.block_store.clone(),
-        state.indexer.clone(),
-    );
+    let svc = state.fileops_service();
     let results = svc
         .batch_move(
             repo_id,

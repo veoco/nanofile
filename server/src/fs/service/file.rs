@@ -3,7 +3,7 @@ use std::sync::Arc;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::activity_log;
-use crate::common::util::{get_head_commit_id, get_head_root_id};
+use crate::common::util::{get_head_commit_id, get_head_root_id, parent_path_from};
 use crate::error::AppError;
 use crate::notification::events::FileLockEvent;
 use crate::repo::file_ops::FileOps;
@@ -18,15 +18,6 @@ pub struct UploadedFile {
     pub file_data: Vec<u8>,
     pub parent_dir: String,
     pub replace: bool,
-}
-
-/// Extract the parent directory path from a full path.
-fn parent_path_from(path: &str) -> &str {
-    match path.rsplit_once('/') {
-        Some(("", _)) => "/",
-        Some((parent, _)) => parent,
-        None => "/",
-    }
 }
 
 // ── Rename file entry (pub(crate), used across handlers) ────────────────

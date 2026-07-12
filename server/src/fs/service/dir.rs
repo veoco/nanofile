@@ -5,22 +5,13 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait};
 
 use crate::activity_log;
 use crate::common::DirEntry;
-use crate::common::util::{get_head_commit_id, get_head_root_id};
+use crate::common::util::{get_head_commit_id, get_head_root_id, parent_path_from};
 use crate::entity::{repo, repo_member};
 use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
 use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
-
-/// Extract the parent directory path from a full path.
-fn parent_path_from(path: &str) -> &str {
-    match path.rsplit_once('/') {
-        Some(("", _)) => "/",
-        Some((parent, _)) => parent,
-        None => "/",
-    }
-}
 
 // ── Free-standing pub(crate) helpers (used by src/ui/files.rs) ──────────
 

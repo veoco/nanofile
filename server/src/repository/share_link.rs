@@ -35,6 +35,8 @@ pub trait ShareLinkRepository: Send + Sync {
     ) -> Result<bool, AppError>;
     /// Increment the view count for a share link by its ID.
     async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError>;
+    /// Delete expired share links (where expires_at < now).
+    async fn delete_expired(&self, now: i64) -> Result<u64, AppError>;
 }
 
 pub struct DbShareLinkRepository {
@@ -148,5 +150,14 @@ impl ShareLinkRepository for DbShareLinkRepository {
             active.update(self.db.as_ref()).await?;
         }
         Ok(())
+    }
+
+    async fn delete_expired(&self, now: i64) -> Result<u64, AppError> {
+        let result = share_link::Entity::delete_many()
+            .filter(share_link::Column::ExpiresAt.is_not_null())
+            .filter(share_link::Column::ExpiresAt.lt(now))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
     }
 }
