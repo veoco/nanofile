@@ -8,6 +8,14 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::repo_member;
 
+/// Parameters for creating a repo member entry.
+pub struct CreateMemberParams {
+    pub repo_id: String,
+    pub user_id: i32,
+    pub permission: String,
+    pub created_at: i64,
+}
+
 #[async_trait]
 pub trait MemberRepository: Send + Sync {
     async fn find_by_user_id(&self, user_id: i32) -> Result<Vec<repo_member::Model>, AppError>;
@@ -31,6 +39,12 @@ pub trait MemberRepository: Send + Sync {
         user_id: i32,
     ) -> Result<DeleteResult, AppError>;
     async fn delete_by_repo(&self, repo_id: &str) -> Result<DeleteResult, AppError>;
+
+    /// Create a repo member from typed parameters.
+    async fn create_member(
+        &self,
+        params: CreateMemberParams,
+    ) -> Result<repo_member::Model, AppError>;
 
     /// Look up a repo's owner and the user's membership permission in a single
     /// LEFT JOIN query. Returns `(owner_id, permission)` where `permission` is
@@ -56,6 +70,19 @@ impl DbMemberRepository {
 
 #[async_trait]
 impl MemberRepository for DbMemberRepository {
+    async fn create_member(
+        &self,
+        params: CreateMemberParams,
+    ) -> Result<repo_member::Model, AppError> {
+        let model = repo_member::ActiveModel {
+            id: sea_orm::NotSet,
+            repo_id: Set(params.repo_id),
+            user_id: Set(params.user_id),
+            permission: Set(params.permission),
+            created_at: Set(params.created_at),
+        };
+        Ok(model.insert(self.db.as_ref()).await?)
+    }
     async fn find_by_user_id(&self, user_id: i32) -> Result<Vec<repo_member::Model>, AppError> {
         Ok(repo_member::Entity::find()
             .filter(repo_member::Column::UserId.eq(user_id))

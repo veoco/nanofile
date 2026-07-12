@@ -7,6 +7,18 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::upload_link;
 
+/// Parameters for creating an upload link.
+pub struct CreateUploadLinkParams {
+    pub repo_id: String,
+    pub creator_id: i32,
+    pub path: String,
+    pub token: String,
+    pub password: Option<String>,
+    pub expires_at: Option<i64>,
+    pub created_at: i64,
+    pub description: Option<String>,
+}
+
 #[async_trait]
 pub trait UploadLinkRepository: Send + Sync {
     async fn find_by_repo_and_path(
@@ -24,6 +36,11 @@ pub trait UploadLinkRepository: Send + Sync {
     async fn find_expired(&self) -> Result<Vec<upload_link::Model>, AppError>;
     async fn insert(&self, model: upload_link::ActiveModel)
     -> Result<upload_link::Model, AppError>;
+    /// Create an upload link from typed parameters.
+    async fn create_upload_link(
+        &self,
+        params: CreateUploadLinkParams,
+    ) -> Result<upload_link::Model, AppError>;
     async fn delete_by_token_and_user(
         &self,
         token: &str,
@@ -57,6 +74,24 @@ impl DbUploadLinkRepository {
 
 #[async_trait]
 impl UploadLinkRepository for DbUploadLinkRepository {
+    async fn create_upload_link(
+        &self,
+        params: CreateUploadLinkParams,
+    ) -> Result<upload_link::Model, AppError> {
+        let model = upload_link::ActiveModel {
+            id: sea_orm::NotSet,
+            repo_id: Set(params.repo_id),
+            creator_id: Set(params.creator_id),
+            path: Set(params.path),
+            token: Set(params.token),
+            password: Set(params.password),
+            expires_at: Set(params.expires_at),
+            created_at: Set(params.created_at),
+            view_cnt: Set(0i64),
+            description: Set(params.description),
+        };
+        Ok(model.insert(self.db.as_ref()).await?)
+    }
     async fn find_by_repo_and_path(
         &self,
         repo_id: &str,

@@ -7,6 +7,19 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::share_link;
 
+/// Parameters for creating a share link.
+pub struct CreateShareLinkParams {
+    pub repo_id: String,
+    pub creator_id: i32,
+    pub path: String,
+    pub token: String,
+    pub password: Option<String>,
+    pub expires_at: Option<i64>,
+    pub created_at: i64,
+    pub s_type: String,
+    pub description: Option<String>,
+}
+
 #[async_trait]
 pub trait ShareLinkRepository: Send + Sync {
     async fn find_by_repo_and_path(
@@ -20,6 +33,11 @@ pub trait ShareLinkRepository: Send + Sync {
     async fn find_by_id(&self, id: i32) -> Result<Option<share_link::Model>, AppError>;
     async fn find_all(&self) -> Result<Vec<share_link::Model>, AppError>;
     async fn insert(&self, model: share_link::ActiveModel) -> Result<share_link::Model, AppError>;
+    /// Create a share link from typed parameters.
+    async fn create_share_link(
+        &self,
+        params: CreateShareLinkParams,
+    ) -> Result<share_link::Model, AppError>;
     async fn delete_by_token_and_user(
         &self,
         token: &str,
@@ -51,6 +69,25 @@ impl DbShareLinkRepository {
 
 #[async_trait]
 impl ShareLinkRepository for DbShareLinkRepository {
+    async fn create_share_link(
+        &self,
+        params: CreateShareLinkParams,
+    ) -> Result<share_link::Model, AppError> {
+        let model = share_link::ActiveModel {
+            id: sea_orm::NotSet,
+            repo_id: Set(params.repo_id),
+            creator_id: Set(params.creator_id),
+            path: Set(params.path),
+            token: Set(params.token),
+            password: Set(params.password),
+            expires_at: Set(params.expires_at),
+            created_at: Set(params.created_at),
+            s_type: Set(params.s_type),
+            view_cnt: Set(0i64),
+            description: Set(params.description),
+        };
+        Ok(model.insert(self.db.as_ref()).await?)
+    }
     async fn find_by_repo_and_path(
         &self,
         repo_id: &str,

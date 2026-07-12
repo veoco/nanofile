@@ -5,11 +5,29 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::{commit, repo};
 
+/// Parameters for creating a new repo.
+pub struct CreateRepoParams {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub owner_id: i32,
+    pub encrypted: i8,
+    pub enc_version: i8,
+    pub magic: Option<String>,
+    pub random_key: Option<String>,
+    pub salt: String,
+    pub permission: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 #[async_trait]
 pub trait RepoRepository: Send + Sync {
     async fn find_by_id(&self, repo_id: &str) -> Result<Option<repo::Model>, AppError>;
     async fn find_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError>;
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
+    /// Create a repo from typed parameters.
+    async fn create_repo(&self, params: CreateRepoParams) -> Result<repo::Model, AppError>;
     async fn update(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
     async fn update_head_commit(
         &self,
@@ -42,6 +60,29 @@ impl DbRepoRepository {
 
 #[async_trait]
 impl RepoRepository for DbRepoRepository {
+    async fn create_repo(&self, params: CreateRepoParams) -> Result<repo::Model, AppError> {
+        let model = repo::ActiveModel {
+            id: Set(params.id.clone()),
+            name: Set(params.name),
+            description: Set(params.description),
+            owner_id: Set(params.owner_id),
+            encrypted: Set(params.encrypted),
+            enc_version: Set(params.enc_version),
+            magic: Set(params.magic),
+            random_key: Set(params.random_key),
+            salt: Set(params.salt),
+            head_commit_id: sea_orm::NotSet,
+            permission: Set(params.permission),
+            repo_version: Set(1),
+            size: Set(0),
+            created_at: Set(params.created_at),
+            updated_at: Set(params.updated_at),
+        };
+        repo::Entity::insert(model).exec(self.db.as_ref()).await?;
+        self.find_by_id(&params.id)
+            .await?
+            .ok_or_else(|| AppError::Internal("Failed to find created repo".into()))
+    }
     async fn find_by_id(&self, repo_id: &str) -> Result<Option<repo::Model>, AppError> {
         Ok(repo::Entity::find_by_id(repo_id)
             .one(self.db.as_ref())
