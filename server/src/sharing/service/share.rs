@@ -1,4 +1,4 @@
-use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde::Serialize;
 
 use crate::Config;
@@ -320,37 +320,52 @@ pub async fn update_share_link_v21(
         return Err(AppError::NotFound("Share link not found".into()));
     }
 
-    let mut active: share_link::ActiveModel = link.into();
+    // Build conditional update (only set fields that were provided)
+    let mut active = share_link::ActiveModel {
+        ..Default::default()
+    };
+    let new_password =
+        password.map(|pwd| pwd.map(|p| hash_password(&p, config.auth.password_hash_iterations)));
+    if let Some(ref pwd) = new_password {
+        active.password = Set(pwd.clone());
+    }
+    let new_expire_at = expire_days.map(|days| days.map(|d| now + d * 86400));
+    if let Some(ref val) = new_expire_at {
+        active.expires_at = Set(*val);
+    }
+    let new_description = description.clone();
+    if let Some(val) = new_description {
+        active.description = Set(val);
+    }
 
-    if let Some(pwd) = password {
-        active.password = Set(pwd.map(|p| hash_password(&p, config.auth.password_hash_iterations)));
-    }
-    if let Some(days) = expire_days {
-        active.expires_at = Set(days.map(|d| now + d * 86400));
-    }
-    if let Some(desc) = description {
-        active.description = Set(desc);
-    }
+    share_link::Entity::update_many()
+        .filter(share_link::Column::Id.eq(link.id))
+        .set(active)
+        .exec(db)
+        .await?;
 
-    let updated = active.update(db).await?;
-    let token = updated.token.clone();
-    let link_url = if updated.s_type == "d" {
-        format!("/d/{}/", updated.token)
+    // Compute effective values for the response using original + requested changes
+    let effective_password = new_password.flatten().or(link.password);
+    let effective_expire_at = new_expire_at.flatten().or(link.expires_at);
+    let effective_description = description.flatten().or(link.description);
+
+    let link_url = if link.s_type == "d" {
+        format!("/d/{}/", link.token)
     } else {
-        format!("/f/{}/", updated.token)
+        format!("/f/{}/", link.token)
     };
 
     Ok(ShareLinkInfo {
-        token,
+        token: link.token,
         link: link_url,
-        repo_id: updated.repo_id,
-        path: updated.path,
-        created_at: updated.created_at,
-        has_password: updated.password.is_some(),
-        expire_at: updated.expires_at,
-        s_type: updated.s_type,
-        view_cnt: updated.view_cnt,
-        description: updated.description,
+        repo_id: link.repo_id,
+        path: link.path,
+        created_at: link.created_at,
+        has_password: effective_password.is_some(),
+        expire_at: effective_expire_at,
+        s_type: link.s_type,
+        view_cnt: link.view_cnt,
+        description: effective_description,
     })
 }
 
@@ -475,15 +490,17 @@ pub async fn modify_share_permission(
         .await?
         .ok_or_else(|| AppError::BadRequest("user not found".into()))?;
 
-    let member = repos
+    // Verify the target user is a member of this repo.
+    let _member = repos
         .member
         .find_by_repo_and_user(repo_id, target_user.id)
         .await?
         .ok_or_else(|| AppError::BadRequest("user is not a member of this repo".into()))?;
 
-    let mut active: repo_member::ActiveModel = member.into();
-    active.permission = Set(new_permission.to_string());
-    active.update(db).await?;
+    repos
+        .member
+        .update_permission(repo_id, target_user.id, new_permission)
+        .await?;
 
     // Send WebSocket notification about the permission change.
     if let Some(mgr) = notification_manager {

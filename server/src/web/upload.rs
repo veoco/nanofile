@@ -792,7 +792,7 @@ pub async fn upload_aj_token(
 
         // Increment upload count if this was triggered by an upload link
         if let Some(link_id) = info.upload_link_id {
-            upload_link_service::increment_upload_view_cnt(state.db.clone(), link_id);
+            upload_link_service::increment_upload_view_cnt(state.repos.clone(), link_id);
         }
 
         return Ok(Json(resp));

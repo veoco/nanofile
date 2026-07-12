@@ -1,4 +1,4 @@
-use sea_orm::{DatabaseConnection, EntityTrait, Set};
+use sea_orm::{DatabaseConnection, Set};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -378,17 +378,9 @@ pub async fn clean_invalid_upload_links_v21(
 }
 
 /// Increment view count for an upload link (fires async, best-effort).
-pub fn increment_upload_view_cnt(db: Arc<DatabaseConnection>, link_id: i32) {
+pub fn increment_upload_view_cnt(repos: Arc<Repositories>, link_id: i32) {
     tokio::spawn(async move {
-        if let Ok(Some(link)) = upload_link::Entity::find_by_id(link_id).one(&*db).await {
-            let mut active: upload_link::ActiveModel = link.into();
-            let current = match &active.view_cnt {
-                Set(v) => *v,
-                _ => 0,
-            };
-            active.view_cnt = Set(current + 1);
-            let _ = upload_link::Entity::update(active).exec(&*db).await;
-        }
+        let _ = repos.upload_link.increment_view_cnt(link_id).await;
     });
 }
 

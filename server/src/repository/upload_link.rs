@@ -41,6 +41,8 @@ pub trait UploadLinkRepository: Send + Sync {
     ) -> Result<bool, AppError>;
     /// Delete expired upload links (where expires_at < now).
     async fn delete_expired(&self, now: i64) -> Result<u64, AppError>;
+    /// Increment the view count for an upload link by its ID.
+    async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError>;
 }
 
 pub struct DbUploadLinkRepository {
@@ -170,6 +172,23 @@ impl UploadLinkRepository for DbUploadLinkRepository {
             return Err(AppError::NotFound("Upload link not found".into()));
         }
         Ok(true)
+    }
+
+    async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError> {
+        if let Some(link) = upload_link::Entity::find_by_id(id)
+            .one(self.db.as_ref())
+            .await?
+        {
+            upload_link::Entity::update_many()
+                .filter(upload_link::Column::Id.eq(id))
+                .set(upload_link::ActiveModel {
+                    view_cnt: Set(link.view_cnt + 1),
+                    ..Default::default()
+                })
+                .exec(self.db.as_ref())
+                .await?;
+        }
+        Ok(())
     }
 
     async fn delete_expired(&self, now: i64) -> Result<u64, AppError> {
