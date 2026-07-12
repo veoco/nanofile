@@ -10,7 +10,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::password::{hash_password, verify_password};
+use crate::service::auth::password::{hash_password, verify_password};
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -93,7 +93,7 @@ pub async fn settings_page(
     let two_fa = state.repos.user_2fa.find_by_user_id(user.user_id).await?;
     let two_fa_enabled = two_fa.as_ref().map(|tf| tf.enabled).unwrap_or(false);
 
-    let csrf_token = Some(crate::auth::csrf::generate_csrf_token(
+    let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
         &state.csrf_secret,
         &user.session_token,
     ));
@@ -127,8 +127,10 @@ pub async fn change_password(
 ) -> Result<impl IntoResponse, AppError> {
     // CSRF check
     if let Some(ref token) = form.csrf_token {
-        let expected =
-            crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        let expected = crate::service::auth::csrf::generate_csrf_token(
+            &state.csrf_secret,
+            &user.session_token,
+        );
         if *token != expected {
             return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
         }
@@ -147,7 +149,7 @@ pub async fn change_password(
         &user_record.password_hash,
         state.config.auth.password_hash_iterations,
     ) {
-        let csrf_token = Some(crate::auth::csrf::generate_csrf_token(
+        let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
             &state.csrf_secret,
             &user.session_token,
         ));
@@ -194,8 +196,10 @@ pub async fn update_display_name(
 ) -> Result<impl IntoResponse, AppError> {
     // CSRF check
     if let Some(ref token) = form.csrf_token {
-        let expected =
-            crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        let expected = crate::service::auth::csrf::generate_csrf_token(
+            &state.csrf_secret,
+            &user.session_token,
+        );
         if *token != expected {
             return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
         }
@@ -247,7 +251,7 @@ pub async fn devices_page(
         }
     }
 
-    let csrf_token = Some(crate::auth::csrf::generate_csrf_token(
+    let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
         &state.csrf_secret,
         &user.session_token,
     ));
@@ -280,8 +284,10 @@ pub async fn unlink_device(
 ) -> Result<impl IntoResponse, AppError> {
     // CSRF check — only validate when form includes a token (gradual rollout).
     if let Some(ref token) = form.csrf_token {
-        let expected =
-            crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        let expected = crate::service::auth::csrf::generate_csrf_token(
+            &state.csrf_secret,
+            &user.session_token,
+        );
         if *token != expected {
             return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
         }
@@ -344,7 +350,7 @@ pub async fn upload_avatar(
 
     // CSRF check
     let expected_csrf =
-        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     if csrf_token.as_deref() != Some(&expected_csrf) {
         return render_settings_error(&state, &user, Some("Invalid CSRF token.".to_string())).await;
     }
@@ -354,7 +360,7 @@ pub async fn upload_avatar(
 
     // Delegate to the shared AvatarService which handles validation (size/ext),
     // persistence, thumbnail generation (with square crop + EXIF), and DB upsert.
-    let svc = crate::user::service::AvatarService::new(state.repos.clone());
+    let svc = crate::service::user::AvatarService::new(state.repos.clone());
     match svc.upload_avatar(&user.email, file_name, data).await {
         Ok(_url) => Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response()),
         Err(e) => {
@@ -373,7 +379,7 @@ async fn render_settings_error(
     user: &WebUser,
     error: Option<String>,
 ) -> Result<Response, AppError> {
-    let csrf_new = Some(crate::auth::csrf::generate_csrf_token(
+    let csrf_new = Some(crate::service::auth::csrf::generate_csrf_token(
         &state.csrf_secret,
         &user.session_token,
     ));

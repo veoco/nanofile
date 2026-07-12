@@ -8,25 +8,20 @@
 #![allow(clippy::too_many_arguments)]
 
 // ── Server crate modules ────────────────────────────────────────────────────
-pub mod activity;
-pub mod admin;
-pub mod routes;
-
-pub mod auth;
 pub mod domain;
 pub mod fs;
+pub mod handler;
 pub mod indexer;
+pub mod middleware;
 pub mod notification;
 pub mod repo;
 pub mod repository;
+pub mod routes;
 pub mod sdoc;
-pub mod sharing;
+pub mod service;
 pub mod static_assets;
-pub mod sync;
 pub mod thumbnail_util;
 pub mod ui;
-pub mod user;
-pub mod web;
 
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -36,11 +31,11 @@ use sea_orm::DatabaseConnection;
 use sha2::Digest;
 use tokio_util::sync::CancellationToken;
 
-use crate::auth::access_token::AccessTokenManager;
 use crate::fs::task_manager::TaskManager;
+use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
-use crate::web::temp_file::TempFileManager;
+use crate::service::auth::access_token::AccessTokenManager;
 use infra::config::Config;
 use infra::crypto::password_manager::PasswordManager;
 use infra::rate_limit::{GenericRateLimiter, LoginRateLimiter};
@@ -234,8 +229,8 @@ impl AppState {
 
     // ── Service factory methods ─────────────────────────────────────────
 
-    pub fn file_service(&self) -> crate::fs::service::file::FileService {
-        crate::fs::service::file::FileService::new(
+    pub fn file_service(&self) -> crate::service::fs::file::FileService {
+        crate::service::fs::file::FileService::new(
             self.repos.clone(),
             self.db.clone(),
             self.block_store.clone(),
@@ -246,20 +241,20 @@ impl AppState {
         )
     }
 
-    pub fn dir_service(&self) -> crate::fs::service::dir::DirService {
-        crate::fs::service::dir::DirService::new(
+    pub fn dir_service(&self) -> crate::service::fs::dir::DirService {
+        crate::service::fs::dir::DirService::new(
             self.repos.clone(),
             self.db.clone(),
             self.indexer.clone(),
         )
     }
 
-    pub fn metadata_service(&self) -> crate::fs::service::metadata::MetadataService {
-        crate::fs::service::metadata::MetadataService::new(self.repos.clone())
+    pub fn metadata_service(&self) -> crate::service::fs::metadata::MetadataService {
+        crate::service::fs::metadata::MetadataService::new(self.repos.clone())
     }
 
-    pub fn fileops_service(&self) -> crate::fs::service::fileops::FileOpsService {
-        crate::fs::service::fileops::FileOpsService::new(
+    pub fn fileops_service(&self) -> crate::service::fs::fileops::FileOpsService {
+        crate::service::fs::fileops::FileOpsService::new(
             self.db.clone(),
             self.repos.clone(),
             self.block_store.clone(),
@@ -267,20 +262,20 @@ impl AppState {
         )
     }
 
-    pub fn starred_service(&self) -> crate::fs::service::starred::StarredService {
-        crate::fs::service::starred::StarredService::new(self.repos.clone(), self.db.clone())
+    pub fn starred_service(&self) -> crate::service::fs::starred::StarredService {
+        crate::service::fs::starred::StarredService::new(self.repos.clone(), self.db.clone())
     }
 
-    pub fn search_service(&self) -> crate::fs::service::search::SearchService {
-        crate::fs::service::search::SearchService::new(
+    pub fn search_service(&self) -> crate::service::fs::search::SearchService {
+        crate::service::fs::search::SearchService::new(
             self.repos.clone(),
             self.db.clone(),
             self.indexer.clone(),
         )
     }
 
-    pub fn thumbnail_service(&self) -> crate::fs::service::thumbnail::ThumbnailService {
-        crate::fs::service::thumbnail::ThumbnailService::new(
+    pub fn thumbnail_service(&self) -> crate::service::fs::thumbnail::ThumbnailService {
+        crate::service::fs::thumbnail::ThumbnailService::new(
             self.repos.clone(),
             self.db.clone(),
             self.block_store.clone(),
@@ -288,16 +283,16 @@ impl AppState {
         )
     }
 
-    pub fn exif_service(&self) -> crate::fs::service::exif::ExifService {
-        crate::fs::service::exif::ExifService::new(
+    pub fn exif_service(&self) -> crate::service::fs::exif::ExifService {
+        crate::service::fs::exif::ExifService::new(
             self.db.clone(),
             self.repos.clone(),
             self.block_store.clone(),
         )
     }
 
-    pub fn login_service(&self) -> crate::auth::service::login::LoginService {
-        crate::auth::service::login::LoginService::new(
+    pub fn login_service(&self) -> crate::service::auth::login::LoginService {
+        crate::service::auth::login::LoginService::new(
             self.repos.clone(),
             self.config.auth.password_hash_iterations,
             self.config.auth.api_token_ttl_days,
@@ -305,32 +300,32 @@ impl AppState {
         )
     }
 
-    pub fn sso_service(&self) -> crate::auth::service::sso::SsoService {
-        crate::auth::service::sso::SsoService::new(self.repos.clone())
+    pub fn sso_service(&self) -> crate::service::auth::sso::SsoService {
+        crate::service::auth::sso::SsoService::new(self.repos.clone())
     }
 
-    pub fn two_factor_service(&self) -> crate::auth::service::two_factor::TwoFactorService {
-        crate::auth::service::two_factor::TwoFactorService::new(
+    pub fn two_factor_service(&self) -> crate::service::auth::two_factor::TwoFactorService {
+        crate::service::auth::two_factor::TwoFactorService::new(
             self.repos.clone(),
             self.config.auth.password_hash_iterations,
             self.disable_2fa_limiter.clone(),
         )
     }
 
-    pub fn admin_user_service(&self) -> crate::admin::service::AdminUserService {
-        crate::admin::service::AdminUserService::new(self.repos.clone())
+    pub fn admin_user_service(&self) -> crate::service::admin::AdminUserService {
+        crate::service::admin::AdminUserService::new(self.repos.clone())
     }
 
-    pub fn admin_service(&self) -> crate::admin::service::AdminService {
-        crate::admin::service::AdminService::new(self.db.clone(), self.repos.clone())
+    pub fn admin_service(&self) -> crate::service::admin::AdminService {
+        crate::service::admin::AdminService::new(self.db.clone(), self.repos.clone())
     }
 
-    pub fn device_service(&self) -> crate::user::service::DeviceService {
-        crate::user::service::DeviceService::new(self.repos.clone())
+    pub fn device_service(&self) -> crate::service::user::DeviceService {
+        crate::service::user::DeviceService::new(self.repos.clone())
     }
 
-    pub fn invitation_service(&self) -> crate::user::service::InvitationService {
-        crate::user::service::InvitationService::new(self.repos.clone())
+    pub fn invitation_service(&self) -> crate::service::user::InvitationService {
+        crate::service::user::InvitationService::new(self.repos.clone())
     }
 }
 

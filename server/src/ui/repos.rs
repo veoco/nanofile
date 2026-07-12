@@ -65,7 +65,7 @@ pub async fn list_repos(
     }
 
     let csrf_token =
-        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
 
     let left_panel_repos: Vec<crate::repo::LeftPanelRepo> = repos
         .iter()

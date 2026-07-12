@@ -204,7 +204,7 @@ pub async fn list_all_shares(
         .filter(|t| t == "upload-links")
         .unwrap_or("share-links".to_string());
 
-    let csrf_token = Some(crate::auth::csrf::generate_csrf_token(
+    let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
         &state.csrf_secret,
         &user.session_token,
     ));
@@ -245,7 +245,7 @@ pub async fn delete_share(
         return Err(AppError::Forbidden);
     }
 
-    crate::auth::csrf::check_form_csrf(
+    crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),
@@ -272,7 +272,7 @@ pub async fn delete_upload(
         return Err(AppError::Forbidden);
     }
 
-    crate::auth::csrf::check_form_csrf(
+    crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),

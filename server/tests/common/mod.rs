@@ -25,7 +25,7 @@ fn cached_hash_password(password: &str) -> String {
     if let Some(h) = cache.get(password) {
         return h.clone();
     }
-    let h = server::auth::password::hash_password(password, TEST_PBKDF2_ITERATIONS);
+    let h = server::service::auth::password::hash_password(password, TEST_PBKDF2_ITERATIONS);
     cache.insert(password.to_string(), h.clone());
     h
 }
@@ -140,13 +140,14 @@ impl TestServer {
         std::fs::create_dir_all(&config.storage.block_dir).unwrap();
 
         let temp_file_manager =
-            server::web::temp_file::TempFileManager::new(config.storage.temp_dir.clone()).await;
+            server::handler::web::temp_file::TempFileManager::new(config.storage.temp_dir.clone())
+                .await;
 
         let state = Arc::new(AppState::new(db, config, temp_file_manager));
 
-        let sync_routes = server::sync::sync_routes();
+        let sync_routes = server::handler::sync::sync_routes();
         let sdoc_routes = server::sdoc::sdoc_routes();
-        let web_routes = server::web::web_routes();
+        let web_routes = server::handler::web::web_routes();
         let ui_routes = server::ui::ui_routes();
         let notification_routes = server::notification::notification_routes();
 
@@ -238,7 +239,8 @@ pub async fn create_test_user(db: &DatabaseConnection, email: &str, password: &s
 }
 
 pub async fn create_test_admin(db: &DatabaseConnection, email: &str, password: &str) -> i32 {
-    let password_hash = server::auth::password::hash_password(password, TEST_PBKDF2_ITERATIONS);
+    let password_hash =
+        server::service::auth::password::hash_password(password, TEST_PBKDF2_ITERATIONS);
     let now = chrono::Utc::now().timestamp();
 
     let user = infra::entity::user::ActiveModel {

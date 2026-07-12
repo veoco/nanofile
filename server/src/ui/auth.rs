@@ -10,12 +10,12 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::password::verify_password;
-use crate::auth::service::password_reset::PasswordResetService;
-use crate::auth::service::registration::{RegistrationParams, RegistrationService};
-use crate::auth::token::generate_api_token;
-use crate::auth::totp::TotpManager;
 use crate::repository::CreateSessionTokenParams;
+use crate::service::auth::password::verify_password;
+use crate::service::auth::password_reset::PasswordResetService;
+use crate::service::auth::registration::{RegistrationParams, RegistrationService};
+use crate::service::auth::token::generate_api_token;
+use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
 
 // ─── Templates ───────────────────────────────────────────────────────────────
@@ -136,7 +136,7 @@ pub async fn login(
 ) -> Result<impl IntoResponse, AppError> {
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
-    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return render_login_page(&state, Some("Invalid request origin.".to_string()))
             .await
             .map(|html| (StatusCode::FORBIDDEN, Html(html)).into_response());
@@ -308,7 +308,7 @@ pub async fn login(
     } else {
         Some(86400)
     };
-    let csrf_cookie = crate::auth::csrf::csrf_cookie_header(
+    let csrf_cookie = crate::service::auth::csrf::csrf_cookie_header(
         &state.csrf_secret,
         &session_token,
         secure_cookies,
@@ -358,7 +358,7 @@ pub async fn two_factor_auth(
 ) -> Result<impl IntoResponse, AppError> {
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
-    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Err(AppError::BadRequest("Invalid request origin.".to_string()));
     }
 
@@ -457,9 +457,13 @@ pub async fn two_factor_auth(
 
     // Try backup code if TOTP failed
     let backup_valid = if !code_valid {
-        crate::auth::backup_codes::BackupCodeManager::verify_code(&state.repos, user_id, &form.code)
-            .await
-            .unwrap_or(false)
+        crate::service::auth::backup_codes::BackupCodeManager::verify_code(
+            &state.repos,
+            user_id,
+            &form.code,
+        )
+        .await
+        .unwrap_or(false)
     } else {
         false
     };
@@ -514,7 +518,7 @@ pub async fn two_factor_auth(
 
     let clear_pending_str = session_cookie("seahub-session-pending", "", Some(0), secure_cookies);
 
-    let csrf_cookie_str = crate::auth::csrf::csrf_cookie_header(
+    let csrf_cookie_str = crate::service::auth::csrf::csrf_cookie_header(
         &state.csrf_secret,
         &session_token,
         secure_cookies,
@@ -633,7 +637,7 @@ pub async fn register(
 ) -> Result<impl IntoResponse, AppError> {
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
-    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Err(AppError::BadRequest("Invalid request origin.".to_string()));
     }
 
@@ -712,7 +716,7 @@ pub async fn register(
         secure_cookies,
     );
 
-    let csrf_cookie = crate::auth::csrf::csrf_cookie_header(
+    let csrf_cookie = crate::service::auth::csrf::csrf_cookie_header(
         &state.csrf_secret,
         &session_token,
         secure_cookies,
@@ -802,7 +806,7 @@ pub async fn password_reset(
 ) -> Result<Html<String>, AppError> {
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
-    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Ok(Html(String::new()));
     }
 
@@ -888,7 +892,7 @@ pub async fn password_reset_confirm(
 ) -> Result<impl IntoResponse, AppError> {
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
-    if !crate::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Ok(StatusCode::FORBIDDEN.into_response());
     }
 

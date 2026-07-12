@@ -413,7 +413,7 @@ async fn file_browser_inner(
     // If the path points to a file (not a directory), fall through to file serving.
     // For the root path `/`, treat errors as an empty directory (repo may be empty).
     let entries_result =
-        crate::fs::handler::dir::list_dir_from_fs_tree(db, repos, &repo_id, &path).await;
+        crate::service::fs::dir::list_dir_from_fs_tree(db, repos, &repo_id, &path).await;
 
     let entries_data = match entries_result {
         Ok(data) => data,
@@ -593,7 +593,7 @@ async fn file_browser_inner(
     let is_partial = query.partial.as_deref() == Some("1");
 
     let csrf_token =
-        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
 
     if is_partial {
         let tpl = FileBrowserCoreTemplate {

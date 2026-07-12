@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::token::generate_api_token;
 use crate::repository::CreateSessionTokenParams;
+use crate::service::auth::token::generate_api_token;
 use base::error::AppError;
 
 const TOKEN_TTL_SECS: i64 = 30;
@@ -111,7 +111,7 @@ pub async fn client_token_login(
 
     let next = resolve_next(params.get("next").map(String::as_str));
 
-    let csrf_cookie = crate::auth::csrf::csrf_cookie_header(
+    let csrf_cookie = crate::service::auth::csrf::csrf_cookie_header(
         &state.csrf_secret,
         &api_token,
         state.config.server.secure_cookies(),

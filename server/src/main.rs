@@ -96,8 +96,10 @@ async fn main() -> anyhow::Result<()> {
                 config.server.port
             );
 
-            let temp_file_manager =
-                server::web::temp_file::TempFileManager::new(config.storage.temp_dir.clone()).await;
+            let temp_file_manager = server::handler::web::temp_file::TempFileManager::new(
+                config.storage.temp_dir.clone(),
+            )
+            .await;
 
             let state = Arc::new(AppState::new(db, config.clone(), temp_file_manager));
 
@@ -111,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
                     .await?;
                 if count == 0 {
                     tracing::info!("No users found; creating initial admin user");
-                    let password_hash = server::auth::password::hash_password(
+                    let password_hash = server::service::auth::password::hash_password(
                         admin_password,
                         state.config.auth.password_hash_iterations,
                     );
@@ -173,9 +175,9 @@ async fn main() -> anyhow::Result<()> {
                     ))
             };
 
-            let sync_routes = server::sync::sync_routes();
+            let sync_routes = server::handler::sync::sync_routes();
             let sdoc_routes = server::sdoc::sdoc_routes();
-            let web_routes = server::web::web_routes();
+            let web_routes = server::handler::web::web_routes();
             let ui_routes = server::ui::ui_routes();
             let notification_routes = server::notification::notification_routes();
 
@@ -187,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
                 .merge(web_routes)
                 .merge(ui_routes)
                 .merge(notification_routes)
-                .merge(server::user::handler::avatar::image_routes())
+                .merge(server::handler::avatar::image_routes())
                 .route("/static/{*path}", get(server::static_assets::serve_static))
                 .layer(cors)
                 .layer(DefaultBodyLimit::max(
@@ -303,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!("user '{}' already exists", email);
             }
 
-            let password_hash = server::auth::password::hash_password(
+            let password_hash = server::service::auth::password::hash_password(
                 &password,
                 config.auth.password_hash_iterations,
             );

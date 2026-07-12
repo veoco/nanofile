@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::middleware::AuthUser;
+use crate::middleware::auth::AuthUser;
 use base::error::AppError;
 
 #[derive(Deserialize)]

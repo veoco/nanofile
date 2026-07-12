@@ -1,1 +1,1 @@
-pub use crate::user::handler::invitations::*;
+pub use crate::handler::invitations::*;

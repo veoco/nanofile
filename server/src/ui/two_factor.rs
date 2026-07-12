@@ -15,8 +15,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::password::verify_password;
-use crate::auth::totp::TotpManager;
+use crate::service::auth::password::verify_password;
+use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -80,7 +80,7 @@ async fn render_page(
         None
     };
 
-    let csrf_token = Some(crate::auth::csrf::generate_csrf_token(
+    let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
         &state.csrf_secret,
         &user.session_token,
     ));
@@ -128,14 +128,17 @@ pub async fn setup_page(
     // Delete any old record so we start clean.
     state.repos.user_2fa.delete_by_user_id(user.user_id).await?;
 
-    crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(&state.repos, user.user_id)
-        .await?;
+    crate::service::auth::backup_codes::BackupCodeManager::delete_all_for_user(
+        &state.repos,
+        user.user_id,
+    )
+    .await?;
 
     TotpManager::get_or_create_2fa(&state.repos, user.user_id).await?;
 
     // Generate backup codes for the post-verify display
-    let raw_codes = crate::auth::backup_codes::BackupCodeManager::generate_codes(10);
-    crate::auth::backup_codes::BackupCodeManager::store_codes(
+    let raw_codes = crate::service::auth::backup_codes::BackupCodeManager::generate_codes(10);
+    crate::service::auth::backup_codes::BackupCodeManager::store_codes(
         &state.repos,
         user.user_id,
         &raw_codes,
@@ -160,7 +163,7 @@ pub async fn setup_2fa(
     State(state): State<Arc<AppState>>,
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::auth::csrf::check_form_csrf(
+    crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),
@@ -169,11 +172,14 @@ pub async fn setup_2fa(
     TotpManager::get_or_create_2fa(&state.repos, user.user_id).await?;
 
     // Regenerate backup codes
-    crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(&state.repos, user.user_id)
-        .await?;
+    crate::service::auth::backup_codes::BackupCodeManager::delete_all_for_user(
+        &state.repos,
+        user.user_id,
+    )
+    .await?;
 
-    let raw_codes = crate::auth::backup_codes::BackupCodeManager::generate_codes(10);
-    crate::auth::backup_codes::BackupCodeManager::store_codes(
+    let raw_codes = crate::service::auth::backup_codes::BackupCodeManager::generate_codes(10);
+    crate::service::auth::backup_codes::BackupCodeManager::store_codes(
         &state.repos,
         user.user_id,
         &raw_codes,
@@ -199,7 +205,11 @@ pub async fn verify_2fa(
     State(state): State<Arc<AppState>>,
     Form(form): Form<VerifyForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::auth::csrf::check_form_csrf(&state, &user.session_token, form.csrf_token.as_deref())?;
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.csrf_token.as_deref(),
+    )?;
 
     let two_fa = state
         .repos
@@ -213,7 +223,7 @@ pub async fn verify_2fa(
 
     let code_valid = TotpManager::verify_code(&totp, &form.code);
     let backup_valid = if !code_valid {
-        crate::auth::backup_codes::BackupCodeManager::verify_code(
+        crate::service::auth::backup_codes::BackupCodeManager::verify_code(
             &state.repos,
             user.user_id,
             &form.code,
@@ -233,13 +243,13 @@ pub async fn verify_2fa(
             .await?;
 
         // Generate a fresh set of backup codes for the user to save one last time
-        crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(
+        crate::service::auth::backup_codes::BackupCodeManager::delete_all_for_user(
             &state.repos,
             user.user_id,
         )
         .await?;
-        let fresh_codes = crate::auth::backup_codes::BackupCodeManager::generate_codes(10);
-        crate::auth::backup_codes::BackupCodeManager::store_codes(
+        let fresh_codes = crate::service::auth::backup_codes::BackupCodeManager::generate_codes(10);
+        crate::service::auth::backup_codes::BackupCodeManager::store_codes(
             &state.repos,
             user.user_id,
             &fresh_codes,
@@ -276,8 +286,10 @@ pub async fn disable_2fa(
 ) -> Result<impl IntoResponse, AppError> {
     // CSRF check — only validate when form includes a token (gradual rollout).
     if let Some(ref token) = form.csrf_token {
-        let expected =
-            crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        let expected = crate::service::auth::csrf::generate_csrf_token(
+            &state.csrf_secret,
+            &user.session_token,
+        );
         if *token != expected {
             return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
         }
@@ -317,8 +329,11 @@ pub async fn disable_2fa(
     state.repos.user_2fa.delete_by_user_id(user.user_id).await?;
 
     // Also clean up backup codes
-    crate::auth::backup_codes::BackupCodeManager::delete_all_for_user(&state.repos, user.user_id)
-        .await?;
+    crate::service::auth::backup_codes::BackupCodeManager::delete_all_for_user(
+        &state.repos,
+        user.user_id,
+    )
+    .await?;
 
     Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }

@@ -123,7 +123,7 @@ pub async fn trash_list_page(
     let cleaned = query.cleaned.unwrap_or(false);
 
     let csrf_token =
-        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
 
     let tpl = TrashListTemplate {

@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::admin::service::AdminUserService;
+use crate::service::admin::AdminUserService;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -55,7 +55,7 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
         Err(e) => return AppError::internal(e.to_string()).into_response(),
     };
 
-    let csrf_token = Some(crate::auth::csrf::generate_csrf_token(
+    let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
         &state.csrf_secret,
         &user.session_token,
     ));
@@ -142,8 +142,10 @@ pub async fn create_user(
 
     // CSRF check
     if let Some(ref token) = form.csrf_token {
-        let expected =
-            crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        let expected = crate::service::auth::csrf::generate_csrf_token(
+            &state.csrf_secret,
+            &user.session_token,
+        );
         if *token != expected {
             return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
         }
@@ -156,7 +158,7 @@ pub async fn create_user(
     let is_active = form.is_active.is_some();
 
     let iterations = state.config.auth.password_hash_iterations;
-    let password_hash = crate::auth::password::hash_password(&form.password, iterations);
+    let password_hash = crate::service::auth::password::hash_password(&form.password, iterations);
 
     if let Err(e) = svc
         .create_user(
@@ -195,8 +197,10 @@ pub async fn update_user(
 
     // CSRF check
     if let Some(ref token) = form.csrf_token {
-        let expected =
-            crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        let expected = crate::service::auth::csrf::generate_csrf_token(
+            &state.csrf_secret,
+            &user.session_token,
+        );
         if *token != expected {
             return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
         }

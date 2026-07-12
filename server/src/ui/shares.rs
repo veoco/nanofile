@@ -13,7 +13,7 @@ use std::sync::Arc;
 use chrono::TimeZone;
 
 use crate::AppState;
-use crate::auth::token::generate_share_link_token;
+use crate::service::auth::token::generate_share_link_token;
 use base::error::AppError;
 use infra::entity::share_link;
 
@@ -185,7 +185,7 @@ pub async fn list_shares(
         .unwrap_or("share-links".to_string());
 
     let csrf_token =
-        crate::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = SharesTemplate {
         urls: crate::static_assets::template_urls(),
@@ -212,11 +212,15 @@ pub async fn create_share(
     State(state): State<Arc<AppState>>,
     axum::Form(form): axum::Form<CreateShareForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::auth::csrf::check_form_csrf(&state, &user.session_token, form.csrf_token.as_deref())?;
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.csrf_token.as_deref(),
+    )?;
     let now = chrono::Utc::now().timestamp();
 
     // Determine s_type by walking the FS tree
-    let s_type = crate::sharing::service::share::resolve_entry_type_raw(
+    let s_type = crate::service::sharing::share::resolve_entry_type_raw(
         &state.repos,
         &form.repo_id,
         &form.path,
@@ -249,7 +253,7 @@ pub async fn delete_share(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::auth::csrf::check_form_csrf(
+    crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),
@@ -286,7 +290,7 @@ pub async fn delete_upload(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::auth::csrf::check_form_csrf(
+    crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),
