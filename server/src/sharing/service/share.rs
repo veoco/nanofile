@@ -13,7 +13,6 @@ use crate::storage;
 
 /// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     path: &str,
@@ -174,7 +173,7 @@ pub async fn create_share_link(
     // Verify caller has read permission on the repo
     storage::check_repo_read_permission(db, repo_id, creator_id).await?;
 
-    let s_type = resolve_entry_type_raw(db, repos, repo_id, path).await?;
+    let s_type = resolve_entry_type_raw(repos, repo_id, path).await?;
 
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
@@ -261,7 +260,7 @@ pub async fn create_share_link_v21(
     // Verify caller has read permission on the repo
     storage::check_repo_read_permission(db, repo_id, creator_id).await?;
 
-    let s_type = resolve_entry_type_raw(db, repos, repo_id, path).await?;
+    let s_type = resolve_entry_type_raw(repos, repo_id, path).await?;
 
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();

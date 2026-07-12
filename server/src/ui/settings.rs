@@ -319,8 +319,6 @@ pub async fn upload_avatar(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, AppError> {
-    let db = state.db.as_ref();
-
     // Extract the avatar file from the multipart stream.
     let mut avatar_field: Option<(String, Vec<u8>)> = None;
     let mut csrf_token: Option<String> = None;
@@ -356,7 +354,7 @@ pub async fn upload_avatar(
 
     // Delegate to the shared AvatarService which handles validation (size/ext),
     // persistence, thumbnail generation (with square crop + EXIF), and DB upsert.
-    let svc = crate::user::service::AvatarService::new(db, &state.repos);
+    let svc = crate::user::service::AvatarService::new(state.repos.clone());
     match svc.upload_avatar(&user.email, file_name, data).await {
         Ok(_url) => Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response()),
         Err(e) => {

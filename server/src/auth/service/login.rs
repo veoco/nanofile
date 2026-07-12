@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sea_orm::{DatabaseConnection, Set};
+use sea_orm::Set;
 
 use crate::auth::password::verify_password;
 use crate::auth::s2fa::{S2FA_TTL_SECONDS, generate_s2fa_token};
@@ -34,8 +34,6 @@ pub enum LoginResult {
 /// and two-factor / S2FA device trust flows.
 pub struct LoginService {
     repos: Arc<Repositories>,
-    #[allow(dead_code)]
-    db: Arc<DatabaseConnection>,
     password_hash_iterations: u32,
     api_token_ttl_days: u64,
     login_rate_limiter: Arc<LoginRateLimiter>,
@@ -43,14 +41,12 @@ pub struct LoginService {
 
 impl LoginService {
     pub fn new(
-        db: Arc<DatabaseConnection>,
         repos: Arc<Repositories>,
         password_hash_iterations: u32,
         api_token_ttl_days: u64,
         login_rate_limiter: Arc<LoginRateLimiter>,
     ) -> Self {
         Self {
-            db,
             repos,
             password_hash_iterations,
             api_token_ttl_days,

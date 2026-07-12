@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::error::AppError;
-use crate::repo::trash::TrashService;
+use crate::repo::trash;
 use crate::ui::files::format_size;
 
 use super::auth_extractor::WebUser;
@@ -74,9 +74,9 @@ pub async fn trash_list_page(
 
     // Fetch trash items across all accessible repos
     let result = if q.is_empty() {
-        TrashService::list_trash_for_user(db, &state.repos, user.user_id, page, per_page).await?
+        trash::list_trash_for_user(db, &state.repos, user.user_id, page, per_page).await?
     } else {
-        TrashService::search_trash_for_user(
+        trash::search_trash_for_user(
             db,
             &state.repos,
             user.user_id,

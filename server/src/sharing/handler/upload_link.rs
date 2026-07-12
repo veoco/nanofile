@@ -41,7 +41,6 @@ pub async fn create_upload_link(
     Json(req): Json<CreateUploadLinkRequest>,
 ) -> Result<Json<link::UploadLinkInfo>, AppError> {
     let info = link::create_upload_link(
-        state.db.as_ref(),
         &state.repos,
         &state.config,
         &req.repo_id,

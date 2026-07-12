@@ -184,7 +184,6 @@ pub async fn create_upload_link_v21(
     Json(req): Json<CreateLinkRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let token = link::create_upload_link_v21(
-        state.db.as_ref(),
         &state.repos,
         &state.config,
         &req.repo_id,
@@ -204,8 +203,7 @@ pub async fn clean_invalid_upload_links_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let count =
-        link::clean_invalid_upload_links_v21(state.db.as_ref(), &state.repos, auth.user_id).await?;
+    let count = link::clean_invalid_upload_links_v21(&state.repos, auth.user_id).await?;
     Ok(Json(serde_json::json!({"success": true, "deleted": count})))
 }
 
@@ -215,7 +213,7 @@ pub async fn get_upload_link_v21(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let info = link::get_upload_link_v21(state.db.as_ref(), &state.repos, &token).await?;
+    let info = link::get_upload_link_v21(&state.repos, &token).await?;
     Ok(Json(info))
 }
 
@@ -324,7 +322,6 @@ pub async fn list_repo_upload_links_v21(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let items =
-        link::list_upload_links_for_repo_v21(state.db.as_ref(), &state.repos, &repo_id).await?;
+    let items = link::list_upload_links_for_repo_v21(&state.repos, &repo_id).await?;
     Ok(Json(serde_json::json!({"upload_link_list": items})))
 }

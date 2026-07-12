@@ -1,4 +1,4 @@
-use sea_orm::{DatabaseConnection, Set};
+use sea_orm::Set;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -43,7 +43,6 @@ pub async fn list_upload_links(
 }
 
 pub async fn create_upload_link(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     config: &Config,
     repo_id: &str,
@@ -145,7 +144,6 @@ pub async fn list_upload_links_for_path(
 }
 
 pub async fn create_upload_link_v21(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     config: &Config,
     repo_id: &str,
@@ -213,7 +211,6 @@ pub async fn delete_upload_link_v21_by_token(
 }
 
 pub async fn get_upload_link_v21(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     token: &str,
 ) -> Result<serde_json::Value, AppError> {
@@ -292,7 +289,6 @@ pub async fn update_upload_link_v21(
 }
 
 pub async fn list_upload_links_for_repo_v21(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
 ) -> Result<Vec<serde_json::Value>, AppError> {
@@ -340,7 +336,6 @@ pub async fn list_upload_links_for_repo_v21(
 }
 
 pub async fn clean_invalid_upload_links_v21(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     user_id: i32,
 ) -> Result<i32, AppError> {

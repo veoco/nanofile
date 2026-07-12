@@ -1,24 +1,15 @@
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection;
-
 use crate::error::AppError;
 use crate::repository::Repositories;
 
 pub struct MetadataService {
-    #[allow(dead_code)]
-    db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
 }
 
 impl MetadataService {
-    pub fn new(db: Arc<DatabaseConnection>, repos: Arc<Repositories>) -> Self {
-        Self { db, repos }
-    }
-
-    #[allow(dead_code)]
-    fn db(&self) -> &DatabaseConnection {
-        self.db.as_ref()
+    pub fn new(repos: Arc<Repositories>) -> Self {
+        Self { repos }
     }
 
     /// Get metadata config for a repo.

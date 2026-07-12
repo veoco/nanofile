@@ -1,6 +1,6 @@
-use sea_orm::DatabaseConnection;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::error::AppError;
 use crate::repository::Repositories;
@@ -38,14 +38,13 @@ pub fn primary_avatar_url(email: &str, size: u32) -> String {
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
-pub struct AvatarService<'a> {
-    pub db: &'a DatabaseConnection,
-    pub repos: &'a Repositories,
+pub struct AvatarService {
+    repos: Arc<Repositories>,
 }
 
-impl<'a> AvatarService<'a> {
-    pub fn new(db: &'a DatabaseConnection, repos: &'a Repositories) -> Self {
-        Self { db, repos }
+impl AvatarService {
+    pub fn new(repos: Arc<Repositories>) -> Self {
+        Self { repos }
     }
 
     /// Find an avatar record by email.

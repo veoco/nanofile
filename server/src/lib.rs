@@ -271,7 +271,7 @@ impl AppState {
     }
 
     pub fn metadata_service(&self) -> crate::fs::service::metadata::MetadataService {
-        crate::fs::service::metadata::MetadataService::new(self.db.clone(), self.repos.clone())
+        crate::fs::service::metadata::MetadataService::new(self.repos.clone())
     }
 
     pub fn fileops_service(&self) -> crate::fs::service::fileops::FileOpsService {
@@ -314,7 +314,6 @@ impl AppState {
 
     pub fn login_service(&self) -> crate::auth::service::login::LoginService {
         crate::auth::service::login::LoginService::new(
-            self.db.clone(),
             self.repos.clone(),
             self.config.auth.password_hash_iterations,
             self.config.auth.api_token_ttl_days,
@@ -323,7 +322,7 @@ impl AppState {
     }
 
     pub fn sso_service(&self) -> crate::auth::service::sso::SsoService {
-        crate::auth::service::sso::SsoService::new(self.db.clone(), self.repos.clone())
+        crate::auth::service::sso::SsoService::new(self.repos.clone())
     }
 
     pub fn two_factor_service(&self) -> crate::auth::service::two_factor::TwoFactorService {

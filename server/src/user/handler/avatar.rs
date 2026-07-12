@@ -38,7 +38,7 @@ pub async fn get_avatar(
     // user existence first.
     let size = resolve_size(&size_str);
 
-    let svc = AvatarService::new(state.db.as_ref(), &state.repos);
+    let svc = AvatarService::new(state.repos.clone());
     let avatar = svc.find_avatar(&email).await?;
 
     match avatar {
@@ -68,7 +68,7 @@ pub async fn serve_avatar_image(
 ) -> Response {
     let size = resolve_size(&size_str);
 
-    let svc = AvatarService::new(state.db.as_ref(), &state.repos);
+    let svc = AvatarService::new(state.repos.clone());
     let avatar = svc.find_avatar(&email).await;
 
     match avatar {

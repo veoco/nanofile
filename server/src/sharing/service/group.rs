@@ -1,11 +1,8 @@
 use crate::error::AppError;
 use crate::repository::Repositories;
 
-use sea_orm::DatabaseConnection;
-
 /// List all groups for a user.
 pub async fn list_groups(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     user_id: i32,
 ) -> Result<Vec<serde_json::Value>, AppError> {
@@ -38,7 +35,6 @@ pub async fn list_groups(
 
 /// List groups and contacts for a user.
 pub async fn groups_and_contacts(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     user_id: i32,
 ) -> Result<serde_json::Value, AppError> {
@@ -78,7 +74,6 @@ pub async fn groups_and_contacts(
 
 /// Search users by email pattern.
 pub async fn search_user(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     query: &str,
 ) -> Result<Vec<serde_json::Value>, AppError> {

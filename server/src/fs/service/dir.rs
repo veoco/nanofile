@@ -760,7 +760,7 @@ impl DirService {
             } else {
                 "file"
             };
-            if let Err(e) = crate::repo::trash::TrashService::add_to_trash(
+            if let Err(e) = crate::repo::trash::add_to_trash(
                 db,
                 &self.repos,
                 repo_id,
@@ -1094,7 +1094,7 @@ async fn record_delete_trash(
     } else {
         "file"
     };
-    if let Err(e) = crate::repo::trash::TrashService::add_to_trash(
+    if let Err(e) = crate::repo::trash::add_to_trash(
         db,
         repos,
         repo_id,

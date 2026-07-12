@@ -22,7 +22,7 @@ pub async fn list_wikis(
     _auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let wikis = wiki::list_wikis(state.db.as_ref(), &state.repos, _auth.user_id).await?;
+    let wikis = wiki::list_wikis(&state.repos, _auth.user_id).await?;
     Ok(Json(serde_json::json!({"wikis": wikis})))
 }
 
@@ -37,7 +37,7 @@ pub async fn rename_wiki(
         .as_str()
         .ok_or_else(|| AppError::BadRequest("name required".into()))?;
 
-    wiki::rename_wiki(state.db.as_ref(), &state.repos, wiki_id, name).await?;
+    wiki::rename_wiki(&state.repos, wiki_id, name).await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -48,7 +48,7 @@ pub async fn publish_wiki(
     State(state): State<Arc<AppState>>,
     Path(wiki_id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    wiki::publish_wiki(state.db.as_ref(), &state.repos, wiki_id).await?;
+    wiki::publish_wiki(&state.repos, wiki_id).await?;
     Ok(Json(serde_json::json!({"success": true})))
 }
 
@@ -58,7 +58,7 @@ pub async fn unpublish_wiki(
     State(state): State<Arc<AppState>>,
     Path(wiki_id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    wiki::unpublish_wiki(state.db.as_ref(), &state.repos, wiki_id).await?;
+    wiki::unpublish_wiki(&state.repos, wiki_id).await?;
     Ok(Json(serde_json::json!({"success": true})))
 }
 
@@ -68,6 +68,6 @@ pub async fn delete_wiki(
     State(state): State<Arc<AppState>>,
     Path(wiki_id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    wiki::delete_wiki(state.db.as_ref(), &state.repos, wiki_id).await?;
+    wiki::delete_wiki(&state.repos, wiki_id).await?;
     Ok(Json(serde_json::json!({"success": true})))
 }

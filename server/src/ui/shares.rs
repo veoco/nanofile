@@ -213,12 +213,10 @@ pub async fn create_share(
     axum::Form(form): axum::Form<CreateShareForm>,
 ) -> Result<impl IntoResponse, AppError> {
     crate::auth::csrf::check_form_csrf(&state, &user.session_token, form.csrf_token.as_deref())?;
-    let db = state.db.as_ref();
     let now = chrono::Utc::now().timestamp();
 
     // Determine s_type by walking the FS tree
     let s_type = crate::sharing::service::share::resolve_entry_type_raw(
-        db,
         &state.repos,
         &form.repo_id,
         &form.path,

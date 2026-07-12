@@ -56,7 +56,7 @@ pub async fn upload_avatar(
     let (file_name, data, _content_type) =
         avatar_field.ok_or_else(|| AppError::BadRequest("no avatar file provided".into()))?;
 
-    let svc = AvatarService::new(state.db.as_ref(), &state.repos);
+    let svc = AvatarService::new(state.repos.clone());
     let avatar_url = svc.upload_avatar(&auth.email, file_name, data).await?;
 
     Ok(Json(serde_json::json!({

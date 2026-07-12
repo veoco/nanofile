@@ -13,7 +13,7 @@ use crate::activity_log;
 use crate::auth::middleware::AuthUser;
 use crate::auth::{RepoPathRead, RepoPathWrite};
 use crate::error::AppError;
-use crate::repo::trash::TrashService;
+use crate::repo::trash;
 
 #[derive(Deserialize)]
 pub struct Trash2Query {
@@ -67,7 +67,7 @@ pub async fn list_trash2(
     let per_page = query.per_page.unwrap_or(50);
 
     let result = serde_json::to_value(
-        TrashService::list_trash2(state.db.as_ref(), &state.repos, repo_id, page, per_page).await?,
+        trash::list_trash2(state.db.as_ref(), &state.repos, repo_id, page, per_page).await?,
     )?;
 
     Ok(Json(result))
@@ -84,7 +84,7 @@ pub async fn search_trash(
     let per_page = query.per_page.unwrap_or(50);
 
     let result = serde_json::to_value(
-        TrashService::search_trash(
+        trash::search_trash(
             state.db.as_ref(),
             repo_id,
             query.q.as_deref().unwrap_or(""),
@@ -109,7 +109,7 @@ pub async fn revert_trash(
     let repo_id = &access.repo_id;
 
     let result = serde_json::to_value(
-        TrashService::restore_trash_items(
+        trash::restore_trash_items(
             state.db.as_ref(),
             &state.repos,
             repo_id,
@@ -153,7 +153,7 @@ pub async fn revert_dirents(
     };
 
     let result = serde_json::to_value(
-        TrashService::restore_dirents(
+        trash::restore_dirents(
             state.db.as_ref(),
             &state.repos,
             repo_id,
@@ -177,7 +177,7 @@ pub async fn clean_trash(
 
     let keep_days = parse_clean_trash_body(req).await;
 
-    TrashService::clean_trash(state.db.as_ref(), &state.repos, repo_id, keep_days).await?;
+    trash::clean_trash(state.db.as_ref(), &state.repos, repo_id, keep_days).await?;
 
     activity_log::log_activity(
         state.db.as_ref(),
@@ -215,7 +215,7 @@ pub async fn list_trash(
     let limit = query.limit.unwrap_or(50);
 
     let result = serde_json::to_value(
-        TrashService::list_trash_cursor(
+        trash::list_trash_cursor(
             state.db.as_ref(),
             &state.repos,
             repo_id,
@@ -232,7 +232,7 @@ pub async fn list_deleted_repos(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let repos = TrashService::list_deleted_repos(&state.repos, auth.user_id).await?;
+    let repos = trash::list_deleted_repos(&state.repos, auth.user_id).await?;
 
     let owner_name = state
         .repos
@@ -270,13 +270,8 @@ pub async fn restore_deleted_repo(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RestoreDeletedRepoBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    TrashService::restore_deleted_repo(
-        state.db.as_ref(),
-        &state.repos,
-        &body.repo_id,
-        auth.user_id,
-    )
-    .await?;
+    trash::restore_deleted_repo(state.db.as_ref(), &state.repos, &body.repo_id, auth.user_id)
+        .await?;
 
     Ok(Json(serde_json::json!({"success": true})))
 }

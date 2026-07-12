@@ -1,11 +1,8 @@
 use crate::error::AppError;
 use crate::repository::Repositories;
 
-use sea_orm::DatabaseConnection;
-
 /// List all wikis owned by a user.
 pub async fn list_wikis(
-    _db: &DatabaseConnection,
     repos: &Repositories,
     owner_id: i32,
 ) -> Result<Vec<serde_json::Value>, AppError> {
@@ -28,38 +25,21 @@ pub async fn list_wikis(
 }
 
 /// Rename a wiki.
-pub async fn rename_wiki(
-    _db: &DatabaseConnection,
-    repos: &Repositories,
-    wiki_id: i32,
-    name: &str,
-) -> Result<(), AppError> {
+pub async fn rename_wiki(repos: &Repositories, wiki_id: i32, name: &str) -> Result<(), AppError> {
     repos.wiki.rename(wiki_id, name).await
 }
 
 /// Publish a wiki.
-pub async fn publish_wiki(
-    _db: &DatabaseConnection,
-    repos: &Repositories,
-    wiki_id: i32,
-) -> Result<(), AppError> {
+pub async fn publish_wiki(repos: &Repositories, wiki_id: i32) -> Result<(), AppError> {
     repos.wiki.set_published(wiki_id, true).await
 }
 
 /// Unpublish a wiki.
-pub async fn unpublish_wiki(
-    _db: &DatabaseConnection,
-    repos: &Repositories,
-    wiki_id: i32,
-) -> Result<(), AppError> {
+pub async fn unpublish_wiki(repos: &Repositories, wiki_id: i32) -> Result<(), AppError> {
     repos.wiki.set_published(wiki_id, false).await
 }
 
 /// Delete a wiki.
-pub async fn delete_wiki(
-    _db: &DatabaseConnection,
-    repos: &Repositories,
-    wiki_id: i32,
-) -> Result<(), AppError> {
+pub async fn delete_wiki(repos: &Repositories, wiki_id: i32) -> Result<(), AppError> {
     repos.wiki.delete_by_id(wiki_id).await
 }

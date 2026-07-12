@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sea_orm::{DatabaseConnection, Set};
+use sea_orm::Set;
 
 use rand::Rng;
 
@@ -10,14 +10,12 @@ use crate::repository::Repositories;
 
 /// Service for SSO login flows, client login tokens, and device-wipe reporting.
 pub struct SsoService {
-    #[allow(dead_code)]
-    db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
 }
 
 impl SsoService {
-    pub fn new(db: Arc<DatabaseConnection>, repos: Arc<Repositories>) -> Self {
-        Self { db, repos }
+    pub fn new(repos: Arc<Repositories>) -> Self {
+        Self { repos }
     }
 
     /// Create a new SSO login token (POST /api2/client-login/).

@@ -7,7 +7,7 @@ use crate::common::util::{get_head_commit_id, get_head_root_id, parent_path_from
 use crate::error::AppError;
 use crate::notification::events::FileLockEvent;
 use crate::repo::file_ops::FileOps;
-use crate::repo::trash::TrashService;
+use crate::repo::trash;
 use crate::repository::Repositories;
 use crate::serialization::S_IFREG;
 use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
@@ -844,7 +844,7 @@ async fn record_delete_file_trash(
         Some(e) => e,
         None => return,
     };
-    if let Err(e) = TrashService::add_to_trash(
+    if let Err(e) = trash::add_to_trash(
         db,
         repos,
         repo_id,
