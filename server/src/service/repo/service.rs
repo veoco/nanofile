@@ -217,33 +217,31 @@ impl RepoService {
         let repo_id = repo_id_opt.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let now = chrono::Utc::now().timestamp();
 
-        let model = infra::entity::repo::ActiveModel {
-            id: Set(repo_id.clone()),
-            name: Set(name.to_string()),
-            description: Set(desc.to_string()),
-            owner_id: Set(user_id),
-            encrypted: Set(encrypted_val as i8),
-            enc_version: Set(enc_version_val as i8),
-            magic: Set(magic.clone()),
-            random_key: Set(random_key.clone()),
-            salt: Set(String::new()),
-            head_commit_id: sea_orm::NotSet,
-            permission: Set("rw".to_string()),
-            repo_version: Set(1),
-            size: Set(0),
-            created_at: Set(now),
-            updated_at: Set(now),
+        let params = crate::repository::repo::CreateRepoParams {
+            id: repo_id.clone(),
+            name: name.to_string(),
+            description: desc.to_string(),
+            owner_id: user_id,
+            encrypted: encrypted_val as i8,
+            enc_version: enc_version_val as i8,
+            magic: magic.clone(),
+            random_key: random_key.clone(),
+            salt: String::new(),
+            permission: "rw".to_string(),
+            created_at: now,
+            updated_at: now,
         };
-        repos.repo.create(model).await?;
+        repos.repo.create_repo(params).await?;
 
-        let member = infra::entity::repo_member::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: Set(repo_id.clone()),
-            user_id: Set(user_id),
-            permission: Set("rw".to_string()),
-            created_at: Set(now),
-        };
-        repos.member.create(member).await?;
+        repos
+            .member
+            .create_member(crate::repository::member::CreateMemberParams {
+                repo_id: repo_id.clone(),
+                user_id,
+                permission: "rw".to_string(),
+                created_at: now,
+            })
+            .await?;
 
         // Generate a sync token
         let token_value = generate_sync_token();

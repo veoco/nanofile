@@ -8,7 +8,7 @@ use crate::repository::Repositories;
 use crate::service::auth::password::hash_password;
 use crate::service::auth::token::generate_share_link_token;
 use base::error::AppError;
-use infra::entity::{repo_member, share_link};
+use infra::entity::share_link;
 
 /// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
@@ -184,20 +184,20 @@ pub async fn create_share_link(
 
     let password_hash = password.map(|p| hash_password(p, config.auth.password_hash_iterations));
 
-    let model = share_link::ActiveModel {
-        id: sea_orm::NotSet,
-        repo_id: Set(repo_id.to_string()),
-        creator_id: Set(creator_id),
-        path: Set(path.to_string()),
-        token: Set(token.clone()),
-        password: Set(password_hash),
-        expires_at: Set(expires_at),
-        created_at: Set(now),
-        s_type: Set(s_type.clone()),
-        view_cnt: Set(0i64),
-        description: Set(None),
-    };
-    repos.share_link.insert(model).await?;
+    repos
+        .share_link
+        .create_share_link(crate::repository::share_link::CreateShareLinkParams {
+            repo_id: repo_id.to_string(),
+            creator_id,
+            path: path.to_string(),
+            token: token.clone(),
+            password: password_hash,
+            expires_at,
+            created_at: now,
+            s_type: s_type.clone(),
+            description: None,
+        })
+        .await?;
 
     let link = if s_type == "d" {
         format!("/d/{}/", token)
@@ -276,18 +276,16 @@ pub async fn create_share_link_v21(
 
     repos
         .share_link
-        .insert(share_link::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: Set(repo_id.to_string()),
-            creator_id: Set(creator_id),
-            path: Set(path.to_string()),
-            token: Set(token.clone()),
-            password: Set(password.map(|p| hash_password(p, config.auth.password_hash_iterations))),
-            expires_at: Set(expire_days.map(|d| now + d * 86400)),
-            created_at: Set(now),
-            s_type: Set(s_type.clone()),
-            view_cnt: Set(0i64),
-            description: Set(description.map(|s| s.to_string())),
+        .create_share_link(crate::repository::share_link::CreateShareLinkParams {
+            repo_id: repo_id.to_string(),
+            creator_id,
+            path: path.to_string(),
+            token: token.clone(),
+            password: password.map(|p| hash_password(p, config.auth.password_hash_iterations)),
+            expires_at: expire_days.map(|d| now + d * 86400),
+            created_at: now,
+            s_type: s_type.clone(),
+            description: description.map(|s| s.to_string()),
         })
         .await?;
 
@@ -426,12 +424,11 @@ pub async fn beshare_repo(
 
     repos
         .member
-        .create(repo_member::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: Set(repo_id.to_string()),
-            user_id: Set(target_user.id),
-            permission: Set(perm.clone()),
-            created_at: Set(now),
+        .create_member(crate::repository::member::CreateMemberParams {
+            repo_id: repo_id.to_string(),
+            user_id: target_user.id,
+            permission: perm.clone(),
+            created_at: now,
         })
         .await?;
 

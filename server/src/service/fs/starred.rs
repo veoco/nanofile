@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use sea_orm::{DatabaseConnection, Set};
+use sea_orm::DatabaseConnection;
 
 use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
@@ -208,13 +208,12 @@ impl StarredService {
         let now = Utc::now().timestamp();
         self.repos
             .starred
-            .insert(infra::entity::starred_file::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: Set(repo_id.to_string()),
-                path: Set(normalized_path.clone()),
-                user_id: Set(user_id),
-                is_dir: Set(is_dir),
-                created_at: Set(now),
+            .create_starred(crate::repository::starred::CreateStarredParams {
+                repo_id: repo_id.to_string(),
+                path: normalized_path.clone(),
+                user_id,
+                is_dir,
+                created_at: now,
             })
             .await?;
 

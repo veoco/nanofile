@@ -1,4 +1,3 @@
-use sea_orm::Set;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -7,7 +6,6 @@ use crate::repository::Repositories;
 use crate::service::auth::password::hash_password;
 use crate::service::auth::token::{generate_share_link_token, generate_upload_link_token};
 use base::error::AppError;
-use infra::entity::upload_link;
 
 // ── Response types ────────────────────────────────────────────────────
 
@@ -56,19 +54,19 @@ pub async fn create_upload_link(
 
     let password_hash = password.map(|p| hash_password(p, config.auth.password_hash_iterations));
 
-    let model = upload_link::ActiveModel {
-        id: sea_orm::NotSet,
-        repo_id: Set(repo_id.to_string()),
-        creator_id: Set(creator_id),
-        path: Set(path.to_string()),
-        token: Set(token.clone()),
-        password: Set(password_hash),
-        expires_at: Set(expires_at),
-        created_at: Set(now),
-        view_cnt: Set(0i64),
-        description: Set(None),
-    };
-    repos.upload_link.insert(model).await?;
+    repos
+        .upload_link
+        .create_upload_link(crate::repository::upload_link::CreateUploadLinkParams {
+            repo_id: repo_id.to_string(),
+            creator_id,
+            path: path.to_string(),
+            token: token.clone(),
+            password: password_hash,
+            expires_at,
+            created_at: now,
+            description: None,
+        })
+        .await?;
 
     Ok(UploadLinkInfo {
         token: token.clone(),
@@ -160,17 +158,15 @@ pub async fn create_upload_link_v21(
 
     repos
         .upload_link
-        .insert(upload_link::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: Set(repo_id.to_string()),
-            creator_id: Set(creator_id),
-            path: Set(path.to_string()),
-            token: Set(token.clone()),
-            password: Set(password_hash),
-            expires_at: Set(expire_days.map(|d| now + d * 86400)),
-            created_at: Set(now),
-            view_cnt: Set(0i64),
-            description: Set(description),
+        .create_upload_link(crate::repository::upload_link::CreateUploadLinkParams {
+            repo_id: repo_id.to_string(),
+            creator_id,
+            path: path.to_string(),
+            token: token.clone(),
+            password: password_hash,
+            expires_at: expire_days.map(|d| now + d * 86400),
+            created_at: now,
+            description,
         })
         .await?;
 

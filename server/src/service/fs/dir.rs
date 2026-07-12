@@ -10,7 +10,6 @@ use base::error::AppError;
 use infra::activity_log;
 use infra::common::DirEntry;
 use infra::common::util::{get_head_commit_id, get_head_root_id, parent_path_from};
-use infra::entity::{repo, repo_member};
 use infra::serialization::S_IFDIR;
 
 // ── Free-standing pub(crate) helpers (used by src/ui/files.rs) ──────────
@@ -655,33 +654,31 @@ impl DirService {
             .next()
             .unwrap_or("subrepo");
 
-        let model = repo::ActiveModel {
-            id: sea_orm::Set(new_repo_id.clone()),
-            name: sea_orm::Set(dir_name.to_string()),
-            description: sea_orm::Set(String::new()),
-            owner_id: sea_orm::Set(user_id),
-            encrypted: sea_orm::Set(0i8),
-            enc_version: sea_orm::Set(0i8),
-            magic: sea_orm::Set(None),
-            random_key: sea_orm::Set(None),
-            salt: sea_orm::Set(String::new()),
-            head_commit_id: sea_orm::NotSet,
-            permission: sea_orm::Set("rw".to_string()),
-            repo_version: sea_orm::Set(1),
-            size: sea_orm::Set(0),
-            created_at: sea_orm::Set(now),
-            updated_at: sea_orm::Set(now),
-        };
-        self.repos.repo.create(model).await?;
+        self.repos
+            .repo
+            .create_repo(crate::repository::repo::CreateRepoParams {
+                id: new_repo_id.clone(),
+                name: dir_name.to_string(),
+                description: String::new(),
+                owner_id: user_id,
+                encrypted: 0i8,
+                enc_version: 0i8,
+                magic: None,
+                random_key: None,
+                salt: String::new(),
+                permission: "rw".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await?;
 
         self.repos
             .member
-            .create(repo_member::ActiveModel {
-                id: sea_orm::NotSet,
-                repo_id: sea_orm::Set(new_repo_id.clone()),
-                user_id: sea_orm::Set(user_id),
-                permission: sea_orm::Set("rw".to_string()),
-                created_at: sea_orm::Set(now),
+            .create_member(crate::repository::member::CreateMemberParams {
+                repo_id: new_repo_id.clone(),
+                user_id,
+                permission: "rw".to_string(),
+                created_at: now,
             })
             .await?;
 
