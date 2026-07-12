@@ -50,8 +50,12 @@ impl FromRequestParts<Arc<AppState>> for RepoPathRead {
             .map_err(|_| AppError::BadRequest("missing repo_id in path".into()))?;
 
         // Check read permission
-        infra::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, user.user_id)
-            .await?;
+        crate::domain::permission::check_repo_read_permission(
+            state.db.as_ref(),
+            &repo_id,
+            user.user_id,
+        )
+        .await?;
 
         Ok(RepoPathRead { user, repo_id })
     }
@@ -75,8 +79,12 @@ impl FromRequestParts<Arc<AppState>> for RepoPathWrite {
             .map_err(|_| AppError::BadRequest("missing repo_id in path".into()))?;
 
         // Check write permission
-        infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, user.user_id)
-            .await?;
+        crate::domain::permission::check_repo_write_permission(
+            state.db.as_ref(),
+            &repo_id,
+            user.user_id,
+        )
+        .await?;
 
         Ok(RepoPathWrite { user, repo_id })
     }

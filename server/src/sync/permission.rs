@@ -46,13 +46,21 @@ pub async fn permission_check(
     // seaf-daemon sends op=upload or op=download.
     match query.op.as_deref() {
         Some("upload") => {
-            infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, _auth.user_id)
-                .await?;
+            crate::domain::permission::check_repo_write_permission(
+                state.db.as_ref(),
+                &repo_id,
+                _auth.user_id,
+            )
+            .await?;
         }
         _ => {
             // Default to read permission check (covers download + unknown ops).
-            infra::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, _auth.user_id)
-                .await?;
+            crate::domain::permission::check_repo_read_permission(
+                state.db.as_ref(),
+                &repo_id,
+                _auth.user_id,
+            )
+            .await?;
         }
     }
 

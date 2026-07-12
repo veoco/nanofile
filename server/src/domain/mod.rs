@@ -12,3 +12,4 @@
 
 pub mod commit;
 pub mod fs;
+pub mod permission;

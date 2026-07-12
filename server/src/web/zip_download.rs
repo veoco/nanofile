@@ -330,7 +330,7 @@ pub async fn zip_task_handler(
     let db = state.db.as_ref();
 
     // Verify read permission
-    infra::storage::check_repo_read_permission(db, &repo_id, auth.user_id).await?;
+    crate::domain::permission::check_repo_read_permission(db, &repo_id, auth.user_id).await?;
 
     if payload.dirents.is_empty() {
         return Err(AppError::BadRequest(

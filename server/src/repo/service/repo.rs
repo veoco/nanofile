@@ -591,7 +591,7 @@ impl RepoService {
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
         // Verify caller has write permission on the repo
-        infra::permission::repo::check_repo_write_permission(db, repo_id, user_id).await?;
+        crate::domain::permission::check_repo_write_permission(db, repo_id, user_id).await?;
 
         let token = token_manager.generate(repo_id, user_id, email, "upload", parent_dir);
 
@@ -626,7 +626,7 @@ impl RepoService {
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
         // Verify caller has write permission on the repo
-        infra::permission::repo::check_repo_write_permission(db, repo_id, user_id).await?;
+        crate::domain::permission::check_repo_write_permission(db, repo_id, user_id).await?;
 
         let token = token_manager.generate(repo_id, user_id, email, "update", parent_dir);
 

@@ -70,8 +70,12 @@ pub async fn star_item(
     };
 
     // Permission check
-    infra::storage::check_repo_read_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
-        .await?;
+    crate::domain::permission::check_repo_read_permission(
+        state.db.as_ref(),
+        &req.repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let svc = state.starred_service();
     let result = svc

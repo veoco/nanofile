@@ -23,7 +23,12 @@ pub async fn v21_delete_dir(
     Path(repo_id): Path<String>,
     Query(query): Query<DeleteQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let path = query
         .p

@@ -156,7 +156,12 @@ pub async fn repo_file_download(
     };
 
     // Check read permission (matching seahub's check_folder_permission behavior).
-    infra::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    crate::domain::permission::check_repo_read_permission(
+        state.db.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     // Check if repo is encrypted and if password is set
     let dec_key = get_decryption_key_for_repo(&state, &repo_id, auth.user_id).await?;
@@ -196,8 +201,12 @@ pub async fn download_api(
 
     // Re-check that user still has read permission on the repo.
     // Permissions may have been revoked between token issuance and use.
-    infra::storage::check_repo_read_permission(state.db.as_ref(), &info.repo_id, info.user_id)
-        .await?;
+    crate::domain::permission::check_repo_read_permission(
+        state.db.as_ref(),
+        &info.repo_id,
+        info.user_id,
+    )
+    .await?;
 
     let repo_id = info.repo_id.clone();
     let path = info.parent_dir.clone();

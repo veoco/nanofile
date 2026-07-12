@@ -259,7 +259,12 @@ pub async fn check_repo_password_v2(
     req: axum::http::Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Check user has access to this repo (matching seahub's check_folder_permission).
-    infra::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    crate::domain::permission::check_repo_read_permission(
+        state.db.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let (_parts, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)

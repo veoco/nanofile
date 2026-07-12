@@ -4,7 +4,6 @@ pub mod cdc;
 use std::sync::Arc;
 
 pub use crate::permission::lock::{check_commit_file_locks, upsert_lock_timestamp};
-pub use crate::permission::repo::{check_repo_read_permission, check_repo_write_permission};
 
 /// Abstract backend for content-addressed block storage.
 ///

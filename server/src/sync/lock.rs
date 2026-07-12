@@ -30,7 +30,12 @@ pub async fn lock_file(
     Query(query): Query<LockQuery>,
 ) -> Result<Json<LockResponse>, AppError> {
     // Permission check: only users with write access can lock files.
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, _auth.user_id).await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &repo_id,
+        _auth.user_id,
+    )
+    .await?;
 
     let path = query
         .p
@@ -92,7 +97,12 @@ pub async fn unlock_file(
     Query(query): Query<LockQuery>,
 ) -> Result<Json<LockResponse>, AppError> {
     // Permission check: only users with write access can unlock files.
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, _auth.user_id).await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &repo_id,
+        _auth.user_id,
+    )
+    .await?;
 
     let path = query
         .p

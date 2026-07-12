@@ -207,8 +207,12 @@ pub async fn move_dir(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MoveDirRequest>,
 ) -> Result<(), AppError> {
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
-        .await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &req.repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let svc = state.dir_service();
     svc.move_dir(
@@ -233,8 +237,12 @@ pub async fn rename_dir(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RenameDirRequest>,
 ) -> Result<(), AppError> {
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
-        .await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &req.repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let path = safe_normalize_path(&req.p)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
@@ -309,7 +317,12 @@ pub async fn delete_dirent_v21(
     Path((repo_id, obj)): Path<(String, String)>,
     Query(query): Query<V21DirQuery>,
 ) -> Result<Json<serde_json::value::Value>, AppError> {
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let path = query
         .p

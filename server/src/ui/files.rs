@@ -363,7 +363,7 @@ async fn verify_repo_access(
     user_id: i32,
     repo_id: &str,
 ) -> Result<(), AppError> {
-    infra::storage::check_repo_read_permission(db, repo_id, user_id).await?;
+    crate::domain::permission::check_repo_read_permission(db, repo_id, user_id).await?;
     Ok(())
 }
 

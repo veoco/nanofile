@@ -1,16 +1,19 @@
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+//! Permission checking — business rules for repo access control.
+//!
+//! These functions were moved from `infra::permission::repo` to the domain
+//! layer because they encode business logic (who can read/write a repo),
+//! not infrastructure concerns.  The underlying SQL queries use raw
+//! `DatabaseConnection` rather than repository traits because the LEFT JOIN
+//! pattern is a single query that doesn't map to a single entity.
 
 use base::AppError;
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
 /// Check if `user_id` has write (`rw`) permission on the repo.
 ///
 /// The repo owner always has full access. Members are checked against
 /// `repo_member.permission`. Non-members and read-only members are
 /// rejected with `AppError::Forbidden`.
-///
-/// Uses a single LEFT JOIN query instead of two sequential lookups.
-///
-/// Matches seafile-server's `check_permission()` in repo-perm.c.
 pub async fn check_repo_write_permission(
     db: &DatabaseConnection,
     repo_id: &str,
@@ -43,8 +46,6 @@ pub async fn check_repo_write_permission(
 ///
 /// The repo owner always has access. Any member (r or rw) has access.
 /// Non-members are rejected with `AppError::Forbidden`.
-///
-/// Uses a single LEFT JOIN query instead of two sequential lookups.
 pub async fn check_repo_read_permission(
     db: &DatabaseConnection,
     repo_id: &str,

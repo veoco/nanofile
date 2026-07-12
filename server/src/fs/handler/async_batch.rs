@@ -16,8 +16,12 @@ pub async fn async_batch_copy_item(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::batch::SyncBatchCopyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
-        .await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &body.src_repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let src_dir = safe_normalize_path(&body.src_parent_dir)
         .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
@@ -94,8 +98,12 @@ pub async fn async_batch_move_item(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::batch::BatchMoveRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
-        .await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &body.src_repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let src_dir = safe_normalize_path(&body.src_parent_dir)
         .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
@@ -182,8 +190,12 @@ pub async fn copy_move_task(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CopyMoveTaskRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &body.src_repo_id, auth.user_id)
-        .await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &body.src_repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let src_dir = safe_normalize_path(&body.src_parent_dir)
         .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;

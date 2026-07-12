@@ -257,8 +257,12 @@ pub async fn move_file(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MoveRequest>,
 ) -> Result<(), AppError> {
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
-        .await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &req.repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let path = safe_normalize_path(&req.p)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
@@ -286,8 +290,12 @@ pub async fn rename_file(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RenameRequest>,
 ) -> Result<(), AppError> {
-    infra::storage::check_repo_write_permission(state.db.as_ref(), &req.repo_id, auth.user_id)
-        .await?;
+    crate::domain::permission::check_repo_write_permission(
+        state.db.as_ref(),
+        &req.repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let path = safe_normalize_path(&req.p)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
@@ -549,7 +557,12 @@ pub async fn get_block_download_link(
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<String>, AppError> {
     let parent_dir = query.get("p").map(|s| s.as_str()).unwrap_or("/");
-    infra::storage::check_repo_read_permission(state.db.as_ref(), &repo_id, auth.user_id).await?;
+    crate::domain::permission::check_repo_read_permission(
+        state.db.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let svc = state.file_service();
 

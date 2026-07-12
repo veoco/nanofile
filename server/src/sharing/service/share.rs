@@ -9,7 +9,6 @@ use crate::notification::events::FolderPermEvent;
 use crate::repository::Repositories;
 use base::error::AppError;
 use infra::entity::{repo_member, share_link};
-use infra::storage;
 
 /// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
@@ -171,7 +170,7 @@ pub async fn create_share_link(
     }
 
     // Verify caller has read permission on the repo
-    storage::check_repo_read_permission(db, repo_id, creator_id).await?;
+    crate::domain::permission::check_repo_read_permission(db, repo_id, creator_id).await?;
 
     let s_type = resolve_entry_type_raw(repos, repo_id, path).await?;
 
@@ -258,7 +257,7 @@ pub async fn create_share_link_v21(
     }
 
     // Verify caller has read permission on the repo
-    storage::check_repo_read_permission(db, repo_id, creator_id).await?;
+    crate::domain::permission::check_repo_read_permission(db, repo_id, creator_id).await?;
 
     let s_type = resolve_entry_type_raw(repos, repo_id, path).await?;
 
@@ -385,7 +384,7 @@ pub async fn beshare_repo(
     }
 
     // Verify caller has write permission on the repo
-    storage::check_repo_write_permission(db, repo_id, caller_user_id).await?;
+    crate::domain::permission::check_repo_write_permission(db, repo_id, caller_user_id).await?;
 
     // Find the target user
     let target_user = repos
@@ -481,7 +480,7 @@ pub async fn modify_share_permission(
     }
 
     // Only the repo owner can modify permissions.
-    storage::check_repo_write_permission(db, repo_id, caller_user_id).await?;
+    crate::domain::permission::check_repo_write_permission(db, repo_id, caller_user_id).await?;
 
     let target_user = repos
         .user
@@ -532,7 +531,7 @@ pub async fn delete_share(
     }
 
     // Only the repo owner can delete shares.
-    storage::check_repo_write_permission(db, repo_id, caller_user_id).await?;
+    crate::domain::permission::check_repo_write_permission(db, repo_id, caller_user_id).await?;
 
     let target_user = repos
         .user
