@@ -17,7 +17,7 @@ use crate::common::EMPTY_SHA1;
 use crate::entity::commit;
 use crate::error::AppError;
 use crate::serialization::S_IFDIR;
-use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData};
+use base::common::{DirEntryData, FsDirData, FsFileData};
 
 /// Result of block checking and size delta computation.
 struct CheckResult {
@@ -100,7 +100,7 @@ pub async fn get_commit(
     // Include repo_name/repo_desc so the daemon can initialize its local
     // library name from the commit (via seaf_repo_from_commit).
     if commit_id == "0000000000000000000000000000000000000000" {
-        let empty_commit = crate::serialization::commit_json::CommitData {
+        let empty_commit = base::common::CommitData {
             commit_id: commit_id.clone(),
             repo_id: repo_id.clone(),
             root_id: "0000000000000000000000000000000000000000".to_string(),
@@ -123,7 +123,7 @@ pub async fn get_commit(
             key: repo_model.random_key.clone(),
             version: 1,
         };
-        let json = empty_commit.to_compact_json();
+        let json = crate::domain::commit::to_json(&empty_commit);
         return Ok(json.into_bytes());
     }
 
@@ -134,7 +134,7 @@ pub async fn get_commit(
         .await?
         .ok_or_else(|| AppError::NotFound("commit not found".into()))?;
 
-    let commit_data = crate::serialization::commit_json::CommitData {
+    let commit_data = base::common::CommitData {
         commit_id: commit_model.commit_id.clone(),
         repo_id: commit_model.repo_id.clone(),
         root_id: commit_model.root_id.clone(),
@@ -158,7 +158,7 @@ pub async fn get_commit(
         version: commit_model.version as i32,
     };
 
-    let json = commit_data.to_compact_json();
+    let json = crate::domain::commit::to_json(&commit_data);
     Ok(json.into_bytes())
 }
 
@@ -173,7 +173,7 @@ pub async fn put_commit(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let commit_data: crate::serialization::commit_json::CommitData = serde_json::from_slice(&data)
+    let commit_data: base::common::CommitData = serde_json::from_slice(&data)
         .map_err(|e| AppError::Internal(format!("invalid commit JSON: {}", e)))?;
 
     if commit_data.repo_id != repo_id {

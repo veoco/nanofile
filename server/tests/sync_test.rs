@@ -350,12 +350,12 @@ async fn test_pack_fs_accepts_json_array() {
     let sync_token = get_sync_token(&client, token, &repo_id).await;
 
     // First push some fs objects via recv-fs
-    let empty_dir = server::serialization::fs_json::FsDirData {
+    let empty_dir = base::common::FsDirData {
         dirents: vec![],
         obj_type: 3,
         version: 1,
     };
-    let dir_json = empty_dir.to_compact_json();
+    let dir_json = serde_json::to_string(&empty_dir).unwrap();
     let dir_fs_id = server::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
         server::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
@@ -396,12 +396,12 @@ async fn test_pack_fs_accepts_form_encoded() {
     let sync_token = get_sync_token(&client, token, &repo_id).await;
 
     // Push fs object
-    let empty_dir = server::serialization::fs_json::FsDirData {
+    let empty_dir = base::common::FsDirData {
         dirents: vec![],
         obj_type: 3,
         version: 1,
     };
-    let dir_json = empty_dir.to_compact_json();
+    let dir_json = serde_json::to_string(&empty_dir).unwrap();
     let dir_fs_id = server::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
         server::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
@@ -538,12 +538,12 @@ async fn test_check_fs_accepts_form_encoded() {
     let sync_token = get_sync_token(&client, token, &repo_id).await;
 
     // Push an fs object
-    let empty_dir = server::serialization::fs_json::FsDirData {
+    let empty_dir = base::common::FsDirData {
         dirents: vec![],
         obj_type: 3,
         version: 1,
     };
-    let dir_json = empty_dir.to_compact_json();
+    let dir_json = serde_json::to_string(&empty_dir).unwrap();
     let dir_fs_id = server::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
         server::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
@@ -656,7 +656,7 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
     let repo_id = common::create_test_repo(&client, api_token, "DirType Test").await;
     let sync_token = get_sync_token(&client, api_token, &repo_id).await;
 
-    use server::serialization::fs_json::{FsDirData, FsFileData};
+    use base::common::{FsDirData, FsFileData};
     use server::serialization::pack_fs;
 
     // Create a directory with type=3 (what seaf-daemon actually sends)
@@ -666,12 +666,13 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
         obj_type: 1, // file
         version: 1,
     };
-    let file_fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
-    let file_json = file_data.to_compact_json();
+    let file_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+    let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
     let dir_data = FsDirData {
-        dirents: vec![server::serialization::fs_json::DirEntryData {
+        dirents: vec![base::common::DirEntryData {
             id: file_fs_id.clone(),
             mode: 33188,
             modifier: "test@example.com".to_string(),
@@ -682,8 +683,9 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
         obj_type: 3, // dir — this must be 3, not 2
         version: 1,
     };
-    let dir_fs_id = server::crypto::fs_id::sha1_hex(dir_data.to_compact_json().as_bytes());
-    let dir_json = dir_data.to_compact_json();
+    let dir_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
+    let dir_json = serde_json::to_string(&dir_data).unwrap();
     let dir_compressed = pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
     // Upload both via recv_fs

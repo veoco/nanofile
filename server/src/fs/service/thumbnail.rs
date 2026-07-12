@@ -8,7 +8,7 @@ use crate::error::AppError;
 use crate::repo::download::Downloader;
 use crate::repo::fs_tree::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
-use crate::serialization::fs_json::SEAF_METADATA_TYPE_DIR;
+use base::common::SEAF_METADATA_TYPE_DIR;
 
 pub struct ThumbnailService {
     repos: Arc<Repositories>,

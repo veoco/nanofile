@@ -11,7 +11,7 @@ use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
 use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
-use crate::serialization::fs_json::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
+use base::common::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
 
 // ── Free-standing pub(crate) helpers (used by src/ui/files.rs) ──────────
 
@@ -216,7 +216,7 @@ pub(crate) async fn create_dir_by_path(
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                empty_root.compute_and_store(db, repo_id).await?
+                crate::domain::fs::store_dir_data(db, repo_id, &empty_root).await?
             }
         }
     } else {

@@ -13,8 +13,8 @@ use crate::AppState;
 use crate::auth::middleware::SyncAuth;
 use crate::error::AppError;
 use crate::repository::FsObjectRepository;
-use crate::serialization::fs_json::SEAF_METADATA_TYPE_DIR;
 use crate::serialization::pack_fs;
+use base::common::SEAF_METADATA_TYPE_DIR;
 
 /// Parse fs_ids from the request body. The seaf-daemon may send either:
 /// 1. JSON array: ["id1", "id2"] (newer versions)
@@ -221,9 +221,8 @@ async fn collect_fs_ids_recursive(
         collected.insert(fs_id.to_string());
 
         if fs_obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 {
-            let dir_data: crate::serialization::fs_json::FsDirData =
-                serde_json::from_str(&fs_obj.data)
-                    .map_err(|e| AppError::Internal(format!("invalid dir data: {}", e)))?;
+            let dir_data: base::common::FsDirData = serde_json::from_str(&fs_obj.data)
+                .map_err(|e| AppError::Internal(format!("invalid dir data: {}", e)))?;
 
             for entry in &dir_data.dirents {
                 Box::pin(collect_fs_ids_recursive(

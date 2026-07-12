@@ -12,7 +12,7 @@ use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::repo::download::Downloader;
-use crate::serialization::fs_json::FsFileData;
+use base::common::FsFileData;
 
 /// Build a streaming body that reads and yields blocks one at a time.
 ///

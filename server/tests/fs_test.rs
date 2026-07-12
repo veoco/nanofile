@@ -1,8 +1,8 @@
 mod common;
 
+use base::common::CommitData;
+use base::common::{DirEntryData, FsDirData, FsFileData};
 use common::{TestServer, create_test_user, get_sync_token};
-use server::serialization::commit_json::CommitData;
-use server::serialization::fs_json::{DirEntryData, FsDirData, FsFileData};
 use server::serialization::pack_fs;
 
 fn random_hex_id() -> String {
@@ -69,7 +69,7 @@ async fn push_commit(
         key: None,
         version: 1,
     };
-    let json_str = commit_data.to_compact_json();
+    let json_str = serde_json::to_string(&commit_data).unwrap();
     let resp = client
         .put_commit(sync_token, repo_id, &commit_id, json_str.into_bytes())
         .await;
@@ -82,7 +82,7 @@ async fn push_commit(
 #[tokio::test]
 async fn test_fs_dir_type_value() {
     let dir_data = make_dir_fs_data(vec![]);
-    let json = dir_data.to_compact_json();
+    let json = serde_json::to_string(&dir_data).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed["type"].as_i64().unwrap(), 3);
 }
@@ -90,7 +90,7 @@ async fn test_fs_dir_type_value() {
 #[tokio::test]
 async fn test_fs_file_type_value() {
     let file_data = make_file_fs_data(vec!["abc123".to_string()], 1024);
-    let json = file_data.to_compact_json();
+    let json = serde_json::to_string(&file_data).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed["type"].as_i64().unwrap(), 1);
 }
@@ -106,10 +106,11 @@ async fn test_fs_dir_serialization_roundtrip() {
         size: 1024,
     }]);
 
-    let fs_id = server::crypto::fs_id::sha1_hex(dir_data.to_compact_json().as_bytes());
+    let fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
     assert_eq!(fs_id.len(), 40);
 
-    let json = dir_data.to_compact_json();
+    let json = serde_json::to_string(&dir_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
     let decompressed = pack_fs::decompress_fs_data(&compressed).unwrap();
     let roundtripped: FsDirData = serde_json::from_slice(&decompressed).unwrap();
@@ -126,10 +127,11 @@ async fn test_fs_file_serialization_roundtrip() {
     let block_id = random_hex_id();
     let file_data = make_file_fs_data(vec![block_id.clone()], 4096);
 
-    let fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
+    let fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
     assert_eq!(fs_id.len(), 40);
 
-    let json = file_data.to_compact_json();
+    let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
     let decompressed = pack_fs::decompress_fs_data(&compressed).unwrap();
     let roundtripped: FsFileData = serde_json::from_slice(&decompressed).unwrap();
@@ -157,8 +159,9 @@ async fn test_recv_fs_binary_format() {
 
     // Create a file fs_object referencing the real block.
     let file_data = make_file_fs_data(vec![block_id.clone()], 512);
-    let fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
-    let json = file_data.to_compact_json();
+    let fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+    let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
@@ -177,9 +180,10 @@ async fn test_recv_fs_binary_format() {
         name: "test.txt".to_string(),
         size: 512,
     }]);
-    let root_json = root_dir.to_compact_json();
+    let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
-    let root_fs_id = server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
+    let root_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
 
     let mut root_packed = Vec::new();
     root_packed.extend_from_slice(root_fs_id.as_bytes());
@@ -223,8 +227,9 @@ async fn test_pack_fs_returns_packed_binary() {
     let client = server.client();
 
     let file_data = make_file_fs_data(vec![random_hex_id()], 256);
-    let fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
-    let json = file_data.to_compact_json();
+    let fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+    let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
@@ -251,8 +256,9 @@ async fn test_check_fs_partial_exists() {
     let client = server.client();
 
     let file_data = make_file_fs_data(vec![random_hex_id()], 100);
-    let fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
-    let json = file_data.to_compact_json();
+    let fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+    let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
@@ -286,8 +292,9 @@ async fn test_fs_id_list_with_server_head() {
         name: "file.txt".to_string(),
         size: 100,
     }]);
-    let root_fs_id = server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
-    let root_json = root_dir.to_compact_json();
+    let root_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+    let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
@@ -312,8 +319,9 @@ async fn test_fs_id_list_with_matching_client_head() {
     let client = server.client();
 
     let root_dir = make_dir_fs_data(vec![]);
-    let root_fs_id = server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
-    let root_json = root_dir.to_compact_json();
+    let root_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+    let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
@@ -365,7 +373,7 @@ async fn test_check_blocks_partial_exists() {
 /// "Failed to find dir" errors and silent sync failures.
 #[tokio::test]
 async fn test_regression_dir_metadata_type_is_3() {
-    use server::serialization::fs_json::{SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE};
+    use base::common::{SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE};
     assert_eq!(
         SEAF_METADATA_TYPE_DIR, 3,
         "SEAF_METADATA_TYPE_DIR must be 3"
@@ -387,9 +395,10 @@ async fn test_regression_recv_fs_stores_correct_dir_type() {
 
     // Create a dir fs object with type=3 (what seaf-daemon sends)
     let dir_data = make_dir_fs_data(vec![]);
-    let dir_json = dir_data.to_compact_json();
+    let dir_json = serde_json::to_string(&dir_data).unwrap();
     let dir_compressed = pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
-    let dir_fs_id = server::crypto::fs_id::sha1_hex(dir_data.to_compact_json().as_bytes());
+    let dir_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
 
     let mut packed = Vec::new();
     packed.extend_from_slice(dir_fs_id.as_bytes());
@@ -425,9 +434,10 @@ async fn test_regression_recv_fs_stores_correct_file_type() {
     let client = server.client();
 
     let file_data = make_file_fs_data(vec![random_hex_id()], 256);
-    let file_json = file_data.to_compact_json();
+    let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
-    let file_fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
+    let file_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
 
     let mut packed = Vec::new();
     packed.extend_from_slice(file_fs_id.as_bytes());
@@ -546,8 +556,10 @@ async fn test_regression_fs_id_is_stable() {
         version: 1,
     };
 
-    let fs_id_1 = server::crypto::fs_id::sha1_hex(dir_data.to_compact_json().as_bytes());
-    let fs_id_2 = server::crypto::fs_id::sha1_hex(dir_data.to_compact_json().as_bytes());
+    let fs_id_1 =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
+    let fs_id_2 =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
 
     // Same data must produce same fs_id
     assert_eq!(fs_id_1, fs_id_2, "fs_id must be deterministic");
@@ -559,8 +571,11 @@ async fn test_regression_fs_id_is_stable() {
         obj_type: 2, // wrong type (SEAF_METADATA_TYPE_LINK)
         version: 1,
     };
-    let fs_id_wrong =
-        server::crypto::fs_id::sha1_hex(dir_data_wrong_type.to_compact_json().as_bytes());
+    let fs_id_wrong = server::crypto::fs_id::sha1_hex(
+        serde_json::to_string(&dir_data_wrong_type)
+            .unwrap()
+            .as_bytes(),
+    );
     assert_ne!(
         fs_id_1, fs_id_wrong,
         "Different type values must produce different fs_ids"
@@ -666,8 +681,9 @@ async fn test_regression_pack_fs_binary_format() {
 
     // Upload a file fs object
     let file_data = make_file_fs_data(vec![random_hex_id()], 128);
-    let fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
-    let json = file_data.to_compact_json();
+    let fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+    let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
@@ -712,8 +728,9 @@ async fn test_regression_check_endpoints_accept_json_array() {
     // check-fs with JSON array
     let _existing = random_hex_id();
     let file_data = make_file_fs_data(vec![random_hex_id()], 64);
-    let fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
-    let json = file_data.to_compact_json();
+    let fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+    let json = serde_json::to_string(&file_data).unwrap();
     let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
@@ -761,8 +778,9 @@ async fn test_resolve_fs_id_root_path() {
 
     // Upload a file to create a real FS tree
     let file_data = make_file_fs_data(vec![block_id.clone()], 64);
-    let file_fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
-    let file_json = file_data.to_compact_json();
+    let file_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+    let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
     let root_dir = make_dir_fs_data(vec![DirEntryData {
@@ -773,8 +791,9 @@ async fn test_resolve_fs_id_root_path() {
         name: "f.txt".to_string(),
         size: 64,
     }]);
-    let root_fs_id = server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
-    let root_json = root_dir.to_compact_json();
+    let root_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+    let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
     // Upload via recv-fs
@@ -823,8 +842,9 @@ async fn test_resolve_fs_id_deep_path() {
 
     // Build: root -> sub/ -> nested.txt
     let file_data = make_file_fs_data(vec![block_id.clone()], 32);
-    let file_fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
-    let file_json = file_data.to_compact_json();
+    let file_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+    let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
     let sub_dir = make_dir_fs_data(vec![DirEntryData {
@@ -835,8 +855,9 @@ async fn test_resolve_fs_id_deep_path() {
         name: "nested.txt".to_string(),
         size: 32,
     }]);
-    let sub_fs_id = server::crypto::fs_id::sha1_hex(sub_dir.to_compact_json().as_bytes());
-    let sub_json = sub_dir.to_compact_json();
+    let sub_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&sub_dir).unwrap().as_bytes());
+    let sub_json = serde_json::to_string(&sub_dir).unwrap();
     let sub_compressed = pack_fs::compress_fs_data(sub_json.as_bytes()).unwrap();
 
     let root_dir = make_dir_fs_data(vec![DirEntryData {
@@ -847,8 +868,9 @@ async fn test_resolve_fs_id_deep_path() {
         name: "sub".to_string(),
         size: 0,
     }]);
-    let root_fs_id = server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
-    let root_json = root_dir.to_compact_json();
+    let root_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+    let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
     // Upload via recv-fs
@@ -894,8 +916,9 @@ async fn test_resolve_fs_id_nonexistent_segment() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
 
     let root_dir = make_dir_fs_data(vec![]);
-    let root_fs_id = server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
-    let root_json = root_dir.to_compact_json();
+    let root_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+    let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();

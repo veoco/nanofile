@@ -1,7 +1,7 @@
 mod common;
 
+use base::common::CommitData;
 use common::{TestServer, create_test_user, get_sync_token};
-use server::serialization::commit_json::CommitData;
 
 fn random_hex_id() -> String {
     use sha1::{Digest, Sha1};
@@ -32,7 +32,7 @@ async fn test_commit_serialization_types() {
         version: 1,
     };
 
-    let json = commit.to_compact_json();
+    let json = serde_json::to_string(&commit).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
     assert_eq!(parsed["ctime"].as_i64().unwrap(), 1700000000);
@@ -63,7 +63,7 @@ async fn test_commit_serialization_null() {
         version: 1,
     };
 
-    let json = commit.to_compact_json();
+    let json = serde_json::to_string(&commit).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
     assert!(parsed["parent_id"].is_null());
@@ -94,7 +94,7 @@ async fn test_commit_serialization_optional_fields() {
         version: 1,
     };
 
-    let json = commit.to_compact_json();
+    let json = serde_json::to_string(&commit).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
     assert!(!parsed["parent_id"].is_null());
@@ -130,7 +130,7 @@ async fn test_commit_roundtrip() {
         version: 2,
     };
 
-    let json = commit.to_compact_json();
+    let json = serde_json::to_string(&commit).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
     let roundtripped: CommitData = serde_json::from_value(parsed).unwrap();
@@ -166,15 +166,15 @@ async fn test_compute_commit_id() {
         version: 1,
     };
 
-    let commit_id = commit.compute_commit_id();
+    let commit_id = server::domain::commit::compute_commit_id(&commit);
     assert_eq!(commit_id.len(), 40);
 
-    let commit_id2 = commit.compute_commit_id();
+    let commit_id2 = server::domain::commit::compute_commit_id(&commit);
     assert_eq!(commit_id, commit_id2, "commit_id should be deterministic");
 
     let mut commit2 = commit.clone();
     commit2.description = "different description".to_string();
-    let commit_id3 = commit2.compute_commit_id();
+    let commit_id3 = server::domain::commit::compute_commit_id(&commit2);
     assert_ne!(
         commit_id, commit_id3,
         "different data should produce different commit_id"
@@ -218,7 +218,7 @@ async fn test_put_get_commit_raw_json() {
         version: 1,
     };
 
-    let json_str = commit_data.to_compact_json();
+    let json_str = serde_json::to_string(&commit_data).unwrap();
 
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit_id, json_str.into_bytes())

@@ -15,7 +15,7 @@ use crate::error::AppError;
 use crate::fs::service::fileops::{self as fops_svc};
 use crate::repository::Repositories;
 use crate::sanitize::safe_normalize_path;
-use crate::serialization::fs_json::DirEntryData;
+use base::common::DirEntryData;
 
 /// Read and parse an FsDirData object from the fs_objects table.
 #[allow(dead_code)]

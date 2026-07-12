@@ -15,7 +15,7 @@ use crate::common::{EMPTY_SHA1, S_IFDIR};
 use crate::error::AppError;
 use crate::repo::download::Downloader;
 use crate::repo::fs_tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
-use crate::serialization::fs_json::FsFileData;
+use base::common::FsFileData;
 
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};

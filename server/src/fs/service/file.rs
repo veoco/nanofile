@@ -10,7 +10,7 @@ use crate::repo::file_ops::FileOps;
 use crate::repo::trash;
 use crate::repository::Repositories;
 use crate::serialization::S_IFREG;
-use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+use base::common::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 
 /// Parsed upload data, extracted from multipart at the handler layer.
 pub struct UploadedFile {
@@ -725,7 +725,7 @@ impl FileService {
             obj_type: 1,
             version: 1,
         };
-        let file_fs_id = file_fs_data.compute_and_store(db, repo_id).await?;
+        let file_fs_id = crate::domain::fs::store_file_data(db, repo_id, &file_fs_data).await?;
 
         let parent_fs_id = if parent_path == "/" {
             match get_head_root_id_no_err(&self.repos, repo_id).await? {
@@ -736,7 +736,7 @@ impl FileService {
                         obj_type: SEAF_METADATA_TYPE_DIR,
                         version: 1,
                     };
-                    empty_dir.compute_and_store(db, repo_id).await?
+                    crate::domain::fs::store_dir_data(db, repo_id, &empty_dir).await?
                 }
             }
         } else {

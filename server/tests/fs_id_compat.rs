@@ -1,4 +1,4 @@
-use server::serialization::fs_json::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+use base::common::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 
 /// Verify that FsFileData JSON serialization produces alphabetically sorted
 /// keys matching seafile C's jansson json_dumps(object, JSON_SORT_KEYS).
@@ -15,7 +15,7 @@ fn test_fs_file_data_json_sorted_keys() {
         obj_type: 1,
         version: 1,
     };
-    let json = data.to_compact_json();
+    let json = serde_json::to_string(&data).unwrap();
     // Keys must be in alphabetical order: block_ids, size, type, version
     assert!(
         json.starts_with("{\"block_ids\":"),
@@ -39,7 +39,7 @@ fn test_fs_dir_data_json_sorted_keys() {
         obj_type: SEAF_METADATA_TYPE_DIR,
         version: 1,
     };
-    let json = data.to_compact_json();
+    let json = serde_json::to_string(&data).unwrap();
     // Keys must be in alphabetical order: dirents, type, version
     assert!(
         json.starts_with("{\"dirents\":"),
@@ -60,8 +60,8 @@ fn test_fs_data_id_is_deterministic() {
         obj_type: SEAF_METADATA_TYPE_DIR,
         version: 1,
     };
-    let json1 = data.to_compact_json();
-    let json2 = data.to_compact_json();
+    let json1 = serde_json::to_string(&data).unwrap();
+    let json2 = serde_json::to_string(&data).unwrap();
     assert_eq!(json1, json2, "to_compact_json must be deterministic");
 
     let id1 = server::crypto::fs_id::sha1_hex(json1.as_bytes());
@@ -83,7 +83,7 @@ fn test_store_fs_dir_object_empty_dir_returns_emty_sha1() {
         obj_type: SEAF_METADATA_TYPE_DIR,
         version: 1,
     };
-    let json = empty_dir.to_compact_json();
+    let json = serde_json::to_string(&empty_dir).unwrap();
     let json_hash = server::crypto::fs_id::sha1_hex(json.as_bytes());
     // Proving the point: the hash of empty dir JSON is NOT all zeros
     assert_ne!(
@@ -103,9 +103,9 @@ fn test_file_data_compute_fs_id_matches_json_hash() {
         obj_type: 1,
         version: 1,
     };
-    let json = data.to_compact_json();
+    let json = serde_json::to_string(&data).unwrap();
     let expected = server::crypto::fs_id::sha1_hex(json.as_bytes());
-    let actual = server::crypto::fs_id::sha1_hex(data.to_compact_json().as_bytes());
+    let actual = server::crypto::fs_id::sha1_hex(serde_json::to_string(&data).unwrap().as_bytes());
     assert_eq!(
         actual, expected,
         "compute_fs_id must match sha1_hex of JSON"
@@ -119,9 +119,9 @@ fn test_dir_data_compute_fs_id_matches_json_hash() {
         obj_type: SEAF_METADATA_TYPE_DIR,
         version: 1,
     };
-    let json = data.to_compact_json();
+    let json = serde_json::to_string(&data).unwrap();
     let expected = server::crypto::fs_id::sha1_hex(json.as_bytes());
-    let actual = server::crypto::fs_id::sha1_hex(data.to_compact_json().as_bytes());
+    let actual = server::crypto::fs_id::sha1_hex(serde_json::to_string(&data).unwrap().as_bytes());
     assert_eq!(
         actual, expected,
         "compute_fs_id must match sha1_hex of JSON"

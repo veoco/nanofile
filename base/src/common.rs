@@ -46,3 +46,73 @@ pub struct DirEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modifier_contact_email: Option<String>,
 }
+
+// ── FS object types (Seafile storage format) ──────────────────────────────
+
+/// A single entry in a directory listing (storage format).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DirEntryData {
+    pub id: String,
+    pub mode: i32,
+    /// Who last modified this entry. Only included for files in seafile's
+    /// format. May be missing in FS objects synced from seaf-daemon.
+    #[serde(default)]
+    pub modifier: String,
+    pub mtime: i64,
+    pub name: String,
+    /// Only included for files in seafile's format.
+    /// May be missing for directory entries from seaf-daemon.
+    #[serde(default)]
+    pub size: i64,
+}
+
+/// Directory FS object (storage format stored in fs_objects.data as JSON).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FsDirData {
+    pub dirents: Vec<DirEntryData>,
+    #[serde(rename = "type")]
+    pub obj_type: i32,
+    pub version: i32,
+}
+
+/// File FS object (storage format stored in fs_objects.data as JSON).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FsFileData {
+    pub block_ids: Vec<String>,
+    pub size: i64,
+    #[serde(rename = "type")]
+    pub obj_type: i32,
+    pub version: i32,
+}
+
+/// Commit metadata (storage format).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CommitData {
+    pub commit_id: String,
+    pub repo_id: String,
+    pub root_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub creator_name: String,
+    pub creator: String,
+    pub description: String,
+    pub ctime: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub second_parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_desc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enc_version: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub magic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    pub version: i32,
+}

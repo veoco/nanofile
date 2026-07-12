@@ -55,7 +55,7 @@ impl GcManager {
         if let Some(obj) = fs_obj
             && obj.obj_type == 3
         {
-            let dir_data: crate::serialization::fs_json::FsDirData =
+            let dir_data: base::common::FsDirData =
                 serde_json::from_str(&obj.data).map_err(|e| AppError::internal(e.to_string()))?;
             for entry in &dir_data.dirents {
                 Box::pin(Self::collect_fs_ids(repos, &entry.id, collected)).await?;

@@ -1,10 +1,11 @@
 use crate::crypto::random_key::encrypt_block;
+use crate::domain;
 use crate::entity::{commit, repo};
 use crate::error::AppError;
 use crate::events;
 use crate::repository::Repositories;
-use crate::serialization::fs_json::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use crate::storage::DynBlockStorage;
+use base::common::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use sea_orm::DatabaseConnection;
 
 /// Sentinel value indicating that no ancestor chain was pre-computed.
@@ -64,7 +65,7 @@ impl FileOps {
             obj_type: 1,
             version: 1,
         };
-        let file_fs_id = file_fs_data.compute_and_store(db, repo_id).await?;
+        let file_fs_id = domain::fs::store_file_data(db, repo_id, &file_fs_data).await?;
 
         // Resolve the parent directory and build an ancestor chain for
         // walk_up_ancestors to avoid O(d²) re-resolution.
@@ -84,7 +85,10 @@ impl FileOps {
                     obj_type: SEAF_METADATA_TYPE_DIR,
                     version: 1,
                 };
-                (empty_dir.compute_and_store(db, repo_id).await?, Vec::new())
+                (
+                    domain::fs::store_dir_data(db, repo_id, &empty_dir).await?,
+                    Vec::new(),
+                )
             }
         } else {
             Self::resolve_fs_id_chain(repos, repo_id, parent_path).await?
@@ -113,7 +117,7 @@ impl FileOps {
             obj_type: SEAF_METADATA_TYPE_DIR,
             version: 1,
         };
-        let new_dir_fs_id = new_dir_data.compute_and_store(db, repo_id).await?;
+        let new_dir_fs_id = domain::fs::store_dir_data(db, repo_id, &new_dir_data).await?;
 
         // Walk up to root, updating all ancestor directories
         let root_fs_id = if parent_path == "/" {
@@ -133,7 +137,7 @@ impl FileOps {
         let repo_model = repos.repo.find_by_id(repo_id).await?;
         let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
 
-        let commit_data = crate::serialization::commit_json::CommitData {
+        let commit_data = base::common::CommitData {
             commit_id: String::new(),
             repo_id: repo_id.to_string(),
             root_id: root_fs_id.clone(),
@@ -152,7 +156,7 @@ impl FileOps {
             key: None,
             version: 1,
         };
-        let commit_id = commit_data.compute_commit_id();
+        let commit_id = domain::commit::compute_commit_id(&commit_data);
 
         let commit_model = commit::ActiveModel {
             id: sea_orm::NotSet,
@@ -261,7 +265,8 @@ impl FileOps {
             }
 
             // Create new fs_object for ancestor
-            let new_ancestor_fs_id = ancestor_data.compute_and_store(db, repo_id).await?;
+            let new_ancestor_fs_id =
+                domain::fs::store_dir_data(db, repo_id, &ancestor_data).await?;
 
             // If we reached root, return
             if parent_path == "/" {
@@ -388,7 +393,7 @@ impl FileOps {
         let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
-        let new_parent_fs_id = parent_data.compute_and_store(db, repo_id).await?;
+        let new_parent_fs_id = domain::fs::store_dir_data(db, repo_id, &parent_data).await?;
 
         let root_fs_id = if parent_path == "/" {
             new_parent_fs_id.clone()
@@ -427,7 +432,7 @@ impl FileOps {
         let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
-        let new_parent_fs_id = parent_data.compute_and_store(db, repo_id).await?;
+        let new_parent_fs_id = domain::fs::store_dir_data(db, repo_id, &parent_data).await?;
 
         let root_fs_id = if parent_path == "/" {
             new_parent_fs_id.clone()
@@ -460,7 +465,7 @@ impl FileOps {
         let repo_model = repos.repo.find_by_id(repo_id).await?;
         let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
 
-        let commit_data = crate::serialization::commit_json::CommitData {
+        let commit_data = base::common::CommitData {
             commit_id: String::new(),
             repo_id: repo_id.to_string(),
             root_id: root_fs_id.to_string(),
@@ -479,7 +484,7 @@ impl FileOps {
             key: None,
             version: 1,
         };
-        let commit_id = commit_data.compute_commit_id();
+        let commit_id = domain::commit::compute_commit_id(&commit_data);
 
         let commit_model = commit::ActiveModel {
             id: sea_orm::NotSet,

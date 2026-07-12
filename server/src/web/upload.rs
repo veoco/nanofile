@@ -1274,15 +1274,15 @@ pub async fn upload_blks_api(
         }
 
         // Create FsFileData from block IDs
-        let file_fs_data = crate::serialization::fs_json::FsFileData {
+        let file_fs_data = base::common::FsFileData {
             block_ids: block_ids.clone(),
             size: file_size,
             obj_type: 1,
             version: 1,
         };
-        let file_fs_id = file_fs_data
-            .compute_and_store(state.db.as_ref(), &info.repo_id)
-            .await?;
+        let file_fs_id =
+            crate::domain::fs::store_file_data(state.db.as_ref(), &info.repo_id, &file_fs_data)
+                .await?;
 
         // Update directory tree and create commit
         let relative_path = fields
@@ -1335,7 +1335,7 @@ pub async fn upload_blks_api(
                 if dirents.iter().any(|d| d.name == entry_name) {
                     let unique_name =
                         crate::common::util::generate_unique_filename(dirents, &entry_name);
-                    dirents.push(crate::serialization::fs_json::DirEntryData {
+                    dirents.push(base::common::DirEntryData {
                         id: file_fs_id.clone(),
                         mode: crate::serialization::S_IFREG,
                         modifier: modifier_name.clone(),
@@ -1344,7 +1344,7 @@ pub async fn upload_blks_api(
                         size: file_size,
                     });
                 } else {
-                    dirents.push(crate::serialization::fs_json::DirEntryData {
+                    dirents.push(base::common::DirEntryData {
                         id: file_fs_id.clone(),
                         mode: crate::serialization::S_IFREG,
                         modifier: modifier_name.clone(),

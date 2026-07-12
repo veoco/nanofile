@@ -4,7 +4,7 @@ use sea_orm::{
 
 use crate::entity::{commit, repo};
 use crate::repository::Repositories;
-use crate::serialization::fs_json::FsDirData;
+use base::common::FsDirData;
 
 #[allow(dead_code)]
 pub struct Versioning;

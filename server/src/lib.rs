@@ -30,6 +30,7 @@ pub mod admin;
 pub mod routes;
 
 pub mod auth;
+pub mod domain;
 pub mod fs;
 pub mod indexer;
 pub mod notification;

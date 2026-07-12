@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::entity::{commit, repo};
-use crate::serialization::fs_json::DirEntryData;
 use base::AppError;
+use base::common::DirEntryData;
 
 /// Extract a field from a POST body probing JSON, form-urlencoded,
 /// then multipart/form-data in order.

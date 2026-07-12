@@ -11,7 +11,7 @@ use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
 use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
-use crate::serialization::fs_json::DirEntryData;
+use base::common::DirEntryData;
 
 /// A single item recorded during batch delete.
 #[derive(Debug, Clone)]

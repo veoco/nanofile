@@ -8,7 +8,7 @@ use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
 use crate::repository::Repositories;
 use crate::serialization::S_IFDIR;
-use crate::serialization::fs_json::DirEntryData;
+use base::common::DirEntryData;
 
 /// Parse colon-separated file_names into a Vec<String>.
 pub fn parse_file_names(s: &str) -> Vec<String> {

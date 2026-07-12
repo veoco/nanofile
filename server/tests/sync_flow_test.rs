@@ -1,8 +1,8 @@
 mod common;
 
+use base::common::CommitData;
+use base::common::{DirEntryData, FsDirData, FsFileData};
 use common::{TestServer, create_test_user, get_sync_token};
-use server::serialization::commit_json::CommitData;
-use server::serialization::fs_json::{DirEntryData, FsDirData, FsFileData};
 use server::serialization::pack_fs;
 
 fn random_hex_id() -> String {
@@ -58,8 +58,9 @@ async fn test_full_upload_flow() {
         obj_type: 1,
         version: 1,
     };
-    let file_fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
-    let file_json = file_data.to_compact_json();
+    let file_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+    let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
     let root_dir = FsDirData {
@@ -74,8 +75,9 @@ async fn test_full_upload_flow() {
         obj_type: 3,
         version: 1,
     };
-    let root_fs_id = server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
-    let root_json = root_dir.to_compact_json();
+    let root_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+    let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
     let mut fs_pack = Vec::new();
@@ -132,7 +134,7 @@ async fn test_full_upload_flow() {
         key: None,
         version: 1,
     };
-    let json_str = commit_data.to_compact_json();
+    let json_str = serde_json::to_string(&commit_data).unwrap();
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit_id, json_str.into_bytes())
         .await;
@@ -235,8 +237,9 @@ async fn test_incremental_upload() {
         obj_type: 1,
         version: 1,
     };
-    let file_fs_id = server::crypto::fs_id::sha1_hex(file_data.to_compact_json().as_bytes());
-    let file_json = file_data.to_compact_json();
+    let file_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
+    let file_json = serde_json::to_string(&file_data).unwrap();
     let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
 
     let root_dir = FsDirData {
@@ -251,8 +254,9 @@ async fn test_incremental_upload() {
         obj_type: 3,
         version: 1,
     };
-    let root_fs_id = server::crypto::fs_id::sha1_hex(root_dir.to_compact_json().as_bytes());
-    let root_json = root_dir.to_compact_json();
+    let root_fs_id =
+        server::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
+    let root_json = serde_json::to_string(&root_dir).unwrap();
     let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
 
     let mut fs_pack = Vec::new();
@@ -287,7 +291,7 @@ async fn test_incremental_upload() {
         key: None,
         version: 1,
     };
-    let json_str = commit_data.to_compact_json();
+    let json_str = serde_json::to_string(&commit_data).unwrap();
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit_id, json_str.into_bytes())
         .await;

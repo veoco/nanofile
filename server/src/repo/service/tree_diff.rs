@@ -4,7 +4,7 @@ use crate::common::EMPTY_SHA1;
 use crate::error::AppError;
 use crate::repo::fs_tree::read_fs_dir_data;
 use crate::repository::Repositories;
-use crate::serialization::fs_json::DirEntryData;
+use base::common::DirEntryData;
 
 /// A single file-system change detected by diffing two tree snapshots.
 #[derive(Debug, Clone)]

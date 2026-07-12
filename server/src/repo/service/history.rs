@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::error::AppError;
 use crate::repository::Repositories;
-use crate::serialization::fs_json::{FsDirData, FsFileData};
 use crate::serialization::{S_IFDIR, S_IFREG};
+use base::common::{FsDirData, FsFileData};
 
 #[derive(Serialize)]
 pub struct HistoryChangesResponse {

@@ -3,8 +3,8 @@ use sea_orm::DatabaseConnection;
 use crate::crypto::random_key::decrypt_block;
 use crate::error::AppError;
 use crate::repository::Repositories;
-use crate::serialization::fs_json::FsFileData;
 use crate::storage::DynBlockStorage;
+use base::common::FsFileData;
 
 pub struct Downloader;
 

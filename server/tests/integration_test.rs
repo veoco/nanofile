@@ -1,7 +1,7 @@
 mod common;
 
+use base::common::CommitData;
 use common::{TestFixture, TestServer, create_test_user, get_sync_token};
-use server::serialization::commit_json::CommitData;
 use server::serialization::pack_fs;
 
 /// Root-level file/folder leak test — directly tests the FS tree after
