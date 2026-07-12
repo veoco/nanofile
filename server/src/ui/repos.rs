@@ -21,7 +21,7 @@ pub struct RepoListTemplate {
     pub active_page: &'static str,
     pub user_id: i32,
     pub csrf_token: String,
-    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
 
@@ -67,9 +67,9 @@ pub async fn list_repos(
     let csrf_token =
         crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
 
-    let left_panel_repos: Vec<crate::repo::LeftPanelRepo> = repos
+    let left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo> = repos
         .iter()
-        .map(|r| crate::repo::LeftPanelRepo {
+        .map(|r| crate::service::repo::service::LeftPanelRepo {
             id: r.id.clone(),
             name: r.name.clone(),
             size_display: r.size_display.clone(),

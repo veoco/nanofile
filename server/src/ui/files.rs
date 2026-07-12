@@ -36,7 +36,7 @@ pub struct FileBrowserTemplate {
     /// "all" = render both views (full page), "list" = only list, "grid" = only grid
     pub render_view: &'static str,
     pub active_page: &'static str,
-    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
     /// Maximum upload file size in MB, from server config.
     pub max_upload_size_mb: u64,
@@ -79,7 +79,7 @@ pub struct PreviewTextTemplate {
     pub parent_path: String,
     pub size_display: String,
     pub active_page: &'static str,
-    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
 
@@ -96,7 +96,7 @@ pub struct PreviewImageTemplate {
     pub parent_path: String,
     pub size_display: String,
     pub active_page: &'static str,
-    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
 
@@ -618,7 +618,8 @@ async fn file_browser_inner(
         Ok(Html(html).into_response())
     } else {
         let left_panel_repos =
-            crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
+            crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id)
+                .await?;
         let current_repo_id = Some(repo_id.clone());
         let tpl = FileBrowserTemplate {
             urls: crate::static_assets::template_urls(),
@@ -712,7 +713,8 @@ async fn serve_file(
         let parent_path = raw_parent.trim_start_matches('/').to_string();
 
         let left_panel_repos =
-            crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
+            crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id)
+                .await?;
         let tpl = PreviewImageTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email,
@@ -757,7 +759,8 @@ async fn serve_file(
             .unwrap_or_else(|_| "?".to_string());
 
         let left_panel_repos =
-            crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
+            crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id)
+                .await?;
         let tpl = PreviewTextTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email,

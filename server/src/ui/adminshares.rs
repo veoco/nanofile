@@ -42,7 +42,7 @@ pub struct AdminSharesTemplate {
     pub upload_links: Vec<AdminUploadLinkInfo>,
     pub active_page: &'static str,
     pub active_tab: String,
-    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
 
@@ -209,11 +209,15 @@ pub async fn list_all_shares(
         &user.session_token,
     ));
 
-    let left_panel_repos =
-        match crate::repo::load_left_panel_repos(&state.repos, user.user_id).await {
-            Ok(r) => r,
-            Err(e) => return AppError::internal(e.to_string()).into_response(),
-        };
+    let left_panel_repos = match crate::service::repo::service::load_left_panel_repos(
+        &state.repos,
+        user.user_id,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return AppError::internal(e.to_string()).into_response(),
+    };
 
     let tpl = AdminSharesTemplate {
         urls: crate::static_assets::template_urls(),

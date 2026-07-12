@@ -18,7 +18,7 @@ pub struct ActivitiesTemplate {
     pub is_admin: bool,
     pub activities: Vec<ActivityView>,
     pub active_page: &'static str,
-    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
 
@@ -167,7 +167,11 @@ pub async fn activities_page(
         is_admin: user.is_admin,
         activities,
         active_page: "activities",
-        left_panel_repos: crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?,
+        left_panel_repos: crate::service::repo::service::load_left_panel_repos(
+            &state.repos,
+            user.user_id,
+        )
+        .await?,
         current_repo_id: None,
     };
 

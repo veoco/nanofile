@@ -42,7 +42,7 @@ pub struct TwoFactorTemplate {
     pub success: Option<String>,
     /// CSRF token for the disable form.
     pub csrf_token: Option<String>,
-    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
 
@@ -85,7 +85,8 @@ async fn render_page(
         &user.session_token,
     ));
 
-    let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let left_panel_repos =
+        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = TwoFactorTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email.clone(),

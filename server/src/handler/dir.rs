@@ -340,33 +340,6 @@ pub async fn delete_dirent_v21(
     Ok(Json(serde_json::json!({"success": true})))
 }
 
-pub async fn delete_dir_v21_handler(
-    access: RepoPathWrite,
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<V21DirQuery>,
-) -> Result<Response, AppError> {
-    let repo_id = &access.repo_id;
-
-    let path = query
-        .p
-        .as_deref()
-        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
-    let normalized = safe_normalize_path(path)
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-
-    let svc = state.dir_service();
-    svc.delete_dirent(
-        repo_id,
-        "dir",
-        &normalized,
-        &access.user.email,
-        access.user.user_id,
-    )
-    .await?;
-
-    Ok(Json(serde_json::json!({"success": true})).into_response())
-}
-
 pub async fn list_dir_v21(
     access: RepoPathRead,
     State(state): State<Arc<AppState>>,

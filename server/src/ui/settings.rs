@@ -30,7 +30,7 @@ pub struct SettingsTemplate {
     pub csrf_token: Option<String>,
     /// Whether the user has admin privileges.
     pub is_admin: bool,
-    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
 
@@ -45,7 +45,7 @@ pub struct DevicesTemplate {
     pub error: Option<String>,
     pub success: Option<String>,
     pub csrf_token: Option<String>,
-    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
 
@@ -98,7 +98,8 @@ pub async fn settings_page(
         &user.session_token,
     ));
 
-    let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let left_panel_repos =
+        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = SettingsTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email,
@@ -154,7 +155,8 @@ pub async fn change_password(
             &user.session_token,
         ));
         let left_panel_repos =
-            crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
+            crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id)
+                .await?;
         let tpl = SettingsTemplate {
             urls: crate::static_assets::template_urls(),
             user_email: user.email.clone(),
@@ -255,7 +257,8 @@ pub async fn devices_page(
         &state.csrf_secret,
         &user.session_token,
     ));
-    let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let left_panel_repos =
+        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
 
     let tpl = DevicesTemplate {
         urls: crate::static_assets::template_urls(),
@@ -383,7 +386,8 @@ async fn render_settings_error(
         &state.csrf_secret,
         &user.session_token,
     ));
-    let left_panel_repos = crate::repo::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let left_panel_repos =
+        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = SettingsTemplate {
         urls: crate::static_assets::template_urls(),
         user_email: user.email.clone(),

@@ -27,7 +27,7 @@ pub struct SysAdminTemplate {
     pub users: Vec<UserRow>,
     pub error: Option<String>,
     pub success: Option<String>,
-    pub left_panel_repos: Vec<crate::repo::LeftPanelRepo>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
 
@@ -60,11 +60,15 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
         &user.session_token,
     ));
 
-    let left_panel_repos =
-        match crate::repo::load_left_panel_repos(&state.repos, user.user_id).await {
-            Ok(r) => r,
-            Err(e) => return AppError::internal(e.to_string()).into_response(),
-        };
+    let left_panel_repos = match crate::service::repo::service::load_left_panel_repos(
+        &state.repos,
+        user.user_id,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return AppError::internal(e.to_string()).into_response(),
+    };
 
     let users: Vec<UserRow> = users_data
         .into_iter()

@@ -14,7 +14,6 @@ pub mod client_login;
 pub mod device_wipe;
 pub mod devices;
 pub mod dir;
-pub mod dir_v21;
 pub mod exif;
 pub mod file;
 pub mod fileops;

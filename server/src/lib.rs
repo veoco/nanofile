@@ -14,7 +14,6 @@ pub mod handler;
 pub mod indexer;
 pub mod middleware;
 pub mod notification;
-pub mod repo;
 pub mod repository;
 pub mod routes;
 pub mod sdoc;
