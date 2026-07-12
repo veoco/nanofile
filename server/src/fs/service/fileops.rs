@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::DatabaseConnection;
 
 use crate::activity_log;
 use crate::common::util::{generate_unique_filename, get_head_root_id};
@@ -91,8 +91,10 @@ impl FileOpsService {
         let names_to_delete = file_names.to_vec();
 
         // Record trash
-        let trash_head_commit_id: Option<String> = crate::entity::repo::Entity::find_by_id(repo_id)
-            .one(db)
+        let trash_head_commit_id: Option<String> = self
+            .repos
+            .repo
+            .find_by_id(repo_id)
             .await
             .ok()
             .flatten()

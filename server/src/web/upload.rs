@@ -9,12 +9,10 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::activity_log;
-use crate::entity::repo;
 use crate::error::AppError;
 use crate::repo::file_ops::FileOps;
 use crate::sharing::service::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
-use sea_orm::EntityTrait;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -25,8 +23,10 @@ async fn get_encryption_key_for_repo(
     repo_id: &str,
     user_id: i32,
 ) -> Result<Option<(Vec<u8>, Vec<u8>)>, AppError> {
-    let repo_model = repo::Entity::find_by_id(repo_id)
-        .one(state.db.as_ref())
+    let repo_model = state
+        .repos
+        .repo
+        .find_by_id(repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 

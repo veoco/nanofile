@@ -1,4 +1,4 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 use serde::Serialize;
 
 use crate::Config;
@@ -13,7 +13,7 @@ use crate::storage;
 
 /// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
     path: &str,
@@ -22,16 +22,17 @@ pub async fn resolve_entry_type_raw(
         return Ok("d".to_string());
     }
 
-    let repo_model = crate::entity::repo::Entity::find_by_id(repo_id)
-        .one(db)
+    let repo_model = repos
+        .repo
+        .find_by_id(repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
     let head_commit_id = repo_model
         .head_commit_id
         .ok_or_else(|| AppError::BadRequest("repo has no commits".into()))?;
-    let head_commit = crate::entity::commit::Entity::find()
-        .filter(crate::entity::commit::Column::CommitId.eq(&head_commit_id))
-        .one(db)
+    let head_commit = repos
+        .commit
+        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
         .await?
         .ok_or_else(|| AppError::Internal("head commit not found".into()))?;
 
@@ -216,16 +217,14 @@ pub async fn create_share_link(
 }
 
 pub async fn delete_share_link(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     token: &str,
     user_id: i32,
 ) -> Result<(), AppError> {
-    share_link::Entity::delete_many()
-        .filter(share_link::Column::Token.eq(token))
-        .filter(share_link::Column::CreatorId.eq(user_id))
-        .exec(db)
+    repos
+        .share_link
+        .delete_by_token_and_user(token, user_id)
         .await?;
-
     Ok(())
 }
 
@@ -288,14 +287,13 @@ pub async fn create_share_link_v21(
 }
 
 pub async fn delete_share_link_v21(
-    db: &DatabaseConnection,
+    repos: &Repositories,
     token: &str,
     user_id: i32,
 ) -> Result<bool, AppError> {
-    let result = share_link::Entity::delete_many()
-        .filter(share_link::Column::Token.eq(token))
-        .filter(share_link::Column::CreatorId.eq(user_id))
-        .exec(db)
+    let result = repos
+        .share_link
+        .delete_by_token_and_user(token, user_id)
         .await?;
     Ok(result.rows_affected > 0)
 }

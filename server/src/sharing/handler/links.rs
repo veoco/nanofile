@@ -119,7 +119,7 @@ pub async fn delete_share_link_v21(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let found = share::delete_share_link_v21(state.db.as_ref(), &token, auth.user_id).await?;
+    let found = share::delete_share_link_v21(&state.repos, &token, auth.user_id).await?;
     if !found {
         return Err(AppError::NotFound("share link not found".into()));
     }
@@ -185,6 +185,7 @@ pub async fn create_upload_link_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let token = link::create_upload_link_v21(
         state.db.as_ref(),
+        &state.repos,
         &state.config,
         &req.repo_id,
         &req.path,

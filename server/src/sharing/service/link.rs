@@ -43,7 +43,8 @@ pub async fn list_upload_links(
 }
 
 pub async fn create_upload_link(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
+    repos: &Repositories,
     config: &Config,
     repo_id: &str,
     path: &str,
@@ -68,7 +69,7 @@ pub async fn create_upload_link(
         view_cnt: Set(0i64),
         description: Set(None),
     };
-    upload_link::Entity::insert(model).exec(db).await?;
+    repos.upload_link.insert(model).await?;
 
     Ok(UploadLinkInfo {
         token: token.clone(),
@@ -144,7 +145,8 @@ pub async fn list_upload_links_for_path(
 }
 
 pub async fn create_upload_link_v21(
-    db: &DatabaseConnection,
+    _db: &DatabaseConnection,
+    repos: &Repositories,
     config: &Config,
     repo_id: &str,
     path: &str,
@@ -158,20 +160,21 @@ pub async fn create_upload_link_v21(
 
     let password_hash = password.map(|p| hash_password(&p, config.auth.password_hash_iterations));
 
-    upload_link::Entity::insert(upload_link::ActiveModel {
-        id: sea_orm::NotSet,
-        repo_id: Set(repo_id.to_string()),
-        creator_id: Set(creator_id),
-        path: Set(path.to_string()),
-        token: Set(token.clone()),
-        password: Set(password_hash),
-        expires_at: Set(expire_days.map(|d| now + d * 86400)),
-        created_at: Set(now),
-        view_cnt: Set(0i64),
-        description: Set(description),
-    })
-    .exec(db)
-    .await?;
+    repos
+        .upload_link
+        .insert(upload_link::ActiveModel {
+            id: sea_orm::NotSet,
+            repo_id: Set(repo_id.to_string()),
+            creator_id: Set(creator_id),
+            path: Set(path.to_string()),
+            token: Set(token.clone()),
+            password: Set(password_hash),
+            expires_at: Set(expire_days.map(|d| now + d * 86400)),
+            created_at: Set(now),
+            view_cnt: Set(0i64),
+            description: Set(description),
+        })
+        .await?;
 
     Ok(token)
 }

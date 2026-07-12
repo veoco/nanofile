@@ -73,7 +73,7 @@ pub async fn delete_share_link(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<(), AppError> {
-    share::delete_share_link(state.db.as_ref(), &token, auth.user_id).await?;
+    share::delete_share_link(&state.repos, &token, auth.user_id).await?;
     Ok(())
 }
 
