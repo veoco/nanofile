@@ -199,6 +199,90 @@ impl SyncService {
         Ok(())
     }
 
+    /// Insert a commit if it doesn't already exist.
+    pub async fn put_commit(&self, data: &base::common::CommitData) -> Result<(), AppError> {
+        let existing = self
+            .repos
+            .commit
+            .find_by_repo_and_commit_id(&data.repo_id, &data.commit_id)
+            .await?;
+        if existing.is_none() {
+            let model = infra::entity::commit::ActiveModel {
+                id: sea_orm::NotSet,
+                repo_id: sea_orm::Set(data.repo_id.clone()),
+                commit_id: sea_orm::Set(data.commit_id.clone()),
+                root_id: sea_orm::Set(data.root_id.clone()),
+                parent_id: sea_orm::Set(data.parent_id.clone()),
+                second_parent_id: sea_orm::Set(data.second_parent_id.clone()),
+                creator_name: sea_orm::Set(data.creator_name.clone()),
+                description: sea_orm::Set(data.description.clone()),
+                ctime: sea_orm::Set(data.ctime),
+                version: sea_orm::Set(data.version as i8),
+            };
+            self.repos.commit.insert(model).await?;
+        }
+        Ok(())
+    }
+
+    /// Find a commit by repo_id and commit_id.
+    pub async fn find_commit(
+        &self,
+        repo_id: &str,
+        commit_id: &str,
+    ) -> Result<Option<infra::entity::commit::Model>, AppError> {
+        self.repos
+            .commit
+            .find_by_repo_and_commit_id(repo_id, commit_id)
+            .await
+    }
+
+    /// Check if a repo exists by ID.
+    pub async fn repo_exists(&self, repo_id: &str) -> Result<bool, AppError> {
+        Ok(self.repos.repo.find_by_id(repo_id).await?.is_some())
+    }
+
+    /// Find a repo model by ID.
+    pub async fn find_repo(
+        &self,
+        repo_id: &str,
+    ) -> Result<Option<infra::entity::repo::Model>, AppError> {
+        self.repos.repo.find_by_id(repo_id).await
+    }
+
+    /// Update repo head commit.
+    pub async fn update_head_commit(
+        &self,
+        repo_id: &str,
+        head_commit_id: Option<String>,
+    ) -> Result<(), AppError> {
+        self.repos
+            .repo
+            .update_head_commit(repo_id, head_commit_id)
+            .await
+    }
+
+    /// Check if a repo is a wiki repo.
+    pub async fn is_wiki_repo(&self, repo_id: &str) -> Result<bool, AppError> {
+        Ok(self.repos.wiki.find_by_repo_id(repo_id).await?.is_some())
+    }
+
+    /// Check if a parent commit exists (not the null commit).
+    pub async fn parent_commit_exists(
+        &self,
+        repo_id: &str,
+        parent_id: &str,
+    ) -> Result<bool, AppError> {
+        if parent_id == "0000000000000000000000000000000000000000" {
+            return Ok(true);
+        }
+        Ok(self
+            .repos
+            .commit
+            .find_by_repo_and_commit_id(repo_id, parent_id)
+            .await?
+            .is_some())
+    }
+
     async fn get_or_create_sync_token(
         &self,
         repo_id: &str,

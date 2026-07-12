@@ -16,19 +16,14 @@ use base::common::{DirEntryData, FsDirData, FsFileData};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::EMPTY_SHA1;
-use infra::entity::commit;
 use infra::serialization::S_IFDIR;
 
 /// Result of block checking and size delta computation.
 struct CheckResult {
-    /// Relative paths of files with missing blocks.
     missing: Vec<String>,
-    /// Size delta between the base tree and the new tree.
-    /// Positive = files grew, negative = files shrank/deleted.
     size_delta: i64,
 }
 
-/// Paths that should be excluded from activity logging (matching seafevents).
 const EXCLUDED_ACTIVITY_PREFIXES: &[&str] = &["/_Internal", "/images/sdoc", "/images/auto-upload"];
 const MAX_BRANCH_RETRY: u32 = 3;
 
@@ -41,9 +36,6 @@ pub struct HeadCommitResponse {
 
 pub fn commit_routes() -> Router<Arc<AppState>> {
     Router::new()
-        // Both with and without trailing slash — seaf-daemon uses HEAD/ for
-        // update_branch (PUT .../commit/HEAD/?head=...) but HEAD for
-        // get_head_commit (GET .../commit/HEAD).
         .route(
             "/{repo_id}/commit/HEAD",
             axum::routing::get(get_head_commit).put(update_branch),
@@ -63,10 +55,9 @@ pub async fn get_head_commit(
     _auth: SyncAuth,
     Path(repo_id): Path<String>,
 ) -> Result<Json<HeadCommitResponse>, AppError> {
-    let repo_model = state
-        .repos
-        .repo
-        .find_by_id(&repo_id)
+    let svc = state.sync_service();
+    let repo_model = svc
+        .find_repo(&repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
@@ -85,20 +76,12 @@ pub async fn get_commit(
     _auth: SyncAuth,
     Path((repo_id, commit_id)): Path<(String, String)>,
 ) -> Result<Vec<u8>, AppError> {
-    // Fetch repo metadata early — the seaf-daemon uses repo_name/repo_desc
-    // from the commit JSON (via seaf_repo_from_commit) to populate the local
-    // library name. Without these fields the library shows as "(unnamed)".
-    let repo_model = state
-        .repos
-        .repo
-        .find_by_id(&repo_id)
+    let svc = state.sync_service();
+    let repo_model = svc
+        .find_repo(&repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-    // The zero commit ID represents an empty repository — return a minimal
-    // placeholder commit so the client can proceed with the initial sync.
-    // Include repo_name/repo_desc so the daemon can initialize its local
-    // library name from the commit (via seaf_repo_from_commit).
     if commit_id == "0000000000000000000000000000000000000000" {
         let empty_commit = base::common::CommitData {
             commit_id: commit_id.clone(),
@@ -127,10 +110,8 @@ pub async fn get_commit(
         return Ok(json.into_bytes());
     }
 
-    let commit_model = state
-        .repos
-        .commit
-        .find_by_repo_and_commit_id(&repo_id, &commit_id)
+    let commit_model = svc
+        .find_commit(&repo_id, &commit_id)
         .await?
         .ok_or_else(|| AppError::NotFound("commit not found".into()))?;
 
@@ -165,7 +146,7 @@ pub async fn get_commit(
 pub async fn put_commit(
     State(state): State<Arc<AppState>>,
     _auth: SyncAuth,
-    Path((repo_id, commit_id)): Path<(String, String)>,
+    Path((repo_id, _commit_id)): Path<(String, String)>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
     let max_bytes = (state.config.server.max_upload_size_mb * 1024 * 1024) as usize;
@@ -180,28 +161,7 @@ pub async fn put_commit(
         return Err(AppError::BadRequest("repo_id mismatch".into()));
     }
 
-    let existing = state
-        .repos
-        .commit
-        .find_by_repo_and_commit_id(&repo_id, &commit_id)
-        .await?;
-
-    if existing.is_none() {
-        let commit_model = commit::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: sea_orm::Set(commit_data.repo_id),
-            commit_id: sea_orm::Set(commit_data.commit_id),
-            root_id: sea_orm::Set(commit_data.root_id),
-            parent_id: sea_orm::Set(commit_data.parent_id),
-            second_parent_id: sea_orm::Set(commit_data.second_parent_id),
-            creator_name: sea_orm::Set(commit_data.creator_name),
-            description: sea_orm::Set(commit_data.description),
-            ctime: sea_orm::Set(commit_data.ctime),
-            version: sea_orm::Set(commit_data.version as i8),
-        };
-        state.repos.commit.insert(commit_model).await?;
-    }
-
+    state.sync_service().put_commit(&commit_data).await?;
     Ok(StatusCode::OK)
 }
 
@@ -215,16 +175,10 @@ pub async fn update_branch(
         .get("head")
         .ok_or_else(|| AppError::BadRequest("missing head parameter".into()))?;
 
-    // Validate commit_id format (40 hex characters, case-insensitive).
-    // This matches seafile's is_object_id_valid() which uses
-    // strspn(id, "0123456789abcdefABCDEF") == 40.
     if new_head.len() != 40 || !new_head.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(AppError::BadRequest("invalid commit id".into()));
     }
 
-    // Permission check: verify write access to the repo.
-    // SyncAuth confirms the token is valid; this checks repo-level
-    // write permission (seafile-server put_update_branch_cb line 1323-1328).
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -232,25 +186,16 @@ pub async fn update_branch(
     )
     .await?;
 
-    // Read the new commit (checks existence + gets parent_id for conflict detection).
-    let new_commit = state
-        .repos
-        .commit
-        .find_by_repo_and_commit_id(&repo_id, new_head)
+    let svc = state.sync_service();
+    let new_commit = svc
+        .find_commit(&repo_id, new_head)
         .await?
         .ok_or_else(|| AppError::Internal("commit not found".into()))?;
 
-    // Verify all blocks referenced by the new commit exist on the server.
-    // Uses tree-diff against the parent commit so only changed files are checked.
-    // This matches seafile-server's check_blocks() which calls diff_trees()
-    // to compare base vs remote and only inspects files that differ.
     let base_root_id: Option<String> = if let Some(ref parent_id) = new_commit.parent_id
         && parent_id != "0000000000000000000000000000000000000000"
     {
-        state
-            .repos
-            .commit
-            .find_by_repo_and_commit_id(&repo_id, parent_id)
+        svc.find_commit(&repo_id, parent_id)
             .await?
             .map(|c| c.root_id)
     } else {
@@ -270,8 +215,6 @@ pub async fn update_branch(
         return Err(AppError::BlockMissing);
     }
 
-    // File lock check: verify no file in the commit is locked by another user.
-    // The daemon parses 403 + "File <path> is locked" as SYNC_ERROR_ID_FILE_LOCKED.
     infra::storage::check_commit_file_locks(
         state.db.as_ref(),
         &repo_id,
@@ -280,48 +223,25 @@ pub async fn update_branch(
     )
     .await?;
 
-    // Verify the parent commit exists. Seafile requires the base commit
-    // to be present on the server; a missing parent is a client error.
     if let Some(ref parent_id) = new_commit.parent_id
-        && parent_id != "0000000000000000000000000000000000000000"
+        && !svc.parent_commit_exists(&repo_id, parent_id).await?
     {
-        let parent_exists = state
-            .repos
-            .commit
-            .find_by_repo_and_commit_id(&repo_id, parent_id)
-            .await?
-            .is_some();
-        if !parent_exists {
-            return Err(AppError::BadRequest("parent commit not found".into()));
-        }
+        return Err(AppError::BadRequest("parent commit not found".into()));
     }
 
-    // CAS retry loop: re-read current HEAD and attempt update.
-    // Seafile's test_and_update_branch uses a DB transaction with
-    // SELECT ... FOR UPDATE. Since nanofile uses SQLite (serialized
-    // writes), a loop with re-read + conditional update is sufficient.
     let mut attempt: u32 = 0;
 
     loop {
         attempt += 1;
 
-        let current_head = state
-            .repos
-            .repo
-            .find_by_id(&repo_id)
+        let current_head = svc
+            .find_repo(&repo_id)
             .await?
             .ok_or_else(|| AppError::Internal("repo not found".into()))?
             .head_commit_id;
 
-        // Conflict detection: the new commit's parent MUST match the current
-        // HEAD (unless this is setting the same commit — which is idempotent).
-        //
-        // When there is no existing HEAD (current_head is None, meaning the
-        // repo was created via REST API without an initial commit), accept
-        // any first commit.
         let is_same_commit = current_head.as_deref() == Some(new_head.as_str());
         if is_same_commit {
-            // Idempotent: HEAD already points to this commit → success.
             if let Some(ref notif_mgr) = state.notification_manager {
                 notif_mgr
                     .notify(crate::notification::events::RepoUpdateEvent::new(
@@ -335,7 +255,6 @@ pub async fn update_branch(
 
         if current_head.is_some() && new_commit.parent_id != current_head {
             if attempt < MAX_BRANCH_RETRY {
-                // Stale HEAD — retry with random backoff (100-500ms).
                 let delay_ms = rand::rng().random_range(100..=500);
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 continue;
@@ -345,16 +264,9 @@ pub async fn update_branch(
             ));
         }
 
-        state
-            .repos
-            .repo
-            .update_head_commit(&repo_id, Some(new_head.clone()))
+        svc.update_head_commit(&repo_id, Some(new_head.clone()))
             .await?;
 
-        // Compute repo size delta from the tree-diff result, avoiding a
-        // full BFS traversal of every file.  When `size_delta` is 0 and
-        // there's no prior size (first commit), `adjust_repo_size` falls
-        // back to `compute_repo_size()` automatically.
         crate::fs::core::adjust_repo_size(
             state.db.as_ref(),
             &state.repos,
@@ -363,21 +275,12 @@ pub async fn update_branch(
         )
         .await?;
 
-        // Compute tree diff and log activities for changed files/dirs,
-        // matching the original seafevents commit-diff behaviour so that
-        // sync-protocol file operations show up in the activity history.
-        // Skip for wiki repos (seafevents excludes them entirely).
-        let is_wiki = state.repos.wiki.find_by_repo_id(&repo_id).await?.is_some();
+        let is_wiki = svc.is_wiki_repo(&repo_id).await?;
 
-        // Compute tree diff between old and new commits.
-        // Always computed (even for wiki repos) — needed for indexing.
         let old_root = if let Some(ref parent_id) = new_commit.parent_id
             && parent_id != "0000000000000000000000000000000000000000"
         {
-            state
-                .repos
-                .commit
-                .find_by_repo_and_commit_id(&repo_id, parent_id)
+            svc.find_commit(&repo_id, parent_id)
                 .await?
                 .map(|c| c.root_id)
         } else {
@@ -393,22 +296,16 @@ pub async fn update_branch(
         .await
         .unwrap_or_default();
 
-        // Log activities (skip for wiki repos, matching seafevents).
         if !is_wiki {
-            // Check for recover operations: seafevents checks if the commit
-            // description starts with "Reverted" or "Recovered" and maps
-            // create/edit → recover.
             let commit_desc = new_commit.description.as_str();
             let is_reverted =
                 commit_desc.starts_with("Reverted") || commit_desc.starts_with("Recovered");
 
             for change in &mut changes {
-                // Map create/edit → recover when commit was a revert/restore.
                 if is_reverted && (change.op_type == "create" || change.op_type == "edit") {
                     change.op_type = "recover";
                 }
 
-                // Skip internal paths (matching seafevents' excluded prefixes).
                 if EXCLUDED_ACTIVITY_PREFIXES
                     .iter()
                     .any(|p| change.path.starts_with(p))
@@ -433,7 +330,6 @@ pub async fn update_branch(
             }
         }
 
-        // Update the full-text search index for changed files.
         if let Some(ref indexer) = state.indexer {
             for change in &changes {
                 if change.obj_type != "file" {
@@ -459,7 +355,6 @@ pub async fn update_branch(
                         }
                     }
                     "rename" | "move" => {
-                        // Remove old path from index, index new path.
                         if let Some(ref old_path) = change.old_path {
                             let _ = indexer.delete_file(&repo_id, old_path);
                         }
@@ -480,7 +375,6 @@ pub async fn update_branch(
             }
         }
 
-        // Success — notify listeners.
         if let Some(ref notif_mgr) = state.notification_manager {
             notif_mgr
                 .notify(crate::notification::events::RepoUpdateEvent::new(
@@ -493,28 +387,15 @@ pub async fn update_branch(
     }
 }
 
-/// Struct for stack-based tree-diff traversal.
+// ── Block checking helpers (sync protocol internals) ────────────────────
+
 struct DiffFrame {
-    /// base fs_id (None → entirely new subtree)
     base_fs_id: Option<String>,
-    /// new commit's fs_id for this subtree
     new_fs_id: String,
-    /// relative path prefix (e.g. "docs/images/")
     prefix: String,
 }
 
 /// Verify blocks referenced by the new commit exist on the server.
-///
-/// When `base_root_id` is provided (non-first commit), uses **tree-diff**
-/// between base and new roots — only files that differ between the two
-/// trees are inspected. Unchanged subtrees are skipped entirely.
-///
-/// When `base_root_id` is `None` (first commit or empty parent), falls back
-/// to a full traversal of the new tree.
-///
-/// This matches seafile-server's `check_blocks()` which calls
-/// `diff_trees(base_root, remote_root)` and only invokes `check_file_blocks`
-/// for files whose IDs differ.
 async fn check_commit_blocks(
     fs_object_repo: Arc<dyn FsObjectRepository>,
     repos: &crate::repository::Repositories,
@@ -535,14 +416,12 @@ async fn check_commit_blocks(
 
     if let Some(base_root) = base_root_id {
         if base_root == new_root_id {
-            // Same root — no changes at all, skip entirely.
             return Ok(CheckResult {
                 missing: Vec::new(),
                 size_delta: 0,
             });
         }
 
-        // Stack-based tree-diff traversal.
         let mut stack: Vec<DiffFrame> = vec![DiffFrame {
             base_fs_id: Some(base_root.to_string()),
             new_fs_id: new_root_id.to_string(),
@@ -551,7 +430,6 @@ async fn check_commit_blocks(
 
         while let Some(frame) = stack.pop() {
             let Some(ref base_fs) = frame.base_fs_id else {
-                // Entirely new subtree — walk all files.
                 let new_dir: FsDirData =
                     match crate::fs::core::read_fs_dir_data(repos, repo_id, &frame.new_fs_id).await
                     {
@@ -587,12 +465,9 @@ async fn check_commit_blocks(
             };
 
             if *base_fs == frame.new_fs_id {
-                // Same fs_id — entire subtree unchanged, skip.
                 continue;
             }
-
             if *base_fs == EMPTY_SHA1 {
-                // Base was empty — handle as entirely new subtree.
                 stack.push(DiffFrame {
                     base_fs_id: None,
                     new_fs_id: frame.new_fs_id,
@@ -601,7 +476,6 @@ async fn check_commit_blocks(
                 continue;
             }
 
-            // Load both directories.
             let base_dir: FsDirData =
                 match crate::fs::core::read_fs_dir_data(repos, repo_id, base_fs).await {
                     Ok(d) => d,
@@ -613,7 +487,6 @@ async fn check_commit_blocks(
                     Err(_) => continue,
                 };
 
-            // Index base entries by name for O(1) lookups.
             let base_map: HashMap<&str, &DirEntryData> = base_dir
                 .dirents
                 .iter()
@@ -626,12 +499,9 @@ async fn check_commit_blocks(
                 } else {
                     format!("{}/{}", frame.prefix, new_entry.name)
                 };
-
                 let is_dir = new_entry.mode & S_IFDIR != 0;
-
                 match base_map.get(new_entry.name.as_str()) {
                     None => {
-                        // Entry only in new tree — added.
                         if is_dir {
                             stack.push(DiffFrame {
                                 base_fs_id: None,
@@ -653,19 +523,15 @@ async fn check_commit_blocks(
                     }
                     Some(base_entry) => {
                         if new_entry.id == base_entry.id {
-                            // Same id — unchanged.
                             continue;
                         }
-                        let base_is_dir = base_entry.mode & S_IFDIR != 0;
-                        if is_dir && base_is_dir {
-                            // Both directories — recurse to compare children.
+                        if is_dir && (base_entry.mode & S_IFDIR != 0) {
                             stack.push(DiffFrame {
                                 base_fs_id: Some(base_entry.id.clone()),
                                 new_fs_id: new_entry.id.clone(),
                                 prefix: child,
                             });
                         } else {
-                            // File modified, or file↔dir type change.
                             size_delta += new_entry.size - base_entry.size;
                             check_file_blocks(
                                 fs_object_repo.clone(),
@@ -680,14 +546,8 @@ async fn check_commit_blocks(
                     }
                 }
             }
-            // Entries only in base tree (deleted) — no block check needed.
-            // Their size contribution is already removed from size_delta
-            // (since we added new size but didn't subtract deleted ones).
-            // This means size_delta for deleted files is ignored — the
-            // existing `adjust_repo_size` handles this via `repo.size` delta.
         }
     } else {
-        // No base commit (first commit) — full traversal fallback.
         full_check_blocks(
             fs_object_repo.clone(),
             block_store.clone(),
@@ -705,9 +565,6 @@ async fn check_commit_blocks(
     })
 }
 
-/// Full tree traversal of all files. Used when there is no base commit
-/// to diff against (first commit). Also accumulates the total size for
-/// repos that haven't been sized yet.
 async fn full_check_blocks(
     fs_object_repo: Arc<dyn FsObjectRepository>,
     block_store: infra::storage::DynBlockStorage,
@@ -717,12 +574,10 @@ async fn full_check_blocks(
     size_total: &mut i64,
 ) -> Result<(), AppError> {
     let mut stack: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
-
     while let Some((fs_id, path)) = stack.pop() {
         if fs_id == "0000000000000000000000000000000000000000" {
             continue;
         }
-
         let obj = match fs_object_repo
             .find_by_repo_and_fs_id(repo_id, &fs_id)
             .await?
@@ -730,22 +585,14 @@ async fn full_check_blocks(
             Some(o) => o,
             None => continue,
         };
-
         if obj.obj_type == 1 {
-            // File — check blocks and accumulate size.
             let file_data: FsFileData = serde_json::from_str(&obj.data)
                 .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
             *size_total += file_data.size;
-
-            // Concurrent block existence check
-            let has_missing =
-                check_blocks_concurrent(block_store.clone(), &file_data.block_ids).await;
-
-            if has_missing {
+            if check_blocks_concurrent(block_store.clone(), &file_data.block_ids).await {
                 missing.push(path.clone());
             }
         } else if obj.obj_type == 3 {
-            // Directory — push children.
             let dir_data: FsDirData = serde_json::from_str(&obj.data)
                 .map_err(|e| AppError::Internal(format!("invalid dir object: {e}")))?;
             for entry in &dir_data.dirents {
@@ -758,12 +605,9 @@ async fn full_check_blocks(
             }
         }
     }
-
     Ok(())
 }
 
-/// Check blocks for a single file identified by its fs_id.
-/// If any block is missing, the file's relative path is appended to `missing`.
 async fn check_file_blocks(
     fs_object_repo: Arc<dyn FsObjectRepository>,
     block_store: infra::storage::DynBlockStorage,
@@ -779,33 +623,22 @@ async fn check_file_blocks(
         Some(o) => o,
         None => return Ok(()),
     };
-
     if obj.obj_type != 1 {
         return Ok(());
     }
-
     let file_data: FsFileData = serde_json::from_str(&obj.data)
         .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
-
-    // Concurrent block existence check, record if any missing
-    let block_ids = file_data.block_ids;
-    let has_missing = check_blocks_concurrent(block_store, &block_ids).await;
-
-    if has_missing {
+    if check_blocks_concurrent(block_store, &file_data.block_ids).await {
         missing.push(path.to_string());
     }
-
     Ok(())
 }
 
-/// Check block existence concurrently with bounded parallelism
 async fn check_blocks_concurrent(
     block_store: infra::storage::DynBlockStorage,
     block_ids: &[String],
 ) -> bool {
-    // Process in batches of 8 to limit concurrent I/O
     const BATCH_SIZE: usize = 8;
-
     for chunk in block_ids.chunks(BATCH_SIZE) {
         let futures: Vec<_> = chunk
             .iter()
@@ -815,12 +648,10 @@ async fn check_blocks_concurrent(
                 async move { !store.has_block(&id).await }
             })
             .collect();
-
         let results = futures::future::join_all(futures).await;
         if results.into_iter().any(|missing| missing) {
             return true;
         }
     }
-
     false
 }
