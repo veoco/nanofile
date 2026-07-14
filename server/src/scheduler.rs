@@ -11,10 +11,12 @@
 //! * **Continuous** — runs until cancelled ([`Scheduler::spawn_continuous`]).
 //!   Used for event-driven tasks that don't have a natural tick interval.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -114,6 +116,8 @@ impl TaskHandle {
 pub struct Scheduler {
     shutdown_token: CancellationToken,
     handles: Mutex<Vec<TaskHandle>>,
+    /// Per-task notifiers for manual trigger (`trigger_now`).
+    triggers: Mutex<HashMap<&'static str, Arc<Notify>>>,
 }
 
 impl Scheduler {
@@ -125,6 +129,7 @@ impl Scheduler {
         Self {
             shutdown_token,
             handles: Mutex::new(Vec::new()),
+            triggers: Mutex::new(HashMap::new()),
         }
     }
 
@@ -149,6 +154,11 @@ impl Scheduler {
         let m = metrics.clone();
         let child = self.shutdown_token.child_token();
 
+        // Create a notifier for manual trigger-by-name.
+        let notify = Arc::new(Notify::new());
+        let n = notify.clone();
+        self.triggers.lock().unwrap().insert(name, notify);
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -162,6 +172,29 @@ impl Scheduler {
                     _ = child.cancelled() => {
                         tracing::info!(name, "Scheduled task stopped");
                         break;
+                    }
+                    // Manual trigger wakes the task immediately.
+                    _ = n.notified() => {
+                        let start = std::time::Instant::now();
+                        let output = work().await;
+                        let elapsed = start.elapsed();
+
+                        let mut stats = m.write().await;
+                        stats.run_count += 1;
+                        stats.last_run_at = Some(chrono::Utc::now().timestamp());
+                        stats.last_duration_ms = elapsed.as_millis() as u64;
+                        stats.last_message = output.message.clone();
+
+                        if output.success {
+                            stats.success_count += 1;
+                            if let Some(count) = output.processed_count {
+                                stats.total_processed += count;
+                            }
+                            tracing::debug!(name, message = %output.message, "Task triggered manually");
+                        } else {
+                            stats.error_count += 1;
+                            tracing::warn!(name, message = %output.message, "Manual trigger failed");
+                        }
                     }
                     _ = interval.tick() => {
                         let start = std::time::Instant::now();
@@ -229,6 +262,20 @@ impl Scheduler {
     /// Return a snapshot of all registered task handles.
     pub fn handles(&self) -> Vec<TaskHandle> {
         self.handles.lock().unwrap().clone()
+    }
+
+    /// Trigger a periodic task to run immediately by name.
+    ///
+    /// Returns `true` if the task was found and signalled, `false` if no
+    /// periodic task with that name exists.
+    pub fn trigger_now(&self, name: &str) -> bool {
+        let triggers = self.triggers.lock().unwrap();
+        if let Some(notify) = triggers.get(name) {
+            notify.notify_one();
+            true
+        } else {
+            false
+        }
     }
 }
 

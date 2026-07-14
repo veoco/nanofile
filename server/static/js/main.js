@@ -118,6 +118,12 @@
         shareLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
         shareLink.textContent = "Share Management";
         dropdown.appendChild(shareLink);
+
+        var taskLink = document.createElement("a");
+        taskLink.href = "/sysadmin/tasks/";
+        taskLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
+        taskLink.textContent = "Task Management";
+        dropdown.appendChild(taskLink);
       }
 
       var signOut = document.createElement("a");

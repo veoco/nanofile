@@ -1,6 +1,7 @@
 /// Web UI module — a Seahub-compatible management interface.
 pub mod activities;
 pub mod adminshares;
+pub mod admintasks;
 pub mod auth;
 pub mod auth_extractor;
 pub mod client_login;
@@ -161,5 +162,11 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route(
             "/sysadmin/shares/upload/{token}/delete/",
             axum::routing::post(adminshares::delete_upload),
+        )
+        // Admin — task management
+        .route("/sysadmin/tasks/", get(admintasks::task_list_page))
+        .route(
+            "/sysadmin/tasks/{name}/trigger/",
+            axum::routing::post(admintasks::trigger_task),
         )
 }
