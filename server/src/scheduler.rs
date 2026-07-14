@@ -13,10 +13,10 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -97,6 +97,13 @@ impl TaskHandle {
     }
 }
 
+/// Wrapper that stores a boxed periodic work function together with its
+/// shared metrics, so the scheduler can spawn a one-shot execution on demand.
+struct StoredTask {
+    work: Arc<dyn Fn() -> Pin<Box<dyn Future<Output = TaskOutput> + Send>> + Send + Sync>,
+    metrics: Arc<RwLock<TaskMetrics>>,
+}
+
 /// Central registry for all background tasks.
 ///
 /// ```ignore
@@ -116,8 +123,8 @@ impl TaskHandle {
 pub struct Scheduler {
     shutdown_token: CancellationToken,
     handles: Mutex<Vec<TaskHandle>>,
-    /// Per-task notifiers for manual trigger (`trigger_now`).
-    triggers: Mutex<HashMap<&'static str, Arc<Notify>>>,
+    /// Stored work functions for one-shot manual triggering.
+    tasks: Mutex<HashMap<&'static str, Arc<StoredTask>>>,
 }
 
 impl Scheduler {
@@ -129,7 +136,7 @@ impl Scheduler {
         Self {
             shutdown_token,
             handles: Mutex::new(Vec::new()),
-            triggers: Mutex::new(HashMap::new()),
+            tasks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -147,17 +154,25 @@ impl Scheduler {
         work: F,
     ) -> TaskHandle
     where
-        F: Fn() -> Fut + Send + 'static,
-        Fut: Future<Output = TaskOutput> + Send,
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = TaskOutput> + Send + 'static,
     {
         let metrics = Arc::new(RwLock::new(TaskMetrics::default()));
         let m = metrics.clone();
         let child = self.shutdown_token.child_token();
 
-        // Create a notifier for manual trigger-by-name.
-        let notify = Arc::new(Notify::new());
-        let n = notify.clone();
-        self.triggers.lock().unwrap().insert(name, notify);
+        // Wrap the work function for one-shot manual triggering.
+        let work_fn: Arc<
+            dyn Fn() -> Pin<Box<dyn Future<Output = TaskOutput> + Send>> + Send + Sync,
+        > = Arc::new(move || Box::pin(work()));
+
+        self.tasks.lock().unwrap().insert(
+            name,
+            Arc::new(StoredTask {
+                work: work_fn.clone(),
+                metrics: metrics.clone(),
+            }),
+        );
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
@@ -173,32 +188,9 @@ impl Scheduler {
                         tracing::info!(name, "Scheduled task stopped");
                         break;
                     }
-                    // Manual trigger wakes the task immediately.
-                    _ = n.notified() => {
-                        let start = std::time::Instant::now();
-                        let output = work().await;
-                        let elapsed = start.elapsed();
-
-                        let mut stats = m.write().await;
-                        stats.run_count += 1;
-                        stats.last_run_at = Some(chrono::Utc::now().timestamp());
-                        stats.last_duration_ms = elapsed.as_millis() as u64;
-                        stats.last_message = output.message.clone();
-
-                        if output.success {
-                            stats.success_count += 1;
-                            if let Some(count) = output.processed_count {
-                                stats.total_processed += count;
-                            }
-                            tracing::debug!(name, message = %output.message, "Task triggered manually");
-                        } else {
-                            stats.error_count += 1;
-                            tracing::warn!(name, message = %output.message, "Manual trigger failed");
-                        }
-                    }
                     _ = interval.tick() => {
                         let start = std::time::Instant::now();
-                        let output = work().await;
+                        let output = work_fn().await;
                         let elapsed = start.elapsed();
 
                         let mut stats = m.write().await;
@@ -264,18 +256,45 @@ impl Scheduler {
         self.handles.lock().unwrap().clone()
     }
 
-    /// Trigger a periodic task to run immediately by name.
+    /// Execute a periodic task immediately and wait for it to complete.
     ///
-    /// Returns `true` if the task was found and signalled, `false` if no
+    /// The task's metrics are updated inline so callers see fresh data
+    /// as soon as this method returns.
+    ///
+    /// Returns `true` if the task was found and executed, `false` if no
     /// periodic task with that name exists.
-    pub fn trigger_now(&self, name: &str) -> bool {
-        let triggers = self.triggers.lock().unwrap();
-        if let Some(notify) = triggers.get(name) {
-            notify.notify_one();
-            true
+    pub async fn trigger_now(&self, name: &str) -> bool {
+        let entry = {
+            let tasks = self.tasks.lock().unwrap();
+            tasks.get(name).cloned()
+        };
+
+        let Some(entry) = entry else {
+            return false;
+        };
+
+        let start = std::time::Instant::now();
+        let output = (entry.work)().await;
+        let elapsed = start.elapsed();
+
+        let mut stats = entry.metrics.write().await;
+        stats.run_count += 1;
+        stats.last_run_at = Some(chrono::Utc::now().timestamp());
+        stats.last_duration_ms = elapsed.as_millis() as u64;
+        stats.last_message = output.message.clone();
+
+        if output.success {
+            stats.success_count += 1;
+            if let Some(count) = output.processed_count {
+                stats.total_processed += count;
+            }
+            tracing::debug!(name, "Task triggered manually");
         } else {
-            false
+            stats.error_count += 1;
+            tracing::warn!(name, message = %output.message, "Manual trigger failed");
         }
+
+        true
     }
 }
 
@@ -416,5 +435,54 @@ mod tests {
         assert_eq!(handles.len(), 2);
         assert!(handles.iter().any(|h| h.name == "p1"));
         assert!(handles.iter().any(|h| h.name == "c1"));
+    }
+
+    #[tokio::test]
+    async fn test_trigger_now_runs_and_updates_metrics() {
+        let token = CancellationToken::new();
+        let sched = Scheduler::new(token.child_token());
+
+        sched.spawn_periodic("trigger-test", 3600, move || async {
+            TaskOutput::success("triggered!", Some(7))
+        });
+
+        // Trigger and wait for it to complete.
+        let ok = sched.trigger_now("trigger-test").await;
+        assert!(ok, "trigger should find the task");
+
+        let m = sched
+            .handles()
+            .into_iter()
+            .find(|h| h.name == "trigger-test")
+            .unwrap()
+            .metrics()
+            .await;
+
+        assert_eq!(m.run_count, 1);
+        assert!(m.last_run_at.is_some());
+        assert_eq!(m.last_message, "triggered!");
+        assert_eq!(m.total_processed, 7);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_now_missing_task() {
+        let token = CancellationToken::new();
+        let sched = Scheduler::new(token.child_token());
+
+        let ok = sched.trigger_now("does-not-exist").await;
+        assert!(!ok, "missing task should return false");
+    }
+
+    #[tokio::test]
+    async fn test_trigger_now_rejected_for_continuous() {
+        let token = CancellationToken::new();
+        let sched = Scheduler::new(token.child_token());
+
+        sched.spawn_continuous("c-task", |ct| async move { ct.cancelled().await });
+
+        // Continuous tasks are not registered in the `tasks` map,
+        // so trigger_now should return false.
+        let ok = sched.trigger_now("c-task").await;
+        assert!(!ok, "continuous tasks cannot be triggered");
     }
 }

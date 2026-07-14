@@ -152,7 +152,7 @@ pub async fn trigger_task(
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
-    if !state.scheduler.trigger_now(&name) {
+    if !state.scheduler.trigger_now(&name).await {
         return Err(AppError::NotFound(format!("Task '{name}' not found")));
     }
 
