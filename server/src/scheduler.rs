@@ -64,8 +64,10 @@ pub struct TaskMetrics {
     pub last_run_at: Option<i64>,
     /// Duration of the most recent execution in milliseconds.
     pub last_duration_ms: u64,
-    /// Message from the most recent execution.
-    pub last_message: String,
+    /// Message from the most recent successful execution.
+    pub last_success_message: String,
+    /// Message from the most recent failed execution.
+    pub last_error_message: String,
     /// Cumulative number of items processed across all runs.
     pub total_processed: u64,
 }
@@ -197,16 +199,17 @@ impl Scheduler {
                         stats.run_count += 1;
                         stats.last_run_at = Some(chrono::Utc::now().timestamp());
                         stats.last_duration_ms = elapsed.as_millis() as u64;
-                        stats.last_message = output.message.clone();
 
                         if output.success {
                             stats.success_count += 1;
+                            stats.last_success_message = output.message.clone();
                             if let Some(count) = output.processed_count {
                                 stats.total_processed += count;
                             }
                             tracing::debug!(name, message = %output.message, "Periodic task completed");
                         } else {
                             stats.error_count += 1;
+                            stats.last_error_message = output.message.clone();
                             tracing::warn!(name, message = %output.message, "Periodic task failed");
                         }
                     }
@@ -281,16 +284,17 @@ impl Scheduler {
         stats.run_count += 1;
         stats.last_run_at = Some(chrono::Utc::now().timestamp());
         stats.last_duration_ms = elapsed.as_millis() as u64;
-        stats.last_message = output.message.clone();
 
         if output.success {
             stats.success_count += 1;
+            stats.last_success_message = output.message.clone();
             if let Some(count) = output.processed_count {
                 stats.total_processed += count;
             }
             tracing::debug!(name, "Task triggered manually");
         } else {
             stats.error_count += 1;
+            stats.last_error_message = output.message.clone();
             tracing::warn!(name, message = %output.message, "Manual trigger failed");
         }
 
@@ -344,7 +348,7 @@ mod tests {
         let m = handle.metrics().await;
         assert!(m.run_count >= 1, "run_count={}", m.run_count);
         assert!(m.last_run_at.is_some());
-        assert_eq!(m.last_message, "all good");
+        assert_eq!(m.last_success_message, "all good");
         assert_eq!(m.total_processed, 42 * m.run_count);
     }
 
@@ -364,7 +368,7 @@ mod tests {
         assert!(m.run_count >= 1);
         assert_eq!(m.error_count, m.run_count);
         assert_eq!(m.success_count, 0);
-        assert!(m.last_message.contains("went wrong"));
+        assert!(m.last_error_message.contains("went wrong"));
     }
 
     #[tokio::test]
@@ -460,7 +464,7 @@ mod tests {
 
         assert_eq!(m.run_count, 1);
         assert!(m.last_run_at.is_some());
-        assert_eq!(m.last_message, "triggered!");
+        assert_eq!(m.last_success_message, "triggered!");
         assert_eq!(m.total_processed, 7);
     }
 

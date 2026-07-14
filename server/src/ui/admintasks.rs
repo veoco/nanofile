@@ -45,7 +45,8 @@ pub struct TaskRow {
     pub error_count: u64,
     pub last_run_at: String,
     pub last_duration_ms: u64,
-    pub last_message: String,
+    pub last_success_message: String,
+    pub last_error_message: String,
     pub total_processed: u64,
     pub can_trigger: bool,
 }
@@ -83,7 +84,8 @@ fn to_task_row(name: &str, kind: &TaskKind, metrics: &TaskMetrics) -> TaskRow {
         error_count: metrics.error_count,
         last_run_at: format_ts(metrics.last_run_at),
         last_duration_ms: metrics.last_duration_ms,
-        last_message: metrics.last_message.clone(),
+        last_success_message: metrics.last_success_message.clone(),
+        last_error_message: metrics.last_error_message.clone(),
         total_processed: metrics.total_processed,
         can_trigger: matches!(kind, TaskKind::Periodic { .. }),
     }
