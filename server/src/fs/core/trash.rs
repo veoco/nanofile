@@ -157,6 +157,101 @@ pub async fn add_batch_to_trash(
     Ok(())
 }
 
+// ── Shared helpers ────────────────────────────────────────────────────
+
+/// Build a condition for trash queries applying keyword, time range,
+/// suffix, and optional user filters on top of a repo filter condition.
+fn build_trash_condition(
+    repo_condition: Condition,
+    query: &str,
+    time_from: Option<i64>,
+    time_to: Option<i64>,
+    suffixes: Option<&str>,
+    op_users: Option<&str>,
+) -> Condition {
+    let mut condition = Condition::all().add(repo_condition);
+
+    if !query.is_empty() {
+        condition = condition.add(file_trash::Column::ObjName.contains(query));
+    }
+
+    if let Some(users) = op_users
+        && !users.is_empty()
+    {
+        let emails: Vec<String> = users
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !emails.is_empty() {
+            condition = condition.add(file_trash::Column::User.is_in(emails));
+        }
+    }
+
+    if let Some(from) = time_from {
+        condition = condition.add(file_trash::Column::DeleteTime.gte(from));
+    }
+    if let Some(to) = time_to {
+        condition = condition.add(file_trash::Column::DeleteTime.lte(to));
+    }
+
+    if let Some(suffixes_str) = suffixes
+        && !suffixes_str.is_empty()
+    {
+        let exts: Vec<&str> = suffixes_str
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !exts.is_empty() {
+            let mut any = Condition::any();
+            for ext in &exts {
+                let pattern = if ext.starts_with('.') {
+                    format!("%{}", ext)
+                } else {
+                    format!("%.{}", ext)
+                };
+                any = any.add(file_trash::Column::ObjName.like(pattern));
+            }
+            condition = condition.add(any);
+        }
+    }
+
+    condition
+}
+
+/// Map trash DB rows to `TrashEntry` response values.
+///
+/// When `repo_names` is `Some`, the `repo_name` field is populated from the
+/// lookup table. Otherwise it is left empty.
+fn map_trash_rows_to_entries(
+    rows: &[file_trash::Model],
+    repo_names: Option<&HashMap<String, String>>,
+) -> Vec<TrashEntry> {
+    rows.iter()
+        .map(|m| {
+            let repo_name = repo_names
+                .and_then(|names| names.get(&m.repo_id).cloned())
+                .unwrap_or_default();
+            TrashEntry {
+                parent_dir: m.path.clone(),
+                obj_name: m.obj_name.clone(),
+                deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
+                    .map(|d| d.to_rfc3339())
+                    .unwrap_or_default(),
+                commit_id: m.commit_id.clone(),
+                is_dir: m.obj_type == "dir",
+                size: m.size,
+                obj_id: m.obj_id.clone(),
+                repo_id: m.repo_id.clone(),
+                repo_name,
+            }
+        })
+        .collect()
+}
+
+// ── Page-based trash listing ──────────────────────────────────────────
+
 /// Page-based trash listing for the `/trash2/` endpoint.
 pub async fn list_trash2(
     repos: &Repositories,
@@ -177,22 +272,7 @@ pub async fn list_trash2(
         .find_by_repo_paginated(repo_id, per_page as u64, offset)
         .await?;
 
-    let items = rows
-        .iter()
-        .map(|m| TrashEntry {
-            parent_dir: m.path.clone(),
-            obj_name: m.obj_name.clone(),
-            deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
-                .map(|d| d.to_rfc3339())
-                .unwrap_or_default(),
-            commit_id: m.commit_id.clone(),
-            is_dir: m.obj_type == "dir",
-            size: m.size,
-            obj_id: m.obj_id.clone(),
-            repo_id: repo_id.to_string(),
-            repo_name: String::new(),
-        })
-        .collect();
+    let items = map_trash_rows_to_entries(&rows, None);
 
     Ok(TrashListResult {
         items,
@@ -218,65 +298,20 @@ pub async fn search_trash(
     let per_page = per_page.clamp(1, 100);
     let offset = ((page - 1) * per_page) as u64;
 
-    let mut condition = Condition::all().add(file_trash::Column::RepoId.eq(repo_id.to_owned()));
+    let condition = build_trash_condition(
+        Condition::all().add(file_trash::Column::RepoId.eq(repo_id.to_owned())),
+        query,
+        time_from,
+        time_to,
+        suffixes,
+        op_users,
+    );
 
-    // Keyword search on obj_name
-    if !query.is_empty() {
-        condition = condition.add(file_trash::Column::ObjName.contains(query));
-    }
-
-    // Filter by users
-    if let Some(users) = op_users
-        && !users.is_empty()
-    {
-        let emails: Vec<String> = users
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if !emails.is_empty() {
-            condition = condition.add(file_trash::Column::User.is_in(emails));
-        }
-    }
-
-    // Time range filter
-    if let Some(from) = time_from {
-        condition = condition.add(file_trash::Column::DeleteTime.gte(from));
-    }
-    if let Some(to) = time_to {
-        condition = condition.add(file_trash::Column::DeleteTime.lte(to));
-    }
-
-    // File extension filter
-    if let Some(suffixes_str) = suffixes
-        && !suffixes_str.is_empty()
-    {
-        let exts: Vec<&str> = suffixes_str
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if !exts.is_empty() {
-            let mut any = Condition::any();
-            for ext in &exts {
-                let pattern = if ext.starts_with('.') {
-                    format!("%{}", ext)
-                } else {
-                    format!("%.{}", ext)
-                };
-                any = any.add(file_trash::Column::ObjName.like(pattern));
-            }
-            condition = condition.add(any);
-        }
-    }
-
-    // Count
     let total_count = file_trash::Entity::find()
         .filter(condition.clone())
         .count(db)
         .await? as i64;
 
-    // Fetch items
     let rows = file_trash::Entity::find()
         .filter(condition)
         .order_by(file_trash::Column::DeleteTime, Order::Desc)
@@ -285,22 +320,7 @@ pub async fn search_trash(
         .all(db)
         .await?;
 
-    let items = rows
-        .iter()
-        .map(|m| TrashEntry {
-            parent_dir: m.path.clone(),
-            obj_name: m.obj_name.clone(),
-            deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
-                .map(|d| d.to_rfc3339())
-                .unwrap_or_default(),
-            commit_id: m.commit_id.clone(),
-            is_dir: m.obj_type == "dir",
-            size: m.size,
-            obj_id: m.obj_id.clone(),
-            repo_id: repo_id.to_string(),
-            repo_name: String::new(),
-        })
-        .collect();
+    let items = map_trash_rows_to_entries(&rows, None);
 
     Ok(TrashListResult {
         items,
@@ -671,6 +691,32 @@ pub async fn clean_trash(
     Ok(0)
 }
 
+/// Collect distinct repo_ids accessible by a user.
+async fn gather_user_repo_ids(repos: &Repositories, user_id: i32) -> Result<Vec<String>, AppError> {
+    let member_repos = repos.member.find_by_user_id(user_id).await?;
+    let ids: Vec<String> = member_repos
+        .into_iter()
+        .map(|m| m.repo_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Ok(ids)
+}
+
+/// Build a repo_id → repo_name lookup map.
+async fn build_repo_name_lookup(
+    repos: &Repositories,
+    repo_ids: &[String],
+) -> Result<HashMap<String, String>, AppError> {
+    let mut names = HashMap::new();
+    for rid in repo_ids {
+        if let Some(r) = repos.repo.find_by_id(rid).await? {
+            names.insert(rid.clone(), r.name);
+        }
+    }
+    Ok(names)
+}
+
 /// List trash items across all repos the user has access to.
 ///
 /// Joins with `repo_members` to find accessible repos, and `repos` to
@@ -686,14 +732,7 @@ pub async fn list_trash_for_user(
     let per_page = per_page.clamp(1, 100);
     let offset = ((page - 1) * per_page) as u64;
 
-    // Gather repo_ids accessible by the user
-    let member_repos = repos.member.find_by_user_id(user_id).await?;
-    let repo_ids: Vec<String> = member_repos
-        .into_iter()
-        .map(|m| m.repo_id)
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
+    let repo_ids = gather_user_repo_ids(repos, user_id).await?;
 
     if repo_ids.is_empty() {
         return Ok(TrashListResult {
@@ -703,21 +742,13 @@ pub async fn list_trash_for_user(
         });
     }
 
-    // Count
     let total_count = file_trash::Entity::find()
         .filter(file_trash::Column::RepoId.is_in(repo_ids.clone()))
         .count(db)
         .await? as i64;
 
-    // Build repo name lookup
-    let mut repo_names: HashMap<String, String> = HashMap::new();
-    for rid in &repo_ids {
-        if let Some(r) = repos.repo.find_by_id(rid).await? {
-            repo_names.insert(rid.clone(), r.name);
-        }
-    }
+    let repo_names = build_repo_name_lookup(repos, &repo_ids).await?;
 
-    // Fetch items
     let rows = file_trash::Entity::find()
         .filter(file_trash::Column::RepoId.is_in(repo_ids))
         .order_by(file_trash::Column::DeleteTime, Order::Desc)
@@ -726,25 +757,7 @@ pub async fn list_trash_for_user(
         .all(db)
         .await?;
 
-    let items = rows
-        .iter()
-        .map(|m| {
-            let repo_name = repo_names.get(&m.repo_id).cloned().unwrap_or_default();
-            TrashEntry {
-                parent_dir: m.path.clone(),
-                obj_name: m.obj_name.clone(),
-                deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
-                    .map(|d| d.to_rfc3339())
-                    .unwrap_or_default(),
-                commit_id: m.commit_id.clone(),
-                is_dir: m.obj_type == "dir",
-                size: m.size,
-                obj_id: m.obj_id.clone(),
-                repo_id: m.repo_id.clone(),
-                repo_name,
-            }
-        })
-        .collect();
+    let items = map_trash_rows_to_entries(&rows, Some(&repo_names));
 
     Ok(TrashListResult {
         items,
@@ -773,14 +786,7 @@ pub async fn search_trash_for_user(
     let per_page = per_page.clamp(1, 100);
     let offset = ((page - 1) * per_page) as u64;
 
-    // Gather repo_ids accessible by the user
-    let member_repos = repos.member.find_by_user_id(user_id).await?;
-    let repo_ids: Vec<String> = member_repos
-        .into_iter()
-        .map(|m| m.repo_id)
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
+    let repo_ids = gather_user_repo_ids(repos, user_id).await?;
 
     if repo_ids.is_empty() {
         return Ok(TrashListResult {
@@ -790,59 +796,22 @@ pub async fn search_trash_for_user(
         });
     }
 
-    let mut condition = Condition::all().add(file_trash::Column::RepoId.is_in(repo_ids.clone()));
+    let condition = build_trash_condition(
+        Condition::all().add(file_trash::Column::RepoId.is_in(repo_ids.clone())),
+        query,
+        time_from,
+        time_to,
+        suffixes,
+        None,
+    );
 
-    // Keyword search on obj_name
-    if !query.is_empty() {
-        condition = condition.add(file_trash::Column::ObjName.contains(query));
-    }
-
-    // Time range filter
-    if let Some(from) = time_from {
-        condition = condition.add(file_trash::Column::DeleteTime.gte(from));
-    }
-    if let Some(to) = time_to {
-        condition = condition.add(file_trash::Column::DeleteTime.lte(to));
-    }
-
-    // File extension filter
-    if let Some(suffixes_str) = suffixes
-        && !suffixes_str.is_empty()
-    {
-        let exts: Vec<&str> = suffixes_str
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if !exts.is_empty() {
-            let mut any = Condition::any();
-            for ext in &exts {
-                let pattern = if ext.starts_with('.') {
-                    format!("%{}", ext)
-                } else {
-                    format!("%.{}", ext)
-                };
-                any = any.add(file_trash::Column::ObjName.like(pattern));
-            }
-            condition = condition.add(any);
-        }
-    }
-
-    // Count
     let total_count = file_trash::Entity::find()
         .filter(condition.clone())
         .count(db)
         .await? as i64;
 
-    // Build repo name lookup
-    let mut repo_names: HashMap<String, String> = HashMap::new();
-    for rid in &repo_ids {
-        if let Some(r) = repos.repo.find_by_id(rid).await? {
-            repo_names.insert(rid.clone(), r.name);
-        }
-    }
+    let repo_names = build_repo_name_lookup(repos, &repo_ids).await?;
 
-    // Fetch items
     let rows = file_trash::Entity::find()
         .filter(condition)
         .order_by(file_trash::Column::DeleteTime, Order::Desc)
@@ -851,25 +820,7 @@ pub async fn search_trash_for_user(
         .all(db)
         .await?;
 
-    let items = rows
-        .iter()
-        .map(|m| {
-            let repo_name = repo_names.get(&m.repo_id).cloned().unwrap_or_default();
-            TrashEntry {
-                parent_dir: m.path.clone(),
-                obj_name: m.obj_name.clone(),
-                deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
-                    .map(|d| d.to_rfc3339())
-                    .unwrap_or_default(),
-                commit_id: m.commit_id.clone(),
-                is_dir: m.obj_type == "dir",
-                size: m.size,
-                obj_id: m.obj_id.clone(),
-                repo_id: m.repo_id.clone(),
-                repo_name,
-            }
-        })
-        .collect();
+    let items = map_trash_rows_to_entries(&rows, Some(&repo_names));
 
     Ok(TrashListResult {
         items,
