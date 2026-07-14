@@ -10,7 +10,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::repository::CreateSessionTokenParams;
+use crate::repository::api_token::CreateSessionTokenParams;
 use crate::service::auth::password::verify_password;
 use crate::service::auth::password_reset::PasswordResetService;
 use crate::service::auth::registration::{RegistrationParams, RegistrationService};

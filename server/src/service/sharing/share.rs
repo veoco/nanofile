@@ -660,7 +660,7 @@ pub fn check_share_link_password(
 
 /// Fire-and-forget view count increment.
 pub fn increment_view_cnt(
-    share_link_repo: Arc<dyn crate::repository::ShareLinkRepository>,
+    share_link_repo: Arc<dyn crate::repository::share_link::ShareLinkRepository>,
     link_id: i32,
 ) {
     tokio::spawn(async move {

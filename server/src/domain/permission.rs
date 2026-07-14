@@ -4,7 +4,7 @@
 //! The actual data retrieval is delegated to `MemberRepository` via trait,
 //! keeping this module free of infrastructure concerns.
 
-use crate::repository::MemberRepository;
+use crate::repository::member::MemberRepository;
 use base::AppError;
 
 /// Check if `user_id` has write (`rw`) permission on the repo.

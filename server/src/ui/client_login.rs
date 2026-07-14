@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::repository::CreateSessionTokenParams;
+use crate::repository::api_token::CreateSessionTokenParams;
 use crate::service::auth::token::generate_api_token;
 use base::error::AppError;
 

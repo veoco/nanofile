@@ -359,7 +359,7 @@ pub struct FileBrowserQuery {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async fn verify_repo_access(
-    member_repo: &dyn crate::repository::MemberRepository,
+    member_repo: &dyn crate::repository::member::MemberRepository,
     user_id: i32,
     repo_id: &str,
 ) -> Result<(), AppError> {
