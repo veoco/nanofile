@@ -233,133 +233,109 @@ impl Config {
     }
 
     fn apply_env_overrides(&mut self) {
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_ADDR") {
-            self.server.addr = v;
+        macro_rules! env_str {
+            ($name:expr, $target:expr) => {
+                if let Ok(v) = std::env::var($name) {
+                    $target = v;
+                }
+            };
         }
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_PORT")
-            && let Ok(p) = v.parse()
-        {
-            self.server.port = p;
+
+        macro_rules! env_parse {
+            ($name:expr, $target:expr) => {
+                if let Ok(v) = std::env::var($name)
+                    && let Ok(p) = v.parse()
+                {
+                    $target = p;
+                }
+            };
         }
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB")
-            && let Ok(n) = v.parse()
-        {
-            self.server.max_upload_size_mb = n;
+
+        macro_rules! env_path {
+            ($name:expr, $target:expr) => {
+                if let Ok(v) = std::env::var($name) {
+                    $target = PathBuf::from(v);
+                }
+            };
         }
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_SITE_URL") {
-            self.server.site_url = v;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_SECRET_KEY") {
-            self.server.secret_key = v;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_REQUEST_TIMEOUT_SECS")
-            && let Ok(n) = v.parse()
-        {
-            self.server.request_timeout_secs = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_DATABASE_URL") {
-            self.database.url = v;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_STORAGE_BLOCK_DIR") {
-            self.storage.block_dir = PathBuf::from(v);
-        }
-        if let Ok(v) = std::env::var("NANOFILE_STORAGE_TEMP_DIR") {
-            self.storage.temp_dir = PathBuf::from(v);
-        }
-        if let Ok(v) = std::env::var("NANOFILE_STORAGE_MAX_STORAGE_BYTES")
-            && let Ok(n) = v.parse()
-        {
-            self.storage.max_storage_bytes = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS")
-            && let Ok(n) = v.parse()
-        {
-            self.auth.password_hash_iterations = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_AUTH_API_TOKEN_TTL_DAYS")
-            && let Ok(n) = v.parse()
-        {
-            self.auth.api_token_ttl_days = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_AUTH_SYNC_TOKEN_TTL_DAYS")
-            && let Ok(n) = v.parse()
-        {
-            self.auth.sync_token_ttl_days = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_AUTH_MAX_LOGIN_ATTEMPTS")
-            && let Ok(n) = v.parse()
-        {
-            self.auth.max_login_attempts = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_AUTH_LOCKOUT_DURATION_SECS")
-            && let Ok(n) = v.parse()
-        {
-            self.auth.lockout_duration_secs = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_AUTH_ENABLE_INVITATIONS")
-            && let Ok(b) = v.parse()
-        {
-            self.auth.enable_invitations = b;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_AUTH_ENABLE_PASSWORD_RESET")
-            && let Ok(b) = v.parse()
-        {
-            self.auth.enable_password_reset = b;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_AUTH_PASSWORD_MIN_LENGTH")
-            && let Ok(n) = v.parse()
-        {
-            self.auth.password_min_length = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_AUTH_REQUIRE_STRONG_PASSWORD")
-            && let Ok(b) = v.parse()
-        {
-            self.auth.require_strong_password = b;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_LOG_LEVEL") {
-            self.logging.level = v;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_GC_ENABLED")
-            && let Ok(b) = v.parse()
-        {
-            self.gc.enabled = b;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_GC_INTERVAL_HOURS")
-            && let Ok(n) = v.parse()
-        {
-            self.gc.interval_hours = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_GC_KEEP_COMMITS")
-            && let Ok(n) = v.parse()
-        {
-            self.gc.keep_commits = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_NOTIFICATION_ENABLED")
-            && let Ok(b) = v.parse()
-        {
-            self.notification.enabled = b;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_NOTIFICATION_PRIVATE_KEY") {
-            self.notification.private_key = v;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_NOTIFICATION_PING_INTERVAL")
-            && let Ok(n) = v.parse()
-        {
-            self.notification.ping_interval = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_NOTIFICATION_CLIENT_TIMEOUT")
-            && let Ok(n) = v.parse()
-        {
-            self.notification.client_timeout = n;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_INDEX_ENABLED")
-            && let Ok(b) = v.parse()
-        {
-            self.index.enabled = b;
-        }
-        if let Ok(v) = std::env::var("NANOFILE_INDEX_INDEX_DIR") {
-            self.index.index_dir = PathBuf::from(v);
-        }
+
+        env_str!("NANOFILE_SERVER_ADDR", self.server.addr);
+        env_parse!("NANOFILE_SERVER_PORT", self.server.port);
+        env_parse!(
+            "NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB",
+            self.server.max_upload_size_mb
+        );
+        env_str!("NANOFILE_SERVER_SITE_URL", self.server.site_url);
+        env_str!("NANOFILE_SERVER_SECRET_KEY", self.server.secret_key);
+        env_parse!(
+            "NANOFILE_SERVER_REQUEST_TIMEOUT_SECS",
+            self.server.request_timeout_secs
+        );
+        env_str!("NANOFILE_DATABASE_URL", self.database.url);
+        env_path!("NANOFILE_STORAGE_BLOCK_DIR", self.storage.block_dir);
+        env_path!("NANOFILE_STORAGE_TEMP_DIR", self.storage.temp_dir);
+        env_parse!(
+            "NANOFILE_STORAGE_MAX_STORAGE_BYTES",
+            self.storage.max_storage_bytes
+        );
+        env_parse!(
+            "NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS",
+            self.auth.password_hash_iterations
+        );
+        env_parse!(
+            "NANOFILE_AUTH_API_TOKEN_TTL_DAYS",
+            self.auth.api_token_ttl_days
+        );
+        env_parse!(
+            "NANOFILE_AUTH_SYNC_TOKEN_TTL_DAYS",
+            self.auth.sync_token_ttl_days
+        );
+        env_parse!(
+            "NANOFILE_AUTH_MAX_LOGIN_ATTEMPTS",
+            self.auth.max_login_attempts
+        );
+        env_parse!(
+            "NANOFILE_AUTH_LOCKOUT_DURATION_SECS",
+            self.auth.lockout_duration_secs
+        );
+        env_parse!(
+            "NANOFILE_AUTH_ENABLE_INVITATIONS",
+            self.auth.enable_invitations
+        );
+        env_parse!(
+            "NANOFILE_AUTH_ENABLE_PASSWORD_RESET",
+            self.auth.enable_password_reset
+        );
+        env_parse!(
+            "NANOFILE_AUTH_PASSWORD_MIN_LENGTH",
+            self.auth.password_min_length
+        );
+        env_parse!(
+            "NANOFILE_AUTH_REQUIRE_STRONG_PASSWORD",
+            self.auth.require_strong_password
+        );
+        env_str!("NANOFILE_LOG_LEVEL", self.logging.level);
+        env_parse!("NANOFILE_GC_ENABLED", self.gc.enabled);
+        env_parse!("NANOFILE_GC_INTERVAL_HOURS", self.gc.interval_hours);
+        env_parse!("NANOFILE_GC_KEEP_COMMITS", self.gc.keep_commits);
+        env_parse!("NANOFILE_NOTIFICATION_ENABLED", self.notification.enabled);
+        env_str!(
+            "NANOFILE_NOTIFICATION_PRIVATE_KEY",
+            self.notification.private_key
+        );
+        env_parse!(
+            "NANOFILE_NOTIFICATION_PING_INTERVAL",
+            self.notification.ping_interval
+        );
+        env_parse!(
+            "NANOFILE_NOTIFICATION_CLIENT_TIMEOUT",
+            self.notification.client_timeout
+        );
+        env_parse!("NANOFILE_INDEX_ENABLED", self.index.enabled);
+        env_path!("NANOFILE_INDEX_INDEX_DIR", self.index.index_dir);
+        env_parse!("NANOFILE_CORS_MAX_AGE_SECS", self.server.cors_max_age_secs);
+
+        // Admin init env vars
         if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_EMAIL") {
             self.admin_init.email = Some(v);
         }
@@ -385,13 +361,10 @@ impl Config {
                 }
             }
         }
+
+        // Comma-separated list
         if let Ok(v) = std::env::var("NANOFILE_CORS_ALLOWED_ORIGINS") {
             self.server.cors_allowed_origins = v.split(',').map(|s| s.trim().to_string()).collect();
-        }
-        if let Ok(v) = std::env::var("NANOFILE_CORS_MAX_AGE_SECS")
-            && let Ok(n) = v.parse()
-        {
-            self.server.cors_max_age_secs = n;
         }
     }
 }

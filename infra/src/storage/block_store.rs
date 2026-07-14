@@ -92,7 +92,12 @@ impl BlockStorageBackend for BlockStorage {
                 if prefix_str.len() == 2 {
                     let mut sub_entries = tokio::fs::read_dir(entry.path()).await?;
                     while let Some(sub_entry) = sub_entries.next_entry().await? {
-                        if let Some(name) = sub_entry.file_name().to_str() {
+                        // Only include regular files matching 40-char hex IDs
+                        if sub_entry.file_type().await?.is_file()
+                            && let Some(name) = sub_entry.file_name().to_str()
+                            && name.len() == 40
+                            && name.bytes().all(|b| b.is_ascii_hexdigit())
+                        {
                             blocks.push(name.to_string());
                         }
                     }
