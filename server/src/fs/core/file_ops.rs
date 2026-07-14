@@ -323,6 +323,7 @@ impl FileOps {
     }
 
     /// Resolve a path to its fs_id by walking the FS tree from root.
+    /// Delegates to `tree::resolve_fs_id` after resolving root fs_id.
     async fn resolve_fs_id(
         repos: &Repositories,
         repo_id: &str,
@@ -331,24 +332,8 @@ impl FileOps {
         if path == "/" {
             return Self::resolve_root_fs_id(repos, repo_id).await;
         }
-
         let root_fs_id = Self::resolve_root_fs_id(repos, repo_id).await?;
-        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
-        let mut current_fs_id = root_fs_id;
-
-        for part in parts {
-            let dir_data = Self::read_dir_fs_object(repos, repo_id, &current_fs_id).await?;
-            let found = dir_data
-                .dirents
-                .iter()
-                .find(|e| e.name == part)
-                .ok_or_else(|| {
-                    AppError::NotFound(format!("path component '{}' not found in '{}'", part, path))
-                })?;
-            current_fs_id = found.id.clone();
-        }
-
-        Ok(current_fs_id)
+        crate::fs::core::resolve_fs_id(repos, repo_id, &root_fs_id, path).await
     }
 
     /// Resolve a path to its fs_id, also returning the fs_id of every
