@@ -15,11 +15,11 @@ use infra::serialization::pack_fs;
 /// Parse fs_ids from the request body. The seaf-daemon may send either:
 /// 1. JSON array: ["id1", "id2"] (newer versions)
 /// 2. URL-encoded form: fs_ids=id1&fs_ids=id2 (older versions)
-fn parse_fs_ids_from_bytes(data: &[u8]) -> Vec<String> {
+fn parse_fs_ids_from_bytes(data: &[u8]) -> Result<Vec<String>, AppError> {
     if let Ok(arr) = serde_json::from_slice::<Vec<String>>(data)
         && !arr.is_empty()
     {
-        return arr;
+        return Ok(arr);
     }
 
     let body_str = String::from_utf8_lossy(data);
@@ -29,29 +29,33 @@ fn parse_fs_ids_from_bytes(data: &[u8]) -> Vec<String> {
         let key = parts.next().unwrap_or("");
         let value = parts.next().unwrap_or("");
         if key == "fs_ids" && !value.is_empty() {
-            fs_ids.push(percent_decode(value));
+            fs_ids.push(percent_decode(value)?);
         }
     }
-    fs_ids
+    Ok(fs_ids)
 }
 
-fn percent_decode(s: &str) -> String {
+fn percent_decode(s: &str) -> Result<String, AppError> {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.bytes();
     while let Some(b) = chars.next() {
         if b == b'%' {
-            let hi = chars.next().unwrap_or(b'0');
-            let lo = chars.next().unwrap_or(b'0');
-            if let Ok(byte) = u8::from_str_radix(&String::from_utf8_lossy(&[hi, lo]), 16) {
-                result.push(byte as char);
-            }
+            let hi = chars
+                .next()
+                .ok_or_else(|| AppError::BadRequest("truncated percent-encoding".into()))?;
+            let lo = chars
+                .next()
+                .ok_or_else(|| AppError::BadRequest("truncated percent-encoding".into()))?;
+            let byte = u8::from_str_radix(&String::from_utf8_lossy(&[hi, lo]), 16)
+                .map_err(|_| AppError::BadRequest("invalid percent-encoding sequence".into()))?;
+            result.push(byte as char);
         } else if b == b'+' {
             result.push(' ');
         } else {
             result.push(b as char);
         }
     }
-    result
+    Ok(result)
 }
 
 #[derive(Deserialize)]
@@ -130,7 +134,7 @@ pub async fn pack_fs_handler(
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
-    let fs_ids = parse_fs_ids_from_bytes(&body_data);
+    let fs_ids = parse_fs_ids_from_bytes(&body_data)?;
 
     let objects = state
         .sync_service()
@@ -173,7 +177,7 @@ pub async fn check_fs(
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
-    let fs_ids = parse_fs_ids_from_bytes(&body_data);
+    let fs_ids = parse_fs_ids_from_bytes(&body_data)?;
 
     let existing = state
         .sync_service()

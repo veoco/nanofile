@@ -23,6 +23,9 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     /// Delete a block file from disk.
     async fn remove_block(&self, block_id: &str) -> Result<(), std::io::Error>;
 
+    /// Get the size of a block on disk in bytes.
+    async fn block_size(&self, block_id: &str) -> Result<i64, std::io::Error>;
+
     /// List all block IDs stored on disk.
     async fn list_blocks(&self) -> Result<Vec<String>, std::io::Error>;
 }

@@ -76,6 +76,11 @@ impl BlockStorageBackend for BlockStorage {
         Ok(())
     }
 
+    async fn block_size(&self, block_id: &str) -> Result<i64, std::io::Error> {
+        let path = self.block_path(block_id);
+        tokio::fs::metadata(&path).await.map(|m| m.len() as i64)
+    }
+
     async fn list_blocks(&self) -> Result<Vec<String>, std::io::Error> {
         let mut blocks = Vec::new();
         let mut entries = tokio::fs::read_dir(&self.base_dir).await?;

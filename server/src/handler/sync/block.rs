@@ -169,17 +169,9 @@ pub async fn get_block_map(
     let block_sizes: Vec<i64> = stream::iter(block_id_strs)
         .map(move |bid| {
             let store = block_store.clone();
-            let block_dir = state.block_dir.clone();
             async move {
-                let path = block_dir
-                    .as_path()
-                    .join(&bid[..bid.len().min(2)])
-                    .join(&bid);
                 if store.has_block(&bid).await {
-                    tokio::fs::metadata(&path)
-                        .await
-                        .map(|m| m.len() as i64)
-                        .unwrap_or(0)
+                    store.block_size(&bid).await.unwrap_or(0)
                 } else {
                     0
                 }
