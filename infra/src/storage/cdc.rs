@@ -149,13 +149,6 @@ impl RabinState {
     }
 }
 
-#[allow(dead_code)]
-pub struct CdcResult {
-    pub offset: usize,
-    pub size: usize,
-    pub block_id: String,
-}
-
 pub fn calculate_chunk_sizes(file_size: usize) -> (usize, usize, usize) {
     let (avg, min, max) = if file_size >= 8 * 1024 * 1024 * 1024 {
         (8 * 1024 * 1024, 2 * 1024 * 1024, 16 * 1024 * 1024)
@@ -169,24 +162,11 @@ pub fn calculate_chunk_sizes(file_size: usize) -> (usize, usize, usize) {
     (avg, min, max)
 }
 
-pub fn is_break_point(fp: u32, block_sz: usize) -> bool {
-    (fp & (block_sz as u32 - 1)) == (BREAK_VALUE & (block_sz as u32 - 1))
-}
-
-/// Compute the fingerprint of exactly `WINDOW_SIZE` bytes starting at `data`,
-/// equivalent to C's `rabin_checksum(buf, WINDOW_SIZE)`.
-#[allow(dead_code)]
-fn finger(data: &[u8]) -> u32 {
-    let mut state = RabinState::new();
-    state.init(data);
-    state.get_fingerprint()
-}
-
 /// Content-defined chunking matching seafile's `file_chunk_cdc` exactly.
 ///
 /// Algorithm mirrors the C code's buffer management:
 /// 1. Skip first `min - WINDOW_SIZE` bytes (no break checking)
-/// 2. At position `min - 1` from chunk start, compute fingerprint from scratch (`finger()`)
+/// 2. At position `min - 1` from chunk start, compute fingerprint from scratch
 /// 3. Continue with rolling updates, checking for break points or max size
 /// 4. On break/max: emit chunk, reset, repeat
 pub fn file_chunk_cdc(data: &[u8]) -> Vec<(usize, usize)> {
@@ -210,8 +190,13 @@ pub fn file_chunk_cdc(data: &[u8]) -> Vec<(usize, usize)> {
 
         // Compute initial fingerprint at position `min - 1` from scratch (like C's finger)
         let scan_start = chunk_start + min - 1;
+        // scan_start >= min - 1 >= DEFAULT_MIN_BLOCK - 1, so this slice is always valid
+        debug_assert!(
+            scan_start >= WINDOW_SIZE - 1,
+            "scan_start too small for window"
+        );
         let mut state = RabinState::new();
-        state.init(&data[scan_start - 47..]);
+        state.init(&data[scan_start - (WINDOW_SIZE - 1)..]);
         let mut fp = state.get_fingerprint();
 
         // Scan forward looking for break
