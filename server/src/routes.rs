@@ -144,8 +144,13 @@ fn v2_routes() -> Router<Arc<AppState>> {
                 .post(crate::handler::links::create_share_link_v21),
         )
         .route(
+            "/api/v2.1/multi-share-links/",
+            post(crate::handler::links::create_multi_share_link_v21),
+        )
+        .route(
             "/api/v2.1/share-links/{token}/",
-            put(crate::handler::links::update_share_link_v21)
+            get(crate::handler::links::get_share_link_v21)
+                .put(crate::handler::links::update_share_link_v21)
                 .delete(crate::handler::links::delete_share_link_v21),
         )
         // Upload Links

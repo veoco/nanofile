@@ -261,7 +261,7 @@
         fetch("/api/v2.1/share-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
           .then(function (r) { return r.json(); })
           .then(function (data) {
-            var links = data.share_link_list || [];
+            var links = data || [];
             shareList.innerHTML = "";
             if (links.length === 0) {
               noLinks.classList.remove("hidden");
@@ -294,7 +294,7 @@
         fetch("/api/v2.1/upload-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
           .then(function (r) { return r.json(); })
           .then(function (data) {
-            var links = data.upload_link_list || [];
+            var links = data || [];
             ulList.innerHTML = "";
             if (links.length === 0) {
               noUl.classList.remove("hidden");

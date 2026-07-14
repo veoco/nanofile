@@ -231,11 +231,6 @@ pub async fn delete_share_link(
 
 // ── Share link operations (v21) ───────────────────────────────────────
 
-pub struct CreateShareLinkResult {
-    pub token: String,
-    pub s_type: String,
-}
-
 pub async fn create_share_link_v21(
     repos: &Repositories,
     config: &Config,
@@ -245,7 +240,7 @@ pub async fn create_share_link_v21(
     expire_days: Option<i64>,
     description: Option<&str>,
     creator_id: i32,
-) -> Result<CreateShareLinkResult, AppError> {
+) -> Result<ShareLinkInfo, AppError> {
     // Block share links for encrypted repos
     let repo_model = repos
         .repo
@@ -286,7 +281,61 @@ pub async fn create_share_link_v21(
         })
         .await?;
 
-    Ok(CreateShareLinkResult { token, s_type })
+    let link = if s_type == "d" {
+        format!("/d/{}/", token)
+    } else {
+        format!("/f/{}/", token)
+    };
+
+    let expire_date = expire_days.map(|d| now + d * 86400);
+
+    Ok(ShareLinkInfo {
+        token: token.clone(),
+        link,
+        repo_id: repo_id.to_string(),
+        path: path.to_string(),
+        created_at: now,
+        has_password: password.is_some(),
+        expire_at: expire_date,
+        s_type,
+        view_cnt: 0,
+        description: description.map(|s| s.to_string()),
+    })
+}
+
+/// GET /api/v2.1/share-links/{token}/ — retrieve share link details
+pub async fn get_share_link_v21(
+    repos: &Repositories,
+    token: &str,
+    user_id: i32,
+) -> Result<ShareLinkInfo, AppError> {
+    let link = repos
+        .share_link
+        .find_by_token(token)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Share link not found".into()))?;
+    if link.creator_id != user_id {
+        return Err(AppError::NotFound("Share link not found".into()));
+    }
+
+    let link_url = if link.s_type == "d" {
+        format!("/d/{}/", link.token)
+    } else {
+        format!("/f/{}/", link.token)
+    };
+
+    Ok(ShareLinkInfo {
+        token: link.token,
+        link: link_url,
+        repo_id: link.repo_id,
+        path: link.path,
+        created_at: link.created_at,
+        has_password: link.password.is_some(),
+        expire_at: link.expires_at,
+        s_type: link.s_type,
+        view_cnt: link.view_cnt,
+        description: link.description,
+    })
 }
 
 pub async fn delete_share_link_v21(

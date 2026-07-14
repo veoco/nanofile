@@ -86,7 +86,7 @@ pub async fn list_share_links_v21(
         })
         .collect();
 
-    Ok(Json(serde_json::json!({"share_link_list": items})))
+    Ok(Json(serde_json::Value::Array(items)))
 }
 
 /// POST /api/v2.1/share-links/
@@ -95,7 +95,7 @@ pub async fn create_share_link_v21(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateLinkRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let result = share::create_share_link_v21(
+    let info = share::create_share_link_v21(
         &state.repos,
         &state.config,
         &req.repo_id,
@@ -107,9 +107,129 @@ pub async fn create_share_link_v21(
     )
     .await?;
 
-    Ok(Json(
-        serde_json::json!({"token": result.token, "s_type": result.s_type}),
-    ))
+    let link_url = if info.s_type == "d" {
+        format!("/d/{}/", info.token)
+    } else {
+        format!("/f/{}/", info.token)
+    };
+
+    Ok(Json(serde_json::json!({
+        "token": info.token,
+        "link": link_url,
+        "repo_id": info.repo_id,
+        "repo_name": null,
+        "path": info.path,
+        "obj_name": info.path.trim_end_matches('/').rsplit_once('/')
+            .map(|(_, n)| n)
+            .unwrap_or(&info.path),
+        "is_dir": info.s_type == "d",
+        "username": null,
+        "view_cnt": 0,
+        "ctime": info.created_at,
+        "expire_date": info.expire_at,
+        "is_expired": info.expire_at.is_some_and(|exp| chrono::Utc::now().timestamp() > exp),
+        "has_password": info.has_password,
+        "permissions": serde_json::json!({
+            "can_edit": false,
+            "can_download": true,
+            "can_upload": false,
+        }),
+        "password": null,
+        "description": info.description,
+    })))
+}
+
+/// GET /api/v2.1/share-links/{token}/
+pub async fn get_share_link_v21(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let info = share::get_share_link_v21(&state.repos, &token, auth.user_id).await?;
+
+    let link_url = if info.s_type == "d" {
+        format!("/d/{}/", info.token)
+    } else {
+        format!("/f/{}/", info.token)
+    };
+
+    Ok(Json(serde_json::json!({
+        "token": info.token,
+        "link": link_url,
+        "repo_id": info.repo_id,
+        "repo_name": null,
+        "path": info.path,
+        "obj_name": info.path.trim_end_matches('/').rsplit_once('/')
+            .map(|(_, n)| n)
+            .unwrap_or(&info.path),
+        "is_dir": info.s_type == "d",
+        "username": null,
+        "view_cnt": info.view_cnt,
+        "ctime": info.created_at,
+        "expire_date": info.expire_at,
+        "is_expired": info.expire_at.is_some_and(|exp| chrono::Utc::now().timestamp() > exp),
+        "has_password": info.has_password,
+        "permissions": serde_json::json!({
+            "can_edit": false,
+            "can_download": true,
+            "can_upload": false,
+        }),
+        "password": null,
+        "description": info.description,
+    })))
+}
+
+/// POST /api/v2.1/multi-share-links/
+///
+/// Creates a share link (behaves identically to POST /api/v2.1/share-links/).
+/// Android client uses this endpoint.
+pub async fn create_multi_share_link_v21(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateLinkRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let info = share::create_share_link_v21(
+        &state.repos,
+        &state.config,
+        &req.repo_id,
+        &req.path,
+        req.password.as_deref(),
+        req.expire_days,
+        req.description.as_deref(),
+        auth.user_id,
+    )
+    .await?;
+
+    let link_url = if info.s_type == "d" {
+        format!("/d/{}/", info.token)
+    } else {
+        format!("/f/{}/", info.token)
+    };
+
+    Ok(Json(serde_json::json!({
+        "token": info.token,
+        "link": link_url,
+        "repo_id": info.repo_id,
+        "repo_name": null,
+        "path": info.path,
+        "obj_name": info.path.trim_end_matches('/').rsplit_once('/')
+            .map(|(_, n)| n)
+            .unwrap_or(&info.path),
+        "is_dir": info.s_type == "d",
+        "username": null,
+        "view_cnt": 0,
+        "ctime": info.created_at,
+        "expire_date": info.expire_at,
+        "is_expired": info.expire_at.is_some_and(|exp| chrono::Utc::now().timestamp() > exp),
+        "has_password": info.has_password,
+        "permissions": serde_json::json!({
+            "can_edit": false,
+            "can_download": true,
+            "can_upload": false,
+        }),
+        "password": null,
+        "description": info.description,
+    })))
 }
 
 /// DELETE /api/v2.1/share-links/{token}/
@@ -172,7 +292,7 @@ pub async fn list_upload_links_v21(
     } else {
         link::list_upload_links_v21(&state.repos, auth.user_id).await?
     };
-    Ok(Json(serde_json::json!({"upload_link_list": items})))
+    Ok(Json(serde_json::Value::Array(items)))
 }
 
 /// POST /api/v2.1/upload-links/
@@ -181,7 +301,10 @@ pub async fn create_upload_link_v21(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateLinkRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let token = link::create_upload_link_v21(
+    let has_password = req.password.is_some();
+    let path = req.path.clone();
+
+    let info = link::create_upload_link_v21(
         &state.repos,
         &state.config,
         &req.repo_id,
@@ -193,7 +316,27 @@ pub async fn create_upload_link_v21(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({"token": token})))
+    let obj_name = path
+        .trim_end_matches('/')
+        .rsplit_once('/')
+        .map(|(_, n)| n.to_string())
+        .unwrap_or_else(|| path.clone());
+
+    Ok(Json(serde_json::json!({
+        "token": info.token,
+        "link": info.link,
+        "repo_id": info.repo_id,
+        "path": info.path,
+        "ctime": info.created_at,
+        "username": null,
+        "expire_date": null,
+        "is_expired": false,
+        "has_password": has_password,
+        "password": null,
+        "description": null,
+        "view_cnt": 0,
+        "obj_name": obj_name,
+    })))
 }
 
 /// DELETE /api/v2.1/upload-links/clean-invalid/
@@ -321,5 +464,5 @@ pub async fn list_repo_upload_links_v21(
     Path(repo_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let items = link::list_upload_links_for_repo_v21(&state.repos, &repo_id).await?;
-    Ok(Json(serde_json::json!({"upload_link_list": items})))
+    Ok(Json(serde_json::Value::Array(items)))
 }

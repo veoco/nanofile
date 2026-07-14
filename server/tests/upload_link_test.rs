@@ -60,7 +60,7 @@ async fn test_upload_link_create_with_password() {
         .await;
     assert_eq!(list.status(), 200);
     let list_body: serde_json::Value = list.json().await.unwrap();
-    let links = list_body["upload_link_list"].as_array().unwrap();
+    let links = list_body.as_array().unwrap();
     let ul = links.iter().find(|l| l["token"] == token).unwrap();
     assert_eq!(
         ul["has_password"], true,
@@ -96,7 +96,7 @@ async fn test_upload_link_create_with_description() {
         .await;
     assert_eq!(list.status(), 200);
     let list_body: serde_json::Value = list.json().await.unwrap();
-    let links = list_body["upload_link_list"].as_array().unwrap();
+    let links = list_body.as_array().unwrap();
     let ul = links.iter().find(|l| l["token"] == token).unwrap();
     assert_eq!(ul["description"], "test description");
 }
@@ -129,7 +129,7 @@ async fn test_upload_link_list_filter_by_repo_and_path() {
         .await;
     assert_eq!(list.status(), 200);
     let body: serde_json::Value = list.json().await.unwrap();
-    let links = body["upload_link_list"].as_array().unwrap();
+    let links = body.as_array().unwrap();
     assert!(!links.is_empty(), "should find upload link for this path");
 
     // List with non-matching path — should return empty
@@ -145,7 +145,7 @@ async fn test_upload_link_list_filter_by_repo_and_path() {
         .await;
     assert_eq!(list2.status(), 200);
     let body2: serde_json::Value = list2.json().await.unwrap();
-    let links2 = body2["upload_link_list"].as_array().unwrap();
+    let links2 = body2.as_array().unwrap();
     assert!(
         links2.is_empty(),
         "should not find upload link for non-matching path"
@@ -176,7 +176,7 @@ async fn test_upload_link_list_response_fields() {
         .await;
     assert_eq!(list.status(), 200);
     let body: serde_json::Value = list.json().await.unwrap();
-    let links = body["upload_link_list"].as_array().unwrap();
+    let links = body.as_array().unwrap();
     assert!(!links.is_empty(), "should have at least one upload link");
 
     let link = &links[0];
@@ -453,7 +453,7 @@ async fn test_upload_link_delete_own() {
         .await;
     assert_eq!(list.status(), 200);
     let list_body: serde_json::Value = list.json().await.unwrap();
-    assert_eq!(list_body["upload_link_list"].as_array().unwrap().len(), 1);
+    assert_eq!(list_body.as_array().unwrap().len(), 1);
 
     // Delete
     let del = f
@@ -614,7 +614,7 @@ async fn test_upload_link_list_repo_links() {
         .await;
     assert_eq!(list.status(), 200);
     let body: serde_json::Value = list.json().await.unwrap();
-    let links = body["upload_link_list"].as_array().unwrap();
+    let links = body.as_array().unwrap();
     assert!(!links.is_empty(), "should find upload link for this repo");
     assert_eq!(links[0]["repo_id"], f.repo_id);
 }

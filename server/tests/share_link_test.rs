@@ -370,7 +370,7 @@ async fn test_share_link_list_response_fields() {
         .await;
     assert_eq!(list.status(), 200);
     let body: serde_json::Value = list.json().await.unwrap();
-    let links = body["share_link_list"].as_array().unwrap();
+    let links = body.as_array().unwrap();
     assert!(!links.is_empty(), "should have at least one share link");
 
     let link = &links[0];
@@ -427,7 +427,7 @@ async fn test_upload_link_create_with_password() {
         .await;
     assert_eq!(list.status(), 200);
     let list_body: serde_json::Value = list.json().await.unwrap();
-    let links = list_body["upload_link_list"].as_array().unwrap();
+    let links = list_body.as_array().unwrap();
     let ul = links.iter().find(|l| l["token"] == token).unwrap();
     assert_eq!(
         ul["has_password"], true,

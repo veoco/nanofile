@@ -150,7 +150,7 @@ pub async fn create_upload_link_v21(
     expire_days: Option<i64>,
     description: Option<String>,
     creator_id: i32,
-) -> Result<String, AppError> {
+) -> Result<UploadLinkInfo, AppError> {
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
 
@@ -170,7 +170,13 @@ pub async fn create_upload_link_v21(
         })
         .await?;
 
-    Ok(token)
+    Ok(UploadLinkInfo {
+        token: token.clone(),
+        link: format!("/u/{}/", token),
+        repo_id: repo_id.to_string(),
+        path: path.to_string(),
+        created_at: now,
+    })
 }
 
 pub async fn delete_upload_link_v21(
