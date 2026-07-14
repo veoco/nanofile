@@ -33,7 +33,7 @@ impl Versioning {
                 crate::fs::core::file_ops::FileOps::read_dir_fs_object(repos, repo_id, &c.root_id)
                     .await?;
 
-            if Self::path_exists_in_dir(repos, &root_data, path).await? {
+            if Self::path_exists_in_dir(repos, repo_id, &root_data, path).await? {
                 history.push(c);
             }
         }
@@ -43,6 +43,7 @@ impl Versioning {
 
     async fn path_exists_in_dir(
         repos: &Repositories,
+        repo_id: &str,
         dir_data: &FsDirData,
         path: &str,
     ) -> Result<bool, Box<dyn std::error::Error>> {
@@ -65,7 +66,7 @@ impl Versioning {
                 Some(id) => id,
                 None => return Ok(false),
             };
-            current_dir = crate::fs::core::read_fs_dir_data(repos, "", &next_id).await?;
+            current_dir = crate::fs::core::read_fs_dir_data(repos, repo_id, &next_id).await?;
         }
         Ok(false)
     }
