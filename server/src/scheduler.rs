@@ -10,6 +10,8 @@
 //!   every execution.
 //! * **Continuous** — runs until cancelled ([`Scheduler::spawn_continuous`]).
 //!   Used for event-driven tasks that don't have a natural tick interval.
+//! * **Manual** — runs only on explicit trigger ([`Scheduler::spawn_manual`]).
+//!   Used for ad-hoc admin operations.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -72,13 +74,15 @@ pub struct TaskMetrics {
     pub total_processed: u64,
 }
 
-/// Whether a task runs periodically or continuously.
+/// Whether a task runs periodically, continuously, or only on manual trigger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskKind {
     /// Task runs on a fixed interval.
     Periodic { interval_secs: u64 },
     /// Task runs until cancelled (event-driven).
     Continuous,
+    /// Task runs only when explicitly triggered via the UI/API.
+    Manual,
 }
 
 /// A handle to inspect a running task's metadata and runtime metrics.
@@ -254,18 +258,52 @@ impl Scheduler {
         handle
     }
 
+    /// Register a **manual** task that runs only when triggered.
+    ///
+    /// Unlike [`spawn_periodic`](Self::spawn_periodic), no background loop is
+    /// started. The task appears in the task-management UI and can be triggered
+    /// via [`trigger_now`](Self::trigger_now). Metrics are recorded after each
+    /// execution.
+    pub fn spawn_manual<F, Fut>(&self, name: &'static str, work: F) -> TaskHandle
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = TaskOutput> + Send + 'static,
+    {
+        let metrics = Arc::new(RwLock::new(TaskMetrics::default()));
+
+        let work_fn: Arc<
+            dyn Fn() -> Pin<Box<dyn Future<Output = TaskOutput> + Send>> + Send + Sync,
+        > = Arc::new(move || Box::pin(work()));
+
+        self.tasks.lock().unwrap().insert(
+            name,
+            Arc::new(StoredTask {
+                work: work_fn,
+                metrics: metrics.clone(),
+            }),
+        );
+
+        let handle = TaskHandle {
+            name,
+            kind: TaskKind::Manual,
+            metrics,
+        };
+        self.handles.lock().unwrap().push(handle.clone());
+        handle
+    }
+
     /// Return a snapshot of all registered task handles.
     pub fn handles(&self) -> Vec<TaskHandle> {
         self.handles.lock().unwrap().clone()
     }
 
-    /// Execute a periodic task immediately and wait for it to complete.
+    /// Execute a periodic or manual task immediately and wait for it to complete.
     ///
     /// The task's metrics are updated inline so callers see fresh data
     /// as soon as this method returns.
     ///
     /// Returns `true` if the task was found and executed, `false` if no
-    /// periodic task with that name exists.
+    /// triggerable task with that name exists.
     pub async fn trigger_now(&self, name: &str) -> bool {
         let entry = {
             let tasks = self.tasks.lock().unwrap();
@@ -488,5 +526,57 @@ mod tests {
         // so trigger_now should return false.
         let ok = sched.trigger_now("c-task").await;
         assert!(!ok, "continuous tasks cannot be triggered");
+    }
+
+    #[tokio::test]
+    async fn test_manual_spawn_and_trigger() {
+        let token = CancellationToken::new();
+        let sched = Scheduler::new(token.child_token());
+
+        sched.spawn_manual("cleanup-inactive", move || async {
+            TaskOutput::success("purged 3 inactive users", Some(3))
+        });
+
+        // Initially no runs.
+        {
+            let m = sched
+                .handles()
+                .into_iter()
+                .find(|h| h.name == "cleanup-inactive")
+                .unwrap()
+                .metrics()
+                .await;
+            assert_eq!(m.run_count, 0);
+        }
+
+        // Trigger and wait for completion.
+        let ok = sched.trigger_now("cleanup-inactive").await;
+        assert!(ok);
+
+        let m = sched
+            .handles()
+            .into_iter()
+            .find(|h| h.name == "cleanup-inactive")
+            .unwrap()
+            .metrics()
+            .await;
+        assert_eq!(m.run_count, 1);
+        assert!(m.last_run_at.is_some());
+        assert_eq!(m.last_success_message, "purged 3 inactive users");
+        assert_eq!(m.total_processed, 3);
+    }
+
+    #[tokio::test]
+    async fn test_manual_handle_kind() {
+        let token = CancellationToken::new();
+        let sched = Scheduler::new(token.child_token());
+
+        let handle = sched.spawn_manual("manual-only", move || async {
+            TaskOutput::success("done", None)
+        });
+
+        assert_eq!(handle.kind, TaskKind::Manual);
+        let handles = sched.handles();
+        assert!(handles.iter().any(|h| h.name == "manual-only"));
     }
 }

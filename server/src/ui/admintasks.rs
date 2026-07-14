@@ -61,7 +61,7 @@ fn interval_display(kind: &TaskKind) -> String {
             format!("{}m", interval_secs / 60)
         }
         TaskKind::Periodic { interval_secs } => format!("{}s", interval_secs),
-        TaskKind::Continuous => "—".to_string(),
+        TaskKind::Continuous | TaskKind::Manual => "—".to_string(),
     }
 }
 
@@ -70,6 +70,7 @@ fn kind_label(kind: &TaskKind) -> &'static str {
     match kind {
         TaskKind::Periodic { .. } => "Periodic",
         TaskKind::Continuous => "Continuous",
+        TaskKind::Manual => "Manual",
     }
 }
 
@@ -87,7 +88,7 @@ fn to_task_row(name: &str, kind: &TaskKind, metrics: &TaskMetrics) -> TaskRow {
         last_success_message: metrics.last_success_message.clone(),
         last_error_message: metrics.last_error_message.clone(),
         total_processed: metrics.total_processed,
-        can_trigger: matches!(kind, TaskKind::Periodic { .. }),
+        can_trigger: !matches!(kind, TaskKind::Continuous),
     }
 }
 
