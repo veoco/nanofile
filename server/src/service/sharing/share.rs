@@ -146,13 +146,15 @@ pub async fn list_share_links_for_path(
     Ok(infos)
 }
 
-pub async fn create_share_link(
+/// Shared implementation for creating a share link (used by both v2 and v2.1).
+async fn create_share_link_impl(
     repos: &Repositories,
     config: &Config,
     repo_id: &str,
     path: &str,
     password: Option<&str>,
     expires_at: Option<i64>,
+    description: Option<String>,
     creator_id: i32,
 ) -> Result<ShareLinkInfo, AppError> {
     // Block share links for encrypted repos
@@ -193,7 +195,7 @@ pub async fn create_share_link(
             expires_at,
             created_at: now,
             s_type: s_type.clone(),
-            description: None,
+            description: description.clone(),
         })
         .await?;
 
@@ -213,8 +215,23 @@ pub async fn create_share_link(
         expire_at: expires_at,
         s_type,
         view_cnt: 0,
-        description: None,
+        description,
     })
+}
+
+pub async fn create_share_link(
+    repos: &Repositories,
+    config: &Config,
+    repo_id: &str,
+    path: &str,
+    password: Option<&str>,
+    expires_at: Option<i64>,
+    creator_id: i32,
+) -> Result<ShareLinkInfo, AppError> {
+    create_share_link_impl(
+        repos, config, repo_id, path, password, expires_at, None, creator_id,
+    )
+    .await
 }
 
 pub async fn delete_share_link(
@@ -241,66 +258,19 @@ pub async fn create_share_link_v21(
     description: Option<&str>,
     creator_id: i32,
 ) -> Result<ShareLinkInfo, AppError> {
-    // Block share links for encrypted repos
-    let repo_model = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-    if repo_model.encrypted != 0 {
-        return Err(AppError::BadRequest(
-            "cannot create share link for encrypted library".into(),
-        ));
-    }
-
-    // Verify caller has read permission on the repo
-    crate::domain::permission::check_repo_read_permission(
-        repos.member.as_ref(),
+    let now = chrono::Utc::now().timestamp();
+    let expires_at = expire_days.map(|d| now + d * 86400);
+    create_share_link_impl(
+        repos,
+        config,
         repo_id,
+        path,
+        password,
+        expires_at,
+        description.map(|s| s.to_string()),
         creator_id,
     )
-    .await?;
-
-    let s_type = resolve_entry_type_raw(repos, repo_id, path).await?;
-
-    let token = generate_share_link_token();
-    let now = chrono::Utc::now().timestamp();
-
-    repos
-        .share_link
-        .create_share_link(crate::repository::share_link::CreateShareLinkParams {
-            repo_id: repo_id.to_string(),
-            creator_id,
-            path: path.to_string(),
-            token: token.clone(),
-            password: password.map(|p| hash_password(p, config.auth.password_hash_iterations)),
-            expires_at: expire_days.map(|d| now + d * 86400),
-            created_at: now,
-            s_type: s_type.clone(),
-            description: description.map(|s| s.to_string()),
-        })
-        .await?;
-
-    let link = if s_type == "d" {
-        format!("/d/{}/", token)
-    } else {
-        format!("/f/{}/", token)
-    };
-
-    let expire_date = expire_days.map(|d| now + d * 86400);
-
-    Ok(ShareLinkInfo {
-        token: token.clone(),
-        link,
-        repo_id: repo_id.to_string(),
-        path: path.to_string(),
-        created_at: now,
-        has_password: password.is_some(),
-        expire_at: expire_date,
-        s_type,
-        view_cnt: 0,
-        description: description.map(|s| s.to_string()),
-    })
+    .await
 }
 
 /// GET /api/v2.1/share-links/{token}/ — retrieve share link details

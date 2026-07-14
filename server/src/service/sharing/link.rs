@@ -40,18 +40,19 @@ pub async fn list_upload_links(
     Ok(infos)
 }
 
-pub async fn create_upload_link(
+/// Shared implementation for creating an upload link (used by both v2 and v2.1).
+async fn create_upload_link_impl(
     repos: &Repositories,
     config: &Config,
     repo_id: &str,
     path: &str,
+    token: String,
     password: Option<&str>,
     expires_at: Option<i64>,
+    description: Option<String>,
     creator_id: i32,
 ) -> Result<UploadLinkInfo, AppError> {
-    let token = generate_upload_link_token();
     let now = chrono::Utc::now().timestamp();
-
     let password_hash = password.map(|p| hash_password(p, config.auth.password_hash_iterations));
 
     repos
@@ -64,7 +65,7 @@ pub async fn create_upload_link(
             password: password_hash,
             expires_at,
             created_at: now,
-            description: None,
+            description,
         })
         .await?;
 
@@ -75,6 +76,22 @@ pub async fn create_upload_link(
         path: path.to_string(),
         created_at: now,
     })
+}
+
+pub async fn create_upload_link(
+    repos: &Repositories,
+    config: &Config,
+    repo_id: &str,
+    path: &str,
+    password: Option<&str>,
+    expires_at: Option<i64>,
+    creator_id: i32,
+) -> Result<UploadLinkInfo, AppError> {
+    let token = generate_upload_link_token();
+    create_upload_link_impl(
+        repos, config, repo_id, path, token, password, expires_at, None, creator_id,
+    )
+    .await
 }
 
 pub async fn delete_upload_link(
@@ -153,30 +170,19 @@ pub async fn create_upload_link_v21(
 ) -> Result<UploadLinkInfo, AppError> {
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
-
-    let password_hash = password.map(|p| hash_password(&p, config.auth.password_hash_iterations));
-
-    repos
-        .upload_link
-        .create_upload_link(crate::repository::upload_link::CreateUploadLinkParams {
-            repo_id: repo_id.to_string(),
-            creator_id,
-            path: path.to_string(),
-            token: token.clone(),
-            password: password_hash,
-            expires_at: expire_days.map(|d| now + d * 86400),
-            created_at: now,
-            description,
-        })
-        .await?;
-
-    Ok(UploadLinkInfo {
-        token: token.clone(),
-        link: format!("/u/{}/", token),
-        repo_id: repo_id.to_string(),
-        path: path.to_string(),
-        created_at: now,
-    })
+    let expires_at = expire_days.map(|d| now + d * 86400);
+    create_upload_link_impl(
+        repos,
+        config,
+        repo_id,
+        path,
+        token,
+        password.as_deref(),
+        expires_at,
+        description,
+        creator_id,
+    )
+    .await
 }
 
 pub async fn delete_upload_link_v21(
