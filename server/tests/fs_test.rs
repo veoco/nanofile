@@ -41,6 +41,40 @@ async fn setup_repo() -> (TestServer, String, String, String) {
     (server, api_token, repo_id, sync_token)
 }
 
+/// Serialize data to JSON, compute its SHA-1 fs_id,
+/// and compress with zlib. Returns (fs_id, compressed_data).
+fn make_fs_entry<T: serde::Serialize>(data: &T) -> (String, Vec<u8>) {
+    let json = serde_json::to_string(data).unwrap();
+    let fs_id = infra::crypto::fs_id::sha1_hex(json.as_bytes());
+    let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
+    (fs_id, compressed)
+}
+
+/// Pack one or more FS entries into recv-fs binary format:
+/// [40-byte fs_id][4-byte big-endian size][zlib data]...
+fn pack_fs_entries(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut packed = Vec::new();
+    for (fs_id, compressed) in entries {
+        packed.extend_from_slice(fs_id.as_bytes());
+        packed.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
+        packed.extend_from_slice(compressed);
+    }
+    packed
+}
+
+/// Upload FS objects via recv-fs and assert success.
+async fn upload_fs_objects(
+    client: &common::client::TestClient,
+    sync_token: &str,
+    repo_id: &str,
+    fs_entries: &[(String, Vec<u8>)],
+) {
+    let resp = client
+        .recv_fs(sync_token, repo_id, pack_fs_entries(fs_entries))
+        .await;
+    assert_eq!(resp.status(), 200);
+}
+
 async fn push_commit(
     client: &common::client::TestClient,
     sync_token: &str,
@@ -159,18 +193,14 @@ async fn test_recv_fs_binary_format() {
 
     // Create a file fs_object referencing the real block.
     let file_data = make_file_fs_data(vec![block_id.clone()], 512);
-    let fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
-    let json = serde_json::to_string(&file_data).unwrap();
-    let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
-
-    let mut packed = Vec::new();
-    packed.extend_from_slice(fs_id.as_bytes());
-    packed.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&compressed);
-
-    let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
-    assert_eq!(resp.status(), 200);
+    let (fs_id, _compressed) = make_fs_entry(&file_data);
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[(fs_id.clone(), _compressed)],
+    )
+    .await;
 
     let root_dir = make_dir_fs_data(vec![DirEntryData {
         id: fs_id.clone(),
@@ -180,18 +210,14 @@ async fn test_recv_fs_binary_format() {
         name: "test.txt".to_string(),
         size: 512,
     }]);
-    let root_json = serde_json::to_string(&root_dir).unwrap();
-    let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
-    let root_fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
-
-    let mut root_packed = Vec::new();
-    root_packed.extend_from_slice(root_fs_id.as_bytes());
-    root_packed.extend_from_slice(&(root_compressed.len() as u32).to_be_bytes());
-    root_packed.extend_from_slice(&root_compressed);
-
-    let resp = client.recv_fs(&sync_token, &repo_id, root_packed).await;
-    assert_eq!(resp.status(), 200);
+    let (root_fs_id, _root_compressed) = make_fs_entry(&root_dir);
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[(root_fs_id.clone(), _root_compressed)],
+    )
+    .await;
 
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 }
@@ -227,17 +253,14 @@ async fn test_pack_fs_returns_packed_binary() {
     let client = server.client();
 
     let file_data = make_file_fs_data(vec![random_hex_id()], 256);
-    let fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
-    let json = serde_json::to_string(&file_data).unwrap();
-    let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
-
-    let mut packed = Vec::new();
-    packed.extend_from_slice(fs_id.as_bytes());
-    packed.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&compressed);
-    let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
-    assert_eq!(resp.status(), 200);
+    let (fs_id, compressed) = make_fs_entry(&file_data);
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[(fs_id.clone(), compressed.clone())],
+    )
+    .await;
 
     let resp = client.pack_fs(&sync_token, &repo_id, &[&fs_id]).await;
     assert_eq!(resp.status(), 200);
@@ -256,17 +279,14 @@ async fn test_check_fs_partial_exists() {
     let client = server.client();
 
     let file_data = make_file_fs_data(vec![random_hex_id()], 100);
-    let fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
-    let json = serde_json::to_string(&file_data).unwrap();
-    let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
-
-    let mut packed = Vec::new();
-    packed.extend_from_slice(fs_id.as_bytes());
-    packed.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&compressed);
-    let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
-    assert_eq!(resp.status(), 200);
+    let (fs_id, compressed) = make_fs_entry(&file_data);
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[(fs_id.clone(), compressed)],
+    )
+    .await;
 
     let fake_id = random_hex_id();
     let resp = client
@@ -292,17 +312,8 @@ async fn test_fs_id_list_with_server_head() {
         name: "file.txt".to_string(),
         size: 100,
     }]);
-    let root_fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
-    let root_json = serde_json::to_string(&root_dir).unwrap();
-    let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
-
-    let mut packed = Vec::new();
-    packed.extend_from_slice(root_fs_id.as_bytes());
-    packed.extend_from_slice(&(root_compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&root_compressed);
-    let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
-    assert_eq!(resp.status(), 200);
+    let (root_fs_id, _rc) = make_fs_entry(&root_dir);
+    upload_fs_objects(&client, &sync_token, &repo_id, &[(root_fs_id.clone(), _rc)]).await;
 
     let commit_id = push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
@@ -319,17 +330,8 @@ async fn test_fs_id_list_with_matching_client_head() {
     let client = server.client();
 
     let root_dir = make_dir_fs_data(vec![]);
-    let root_fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
-    let root_json = serde_json::to_string(&root_dir).unwrap();
-    let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
-
-    let mut packed = Vec::new();
-    packed.extend_from_slice(root_fs_id.as_bytes());
-    packed.extend_from_slice(&(root_compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&root_compressed);
-    let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
-    assert_eq!(resp.status(), 200);
+    let (root_fs_id, _rc) = make_fs_entry(&root_dir);
+    upload_fs_objects(&client, &sync_token, &repo_id, &[(root_fs_id.clone(), _rc)]).await;
 
     let commit_id = push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
@@ -395,17 +397,14 @@ async fn test_regression_recv_fs_stores_correct_dir_type() {
 
     // Create a dir fs object with type=3 (what seaf-daemon sends)
     let dir_data = make_dir_fs_data(vec![]);
-    let dir_json = serde_json::to_string(&dir_data).unwrap();
-    let dir_compressed = pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
-    let dir_fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
-
-    let mut packed = Vec::new();
-    packed.extend_from_slice(dir_fs_id.as_bytes());
-    packed.extend_from_slice(&(dir_compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&dir_compressed);
-
-    client.recv_fs(&sync_token, &repo_id, packed).await;
+    let (dir_fs_id, _compressed) = make_fs_entry(&dir_data);
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[(dir_fs_id.clone(), _compressed)],
+    )
+    .await;
 
     // Push a commit with this root
     push_commit(&client, &sync_token, &repo_id, &dir_fs_id, None).await;
@@ -728,16 +727,14 @@ async fn test_regression_check_endpoints_accept_json_array() {
     // check-fs with JSON array
     let _existing = random_hex_id();
     let file_data = make_file_fs_data(vec![random_hex_id()], 64);
-    let fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
-    let json = serde_json::to_string(&file_data).unwrap();
-    let compressed = pack_fs::compress_fs_data(json.as_bytes()).unwrap();
-
-    let mut packed = Vec::new();
-    packed.extend_from_slice(fs_id.as_bytes());
-    packed.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&compressed);
-    client.recv_fs(&sync_token, &repo_id, packed).await;
+    let (fs_id, compressed) = make_fs_entry(&file_data);
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[(fs_id.clone(), compressed)],
+    )
+    .await;
 
     // Test check-fs accepts JSON array (what seaf-daemon sends)
     let resp = client.check_fs(&sync_token, &repo_id, &[&fs_id]).await;
@@ -778,10 +775,7 @@ async fn test_resolve_fs_id_root_path() {
 
     // Upload a file to create a real FS tree
     let file_data = make_file_fs_data(vec![block_id.clone()], 64);
-    let file_fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
-    let file_json = serde_json::to_string(&file_data).unwrap();
-    let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
+    let (file_fs_id, _fc) = make_fs_entry(&file_data);
 
     let root_dir = make_dir_fs_data(vec![DirEntryData {
         id: file_fs_id.clone(),
@@ -791,21 +785,15 @@ async fn test_resolve_fs_id_root_path() {
         name: "f.txt".to_string(),
         size: 64,
     }]);
-    let root_fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
-    let root_json = serde_json::to_string(&root_dir).unwrap();
-    let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
+    let (root_fs_id, _rc) = make_fs_entry(&root_dir);
 
-    // Upload via recv-fs
-    let mut packed = Vec::new();
-    packed.extend_from_slice(file_fs_id.as_bytes());
-    packed.extend_from_slice(&(file_compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&file_compressed);
-    packed.extend_from_slice(root_fs_id.as_bytes());
-    packed.extend_from_slice(&(root_compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&root_compressed);
-    let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
-    assert_eq!(resp.status(), 200);
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[(file_fs_id.clone(), _fc), (root_fs_id.clone(), _rc)],
+    )
+    .await;
 
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
@@ -842,10 +830,7 @@ async fn test_resolve_fs_id_deep_path() {
 
     // Build: root -> sub/ -> nested.txt
     let file_data = make_file_fs_data(vec![block_id.clone()], 32);
-    let file_fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
-    let file_json = serde_json::to_string(&file_data).unwrap();
-    let file_compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
+    let (file_fs_id, _fc) = make_fs_entry(&file_data);
 
     let sub_dir = make_dir_fs_data(vec![DirEntryData {
         id: file_fs_id.clone(),
@@ -855,10 +840,7 @@ async fn test_resolve_fs_id_deep_path() {
         name: "nested.txt".to_string(),
         size: 32,
     }]);
-    let sub_fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&sub_dir).unwrap().as_bytes());
-    let sub_json = serde_json::to_string(&sub_dir).unwrap();
-    let sub_compressed = pack_fs::compress_fs_data(sub_json.as_bytes()).unwrap();
+    let (sub_fs_id, _sc) = make_fs_entry(&sub_dir);
 
     let root_dir = make_dir_fs_data(vec![DirEntryData {
         id: sub_fs_id.clone(),
@@ -868,24 +850,19 @@ async fn test_resolve_fs_id_deep_path() {
         name: "sub".to_string(),
         size: 0,
     }]);
-    let root_fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
-    let root_json = serde_json::to_string(&root_dir).unwrap();
-    let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
+    let (root_fs_id, _rc) = make_fs_entry(&root_dir);
 
-    // Upload via recv-fs
-    let mut packed = Vec::new();
-    packed.extend_from_slice(file_fs_id.as_bytes());
-    packed.extend_from_slice(&(file_compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&file_compressed);
-    packed.extend_from_slice(sub_fs_id.as_bytes());
-    packed.extend_from_slice(&(sub_compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&sub_compressed);
-    packed.extend_from_slice(root_fs_id.as_bytes());
-    packed.extend_from_slice(&(root_compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&root_compressed);
-    let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
-    assert_eq!(resp.status(), 200);
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[
+            (file_fs_id.clone(), _fc),
+            (sub_fs_id.clone(), _sc),
+            (root_fs_id.clone(), _rc),
+        ],
+    )
+    .await;
 
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
@@ -915,21 +892,13 @@ async fn test_resolve_fs_id_deep_path() {
 #[tokio::test]
 async fn test_resolve_fs_id_nonexistent_segment() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
+    let client = server.client();
 
     let root_dir = make_dir_fs_data(vec![]);
-    let root_fs_id =
-        infra::crypto::fs_id::sha1_hex(serde_json::to_string(&root_dir).unwrap().as_bytes());
-    let root_json = serde_json::to_string(&root_dir).unwrap();
-    let root_compressed = pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
+    let (root_fs_id, _rc) = make_fs_entry(&root_dir);
+    upload_fs_objects(&client, &sync_token, &repo_id, &[(root_fs_id.clone(), _rc)]).await;
 
-    let mut packed = Vec::new();
-    packed.extend_from_slice(root_fs_id.as_bytes());
-    packed.extend_from_slice(&(root_compressed.len() as u32).to_be_bytes());
-    packed.extend_from_slice(&root_compressed);
-    let resp = server.client().recv_fs(&sync_token, &repo_id, packed).await;
-    assert_eq!(resp.status(), 200);
-
-    push_commit(&server.client(), &sync_token, &repo_id, &root_fs_id, None).await;
+    push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
     let result = server::fs::core::resolve_fs_id(
         server.repos.as_ref(),
