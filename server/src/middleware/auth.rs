@@ -35,11 +35,8 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
 
         if let Some(record) = sync_record {
             // Check token expiry.
-            if let Some(expires_at) = record.expires_at {
-                let now = chrono::Utc::now().timestamp();
-                if now > expires_at {
-                    return Err(base::error::AppError::Unauthorized);
-                }
+            if is_token_expired(record.expires_at) {
+                return Err(base::error::AppError::Unauthorized);
             }
 
             let user_id = record.user_id;
@@ -117,19 +114,13 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
 
         let user_id = if let Some(token_record) = api_record {
             // Check API token expiration.
-            if let Some(expires_at) = token_record.expires_at {
-                let now = chrono::Utc::now().timestamp();
-                if now > expires_at {
-                    return Err(StatusCode::UNAUTHORIZED);
-                }
+            if is_token_expired(token_record.expires_at) {
+                return Err(StatusCode::UNAUTHORIZED);
             }
             token_record.user_id
         } else if let Some(sync_rec) = sync_record {
-            if let Some(expires_at) = sync_rec.expires_at {
-                let now = chrono::Utc::now().timestamp();
-                if now > expires_at {
-                    return Err(StatusCode::UNAUTHORIZED);
-                }
+            if is_token_expired(sync_rec.expires_at) {
+                return Err(StatusCode::UNAUTHORIZED);
             }
             sync_rec.user_id
         } else {
@@ -219,11 +210,8 @@ impl SyncAuth {
         if let Ok(Some(record)) = sync_result
             && let Ok(_) = &api_result
         {
-            if let Some(expires_at) = record.expires_at {
-                let now = chrono::Utc::now().timestamp();
-                if now > expires_at {
-                    return Err(StatusCode::UNAUTHORIZED);
-                }
+            if is_token_expired(record.expires_at) {
+                return Err(StatusCode::UNAUTHORIZED);
             }
 
             return Ok(SyncAuth {
@@ -234,11 +222,8 @@ impl SyncAuth {
 
         // Fall back to API token — check expiration like AuthUser does.
         if let Ok(Some(record)) = api_result {
-            if let Some(expires_at) = record.expires_at {
-                let now = chrono::Utc::now().timestamp();
-                if now > expires_at {
-                    return Err(StatusCode::UNAUTHORIZED);
-                }
+            if is_token_expired(record.expires_at) {
+                return Err(StatusCode::UNAUTHORIZED);
             }
             return Ok(SyncAuth {
                 user_id: record.user_id,
@@ -248,6 +233,12 @@ impl SyncAuth {
 
         Err(StatusCode::UNAUTHORIZED)
     }
+}
+
+/// Check if a token has expired. Returns `true` when `expires_at` is set
+/// and is in the past.
+fn is_token_expired(expires_at: Option<i64>) -> bool {
+    matches!(expires_at, Some(exp) if chrono::Utc::now().timestamp() > exp)
 }
 
 /// Extract a sync/API token from HTTP headers. Used by /seafhttp/ endpoints.
