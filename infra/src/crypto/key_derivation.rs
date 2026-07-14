@@ -1,6 +1,7 @@
 use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use rand::Rng;
 use sha2::Sha256;
+use thiserror::Error;
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
@@ -10,28 +11,19 @@ type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 const MAGIC_SALT: [u8; 8] = [0xda, 0x90, 0x45, 0xc3, 0x06, 0xc7, 0xcc, 0x26];
 
 /// Error type for key derivation operations.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CryptoError {
+    #[error("unsupported encryption version: {0}")]
     UnsupportedVersion(i32),
+    #[error("invalid key: {0}")]
     InvalidKey(String),
+    #[error("invalid salt: {0}")]
     InvalidSalt(String),
+    #[error("decryption failed: {0}")]
     DecryptionFailed(String),
+    #[error("encryption failed: {0}")]
     EncryptionFailed(String),
 }
-
-impl std::fmt::Display for CryptoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CryptoError::UnsupportedVersion(v) => write!(f, "unsupported encryption version: {v}"),
-            CryptoError::InvalidKey(msg) => write!(f, "invalid key: {msg}"),
-            CryptoError::InvalidSalt(msg) => write!(f, "invalid salt: {msg}"),
-            CryptoError::DecryptionFailed(msg) => write!(f, "decryption failed: {msg}"),
-            CryptoError::EncryptionFailed(msg) => write!(f, "encryption failed: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for CryptoError {}
 
 /// The Seafile encryption protocol supports these versions:
 ///
