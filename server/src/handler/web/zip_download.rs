@@ -368,7 +368,10 @@ pub async fn zip_task_handler(
         zip_name,
         created_at: now_secs(),
     };
-    zip_tasks().lock().unwrap().insert(token.clone(), task);
+    zip_tasks()
+        .lock()
+        .expect("zip task mutex poisoned")
+        .insert(token.clone(), task);
 
     Ok(JsonResponse(ZipTaskResponse { zip_token: token }))
 }
@@ -385,7 +388,7 @@ pub async fn zip_download_handler(
 ) -> Result<Response, AppError> {
     // Look up the task
     let task = {
-        let mut tasks = zip_tasks().lock().unwrap();
+        let mut tasks = zip_tasks().lock().expect("zip task mutex poisoned");
         tasks
             .remove(&token)
             .ok_or_else(|| AppError::NotFound("Zip task not found or expired".into()))?

@@ -114,6 +114,12 @@ pub struct Repositories {
     pub sdoc_comment: Arc<dyn SdocCommentRepository>,
 }
 
+impl std::fmt::Debug for Repositories {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Repositories").finish_non_exhaustive()
+    }
+}
+
 impl Repositories {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self {

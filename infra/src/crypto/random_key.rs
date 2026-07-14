@@ -11,9 +11,23 @@ type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 ///
 /// Block ID = SHA-1(ciphertext), matching seafile's seafile_encrypt().
 ///
+/// Encrypt a file block with AES-256-CBC (Seafile protocol).
+///
 /// # Panics
 /// Panics if `file_key` is not 32 bytes or `file_iv` is not 16 bytes.
+/// Callers must always pass valid key/IV lengths (enforced by the Seafile
+/// protocol — key is always 32 bytes derived via PBKDF2, IV is always 16 bytes).
 pub fn encrypt_block(data: &[u8], file_key: &[u8], file_iv: &[u8]) -> Vec<u8> {
+    debug_assert!(
+        file_key.len() == 32,
+        "AES-256 key must be 32 bytes, got {}",
+        file_key.len()
+    );
+    debug_assert!(
+        file_iv.len() == 16,
+        "AES IV must be 16 bytes, got {}",
+        file_iv.len()
+    );
     Aes256CbcEnc::new_from_slices(file_key, file_iv)
         .expect("key must be 32 bytes, IV must be 16 bytes")
         .encrypt_padded_vec::<Pkcs7>(data)

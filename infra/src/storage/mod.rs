@@ -10,7 +10,7 @@ pub use crate::permission::lock::{check_commit_file_locks, upsert_lock_timestamp
 /// Blocks are identified by their SHA-1 hash (40-char hex string) and stored
 /// in a two-level directory tree: `{base}/{prefix[..2]}/{block_id}`.
 #[async_trait::async_trait]
-pub trait BlockStorageBackend: Send + Sync {
+pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     /// Check if a block exists on disk.
     async fn has_block(&self, block_id: &str) -> bool;
 

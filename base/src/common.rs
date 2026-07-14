@@ -23,7 +23,7 @@ pub const SEAF_METADATA_TYPE_FILE: i32 = 1;
 pub const SEAF_METADATA_TYPE_DIR: i32 = 3;
 
 /// Directory entry returned by API listing endpoints.
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct DirEntry {
     pub id: String,
     #[serde(rename = "type")]

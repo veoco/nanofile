@@ -5,6 +5,7 @@ use crate::crypto::fs_id::sha1_hex;
 use crate::crypto::random_key::{decrypt_block, encrypt_block};
 use crate::storage::BlockStorageBackend;
 
+#[derive(Debug)]
 pub struct BlockStorage {
     base_dir: PathBuf,
 }

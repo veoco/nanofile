@@ -81,6 +81,19 @@ pub struct AppState {
     pub password_manager: Arc<PasswordManager>,
 }
 
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppState")
+            .field("config", &self.config)
+            .field("block_dir", &self.block_dir)
+            .field("indexer", &self.indexer.is_some())
+            .field("notification_manager", &self.notification_manager.is_some())
+            .field("db", &"...")
+            .field("block_store", &"...")
+            .finish_non_exhaustive()
+    }
+}
+
 impl AppState {
     pub fn new(db: DatabaseConnection, config: Config, temp_file_manager: TempFileManager) -> Self {
         let block_dir = Arc::new(PathBuf::from(&config.storage.block_dir));
