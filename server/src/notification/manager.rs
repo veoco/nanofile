@@ -251,64 +251,46 @@ impl NotificationManager {
 }
 
 impl NotificationManager {
-    /// Start a background task that listens for repo-update events on the
-    /// global broadcast channel and forwards them to WebSocket subscribers.
-    /// Pass a `CancellationToken` to allow graceful shutdown.
-    pub async fn start_event_listener(&self, token: CancellationToken) {
+    /// Run the event listener loop that forwards repo-update events from the
+    /// global broadcast channel to WebSocket subscribers.
+    ///
+    /// Runs until `token` is cancelled. Does **not** spawn internally — the
+    /// caller (typically [`Scheduler`](crate::scheduler::Scheduler)) owns the
+    /// tokio task boundary.
+    pub async fn run_event_listener(&self, token: CancellationToken) {
         let mut rx = events::subscribe_repo_updates();
         let mgr = self.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    result = rx.recv() => {
-                        match result {
-                            Ok((repo_id, commit_id)) => {
-                                let event = super::events::RepoUpdateEvent::new(repo_id, commit_id);
-                                mgr.notify(event).await;
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!("Notification listener lagged by {n} messages, resuming");
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                tracing::error!("Notification broadcast channel closed");
-                                break;
-                            }
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok((repo_id, commit_id)) => {
+                            let event = super::events::RepoUpdateEvent::new(repo_id, commit_id);
+                            mgr.notify(event).await;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!("Notification listener lagged by {n} messages, resuming");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            tracing::error!("Notification broadcast channel closed");
+                            break;
                         }
                     }
-                    _ = token.cancelled() => {
-                        tracing::info!("Notification listener shutting down");
-                        break;
-                    }
+                }
+                _ = token.cancelled() => {
+                    tracing::info!("Notification listener shutting down");
+                    break;
                 }
             }
-        });
+        }
     }
 
-    /// Start a background task that checks for expired JWT tokens every hour
-    /// and sends `jwt-expired` notifications to affected clients.
-    /// Pass a `CancellationToken` to allow graceful shutdown.
-    pub async fn start_token_expiry_checker(&self, token: CancellationToken) {
-        let mgr = self.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => mgr.check_expired_tokens().await,
-                    _ = token.cancelled() => {
-                        tracing::info!("Token expiry checker shutting down");
-                        break;
-                    }
-                }
-            }
-        });
-    }
-
-    /// Iterate all clients and check their JWT token expirations.
-    /// Expired tokens are removed and a `jwt-expired` message is sent to the client,
-    /// matching the seafile notification-server behavior so the seahub frontend
-    /// can fetch a new JWT and resubscribe.
-    async fn check_expired_tokens(&self) {
+    /// Check all clients for expired JWT tokens and send `jwt-expired`
+    /// notifications.
+    ///
+    /// This is a single-shot check intended to be called periodically by
+    /// the [`Scheduler`](crate::scheduler::Scheduler).
+    pub async fn check_expired_tokens(&self) {
         let now = chrono::Utc::now().timestamp();
         let clients = self.read_clients();
         for (client_id, client) in clients.iter() {

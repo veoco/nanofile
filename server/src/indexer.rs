@@ -18,7 +18,6 @@
 
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use std::sync::Arc;
 use tantivy::Index;
@@ -28,7 +27,6 @@ use tantivy::collector::TopDocs;
 use tantivy::doc;
 use tantivy::schema::*;
 use tantivy::tokenizer::TextAnalyzer;
-use tokio_util::sync::CancellationToken;
 
 use crate::repository::Repositories;
 use base::error::AppError;
@@ -256,36 +254,6 @@ impl TextIndexer {
         self.reader
             .reload()
             .map_err(|e| AppError::internal(format!("index reload: {e}")))
-    }
-
-    /// Spawn a background task that commits the Tantivy writer periodically.
-    ///
-    /// The task commits every 30 seconds so uncommitted documents don't
-    /// accumulate indefinitely.  On shutdown the caller should also call
-    /// `commit()` explicitly.
-    ///
-    /// The task exits when `token` is cancelled.
-    pub fn spawn_background_committer(&self, token: CancellationToken) {
-        let writer = self.writer.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        if let Ok(mut w) = writer.lock()
-                            && let Err(e) = w.commit()
-                        {
-                            tracing::warn!("Background index commit failed: {e}");
-                        }
-                    }
-                    _ = token.cancelled() => {
-                        tracing::info!("Background index committer shutting down");
-                        break;
-                    }
-                }
-            }
-        });
     }
 
     /// Re-index a file by reading its content from block storage.

@@ -16,6 +16,7 @@ pub mod middleware;
 pub mod notification;
 pub mod repository;
 pub mod routes;
+pub mod scheduler;
 pub mod sdoc;
 pub mod service;
 pub mod static_assets;
@@ -23,17 +24,18 @@ pub mod thumbnail_util;
 pub mod ui;
 
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 use sha2::Digest;
 use tokio_util::sync::CancellationToken;
 
+use crate::fs::core::gc::GcManager;
 use crate::fs::task_manager::TaskManager;
 use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
+use crate::scheduler::{Scheduler, TaskOutput};
 use crate::service::auth::access_token::AccessTokenManager;
 use infra::config::Config;
 use infra::crypto::password_manager::PasswordManager;
@@ -79,6 +81,8 @@ pub struct AppState {
     pub shutdown_token: CancellationToken,
     /// Password manager for encrypted repo key caching.
     pub password_manager: Arc<PasswordManager>,
+    /// Unified scheduler for all periodic and continuous background tasks.
+    pub scheduler: Arc<Scheduler>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -99,30 +103,37 @@ impl AppState {
         let block_dir = Arc::new(PathBuf::from(&config.storage.block_dir));
         let block_store = infra::storage::new_block_store(&block_dir);
         let shutdown_token = CancellationToken::new();
+        let scheduler = Arc::new(Scheduler::new(shutdown_token.child_token()));
+
+        // ── State setup (order independent of scheduler) ────────────────
+
         let notification_manager =
             if config.notification.enabled && !config.notification.private_key.is_empty() {
                 Some(NotificationManager::new())
             } else {
                 None
             };
-        // Start the background event listener that forwards repo-update events
-        // from the global broadcast channel to WebSocket subscribers.
+
+        // Continuous: event listener (forwards repo-update events to WebSocket subscribers).
         if let Some(ref mgr) = notification_manager {
             let mgr = mgr.clone();
-            let token = shutdown_token.child_token();
-            tokio::spawn(async move {
-                mgr.start_event_listener(token).await;
+            scheduler.spawn_continuous("event listener", move |token| async move {
+                mgr.run_event_listener(token).await;
             });
         }
-        // Start the background JWT token expiry checker that sends jwt-expired
-        // notifications when subscription tokens expire. Runs hourly.
+
+        // Periodic: JWT token expiry check (hourly).
         if let Some(ref mgr) = notification_manager {
             let mgr = mgr.clone();
-            let token = shutdown_token.child_token();
-            tokio::spawn(async move {
-                mgr.start_token_expiry_checker(token).await;
+            scheduler.spawn_periodic("token expiry check", 3600, move || {
+                let mgr = mgr.clone();
+                async move {
+                    mgr.check_expired_tokens().await;
+                    TaskOutput::success("ok", None)
+                }
             });
         }
+
         let login_rate_limiter = Arc::new(LoginRateLimiter::new(
             config.auth.max_login_attempts,
             config.auth.lockout_duration_secs,
@@ -146,54 +157,96 @@ impl AppState {
         ));
 
         // Derive the CSRF secret from the server-wide secret_key via SHA-256.
-        // This makes it deterministic across restarts so existing browser
-        // sessions (sfcsrftoken cookies) survive a server restart.
         let mut hasher = sha2::Sha256::new();
         hasher.update(b"csrf-v1:");
         hasher.update(config.server.secret_key.as_bytes());
         let csrf_secret = Arc::new(hasher.finalize().to_vec());
 
+        // Periodic: password cache cleanup (every 5 minutes).
         let password_manager = Arc::new(PasswordManager::new());
-        // Start background password cache cleanup (evicts expired entries every 5 min).
         {
             let pm = password_manager.clone();
-            let token = shutdown_token.child_token();
-            tokio::spawn(async move {
-                pm.cleanup_expired(token).await;
+            scheduler.spawn_periodic("password cache cleanup", 300, move || {
+                let pm = pm.clone();
+                async move {
+                    let count = pm.cleanup_expired_once().await;
+                    if count > 0 {
+                        TaskOutput::success(
+                            format!("Evicted {count} expired password cache entries"),
+                            Some(count),
+                        )
+                    } else {
+                        TaskOutput::success("no expired entries", None)
+                    }
+                }
             });
         }
 
         let db = Arc::new(db);
         let repos = Arc::new(crate::repository::Repositories::new(db.clone()));
 
-        // Start background expired share link cleanup (runs hourly).
+        // Periodic: expired share link cleanup (hourly).
         {
             let repos = repos.clone();
-            start_expiry_cleaner(
-                db.clone(),
-                shutdown_token.child_token(),
-                "share link",
-                move |_, now| {
-                    let repos = repos.clone();
-                    Box::pin(async move { repos.share_link.delete_expired(now).await })
-                },
-            );
+            scheduler.spawn_periodic("share link cleanup", 3600, move || {
+                let repos = repos.clone();
+                async move {
+                    let now = chrono::Utc::now().timestamp();
+                    match repos.share_link.delete_expired(now).await {
+                        Ok(count) if count > 0 => TaskOutput::success(
+                            format!("Cleaned up {count} expired share links"),
+                            Some(count),
+                        ),
+                        Ok(_) => TaskOutput::success("no expired share links", None),
+                        Err(e) => {
+                            TaskOutput::error(format!("Failed to clean expired share links: {e}"))
+                        }
+                    }
+                }
+            });
         }
 
-        // Start background expired upload link cleanup (runs hourly).
+        // Periodic: expired upload link cleanup (hourly).
         {
             let repos = repos.clone();
-            start_expiry_cleaner(
-                db.clone(),
-                shutdown_token.child_token(),
-                "upload link",
-                move |_, now| {
-                    let repos = repos.clone();
-                    Box::pin(async move { repos.upload_link.delete_expired(now).await })
-                },
-            );
+            scheduler.spawn_periodic("upload link cleanup", 3600, move || {
+                let repos = repos.clone();
+                async move {
+                    let now = chrono::Utc::now().timestamp();
+                    match repos.upload_link.delete_expired(now).await {
+                        Ok(count) if count > 0 => TaskOutput::success(
+                            format!("Cleaned up {count} expired upload links"),
+                            Some(count),
+                        ),
+                        Ok(_) => TaskOutput::success("no expired upload links", None),
+                        Err(e) => {
+                            TaskOutput::error(format!("Failed to clean expired upload links: {e}"))
+                        }
+                    }
+                }
+            });
         }
 
+        // Periodic: garbage collection (configurable interval).
+        let gc_config = config.gc.clone();
+        if gc_config.enabled {
+            let repos_for_gc = repos.clone();
+            scheduler.spawn_periodic("gc", gc_config.interval_hours * 3600, move || {
+                let repos = repos_for_gc.clone();
+                async move {
+                    match GcManager::garbage_collect(&repos, gc_config.keep_commits).await {
+                        Ok(count) if count > 0 => TaskOutput::success(
+                            format!("GC removed {count} unreferenced FS objects"),
+                            Some(count),
+                        ),
+                        Ok(_) => TaskOutput::success("GC completed: nothing to remove", None),
+                        Err(e) => TaskOutput::error(format!("GC failed: {e}")),
+                    }
+                }
+            });
+        }
+
+        // Periodic: index background committer (every 30 seconds).
         let indexer = if config.index.enabled {
             match TextIndexer::new(&config.index.index_dir, Some(repos.clone())) {
                 Ok(idx) => {
@@ -201,9 +254,20 @@ impl AppState {
                         "Full-text indexer initialized at {:?}",
                         config.index.index_dir
                     );
-                    // Spawn the background committer so uncommitted index
-                    // documents are persisted periodically.
-                    idx.spawn_background_committer(shutdown_token.child_token());
+                    {
+                        let idx = idx.clone();
+                        scheduler.spawn_periodic("index commit", 30, move || {
+                            let idx = idx.clone();
+                            async move {
+                                match idx.commit() {
+                                    Ok(()) => TaskOutput::success("index committed", None),
+                                    Err(e) => TaskOutput::error(format!(
+                                        "Background index commit failed: {e}"
+                                    )),
+                                }
+                            }
+                        });
+                    }
                     Some(idx)
                 }
                 Err(e) => {
@@ -236,6 +300,7 @@ impl AppState {
             temp_file_manager,
             shutdown_token,
             password_manager,
+            scheduler,
         }
     }
 
@@ -343,46 +408,4 @@ impl AppState {
             self.indexer.clone(),
         )
     }
-}
-
-/// Spawn a background task that periodically deletes expired records.
-///
-/// Runs on an hourly interval with graceful cancellation support.
-fn start_expiry_cleaner<F>(
-    db: Arc<DatabaseConnection>,
-    token: CancellationToken,
-    name: &'static str,
-    cleanup: F,
-) where
-    F: Fn(
-            Arc<DatabaseConnection>,
-            i64,
-        ) -> Pin<Box<dyn Future<Output = Result<u64, base::AppError>> + Send>>
-        + Send
-        + 'static,
-{
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                _ = token.cancelled() => {
-                    tracing::info!("Expired {name} cleaner stopped");
-                    break;
-                }
-                _ = interval.tick() => {
-                    let now = chrono::Utc::now().timestamp();
-                    match cleanup(db.clone(), now).await {
-                        Ok(count) if count > 0 => {
-                            tracing::info!("Cleaned up {count} expired {name}(s)");
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to clean expired {name}s: {e}");
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    });
 }

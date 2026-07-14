@@ -194,6 +194,19 @@ impl PasswordManager {
         cache.retain(|k, _| !k.ends_with(&suffix));
     }
 
+    /// Remove all expired entries and return the count removed.
+    ///
+    /// This is a single-shot variant used by the unified task scheduler
+    /// ([`Scheduler`](crate::scheduler::Scheduler)) which owns the interval
+    /// loop.
+    pub async fn cleanup_expired_once(&self) -> u64 {
+        let now = chrono::Utc::now().timestamp();
+        let mut cache = self.cache.write().await;
+        let before = cache.len();
+        cache.retain(|_, entry| now < entry.expires_at);
+        (before - cache.len()) as u64
+    }
+
     /// Run periodic cleanup of expired entries.
     ///
     /// This is intended to be called from a background tokio task.
