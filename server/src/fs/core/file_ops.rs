@@ -7,6 +7,29 @@ use infra::entity::{commit, repo};
 use infra::events;
 use infra::storage::DynBlockStorage;
 use sea_orm::DatabaseConnection;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::LazyLock;
+use tokio::sync::Mutex;
+
+/// Per-repo mutexes to prevent concurrent read-modify-write races
+/// on FS tree directories. Without this, two concurrent requests
+/// modifying the same directory can lose entries (one overwrites
+/// the other's changes before a commit is created).
+static REPO_WRITE_LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Acquire the per-repo write lock. Blocks until no other FS tree
+/// mutation is in progress for the given repo.
+pub(crate) async fn acquire_repo_lock(repo_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    let mut map = REPO_WRITE_LOCKS.lock().await;
+    let lock = map
+        .entry(repo_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())));
+    let guard = lock.clone().lock_owned().await;
+    drop(map); // release the hashmap lock before the long-running operation
+    guard
+}
 
 /// Sentinel value indicating that no ancestor chain was pre-computed.
 /// Callers that don't have an ancestor chain pass this to
@@ -33,6 +56,7 @@ impl FileOps {
         // before writing. Used for encrypted repos during web upload.
         enc_key: Option<(&[u8], &[u8])>,
     ) -> Result<String, AppError> {
+        let _lock = acquire_repo_lock(repo_id).await;
         let now = chrono::Utc::now().timestamp();
 
         // Validate input — name may contain '/' for nested paths.
@@ -391,6 +415,7 @@ impl FileOps {
         ancestor_chain: &[(String, String)],
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
     ) -> Result<String, AppError> {
+        let _lock = acquire_repo_lock(repo_id).await;
         let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
@@ -431,6 +456,7 @@ impl FileOps {
         ancestor_chain: &[(String, String)],
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
     ) -> Result<String, AppError> {
+        let _lock = acquire_repo_lock(repo_id).await;
         let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
