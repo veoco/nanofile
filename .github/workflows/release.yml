@@ -263,8 +263,9 @@ jobs:
         run: |
           # ── Generate changelog from git log ─────────────────────────
           TAG_COUNT=$(git tag --list 'v*' --sort=-v:refname | wc -l)
-          if [ "$TAG_COUNT" -gt 1 ]; then
-            PREV_TAG=$(git tag --list 'v*' --sort=-v:refname | head -2 | tail -1)
+          if [ "$TAG_COUNT" -gt 0 ]; then
+            # Exclude the tag being released and get the latest historical tag
+            PREV_TAG=$(git tag --list 'v*' --sort=-v:refname | grep -v "^${RELEASE_TAG}$" | head -1)
             LOG_RANGE="$PREV_TAG"..HEAD
             COMPARE_LINK="https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${RELEASE_TAG}"
           else
