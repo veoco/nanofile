@@ -214,7 +214,9 @@ fn v2_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/v2.1/repos/batch-delete-item/",
-            post(crate::handler::batch::batch_delete_item),
+            // Desktop client sends DELETE; web UI uses POST.
+            post(crate::handler::batch::batch_delete_item)
+                .delete(crate::handler::batch::batch_delete_item),
         )
         // Async batch copy/move
         .route(

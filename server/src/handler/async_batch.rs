@@ -280,11 +280,11 @@ pub async fn query_copy_move_progress(
 
     match task {
         Some(t) => {
-            let (state_str, done, failed) = match &t.state {
-                TaskState::Pending => ("pending", false, false),
-                TaskState::Processing => ("processing", false, false),
-                TaskState::Completed => ("completed", true, false),
-                TaskState::Failed(_) => ("failed", true, true),
+            let (state_str, done, failed, successful) = match &t.state {
+                TaskState::Pending => ("pending", false, false, false),
+                TaskState::Processing => ("processing", false, false, false),
+                TaskState::Completed => ("completed", true, false, true),
+                TaskState::Failed(_) => ("failed", true, true, false),
             };
             let error_msg = match &t.state {
                 TaskState::Failed(msg) => msg.clone(),
@@ -293,13 +293,14 @@ pub async fn query_copy_move_progress(
 
             Ok(Json(serde_json::json!({
                 "state": state_str, "done": done, "failed": failed,
+                "successful": successful,
                 "description": error_msg, "total": t.total,
                 "done_count": t.done_count, "failed_count": if failed { 1 } else { 0 },
                 "cancelable": false,
             })))
         }
         None => Ok(Json(serde_json::json!({
-            "state": "completed", "done": true, "failed": false,
+            "state": "completed", "done": true, "failed": false, "successful": true,
             "description": "", "total": 0, "done_count": 0, "failed_count": 0, "cancelable": false,
         }))),
     }
