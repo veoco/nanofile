@@ -221,7 +221,14 @@ async fn main() -> anyhow::Result<()> {
             // ── Start server with graceful shutdown via oneshot ─────────────
             let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-            let serve_fut = axum::serve(listener, app).with_graceful_shutdown(async {
+            // ConnectInfo exposes the TCP peer address to handlers so rate
+            // limiting can use the real client IP instead of the spoofable
+            // X-Forwarded-For header.
+            let serve_fut = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
                 let _ = shutdown_rx.await;
             });
 

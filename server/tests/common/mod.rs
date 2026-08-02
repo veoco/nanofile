@@ -109,6 +109,7 @@ impl TestServer {
                 cors_max_age_secs: 86400,
                 secret_key: String::new(),
                 webdav_enabled,
+                trusted_proxies: vec![],
             },
             database: infra::config::DatabaseConfig {
                 url: "sqlite::memory:".to_string(),
@@ -199,12 +200,15 @@ impl TestServer {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
         tokio::spawn(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-                .expect("server failed");
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .expect("server failed");
         });
 
         // Poll until the server is actually ready (typically <1ms).

@@ -18,6 +18,10 @@ request_timeout_secs = 600
 cors_allowed_origins = []
 cors_max_age_secs = 86400
 webdav_enabled = true
+# IPs of trusted reverse proxies (comma-separated). X-Forwarded-For is only
+# honored for rate limiting when the TCP peer is one of these. Keep empty when
+# the server is exposed directly.
+trusted_proxies = []
 #   NANOFILE_SERVER_SECRET_KEY               (generate with: openssl rand -hex 32)
 # IMPORTANT: Generate a unique secret key for production:
 #   openssl rand -hex 32

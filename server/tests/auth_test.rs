@@ -3,6 +3,52 @@ mod common;
 use common::{TestServer, create_test_user};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
+/// Security: spoofing X-Forwarded-For must NOT bypass the per-IP login rate
+/// limit. The limiter keys on the TCP peer address, so rotating the header
+/// across failed attempts still accumulates failures on the real client IP.
+#[tokio::test]
+async fn test_login_rate_limit_not_bypassable_via_xff_spoofing() {
+    let server = TestServer::start().await;
+    create_test_user(server.db.as_ref(), "victim@example.com", "secret123").await;
+
+    // Raw client so we can attach arbitrary X-Forwarded-For headers.
+    let raw = reqwest::Client::builder().no_proxy().build().unwrap();
+    let url = format!("{}/api2/auth-token/", server.base_url);
+
+    // 5 failed attempts: DIFFERENT usernames, DIFFERENT spoofed XFF values.
+    for i in 0..5 {
+        let resp = raw
+            .post(&url)
+            .header("X-Forwarded-For", format!("10.0.0.{i}"))
+            .form(&[
+                ("username", format!("ghost{i}@example.com")),
+                ("password", "wrong".to_string()),
+            ])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "failed attempt {i} should be rejected");
+    }
+
+    // 6th attempt with CORRECT credentials and yet another spoofed XFF. It
+    // must be rate-limited (not 200) because all 5 failures share the socket IP.
+    let resp = raw
+        .post(&url)
+        .header("X-Forwarded-For", "10.0.0.99")
+        .form(&[
+            ("username", "victim@example.com"),
+            ("password", "secret123"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        resp.status(),
+        200,
+        "XFF spoofing must not bypass the per-IP login rate limit"
+    );
+}
+
 #[tokio::test]
 async fn test_login_success() {
     let server = TestServer::start().await;

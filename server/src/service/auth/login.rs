@@ -75,13 +75,13 @@ impl LoginService {
         client_version: Option<String>,
     ) -> Result<LoginResult, AppError> {
         // ── Rate limit keys ──────────────────────────────────────────────
+        // Per-IP + per-username. Deliberately NO global key: a global lockout
+        // would let anyone DoS the whole instance with a handful of bad logins.
         let rate_limit_key_ip = format!("login:ip:{client_ip}");
         let rate_limit_key_user = format!("login:user:{username}");
-        let rate_limit_key_global = "login:global".to_string();
 
         if self.login_rate_limiter.is_locked(&rate_limit_key_ip)
             || self.login_rate_limiter.is_locked(&rate_limit_key_user)
-            || self.login_rate_limiter.is_locked(&rate_limit_key_global)
         {
             return Ok(LoginResult::RateLimited);
         }
@@ -90,8 +90,6 @@ impl LoginService {
         let record_failure = || {
             self.login_rate_limiter.record_failure(&rate_limit_key_ip);
             self.login_rate_limiter.record_failure(&rate_limit_key_user);
-            self.login_rate_limiter
-                .record_failure(&rate_limit_key_global);
         };
 
         // ── Find user ─────────────────────────────────────────────────────
@@ -189,7 +187,6 @@ impl LoginService {
         // ── Login succeeded — create API token ─────────────────────────────
         self.login_rate_limiter.clear(&rate_limit_key_ip);
         self.login_rate_limiter.clear(&rate_limit_key_user);
-        self.login_rate_limiter.clear(&rate_limit_key_global);
 
         let token_value = generate_api_token();
         let now = chrono::Utc::now().timestamp();

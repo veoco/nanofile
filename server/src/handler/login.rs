@@ -107,6 +107,7 @@ async fn parse_multipart_login(bytes: &[u8], content_type: &str) -> Result<Login
 
 pub async fn login(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     req: Request<Body>,
 ) -> Result<Response, AppError> {
@@ -141,17 +142,11 @@ pub async fn login(
     }
 
     // ── Extract client IP for rate limiting ──────────────────────────
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    let client_ip = crate::middleware::effective_client_ip(
+        &addr,
+        &headers,
+        &state.config.server.trusted_proxies,
+    );
 
     // Extract S2FA/OTP/trust-device headers
     let s2fa_header = headers.get("X-SEAFILE-S2FA").and_then(|v| v.to_str().ok());

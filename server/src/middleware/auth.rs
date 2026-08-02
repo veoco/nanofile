@@ -65,11 +65,15 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             {
                 let now = chrono::Utc::now().timestamp();
                 let peer_ip = parts
-                    .headers
-                    .get("x-forwarded-for")
-                    .and_then(|v| v.to_str().ok())
-                    .or_else(|| parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok()))
-                    .map(|s| s.to_string());
+                    .extensions
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .map(|ci| {
+                        crate::middleware::effective_client_ip(
+                            &ci.0,
+                            &parts.headers,
+                            &state.config.server.trusted_proxies,
+                        )
+                    });
                 let _ = repos
                     .sync_token
                     .update_peer_info(

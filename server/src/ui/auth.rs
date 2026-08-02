@@ -131,6 +131,7 @@ async fn render_login_page(
 /// POST /accounts/login/ — authenticate user, handle 2FA if enabled.
 pub async fn login(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -142,29 +143,22 @@ pub async fn login(
             .map(|html| (StatusCode::FORBIDDEN, Html(html)).into_response());
     }
 
-    // Extract client IP for rate limiting.
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    // Client IP for rate limiting: TCP peer address (X-Forwarded-For is only
+    // trusted from configured proxies), so spoofing the header can't bypass it.
+    let client_ip = crate::middleware::effective_client_ip(
+        &addr,
+        &headers,
+        &state.config.server.trusted_proxies,
+    );
 
-    // Use composite keys: per-IP + per-username + global, so that rotating
-    // spoofed X-Forwarded-For headers cannot bypass the rate limiter.
+    // Composite keys: per-IP + per-username. No global key — a global lockout
+    // would be a trivial denial-of-service against every user.
     let rate_limit_key_ip = format!("login:ip:{}", client_ip);
     let rate_limit_key_user = format!("login:user:{}", form.email);
-    let rate_limit_key_global = "login:global".to_string();
 
     // Check rate limit before any DB or password work.
     if state.login_rate_limiter.is_locked(&rate_limit_key_ip)
         || state.login_rate_limiter.is_locked(&rate_limit_key_user)
-        || state.login_rate_limiter.is_locked(&rate_limit_key_global)
     {
         return render_login_page(
             &state,
@@ -181,9 +175,6 @@ pub async fn login(
             state
                 .login_rate_limiter
                 .record_failure(&rate_limit_key_user);
-            state
-                .login_rate_limiter
-                .record_failure(&rate_limit_key_global);
             return render_login_page(&state, Some("Incorrect email or password.".to_string()))
                 .await
                 .map(|html| (StatusCode::OK, Html(html)).into_response());
@@ -196,9 +187,6 @@ pub async fn login(
         state
             .login_rate_limiter
             .record_failure(&rate_limit_key_user);
-        state
-            .login_rate_limiter
-            .record_failure(&rate_limit_key_global);
         return render_login_page(&state, Some("Incorrect email or password.".to_string()))
             .await
             .map(|html| (StatusCode::OK, Html(html)).into_response());
@@ -213,18 +201,14 @@ pub async fn login(
         state
             .login_rate_limiter
             .record_failure(&rate_limit_key_user);
-        state
-            .login_rate_limiter
-            .record_failure(&rate_limit_key_global);
         return render_login_page(&state, Some("Incorrect email or password.".to_string()))
             .await
             .map(|html| (StatusCode::OK, Html(html)).into_response());
     }
 
-    // Successful login — clear rate limit for this IP.
+    // Successful login — clear rate limit for this IP and user.
     state.login_rate_limiter.clear(&rate_limit_key_ip);
     state.login_rate_limiter.clear(&rate_limit_key_user);
-    state.login_rate_limiter.clear(&rate_limit_key_global);
 
     // ── Check for 2FA ─────────────────────────────────────────────────
     let two_fa = state.repos.user_2fa.find_by_user_id(user_record.id).await?;
@@ -353,6 +337,7 @@ pub async fn two_factor_auth_page() -> Result<Html<String>, AppError> {
 /// POST /accounts/two-factor-auth/ — verify TOTP code and create session.
 pub async fn two_factor_auth(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Form(form): Form<TwoFactorAuthForm>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -362,18 +347,12 @@ pub async fn two_factor_auth(
         return Err(AppError::BadRequest("Invalid request origin.".to_string()));
     }
 
-    // Extract client IP for rate limiting.
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    // Client IP for rate limiting: TCP peer address (not spoofable XFF).
+    let client_ip = crate::middleware::effective_client_ip(
+        &addr,
+        &headers,
+        &state.config.server.trusted_proxies,
+    );
 
     // Read the pending token from cookie
     let pending_token = headers
@@ -632,6 +611,7 @@ pub async fn register_page() -> Result<Html<String>, AppError> {
 /// POST /accounts/register/ — validate invitation code and create account.
 pub async fn register(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Form(form): Form<RegisterForm>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -641,18 +621,12 @@ pub async fn register(
         return Err(AppError::BadRequest("Invalid request origin.".to_string()));
     }
 
-    // Rate limit: per IP.
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    // Rate limit: per IP (TCP peer, not spoofable XFF).
+    let client_ip = crate::middleware::effective_client_ip(
+        &addr,
+        &headers,
+        &state.config.server.trusted_proxies,
+    );
     let rl_key = format!("register:{}", client_ip);
     if state.registration_limiter.is_limited(&rl_key) {
         return Err(AppError::BadRequest(
@@ -804,6 +778,7 @@ pub async fn password_reset_page() -> Result<Html<String>, AppError> {
 /// minted), so the response can never be used to take over an account.
 pub async fn password_reset(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Form(form): Form<PasswordResetForm>,
 ) -> Result<Html<String>, AppError> {
@@ -826,18 +801,12 @@ pub async fn password_reset(
         return Ok(Html(html));
     }
 
-    // Rate limit: per IP.
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    // Rate limit: per IP (TCP peer, not spoofable XFF).
+    let client_ip = crate::middleware::effective_client_ip(
+        &addr,
+        &headers,
+        &state.config.server.trusted_proxies,
+    );
     let rl_key = format!("password_reset:{}", client_ip);
     if state.password_reset_limiter.is_limited(&rl_key) {
         // Show the done page silently to prevent enumeration.

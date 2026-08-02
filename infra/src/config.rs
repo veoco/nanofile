@@ -93,6 +93,13 @@ pub struct ServerConfig {
     /// When false, all WebDAV requests return 403.
     #[serde(default = "default_true")]
     pub webdav_enabled: bool,
+    /// IP addresses of trusted reverse proxies. The `X-Forwarded-For` header is
+    /// only honored for rate limiting when the TCP peer is one of these. When
+    /// empty (default) rate limiting uses the raw TCP peer address, so clients
+    /// cannot spoof the header to bypass per-IP limits.
+    /// Env: NANOFILE_SERVER_TRUSTED_PROXIES (comma-separated)
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 fn default_site_url() -> String {
@@ -387,6 +394,11 @@ impl Config {
         // Comma-separated list
         if let Ok(v) = std::env::var("NANOFILE_CORS_ALLOWED_ORIGINS") {
             self.server.cors_allowed_origins = v.split(',').map(|s| s.trim().to_string()).collect();
+        }
+
+        // Comma-separated trusted proxy IP list.
+        if let Ok(v) = std::env::var("NANOFILE_SERVER_TRUSTED_PROXIES") {
+            self.server.trusted_proxies = v.split(',').map(|s| s.trim().to_string()).collect();
         }
     }
 }
