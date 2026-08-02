@@ -215,6 +215,7 @@ async fn test_check_blocks_all_missing() {
     let repo_id = common::create_test_repo(&client, token, "My Library").await;
     let sync_token = get_sync_token(&client, token, &repo_id).await;
 
+    // Valid-format (40-hex) but non-existent block ids are reported missing.
     let resp = client
         .check_blocks(
             &sync_token,
@@ -476,7 +477,7 @@ async fn test_check_blocks_accepts_json_array() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let missing = body.as_array().unwrap();
-    // Only the nonexistent block should be reported missing
+    // Only the nonexistent (but well-formed) block should be reported missing
     assert_eq!(missing.len(), 1);
 }
 
@@ -657,6 +658,84 @@ async fn test_check_blocks_rejects_malicious_block_ids() {
         .check_blocks(&f.sync_token, &f.repo_id, &["../../../../etc/passwd"])
         .await;
     assert_eq!(resp.status(), 400);
+}
+
+// ==================== Security: cross-repo IDOR ====================
+
+/// Security: a sync token bound to repo B must not be usable on repo A.
+#[tokio::test]
+async fn test_sync_token_rejected_for_other_repo() {
+    let f = TestFixture::new().await;
+
+    create_test_user(f.server.db.as_ref(), "other@example.com", "password123").await;
+    let resp = f.client.login("other@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let b_api = body["token"].as_str().unwrap().to_string();
+    let b_repo = common::create_test_repo(&f.client, &b_api, "B Repo").await;
+    let b_sync = get_sync_token(&f.client, &b_api, &b_repo).await;
+
+    // B's sync token (bound to b_repo) must be rejected on A's repo.
+    let resp = f.client.get_head_commit(&b_sync, &f.repo_id).await;
+    assert!(
+        resp.status() == 401 || resp.status() == 403,
+        "expected 401/403 for cross-repo get_head_commit, got {}",
+        resp.status()
+    );
+
+    // …and write paths too.
+    let resp = f
+        .client
+        .get_commit(
+            &b_sync,
+            &f.repo_id,
+            "0000000000000000000000000000000000000000",
+        )
+        .await;
+    assert!(
+        resp.status() == 401 || resp.status() == 403,
+        "expected 401/403 for cross-repo get_commit, got {}",
+        resp.status()
+    );
+}
+
+/// Security: an API token must not grant access to a repo the user is not a
+/// member of.
+#[tokio::test]
+async fn test_api_token_rejected_for_other_repo() {
+    let f = TestFixture::new().await;
+
+    create_test_user(f.server.db.as_ref(), "other@example.com", "password123").await;
+    let resp = f.client.login("other@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let b_api = body["token"].as_str().unwrap().to_string();
+
+    let resp = f.client.get_head_commit(&b_api, &f.repo_id).await;
+    assert!(
+        resp.status() == 401 || resp.status() == 403,
+        "expected 401/403 for cross-repo API token, got {}",
+        resp.status()
+    );
+}
+
+/// Security: repo-tokens must not mint a token for a repo the caller is not a
+/// member of (official seahub skips such repos rather than erroring).
+#[tokio::test]
+async fn test_repo_tokens_skips_non_member() {
+    let f = TestFixture::new().await;
+
+    create_test_user(f.server.db.as_ref(), "other@example.com", "password123").await;
+    let resp = f.client.login("other@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let b_api = body["token"].as_str().unwrap().to_string();
+
+    let path = format!("/api2/repo-tokens/?repos={}", f.repo_id);
+    let resp = f.client.get(&path, Some(&b_api)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body.get(&f.repo_id).is_none(),
+        "non-member must not receive a sync token for someone else's repo"
+    );
 }
 
 /// Regression: recv_fs must accept directory objects with type=3 (not 2).
