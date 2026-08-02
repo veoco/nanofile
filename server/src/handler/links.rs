@@ -493,6 +493,7 @@ pub async fn delete_upload_link_v21(
 /// Validates the upload link and returns a short-lived upload URL.
 /// Anyone with the token can call this (password checked via query param).
 pub async fn get_upload_link_upload_url_v21(
+    headers: axum::http::HeaderMap,
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -509,6 +510,22 @@ pub async fn get_upload_link_upload_url_v21(
         && chrono::Utc::now().timestamp() > exp
     {
         return Err(AppError::NotFound("Upload link has expired".into()));
+    }
+
+    // Password-protected links require the `visited_ufs_{token}` session flag,
+    // set by the web password form (matches seahub). This prevents bypassing
+    // the password to obtain an upload token.
+    if link.password.is_some()
+        && !headers
+            .get("cookie")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|c| {
+                c.split(';')
+                    .map(|s| s.trim())
+                    .any(|s| s == format!("visited_ufs_{token}=1"))
+            })
+    {
+        return Err(AppError::Forbidden);
     }
 
     // Check repo still exists

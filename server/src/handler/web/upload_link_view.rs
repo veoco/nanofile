@@ -20,7 +20,6 @@ struct UploadLinkViewTemplate {
     pub repo_id: String,
     pub path: String,
     pub dir_name: String,
-    pub password_query: String,
     pub has_password: bool,
     pub max_upload_size_mb: i64,
     pub description: Option<String>,
@@ -37,21 +36,10 @@ struct ShareAccessValidationTemplate {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-/// Simple URL encoding for password (same as share_view.rs).
-fn urlencoding(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            b' ' => out.push_str("%20"),
-            _ => {
-                out.push_str(&format!("%{:02X}", b));
-            }
-        }
-    }
-    out
+/// Cookie value marking that this browser session has supplied the correct
+/// upload-link password. Mirrors seahub's `visited_ufs_{token}` session flag.
+fn upload_link_cookie(token: &str) -> String {
+    format!("visited_ufs_{token}=1; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax")
 }
 
 /// Validate the upload link: check it exists, not expired, repo exists.
@@ -143,18 +131,11 @@ pub async fn upload_link_view(
         .map(|(_, n)| n.to_string())
         .unwrap_or_else(|| link.path.clone());
 
-    let password_query = if let Some(pwd) = params.get("password") {
-        format!("?password={}", urlencoding(pwd))
-    } else {
-        String::new()
-    };
-
     let tpl = UploadLinkViewTemplate {
         token: link.token.clone(),
         repo_id: link.repo_id.clone(),
         path: link.path.clone(),
         dir_name,
-        password_query,
         has_password: link.password.is_some(),
         max_upload_size_mb: state.config.server.max_upload_size_mb as i64,
         description: link.description.clone(),
@@ -163,12 +144,24 @@ pub async fn upload_link_view(
     let html = tpl
         .render()
         .map_err(|e| AppError::Internal(e.to_string()))?;
-    Ok(Html(html).into_response())
+
+    // Valid password (provided or previously verified) → mark this session as
+    // authorized so the upload URL API grants a token.
+    let mut resp = Html(html).into_response();
+    if link.password.is_some()
+        && pw_ok
+        && let Ok(value) = axum::http::HeaderValue::from_str(&upload_link_cookie(&token))
+    {
+        resp.headers_mut()
+            .append(axum::http::header::SET_COOKIE, value);
+    }
+    Ok(resp)
 }
 
 // ── POST handler for password submission ──────────────────────────────────
 
-/// POST /u/{token}/ — validate password, redirect with password in URL.
+/// POST /u/{token}/ — validate the password, set a session flag cookie, then
+/// redirect to the upload page (the password is NOT carried in the URL).
 pub async fn upload_link_view_post(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
@@ -198,6 +191,10 @@ pub async fn upload_link_view_post(
         return Ok(Html(html).into_response());
     }
 
-    let redirect = format!("/u/{}/?password={}", token, urlencoding(password));
-    Ok((StatusCode::FOUND, [("Location", redirect.as_str())]).into_response())
+    let mut resp = (StatusCode::FOUND, [("Location", format!("/u/{}/", token))]).into_response();
+    if let Ok(value) = axum::http::HeaderValue::from_str(&upload_link_cookie(&token)) {
+        resp.headers_mut()
+            .append(axum::http::header::SET_COOKIE, value);
+    }
+    Ok(resp)
 }

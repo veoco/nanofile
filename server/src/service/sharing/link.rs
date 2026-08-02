@@ -60,6 +60,14 @@ async fn create_upload_link_impl(
     description: Option<String>,
     creator_id: i32,
 ) -> Result<UploadLinkInfo, AppError> {
+    // Only repo members may create upload links into a repo.
+    crate::domain::permission::check_repo_read_permission(
+        repos.member.as_ref(),
+        repo_id,
+        creator_id,
+    )
+    .await?;
+
     let now = chrono::Utc::now().timestamp();
     let password_hash = password.map(|p| hash_password(p, config.auth.password_hash_iterations));
 

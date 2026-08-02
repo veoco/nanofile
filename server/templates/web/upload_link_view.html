@@ -240,7 +240,10 @@
     async function getUploadUrl() {
         if (uploadUrl) return uploadUrl;
         try {
-            var resp = await fetch('/api/v2.1/upload-links/' + UPLOAD_TOKEN + '/upload/{{ password_query }}');
+            // The password (if any) is carried via the visited_ufs_{token}
+            // session cookie set when the upload page was unlocked, never in
+            // the URL.
+            var resp = await fetch('/api/v2.1/upload-links/' + UPLOAD_TOKEN + '/upload/', { credentials: 'same-origin' });
             if (!resp.ok) throw new Error('Failed to get upload URL');
             var data = await resp.json();
             uploadUrl = data.upload_link;

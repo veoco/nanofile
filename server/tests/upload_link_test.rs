@@ -567,6 +567,101 @@ async fn test_upload_link_get_upload_url() {
     );
 }
 
+/// Security: a non-member must not be able to create an upload link into
+/// someone else's repo.
+#[tokio::test]
+async fn test_upload_link_create_non_member_forbidden() {
+    let f = TestFixture::new().await;
+    create_test_user(f.server.db.as_ref(), "other@example.com", "password123").await;
+    let resp = f.client.login("other@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let b_token = body["token"].as_str().unwrap().to_string();
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&b_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+}
+
+/// Security: a password-protected upload link must not yield an upload URL
+/// without the password (previously the password was never checked).
+#[tokio::test]
+async fn test_upload_link_upload_url_requires_password() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/", "password": "uploadpass" }),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    // No password / session flag → must be rejected.
+    let url_resp = f
+        .client
+        .get(&format!("/api/v2.1/upload-links/{}/upload/", token), None)
+        .await;
+    assert_eq!(url_resp.status(), 403);
+}
+
+/// The official flow: submitting the password via the web form sets a session
+/// flag; the upload URL is then granted to that session.
+#[tokio::test]
+async fn test_upload_link_upload_url_after_password_form() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/", "password": "uploadpass" }),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    // Browser session with cookie store.
+    let browser = common::client::TestClient::new_with_cookies(&f.server.base_url);
+
+    // Submit the password via the web form. The cookie-enabled client follows
+    // the redirect, so we accept either the redirect or the final page.
+    let resp = browser
+        .post_ui_form(&format!("/u/{}/", token), &[("password", "uploadpass")])
+        .await;
+    assert!(
+        resp.status().is_redirection() || resp.status().is_success(),
+        "password POST should redirect or succeed, got {}",
+        resp.status()
+    );
+
+    // The same session can now obtain an upload URL.
+    let url_resp = browser
+        .get(&format!("/api/v2.1/upload-links/{}/upload/", token), None)
+        .await;
+    assert_eq!(
+        url_resp.status(),
+        200,
+        "upload URL should be granted after password"
+    );
+
+    // But a fresh session still cannot.
+    let fresh = common::client::TestClient::new_with_cookies(&f.server.base_url);
+    let url_resp = fresh
+        .get(&format!("/api/v2.1/upload-links/{}/upload/", token), None)
+        .await;
+    assert_eq!(url_resp.status(), 403);
+}
+
 /// U.15 — GET /api/v2.1/upload-links/{token}/ — non-existent token returns 404
 #[tokio::test]
 async fn test_upload_link_get_nonexistent() {
