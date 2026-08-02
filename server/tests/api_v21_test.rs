@@ -1,6 +1,6 @@
 mod common;
 
-use common::TestFixture;
+use common::{TestFixture, create_test_user};
 
 /// D.1 — v2.1 Repos
 #[tokio::test]
@@ -991,4 +991,70 @@ async fn test_v21_dir_recursive_invalid_params() {
         )
         .await;
     assert_eq!(resp.status(), 400);
+}
+
+/// Security: wiki rename/publish/unpublish/delete must require ownership.
+#[tokio::test]
+async fn test_wiki_owner_required() {
+    use sea_orm::{ActiveModelTrait, Set};
+
+    let f = TestFixture::new().await;
+
+    // Create a wiki owned by the fixture user.
+    let now = chrono::Utc::now().timestamp();
+    let wiki = infra::entity::wiki::ActiveModel {
+        id: sea_orm::NotSet,
+        repo_id: Set(f.repo_id.clone()),
+        name: Set("my-wiki".to_string()),
+        owner_id: Set(f.user_id),
+        published: Set(Some(false)),
+        permission: Set(None),
+        created_at: Set(now),
+    };
+    let wiki = wiki.insert(f.server.db.as_ref()).await.unwrap();
+    let wiki_id = wiki.id;
+
+    // Second (non-owner) user.
+    create_test_user(f.server.db.as_ref(), "other@example.com", "password").await;
+    let resp = f.client.login("other@example.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let b_token = body["token"].as_str().unwrap().to_string();
+
+    // Non-owner must not rename / delete / publish.
+    let resp = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/wiki2/{wiki_id}/"),
+            Some(&b_token),
+            &serde_json::json!({"name": "hacked"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "non-owner must not rename a wiki");
+
+    let resp = f
+        .client
+        .delete(&format!("/api/v2.1/wiki2/{wiki_id}/"), Some(&b_token))
+        .await;
+    assert_eq!(resp.status(), 403, "non-owner must not delete a wiki");
+
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api/v2.1/wiki2/{wiki_id}/publish/"),
+            Some(&b_token),
+            &serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "non-owner must not publish a wiki");
+
+    // Owner still can.
+    let resp = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/wiki2/{wiki_id}/"),
+            Some(&f.api_token),
+            &serde_json::json!({"name": "renamed"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "owner can rename");
 }

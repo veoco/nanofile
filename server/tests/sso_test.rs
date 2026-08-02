@@ -129,9 +129,7 @@ async fn test_device_wiped_invalid_token() {
     assert_eq!(resp.status(), 400);
 
     // Missing token entirely.
-    let resp = client
-        .post_form("/api2/device-wiped/", None, &[])
-        .await;
+    let resp = client.post_form("/api2/device-wiped/", None, &[]).await;
     assert_eq!(resp.status(), 400);
 }
 
