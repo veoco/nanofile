@@ -99,11 +99,18 @@ fn build_op_url(site_url: &str, op: &str, token: &str) -> String {
 }
 
 /// Ensure a sync token exists for the given user+repo pair.
+///
+/// Only repo members may obtain a sync token (matches official seafile: the
+/// token is minted from `repo-tokens`/`download-info`, both of which require
+/// repo permission). Non-members get `Forbidden`.
 async fn ensure_sync_token(
     repos: &Repositories,
     repo_id: &str,
     user_id: i32,
 ) -> Result<String, AppError> {
+    crate::domain::permission::check_repo_read_permission(repos.member.as_ref(), repo_id, user_id)
+        .await?;
+
     if let Some(existing) = repos
         .sync_token
         .find_by_repo_and_user(repo_id, user_id)
@@ -649,6 +656,10 @@ impl RepoService {
     }
 
     /// Batch get sync tokens for multiple repos.
+    ///
+    /// Repos the caller has no permission on are silently skipped (matches
+    /// official seahub's `RepoTokensView` behaviour) so desktop clients can
+    /// batch-request without tripping over non-member repos.
     pub async fn repo_tokens(
         repos: &Repositories,
         repo_ids: &[&str],
@@ -656,8 +667,15 @@ impl RepoService {
     ) -> Result<HashMap<String, String>, AppError> {
         let mut result = HashMap::new();
         for repo_id in repo_ids {
-            let token = ensure_sync_token(repos, repo_id, user_id).await?;
-            result.insert(repo_id.to_string(), token);
+            match ensure_sync_token(repos, repo_id, user_id).await {
+                Ok(token) => {
+                    result.insert(repo_id.to_string(), token);
+                }
+                Err(AppError::Forbidden) | Err(AppError::NotFound(_)) => {
+                    // Not a member / repo doesn't exist → skip, don't error.
+                }
+                Err(e) => return Err(e),
+            }
         }
         Ok(result)
     }

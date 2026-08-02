@@ -28,6 +28,12 @@ pub async fn get_thumbnail(
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("path required".into()))?;
     let size = query.size.unwrap_or(48);
+    if size > crate::thumbnail_util::MAX_THUMBNAIL_SIZE {
+        return Err(AppError::BadRequest(format!(
+            "thumbnail size too large (max {})",
+            crate::thumbnail_util::MAX_THUMBNAIL_SIZE
+        )));
+    }
 
     let svc = state.thumbnail_service();
     let data = svc.get_thumbnail(&repo_id, path, size).await?;

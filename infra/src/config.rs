@@ -16,6 +16,22 @@ pub struct Config {
     pub notification: NotificationConfig,
     #[serde(default)]
     pub admin_init: AdminInitConfig,
+    #[serde(default)]
+    pub email: EmailConfig,
+}
+
+/// Email delivery configuration.
+///
+/// Password reset links are **only** delivered to the account owner's inbox.
+/// Without a configured email backend the reset feature is disabled: the server
+/// must never echo the reset link back in the HTTP response, since that would
+/// let anyone take over any account.
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct EmailConfig {
+    /// Master switch. When `false` (default) the password-reset flow is
+    /// disabled and requests render a generic page without minting a token.
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -339,6 +355,7 @@ impl Config {
         env_path!("NANOFILE_INDEX_INDEX_DIR", self.index.index_dir);
         env_parse!("NANOFILE_CORS_MAX_AGE_SECS", self.server.cors_max_age_secs);
         env_parse!("NANOFILE_SERVER_WEBDAV_ENABLED", self.server.webdav_enabled);
+        env_parse!("NANOFILE_EMAIL_ENABLED", self.email.enabled);
 
         // Admin init env vars
         if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_EMAIL") {

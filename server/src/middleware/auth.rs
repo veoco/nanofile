@@ -28,6 +28,11 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         let token = extract_sync_token(&parts.headers)?;
         let repos = &state.repos;
 
+        // Repo id embedded in the URL path, if any (`/seafhttp/repo/{repo_id}/…`).
+        // Endpoints without a repo segment (accessible-repos, head-commits-multi)
+        // skip the repo binding check.
+        let url_repo_id = extract_url_repo_id(parts.uri.path());
+
         // First try to authenticate via sync token (primary sync protocol path).
         // We look up sync_tokens directly here (rather than delegating to from_token)
         // so we can capture client_id from the request URI and store peer info.
@@ -36,6 +41,14 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         if let Some(record) = sync_record {
             // Check token expiry.
             if is_token_expired(record.expires_at) {
+                return Err(base::error::AppError::Unauthorized);
+            }
+
+            // A sync token is bound to exactly one repo: it must match the repo
+            // in the URL (matches seafile-server's validate_token behaviour).
+            if let Some(url_repo) = &url_repo_id
+                && record.repo_id != *url_repo
+            {
                 return Err(base::error::AppError::Unauthorized);
             }
 
@@ -74,10 +87,40 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         }
 
         // Fall back to API token (for requests using Bearer/Token auth).
-        SyncAuth::from_token(repos, &token)
+        SyncAuth::from_token(repos, &token, url_repo_id.as_deref())
             .await
             .map_err(|_| base::error::AppError::Unauthorized)
     }
+}
+
+/// Extract the repo id from a `/seafhttp/repo/{repo_id}/…` URL path.
+///
+/// axum's `nest("/seafhttp/repo", …)` strips the matched prefix, so handlers
+/// may see either the full path or the stripped `/{repo_id}/…` form. In both
+/// cases the repo id is the first path segment; non-repo endpoints
+/// (accessible-repos, head-commits-multi, protocol-version) have no UUID
+/// segment and return `None` — those endpoints skip the repo binding check.
+fn extract_url_repo_id(path: &str) -> Option<String> {
+    let trimmed = path.trim_start_matches('/');
+    let first = if let Some(rest) = trimmed.strip_prefix("seafhttp/repo/") {
+        rest.split('/').next()
+    } else {
+        trimmed.split('/').next()
+    };
+    first.and_then(|s| is_uuid_str(s).then(|| s.to_string()))
+}
+
+/// True when `s` is a UUID-formatted string (8-4-4-4-12 hex).
+fn is_uuid_str(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b[8] == b'-'
+        && b[13] == b'-'
+        && b[18] == b'-'
+        && b[23] == b'-'
+        && b.iter()
+            .enumerate()
+            .all(|(i, &c)| i == 8 || i == 13 || i == 18 || i == 23 || c.is_ascii_hexdigit())
 }
 
 impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
@@ -199,7 +242,15 @@ fn try_extract_cookie_session(
 
 impl SyncAuth {
     /// Authenticate via sync token or API token.
-    pub async fn from_token(repos: &Repositories, token_str: &str) -> Result<Self, StatusCode> {
+    ///
+    /// `url_repo_id` is the repo in the request URL path (if any). Sync tokens
+    /// must match it; API tokens are only accepted when the caller is a member
+    /// of that repo.
+    pub async fn from_token(
+        repos: &Repositories,
+        token_str: &str,
+        url_repo_id: Option<&str>,
+    ) -> Result<Self, StatusCode> {
         // Query both token tables concurrently.
         let sync_fut = repos.sync_token.find_by_token(token_str);
         let api_fut = repos.api_token.find_by_token(token_str);
@@ -214,6 +265,12 @@ impl SyncAuth {
                 return Err(StatusCode::UNAUTHORIZED);
             }
 
+            if let Some(url_repo) = url_repo_id
+                && record.repo_id != url_repo
+            {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: record.repo_id,
@@ -225,9 +282,24 @@ impl SyncAuth {
             if is_token_expired(record.expires_at) {
                 return Err(StatusCode::UNAUTHORIZED);
             }
+
+            // API tokens are not repo-scoped. On repo-scoped endpoints the
+            // caller must be a member of the URL repo, closing the cross-repo
+            // IDOR while keeping seaf-daemon's API-token logon working for the
+            // user's own repos.
+            if let Some(url_repo) = url_repo_id {
+                crate::domain::permission::check_repo_read_permission(
+                    repos.member.as_ref(),
+                    url_repo,
+                    record.user_id,
+                )
+                .await
+                .map_err(|_| StatusCode::UNAUTHORIZED)?;
+            }
+
             return Ok(SyncAuth {
                 user_id: record.user_id,
-                repo_id: String::new(),
+                repo_id: url_repo_id.unwrap_or("").to_string(),
             });
         }
 

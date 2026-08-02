@@ -1078,3 +1078,43 @@ async fn test_client_login_no_token_redirects() {
         "no token should redirect"
     );
 }
+
+// ============================================================================
+// Password reset security
+// ============================================================================
+
+/// Security: with no email backend configured, the password-reset endpoint must
+/// never echo a reset link in the response, and must not mint a token at all
+/// (previously the reset link was rendered back to the requester, letting
+/// anyone take over any account).
+#[tokio::test]
+async fn test_password_reset_disabled_without_email() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_ui_form(
+            "/accounts/password/reset/",
+            &[("email", "test@example.com")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+
+    // No reset link / token must appear in the response body.
+    assert!(
+        !body.contains("/accounts/password/reset/"),
+        "response leaked a reset link: {body}"
+    );
+
+    // With email disabled, no reset token row may be created.
+    use sea_orm::EntityTrait;
+    let tokens = infra::entity::password_reset_token::Entity::find()
+        .all(f.server.db.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        tokens.is_empty(),
+        "password reset token minted despite email being disabled"
+    );
+}

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{TestServer, create_test_user, get_sync_token};
+use common::{TestFixture, TestServer, create_test_user, get_sync_token};
 use sea_orm::{ActiveModelTrait, EntityTrait};
 
 #[tokio::test]
@@ -216,7 +216,14 @@ async fn test_check_blocks_all_missing() {
     let sync_token = get_sync_token(&client, token, &repo_id).await;
 
     let resp = client
-        .check_blocks(&sync_token, &repo_id, &["block_1", "block_2"])
+        .check_blocks(
+            &sync_token,
+            &repo_id,
+            &[
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ],
+        )
         .await;
     assert_eq!(resp.status(), 200);
 
@@ -463,7 +470,7 @@ async fn test_check_blocks_accepts_json_array() {
         .check_blocks(
             &sync_token,
             &repo_id,
-            &[&real_id, "nonexistent_block_40_chars_hex_ff00aa"],
+            &[&real_id, "cccccccccccccccccccccccccccccccccccccccc"],
         )
         .await;
     assert_eq!(resp.status(), 200);
@@ -499,7 +506,7 @@ async fn test_check_blocks_accepts_form_encoded() {
 
     // Send form-encoded request
     let form_body = format!(
-        "block_ids={}&block_ids=fake_missing_40char_hex_id_0000aa",
+        "block_ids={}&block_ids=dddddddddddddddddddddddddddddddddddddddd",
         real_id
     );
     let resp = reqwest::Client::builder()
@@ -638,6 +645,18 @@ async fn test_regression_commit_has_required_fields() {
     // root_id must be 40 hex chars
     let root_id = commit["root_id"].as_str().unwrap();
     assert_eq!(root_id.len(), 40, "root_id must be exactly 40 hex chars");
+}
+
+/// Security: check-blocks must reject malformed / path-traversal block ids
+/// with a 400 instead of probing arbitrary file paths on the server.
+#[tokio::test]
+async fn test_check_blocks_rejects_malicious_block_ids() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .check_blocks(&f.sync_token, &f.repo_id, &["../../../../etc/passwd"])
+        .await;
+    assert_eq!(resp.status(), 400);
 }
 
 /// Regression: recv_fs must accept directory objects with type=3 (not 2).

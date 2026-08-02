@@ -757,7 +757,6 @@ pub struct PasswordResetFormTemplate {
 #[template(path = "page/password_reset_done.html")]
 pub struct PasswordResetDoneTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
-    pub reset_url: Option<String>,
 }
 
 #[derive(Template)]
@@ -798,7 +797,11 @@ pub async fn password_reset_page() -> Result<Html<String>, AppError> {
     Ok(Html(html))
 }
 
-/// POST /accounts/password/reset/ — generate a reset token and display the link.
+/// POST /accounts/password/reset/ — request a password reset.
+///
+/// Security: the reset link is **never** returned in the HTTP response. Without
+/// a configured email backend the flow is disabled entirely (no token is
+/// minted), so the response can never be used to take over an account.
 pub async fn password_reset(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -808,6 +811,19 @@ pub async fn password_reset(
     let origin = state.config.server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Ok(Html(String::new()));
+    }
+
+    // Email delivery is required to hand the reset link to the account owner.
+    // Without it, minting a token and echoing the link back would let anyone
+    // reset any account. Render the generic page and do not create a token.
+    if !state.config.email.enabled {
+        let tpl = PasswordResetDoneTemplate {
+            urls: crate::static_assets::template_urls(),
+        };
+        let html = tpl
+            .render()
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        return Ok(Html(html));
     }
 
     // Rate limit: per IP.
@@ -827,7 +843,6 @@ pub async fn password_reset(
         // Show the done page silently to prevent enumeration.
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
-            reset_url: None,
         };
         let html = tpl
             .render()
@@ -836,15 +851,15 @@ pub async fn password_reset(
     }
     state.password_reset_limiter.record_attempt(&rl_key);
 
-    // Use PasswordResetService.
+    // Mint a token that will be emailed to the account owner (delivery backend
+    // not yet wired up). The response deliberately does not contain it.
     let reset_service = PasswordResetService::new(state.repos.clone());
-    let result = reset_service
+    let _result = reset_service
         .create_reset_token(&form.email, &state.config.server.site_url)
         .await?;
 
     let tpl = PasswordResetDoneTemplate {
         urls: crate::static_assets::template_urls(),
-        reset_url: result.reset_url,
     };
     let html = tpl
         .render()
@@ -856,7 +871,6 @@ pub async fn password_reset(
 pub async fn password_reset_done() -> Result<Html<String>, AppError> {
     let tpl = PasswordResetDoneTemplate {
         urls: crate::static_assets::template_urls(),
-        reset_url: None,
     };
     let html = tpl
         .render()

@@ -104,3 +104,24 @@ async fn test_file_uploaded_bytes_missing_params() {
         .await;
     assert_eq!(resp.status(), 400);
 }
+
+/// Security: upload-blks commit mode must reject non-hex / path-traversal
+/// block ids with a 400 instead of storing them in the fs object.
+#[tokio::test]
+async fn test_upload_blks_commit_rejects_malicious_blockids() {
+    let f = TestFixture::new().await;
+
+    let resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let url: String = resp.json().await.unwrap();
+    assert!(url.contains("upload-blks-api/"), "bad url: {url}");
+
+    let form = reqwest::multipart::Form::new()
+        .text("commitonly", "1")
+        .text("parent_dir", "/")
+        .text("file_name", "pwned.txt")
+        .text("file_size", "6")
+        .text("blockids", r#"["../../../../etc/passwd"]"#);
+    let resp = f.client.post_multipart_url(&url, form).await;
+    assert_eq!(resp.status(), 400);
+}

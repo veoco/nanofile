@@ -36,6 +36,19 @@ async fn test_avatar_different_sizes() {
     }
 }
 
+/// Security: the unauthenticated avatar-image endpoint must reject oversized
+/// sizes (which would otherwise trigger a huge thumbnail allocation / OOM).
+#[tokio::test]
+async fn test_avatar_image_oversized_size_rejected() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .get(&format!("/avatars/user/{}/resized/100000/", f.email), None)
+        .await;
+    assert_eq!(resp.status(), 400);
+}
+
 #[tokio::test]
 async fn test_avatar_nonexistent_user() {
     let f = TestFixture::new().await;

@@ -15,8 +15,15 @@ impl BlockStorage {
         Self { base_dir }
     }
 
+    /// Block IDs are content-addressed SHA-1 hashes: exactly 40 lowercase hex.
+    fn is_valid_block_id(block_id: &str) -> bool {
+        block_id.len() == 40 && block_id.bytes().all(|b| b.is_ascii_hexdigit())
+    }
+
     fn block_path(&self, block_id: &str) -> PathBuf {
-        let prefix = &block_id[..2];
+        // Defensive: never index before checking length (callers validate via
+        // `is_valid_block_id`, but write_block also routes through here).
+        let prefix = block_id.get(..2).unwrap_or(block_id);
         self.base_dir.join(prefix).join(block_id)
     }
 
@@ -48,11 +55,20 @@ impl BlockStorage {
 #[async_trait]
 impl BlockStorageBackend for BlockStorage {
     async fn has_block(&self, block_id: &str) -> bool {
+        if !Self::is_valid_block_id(block_id) {
+            return false;
+        }
         let path = self.block_path(block_id);
         tokio::fs::try_exists(&path).await.unwrap_or(false)
     }
 
     async fn read_block(&self, block_id: &str) -> Result<Vec<u8>, std::io::Error> {
+        if !Self::is_valid_block_id(block_id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid block id",
+            ));
+        }
         tokio::fs::read(self.block_path(block_id)).await
     }
 
@@ -69,6 +85,9 @@ impl BlockStorageBackend for BlockStorage {
     }
 
     async fn remove_block(&self, block_id: &str) -> Result<(), std::io::Error> {
+        if !Self::is_valid_block_id(block_id) {
+            return Ok(());
+        }
         let path = self.block_path(block_id);
         if path.exists() {
             tokio::fs::remove_file(&path).await?;
@@ -77,6 +96,12 @@ impl BlockStorageBackend for BlockStorage {
     }
 
     async fn block_size(&self, block_id: &str) -> Result<i64, std::io::Error> {
+        if !Self::is_valid_block_id(block_id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid block id",
+            ));
+        }
         let path = self.block_path(block_id);
         tokio::fs::metadata(&path).await.map(|m| m.len() as i64)
     }
@@ -106,5 +131,98 @@ impl BlockStorageBackend for BlockStorage {
         }
 
         Ok(blocks)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// Create a unique temp layout
+    /// `{tmp}/nf-blockstore-{uuid}/data/blocks` and return `(root, store)`.
+    /// The `data` level makes path-traversal ids resolve through real
+    /// directories (the kernel rejects `..` through non-existent dirs).
+    fn temp_storage() -> (PathBuf, BlockStorage) {
+        let root = std::env::temp_dir().join(format!("nf-blockstore-{}", uuid::Uuid::new_v4()));
+        let blocks = root.join("data").join("blocks");
+        std::fs::create_dir_all(&blocks).unwrap();
+        (root, BlockStorage::new(blocks))
+    }
+
+    #[tokio::test]
+    async fn valid_block_roundtrip_works() {
+        let (_root, store) = temp_storage();
+        let id = store.write_block(b"hello world").await.unwrap();
+        assert_eq!(id.len(), 40);
+        assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(store.has_block(&id).await);
+        assert_eq!(store.read_block(&id).await.unwrap(), b"hello world");
+        assert!(store.block_size(&id).await.unwrap() > 0);
+        store.remove_block(&id).await.unwrap();
+        assert!(!store.has_block(&id).await);
+    }
+
+    #[tokio::test]
+    async fn path_traversal_block_ids_are_rejected() {
+        let (root, store) = temp_storage();
+        // A file living *outside* the block tree (sibling of `blocks/`).
+        let secret = root.join("secret.txt");
+        tokio::fs::write(&secret, b"secret").await.unwrap();
+
+        // `block_path` is `{base}/{prefix[..2]}/{block_id}`. The prefix
+        // segment adds one `..` and the id a second, so
+        // `data/blocks/../../secret.txt` resolves to `root/secret.txt`
+        // (sibling of the block tree, via real existing dirs).
+        let traversal = "../secret.txt";
+
+        // Must not be readable through the block store…
+        assert!(store.read_block(traversal).await.is_err());
+        assert!(!store.has_block(traversal).await);
+        assert!(store.block_size(traversal).await.is_err());
+        // …and remove_block must not delete it.
+        store.remove_block(traversal).await.unwrap();
+        assert_eq!(tokio::fs::read(&secret).await.unwrap(), b"secret");
+    }
+
+    #[tokio::test]
+    async fn malformed_or_short_block_ids_do_not_panic() {
+        let (_root, store) = temp_storage();
+        let bad_ids = [
+            "",                                         // too short to even take a prefix
+            "a",                                        // too short
+            "..",                                       // directory traversal
+            "nothex",                                   // valid length, not hex
+            "abcdef1234567890abcdef1234567890abcdef12", // 40 hex, valid shape but absent
+        ];
+        for bad in bad_ids {
+            assert!(
+                !store.has_block(bad).await,
+                "has_block({bad:?}) should be false"
+            );
+            assert!(
+                store.read_block(bad).await.is_err(),
+                "read_block({bad:?}) should be Err"
+            );
+            assert!(
+                store.block_size(bad).await.is_err(),
+                "block_size({bad:?}) should be Err"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn read_block_rejects_absolute_escape() {
+        let (_root, store) = temp_storage();
+        // Worst case: a traversal id pointing at a real system file.
+        assert!(store.read_block("../../../../etc/passwd").await.is_err());
+        assert!(!store.has_block("../../../../etc/passwd").await);
+    }
+
+    #[test]
+    fn block_path_prefix_uses_first_two_chars() {
+        let store = BlockStorage::new(PathBuf::from("/tmp"));
+        let p = store.block_path("abcdef");
+        assert_eq!(p, Path::new("/tmp/ab/abcdef"));
     }
 }

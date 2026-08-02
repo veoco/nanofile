@@ -70,6 +70,11 @@ pub async fn check_blocks(
         ids
     };
 
+    // Reject malformed / path-traversal ids before touching the store.
+    for id in &block_ids {
+        validate_block_id(id)?;
+    }
+
     let block_store = state.block_store.clone();
 
     let missing: Vec<String> = stream::iter(block_ids)

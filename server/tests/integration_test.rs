@@ -212,12 +212,16 @@ async fn test_download_sync_flow() {
 
     // Step 7: Check blocks
     let resp = client
-        .check_blocks(&sync_token, &repo_id, &["fake_block_id"])
+        .check_blocks(
+            &sync_token,
+            &repo_id,
+            &["ffffffffffffffffffffffffffffffffffffffff"],
+        )
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let missing = body.as_array().unwrap();
-    assert_eq!(missing.len(), 1); // fake_block_id should be missing
+    assert_eq!(missing.len(), 1); // well-formed but non-existent block is missing
 
     // Step 8: Verify file download
     let resp = client.download_file(api_token, &repo_id, "/test.txt").await;

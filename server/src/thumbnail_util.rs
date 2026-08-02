@@ -14,12 +14,18 @@ use image::imageops::FilterType;
 
 use base::error::AppError;
 
+/// Upper bound for thumbnail/avatar dimensions. Resizing to `size × size` at
+/// unbounded sizes would allocate `size² × 4` bytes (a 100000px thumb needs
+/// ~100 GB) and abort the process. Real clients use sizes ≤ 256.
+pub const MAX_THUMBNAIL_SIZE: u32 = 1024;
+
 // ─── Public API ───────────────────────────────────────────────────────────
 
 /// Decode image bytes, apply EXIF orientation, then produce a **square**
 /// thumbnail (center-crop + resize-exact).  Used for **avatar** thumbnails,
 /// matching seahub's `AvatarBase.create_thumbnail()` behaviour.
 pub fn generate_square_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError> {
+    let size = size.min(MAX_THUMBNAIL_SIZE);
     let img = load_image_with_orientation(content, size)?;
     let (w, h) = (img.width(), img.height());
     let side = w.min(h);
@@ -37,6 +43,7 @@ pub fn generate_square_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, A
 /// Uses `Triangle` filter (faster than Lanczos3) — quality difference at
 /// thumbnail sizes is imperceptible.
 pub fn generate_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError> {
+    let size = size.min(MAX_THUMBNAIL_SIZE);
     let img = load_image_with_orientation(content, size)?;
     let thumb = img.resize(size, size, FilterType::Triangle);
     encode_png(&thumb)

@@ -51,3 +51,22 @@ async fn test_thumbnail_directory_returns_400() {
         .await;
     assert_eq!(resp.status(), 400);
 }
+
+/// Security: absurd thumbnail sizes must be rejected up-front, not passed to
+/// the image decoder (which would allocate size×size×bytes and OOM the process).
+#[tokio::test]
+async fn test_thumbnail_oversized_size_rejected() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/thumbnail/?p=/test.txt&size=100000",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+}

@@ -68,6 +68,15 @@ registration_max_per_hour = 5
 # Max TOTP verification attempts per user per 5 minutes (0 = unlimited)
 totp_max_attempts = 5
 
+[email]
+# Environment variables:
+#   NANOFILE_EMAIL_ENABLED
+# Password reset links are ONLY delivered to the account owner's email inbox.
+# Without an email backend configured, the password-reset flow is disabled and
+# the server never returns a reset link (echoing it back would allow account
+# takeover). Set to true only once an SMTP backend is wired up.
+enabled = false
+
 [admin_init]
 # Environment variables:
 #   NANOFILE_ADMIN_INIT_EMAIL

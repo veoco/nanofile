@@ -1251,8 +1251,13 @@ pub async fn upload_blks_api(
             return Err(AppError::BadRequest("blockids cannot be empty".into()));
         }
 
-        // Verify all blocks exist in block store
+        // Verify all blocks exist in block store.
+        // Reject malformed / path-traversal ids outright — a valid block id
+        // is exactly 40 hex chars (content-addressed SHA-1).
         for bid in &block_ids {
+            if bid.len() != 40 || !bid.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(AppError::BadRequest(format!("invalid block id: {bid}")));
+            }
             if !state.block_store.has_block(bid).await {
                 return Err(AppError::BadRequest(format!("block not found: {bid}")));
             }

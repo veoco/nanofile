@@ -22,6 +22,19 @@ pub struct AvatarResponse {
     pub mtime: i64,
 }
 
+/// Parse the `{size}` segment and reject absurd sizes (which would otherwise
+/// drive a `size² × 4` allocation in the thumbnail generator → OOM).
+fn parse_resize_size(size_str: &str) -> Result<u32, AppError> {
+    let size = resolve_size(size_str);
+    if size > crate::thumbnail_util::MAX_THUMBNAIL_SIZE {
+        return Err(AppError::BadRequest(format!(
+            "avatar size too large (max {})",
+            crate::thumbnail_util::MAX_THUMBNAIL_SIZE
+        )));
+    }
+    Ok(size)
+}
+
 // ─── JSON API endpoint (seafile API2) ───────────────────────────────────────
 
 /// `GET /api2/avatars/user/{email}/resized/{size}/`
@@ -36,7 +49,7 @@ pub async fn get_avatar(
     // Seahub compatibility: always return a URL (default if no avatar or user
     // doesn't exist).  Clients query avatars for any email without checking
     // user existence first.
-    let size = resolve_size(&size_str);
+    let size = parse_resize_size(&size_str)?;
 
     // Desktop client uses the returned `url` directly as the fetch target, so
     // it must be an absolute URL (matching seahub's api_avatar_url behaviour).
@@ -71,7 +84,10 @@ pub async fn serve_avatar_image(
     State(state): State<Arc<AppState>>,
     Path((email, size_str)): Path<(String, String)>,
 ) -> Response {
-    let size = resolve_size(&size_str);
+    let size = match parse_resize_size(&size_str) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
 
     let svc = AvatarService::new(state.repos.clone());
     let avatar = svc.find_avatar(&email).await;
