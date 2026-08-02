@@ -126,3 +126,25 @@ async fn test_accessible_repos_unauthorized() {
     let resp = client.get("/seafhttp/accessible-repos", None).await;
     assert_eq!(resp.status(), 401);
 }
+
+/// Security hardening: head-commits-multi must reject malformed repo ids
+/// (this endpoint is intentionally unauthenticated for seaf-daemon, matching
+/// official seafile, so input validation is the mitigation).
+#[tokio::test]
+async fn test_head_commits_multi_rejects_malformed_ids() {
+    let f = TestFixture::new().await;
+    let resp = f.client.head_commits_multi(&["not-a-uuid"]).await;
+    assert_eq!(resp.status(), 400);
+}
+
+/// Security hardening: head-commits-multi must reject oversized request arrays.
+#[tokio::test]
+async fn test_head_commits_multi_rejects_oversized_array() {
+    let f = TestFixture::new().await;
+    let too_many: Vec<String> = (0..5000)
+        .map(|i| format!("{i:0>8}-0000-4000-8000-000000000000"))
+        .collect();
+    let refs: Vec<&str> = too_many.iter().map(|s| s.as_str()).collect();
+    let resp = f.client.head_commits_multi(&refs).await;
+    assert_eq!(resp.status(), 400);
+}

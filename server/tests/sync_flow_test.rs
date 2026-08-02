@@ -343,7 +343,9 @@ async fn test_head_commits_multi_partial() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    let fake_repo_id = random_hex_id();
+    // A well-formed UUID that does not exist must be silently skipped, not
+    // cause an error (matching official seafile's partial-result behaviour).
+    let fake_repo_id = uuid::Uuid::new_v4().to_string();
     let resp = client.head_commits_multi(&[&repo_id, &fake_repo_id]).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
