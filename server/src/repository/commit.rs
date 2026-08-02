@@ -28,6 +28,10 @@ pub trait CommitRepository: Send + Sync {
         commit_id: &str,
     ) -> Result<Option<commit::Model>, AppError>;
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<commit::Model>, AppError>;
+    async fn find_by_repo_id_ordered_by_ctime_desc(
+        &self,
+        repo_id: &str,
+    ) -> Result<Vec<commit::Model>, AppError>;
     async fn insert(&self, model: commit::ActiveModel) -> Result<commit::Model, AppError>;
     async fn find_all_ordered_by_ctime_desc(&self) -> Result<Vec<commit::Model>, AppError>;
     async fn insert_commit(&self, params: CreateCommitParams) -> Result<commit::Model, AppError>;
@@ -67,6 +71,20 @@ impl CommitRepository for DbCommitRepository {
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<commit::Model>, AppError> {
         Ok(commit::Entity::find()
             .filter(commit::Column::RepoId.eq(repo_id))
+            .all(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_repo_id_ordered_by_ctime_desc(
+        &self,
+        repo_id: &str,
+    ) -> Result<Vec<commit::Model>, AppError> {
+        Ok(commit::Entity::find()
+            .filter(commit::Column::RepoId.eq(repo_id))
+            // Secondary sort by auto-increment id so commits created within the
+            // same second (identical ctime) come back in a stable order.
+            .order_by_desc(commit::Column::Ctime)
+            .order_by_desc(commit::Column::Id)
             .all(self.db.as_ref())
             .await?)
     }

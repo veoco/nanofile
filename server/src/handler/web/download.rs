@@ -112,7 +112,7 @@ pub async fn shared_file_download(
 /// Returns `None` if the repo is not encrypted, or `Some(Some((key, iv)))` if
 /// the password is cached, or `RepoPasswdRequired` error if the repo is
 /// encrypted but no password has been set.
-async fn get_decryption_key_for_repo(
+pub(crate) async fn get_decryption_key_for_repo(
     state: &AppState,
     repo_id: &str,
     user_id: i32,

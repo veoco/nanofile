@@ -1,9 +1,14 @@
+use sea_orm::DatabaseConnection;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
+use crate::fs::core::file_ops::FileOps;
+use crate::fs::core::{read_fs_file_data, resolve_fs_id};
 use crate::repository::Repositories;
 use base::common::{FsDirData, FsFileData};
 use base::error::AppError;
+use infra::activity_log;
+use infra::common::util::{get_head_root_id, parent_path_from};
 use infra::serialization::{S_IFDIR, S_IFREG};
 
 #[derive(Serialize)]
@@ -191,5 +196,176 @@ impl HistoryService {
             new_dirs: Vec::new(),
             deleted_dirs: Vec::new(),
         })
+    }
+}
+
+/// A single version of a file, in the seahub `FileHistoryItem` field layout.
+#[derive(Serialize)]
+pub struct FileHistoryItem {
+    pub commit_id: String,
+    pub path: String,
+    pub size: i64,
+    pub mtime: i64,
+    pub last_modified_by: String,
+    pub rev_file_id: String,
+    pub rev_file_name: String,
+    pub rev_desc: String,
+    pub file_name: String,
+    pub file_size: i64,
+    pub file_mtime: i64,
+    pub file_type: String,
+}
+
+impl HistoryService {
+    /// Return the version history of a single file, newest first.
+    ///
+    /// Walks the repo's commits newest→oldest and records each commit whose
+    /// file content (`fs_id`) differs from the previously recorded one; stops
+    /// as soon as the path no longer resolves (the file's creation commit).
+    pub async fn get_file_history(
+        repos: &Repositories,
+        repo_id: &str,
+        path: &str,
+        limit: u64,
+    ) -> Result<Vec<FileHistoryItem>, AppError> {
+        let commits = repos
+            .commit
+            .find_by_repo_id_ordered_by_ctime_desc(repo_id)
+            .await?;
+
+        let file_name = path
+            .rsplit_once('/')
+            .map(|(_, n)| n)
+            .unwrap_or(path)
+            .to_string();
+
+        let mut result = Vec::new();
+        let mut last_fs_id: Option<String> = None;
+        for c in &commits {
+            if result.len() >= limit as usize {
+                break;
+            }
+            let fs_id = match resolve_fs_id(repos, repo_id, &c.root_id, path).await {
+                Ok(id) => id,
+                Err(_) => break, // path doesn't exist in this commit or earlier ones
+            };
+            if last_fs_id.as_deref() == Some(fs_id.as_str()) {
+                continue; // content unchanged in this commit
+            }
+            let size = read_fs_file_data(repos, repo_id, &fs_id)
+                .await
+                .map(|f| f.size)
+                .unwrap_or(0);
+            result.push(FileHistoryItem {
+                commit_id: c.commit_id.clone(),
+                path: path.to_string(),
+                size,
+                mtime: c.ctime,
+                last_modified_by: c.creator_name.clone(),
+                rev_file_id: fs_id.clone(),
+                rev_file_name: file_name.clone(),
+                rev_desc: c.description.clone(),
+                file_name: file_name.clone(),
+                file_size: size,
+                file_mtime: c.ctime,
+                file_type: "file".to_string(),
+            });
+            last_fs_id = Some(fs_id);
+        }
+        Ok(result)
+    }
+
+    /// Resolve a file's `(fs_id, FsFileData)` at a specific historical commit.
+    pub async fn get_file_revision(
+        repos: &Repositories,
+        repo_id: &str,
+        commit_id: &str,
+        path: &str,
+    ) -> Result<(String, FsFileData), AppError> {
+        let c = repos
+            .commit
+            .find_by_repo_and_commit_id(repo_id, commit_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("commit not found".into()))?;
+
+        let fs_id = resolve_fs_id(repos, repo_id, &c.root_id, path)
+            .await
+            .map_err(|_| AppError::NotFound("file not found in this version".into()))?;
+        let file_data = read_fs_file_data(repos, repo_id, &fs_id).await?;
+        Ok((fs_id, file_data))
+    }
+
+    /// Restore a file to one of its historical versions by pointing the file's
+    /// dirent at the target commit's `fs_id` and committing the change.
+    pub async fn restore_file_revision(
+        db: &DatabaseConnection,
+        repos: &Repositories,
+        repo_id: &str,
+        commit_id: &str,
+        path: &str,
+        modifier: &str,
+        user_id: i32,
+    ) -> Result<(), AppError> {
+        let c = repos
+            .commit
+            .find_by_repo_and_commit_id(repo_id, commit_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("commit not found".into()))?;
+
+        let target_fs_id = resolve_fs_id(repos, repo_id, &c.root_id, path)
+            .await
+            .map_err(|_| AppError::NotFound("file not found in target version".into()))?;
+        // Fails with NotFound if the old fs_object was already garbage-collected.
+        let target_file = read_fs_file_data(repos, repo_id, &target_fs_id).await?;
+
+        let name = path
+            .rsplit_once('/')
+            .map(|(_, n)| n)
+            .unwrap_or(path)
+            .to_string();
+        let parent_path = parent_path_from(path);
+        let head_root_id = get_head_root_id(db, repo_id).await?;
+        let parent_fs_id = resolve_fs_id(repos, repo_id, &head_root_id, parent_path).await?;
+
+        let now = chrono::Utc::now().timestamp();
+        let target_size = target_file.size;
+
+        FileOps::update_dir_tree_and_commit(
+            db,
+            repos,
+            repo_id,
+            parent_path,
+            &parent_fs_id,
+            modifier,
+            &format!("Reverted {name} to version from {commit_id}"),
+            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
+            |dirents| {
+                if let Some(d) = dirents.iter_mut().find(|d| d.name == name) {
+                    d.id = target_fs_id.clone();
+                    d.size = target_size;
+                    d.mtime = now;
+                    d.modifier = modifier.to_string();
+                }
+                Ok(())
+            },
+        )
+        .await?;
+
+        activity_log::log_activity(
+            db,
+            repo_id,
+            "recover",
+            "file",
+            path,
+            user_id,
+            None,
+            Some(target_size),
+            Some(&target_fs_id),
+            None,
+            None,
+        )
+        .await;
+
+        Ok(())
     }
 }

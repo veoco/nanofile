@@ -302,6 +302,8 @@ fn v2_routes() -> Router<Arc<AppState>> {
             get(crate::handler::metadata::get_metadata_record)
                 .put(crate::handler::metadata::update_metadata_record),
         )
+        // File history / revision / restore (web UI 文件历史版本)
+        .nest("/api/v2.1", crate::handler::history::file_history_routes())
         // Trash
         .route(
             "/api/v2.1/repos/{repo_id}/trash/",
