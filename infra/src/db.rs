@@ -2,8 +2,31 @@ use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, St
 
 use crate::config::DatabaseConfig;
 
+/// Extract the file path from a `sqlite:` URL such as
+/// `sqlite:data/nanofile.db?mode=rwc`. Returns `None` for non-file databases
+/// (e.g. `sqlite::memory:`).
+#[cfg(unix)]
+fn sqlite_file_path(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("sqlite:")?;
+    let path = rest.split('?').next()?;
+    if path.is_empty() || path == ":memory:" || path.starts_with("file::memory") {
+        return None;
+    }
+    Some(path)
+}
+
 pub async fn establish_connection(config: &DatabaseConfig) -> anyhow::Result<DatabaseConnection> {
     let db = Database::connect(&config.url).await?;
+
+    // Restrict the SQLite database file to the owning user so other local
+    // users cannot read it (default umask may leave it world-readable).
+    #[cfg(unix)]
+    if db.get_database_backend() == DatabaseBackend::Sqlite {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(path) = sqlite_file_path(&config.url) {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
 
     // ── SQLite performance PRAGMAs ──────────────────────────────────
     // These are essential for concurrent read/write throughput.

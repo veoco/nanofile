@@ -158,6 +158,13 @@ pub async fn list_share_links_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let base_url = &state.config.server.site_url;
     let infos = if let (Some(repo_id), Some(path)) = (&query.repo_id, &query.path) {
+        // Filtering by a repo requires membership of that repo.
+        crate::domain::permission::check_repo_read_permission(
+            state.repos.member.as_ref(),
+            repo_id,
+            auth.user_id,
+        )
+        .await?;
         share::list_share_links_for_path(&state.repos, base_url, repo_id, path).await?
     } else {
         share::list_share_links(&state.repos, base_url, auth.user_id).await?
@@ -374,6 +381,13 @@ pub async fn list_upload_links_v21(
     Query(query): Query<ListUploadLinksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let items = if let (Some(repo_id), Some(path)) = (&query.repo_id, &query.path) {
+        // Filtering by a repo requires membership of that repo.
+        crate::domain::permission::check_repo_read_permission(
+            state.repos.member.as_ref(),
+            repo_id,
+            auth.user_id,
+        )
+        .await?;
         link::list_upload_links_for_path(&state.repos, repo_id, path).await?
     } else {
         link::list_upload_links_v21(&state.repos, auth.user_id).await?
@@ -565,10 +579,10 @@ pub async fn get_upload_link_upload_url_v21(
 
 /// GET /api/v2.1/repos/{repo_id}/upload-links/
 pub async fn list_repo_upload_links_v21(
-    _auth: AuthUser,
+    path: crate::middleware::repo_extractor::RepoPathRead,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_id = path.repo_id;
     let items =
         link::list_upload_links_for_repo_v21(&state.repos, &state.config.server.site_url, &repo_id)
             .await?;

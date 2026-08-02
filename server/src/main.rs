@@ -96,6 +96,17 @@ async fn main() -> anyhow::Result<()> {
                 config.server.port
             );
 
+            // Ensure data directories exist with restrictive permissions so
+            // other local users cannot read the SQLite DB or file blocks.
+            for dir in [&config.storage.block_dir, &config.storage.temp_dir] {
+                std::fs::create_dir_all(dir)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+                }
+            }
+
             let temp_file_manager = server::handler::web::temp_file::TempFileManager::new(
                 config.storage.temp_dir.clone(),
             )
@@ -142,24 +153,19 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let cors = {
+                // `cors_origins()` returns `[site_url_origin()]` when the
+                // configured list is empty, so this always allows the same-origin
+                // site (and any explicitly configured origins).
                 let origins = state.config.server.cors_origins();
 
-                let origin_layer = if origins.is_empty() {
-                    // Empty list — deny all cross-origin requests.
-                    CorsLayer::new().allow_origin(AllowOrigin::predicate(|_, _| false))
-                } else {
-                    CorsLayer::new().allow_origin(AllowOrigin::list(
-                        origins.into_iter().filter_map(|o| {
-                            o.parse()
-                                .map_err(|e| {
-                                    tracing::warn!("Skipping invalid CORS origin '{}': {:?}", o, e)
-                                })
-                                .ok()
-                        }),
-                    ))
-                };
-
-                origin_layer
+                CorsLayer::new()
+                    .allow_origin(AllowOrigin::list(origins.into_iter().filter_map(|o| {
+                        o.parse()
+                            .map_err(|e| {
+                                tracing::warn!("Skipping invalid CORS origin '{}': {:?}", o, e)
+                            })
+                            .ok()
+                    })))
                     .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
                     .allow_headers([
                         header::AUTHORIZATION,
