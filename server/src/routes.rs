@@ -192,6 +192,11 @@ fn v2_routes() -> Router<Arc<AppState>> {
             "/api/v2.1/activities/",
             get(crate::handler::activities::get_activities),
         )
+        // Groups (required by seadroid's library-list load chain; returns 200 + array)
+        .route(
+            "/api/v2.1/groups/",
+            get(crate::handler::groups::list_groups_v21),
+        )
         // Wikis
         .route("/api/v2.1/wikis/", get(crate::handler::wiki::list_wikis))
         .route("/api/v2.1/wikis2/", get(crate::handler::wiki::list_wikis))
