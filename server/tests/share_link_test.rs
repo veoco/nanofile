@@ -378,9 +378,16 @@ async fn test_share_link_list_response_fields() {
         !link["token"].as_str().unwrap_or("").is_empty(),
         "token missing"
     );
+    let link_url = link["link"].as_str().unwrap_or("");
+    // `link` must be an absolute URL (Android client shares it verbatim).
     assert!(
-        link["link"].as_str().unwrap_or("").starts_with("/f/"),
-        "link should start with /f/"
+        link_url.starts_with("http://") || link_url.starts_with("https://"),
+        "link should be an absolute URL, got: {link_url}"
+    );
+    let token = link["token"].as_str().unwrap();
+    assert!(
+        link_url.contains(&format!("/f/{token}/")) || link_url.contains(&format!("/d/{token}/")),
+        "link should contain /f/{{token}}/ or /d/{{token}}/ path"
     );
     assert!(
         link["has_password"].is_boolean(),
@@ -661,4 +668,59 @@ async fn test_share_link_update_nonexistent() {
         )
         .await;
     assert_eq!(upd.status(), 404, "non-existent token must return 404");
+}
+
+/// H.16 — Desktop client creates a share link via form-encoded POST
+/// (`repo_id`, `path`, optional `password`, `expiration_time`).
+#[tokio::test]
+async fn test_share_link_create_form_encoded_desktop() {
+    let f = TestFixture::new().await;
+
+    let up = f
+        .client
+        .upload_file(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            "desktop_form.txt",
+            b"desktop form",
+        )
+        .await;
+    assert!(up.status().is_success(), "upload failed");
+
+    // The desktop client sends application/x-www-form-urlencoded.
+    let resp = f
+        .client
+        .post_form(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &[
+                ("repo_id", &f.repo_id),
+                ("path", "/desktop_form.txt"),
+                ("expiration_time", "2099-12-31T23:59:59+08:00"),
+            ],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "form-encoded share link create failed: {:?}",
+        resp.text().await
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap();
+    assert!(!token.is_empty());
+    // The response link must be an absolute URL.
+    let link = body["link"].as_str().unwrap_or("");
+    assert!(
+        link.starts_with("http://") || link.starts_with("https://"),
+        "link should be absolute, got: {link}"
+    );
+    // expiration_time (year 2099) must be honoured.
+    let expire = body["expire_date"].as_i64().unwrap_or(0);
+    assert!(expire > 0, "expire_date should be set from expiration_time");
+
+    // The shared link should be downloadable.
+    let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
+    assert_eq!(dl.status(), 200, "shared download should succeed");
 }

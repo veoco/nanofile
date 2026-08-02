@@ -45,7 +45,8 @@ pub async fn list_share_links(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<share::ShareLinkInfo>>, AppError> {
-    let infos = share::list_share_links(&state.repos, auth.user_id).await?;
+    let infos =
+        share::list_share_links(&state.repos, &state.config.server.site_url, auth.user_id).await?;
     Ok(Json(infos))
 }
 

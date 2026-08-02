@@ -1,9 +1,12 @@
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    body::to_bytes,
+    extract::{FromRequest, Path, Query, Request, State},
+    http::header,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -28,7 +31,97 @@ pub struct CreateLinkRequest {
     pub path: String,
     pub password: Option<String>,
     pub expire_days: Option<i64>,
+    /// ISO 8601 datetime (desktop client sends this instead of `expire_days`).
+    #[serde(default)]
+    pub expiration_time: Option<String>,
     pub description: Option<String>,
+}
+
+/// Extract the request body as a generic value, accepting either a JSON object
+/// or an `application/x-www-form-urlencoded` body. The desktop client sends
+/// form-encoded data (`repo_id`, `path`, `password`, `expiration_time`) to the
+/// share/upload link creation endpoints, while web/Android send JSON.
+pub struct JsonOrForm(serde_json::Value);
+
+impl<S> FromRequest<S> for JsonOrForm
+where
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request(req: Request, _state: &S) -> Result<Self, Self::Rejection> {
+        let content_type = req
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        let bytes = to_bytes(req.into_body(), 8 * 1024 * 1024)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("failed to read body: {e}")))?;
+
+        if content_type.starts_with("application/x-www-form-urlencoded") {
+            let map = serde_urlencoded::from_bytes::<HashMap<String, String>>(&bytes)
+                .map_err(|e| AppError::BadRequest(format!("invalid form body: {e}")))?;
+            Ok(JsonOrForm(serde_json::to_value(map).unwrap_or_default()))
+        } else {
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map(JsonOrForm)
+                .map_err(|e| AppError::BadRequest(format!("invalid JSON body: {e}")))
+        }
+    }
+}
+
+/// Convert a JSON-or-form body value into `CreateLinkRequest`, mapping the
+/// desktop's `expiration_time` (ISO datetime) onto `expire_days`.
+fn parse_link_request(v: &serde_json::Value) -> Result<CreateLinkRequest, AppError> {
+    let get_str = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|s| s.to_string());
+    let get_i64 = |k: &str| {
+        v.get(k).and_then(|x| match x {
+            serde_json::Value::Number(n) => n.as_i64(),
+            serde_json::Value::String(s) => s.parse().ok(),
+            _ => None,
+        })
+    };
+
+    let repo_id = get_str("repo_id")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::BadRequest("repo_id invalid".into()))?;
+    let path = get_str("path")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::BadRequest("path invalid".into()))?;
+
+    Ok(CreateLinkRequest {
+        repo_id,
+        path,
+        password: get_str("password"),
+        expire_days: get_i64("expire_days"),
+        expiration_time: get_str("expiration_time"),
+        description: get_str("description"),
+    })
+}
+
+/// Normalize `expiration_time` (ISO datetime) into `expire_days` when the
+/// latter is absent, matching seahub's handling of both fields.
+fn resolve_expire_days(req: &CreateLinkRequest) -> Result<Option<i64>, AppError> {
+    if req.expire_days.is_some() {
+        return Ok(req.expire_days);
+    }
+    match &req.expiration_time {
+        Some(et) => {
+            let dt = chrono::DateTime::parse_from_rfc3339(et).map_err(|_| {
+                AppError::BadRequest(
+                    "expiration_time invalid, should be ISO format e.g. 2020-05-17T10:26:22+08:00"
+                        .into(),
+                )
+            })?;
+            let now = chrono::Utc::now();
+            let days = dt.timestamp() - now.timestamp();
+            Ok(Some((days + 86399).max(1) / 86400))
+        }
+        None => Ok(None),
+    }
 }
 
 #[derive(Deserialize)]
@@ -63,10 +156,11 @@ pub async fn list_share_links_v21(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListShareLinksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let base_url = &state.config.server.site_url;
     let infos = if let (Some(repo_id), Some(path)) = (&query.repo_id, &query.path) {
-        share::list_share_links_for_path(&state.repos, repo_id, path).await?
+        share::list_share_links_for_path(&state.repos, base_url, repo_id, path).await?
     } else {
-        share::list_share_links(&state.repos, auth.user_id).await?
+        share::list_share_links(&state.repos, base_url, auth.user_id).await?
     };
     let items: Vec<serde_json::Value> = infos
         .into_iter()
@@ -93,29 +187,25 @@ pub async fn list_share_links_v21(
 pub async fn create_share_link_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateLinkRequest>,
+    JsonOrForm(v): JsonOrForm,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let req = parse_link_request(&v)?;
+    let expire_days = resolve_expire_days(&req)?;
     let info = share::create_share_link_v21(
         &state.repos,
         &state.config,
         &req.repo_id,
         &req.path,
         req.password.as_deref(),
-        req.expire_days,
+        expire_days,
         req.description.as_deref(),
         auth.user_id,
     )
     .await?;
 
-    let link_url = if info.s_type == "d" {
-        format!("/d/{}/", info.token)
-    } else {
-        format!("/f/{}/", info.token)
-    };
-
     Ok(Json(serde_json::json!({
         "token": info.token,
-        "link": link_url,
+        "link": info.link,
         "repo_id": info.repo_id,
         "repo_name": null,
         "path": info.path,
@@ -145,17 +235,17 @@ pub async fn get_share_link_v21(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let info = share::get_share_link_v21(&state.repos, &token, auth.user_id).await?;
-
-    let link_url = if info.s_type == "d" {
-        format!("/d/{}/", info.token)
-    } else {
-        format!("/f/{}/", info.token)
-    };
+    let info = share::get_share_link_v21(
+        &state.repos,
+        &state.config.server.site_url,
+        &token,
+        auth.user_id,
+    )
+    .await?;
 
     Ok(Json(serde_json::json!({
         "token": info.token,
-        "link": link_url,
+        "link": info.link,
         "repo_id": info.repo_id,
         "repo_name": null,
         "path": info.path,
@@ -186,29 +276,25 @@ pub async fn get_share_link_v21(
 pub async fn create_multi_share_link_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateLinkRequest>,
+    JsonOrForm(v): JsonOrForm,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let req = parse_link_request(&v)?;
+    let expire_days = resolve_expire_days(&req)?;
     let info = share::create_share_link_v21(
         &state.repos,
         &state.config,
         &req.repo_id,
         &req.path,
         req.password.as_deref(),
-        req.expire_days,
+        expire_days,
         req.description.as_deref(),
         auth.user_id,
     )
     .await?;
 
-    let link_url = if info.s_type == "d" {
-        format!("/d/{}/", info.token)
-    } else {
-        format!("/f/{}/", info.token)
-    };
-
     Ok(Json(serde_json::json!({
         "token": info.token,
-        "link": link_url,
+        "link": info.link,
         "repo_id": info.repo_id,
         "repo_name": null,
         "path": info.path,
@@ -299,8 +385,10 @@ pub async fn list_upload_links_v21(
 pub async fn create_upload_link_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateLinkRequest>,
+    JsonOrForm(v): JsonOrForm,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let req = parse_link_request(&v)?;
+    let expire_days = resolve_expire_days(&req)?;
     let has_password = req.password.is_some();
     let path = req.path.clone();
 
@@ -310,7 +398,7 @@ pub async fn create_upload_link_v21(
         &req.repo_id,
         &req.path,
         req.password,
-        req.expire_days,
+        expire_days,
         req.description,
         auth.user_id,
     )
@@ -354,7 +442,8 @@ pub async fn get_upload_link_v21(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let info = link::get_upload_link_v21(&state.repos, &token).await?;
+    let info =
+        link::get_upload_link_v21(&state.repos, &state.config.server.site_url, &token).await?;
     Ok(Json(info))
 }
 
@@ -463,6 +552,8 @@ pub async fn list_repo_upload_links_v21(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let items = link::list_upload_links_for_repo_v21(&state.repos, &repo_id).await?;
+    let items =
+        link::list_upload_links_for_repo_v21(&state.repos, &state.config.server.site_url, &repo_id)
+            .await?;
     Ok(Json(serde_json::Value::Array(items)))
 }

@@ -85,6 +85,18 @@ pub struct ShareMember {
     pub created_at: i64,
 }
 
+/// Build an absolute share-link URL, matching seahub's `gen_shared_link()`
+/// (`{service_url}/f/{token}/` or `{service_url}/d/{token}/`). Clients
+/// (notably the Android app) share/copy the `link` field verbatim.
+fn share_link_url(s_type: &str, token: &str, base_url: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    if s_type == "d" {
+        format!("{base}/d/{token}/")
+    } else {
+        format!("{base}/f/{token}/")
+    }
+}
+
 /// Result returned by `beshare_repo`.
 pub struct BeshareResult {
     pub already_shared: bool,
@@ -94,6 +106,7 @@ pub struct BeshareResult {
 
 pub async fn list_share_links(
     repos: &Repositories,
+    base_url: &str,
     user_id: i32,
 ) -> Result<Vec<ShareLinkInfo>, AppError> {
     let links = repos.share_link.find_by_creator_id(user_id).await?;
@@ -102,7 +115,7 @@ pub async fn list_share_links(
         .into_iter()
         .map(|l| ShareLinkInfo {
             token: l.token.clone(),
-            link: format!("/f/{}/", l.token),
+            link: share_link_url(&l.s_type, &l.token, base_url),
             repo_id: l.repo_id,
             path: l.path,
             created_at: l.created_at,
@@ -119,6 +132,7 @@ pub async fn list_share_links(
 
 pub async fn list_share_links_for_path(
     repos: &Repositories,
+    base_url: &str,
     repo_id: &str,
     path: &str,
 ) -> Result<Vec<ShareLinkInfo>, AppError> {
@@ -131,7 +145,7 @@ pub async fn list_share_links_for_path(
         .into_iter()
         .map(|l| ShareLinkInfo {
             token: l.token.clone(),
-            link: format!("/f/{}/", l.token),
+            link: share_link_url(&l.s_type, &l.token, base_url),
             repo_id: l.repo_id,
             path: l.path,
             created_at: l.created_at,
@@ -199,11 +213,7 @@ async fn create_share_link_impl(
         })
         .await?;
 
-    let link = if s_type == "d" {
-        format!("/d/{}/", token)
-    } else {
-        format!("/f/{}/", token)
-    };
+    let link = share_link_url(&s_type, &token, &config.server.site_url);
 
     Ok(ShareLinkInfo {
         token: token.clone(),
@@ -276,6 +286,7 @@ pub async fn create_share_link_v21(
 /// GET /api/v2.1/share-links/{token}/ — retrieve share link details
 pub async fn get_share_link_v21(
     repos: &Repositories,
+    base_url: &str,
     token: &str,
     user_id: i32,
 ) -> Result<ShareLinkInfo, AppError> {
@@ -288,11 +299,7 @@ pub async fn get_share_link_v21(
         return Err(AppError::NotFound("Share link not found".into()));
     }
 
-    let link_url = if link.s_type == "d" {
-        format!("/d/{}/", link.token)
-    } else {
-        format!("/f/{}/", link.token)
-    };
+    let link_url = share_link_url(&link.s_type, &link.token, base_url);
 
     Ok(ShareLinkInfo {
         token: link.token,
@@ -362,11 +369,7 @@ pub async fn update_share_link_v21(
     let effective_expire_at = new_expire_at.flatten().or(link.expires_at);
     let effective_description = description.flatten().or(link.description);
 
-    let link_url = if link.s_type == "d" {
-        format!("/d/{}/", link.token)
-    } else {
-        format!("/f/{}/", link.token)
-    };
+    let link_url = share_link_url(&link.s_type, &link.token, &config.server.site_url);
 
     Ok(ShareLinkInfo {
         token: link.token,

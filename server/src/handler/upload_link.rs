@@ -31,7 +31,8 @@ pub async fn list_upload_links(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<link::UploadLinkInfo>>, AppError> {
-    let infos = link::list_upload_links(&state.repos, auth.user_id).await?;
+    let infos =
+        link::list_upload_links(&state.repos, &state.config.server.site_url, auth.user_id).await?;
     Ok(Json(infos))
 }
 

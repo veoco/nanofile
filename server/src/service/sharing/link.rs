@@ -18,10 +18,18 @@ pub struct UploadLinkInfo {
     pub created_at: i64,
 }
 
+/// Build an absolute upload-link URL, matching seahub's
+/// `gen_shared_upload_link()` (`{service_url}/u/d/{token}/`).
+fn upload_link_url(token: &str, base_url: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    format!("{base}/u/{token}/")
+}
+
 // ── Upload link operations (v2) ───────────────────────────────────────
 
 pub async fn list_upload_links(
     repos: &Repositories,
+    base_url: &str,
     user_id: i32,
 ) -> Result<Vec<UploadLinkInfo>, AppError> {
     let links = repos.upload_link.find_by_creator_id(user_id).await?;
@@ -30,7 +38,7 @@ pub async fn list_upload_links(
         .into_iter()
         .map(|l| UploadLinkInfo {
             token: l.token.clone(),
-            link: format!("/u/{}/", l.token),
+            link: upload_link_url(&l.token, base_url),
             repo_id: l.repo_id,
             path: l.path,
             created_at: l.created_at,
@@ -71,7 +79,7 @@ async fn create_upload_link_impl(
 
     Ok(UploadLinkInfo {
         token: token.clone(),
-        link: format!("/u/{}/", token),
+        link: upload_link_url(&token, &config.server.site_url),
         repo_id: repo_id.to_string(),
         path: path.to_string(),
         created_at: now,
@@ -220,6 +228,7 @@ pub async fn delete_upload_link_v21_by_token(
 
 pub async fn get_upload_link_v21(
     repos: &Repositories,
+    base_url: &str,
     token: &str,
 ) -> Result<serde_json::Value, AppError> {
     let link = repos
@@ -253,7 +262,7 @@ pub async fn get_upload_link_v21(
         "obj_name": obj_name,
         "view_cnt": link.view_cnt,
         "ctime": link.created_at,
-        "link": format!("/u/{}/", link.token),
+        "link": upload_link_url(&link.token, base_url),
         "username": "",  // placeholder — username not stored directly on upload links
         "expire_date": link.expires_at,
         "is_expired": link.expires_at.is_some_and(|exp| chrono::Utc::now().timestamp() > exp),
@@ -298,6 +307,7 @@ pub async fn update_upload_link_v21(
 
 pub async fn list_upload_links_for_repo_v21(
     repos: &Repositories,
+    base_url: &str,
     repo_id: &str,
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let links = repos.upload_link.find_by_repo_id(repo_id).await?;
@@ -329,7 +339,7 @@ pub async fn list_upload_links_for_repo_v21(
                 "repo_name": &repo_name,
                 "path": l.path,
                 "obj_name": obj_name,
-                "link": format!("/u/{}/", l.token),
+                "link": upload_link_url(&l.token, base_url),
                 "view_cnt": l.view_cnt,
                 "ctime": l.created_at,
                 "expire_date": l.expires_at,
