@@ -180,18 +180,26 @@ async fn main() -> anyhow::Result<()> {
             let web_routes = server::handler::web::web_routes();
             let ui_routes = server::ui::ui_routes();
             let notification_routes = server::notification::notification_routes();
+            let webdav_routes = server::webdav::webdav_routes();
+
+            // CORS is applied only to the REST API routes. It must not wrap
+            // the WebDAV endpoints: tower-http's CorsLayer answers OPTIONS
+            // requests itself, which would shadow the `DAV:`/`Allow:` response
+            // WebDAV clients expect. WebDAV clients are not browsers, so CORS
+            // does not apply to them.
+            let api_with_cors = server::routes::api_routes().layer(cors);
 
             let app = Router::new()
                 .route("/health", get(health_check))
-                .merge(server::routes::api_routes())
+                .merge(api_with_cors)
                 .merge(sync_routes)
                 .merge(sdoc_routes)
                 .merge(web_routes)
                 .merge(ui_routes)
                 .merge(notification_routes)
+                .merge(webdav_routes)
                 .merge(server::handler::avatar::image_routes())
                 .route("/static/{*path}", get(server::static_assets::serve_static))
-                .layer(cors)
                 .layer(DefaultBodyLimit::max(
                     (config.server.max_upload_size_mb * 1024 * 1024) as usize,
                 ))

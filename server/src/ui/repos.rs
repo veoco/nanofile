@@ -23,6 +23,8 @@ pub struct RepoListTemplate {
     pub csrf_token: String,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
+    /// Base URL (from site_url) used to build the WebDAV endpoint address.
+    pub webdav_base_url: String,
 }
 
 // ─── Data types ──────────────────────────────────────────────────────────────
@@ -86,6 +88,12 @@ pub async fn list_repos(
         csrf_token,
         left_panel_repos,
         current_repo_id: None,
+        webdav_base_url: state
+            .config
+            .server
+            .site_url
+            .trim_end_matches('/')
+            .to_string(),
     };
 
     let html = tpl

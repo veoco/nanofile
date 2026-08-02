@@ -22,6 +22,7 @@ pub mod service;
 pub mod static_assets;
 pub mod thumbnail_util;
 pub mod ui;
+pub mod webdav;
 
 use std::path::PathBuf;
 use std::sync::Arc;

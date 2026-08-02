@@ -37,6 +37,7 @@ pub mod user;
 pub mod user_2fa;
 pub mod user_2fa_backup_code;
 pub mod user_contact;
+pub mod webdav_key;
 pub mod wiki;
 
 use std::sync::Arc;
@@ -74,6 +75,7 @@ use crate::repository::user::*;
 use crate::repository::user_2fa::*;
 use crate::repository::user_2fa_backup_code::*;
 use crate::repository::user_contact::*;
+use crate::repository::webdav_key::*;
 use crate::repository::wiki::*;
 
 use base::error::AppError;
@@ -112,6 +114,7 @@ pub struct Repositories {
     pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
     pub file_lock_timestamp: Arc<dyn FileLockTimestampRepository>,
     pub sdoc_comment: Arc<dyn SdocCommentRepository>,
+    pub webdav_key: Arc<dyn WebdavKeyRepository>,
 }
 
 impl std::fmt::Debug for Repositories {
@@ -155,6 +158,7 @@ impl Repositories {
             user_2fa_backup_code: Arc::new(DbUser2faBackupCodeRepository::new(db.clone())),
             file_lock_timestamp: Arc::new(DbFileLockTimestampRepository::new(db.clone())),
             sdoc_comment: Arc::new(DbSdocCommentRepository::new(db.clone())),
+            webdav_key: Arc::new(DbWebdavKeyRepository::new(db.clone())),
         }
     }
 

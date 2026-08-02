@@ -19,7 +19,7 @@ use base::error::AppError;
 /// `block_ids` — list of block SHA-1 hashes to stream.
 /// `block_store` — content-addressed block storage backend.
 /// `enc_key` — optional decryption key (None = plaintext blocks).
-fn stream_blocks(
+pub(crate) fn stream_blocks(
     block_ids: Vec<String>,
     block_store: infra::storage::DynBlockStorage,
     enc_key: Option<(Vec<u8>, Vec<u8>)>,

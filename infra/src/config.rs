@@ -73,6 +73,10 @@ pub struct ServerConfig {
     /// CORS max-age in seconds (default 86400 = 24h).
     #[serde(default = "default_cors_max_age")]
     pub cors_max_age_secs: u64,
+    /// Whether the WebDAV endpoint (`/dav/...`) is enabled.
+    /// When false, all WebDAV requests return 403.
+    #[serde(default = "default_true")]
+    pub webdav_enabled: bool,
 }
 
 fn default_site_url() -> String {
@@ -334,6 +338,7 @@ impl Config {
         env_parse!("NANOFILE_INDEX_ENABLED", self.index.enabled);
         env_path!("NANOFILE_INDEX_INDEX_DIR", self.index.index_dir);
         env_parse!("NANOFILE_CORS_MAX_AGE_SECS", self.server.cors_max_age_secs);
+        env_parse!("NANOFILE_SERVER_WEBDAV_ENABLED", self.server.webdav_enabled);
 
         // Admin init env vars
         if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_EMAIL") {

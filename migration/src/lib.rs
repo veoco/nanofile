@@ -35,6 +35,7 @@ mod m20260619_000004_create_avatars;
 mod m20260620_000001_create_file_trash;
 mod m20260620_000002_create_deleted_repos;
 mod m20260705_000001_add_storage_quota_to_users;
+mod m20260802_000001_create_webdav_keys;
 
 pub struct Migrator;
 
@@ -76,6 +77,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260620_000001_create_file_trash::Migration),
             Box::new(m20260620_000002_create_deleted_repos::Migration),
             Box::new(m20260705_000001_add_storage_quota_to_users::Migration),
+            Box::new(m20260802_000001_create_webdav_keys::Migration),
         ]
     }
 }

@@ -56,11 +56,34 @@ impl TestServer {
         Self::start_with_config(true, false, ping_interval, client_timeout).await
     }
 
+    /// Start a server with a specific `webdav_enabled` setting (for testing
+    /// the WebDAV global switch).
+    pub async fn start_with_webdav_enabled(webdav_enabled: bool) -> Self {
+        Self::start_full(false, false, 30, 90, webdav_enabled).await
+    }
+
     async fn start_with_config(
         enable_notification: bool,
         enable_index: bool,
         ping_interval: u64,
         client_timeout: u64,
+    ) -> Self {
+        Self::start_full(
+            enable_notification,
+            enable_index,
+            ping_interval,
+            client_timeout,
+            true,
+        )
+        .await
+    }
+
+    async fn start_full(
+        enable_notification: bool,
+        enable_index: bool,
+        ping_interval: u64,
+        client_timeout: u64,
+        webdav_enabled: bool,
     ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -85,6 +108,7 @@ impl TestServer {
                 cors_allowed_origins: vec![],
                 cors_max_age_secs: 86400,
                 secret_key: String::new(),
+                webdav_enabled,
             },
             database: infra::config::DatabaseConfig {
                 url: "sqlite::memory:".to_string(),
@@ -150,6 +174,7 @@ impl TestServer {
         let web_routes = server::handler::web::web_routes();
         let ui_routes = server::ui::ui_routes();
         let notification_routes = server::notification::notification_routes();
+        let webdav_routes = server::webdav::webdav_routes();
 
         let app = Router::new()
             .merge(server::routes::api_routes())
@@ -158,6 +183,7 @@ impl TestServer {
             .merge(web_routes)
             .merge(ui_routes)
             .merge(notification_routes)
+            .merge(webdav_routes)
             .route(
                 "/static/{*path}",
                 axum::routing::get(server::static_assets::serve_static),

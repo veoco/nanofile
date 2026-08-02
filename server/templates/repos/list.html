@@ -127,6 +127,20 @@
                     <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Size</p>
                     <p class="text-sm text-gray-900 dark:text-gray-100" id="edit-size"></p>
                 </div>
+                <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
+                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">WebDAV 访问</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 break-all mb-2" id="webdav-url"></p>
+                    <ul id="webdav-key-list" class="text-sm text-gray-900 dark:text-gray-100 space-y-1 mb-2"></ul>
+                    <div class="flex gap-2">
+                        <input id="webdav-key-name" type="text" placeholder="设备名,如 MacBook"
+                               class="block flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2"
+                               onkeydown="if(event.key==='Enter'){event.preventDefault();createWebdavKey();}">
+                        <button type="button" onclick="createWebdavKey()"
+                                class="rounded-lg bg-brand-500 px-3 py-2 text-xs font-medium text-white hover:bg-brand-600 transition-colors">
+                            生成密钥
+                        </button>
+                    </div>
+                </div>
             </div>
             <div class="mt-6 flex justify-end gap-2">
                 <button type="button" onclick="hideEditDialog()"
@@ -143,6 +157,7 @@
 </div>
 
 <script>
+var webdavBaseUrl = "{{ webdav_base_url }}";
 function showCreateDialog() {
     document.getElementById('create-overlay').classList.remove('hidden');
     document.getElementById('create-input').value = '';
@@ -177,15 +192,98 @@ function submitCreate(form) {
 }
 
 function showEditDialog(btn) {
-    document.getElementById('edit-repo-id').value = btn.getAttribute('data-id');
+    var repoId = btn.getAttribute('data-id');
+    document.getElementById('edit-repo-id').value = repoId;
     document.getElementById('edit-name').value = btn.getAttribute('data-name');
     document.getElementById('edit-description').value = btn.getAttribute('data-description') || '';
     document.getElementById('edit-size').textContent = btn.getAttribute('data-size');
+    document.getElementById('webdav-url').textContent = webdavBaseUrl + '/dav/' + repoId + '/';
+    document.getElementById('webdav-key-name').value = '';
+    loadWebdavKeys(repoId);
     document.getElementById('edit-overlay').classList.remove('hidden');
     setTimeout(function() { document.getElementById('edit-name').focus(); document.getElementById('edit-name').select(); }, 100);
 }
 function hideEditDialog() {
     document.getElementById('edit-overlay').classList.add('hidden');
+}
+function loadWebdavKeys(repoId) {
+    var listEl = document.getElementById('webdav-key-list');
+    listEl.innerHTML = '<li class="text-xs text-gray-400 dark:text-gray-500">加载中…</li>';
+    fetch('/api2/repos/' + repoId + '/webdav-keys/', {
+        method: 'GET',
+        credentials: 'same-origin',
+    }).then(function (resp) {
+        if (!resp.ok) { listEl.innerHTML = ''; return; }
+        return resp.json();
+    }).then(function (data) {
+        if (!data || !data.keys || data.keys.length === 0) {
+            listEl.innerHTML = '<li class="text-xs text-gray-400 dark:text-gray-500">尚未生成 WebDAV 密钥。</li>';
+            return;
+        }
+        listEl.innerHTML = '';
+        data.keys.forEach(function (k) {
+            var li = document.createElement('li');
+            li.className = 'flex items-center justify-between gap-2 text-xs';
+            var info = document.createElement('span');
+            info.className = 'truncate';
+            info.textContent = k.name + ' · ' + new Date(k.created_at * 1000).toLocaleDateString();
+            var del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'text-red-500 hover:text-red-700 font-medium flex-shrink-0';
+            del.textContent = '删除';
+            del.onclick = function () { deleteWebdavKey(repoId, k.id); };
+            li.appendChild(info);
+            li.appendChild(del);
+            listEl.appendChild(li);
+        });
+    }).catch(function () {
+        listEl.innerHTML = '';
+    });
+}
+function createWebdavKey() {
+    var repoId = document.getElementById('edit-repo-id').value;
+    if (!repoId) return;
+    var name = document.getElementById('webdav-key-name').value.trim() || 'default';
+    var csrfToken = getCookie('sfcsrftoken');
+    fetch('/api2/repos/' + repoId + '/webdav-keys/', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            'Content-Type': 'application/json;charset=utf-8',
+            'X-CSRFToken': csrfToken,
+        },
+        body: JSON.stringify({ name: name }),
+    }).then(function (resp) {
+        if (!resp.ok) {
+            alert('生成密钥失败: ' + resp.status);
+            return;
+        }
+        return resp.json();
+    }).then(function (data) {
+        if (!data) return;
+        alert('已生成 WebDAV 密钥。密钥仅显示这一次,请妥善保存:\n\n' + data.key);
+        document.getElementById('webdav-key-name').value = '';
+        loadWebdavKeys(repoId);
+    }).catch(function () {
+        alert('网络错误');
+    });
+}
+function deleteWebdavKey(repoId, keyId) {
+    if (!confirm('确定删除该 WebDAV 密钥?使用它的设备将立即无法访问。')) return;
+    var csrfToken = getCookie('sfcsrftoken');
+    fetch('/api2/repos/' + repoId + '/webdav-keys/' + keyId + '/', {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { 'X-CSRFToken': csrfToken },
+    }).then(function (resp) {
+        if (resp.ok) {
+            loadWebdavKeys(repoId);
+        } else {
+            alert('删除密钥失败: ' + resp.status);
+        }
+    }).catch(function () {
+        alert('网络错误');
+    });
 }
 function submitEdit(form) {
     var repoId = document.getElementById('edit-repo-id').value;

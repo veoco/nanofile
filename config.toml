@@ -7,6 +7,7 @@
 #   NANOFILE_SERVER_REQUEST_TIMEOUT_SECS
 #   NANOFILE_CORS_ALLOWED_ORIGINS           (comma-separated)
 #   NANOFILE_CORS_MAX_AGE_SECS
+#   NANOFILE_SERVER_WEBDAV_ENABLED
 addr = "0.0.0.0"
 port = 8082
 # External URL used for download links and CORS defaults.
@@ -16,6 +17,7 @@ max_upload_size_mb = 4096
 request_timeout_secs = 600
 cors_allowed_origins = []
 cors_max_age_secs = 86400
+webdav_enabled = true
 #   NANOFILE_SERVER_SECRET_KEY               (generate with: openssl rand -hex 32)
 # IMPORTANT: Generate a unique secret key for production:
 #   openssl rand -hex 32

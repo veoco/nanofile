@@ -852,7 +852,7 @@ async fn get_head_root_id(
     Ok(head.root_id)
 }
 
-fn mime_guess(filename: &str) -> &'static str {
+pub(crate) fn mime_guess(filename: &str) -> &'static str {
     if filename.ends_with(".txt")
         || filename.ends_with(".md")
         || filename.ends_with(".rs")
