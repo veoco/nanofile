@@ -564,6 +564,7 @@ impl FileService {
         &self,
         repo_id: &str,
         path: &str,
+        user_id: i32,
     ) -> Result<serde_json::Value, AppError> {
         let db = self.db();
         let head_root_id = get_head_root_id(db, repo_id).await?;
@@ -613,14 +614,53 @@ impl FileService {
             .map(|u| u.email)
             .unwrap_or_else(|| entry.modifier.clone());
 
+        // Read access is guaranteed by the handler; `permission` distinguishes
+        // write from read-only (matching seahub's FileDetailView).
+        let permission = if crate::domain::permission::check_repo_write_permission(
+            self.repos.member.as_ref(),
+            repo_id,
+            user_id,
+        )
+        .await
+        .is_ok()
+        {
+            "rw"
+        } else {
+            "r"
+        };
+
+        let starred = self
+            .repos
+            .starred
+            .find_by_user_repo_and_path(user_id, repo_id, path)
+            .await?
+            .is_some();
+
+        // Absolute avatar URL (seahub returns a full URL via api_avatar_url).
+        let origin = self.config.server.site_url_origin();
+        let last_modifier_avatar = format!(
+            "{}{}",
+            origin,
+            crate::service::user::primary_avatar_url(&modifier_email, 72)
+        );
+
         Ok(serde_json::json!({
             "id": file_fs_id,
             "type": "file",
             "name": entry.name,
+            "permission": permission,
+            "mtime": entry.mtime,
             "size": entry.size,
-            "last_modified": entry.mtime,
+            "last_modified": chrono::DateTime::from_timestamp(entry.mtime, 0)
+                .map(|d| d.to_rfc3339())
+                .unwrap_or_default(),
             "last_modifier_name": entry.modifier,
             "last_modifier_email": modifier_email,
+            "last_modifier_contact_email": modifier_email,
+            "last_modifier_avatar": last_modifier_avatar,
+            "starred": starred,
+            "comment_total": 0,
+            "can_edit": permission == "rw",
         }))
     }
 

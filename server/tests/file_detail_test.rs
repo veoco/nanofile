@@ -36,14 +36,19 @@ async fn test_file_detail_success() {
         "expected 40-char fs_id, got: {}",
         body["id"]
     );
-    assert!(
-        body["last_modified"].as_i64().unwrap() > 0,
-        "last_modified should be positive"
-    );
+    // last_modified must be an ISO 8601 offset datetime string (seahub /
+    // Android FileDetailModel contract), not a raw Unix timestamp.
+    let last_modified = body["last_modified"]
+        .as_str()
+        .expect("last_modified should be a string");
+    let parsed = chrono::DateTime::parse_from_rfc3339(last_modified)
+        .expect("last_modified should parse as RFC3339/ISO8601");
+    assert!(parsed.timestamp() > 0, "last_modified should be positive");
     assert!(
         body["last_modifier_name"].as_str().is_some(),
         "last_modifier_name should exist"
     );
+    assert_eq!(body["permission"], "rw");
 }
 
 #[tokio::test]

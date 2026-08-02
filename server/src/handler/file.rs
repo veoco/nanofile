@@ -326,7 +326,7 @@ pub async fn file_detail(
     .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let svc = state.file_service();
-    let result = svc.file_detail(repo_id, &path).await?;
+    let result = svc.file_detail(repo_id, &path, access.user.user_id).await?;
 
     Ok(Json(result))
 }
