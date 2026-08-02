@@ -71,6 +71,15 @@ pub async fn change_password_v21(
 
     match operation {
         Some("change-password") => {
+            // Changing the repo password re-encrypts content for all members →
+            // only members with write access may do it.
+            crate::domain::permission::check_repo_write_permission(
+                state.repos.member.as_ref(),
+                &repo_id,
+                auth.user_id,
+            )
+            .await?;
+
             let old_password = body
                 .old_password
                 .ok_or_else(|| AppError::BadRequest("old_password required".into()))?;

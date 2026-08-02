@@ -1,6 +1,6 @@
 mod common;
 
-use common::TestFixture;
+use common::{TestFixture, create_test_user, get_sync_token};
 
 /// C.1.2 — POST /seafhttp/repo/{repo_id}/unlock-file?p=path
 #[tokio::test]
@@ -153,4 +153,61 @@ async fn test_lock_file_requires_auth() {
         .await;
     // No valid token → 401
     assert!(resp.status() == 401 || resp.status() == 403);
+}
+
+/// Security: a read-only member must not be able to lock/unlock files.
+#[tokio::test]
+async fn test_lock_file_readonly_member_forbidden() {
+    let f = TestFixture::new().await;
+
+    // A file to lock.
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "lock-ro.txt", b"x")
+        .await;
+    assert!(resp.status().is_success());
+
+    // Second user, shared as read-only.
+    create_test_user(f.server.db.as_ref(), "ro@example.com", "password").await;
+    let resp = f.client.login("ro@example.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let b_token = body["token"].as_str().unwrap().to_string();
+
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "ro@example.com",
+                "permission": "r"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let b_sync = get_sync_token(&f.client, &b_token, &f.repo_id).await;
+
+    // Read-only member must NOT be able to lock…
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/lock-file?p=/lock-ro.txt", f.repo_id),
+            &b_sync,
+            vec![],
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "read-only member must not lock files");
+
+    // …nor unlock.
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/unlock-file?p=/lock-ro.txt", f.repo_id),
+            &b_sync,
+            vec![],
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "read-only member must not unlock files");
 }

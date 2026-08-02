@@ -56,6 +56,14 @@ pub async fn lock_file(
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("path required".into()))?;
 
+    // Locking modifies repo state → requires write permission.
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        _auth.user_id,
+    )
+    .await?;
+
     state
         .file_service()
         .lock_file_sync(&repo_id, path, _auth.user_id)
@@ -75,6 +83,14 @@ pub async fn unlock_file(
         .p
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("path required".into()))?;
+
+    // Unlocking modifies repo state → requires write permission.
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        _auth.user_id,
+    )
+    .await?;
 
     state
         .file_service()
