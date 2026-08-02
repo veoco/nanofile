@@ -234,3 +234,82 @@ async fn test_account_info_quota_fallback_global() {
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["total"], 10_737_418_240_i64); // 10 GB from test config
 }
+
+// ============================================================================
+// Account registration requires admin authentication
+// ============================================================================
+
+/// Security: anonymous registration via POST /api2/accounts/ must be rejected
+/// (it previously bypassed the invitation system and rate limits entirely).
+#[tokio::test]
+async fn test_register_anonymous_rejected() {
+    let server = TestServer::start().await;
+    let client = server.client();
+
+    let resp = client
+        .post_form(
+            "/api2/accounts/",
+            None,
+            &[("email", "anon@example.com"), ("password", "secret123")],
+        )
+        .await;
+    assert_eq!(resp.status(), 401);
+}
+
+/// Security: a logged-in non-admin user must not be able to create accounts.
+#[tokio::test]
+async fn test_register_non_admin_rejected() {
+    let server = TestServer::start().await;
+    let client = server.client();
+    create_test_user(&server.db, "user@example.com", "password").await;
+
+    let resp = client.login("user@example.com", "password").await;
+    let body: Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    let resp = client
+        .post_form(
+            "/api2/accounts/",
+            Some(&token),
+            &[("email", "new@example.com"), ("password", "secret123")],
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+}
+
+/// Security: an admin may create accounts via the API (seahub behaviour).
+#[tokio::test]
+async fn test_register_admin_allowed() {
+    use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+
+    let server = TestServer::start().await;
+    let client = server.client();
+    let uid = create_test_user(&server.db, "admin@example.com", "password").await;
+
+    // Promote to admin.
+    let user_record = infra::entity::user::Entity::find_by_id(uid)
+        .one(&*server.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: infra::entity::user::ActiveModel = user_record.into();
+    active.is_admin = Set(true);
+    active.update(&*server.db).await.unwrap();
+
+    let resp = client.login("admin@example.com", "password").await;
+    let body: Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    let resp = client
+        .post_form(
+            "/api2/accounts/",
+            Some(&token),
+            &[("email", "created@example.com"), ("password", "secret123")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // The new account exists.
+    let resp = client.login("created@example.com", "secret123").await;
+    assert_eq!(resp.status(), 200);
+}

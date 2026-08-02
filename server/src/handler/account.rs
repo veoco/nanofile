@@ -64,9 +64,23 @@ pub async fn update_account_info(
 }
 
 pub async fn register_user(
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Form(form): Form<RegisterForm>,
 ) -> Result<StatusCode, AppError> {
+    // Account creation via the API is admin-only (matches seahub's
+    // `IsAdminUser`). Anonymous/self registration goes through the UI flow,
+    // which enforces invitation codes and rate limits.
+    let user_record = state
+        .repos
+        .user
+        .find_by_id(auth.user_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if !user_record.is_admin {
+        return Err(AppError::Forbidden);
+    }
+
     let iterations = state.config.auth.password_hash_iterations;
     let password_hash = crate::service::auth::password::hash_password(&form.password, iterations);
 
