@@ -38,17 +38,22 @@ pub async fn get_avatar(
     // user existence first.
     let size = resolve_size(&size_str);
 
+    // Desktop client uses the returned `url` directly as the fetch target, so
+    // it must be an absolute URL (matching seahub's api_avatar_url behaviour).
+    let origin = state.config.server.site_url_origin();
+    let url = format!("{}{}", origin, primary_avatar_url(&email, size));
+
     let svc = AvatarService::new(state.repos.clone());
     let avatar = svc.find_avatar(&email).await?;
 
     match avatar {
         Some(a) => Ok(Json(AvatarResponse {
-            url: primary_avatar_url(&email, size),
+            url,
             is_default: false,
             mtime: a.date_uploaded,
         })),
         None => Ok(Json(AvatarResponse {
-            url: primary_avatar_url(&email, size),
+            url,
             is_default: true,
             mtime: 0,
         })),
