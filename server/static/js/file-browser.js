@@ -250,6 +250,18 @@
       shareBtn.dataset.type = d.type || "";
     }
 
+    // History (only meaningful for files)
+    var historyBtn = ct.querySelector(".js-rp-history-btn");
+    if (historyBtn) {
+      if (d.type === "file") {
+        historyBtn.dataset.repoId = d.repoId || "";
+        historyBtn.dataset.path = d.path || "";
+        historyBtn.classList.remove("hidden");
+      } else {
+        historyBtn.classList.add("hidden");
+      }
+    }
+
     // ── Share Links (fetch existing links for this file) ──
     var shareSection = ct.querySelector(".js-rp-share-links-section");
     var shareList = ct.querySelector(".js-rp-share-links-list");

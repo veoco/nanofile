@@ -437,6 +437,163 @@
     }
   });
 
+  // ─── File history dialog ─────────────────────────────────────────────
+  var historyOverlay = document.getElementById("history-dialog-overlay");
+  var historyPathEl = historyOverlay
+    ? historyOverlay.querySelector(".js-history-path")
+    : null;
+  var historyListEl = historyOverlay
+    ? historyOverlay.querySelector(".js-history-list")
+    : null;
+
+  function formatHistoryTime(ts) {
+    var d = new Date(ts * 1000);
+    return d.toLocaleString();
+  }
+
+  function formatHistorySize(n) {
+    if (n >= 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+    if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
+    if (n >= 1024) return (n / 1024).toFixed(1) + " KB";
+    return n + " B";
+  }
+
+  function closeHistoryDialog() {
+    if (historyOverlay) historyOverlay.classList.add("hidden");
+  }
+
+  async function openHistoryDialog(repoId, path) {
+    if (!historyOverlay) return;
+    historyPathEl.textContent = path;
+    historyOverlay.classList.remove("hidden");
+    historyListEl.innerHTML =
+      '<div class="text-sm text-gray-400 text-center py-4">Loading...</div>';
+
+    try {
+      var res = await window.apiFetch(
+        "/api/v2.1/repos/" +
+          encodeURIComponent(repoId) +
+          "/file/history/?p=" +
+          encodeURIComponent(path)
+      );
+      var body = await res.json();
+      renderHistoryList(body.data || [], repoId, path);
+    } catch (err) {
+      historyListEl.innerHTML =
+        '<div class="text-sm text-red-500 text-center py-4">Failed to load history: ' +
+        escapeHtml(err.message) +
+        "</div>";
+    }
+  }
+
+  function renderHistoryList(items, repoId, path) {
+    if (!items.length) {
+      historyListEl.innerHTML =
+        '<div class="text-sm text-gray-400 text-center py-4">No history available</div>';
+      return;
+    }
+    var html = "";
+    items.forEach(function (item, idx) {
+      var versionNo = items.length - idx;
+      var commitId = item.commit_id || "";
+      var fileName = path.split("/").pop() || "";
+      var revUrl =
+        "/api/v2.1/repos/" +
+        encodeURIComponent(repoId) +
+        "/file/revision/?p=" +
+        encodeURIComponent(path) +
+        "&commit_id=" +
+        encodeURIComponent(commitId);
+      html +=
+        '<div class="flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-gray-50 dark:hover:bg-surface-700">' +
+        '<div class="min-w-0">' +
+        '<div class="text-sm font-medium text-gray-800 dark:text-gray-200">Version ' +
+        versionNo +
+        '<span class="ml-2 text-xs font-normal text-gray-400">' +
+        escapeHtml(item.last_modified_by || "") +
+        "</span></div>" +
+        '<div class="text-xs text-gray-400">' +
+        formatHistoryTime(item.mtime || item.file_mtime || 0) +
+        " · " +
+        formatHistorySize(item.size || item.file_size || 0) +
+        "</div></div>" +
+        '<div class="flex items-center gap-1 flex-shrink-0">' +
+        '<a href="' +
+        revUrl +
+        '" download class="px-2 py-1 rounded-md text-xs font-medium text-brand-600 dark:text-brand-400 border border-brand-200 dark:border-brand-900/50 hover:bg-brand-50 dark:hover:bg-brand-900/20">Download</a>' +
+        '<button type="button" class="js-history-restore px-2 py-1 rounded-md text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-700" data-commit-id="' +
+        escapeHtml(commitId) +
+        '" data-repo-id="' +
+        escapeHtml(repoId) +
+        '" data-path="' +
+        escapeHtml(path) +
+        '" data-name="' +
+        escapeHtml(fileName) +
+        '">Restore</button>' +
+        "</div></div>";
+    });
+    historyListEl.innerHTML = html;
+  }
+
+  // Restore action (event delegation inside the history list)
+  if (historyListEl) {
+    historyListEl.addEventListener("click", async function (e) {
+      var btn = e.target.closest(".js-history-restore");
+      if (!btn) return;
+      var repoId = btn.dataset.repoId;
+      var path = btn.dataset.path;
+      var commitId = btn.dataset.commitId;
+      var name = btn.dataset.name;
+
+      var confirmed = await window.ConfirmDialog.confirm(
+        "Restore version",
+        'Restore "' + name + '" to this version? This will overwrite the current file.',
+        { confirmText: "Restore" }
+      );
+      if (!confirmed) return;
+
+      try {
+        await window.apiFetch(
+          "/api/v2.1/repos/" +
+            encodeURIComponent(repoId) +
+            "/file/revision/restore/?p=" +
+            encodeURIComponent(path) +
+            "&commit_id=" +
+            encodeURIComponent(commitId),
+          { method: "POST" }
+        );
+        window.Toast.success('Restored "' + name + '"');
+        closeHistoryDialog();
+        if (window.refreshFileList) window.refreshFileList();
+        else window.location.reload();
+      } catch (err) {
+        window.Toast.error("Restore failed: " + err.message);
+      }
+    });
+  }
+
+  // Open history from any .js-history-btn
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-history-btn");
+    if (!btn) return;
+    openHistoryDialog(btn.dataset.repoId, btn.dataset.path);
+  });
+
+  // Close via backdrop, close button, or Escape
+  document.addEventListener("click", function (e) {
+    if (!historyOverlay || historyOverlay.classList.contains("hidden")) return;
+    if (e.target === historyOverlay || e.target.closest(".js-history-close")) {
+      closeHistoryDialog();
+    }
+  });
+  if (historyOverlay) {
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !historyOverlay.classList.contains("hidden")) {
+        closeHistoryDialog();
+      }
+    });
+  }
+
   // ─── Share dialog elements ──────────────────────────────────────────
   var shareDialog = document.getElementById("share-dialog-overlay");
   var shareDialogPath = document.querySelector(".js-share-dialog-path");
