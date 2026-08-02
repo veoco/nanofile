@@ -213,6 +213,25 @@ async fn login_client(fixture: &TestFixture) -> reqwest::Client {
     client // cookie stored by cookie_store
 }
 
+/// Fetch the hidden `csrf_token` from the settings page (the settings form
+/// embeds it as `<input type="hidden" name="csrf_token" value="...">`).
+async fn settings_csrf_token(client: &reqwest::Client, base_url: &str) -> String {
+    let resp = client
+        .get(format!("{}/settings/", base_url))
+        .send()
+        .await
+        .unwrap();
+    let body = resp.text().await.unwrap();
+    let marker = r#"name="csrf_token" value=""#;
+    body.find(marker)
+        .and_then(|i| {
+            let rest = &body[i + marker.len()..];
+            let end = rest.find('"')?;
+            Some(rest[..end].to_string())
+        })
+        .unwrap_or_default()
+}
+
 /// Extract CSRF token from any authenticated page's hidden form input.
 /// The caller must have a valid session cookie.
 async fn get_csrf_token(client: &reqwest::Client, base_url: &str, repo_id: &str) -> String {
@@ -676,10 +695,16 @@ async fn test_settings_page_shows_info() {
 async fn test_change_password_works() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
+    let csrf = settings_csrf_token(&client, &fixture.server.base_url).await;
+    assert!(!csrf.is_empty(), "settings page must expose csrf_token");
 
     let resp = client
         .post(format!("{}/settings/password/", fixture.server.base_url))
-        .form(&[("old_password", "password"), ("new_password", "newpass123")])
+        .form(&[
+            ("old_password", "password"),
+            ("new_password", "newpass123"),
+            ("csrf_token", csrf.as_str()),
+        ])
         .send()
         .await
         .unwrap();
@@ -695,12 +720,14 @@ async fn test_change_password_works() {
 async fn test_change_password_wrong_old() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
+    let csrf = settings_csrf_token(&client, &fixture.server.base_url).await;
 
     let resp = client
         .post(format!("{}/settings/password/", fixture.server.base_url))
         .form(&[
             ("old_password", "wrongpass"),
             ("new_password", "newpass123"),
+            ("csrf_token", csrf.as_str()),
         ])
         .send()
         .await

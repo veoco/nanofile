@@ -47,6 +47,9 @@ impl TwoFactorService {
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
         let backup_codes = BackupCodeManager::generate_codes(10);
+        // Replace previously issued backup codes so re-running setup does not
+        // leave stale codes (still valid) in the database.
+        BackupCodeManager::delete_all_for_user(&self.repos, user_id).await?;
         BackupCodeManager::store_codes(&self.repos, user_id, &backup_codes).await?;
 
         Ok(Setup2faResult {

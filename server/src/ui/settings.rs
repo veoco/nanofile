@@ -126,16 +126,12 @@ pub async fn change_password(
     State(state): State<Arc<AppState>>,
     Form(form): Form<PasswordForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    // CSRF check
-    if let Some(ref token) = form.csrf_token {
-        let expected = crate::service::auth::csrf::generate_csrf_token(
-            &state.csrf_secret,
-            &user.session_token,
-        );
-        if *token != expected {
-            return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
-        }
-    }
+    // CSRF check — the token is mandatory; a missing token is rejected.
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.csrf_token.as_deref(),
+    )?;
 
     let user_record = state
         .repos
@@ -196,16 +192,12 @@ pub async fn update_display_name(
     State(state): State<Arc<AppState>>,
     Form(form): Form<DisplayNameForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    // CSRF check
-    if let Some(ref token) = form.csrf_token {
-        let expected = crate::service::auth::csrf::generate_csrf_token(
-            &state.csrf_secret,
-            &user.session_token,
-        );
-        if *token != expected {
-            return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
-        }
-    }
+    // CSRF check — the token is mandatory; a missing token is rejected.
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.csrf_token.as_deref(),
+    )?;
 
     let display_name = if form.display_name.trim().is_empty() {
         None

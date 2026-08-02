@@ -71,6 +71,18 @@ fn compute_target_dir(parent_dir: &str, relative_path: &str) -> Result<String, A
 /// Parse a `Content-Range` header of the form `bytes start-end/file_size`.
 ///
 /// Example: `"bytes 0-8388607/26214400"` → `(0, 8388607, 26214400)`
+/// Validate an upload-link commit `file_name`, aligned with seafile's
+/// `should_ignore_file` semantics (reject empty, path separators, NUL, "." /
+/// "..", and over-long names) rather than a strict character blacklist.
+fn is_valid_upload_filename(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\0')
+        && name.len() <= 255
+}
+
 fn parse_content_range(header: &str) -> Result<(u64, u64, u64), AppError> {
     let rest = header
         .strip_prefix("bytes ")
@@ -1234,6 +1246,13 @@ pub async fn upload_blks_api(
         let file_name = fields
             .get("file_name")
             .ok_or_else(|| AppError::BadRequest("file_name required for commit".into()))?;
+        // Align with seafile's should_ignore_file: reject empty names, path
+        // separators, NUL, "." / "..", and over-long names. Deliberately NOT
+        // the strict character blacklist so clients can upload files with
+        // quotes, brackets etc.
+        if !is_valid_upload_filename(file_name) {
+            return Err(AppError::BadRequest("invalid file_name".into()));
+        }
         let blockids_str = fields
             .get("blockids")
             .ok_or_else(|| AppError::BadRequest("blockids required for commit".into()))?;

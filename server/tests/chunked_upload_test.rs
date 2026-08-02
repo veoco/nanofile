@@ -125,3 +125,32 @@ async fn test_upload_blks_commit_rejects_malicious_blockids() {
     let resp = f.client.post_multipart_url(&url, form).await;
     assert_eq!(resp.status(), 400);
 }
+
+/// Security: upload-blks commit mode must reject path-traversal / invalid
+/// file names (aligned with seafile's should_ignore_file semantics).
+#[tokio::test]
+async fn test_upload_blks_commit_rejects_invalid_filename() {
+    let f = TestFixture::new().await;
+
+    let resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let url: String = resp.json().await.unwrap();
+
+    for bad_name in ["../evil.txt", "a/b.txt", "..", "not\x00null"] {
+        let form = reqwest::multipart::Form::new()
+            .text("commitonly", "1")
+            .text("parent_dir", "/")
+            .text("file_name", bad_name)
+            .text("file_size", "6")
+            .text(
+                "blockids",
+                r#"["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]"#,
+            );
+        let resp = f.client.post_multipart_url(&url, form).await;
+        assert_eq!(
+            resp.status(),
+            400,
+            "file_name {bad_name:?} should be rejected"
+        );
+    }
+}
