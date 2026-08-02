@@ -380,3 +380,83 @@ async fn test_create_repo_multipart_with_desc() {
     assert_eq!(body["desc"], "A test repo");
     assert!(body["id"].as_str().is_some());
 }
+
+// ============================================================================
+// Security: repo-scoped metadata / thumbnail / exif / history require membership
+// ============================================================================
+
+/// Security: a non-member must not read another user's repo metadata,
+/// thumbnails, EXIF data, or history.
+#[tokio::test]
+async fn test_metadata_thumbnail_exif_history_require_membership() {
+    let f = TestFixture::new().await;
+
+    // Second user who is not a member of f.repo_id.
+    create_test_user(f.server.db.as_ref(), "other@example.com", "password123").await;
+    let resp = f.client.login("other@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let b_token = body["token"].as_str().unwrap().to_string();
+
+    let rid = &f.repo_id;
+
+    // Metadata config
+    let resp = f
+        .client
+        .get(&format!("/api/v2.1/repos/{rid}/metadata/"), Some(&b_token))
+        .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "metadata config must require membership"
+    );
+
+    // Metadata tags
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{rid}/metadata/tags/"),
+            Some(&b_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "metadata tags must require membership");
+
+    // Thumbnail
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{rid}/thumbnail/?p=/test.txt&size=48"),
+            Some(&b_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "thumbnail must require membership");
+
+    // EXIF
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{rid}/file/exif/?p=/test.txt"),
+            Some(&b_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "exif must require membership");
+
+    // History
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repo_history_changes/{rid}/?commit_id=0000000000000000000000000000000000000000"),
+            Some(&b_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "history must require membership");
+
+    // Owner still has access.
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{rid}/metadata/"),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "owner keeps access to metadata");
+}

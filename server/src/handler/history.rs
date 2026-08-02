@@ -1,12 +1,12 @@
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Query, State},
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::middleware::auth::AuthUser;
+use crate::middleware::repo_extractor::RepoPathRead;
 use crate::service::repo::history::HistoryService;
 use base::error::AppError;
 
@@ -19,11 +19,11 @@ pub struct HistoryQuery {
 ///
 /// Returns the file changes introduced by a specific commit.
 pub async fn repo_history_changes(
-    _auth: AuthUser,
+    path: RepoPathRead,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<crate::service::repo::history::HistoryChangesResponse>, AppError> {
+    let repo_id = path.repo_id;
     let response =
         HistoryService::get_history_changes(&state.repos, &repo_id, &query.commit_id).await?;
 

@@ -780,7 +780,7 @@ async fn test_v21_seadoc_upload_image() {
     let resp = f
         .client
         .post_form(
-            &format!("/api/v2.1/seadoc/upload-image/{}/", uuid::Uuid::new_v4()),
+            &format!("/api/v2.1/seadoc/upload-image/{}/", f.repo_id),
             Some(&f.api_token),
             &[],
         )

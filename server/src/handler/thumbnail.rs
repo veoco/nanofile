@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::middleware::auth::AuthUser;
+use crate::middleware::repo_extractor::RepoPathRead;
 use base::error::AppError;
 
 #[derive(Deserialize)]
@@ -18,11 +18,11 @@ pub struct ThumbnailQuery {
 }
 
 pub async fn get_thumbnail(
-    _auth: AuthUser,
+    path: RepoPathRead,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<ThumbnailQuery>,
 ) -> Result<Response, AppError> {
+    let repo_id = path.repo_id;
     let path = query
         .p
         .as_deref()

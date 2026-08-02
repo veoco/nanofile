@@ -1,12 +1,12 @@
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Query, State},
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::middleware::auth::AuthUser;
+use crate::middleware::repo_extractor::RepoPathRead;
 use base::error::AppError;
 use base::sanitize::safe_normalize_path;
 
@@ -20,11 +20,11 @@ pub struct ExifQuery {
 /// Return EXIF metadata for an image file as a JSON object.
 /// Returns `null` if the file contains no EXIF data.
 pub async fn get_exif(
-    _auth: AuthUser,
+    path: RepoPathRead,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Query(query): Query<ExifQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_id = path.repo_id;
     let path = query
         .p
         .ok_or_else(|| AppError::BadRequest("path is required".into()))?;
