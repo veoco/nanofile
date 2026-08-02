@@ -423,6 +423,12 @@ async fn test_activity_response_fields() {
     assert_eq!(ev["author_email"], f.email);
     assert_eq!(ev["author_name"], f.email.split('@').next().unwrap_or(""));
     assert_eq!(ev["author_contact_email"], f.email);
+    // avatar_url must be an absolute URL (Android loads it directly with Glide).
+    let avatar_url = ev["avatar_url"].as_str().unwrap_or("");
+    assert!(
+        avatar_url.starts_with("http://") || avatar_url.starts_with("https://"),
+        "avatar_url should be absolute, got: {avatar_url}"
+    );
     assert!(ev["time"].as_str().unwrap_or("").contains('T'));
     // details should contain metadata about the operation
     let details = ev["details"].as_array().unwrap();

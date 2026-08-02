@@ -9,8 +9,12 @@ pub struct ActivityService;
 
 impl ActivityService {
     /// Get activity logs with optional repo_id and user_id filtering.
+    ///
+    /// `base_url` is the site origin (scheme://host[:port]) used to build the
+    /// absolute `avatar_url` (matching seahub's `api_avatar_url`).
     pub async fn get_activities(
         repos: &Repositories,
+        base_url: &str,
         user_id: i32,
         page: u32,
         per_page: u32,
@@ -73,6 +77,14 @@ impl ActivityService {
                 Some(u) => (u.nickname(), u.email),
                 None => (String::new(), String::new()),
             };
+
+            // Absolute avatar URL (seahub returns a full URL via api_avatar_url;
+            // the Android client loads this field directly with Glide).
+            let avatar_url = format!(
+                "{}{}",
+                base_url,
+                crate::service::user::primary_avatar_url(&user_email, 256)
+            );
 
             // Build details array, count, and extract old_repo_name.
             // detail is an Object for single events and an Array for batch-aggregated events.
@@ -142,6 +154,7 @@ impl ActivityService {
                 "author_email": user_email,
                 "author_name": user_name,
                 "author_contact_email": user_email,
+                "avatar_url": avatar_url,
                 "user_name": user_name,
                 "user_email": user_email,
                 "details": details,

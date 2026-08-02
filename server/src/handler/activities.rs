@@ -29,6 +29,7 @@ pub async fn get_activities(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let result = ActivityService::get_activities(
         &state.repos,
+        &state.config.server.site_url_origin(),
         auth.user_id,
         query.page.unwrap_or(1),
         query.per_page.unwrap_or(25),
