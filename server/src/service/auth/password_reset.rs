@@ -43,6 +43,17 @@ impl PasswordResetService {
             let now = chrono::Utc::now().timestamp();
             let (raw_token, token_hash) = generate_reset_token();
 
+            // Invalidate any previously issued reset links so old tokens stop
+            // working as soon as a new one is requested.
+            let old_tokens = self
+                .repos
+                .password_reset_token
+                .find_by_user(user.id)
+                .await?;
+            for old in old_tokens {
+                self.repos.password_reset_token.delete_by_id(old.id).await?;
+            }
+
             self.repos
                 .password_reset_token
                 .create(user.id, token_hash, now, now + RESET_TOKEN_TTL_SECONDS)
