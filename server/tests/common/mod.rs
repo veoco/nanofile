@@ -185,6 +185,7 @@ impl TestServer {
             .merge(ui_routes)
             .merge(notification_routes)
             .merge(webdav_routes)
+            .merge(server::handler::avatar::image_routes())
             .route(
                 "/static/{*path}",
                 axum::routing::get(server::static_assets::serve_static),
