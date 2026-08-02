@@ -582,11 +582,14 @@
   // Close via backdrop, close button, or Escape
   document.addEventListener("click", function (e) {
     if (!historyOverlay || historyOverlay.classList.contains("hidden")) return;
-    if (e.target === historyOverlay || e.target.closest(".js-history-close")) {
-      closeHistoryDialog();
-    }
+    if (e.target === historyOverlay) closeHistoryDialog();
   });
   if (historyOverlay) {
+    // Direct listeners (inside the stopPropagation boundary) fire at the
+    // target phase and are not blocked by the card's stopPropagation.
+    historyOverlay.querySelectorAll(".js-history-close").forEach(function (btn) {
+      btn.addEventListener("click", closeHistoryDialog);
+    });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && !historyOverlay.classList.contains("hidden")) {
         closeHistoryDialog();
