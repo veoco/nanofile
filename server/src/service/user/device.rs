@@ -70,11 +70,16 @@ impl DeviceService {
             .delete_by_user_and_peer(user_id, device_id)
             .await?;
 
+        // Also revoke sync tokens not linked to any peer (created via
+        // download-info / repo-tokens with peer_id NULL), so a device unlink
+        // reliably revokes every sync token the user holds.
+        let deleted_sync_unlinked = self.repos.sync_token.delete_by_user(user_id).await?;
+
         Ok(serde_json::json!({
             "success": true,
             "deleted_api_tokens": deleted_api,
             "deleted_s2fa_tokens": deleted_s2fa,
-            "deleted_sync_tokens": deleted_sync,
+            "deleted_sync_tokens": deleted_sync + deleted_sync_unlinked,
         }))
     }
 }

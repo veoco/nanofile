@@ -27,6 +27,7 @@ pub trait SyncTokenRepository: Send + Sync {
         now: i64,
     ) -> Result<(), AppError>;
     async fn delete_by_repo(&self, repo_id: &str) -> Result<(), AppError>;
+    async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError>;
     async fn delete_by_user_and_peer(&self, user_id: i32, peer_id: &str) -> Result<u64, AppError>;
     async fn update_peer_info(
         &self,
@@ -114,6 +115,14 @@ impl SyncTokenRepository for DbSyncTokenRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(())
+    }
+
+    async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError> {
+        let result = sync_token::Entity::delete_many()
+            .filter(sync_token::Column::UserId.eq(user_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
     }
 
     async fn delete_by_user_and_peer(&self, user_id: i32, peer_id: &str) -> Result<u64, AppError> {

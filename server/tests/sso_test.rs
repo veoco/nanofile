@@ -81,40 +81,58 @@ async fn test_client_sso_link_poll() {
     assert_eq!(body["status"], "pending");
 }
 
-/// B.8.1 — POST /api2/device-wiped/
+/// B.8.1 — POST /api2/device-wiped/ (official protocol: anonymous + the
+/// device's own API token).
 #[tokio::test]
 async fn test_device_wiped() {
     let f = TestFixture::new().await;
 
+    // Login with device metadata so the API token is tied to a device.
     let resp = f
         .client
-        .post_json(
-            "/api2/device-wiped/",
-            Some(&f.api_token),
-            &serde_json::json!({
-                "device_id": "test-device",
-                "platform": "linux",
-            }),
+        .post_form(
+            "/api2/auth-token/",
+            None,
+            &[
+                ("username", f.email.as_str()),
+                ("password", f.password.as_str()),
+                ("platform", "linux"),
+                ("device_id", "test-device"),
+                ("device_name", "laptop"),
+                ("client_version", "9.0.0"),
+            ],
         )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let device_token = body["token"].as_str().unwrap().to_string();
+
+    let resp = f
+        .client
+        .post_form("/api2/device-wiped/", None, &[("token", &device_token)])
         .await;
     assert_eq!(resp.status(), 200);
 }
 
 #[tokio::test]
-async fn test_device_wiped_unauthorized() {
+async fn test_device_wiped_invalid_token() {
     let server = common::TestServer::start().await;
     let client = server.client();
+    // A nonexistent / anonymous report must be rejected.
     let resp = client
-        .post_json(
+        .post_form(
             "/api2/device-wiped/",
             None,
-            &serde_json::json!({
-                "device_id": "test",
-                "platform": "linux",
-            }),
+            &[("token", "nonexistent-token-00000000000000000000")],
         )
         .await;
-    assert_eq!(resp.status(), 401);
+    assert_eq!(resp.status(), 400);
+
+    // Missing token entirely.
+    let resp = client
+        .post_form("/api2/device-wiped/", None, &[])
+        .await;
+    assert_eq!(resp.status(), 400);
 }
 
 /// B.9.1 — GET /api2/search/?q=&per_page=&page=&search_repo=

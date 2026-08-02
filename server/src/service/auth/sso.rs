@@ -118,24 +118,16 @@ impl SsoService {
 
     /// Report that a device was wiped (POST /api2/device-wiped/).
     ///
-    /// Invalidates all API tokens associated with the given device.
-    pub async fn device_wiped(
-        &self,
-        user_id: i32,
-        device_id: Option<&str>,
-        platform: Option<&str>,
-    ) -> Result<(), AppError> {
-        if let Some(dev_id) = device_id {
-            self.repos.api_token.delete_many_by_device(dev_id).await?;
+    /// Invalidates the API tokens belonging to `user_id` on `device_id`. The
+    /// wipe report is scoped to the (user, device) that owns the reporting
+    /// token, so it can never revoke another user's sessions.
+    pub async fn device_wiped(&self, user_id: i32, device_id: &str) -> Result<(), AppError> {
+        self.repos
+            .api_token
+            .delete_many_by_user_and_device(user_id, device_id)
+            .await?;
 
-            tracing::info!(
-                "device wiped: user_id={}, device_id={:?}, platform={:?}",
-                user_id,
-                device_id,
-                platform,
-            );
-        }
-
+        tracing::info!("device wiped: user_id={}, device_id={}", user_id, device_id);
         Ok(())
     }
 }

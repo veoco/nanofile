@@ -187,3 +187,126 @@ async fn test_list_devices_with_data() {
     assert_eq!(devices.len(), 1, "should only have 1 device after unlink");
     assert_eq!(devices[0]["platform"], "windows");
 }
+
+// ============================================================================
+// device-wiped (official protocol: anonymous + the device's own API token)
+// ============================================================================
+
+/// Compatibility + security: the wipe report is anonymous and carries the
+/// device's own API token (the desktop client sends no Authorization header).
+#[tokio::test]
+async fn test_device_wiped_anonymous_with_token() {
+    let server = TestServer::start().await;
+    let client = server.client();
+    create_test_user(&server.db, "a@example.com", "password123").await;
+
+    let resp = client
+        .post_form(
+            "/api2/auth-token/",
+            None,
+            &[
+                ("username", "a@example.com"),
+                ("password", "password123"),
+                ("platform", "linux"),
+                ("device_id", "dev-a"),
+                ("device_name", "laptop"),
+                ("client_version", "9.0.0"),
+            ],
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token_a = body["token"].as_str().unwrap().to_string();
+
+    // Anonymous report carrying the device's own token.
+    let resp = client
+        .post_form("/api2/device-wiped/", None, &[("token", &token_a)])
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // The reported token is invalidated.
+    let resp = client.ping(&token_a).await;
+    assert_eq!(resp.status(), 401, "wiped device token should be invalid");
+}
+
+/// Security: a wipe report for one user's device must not delete another
+/// user's sessions even if they share the same device_id.
+#[tokio::test]
+async fn test_device_wiped_scoped_to_user() {
+    let server = TestServer::start().await;
+    let client = server.client();
+    create_test_user(&server.db, "a@example.com", "password123").await;
+    create_test_user(&server.db, "b@example.com", "password123").await;
+
+    // Both users login with the SAME device_id.
+    for (user, pass) in [
+        ("a@example.com", "password123"),
+        ("b@example.com", "password123"),
+    ] {
+        let resp = client
+            .post_form(
+                "/api2/auth-token/",
+                None,
+                &[
+                    ("username", user),
+                    ("password", pass),
+                    ("platform", "linux"),
+                    ("device_id", "shared-dev"),
+                    ("device_name", "x"),
+                    ("client_version", "9.0.0"),
+                ],
+            )
+            .await;
+        assert_eq!(resp.status(), 200, "login {user} failed");
+    }
+
+    // Token for user A.
+    let resp = client
+        .post_form(
+            "/api2/auth-token/",
+            None,
+            &[
+                ("username", "a@example.com"),
+                ("password", "password123"),
+                ("platform", "linux"),
+                ("device_id", "shared-dev"),
+                ("device_name", "x"),
+                ("client_version", "9.0.0"),
+            ],
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token_a = body["token"].as_str().unwrap().to_string();
+
+    // Token for user B.
+    let resp = client
+        .post_form(
+            "/api2/auth-token/",
+            None,
+            &[
+                ("username", "b@example.com"),
+                ("password", "password123"),
+                ("platform", "linux"),
+                ("device_id", "shared-dev"),
+                ("device_name", "x"),
+                ("client_version", "9.0.0"),
+            ],
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token_b = body["token"].as_str().unwrap().to_string();
+
+    // A's token reports a wipe → only A's sessions are removed.
+    let resp = client
+        .post_form("/api2/device-wiped/", None, &[("token", &token_a)])
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = client.ping(&token_a).await;
+    assert_eq!(resp.status(), 401, "reported token should be invalid");
+    let resp = client.ping(&token_b).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "another user's token must not be deleted"
+    );
+}

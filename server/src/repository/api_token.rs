@@ -33,6 +33,11 @@ pub trait ApiTokenRepository: Send + Sync {
         platform: &str,
         device_id: &str,
     ) -> Result<u64, AppError>;
+    async fn delete_many_by_user_and_device(
+        &self,
+        user_id: i32,
+        device_id: &str,
+    ) -> Result<u64, AppError>;
     async fn delete_by_token(&self, token: &str) -> Result<(), AppError>;
     async fn insert(&self, model: api_token::ActiveModel) -> Result<(), AppError>;
     async fn delete_many_by_user_id(&self, user_id: i32) -> Result<(), AppError>;
@@ -101,6 +106,19 @@ impl ApiTokenRepository for DbApiTokenRepository {
         let result = api_token::Entity::delete_many()
             .filter(api_token::Column::UserId.eq(user_id))
             .filter(api_token::Column::Platform.eq(platform))
+            .filter(api_token::Column::DeviceId.eq(device_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
+    }
+
+    async fn delete_many_by_user_and_device(
+        &self,
+        user_id: i32,
+        device_id: &str,
+    ) -> Result<u64, AppError> {
+        let result = api_token::Entity::delete_many()
+            .filter(api_token::Column::UserId.eq(user_id))
             .filter(api_token::Column::DeviceId.eq(device_id))
             .exec(self.db.as_ref())
             .await?;
