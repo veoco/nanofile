@@ -10,7 +10,6 @@ pub mod crypto;
 pub mod db;
 pub mod entity;
 pub mod events;
-pub mod permission;
 pub mod rate_limit;
 pub mod serialization;
 pub mod storage;

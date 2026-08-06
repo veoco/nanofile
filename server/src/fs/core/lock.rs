@@ -3,10 +3,9 @@ use sea_orm::{
     Set,
 };
 
-use crate::common::EMPTY_SHA1;
-use crate::entity::{file_lock_timestamp, fs_object, locked_file};
-use base::AppError;
-use base::common::FsDirData;
+use base::common::{EMPTY_SHA1, FsDirData};
+use base::error::AppError;
+use infra::entity::{file_lock_timestamp, fs_object, locked_file};
 
 /// Walk the FS tree of a commit and check whether any file in the tree
 /// is locked by a different user. Returns `AppError::Locked(path)` with

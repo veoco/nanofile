@@ -606,7 +606,7 @@ impl SyncService {
             return Err(AppError::BlockMissing);
         }
 
-        infra::storage::check_commit_file_locks(
+        crate::fs::core::check_commit_file_locks(
             self.db.as_ref(),
             repo_id,
             &new_commit.root_id,

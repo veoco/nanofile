@@ -7,6 +7,7 @@
 pub mod download;
 pub mod file_ops;
 pub mod gc;
+pub mod lock;
 pub mod size;
 pub mod store;
 pub mod trash;
@@ -17,6 +18,7 @@ pub mod versioning;
 pub use download::Downloader;
 pub use file_ops::FileOps;
 pub use gc::GcManager;
+pub use lock::{check_commit_file_locks, upsert_lock_timestamp};
 pub use size::{adjust_repo_size, compute_repo_size, compute_tree_size, get_entry_total_size};
 pub use store::{store_fs_dir_object, store_fs_file_object};
 pub use tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};

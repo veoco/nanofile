@@ -765,7 +765,7 @@ impl FileService {
             }
         }
 
-        infra::storage::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
+        crate::fs::core::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
         self.notify_file_lock(repo_id, path, "locked", user_id)
             .await;
         Ok(())
@@ -783,7 +783,7 @@ impl FileService {
             .delete_by_repo_and_path(repo_id, path)
             .await?;
 
-        infra::storage::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
+        crate::fs::core::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
         self.notify_file_lock(repo_id, path, "unlocked", user_id)
             .await;
         Ok(())

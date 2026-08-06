@@ -3,8 +3,6 @@ pub mod cdc;
 
 use std::sync::Arc;
 
-pub use crate::permission::lock::{check_commit_file_locks, upsert_lock_timestamp};
-
 /// Abstract backend for content-addressed block storage.
 ///
 /// Blocks are identified by their SHA-1 hash (40-char hex string) and stored
