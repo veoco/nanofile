@@ -623,16 +623,14 @@ async fn file_browser_inner(
             .map_err(|e| AppError::internal(e.to_string()))?;
         Ok(Html(html).into_response())
     } else {
-        let left_panel_repos =
-            crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id)
-                .await?;
+        let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
         let current_repo_id = Some(repo_id.clone());
         let tpl = FileBrowserTemplate {
-            urls: crate::static_assets::template_urls(),
-            t,
-            user_email: user.email,
-            is_admin: user.is_admin,
-            csrf_token,
+            urls: ctx.urls,
+            t: ctx.t,
+            user_email: ctx.user_email,
+            is_admin: ctx.is_admin,
+            csrf_token: ctx.csrf_token,
             repo_id,
             repo_name: repo_record.name,
             current_path: path,
@@ -643,7 +641,7 @@ async fn file_browser_inner(
             page: page as u32,
             render_view: "all",
             active_page: "repos",
-            left_panel_repos,
+            left_panel_repos: ctx.left_panel_repos,
             current_repo_id,
             max_upload_size_mb: state.config.server.max_upload_size_mb,
             sort_field: sort_field.to_string(),

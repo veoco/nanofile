@@ -103,26 +103,20 @@ pub async fn settings_page(
     let two_fa = state.repos.user_2fa.find_by_user_id(user.user_id).await?;
     let two_fa_enabled = two_fa.as_ref().map(|tf| tf.enabled).unwrap_or(false);
 
-    let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
-        &state.csrf_secret,
-        &user.session_token,
-    ));
-
-    let left_panel_repos =
-        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
     let tpl = SettingsTemplate {
-        urls: crate::static_assets::template_urls(),
-        t: I18n::get(user.language.as_deref()),
-        user_language: I18n::get(user.language.as_deref()).lang,
-        user_email: user.email,
+        urls: ctx.urls,
+        t: ctx.t,
+        user_language: ctx.t.lang,
+        user_email: ctx.user_email,
         user_display_name: user_record.nickname(),
         error: None,
         success: None,
         active_page: "settings",
         two_fa_enabled,
-        csrf_token,
-        is_admin: user.is_admin,
-        left_panel_repos,
+        csrf_token: Some(ctx.csrf_token),
+        is_admin: ctx.is_admin,
+        left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
     };
 
@@ -158,30 +152,20 @@ pub async fn change_password(
         &user_record.password_hash,
         state.config.auth.password_hash_iterations,
     ) {
-        let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
-            &state.csrf_secret,
-            &user.session_token,
-        ));
-        let left_panel_repos =
-            crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id)
-                .await?;
+        let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
         let tpl = SettingsTemplate {
-            urls: crate::static_assets::template_urls(),
-            t: I18n::get(user.language.as_deref()),
-            user_language: I18n::get(user.language.as_deref()).lang,
-            user_email: user.email.clone(),
+            urls: ctx.urls,
+            t: ctx.t,
+            user_language: ctx.t.lang,
+            user_email: ctx.user_email,
             user_display_name: user.email.split('@').next().unwrap_or("").to_string(),
-            error: Some(
-                I18n::get(user.language.as_deref())
-                    .tr("settings.incorrect_password")
-                    .to_string(),
-            ),
+            error: Some(ctx.t.tr("settings.incorrect_password").to_string()),
             success: None,
             active_page: "settings",
             two_fa_enabled: false,
-            csrf_token,
-            is_admin: user.is_admin,
-            left_panel_repos,
+            csrf_token: Some(ctx.csrf_token),
+            is_admin: ctx.is_admin,
+            left_panel_repos: ctx.left_panel_repos,
             current_repo_id: None,
         };
         let html = tpl

@@ -566,13 +566,19 @@
   // ─── Repo filter ────────────────────────────────────────────────────
   var repoFilter = document.querySelector(".js-repo-filter");
   if (repoFilter) {
+    // Debounce so a fast typist isn't re-filtering a large repo list on
+    // every keystroke.
+    var filterTimer = null;
     repoFilter.addEventListener("input", function () {
-      var q = repoFilter.value.toLowerCase();
-      var items = document.querySelectorAll(".js-repo-item");
-      for (var i = 0; i < items.length; i++) {
-        var name = (items[i].textContent || "").toLowerCase();
-        items[i].style.display = name.indexOf(q) > -1 ? "" : "none";
-      }
+      clearTimeout(filterTimer);
+      filterTimer = setTimeout(function () {
+        var q = repoFilter.value.toLowerCase();
+        var items = document.querySelectorAll(".js-repo-item");
+        for (var i = 0; i < items.length; i++) {
+          var name = (items[i].textContent || "").toLowerCase();
+          items[i].style.display = name.indexOf(q) > -1 ? "" : "none";
+        }
+      }, 60);
     });
   }
 

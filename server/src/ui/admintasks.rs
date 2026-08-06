@@ -113,30 +113,20 @@ pub async fn task_list_page(user: WebUser, State(state): State<Arc<AppState>>) -
         ));
     }
 
-    let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
-        &state.csrf_secret,
-        &user.session_token,
-    ));
-
-    let left_panel_repos = match crate::service::repo::service::load_left_panel_repos(
-        &state.repos,
-        user.user_id,
-    )
-    .await
-    {
-        Ok(r) => r,
+    let ctx = match crate::ui::ctx::build_page_ctx(&state, &user).await {
+        Ok(c) => c,
         Err(e) => return AppError::internal(e.to_string()).into_response(),
     };
 
     let tpl = AdmintasksTemplate {
-        urls: crate::static_assets::template_urls(),
-        t: I18n::get(user.language.as_deref()),
-        user_email: user.email,
-        is_admin: user.is_admin,
-        csrf_token,
+        urls: ctx.urls,
+        t: ctx.t,
+        user_email: ctx.user_email,
+        is_admin: ctx.is_admin,
+        csrf_token: Some(ctx.csrf_token),
         active_page: "admintasks",
         tasks,
-        left_panel_repos,
+        left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
     };
 

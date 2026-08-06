@@ -158,13 +158,12 @@ pub async fn search_page(
         (results, total, has_more)
     };
 
-    let left_panel_repos =
-        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
     let tpl = SearchTemplate {
-        urls: crate::static_assets::template_urls(),
-        t: I18n::get(user.language.as_deref()),
-        user_email: user.email.clone(),
-        is_admin: user.is_admin,
+        urls: ctx.urls,
+        t: ctx.t,
+        user_email: ctx.user_email,
+        is_admin: ctx.is_admin,
         query: q,
         active_page: "search",
         results,
@@ -173,7 +172,7 @@ pub async fn search_page(
         per_page,
         current_page: page,
         search_filename_only,
-        left_panel_repos,
+        left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
     };
     let html = tpl

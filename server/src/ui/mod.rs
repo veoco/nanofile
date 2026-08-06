@@ -5,6 +5,7 @@ pub mod admintasks;
 pub mod auth;
 pub mod auth_extractor;
 pub mod client_login;
+pub mod ctx;
 pub mod files;
 pub mod invitations;
 pub mod repos;

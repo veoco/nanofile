@@ -103,21 +103,18 @@ pub async fn starred_page(
     starred_folders.sort_by(sort_desc);
     starred_files.sort_by(sort_desc);
 
-    let csrf_token =
-        crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
-    let left_panel_repos =
-        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
     let tpl = StarredTemplate {
-        urls: crate::static_assets::template_urls(),
-        t: I18n::get(user.language.as_deref()),
-        user_email: user.email,
-        is_admin: user.is_admin,
-        csrf_token,
+        urls: ctx.urls,
+        t: ctx.t,
+        user_email: ctx.user_email,
+        is_admin: ctx.is_admin,
+        csrf_token: ctx.csrf_token,
         starred_repos,
         starred_folders,
         starred_files,
         active_page: "starred",
-        left_panel_repos,
+        left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
     };
 

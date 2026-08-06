@@ -82,18 +82,12 @@ async fn render_page(
         None
     };
 
-    let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
-        &state.csrf_secret,
-        &user.session_token,
-    ));
-
-    let left_panel_repos =
-        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
     let tpl = TwoFactorTemplate {
-        urls: crate::static_assets::template_urls(),
-        t: I18n::get(user.language.as_deref()),
-        user_email: user.email.clone(),
-        is_admin: user.is_admin,
+        urls: ctx.urls,
+        t: ctx.t,
+        user_email: ctx.user_email,
+        is_admin: ctx.is_admin,
         active_page: "settings",
         enabled,
         setup_pending,
@@ -101,8 +95,8 @@ async fn render_page(
         backup_codes,
         error,
         success,
-        csrf_token,
-        left_panel_repos,
+        csrf_token: Some(ctx.csrf_token),
+        left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
     };
 

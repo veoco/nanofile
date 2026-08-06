@@ -124,16 +124,13 @@ pub async fn trash_list_page(
     let failed = query.failed.unwrap_or(0);
     let cleaned = query.cleaned.unwrap_or(false);
 
-    let csrf_token =
-        crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
-    let left_panel_repos =
-        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
 
     let tpl = TrashListTemplate {
-        urls: crate::static_assets::template_urls(),
-        t: I18n::get(user.language.as_deref()),
-        user_email: user.email.clone(),
-        is_admin: user.is_admin,
+        urls: ctx.urls,
+        t: ctx.t,
+        user_email: ctx.user_email,
+        is_admin: ctx.is_admin,
         items,
         total_count,
         current_page: page,
@@ -144,8 +141,8 @@ pub async fn trash_list_page(
         failed,
         cleaned,
         active_page: "trash",
-        csrf_token,
-        left_panel_repos,
+        csrf_token: ctx.csrf_token,
+        left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
     };
 
