@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use crate::fs::core::gc::GcManager;
+use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
 use crate::repository::Repositories;
@@ -26,6 +27,7 @@ pub fn register_default_tasks(
     password_manager: &Arc<PasswordManager>,
     gc_config: &GcConfig,
     indexer: Option<&TextIndexer>,
+    temp_file_manager: &TempFileManager,
 ) {
     // Continuous: event listener (forwards repo-update events to WebSocket subscribers).
     if let Some(mgr) = notification_manager {
@@ -136,6 +138,25 @@ pub fn register_default_tasks(
                     Ok(()) => TaskOutput::success("index committed", None),
                     Err(e) => TaskOutput::error(format!("Background index commit failed: {e}")),
                 }
+            }
+        });
+    }
+
+    // Periodic: purge abandoned zip-download tasks (every 10 minutes).
+    scheduler.spawn_periodic("zip task cleanup", 600, || async {
+        crate::handler::web::zip_download::cleanup_expired(chrono::Utc::now().timestamp());
+        TaskOutput::success("ok", None)
+    });
+
+    // Periodic: clean stale resumable-upload temp files (every 30 minutes).
+    {
+        let tmp = temp_file_manager.clone();
+        scheduler.spawn_periodic("temp upload cleanup", 1800, move || {
+            let tmp = tmp.clone();
+            async move {
+                tmp.cleanup_stale(std::time::Duration::from_secs(24 * 3600))
+                    .await;
+                TaskOutput::success("ok", None)
             }
         });
     }

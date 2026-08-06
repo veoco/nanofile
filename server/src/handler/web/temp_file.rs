@@ -34,7 +34,6 @@ struct TempFileEntry {
     tmp_path: PathBuf,
     /// Total file size as declared in the first Content-Range header
     file_size: u64,
-    #[allow(dead_code)]
     created_at: Instant,
 }
 
@@ -181,6 +180,31 @@ impl TempFileManager {
         };
         if let Some(p) = tmp_path {
             let _ = fs::remove_file(&p).await;
+        }
+    }
+
+    /// Remove active uploads that have been idle longer than `ttl` and delete
+    /// their temp files from disk. Called periodically by the scheduler so
+    /// abandoned resumable uploads don't leak memory or disk.
+    pub async fn cleanup_stale(&self, ttl: std::time::Duration) {
+        let cutoff = Instant::now() - ttl;
+        let stale: Vec<PathBuf> = {
+            let mut guard = self.inner.active.write().await;
+            let mut paths = Vec::new();
+            guard.retain(|_, e| {
+                if e.created_at < cutoff {
+                    paths.push(e.tmp_path.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            paths
+        };
+        for p in stale {
+            if let Err(e) = fs::remove_file(&p).await {
+                tracing::warn!("Failed to remove stale temp file {:?}: {e}", p);
+            }
         }
     }
 

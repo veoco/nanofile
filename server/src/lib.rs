@@ -153,6 +153,7 @@ impl AppState {
             &password_manager,
             &config.gc,
             indexer.as_ref(),
+            &temp_file_manager,
         );
 
         Self {

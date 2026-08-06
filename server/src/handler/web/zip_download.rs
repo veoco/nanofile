@@ -61,8 +61,22 @@ struct ZipTaskInfo {
 
 static ZIP_TASKS: OnceLock<Mutex<HashMap<String, ZipTaskInfo>>> = OnceLock::new();
 
+/// TTL for an unconsumed zip task, and a hard cap on the in-memory map so a
+/// flood of zip-task requests can't grow it without bound.
+const ZIP_TASK_TTL_SECS: i64 = 3600;
+const MAX_ZIP_TASKS: usize = 1000;
+
 fn zip_tasks() -> &'static Mutex<HashMap<String, ZipTaskInfo>> {
     ZIP_TASKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Remove zip tasks older than `ZIP_TASK_TTL_SECS`. Called on new task
+/// creation and periodically by the scheduler so abandoned tasks don't
+/// accumulate.
+pub fn cleanup_expired(now: i64) {
+    if let Ok(mut tasks) = zip_tasks().lock() {
+        tasks.retain(|_, t| now - t.created_at < ZIP_TASK_TTL_SECS);
+    }
 }
 
 fn generate_token() -> String {
@@ -360,18 +374,25 @@ pub async fn zip_task_handler(
 
     let zip_name = determine_zip_name(&payload.parent_dir, &payload.dirents);
     let token = generate_token();
+    let now = now_secs();
 
-    // Store task info
-    let task = ZipTaskInfo {
-        repo_id: repo_id.clone(),
-        files,
-        zip_name,
-        created_at: now_secs(),
-    };
-    zip_tasks()
-        .lock()
-        .expect("zip task mutex poisoned")
-        .insert(token.clone(), task);
+    // Purge abandoned tasks and enforce the in-memory cap.
+    cleanup_expired(now);
+    {
+        let mut tasks = zip_tasks().lock().expect("zip task mutex poisoned");
+        if tasks.len() >= MAX_ZIP_TASKS {
+            return Err(AppError::TooManyRequests);
+        }
+        tasks.insert(
+            token.clone(),
+            ZipTaskInfo {
+                repo_id: repo_id.clone(),
+                files,
+                zip_name,
+                created_at: now,
+            },
+        );
+    }
 
     Ok(JsonResponse(ZipTaskResponse { zip_token: token }))
 }
