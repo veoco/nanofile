@@ -6,6 +6,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::service::sharing::link;
 use base::error::AppError;
@@ -58,7 +59,7 @@ pub async fn delete_upload_link(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
-) -> Result<(), AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     link::delete_upload_link(&state.repos, &token, auth.user_id).await?;
-    Ok(())
+    Ok(ok_json())
 }

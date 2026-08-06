@@ -6,6 +6,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::RepoPathWrite;
 use crate::service::sharing::share;
@@ -102,7 +103,7 @@ pub async fn beshare_repo(
             serde_json::json!({"success": true, "already_shared": true}),
         ))
     } else {
-        Ok(Json(serde_json::json!({"success": true})))
+        Ok(ok_json())
     }
 }
 
@@ -137,7 +138,7 @@ pub async fn modify_share_permission(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// `DELETE /api2/beshared-repos/{repo_id}/` — remove a user's share.
@@ -156,5 +157,5 @@ pub async fn delete_share(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }

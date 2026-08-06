@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use crate::service::repo::history::HistoryService;
 use base::error::AppError;
@@ -156,7 +157,7 @@ pub async fn restore_file_revision_v21(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// Routes nested under `/api/v2.1` by `routes.rs`.

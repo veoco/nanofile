@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use base::error::AppError;
 
@@ -187,5 +188,5 @@ async fn delete_user(
     let svc = state.admin_user_service();
     svc.delete_user(user_id).await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }

@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::handler::exif::get_exif;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use crate::service::fs::file as file_svc;
@@ -181,7 +182,7 @@ pub async fn file_post_handler(
 
             svc.upload_file(repo_id, upload, &access.user.email, access.user.user_id)
                 .await?;
-            Ok(Json(serde_json::json!({"success": true})))
+            Ok(ok_json())
         }
     } else {
         let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)
@@ -202,7 +203,7 @@ pub async fn file_post_handler(
                     access.user.user_id,
                 )
                 .await?;
-                Ok(Json(serde_json::json!({"success": true})))
+                Ok(ok_json())
             }
             Some("move") => {
                 let _dst_repo = form
@@ -217,7 +218,7 @@ pub async fn file_post_handler(
                     access.user.user_id,
                 )
                 .await?;
-                Ok(Json(serde_json::json!({"success": true})))
+                Ok(ok_json())
             }
             _ => Err(AppError::BadRequest("unknown operation".into())),
         }
@@ -425,7 +426,7 @@ pub async fn lock_file_via_api_handler(
     svc.lock_file(repo_id, &path, operation, &access.user.email)
         .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 #[derive(Deserialize)]
@@ -481,14 +482,14 @@ pub async fn create_file_v21(
             access.user.user_id,
         )
         .await?;
-        return Ok(Json(serde_json::json!({"success": true})));
+        return Ok(ok_json());
     }
 
     let svc = state.file_service();
     svc.create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
         .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 #[derive(Deserialize)]

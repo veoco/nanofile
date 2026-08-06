@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::service::sharing::{link, share};
 use base::error::AppError;
@@ -335,7 +336,7 @@ pub async fn delete_share_link_v21(
     if !found {
         return Err(AppError::NotFound("share link not found".into()));
     }
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// PUT /api/v2.1/share-links/{token}/
@@ -482,7 +483,7 @@ pub async fn update_upload_link_v21(
     if !updated {
         return Err(AppError::NotFound("upload link not found".into()));
     }
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// DELETE /api/v2.1/upload-links/{token}/

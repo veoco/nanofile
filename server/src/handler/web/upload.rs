@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::service::sharing::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
 use base::error::AppError;
@@ -149,7 +150,7 @@ async fn try_handle_chunked(
 
     // Intermediate chunk — tell the client to keep sending
     if end != file_size - 1 {
-        return Ok(Some(Json(json!({"success": true}))));
+        return Ok(Some(ok_json()));
     }
 
     // ── Final chunk: assemble the complete file and commit ─────────
@@ -485,7 +486,7 @@ pub async fn update_api(
         return Ok(Json(resp));
     }
 
-    Ok(Json(json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// POST /update-aj/ — AJAX file update (Seahub web UI).
@@ -583,7 +584,7 @@ pub async fn update_aj(
         return Ok(Json(resp));
     }
 
-    Ok(Json(json!({"success": true})))
+    Ok(ok_json())
 }
 
 // ─── Token-authenticated upload endpoints ─────────────────────────────────────
@@ -894,7 +895,7 @@ pub async fn update_api_handler(
         }
     }
 
-    Ok(Json(json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// POST /update-aj/{token} — Token-based AJAX file update (Seahub web frontend).
@@ -944,7 +945,7 @@ pub async fn update_aj_token(
     }
 
     if file_data.is_empty() {
-        return Ok(Json(json!({"success": true})));
+        return Ok(ok_json());
     }
 
     let uid = Some(info.user_id);
@@ -981,7 +982,7 @@ pub async fn update_aj_token(
         ));
     }
 
-    Ok(Json(json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// POST /upload-blks-api/{token} — Token-based block upload and commit.
@@ -1245,7 +1246,7 @@ pub async fn upload_blks_api(
             .map_err(|e| AppError::Internal(format!("failed to write block {block_id}: {e}")))?;
     }
 
-    Ok(Json(json!({"success": true})))
+    Ok(ok_json())
 }
 
 #[cfg(test)]

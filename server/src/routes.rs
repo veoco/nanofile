@@ -3,15 +3,11 @@
 //! Replaces the old `api/` and `api_v21/` shim modules that only re-exported
 //! handler functions from the domain-oriented handler modules.
 
-use axum::Json;
 use axum::Router;
-use axum::extract::{Query, State};
 use axum::routing::{delete, get, post, put};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use base::error::AppError;
 
 // ── V2 (legacy) API routes ────────────────────────────────────────────────
 
@@ -137,7 +133,7 @@ fn v2_routes() -> Router<Arc<AppState>> {
             "/api/v2.1/repos/{repo_id}/dir/",
             get(crate::handler::dir::list_dir_v21)
                 .post(crate::handler::dir::create_dir_v21)
-                .delete(v2_delete_dir),
+                .delete(crate::handler::dir::delete_dir),
         )
         // Starred
         .route(
@@ -248,7 +244,7 @@ fn v2_routes() -> Router<Arc<AppState>> {
         // File (create=POST, delete delegated to v2 handler)
         .route(
             "/api/v2.1/repos/{repo_id}/file/",
-            post(crate::handler::file::create_file_v21).delete(v2_delete_file),
+            post(crate::handler::file::create_file_v21).delete(crate::handler::file::delete_file),
         )
         // Metadata
         .route(
@@ -330,53 +326,6 @@ fn v2_routes() -> Router<Arc<AppState>> {
             get(crate::handler::trash::list_deleted_repos)
                 .post(crate::handler::trash::restore_deleted_repo),
         )
-}
-
-// ── Inline handlers for v2.1 routes that need extra logic ─────────────────
-
-async fn v2_delete_dir(
-    access: crate::middleware::repo_extractor::RepoPathWrite,
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<HashMap<String, String>>,
-) -> Result<axum::Json<serde_json::Value>, AppError> {
-    let p = query
-        .get("p")
-        .cloned()
-        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
-    let v2_query = crate::handler::dir::DirQuery {
-        p: Some(p),
-        t: None,
-        recursive: None,
-    };
-    crate::handler::dir::delete_dir(
-        access,
-        axum::extract::State(state),
-        axum::extract::Query(v2_query),
-    )
-    .await?;
-    Ok(Json(serde_json::json!({"success": true})))
-}
-
-async fn v2_delete_file(
-    access: crate::middleware::repo_extractor::RepoPathWrite,
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<HashMap<String, String>>,
-) -> Result<axum::Json<serde_json::Value>, AppError> {
-    let p = query
-        .get("p")
-        .cloned()
-        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
-    let v2_query = crate::handler::file::FileQuery {
-        p: Some(p),
-        reuse: None,
-    };
-    crate::handler::file::delete_file(
-        access,
-        axum::extract::State(state),
-        axum::extract::Query(v2_query),
-    )
-    .await?;
-    Ok(Json(serde_json::json!({"success": true})))
 }
 
 // ── Combined API routes (V1 + V2.1) ───────────────────────────────────────

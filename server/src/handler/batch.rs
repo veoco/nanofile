@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use base::error::AppError;
 use base::sanitize::safe_normalize_path;
@@ -35,7 +36,7 @@ pub async fn batch_move_items(
     .await?;
 
     if req.src_dirents.is_empty() {
-        return Ok(Json(serde_json::json!({"success": true})));
+        return Ok(ok_json());
     }
 
     let svc = state.fileops_service();
@@ -55,7 +56,7 @@ pub async fn batch_move_items(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 #[derive(Deserialize)]
@@ -103,7 +104,7 @@ pub async fn sync_batch_copy_item(
         )
         .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 #[derive(Deserialize)]
@@ -119,7 +120,7 @@ pub async fn batch_delete_item(
     Json(body): Json<BatchDeleteRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if body.dirents.is_empty() {
-        return Ok(Json(serde_json::json!({"success": true})));
+        return Ok(ok_json());
     }
 
     let repo_id = &body.repo_id;
@@ -145,5 +146,5 @@ pub async fn batch_delete_item(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }

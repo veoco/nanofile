@@ -2,6 +2,7 @@ use axum::{Json, extract::State};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::repo_extractor::RepoPathRead;
 use crate::middleware::repo_extractor::RepoPathWrite;
 use base::error::AppError;
@@ -25,7 +26,7 @@ pub async fn update_metadata_config(
     let enabled = req.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
     let svc = state.metadata_service();
     svc.update_metadata_config(&repo_id, enabled).await?;
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 pub async fn get_file_tags(
@@ -51,7 +52,7 @@ pub async fn update_file_tags(
     svc.update_file_tags(&repo_id, file_path, tags.map(|v| &**v))
         .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 pub async fn related_users(
@@ -102,5 +103,5 @@ pub async fn update_metadata_record(
     svc.update_metadata_record(&repo_id, file_path, key, value)
         .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }

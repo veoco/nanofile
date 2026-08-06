@@ -8,6 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use base::error::AppError;
 
@@ -94,5 +95,5 @@ pub async fn unstar_item(
     svc.unstar_item(auth.user_id, &query.repo_id, &query.path)
         .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }

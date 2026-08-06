@@ -4,6 +4,13 @@
 //! The sync protocol (`/seafhttp/`) and file serving (`/download-api/`, etc.)
 //! each have their own subdirectories due to their distinct auth patterns.
 
+use axum::Json;
+
+/// Standard success response body: `{"success": true}`.
+pub fn ok_json() -> Json<serde_json::Value> {
+    Json(serde_json::json!({"success": true}))
+}
+
 pub mod account;
 pub mod activities;
 pub mod async_batch;

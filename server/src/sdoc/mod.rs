@@ -8,6 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use base::error::AppError;
 
@@ -61,7 +62,7 @@ pub async fn resolve_comment(
     if let Some(r) = req.get("resolved").and_then(|v| v.as_bool()) {
         state.sdoc_service().resolve_comment(comment_id, r).await?;
     }
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// DELETE /api/v1/docs/{uuid}/comment/{id}/
@@ -71,7 +72,7 @@ pub async fn delete_comment(
     Path((_doc_uuid, comment_id)): Path<(String, i32)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     state.sdoc_service().delete_comment(comment_id).await?;
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 fn doc_routes() -> Router<Arc<AppState>> {

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::fs::core::trash;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use base::error::AppError;
@@ -194,7 +195,7 @@ pub async fn clean_trash(
     )
     .await;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 async fn parse_clean_trash_body(req: Request<Body>) -> Option<i64> {
@@ -264,5 +265,5 @@ pub async fn restore_deleted_repo(
     trash::restore_deleted_repo(state.db.as_ref(), &state.repos, &body.repo_id, auth.user_id)
         .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }

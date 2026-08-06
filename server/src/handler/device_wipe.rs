@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use base::error::AppError;
 
 /// POST /api2/device-wiped/
@@ -35,5 +36,5 @@ pub async fn device_wiped(
     let svc = state.sso_service();
     svc.device_wiped(token_record.user_id, &device_id).await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }

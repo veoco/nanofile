@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::service::repo::password::PasswordService;
 use crate::service::repo::service;
@@ -242,7 +243,7 @@ pub async fn set_repo_password_v2(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// `POST /api2/repos/{repo_id}/?op=checkpassword`
@@ -288,7 +289,7 @@ pub async fn check_repo_password_v2(
 
     use infra::crypto::verify::verify_magic;
     if verify_magic(stored_magic, &magic) {
-        Ok(Json(serde_json::json!({"success": true})))
+        Ok(ok_json())
     } else {
         Err(AppError::RepoPasswdMagicRequired)
     }

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::service::auth::login::LoginResult;
 use base::error::AppError;
@@ -250,5 +251,5 @@ pub async fn logout_device(
     // Invalidate device session via service
     state.login_service().logout_device(token_str).await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }

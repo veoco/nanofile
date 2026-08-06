@@ -6,6 +6,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::service::sharing::wiki;
 use base::error::AppError;
@@ -55,7 +56,7 @@ pub async fn rename_wiki(
 
     wiki::rename_wiki(&state.repos, wiki_id, name).await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// POST /api/v2.1/wiki2/{wiki_id}/publish/
@@ -66,7 +67,7 @@ pub async fn publish_wiki(
 ) -> Result<Json<serde_json::Value>, AppError> {
     ensure_wiki_owner(&state, wiki_id, auth.user_id).await?;
     wiki::publish_wiki(&state.repos, wiki_id).await?;
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// DELETE /api/v2.1/wiki2/{wiki_id}/publish/
@@ -77,7 +78,7 @@ pub async fn unpublish_wiki(
 ) -> Result<Json<serde_json::Value>, AppError> {
     ensure_wiki_owner(&state, wiki_id, auth.user_id).await?;
     wiki::unpublish_wiki(&state.repos, wiki_id).await?;
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// DELETE /api/v2.1/wiki2/{wiki_id}/
@@ -88,5 +89,5 @@ pub async fn delete_wiki(
 ) -> Result<Json<serde_json::Value>, AppError> {
     ensure_wiki_owner(&state, wiki_id, auth.user_id).await?;
     wiki::delete_wiki(&state.repos, wiki_id).await?;
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }

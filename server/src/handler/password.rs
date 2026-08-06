@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::RepoPathRead;
 use crate::service::repo::password::PasswordService;
@@ -47,7 +48,7 @@ pub async fn set_password_v21(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(ok_json())
 }
 
 /// PUT /api/v2.1/repos/{repo_id}/set-password/?operation=change-password
@@ -89,7 +90,7 @@ pub async fn change_password_v21(
                 &new_password,
             )
             .await
-            .map(|_| Json(serde_json::json!({"success": true})))
+            .map(|_| ok_json())
         }
         Some("check-password") => {
             let is_set = state
