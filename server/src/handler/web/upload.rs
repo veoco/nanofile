@@ -152,6 +152,18 @@ async fn try_handle_chunked(
         )));
     }
 
+    // Pre-check storage quota against the declared total size so over-quota
+    // uploads fail before consuming chunks / assembling the file.
+    if let Some(uid) = user_id {
+        crate::service::fs::quota::check_upload_quota(
+            &state.repos,
+            uid,
+            file_size as i64,
+            state.config.storage.max_storage_bytes,
+        )
+        .await?;
+    }
+
     let file_path = if target_dir == "/" {
         format!("/{file_name}")
     } else {
@@ -723,8 +735,10 @@ pub async fn upload_api(
         return Err(AppError::BadRequest("token not valid for upload".into()));
     }
 
-    // Read the full body
-    let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
+    // Read the full body (bounded to the configured upload limit as a
+    // belt-and-suspenders cap alongside the global body limit layer).
+    let max_bytes = state.config.server.max_upload_size_mb * 1024 * 1024;
+    let bytes = axum::body::to_bytes(req.into_body(), max_bytes as usize)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
@@ -1070,6 +1084,16 @@ pub async fn upload_blks_api(
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| AppError::BadRequest("file_size required for commit".into()))?;
         let replace = fields.get("replace").map(|s| s.as_str()) == Some("1");
+
+        // Pre-check storage quota against the declared file size before
+        // assembling the file from its blocks.
+        crate::service::fs::quota::check_upload_quota(
+            &state.repos,
+            info.user_id,
+            file_size,
+            state.config.storage.max_storage_bytes,
+        )
+        .await?;
 
         // Parse blockids JSON array
         let block_ids: Vec<String> = serde_json::from_str(blockids_str)

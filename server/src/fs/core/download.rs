@@ -38,6 +38,44 @@ impl Downloader {
         Ok(file_content)
     }
 
+    /// Read at most the first `max_bytes` of a file's content. Returns fewer
+    /// bytes when the file is smaller. Used by previews and thumbnails so a
+    /// huge file can't be loaded fully into memory.
+    pub async fn download_file_limited(
+        repos: &Repositories,
+        repo_id: &str,
+        path: &str,
+        block_store: &DynBlockStorage,
+        dec_key: Option<(&[u8], &[u8])>,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, AppError> {
+        let (file_data, block_ids) = Self::download_file_stream(repos, repo_id, path).await?;
+
+        let mut out = Vec::with_capacity(file_data.size.min(max_bytes as i64) as usize);
+        for block_id in &block_ids {
+            if out.len() >= max_bytes {
+                break;
+            }
+            let block_data = block_store
+                .read_block(block_id)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let block_data = if let Some((key, iv)) = dec_key {
+                decrypt_block(&block_data, key, iv)
+                    .map_err(|e| AppError::internal(e.to_string()))?
+            } else {
+                block_data
+            };
+            let remaining = max_bytes - out.len();
+            let take = remaining.min(block_data.len());
+            out.extend_from_slice(&block_data[..take]);
+            if take < block_data.len() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     /// Resolve a file's block IDs without reading their content.
     ///
     /// Returns `(FsFileData, Vec<block_id>)` so the caller can stream

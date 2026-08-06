@@ -20,10 +20,18 @@ impl ExifService {
     /// Returns a JSON object with EXIF fields that were found, or `null` if
     /// the file contains no EXIF data.
     pub async fn get_exif(&self, repo_id: &str, path: &str) -> Result<serde_json::Value, AppError> {
-        let content =
-            Downloader::download_file(&self.repos, repo_id, path, &self.block_store, None)
-                .await
-                .map_err(|_| AppError::NotFound("file not found".into()))?;
+        // EXIF lives in the APP1 segment near the start of the image, so a
+        // bounded read is enough and avoids loading huge files into memory.
+        let content = Downloader::download_file_limited(
+            &self.repos,
+            repo_id,
+            path,
+            &self.block_store,
+            None,
+            8 * 1024 * 1024,
+        )
+        .await
+        .map_err(|_| AppError::NotFound("file not found".into()))?;
 
         let exif_data = tokio::task::spawn_blocking(move || Self::extract_exif(&content))
             .await

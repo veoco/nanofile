@@ -1,6 +1,7 @@
 /// Web UI file browser handlers.
 use askama::Template;
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
     http::{StatusCode, header},
     response::{Html, IntoResponse},
@@ -682,12 +683,13 @@ async fn serve_file(
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
     let file_name = path.rsplit('/').next().unwrap_or("file").to_string();
 
-    // ?dl=1 → force download
+    // ?dl=1 → force download (streamed so large files aren't buffered).
     if query.dl.as_deref() == Some("1") {
-        let data =
-            Downloader::download_file(&state.repos, &repo_id, &path, &state.block_store, None)
-                .await
-                .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+        let (_file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
+            .await
+            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+        let stream =
+            crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
         let content_type = mime_guess(&file_name);
         let disposition = format!("attachment; filename=\"{}\"", file_name);
         return Ok((
@@ -696,7 +698,7 @@ async fn serve_file(
                 (header::CONTENT_TYPE, content_type),
                 (header::CONTENT_DISPOSITION, &disposition),
             ],
-            data,
+            Body::from_stream(stream),
         )
             .into_response());
     }
@@ -755,10 +757,17 @@ async fn serve_file(
     }
 
     if is_text {
-        let data =
-            Downloader::download_file(&state.repos, &repo_id, &path, &state.block_store, None)
-                .await
-                .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+        // Cap the preview read so huge text files don't blow up memory.
+        let data = Downloader::download_file_limited(
+            &state.repos,
+            &repo_id,
+            &path,
+            &state.block_store,
+            None,
+            4 * 1024 * 1024,
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
         let content = String::from_utf8_lossy(&data).to_string();
 
         let repo_name = state
@@ -802,12 +811,19 @@ async fn serve_file(
         return Ok(Html(html).into_response());
     }
 
-    // Binary files — serve raw bytes inline
-    let data = Downloader::download_file(&state.repos, &repo_id, &path, &state.block_store, None)
+    // Binary files — serve raw bytes inline (streamed).
+    let (_file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
         .await
         .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+    let stream =
+        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
     let content_type = mime_guess(&file_name);
-    Ok((StatusCode::OK, [(header::CONTENT_TYPE, content_type)], data).into_response())
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, content_type)],
+        Body::from_stream(stream),
+    )
+        .into_response())
 }
 
 /// Resolve a file's size from the FS tree without downloading its content.

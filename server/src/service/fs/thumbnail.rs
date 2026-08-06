@@ -139,13 +139,24 @@ impl ThumbnailService {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
-        // Download file content and generate thumbnail
-        let content = Downloader::download_file(
+        // Skip huge images and cap the in-memory read; decoding a truncated
+        // multi-hundred-MB image would waste CPU and memory for no benefit.
+        const MAX_THUMBNAIL_SOURCE: i64 = 32 * 1024 * 1024;
+        let (file_data, _block_ids) =
+            Downloader::resolve_blocks(&self.repos, repo_id, &normalized_path)
+                .await
+                .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
+        if file_data.size > MAX_THUMBNAIL_SOURCE {
+            return Err(AppError::NotFound("thumbnail not available".into()));
+        }
+
+        let content = Downloader::download_file_limited(
             &self.repos,
             repo_id,
             &normalized_path,
             &self.block_store,
             None,
+            MAX_THUMBNAIL_SOURCE as usize,
         )
         .await
         .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
