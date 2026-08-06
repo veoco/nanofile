@@ -20,6 +20,38 @@ async fn test_create_repo() {
     assert_eq!(body["name"].as_str().unwrap(), "My Library");
 }
 
+/// Security: a repo name containing script-breaking characters must be
+/// rejected at creation — repo names are rendered into inline `<script>`
+/// blocks, so `</script>` must never be persisted.
+#[tokio::test]
+async fn test_create_repo_rejects_script_in_name() {
+    let server = TestServer::start().await;
+    let client = server.client();
+    create_test_user(server.db.as_ref(), "x@example.com", "password123").await;
+    let resp = client.login("x@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap();
+
+    let resp = client
+        .create_repo(token, "</script><script>alert(1)</script>")
+        .await;
+    assert_eq!(resp.status(), 400, "script-in-name repo must be rejected");
+}
+
+/// Legal repo names with punctuation (parentheses, apostrophes) still work.
+#[tokio::test]
+async fn test_create_repo_allows_punctuation() {
+    let server = TestServer::start().await;
+    let client = server.client();
+    create_test_user(server.db.as_ref(), "y@example.com", "password123").await;
+    let resp = client.login("y@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap();
+
+    let resp = client.create_repo(token, "My (Team) Docs").await;
+    assert_eq!(resp.status(), 201);
+}
+
 #[tokio::test]
 async fn test_list_repos() {
     let server = TestServer::start().await;

@@ -9,6 +9,7 @@
 
 // ── Server crate modules ────────────────────────────────────────────────────
 pub mod domain;
+pub mod filters;
 pub mod fs;
 pub mod handler;
 pub mod i18n;

@@ -170,8 +170,8 @@ function addToQueue(items) {
     bitrateTimestamp = null;
     currentBitrate = 0;
 
-    var currentDir = {{ current_path|json|safe }};
-    var repoId = {{ repo_id|json|safe }};
+    var currentDir = {{ current_path|crate::filters::js_json|safe }};
+    var repoId = {{ repo_id|crate::filters::js_json|safe }};
 
     items.forEach(function (item) {
         var parentDir;
@@ -279,8 +279,8 @@ function uploadFileDirect(item, url) {
 
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
-    formData.append('repo_name', {{ repo_name|json|safe }});
-    if (!uploadTokenUrl) formData.append('repo_id', {{ repo_id|json|safe }});
+    formData.append('repo_name', {{ repo_name|crate::filters::js_json|safe }});
+    if (!uploadTokenUrl) formData.append('repo_id', {{ repo_id|crate::filters::js_json|safe }});
     formData.append('file', item.file, item.name);
     formData.append('xhr', '1');
 
@@ -334,7 +334,7 @@ function uploadFileDirect(item, url) {
 
 /** Query the server for how many bytes have already been uploaded. */
 function getUploadedBytes(parentDir, fileName) {
-    var repoId = {{ repo_id|json|safe }};
+    var repoId = {{ repo_id|crate::filters::js_json|safe }};
     var url = '/api/v2.1/repos/' + repoId + '/file-uploaded-bytes/'
         + '?parent_dir=' + encodeURIComponent(parentDir)
         + '&file_name=' + encodeURIComponent(fileName);
@@ -379,8 +379,8 @@ function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
 
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
-    formData.append('repo_name', {{ repo_name|json|safe }});
-    if (!uploadTokenUrl) formData.append('repo_id', {{ repo_id|json|safe }});
+    formData.append('repo_name', {{ repo_name|crate::filters::js_json|safe }});
+    if (!uploadTokenUrl) formData.append('repo_id', {{ repo_id|crate::filters::js_json|safe }});
     formData.append('file', chunk, item.name);
     formData.append('xhr', '1');
 
@@ -813,7 +813,7 @@ function submitNewFolder(form) {
     hideNewFolderDialog();
 
     // Use fetch to call Seafile API
-    var repoId = {{ repo_id|json|safe }};
+    var repoId = {{ repo_id|crate::filters::js_json|safe }};
     var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
     fetch('/api/v2.1/repos/' + repoId + '/dir/', {
         method: 'POST',

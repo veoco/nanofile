@@ -220,12 +220,13 @@ impl RepoService {
         magic: Option<String>,
         random_key: Option<String>,
     ) -> Result<(RepoInfo, String), AppError> {
+        let name = validate_repo_name(name)?;
         let repo_id = repo_id_opt.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let now = chrono::Utc::now().timestamp();
 
         let params = crate::repository::repo::CreateRepoParams {
             id: repo_id.clone(),
-            name: name.to_string(),
+            name: name.clone(),
             description: desc.to_string(),
             owner_id: user_id,
             encrypted: encrypted_val as i8,
@@ -391,10 +392,7 @@ impl RepoService {
             return Err(AppError::Forbidden);
         }
 
-        let new_name = new_name.trim().to_string();
-        if new_name.is_empty() || new_name.contains('/') {
-            return Err(AppError::BadRequest("invalid repo name".into()));
-        }
+        let new_name = validate_repo_name(new_name)?;
 
         // Log repo rename activity (before update, so detail captures the old name)
         activity_log::log_activity(
@@ -442,17 +440,10 @@ impl RepoService {
 
         let now = chrono::Utc::now().timestamp();
 
-        // Validate name if provided (must be non-empty and without slashes)
+        // Validate name if provided.
         let validated_name = new_name
             .as_ref()
-            .map(|n| {
-                let n = n.trim().to_string();
-                if n.is_empty() || n.contains('/') {
-                    Err(AppError::BadRequest("invalid repo name".into()))
-                } else {
-                    Ok(n)
-                }
-            })
+            .map(|n| validate_repo_name(n))
             .transpose()?;
 
         // Validate history retention settings (must be >= 0; 0 = unlimited).
@@ -830,4 +821,23 @@ fn format_repo_size(bytes: i64) -> String {
     } else {
         format!("{:.1} {}", val, units[i])
     }
+}
+
+/// Validate a repo name before it is persisted.
+///
+/// Repo names are rendered into inline `<script>` blocks (`|json|safe` in the
+/// toolbar template), so `<`, `>`, `&` and `"` are rejected outright — along
+/// with control characters, path separators and over-long names — to prevent
+/// script breakout.
+fn validate_repo_name(name: &str) -> Result<String, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 255
+        || trimmed.contains('/')
+        || trimmed.contains(['<', '>', '&', '"'])
+        || trimmed.chars().any(char::is_control)
+    {
+        return Err(AppError::BadRequest("invalid repo name".into()));
+    }
+    Ok(trimmed.to_string())
 }
