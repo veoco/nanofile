@@ -7,7 +7,7 @@
 *.log
 .env
 config.local.toml
-static/css/app.css
+server/static/css/app.css
 tailwindcss
 node_modules/
 package-lock.json
