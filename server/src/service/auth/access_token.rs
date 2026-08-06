@@ -7,6 +7,10 @@ use tracing::debug;
 
 const TOKEN_EXPIRE_SECS: i64 = 3600; // 1 hour, matching seafile
 
+/// Above this map size, `validate` takes the write lock to purge expired
+/// tokens. Below it, common-path validation is read-lock only.
+const CLEANUP_THRESHOLD: usize = 10_000;
+
 /// An access token granting permission to upload, update, or download a file.
 #[derive(Clone, Debug)]
 pub struct AccessToken {
@@ -110,21 +114,54 @@ impl AccessTokenManager {
         file_fs_id: &str,
         file_name: &str,
     ) -> String {
-        let token = self.generate(repo_id, user_id, username, "download", parent_dir);
-        if let Ok(mut guard) = self.tokens.write()
-            && let Some(entry) = guard.get_mut(&token)
-        {
-            entry.file_fs_id = Some(file_fs_id.to_string());
-            entry.file_name = Some(file_name.to_string());
+        let now = chrono::Utc::now().timestamp();
+        let token = Uuid::new_v4().to_string().replace('-', "");
+
+        let entry = AccessToken {
+            token: token.clone(),
+            repo_id: repo_id.to_owned(),
+            user_id,
+            username: username.to_owned(),
+            op: "download".to_owned(),
+            parent_dir: parent_dir.to_owned(),
+            file_fs_id: Some(file_fs_id.to_string()),
+            file_name: Some(file_name.to_string()),
+            upload_link_id: None,
+            created_at: now,
+            expires_at: now + TOKEN_EXPIRE_SECS,
+        };
+
+        match self.tokens.write() {
+            Ok(mut guard) => {
+                guard.insert(token.clone(), entry);
+                debug!(repo_id = %repo_id, len = guard.len(), "download token stored");
+            }
+            Err(poisoned) => {
+                eprintln!("[access_token] WRITE LOCK POISONED! recovering...");
+                poisoned.into_inner().insert(token.clone(), entry);
+            }
         }
+
         token
     }
 
     /// Validate and return the token.  Returns `None` if the token
-    /// doesn't exist or has expired.  Expired tokens are cleaned up
-    /// during validation.
+    /// doesn't exist or has expired.  Expired tokens are purged lazily,
+    /// only when the map grows past a threshold, so that the common path
+    /// (a valid token) takes a read lock and a single lookup.
     pub fn validate(&self, token: &str) -> Option<AccessToken> {
         let now = chrono::Utc::now().timestamp();
+
+        // Fast path: read lock + single lookup.
+        if let Ok(guard) = self.tokens.read()
+            && let Some(entry) = guard.get(token)
+            && entry.expires_at > now
+        {
+            return Some(entry.clone());
+        }
+
+        // Slow path: missing or expired token — take the write lock and
+        // purge expired entries once the map has grown large.
         let mut guard = match self.tokens.write() {
             Ok(g) => g,
             Err(poisoned) => {
@@ -132,14 +169,14 @@ impl AccessTokenManager {
                 poisoned.into_inner()
             }
         };
-
-        // Clean up expired tokens lazily.
-        guard.retain(|_, t| t.expires_at > now);
+        if guard.len() > CLEANUP_THRESHOLD {
+            guard.retain(|_, t| t.expires_at > now);
+        }
 
         debug!(size = guard.len(), "validating access token");
-        let entry = guard.get(token)?.clone();
+        let entry = guard.get(token)?;
         if entry.expires_at > now {
-            Some(entry)
+            Some(entry.clone())
         } else {
             None
         }

@@ -11,7 +11,6 @@ use crate::AppState;
 use crate::service::sharing::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
 use base::error::AppError;
-use infra::activity_log;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -668,7 +667,7 @@ pub async fn upload_aj_token(
             return Ok(resp);
         }
 
-        let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
+        let uid = Some(info.user_id);
         let resp = upload_and_build_response(
             &state,
             &info.repo_id,
@@ -758,7 +757,7 @@ pub async fn upload_api(
     if let Some(data) = parsed.file_data
         && !data.is_empty()
     {
-        let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
+        let uid = Some(info.user_id);
         let resp = upload_and_build_response(
             &state,
             &info.repo_id,
@@ -833,7 +832,7 @@ pub async fn update_api_handler(
         .unwrap_or_default();
 
     if !data.is_empty() {
-        let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
+        let uid = Some(info.user_id);
         if !target_file.is_empty() {
             // Derive target from target_file + optional relative_path
             let (raw_parent, raw_name) =
@@ -944,7 +943,7 @@ pub async fn update_aj_token(
         return Ok(Json(json!({"success": true})));
     }
 
-    let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
+    let uid = Some(info.user_id);
     let target_file = fields.get("target_file").cloned().unwrap_or_default();
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
 
@@ -1016,7 +1015,7 @@ pub async fn upload_blks_api(
         ));
     }
 
-    let uid = activity_log::user_id_by_email(state.db.as_ref(), &info.username).await;
+    let uid = Some(info.user_id);
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut blocks: Vec<(String, Vec<u8>)> = Vec::new();
 
