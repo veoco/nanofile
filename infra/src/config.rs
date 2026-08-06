@@ -232,7 +232,6 @@ pub struct LoggingConfig {
 pub struct GcConfig {
     pub enabled: bool,
     pub interval_hours: u64,
-    pub keep_commits: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -344,7 +343,6 @@ impl Config {
         env_str!("NANOFILE_LOG_LEVEL", self.logging.level);
         env_parse!("NANOFILE_GC_ENABLED", self.gc.enabled);
         env_parse!("NANOFILE_GC_INTERVAL_HOURS", self.gc.interval_hours);
-        env_parse!("NANOFILE_GC_KEEP_COMMITS", self.gc.keep_commits);
         env_parse!("NANOFILE_NOTIFICATION_ENABLED", self.notification.enabled);
         env_str!(
             "NANOFILE_NOTIFICATION_PRIVATE_KEY",

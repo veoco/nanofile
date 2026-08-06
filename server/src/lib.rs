@@ -235,7 +235,7 @@ impl AppState {
             scheduler.spawn_periodic("gc", gc_config.interval_hours * 3600, move || {
                 let repos = repos_for_gc.clone();
                 async move {
-                    match GcManager::garbage_collect(&repos, gc_config.keep_commits).await {
+                    match GcManager::garbage_collect(&repos).await {
                         Ok(count) if count > 0 => TaskOutput::success(
                             format!("GC removed {count} unreferenced FS objects"),
                             Some(count),

@@ -25,6 +25,8 @@ pub struct CreateRepoParams {
 pub trait RepoRepository: Send + Sync {
     async fn find_by_id(&self, repo_id: &str) -> Result<Option<repo::Model>, AppError>;
     async fn find_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError>;
+    /// Get all repos (used by garbage collection).
+    async fn find_all(&self) -> Result<Vec<repo::Model>, AppError>;
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
     /// Create a repo from typed parameters.
     async fn create_repo(&self, params: CreateRepoParams) -> Result<repo::Model, AppError>;
@@ -49,12 +51,15 @@ pub trait RepoRepository: Send + Sync {
     /// Rename a repo (owner-only).
     async fn rename_repo(&self, repo_id: &str, name: &str, updated_at: i64)
     -> Result<(), AppError>;
-    /// Update repo name and/or description (owner-only).
+    /// Update repo name, description, and/or history retention settings
+    /// (owner-only). `None` fields are left unchanged.
     async fn update_repo_details(
         &self,
         repo_id: &str,
         name: Option<&str>,
         description: Option<&str>,
+        history_limit: Option<i32>,
+        history_ttl_days: Option<i32>,
         updated_at: i64,
     ) -> Result<(), AppError>;
 }
@@ -88,6 +93,8 @@ impl RepoRepository for DbRepoRepository {
             size: Set(0),
             created_at: Set(params.created_at),
             updated_at: Set(params.updated_at),
+            history_limit: Set(0),
+            history_ttl_days: Set(0),
         };
         repo::Entity::insert(model).exec(self.db.as_ref()).await?;
         self.find_by_id(&params.id)
@@ -105,6 +112,10 @@ impl RepoRepository for DbRepoRepository {
             .filter(repo::Column::OwnerId.eq(user_id))
             .all(self.db.as_ref())
             .await?)
+    }
+
+    async fn find_all(&self) -> Result<Vec<repo::Model>, AppError> {
+        Ok(repo::Entity::find().all(self.db.as_ref()).await?)
     }
 
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError> {
@@ -225,6 +236,8 @@ impl RepoRepository for DbRepoRepository {
         repo_id: &str,
         name: Option<&str>,
         description: Option<&str>,
+        history_limit: Option<i32>,
+        history_ttl_days: Option<i32>,
         updated_at: i64,
     ) -> Result<(), AppError> {
         let mut active: repo::ActiveModel = repo::ActiveModel {
@@ -235,6 +248,12 @@ impl RepoRepository for DbRepoRepository {
         }
         if let Some(d) = description {
             active.description = Set(d.to_string());
+        }
+        if let Some(hl) = history_limit {
+            active.history_limit = Set(hl);
+        }
+        if let Some(ht) = history_ttl_days {
+            active.history_ttl_days = Set(ht);
         }
         active.updated_at = Set(updated_at);
 

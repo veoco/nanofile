@@ -143,7 +143,6 @@ impl TestServer {
             gc: infra::config::GcConfig {
                 enabled: false,
                 interval_hours: 24,
-                keep_commits: 10,
             },
             notification: infra::config::NotificationConfig {
                 enabled: enable_notification,

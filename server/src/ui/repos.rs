@@ -38,6 +38,8 @@ pub struct RepoInfo {
     pub mtime: i64,
     pub encrypted: bool,
     pub owner_id: i32,
+    pub history_limit: i32,
+    pub history_ttl_days: i32,
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -62,6 +64,8 @@ pub async fn list_repos(
                 mtime: r.updated_at,
                 encrypted: r.encrypted != 0,
                 owner_id: r.owner_id,
+                history_limit: r.history_limit,
+                history_ttl_days: r.history_ttl_days,
             });
         }
     }

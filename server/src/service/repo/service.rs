@@ -418,7 +418,8 @@ impl RepoService {
         Ok(())
     }
 
-    /// Update a repo's name and/or description. Only the owner can update.
+    /// Update a repo's name, description, and/or history retention settings.
+    /// Only the owner can update.
     pub async fn update_repo(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -426,6 +427,8 @@ impl RepoService {
         user_id: i32,
         new_name: Option<String>,
         new_description: Option<String>,
+        history_limit: Option<i32>,
+        history_ttl_days: Option<i32>,
     ) -> Result<(), AppError> {
         let r = repos
             .repo
@@ -452,6 +455,13 @@ impl RepoService {
             })
             .transpose()?;
 
+        // Validate history retention settings (must be >= 0; 0 = unlimited).
+        if history_limit.is_some_and(|v| v < 0) || history_ttl_days.is_some_and(|v| v < 0) {
+            return Err(AppError::BadRequest(
+                "history_limit and history_ttl_days must be >= 0".into(),
+            ));
+        }
+
         // Log rename activity (before update, so detail captures the old name)
         if validated_name.is_some() {
             activity_log::log_activity(
@@ -476,6 +486,8 @@ impl RepoService {
                 repo_id,
                 validated_name.as_deref(),
                 new_description.as_deref(),
+                history_limit,
+                history_ttl_days,
                 now,
             )
             .await?;

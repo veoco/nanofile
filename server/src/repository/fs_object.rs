@@ -19,8 +19,8 @@ pub trait FsObjectRepository: Send + Sync {
         fs_ids: &[String],
     ) -> Result<Vec<fs_object::Model>, AppError>;
     async fn insert_many(&self, models: Vec<fs_object::ActiveModel>) -> Result<(), AppError>;
-    async fn find_all(&self) -> Result<Vec<fs_object::Model>, AppError>;
-    async fn find_by_fs_id(&self, fs_id: &str) -> Result<Option<fs_object::Model>, AppError>;
+    /// Get all fs objects of a single repo (used by garbage collection).
+    async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<fs_object::Model>, AppError>;
     async fn delete_many_by_ids(&self, ids: Vec<i64>) -> Result<(), AppError>;
 }
 
@@ -90,17 +90,10 @@ impl FsObjectRepository for DbFsObjectRepository {
         Ok(())
     }
 
-    async fn find_all(&self) -> Result<Vec<fs_object::Model>, AppError> {
+    async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<fs_object::Model>, AppError> {
         Ok(fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.ne(""))
+            .filter(fs_object::Column::RepoId.eq(repo_id))
             .all(self.db.as_ref())
-            .await?)
-    }
-
-    async fn find_by_fs_id(&self, fs_id: &str) -> Result<Option<fs_object::Model>, AppError> {
-        Ok(fs_object::Entity::find()
-            .filter(fs_object::Column::FsId.eq(fs_id))
-            .one(self.db.as_ref())
             .await?)
     }
 

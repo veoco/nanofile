@@ -160,6 +160,8 @@ pub async fn rename_repo(
 struct UpdateRepoRequest {
     repo_name: Option<String>,
     description: Option<String>,
+    history_limit: Option<i32>,
+    history_ttl_days: Option<i32>,
 }
 
 /// `POST /api2/repos/{repo_id}/?op=update`
@@ -186,6 +188,8 @@ pub async fn update_repo(
         auth.user_id,
         update.repo_name,
         update.description,
+        update.history_limit,
+        update.history_ttl_days,
     )
     .await?;
 

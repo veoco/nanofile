@@ -910,6 +910,8 @@ pub async fn restore_deleted_repo(
                 updated_at: Set(now),
                 size: Set(trashed.size),
                 repo_version: Set(1i32),
+                history_limit: Set(0),
+                history_ttl_days: Set(0),
             })
             .await?;
     }

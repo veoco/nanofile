@@ -53,6 +53,8 @@
                             data-name="{{ r.name }}"
                             data-description="{{ r.description }}"
                             data-size="{{ r.size_display }}"
+                            data-history-limit="{{ r.history_limit }}"
+                            data-history-ttl-days="{{ r.history_ttl_days }}"
                             class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-800 transition-colors"
                             title="Edit library">
                         <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -126,6 +128,22 @@
                 <div>
                     <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Size</p>
                     <p class="text-sm text-gray-900 dark:text-gray-100" id="edit-size"></p>
+                </div>
+                <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
+                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">历史设置</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">每次文件修改生成一个新版本。0 表示不限制。</p>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label for="edit-history-limit" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">保留版本数</label>
+                            <input id="edit-history-limit" type="number" min="0"
+                                   class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                        </div>
+                        <div>
+                            <label for="edit-history-ttl-days" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">保留天数</label>
+                            <input id="edit-history-ttl-days" type="number" min="0"
+                                   class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                        </div>
+                    </div>
                 </div>
                 <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
                     <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">WebDAV 访问</p>
@@ -215,6 +233,8 @@ function showEditDialog(btn) {
     document.getElementById('edit-name').value = btn.getAttribute('data-name');
     document.getElementById('edit-description').value = btn.getAttribute('data-description') || '';
     document.getElementById('edit-size').textContent = btn.getAttribute('data-size');
+    document.getElementById('edit-history-limit').value = btn.getAttribute('data-history-limit') || '0';
+    document.getElementById('edit-history-ttl-days').value = btn.getAttribute('data-history-ttl-days') || '0';
     document.getElementById('webdav-url').textContent = webdavBaseUrl + '/dav/' + repoId + '/';
     document.getElementById('webdav-key-name').value = '';
     dismissNewKey();
@@ -357,6 +377,8 @@ function submitEdit(form) {
     if (!newName) { alert('Library name cannot be empty.'); return false; }
     hideEditDialog();
     var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
+    var historyLimit = numOrNull('edit-history-limit');
+    var historyTtlDays = numOrNull('edit-history-ttl-days');
     fetch('/api2/repos/' + repoId + '/?op=update', {
         method: 'POST',
         credentials: 'same-origin',
@@ -364,7 +386,12 @@ function submitEdit(form) {
             'Content-Type': 'application/json;charset=utf-8',
             'X-CSRFToken': csrfToken,
         },
-        body: JSON.stringify({ repo_name: newName, description: newDesc }),
+        body: JSON.stringify({
+            repo_name: newName,
+            description: newDesc,
+            history_limit: historyLimit,
+            history_ttl_days: historyTtlDays,
+        }),
     }).then(function (resp) {
         if (resp.ok) {
             window.location.reload();
@@ -398,6 +425,13 @@ function deleteRepo(btn) {
     }).catch(function () {
         alert('Network error');
     });
+}
+
+// Read a numeric input; empty/invalid → null so the server leaves it unchanged.
+function numOrNull(id) {
+    var v = document.getElementById(id).value.trim();
+    if (v === '' || isNaN(Number(v))) return null;
+    return Number(v);
 }
 
 function getCookie(name) {

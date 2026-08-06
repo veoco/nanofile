@@ -98,10 +98,8 @@ level = "info"
 # Environment variables:
 #   NANOFILE_GC_ENABLED
 #   NANOFILE_GC_INTERVAL_HOURS
-#   NANOFILE_GC_KEEP_COMMITS
 enabled = false
 interval_hours = 24
-keep_commits = 100
 
 [index]
 # Environment variables:

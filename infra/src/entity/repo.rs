@@ -31,6 +31,12 @@ pub struct Model {
     pub size: i64,
     #[sea_orm(not_null, default_value = 1)]
     pub repo_version: i32,
+    /// Max number of file versions (commits) to keep. 0 = unlimited.
+    #[sea_orm(not_null, default_value = 0)]
+    pub history_limit: i32,
+    /// Keep file history for at most this many days. 0 = unlimited.
+    #[sea_orm(not_null, default_value = 0)]
+    pub history_ttl_days: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

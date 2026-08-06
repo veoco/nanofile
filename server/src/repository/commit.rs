@@ -35,6 +35,8 @@ pub trait CommitRepository: Send + Sync {
     async fn insert(&self, model: commit::ActiveModel) -> Result<commit::Model, AppError>;
     async fn find_all_ordered_by_ctime_desc(&self) -> Result<Vec<commit::Model>, AppError>;
     async fn insert_commit(&self, params: CreateCommitParams) -> Result<commit::Model, AppError>;
+    /// Delete commits by their primary key ids (used by history pruning).
+    async fn delete_many_by_ids(&self, ids: Vec<i64>) -> Result<(), AppError>;
 }
 
 pub struct DbCommitRepository {
@@ -114,5 +116,16 @@ impl CommitRepository for DbCommitRepository {
             .order_by_desc(commit::Column::Ctime)
             .all(self.db.as_ref())
             .await?)
+    }
+
+    async fn delete_many_by_ids(&self, ids: Vec<i64>) -> Result<(), AppError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        commit::Entity::delete_many()
+            .filter(commit::Column::Id.is_in(ids))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
     }
 }
