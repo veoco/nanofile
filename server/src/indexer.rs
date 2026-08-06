@@ -18,6 +18,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::sync::Arc;
 use tantivy::Index;
@@ -76,6 +77,10 @@ pub struct TextIndexer {
     schema: Schema,
     reader: tantivy::IndexReader,
     repos: Option<Arc<Repositories>>,
+    /// Number of uncommitted index operations since the last `commit()`.
+    /// Lets `search()` skip a needless commit+fsync when nothing changed.
+    /// `Arc` so the `Clone` derive shares the counter across clones.
+    pending: Arc<AtomicUsize>,
 }
 
 impl TextIndexer {
@@ -157,6 +162,7 @@ impl TextIndexer {
             schema,
             reader,
             repos,
+            pending: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -217,6 +223,7 @@ impl TextIndexer {
         writer
             .add_document(doc)
             .map_err(|e| AppError::internal(format!("index add doc: {e}")))?;
+        self.pending.fetch_add(1, Ordering::Relaxed);
 
         // No automatic commit here — the background committer persists pending
         // documents periodically.  Call commit() manually when immediate
@@ -231,6 +238,7 @@ impl TextIndexer {
             .lock()
             .map_err(|e| AppError::internal(format!("indexer mutex poisoned: {e}")))?;
         self.delete_docs_inner(&mut writer, repo_id, fullpath)?;
+        self.pending.fetch_add(1, Ordering::Relaxed);
         // No automatic commit — the background committer handles persistence.
         Ok(())
     }
@@ -245,7 +253,13 @@ impl TextIndexer {
         writer
             .commit()
             .map_err(|e| AppError::internal(format!("index commit: {e}")))?;
+        self.pending.store(0, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Whether there are uncommitted index operations since the last commit.
+    fn has_pending(&self) -> bool {
+        self.pending.load(Ordering::Relaxed) > 0
     }
 
     /// Explicitly reload the reader to pick up newly committed documents.
@@ -332,13 +346,18 @@ impl TextIndexer {
             return Ok(Vec::new());
         }
 
-        // Commit any pending documents first so the reader can pick them up.
-        // This ensures search always returns the latest content without
-        // requiring callers to explicitly commit after every index operation.
-        if let Err(e) = self.commit() {
+        // If there are uncommitted index operations, commit them so the reader
+        // can pick up the latest content. When nothing changed since the last
+        // commit (the common read-only case) we skip the writer lock + fsync.
+        if self.has_pending()
+            && let Err(e) = self.commit()
+        {
             tracing::warn!("search: commit before search failed: {e}");
-        } else if let Err(e) = self.reader.reload() {
-            tracing::warn!("search: reload after commit failed: {e}");
+        }
+        // Always reload: cheap, and needed to see docs committed by the
+        // background committer or by an explicit commit() since the last search.
+        if let Err(e) = self.reader.reload() {
+            tracing::warn!("search: reload failed: {e}");
         }
         let reader = self.reader.clone();
         let searcher = reader.searcher();

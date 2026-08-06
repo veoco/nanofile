@@ -12,6 +12,22 @@ use base::error::AppError;
 use infra::serialization::pack_fs;
 use infra::storage::DynBlockStorage;
 
+/// Reindex a file in the background so the full-file read + index write
+/// doesn't block the sync commit response. The 30s background committer
+/// persists the writer afterwards, so the index converges within that window.
+fn spawn_reindex(
+    indexer: TextIndexer,
+    block_store: DynBlockStorage,
+    repo_id: String,
+    path: String,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = indexer.reindex_file(&repo_id, &path, &block_store).await {
+            tracing::warn!("sync index file {}: {e}", path);
+        }
+    });
+}
+
 /// Service for sync protocol operations.
 pub struct SyncService {
     pub(super) repos: Arc<Repositories>,
@@ -707,19 +723,23 @@ impl SyncService {
                 }
             }
 
-            if let Some(ref indexer) = self.indexer {
+            if let Some(indexer) = self.indexer.clone() {
+                let block_store = self.block_store.clone();
                 for change in &changes {
                     if change.obj_type != "file" {
                         continue;
                     }
                     match change.op_type {
+                        // Reindexing reads the whole file from block storage, so
+                        // run it in the background rather than blocking the commit
+                        // response. Delete ops stay synchronous (they're cheap).
                         "create" | "edit" | "recover" => {
-                            if let Err(e) = indexer
-                                .reindex_file(repo_id, &change.path, &self.block_store)
-                                .await
-                            {
-                                tracing::warn!("sync index file {}: {e}", change.path);
-                            }
+                            spawn_reindex(
+                                indexer.clone(),
+                                block_store.clone(),
+                                repo_id.to_string(),
+                                change.path.clone(),
+                            );
                         }
                         "delete" => {
                             if let Err(e) = indexer.delete_file(repo_id, &change.path) {
@@ -730,12 +750,12 @@ impl SyncService {
                             if let Some(ref old_path) = change.old_path {
                                 let _ = indexer.delete_file(repo_id, old_path);
                             }
-                            if let Err(e) = indexer
-                                .reindex_file(repo_id, &change.path, &self.block_store)
-                                .await
-                            {
-                                tracing::warn!("sync reindex {}: {e}", change.path);
-                            }
+                            spawn_reindex(
+                                indexer.clone(),
+                                block_store.clone(),
+                                repo_id.to_string(),
+                                change.path.clone(),
+                            );
                         }
                         _ => {}
                     }
