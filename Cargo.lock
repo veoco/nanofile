@@ -2620,7 +2620,9 @@ name = "migration"
 version = "0.1.8"
 dependencies = [
  "flate2",
+ "sea-orm",
  "sea-orm-migration",
+ "tempfile",
  "tokio",
 ]
 

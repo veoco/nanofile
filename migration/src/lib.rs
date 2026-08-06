@@ -87,3 +87,40 @@ impl MigratorTrait for Migrator {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{EntityTrait, PaginatorTrait};
+    use sea_orm_migration::MigratorTrait;
+    use sea_orm_migration::seaql_migrations::Entity as SeaqlMigrations;
+
+    /// Verify the full migration chain applies cleanly to a fresh database.
+    ///
+    /// Catches ordering/`self.manager`/index-creation regressions that only
+    /// surface when every migration runs end-to-end against an empty schema.
+    #[tokio::test]
+    async fn migrates_fresh_database_from_scratch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let db =
+            sea_orm::Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
+                .await
+                .expect("connect sqlite");
+
+        Migrator::up(&db, None).await.expect("run all migrations");
+
+        // Every migration must be recorded in the migrations table.
+        let applied = SeaqlMigrations::find()
+            .count(&db)
+            .await
+            .expect("count migrations");
+        assert_eq!(
+            applied as usize,
+            Migrator::migrations().len(),
+            "migration chain did not apply fully"
+        );
+
+        let _ = db.close().await;
+    }
+}
