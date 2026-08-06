@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter, Set,
+    sea_query::Expr,
 };
 use std::sync::Arc;
 
@@ -44,13 +45,6 @@ pub trait ShareLinkRepository: Send + Sync {
         user_id: i32,
     ) -> Result<DeleteResult, AppError>;
     async fn delete_by_token(&self, token: &str) -> Result<DeleteResult, AppError>;
-    async fn update_expire_and_description(
-        &self,
-        token: &str,
-        user_id: i32,
-        expire_at: Option<Option<i64>>,
-        description: Option<Option<String>>,
-    ) -> Result<bool, AppError>;
     /// Increment the view count for a share link by its ID.
     async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError>;
     /// Delete expired share links (where expires_at < now).
@@ -159,47 +153,17 @@ impl ShareLinkRepository for DbShareLinkRepository {
             .await?)
     }
 
-    async fn update_expire_and_description(
-        &self,
-        token: &str,
-        user_id: i32,
-        expire_at: Option<Option<i64>>,
-        description: Option<Option<String>>,
-    ) -> Result<bool, AppError> {
-        let mut active: share_link::ActiveModel = share_link::ActiveModel {
-            ..Default::default()
-        };
-        if let Some(val) = expire_at {
-            active.expires_at = Set(val);
-        }
-        if let Some(val) = description {
-            active.description = Set(val);
-        }
-
+    async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError> {
+        // Atomic SQL increment: `view_cnt = view_cnt + 1` avoids lost updates
+        // from concurrent read-then-write on the same link.
         share_link::Entity::update_many()
-            .filter(share_link::Column::Token.eq(token))
-            .filter(share_link::Column::CreatorId.eq(user_id))
-            .set(active)
+            .filter(share_link::Column::Id.eq(id))
+            .col_expr(
+                share_link::Column::ViewCnt,
+                Expr::col(share_link::Column::ViewCnt).add(1),
+            )
             .exec(self.db.as_ref())
             .await?;
-        Ok(true)
-    }
-
-    async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError> {
-        if let Some(link) = share_link::Entity::find_by_id(id)
-            .one(self.db.as_ref())
-            .await?
-        {
-            let new_cnt = link.view_cnt + 1;
-            share_link::Entity::update_many()
-                .filter(share_link::Column::Id.eq(id))
-                .set(share_link::ActiveModel {
-                    view_cnt: Set(new_cnt),
-                    ..Default::default()
-                })
-                .exec(self.db.as_ref())
-                .await?;
-        }
         Ok(())
     }
 

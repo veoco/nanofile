@@ -7,7 +7,7 @@ use sea_orm::{
 use std::sync::Arc;
 
 use base::error::AppError;
-use infra::entity::{commit, repo};
+use infra::entity::repo;
 
 /// Row shape for `SELECT SUM(size) AS total FROM repos WHERE owner_id = ?`.
 /// `total` is `Option` because SQL `SUM` yields NULL when no rows match.
@@ -50,8 +50,6 @@ pub trait RepoRepository: Send + Sync {
         head_commit_id: Option<String>,
     ) -> Result<(), AppError>;
     async fn delete_by_id(&self, repo_id: &str) -> Result<(), AppError>;
-    /// Get the root fs_id from the repo's head commit.
-    async fn get_head_root_id(&self, repo_id: &str) -> Result<Option<String>, AppError>;
     /// Add a delta to the repo's size (can be negative).
     async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError>;
     /// Update repo encryption keys (magic + random_key). Used by password change.
@@ -181,24 +179,6 @@ impl RepoRepository for DbRepoRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(())
-    }
-
-    async fn get_head_root_id(&self, repo_id: &str) -> Result<Option<String>, AppError> {
-        let repo = self.find_by_id(repo_id).await?;
-        match repo {
-            Some(r) => match r.head_commit_id {
-                Some(head_id) => {
-                    let head = commit::Entity::find()
-                        .filter(commit::Column::RepoId.eq(repo_id))
-                        .filter(commit::Column::CommitId.eq(&head_id))
-                        .one(self.db.as_ref())
-                        .await?;
-                    Ok(head.map(|h| h.root_id))
-                }
-                None => Ok(None),
-            },
-            None => Ok(None),
-        }
     }
 
     async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError> {

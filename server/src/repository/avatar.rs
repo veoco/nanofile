@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, sea_query::OnConflict,
+};
 use std::sync::Arc;
 
 use base::error::AppError;
@@ -45,35 +47,28 @@ impl AvatarRepository for DbAvatarRepository {
         file_size: i32,
         now: i64,
     ) -> Result<(), AppError> {
-        let existing = avatar::Entity::find()
-            .filter(avatar::Column::Email.eq(email))
-            .one(self.db.as_ref())
-            .await?;
-
-        if existing.is_some() {
-            avatar::Entity::update_many()
-                .filter(avatar::Column::Email.eq(email))
-                .set(avatar::ActiveModel {
-                    avatar_file_name: Set(file_name.to_string()),
-                    mime_type: Set(mime_type.to_string()),
-                    file_size: Set(file_size),
-                    date_uploaded: Set(now),
-                    ..Default::default()
-                })
-                .exec(self.db.as_ref())
-                .await?;
-        } else {
-            avatar::ActiveModel {
-                id: sea_orm::NotSet,
-                email: Set(email.to_string()),
-                avatar_file_name: Set(file_name.to_string()),
-                mime_type: Set(mime_type.to_string()),
-                file_size: Set(file_size),
-                date_uploaded: Set(now),
-            }
-            .insert(self.db.as_ref())
-            .await?;
-        }
+        // Single `INSERT ... ON CONFLICT(email) DO UPDATE` avoids the
+        // read-then-write race between concurrent avatar uploads.
+        avatar::Entity::insert(avatar::ActiveModel {
+            email: Set(email.to_string()),
+            avatar_file_name: Set(file_name.to_string()),
+            mime_type: Set(mime_type.to_string()),
+            file_size: Set(file_size),
+            date_uploaded: Set(now),
+            ..Default::default()
+        })
+        .on_conflict(
+            OnConflict::column(avatar::Column::Email)
+                .update_columns([
+                    avatar::Column::AvatarFileName,
+                    avatar::Column::MimeType,
+                    avatar::Column::FileSize,
+                    avatar::Column::DateUploaded,
+                ])
+                .to_owned(),
+        )
+        .exec(self.db.as_ref())
+        .await?;
         Ok(())
     }
 }

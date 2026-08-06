@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::middleware::auth::AuthUser;
+use crate::middleware::repo_extractor::RepoPathWrite;
 use crate::service::sharing::share;
 use base::error::AppError;
 
@@ -72,9 +73,9 @@ pub async fn delete_share_link(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
-) -> Result<(), AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     share::delete_share_link(&state.repos, &token, auth.user_id).await?;
-    Ok(())
+    Ok(ok_json())
 }
 
 /// `POST /api2/beshared-repos/{repo_id}/`
@@ -107,19 +108,10 @@ pub async fn beshare_repo(
 
 /// `GET /api2/beshared-repos/{repo_id}/` — list all users shared to this repo.
 pub async fn list_share_members(
-    auth: AuthUser,
+    path: RepoPathWrite,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
 ) -> Result<Json<Vec<share::ShareMember>>, AppError> {
-    // Only the repo owner can list share members.
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
-    let members = share::list_share_members(&state.repos, &repo_id).await?;
+    let members = share::list_share_members(&state.repos, &path.repo_id).await?;
     Ok(Json(members))
 }
 

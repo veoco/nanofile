@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter, Set,
+    sea_query::Expr,
 };
 use std::sync::Arc;
 
@@ -210,19 +211,16 @@ impl UploadLinkRepository for DbUploadLinkRepository {
     }
 
     async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError> {
-        if let Some(link) = upload_link::Entity::find_by_id(id)
-            .one(self.db.as_ref())
-            .await?
-        {
-            upload_link::Entity::update_many()
-                .filter(upload_link::Column::Id.eq(id))
-                .set(upload_link::ActiveModel {
-                    view_cnt: Set(link.view_cnt + 1),
-                    ..Default::default()
-                })
-                .exec(self.db.as_ref())
-                .await?;
-        }
+        // Atomic SQL increment: `view_cnt = view_cnt + 1` avoids lost updates
+        // from concurrent read-then-write on the same link.
+        upload_link::Entity::update_many()
+            .filter(upload_link::Column::Id.eq(id))
+            .col_expr(
+                upload_link::Column::ViewCnt,
+                Expr::col(upload_link::Column::ViewCnt).add(1),
+            )
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 

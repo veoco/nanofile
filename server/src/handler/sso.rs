@@ -7,17 +7,6 @@ use crate::AppState;
 use crate::middleware::auth::AuthUser;
 use base::error::AppError;
 
-/// POST /api2/client-login/
-pub async fn client_login(
-    _auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let svc = state.sso_service();
-    let token = svc.create_login_token().await?;
-
-    Ok(Json(serde_json::json!({"token": token})))
-}
-
 /// POST /api2/client-sso-link/
 pub async fn client_sso_link(
     _auth: AuthUser,

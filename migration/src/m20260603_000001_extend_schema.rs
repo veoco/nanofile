@@ -602,14 +602,14 @@ impl MigrationTrait for Migration {
     }
 }
 
-// ================ Old table Iden types (manual impl to match existing table names) ================
+// ================ Old table Iden types (derive with renamed table idens) ================
 
+#[derive(Iden)]
+#[iden = "users"]
 struct UsersRef;
-impl Iden for UsersRef {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        write!(s, "users").unwrap();
-    }
-}
+
+#[derive(Iden)]
+#[iden = "users"]
 #[allow(dead_code)]
 enum UsersRefCol {
     Table,
@@ -620,27 +620,14 @@ enum UsersRefCol {
     StorageUsage,
     IsStaff,
 }
-impl Iden for UsersRefCol {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        match self {
-            Self::Table => write!(s, "users").unwrap(),
-            Self::Id => write!(s, "id").unwrap(),
-            Self::Name => write!(s, "name").unwrap(),
-            Self::DisplayName => write!(s, "display_name").unwrap(),
-            Self::StorageTotal => write!(s, "storage_total").unwrap(),
-            Self::StorageUsage => write!(s, "storage_usage").unwrap(),
-            Self::IsStaff => write!(s, "is_staff").unwrap(),
-        }
-    }
-}
 
+#[derive(Iden)]
+#[iden = "api_tokens"]
 #[allow(dead_code)]
 struct OldApiTokens;
-impl Iden for OldApiTokens {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        write!(s, "api_tokens").unwrap();
-    }
-}
+
+#[derive(Iden)]
+#[iden = "api_tokens"]
 #[allow(dead_code)]
 enum OldApiTokensCol {
     Table,
@@ -649,25 +636,14 @@ enum OldApiTokensCol {
     DeviceName,
     ClientVersion,
 }
-impl Iden for OldApiTokensCol {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        match self {
-            Self::Table => write!(s, "api_tokens").unwrap(),
-            Self::DeviceId => write!(s, "device_id").unwrap(),
-            Self::Platform => write!(s, "platform").unwrap(),
-            Self::DeviceName => write!(s, "device_name").unwrap(),
-            Self::ClientVersion => write!(s, "client_version").unwrap(),
-        }
-    }
-}
 
+#[derive(Iden)]
+#[iden = "repos"]
 #[allow(dead_code)]
 struct OldRepos;
-impl Iden for OldRepos {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        write!(s, "repos").unwrap();
-    }
-}
+
+#[derive(Iden)]
+#[iden = "repos"]
 #[allow(dead_code)]
 enum OldReposCol {
     Table,
@@ -676,127 +652,73 @@ enum OldReposCol {
     RepoVersion,
     Size,
 }
-impl Iden for OldReposCol {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        match self {
-            Self::Table => write!(s, "repos").unwrap(),
-            Self::Id => write!(s, "id").unwrap(),
-            Self::OwnerId => write!(s, "owner_id").unwrap(),
-            Self::RepoVersion => write!(s, "repo_version").unwrap(),
-            Self::Size => write!(s, "size").unwrap(),
-        }
-    }
-}
 
+#[derive(Iden)]
+#[iden = "commits"]
 #[allow(dead_code)]
 struct OldCommits;
-impl Iden for OldCommits {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        write!(s, "commits").unwrap();
-    }
-}
+
+#[derive(Iden)]
+#[iden = "commits"]
 #[allow(dead_code)]
 enum OldCommitsCol {
     Table,
     Encrypted,
     Creator,
 }
-impl Iden for OldCommitsCol {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        match self {
-            Self::Table => write!(s, "commits").unwrap(),
-            Self::Encrypted => write!(s, "encrypted").unwrap(),
-            Self::Creator => write!(s, "creator").unwrap(),
-        }
-    }
-}
 
+#[derive(Iden)]
+#[iden = "fs_objects"]
 #[allow(dead_code)]
 struct OldFsObjects;
-impl Iden for OldFsObjects {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        write!(s, "fs_objects").unwrap();
-    }
-}
+
+#[derive(Iden)]
+#[iden = "fs_objects"]
 #[allow(dead_code)]
 enum OldFsObjectsCol {
     Table,
     RepoId,
     FsId,
 }
-impl Iden for OldFsObjectsCol {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        match self {
-            Self::Table => write!(s, "fs_objects").unwrap(),
-            Self::RepoId => write!(s, "repo_id").unwrap(),
-            Self::FsId => write!(s, "fs_id").unwrap(),
-        }
-    }
-}
 
+#[derive(Iden)]
+#[iden = "share_links"]
 #[allow(dead_code)]
 struct OldShareLinks;
-impl Iden for OldShareLinks {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        write!(s, "share_links").unwrap();
-    }
-}
+
+#[derive(Iden)]
+#[iden = "share_links"]
 #[allow(dead_code)]
 enum OldShareLinksCol {
     Table,
     RepoId,
 }
-impl Iden for OldShareLinksCol {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        match self {
-            Self::Table => write!(s, "share_links").unwrap(),
-            Self::RepoId => write!(s, "repo_id").unwrap(),
-        }
-    }
-}
 
+#[derive(Iden)]
+#[iden = "upload_links"]
 #[allow(dead_code)]
 struct OldUploadLinks;
-impl Iden for OldUploadLinks {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        write!(s, "upload_links").unwrap();
-    }
-}
+
+#[derive(Iden)]
+#[iden = "upload_links"]
 #[allow(dead_code)]
 enum OldUploadLinksCol {
     Table,
     RepoId,
 }
-impl Iden for OldUploadLinksCol {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        match self {
-            Self::Table => write!(s, "upload_links").unwrap(),
-            Self::RepoId => write!(s, "repo_id").unwrap(),
-        }
-    }
-}
 
+#[derive(Iden)]
+#[iden = "sync_tokens"]
 #[allow(dead_code)]
 struct OldSyncTokens;
-impl Iden for OldSyncTokens {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        write!(s, "sync_tokens").unwrap();
-    }
-}
+
+#[derive(Iden)]
+#[iden = "sync_tokens"]
 #[allow(dead_code)]
 enum OldSyncTokensCol {
     Table,
     RepoId,
     UserId,
-}
-impl Iden for OldSyncTokensCol {
-    fn unquoted(&self, s: &mut dyn std::fmt::Write) {
-        match self {
-            Self::Table => write!(s, "sync_tokens").unwrap(),
-            Self::RepoId => write!(s, "repo_id").unwrap(),
-            Self::UserId => write!(s, "user_id").unwrap(),
-        }
-    }
 }
 
 // ================ New table Iden types ================

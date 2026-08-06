@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::middleware::auth::AuthUser;
+use crate::middleware::repo_extractor::RepoPathRead;
 use crate::service::repo::password::PasswordService;
 use base::error::AppError;
 
@@ -28,19 +29,11 @@ pub struct ChangePasswordRequest {
 ///
 /// Set the password for an encrypted repo.
 pub async fn set_password_v21(
-    auth: AuthUser,
+    path: RepoPathRead,
     State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
     Json(body): Json<SetPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Check user has access to this repo (matching seahub's check_folder_permission).
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
+    let repo_id = &path.repo_id;
     let password = body
         .password
         .ok_or_else(|| AppError::BadRequest("password required".into()))?;
@@ -48,8 +41,8 @@ pub async fn set_password_v21(
     PasswordService::set_password(
         &state.password_manager,
         &state.repos,
-        &repo_id,
-        auth.user_id,
+        repo_id,
+        path.user.user_id,
         &password,
     )
     .await?;
