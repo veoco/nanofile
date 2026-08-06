@@ -53,6 +53,24 @@ impl TaskOutput {
     }
 }
 
+/// Accumulate an execution's outcome into a task's metrics.
+async fn record_metrics(stats: &mut TaskMetrics, output: &TaskOutput, elapsed: Duration) {
+    stats.run_count += 1;
+    stats.last_run_at = Some(chrono::Utc::now().timestamp());
+    stats.last_duration_ms = elapsed.as_millis() as u64;
+
+    if output.success {
+        stats.success_count += 1;
+        stats.last_success_message = output.message.clone();
+        if let Some(count) = output.processed_count {
+            stats.total_processed += count;
+        }
+    } else {
+        stats.error_count += 1;
+        stats.last_error_message = output.message.clone();
+    }
+}
+
 /// Runtime metrics accumulated across all executions of a task.
 #[derive(Debug, Clone, Default)]
 pub struct TaskMetrics {
@@ -200,20 +218,10 @@ impl Scheduler {
                         let elapsed = start.elapsed();
 
                         let mut stats = m.write().await;
-                        stats.run_count += 1;
-                        stats.last_run_at = Some(chrono::Utc::now().timestamp());
-                        stats.last_duration_ms = elapsed.as_millis() as u64;
-
+                        record_metrics(&mut stats, &output, elapsed).await;
                         if output.success {
-                            stats.success_count += 1;
-                            stats.last_success_message = output.message.clone();
-                            if let Some(count) = output.processed_count {
-                                stats.total_processed += count;
-                            }
                             tracing::debug!(name, message = %output.message, "Periodic task completed");
                         } else {
-                            stats.error_count += 1;
-                            stats.last_error_message = output.message.clone();
                             tracing::warn!(name, message = %output.message, "Periodic task failed");
                         }
                     }
@@ -319,20 +327,10 @@ impl Scheduler {
         let elapsed = start.elapsed();
 
         let mut stats = entry.metrics.write().await;
-        stats.run_count += 1;
-        stats.last_run_at = Some(chrono::Utc::now().timestamp());
-        stats.last_duration_ms = elapsed.as_millis() as u64;
-
+        record_metrics(&mut stats, &output, elapsed).await;
         if output.success {
-            stats.success_count += 1;
-            stats.last_success_message = output.message.clone();
-            if let Some(count) = output.processed_count {
-                stats.total_processed += count;
-            }
             tracing::debug!(name, "Task triggered manually");
         } else {
-            stats.error_count += 1;
-            stats.last_error_message = output.message.clone();
             tracing::warn!(name, message = %output.message, "Manual trigger failed");
         }
 

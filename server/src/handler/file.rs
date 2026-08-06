@@ -20,7 +20,7 @@ use crate::service::fs::file as file_svc;
 use base::error::AppError;
 
 // Re-export pub(crate) rename function for create_file_v21 use
-pub(crate) use file_svc::rename_file_entry;
+pub(crate) use file_svc::rename_entry;
 
 #[derive(Deserialize)]
 pub struct FileQuery {
@@ -115,7 +115,7 @@ pub async fn file_post_handler(
                 .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
             let path = safe_normalize_path(&query.p.unwrap_or_default())
                 .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-            rename_file_entry(
+            rename_entry(
                 state.db.as_ref(),
                 &state.repos,
                 repo_id,
@@ -123,6 +123,7 @@ pub async fn file_post_handler(
                 &newname,
                 &access.user.email,
                 access.user.user_id,
+                false,
             )
             .await?;
             Ok(Json(serde_json::Value::String("success".to_string())))
@@ -472,7 +473,7 @@ pub async fn create_file_v21(
     {
         let newname = extract_multipart_field(&bytes, "newname")
             .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
-        self::rename_file_entry(
+        self::rename_entry(
             state.db.as_ref(),
             &state.repos,
             repo_id,
@@ -480,6 +481,7 @@ pub async fn create_file_v21(
             &newname,
             &access.user.email,
             access.user.user_id,
+            false,
         )
         .await?;
         return Ok(ok_json());

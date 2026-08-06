@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::AccessTokenManager;
 use crate::repository::Repositories;
-use crate::service::auth::token::generate_sync_token;
+use crate::service::auth::token::{ensure_sync_token, generate_sync_token};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{format_size, timestamp_rfc3339};
@@ -104,31 +104,6 @@ fn build_op_url(site_url: &str, op: &str, token: &str) -> String {
 /// Only repo members may obtain a sync token (matches official seafile: the
 /// token is minted from `repo-tokens`/`download-info`, both of which require
 /// repo permission). Non-members get `Forbidden`.
-async fn ensure_sync_token(
-    repos: &Repositories,
-    repo_id: &str,
-    user_id: i32,
-) -> Result<String, AppError> {
-    crate::domain::permission::check_repo_read_permission(repos.member.as_ref(), repo_id, user_id)
-        .await?;
-
-    if let Some(existing) = repos
-        .sync_token
-        .find_by_repo_and_user(repo_id, user_id)
-        .await?
-    {
-        return Ok(existing.token);
-    }
-
-    let token_value = generate_sync_token();
-    let now = chrono::Utc::now().timestamp();
-    repos
-        .sync_token
-        .create(repo_id, user_id, token_value.clone(), None, now)
-        .await?;
-    Ok(token_value)
-}
-
 fn build_repo_info_from_model(
     r: &repo::Model,
     owner_email: &str,

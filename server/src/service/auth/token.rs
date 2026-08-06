@@ -1,6 +1,36 @@
 use rand::Rng;
 
+use base::error::AppError;
+
 const TOKEN_LEN: usize = 40;
+
+/// Return the existing sync token for a repo/user, or create a new one.
+///
+/// Requires read permission on the repo (a sync token grants repo access).
+pub async fn ensure_sync_token(
+    repos: &crate::repository::Repositories,
+    repo_id: &str,
+    user_id: i32,
+) -> Result<String, AppError> {
+    crate::domain::permission::check_repo_read_permission(repos.member.as_ref(), repo_id, user_id)
+        .await?;
+
+    if let Some(existing) = repos
+        .sync_token
+        .find_by_repo_and_user(repo_id, user_id)
+        .await?
+    {
+        return Ok(existing.token);
+    }
+
+    let token_value = generate_sync_token();
+    let now = chrono::Utc::now().timestamp();
+    repos
+        .sync_token
+        .create(repo_id, user_id, token_value.clone(), None, now)
+        .await?;
+    Ok(token_value)
+}
 
 pub fn generate_api_token() -> String {
     let mut token = [0u8; TOKEN_LEN / 2];

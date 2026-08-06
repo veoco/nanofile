@@ -6,14 +6,14 @@ use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::trash;
 use crate::notification::events::FileLockEvent;
 use crate::repository::Repositories;
-use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+use base::common::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{
     basename, get_head_root_id, get_head_root_id_opt, join_path, parent_path_from,
     timestamp_rfc3339,
 };
-use infra::serialization::S_IFREG;
+use infra::serialization::{S_IFDIR, S_IFREG};
 
 /// Parsed upload data, extracted from multipart at the handler layer.
 pub struct UploadedFile {
@@ -778,27 +778,6 @@ impl FileService {
     ) -> Result<serde_json::Value, AppError> {
         let db = self.db();
         let head_root_id = get_head_root_id(db, repo_id).await?;
-        let file_fs_id = crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, path)
-            .await
-            .map_err(|_| AppError::NotFound("file not found".into()))?;
-
-        if file_fs_id == EMPTY_SHA1 {
-            return Err(AppError::BadRequest(
-                "path is a directory, not a file".into(),
-            ));
-        }
-        let file_obj = self
-            .repos
-            .fs_object
-            .find_by_repo_and_fs_id(repo_id, &file_fs_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("file not found".into()))?;
-
-        if file_obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 {
-            return Err(AppError::BadRequest(
-                "path is a directory, not a file".into(),
-            ));
-        }
 
         let parent_path = parent_path_from(path);
         let file_name = basename(path);
@@ -814,7 +793,16 @@ impl FileService {
             .dirents
             .iter()
             .find(|e| e.name == file_name)
-            .ok_or_else(|| AppError::NotFound("file not found in parent".into()))?;
+            .ok_or_else(|| AppError::NotFound("file not found".into()))?;
+
+        // The entry's mode (from the parent dirent) tells us the type, so the
+        // separate resolve_fs_id + fs_object read is unnecessary.
+        if entry.mode & S_IFDIR != 0 {
+            return Err(AppError::BadRequest(
+                "path is a directory, not a file".into(),
+            ));
+        }
+        let file_fs_id = entry.id.clone();
 
         let modifier_email = self
             .repos

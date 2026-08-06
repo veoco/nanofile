@@ -727,9 +727,9 @@ impl DirService {
             nickname_cache.insert(u.email.clone(), u.nickname());
         }
         for email in &modifier_emails {
-            nickname_cache.entry(email.clone()).or_insert_with(|| {
-                email.split('@').next().unwrap_or("").to_string()
-            });
+            nickname_cache
+                .entry(email.clone())
+                .or_insert_with(|| email.split('@').next().unwrap_or("").to_string());
         }
 
         for e in &file_list {

@@ -6,7 +6,6 @@ use sea_orm::DatabaseConnection;
 
 use crate::indexer::TextIndexer;
 use crate::repository::Repositories;
-use crate::service::auth::token::generate_sync_token;
 use base::common::{EMPTY_SHA1, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::serialization::pack_fs;
@@ -324,23 +323,7 @@ impl SyncService {
         repo_id: &str,
         user_id: i32,
     ) -> Result<String, AppError> {
-        if let Some(existing) = self
-            .repos
-            .sync_token
-            .find_by_repo_and_user(repo_id, user_id)
-            .await?
-        {
-            return Ok(existing.token);
-        }
-
-        let token_value = generate_sync_token();
-        let now = chrono::Utc::now().timestamp();
-        self.repos
-            .sync_token
-            .create(repo_id, user_id, token_value.clone(), None, now)
-            .await?;
-
-        Ok(token_value)
+        crate::service::auth::token::ensure_sync_token(&self.repos, repo_id, user_id).await
     }
 
     // ── Branch update (sync protocol) ──────────────────────────────────
