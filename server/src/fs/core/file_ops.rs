@@ -56,7 +56,6 @@ impl FileOps {
         // before writing. Used for encrypted repos during web upload.
         enc_key: Option<(&[u8], &[u8])>,
     ) -> Result<String, AppError> {
-        let _lock = acquire_repo_lock(repo_id).await;
         let now = chrono::Utc::now().timestamp();
 
         // Validate input — name may contain '/' for nested paths.
@@ -64,6 +63,12 @@ impl FileOps {
             .map_err(|e| AppError::BadRequest(e.to_string()))?;
         base::sanitize::validate_name(name).map_err(|e| AppError::BadRequest(e.to_string()))?;
 
+        // Write blocks and store the fs object WITHOUT the per-repo lock:
+        // blocks are content-addressed (SHA-1) and the fs_object insert is
+        // INSERT OR IGNORE, so concurrent writers can't race here. Only the
+        // read-modify-write of the FS tree below needs the lock — keeping the
+        // (possibly slow) block I/O out of it lets concurrent writes to the
+        // same repo proceed.
         let file_chunks = infra::storage::cdc::file_chunk_cdc(data);
 
         let mut block_ids = Vec::new();
@@ -84,12 +89,15 @@ impl FileOps {
         }
 
         let file_fs_data = FsFileData {
-            block_ids: block_ids.clone(),
+            block_ids,
             size: total_size,
             obj_type: 1,
             version: 1,
         };
         let file_fs_id = crate::fs::core::store_fs_file_object(db, repo_id, &file_fs_data).await?;
+
+        // Serialize the FS tree mutation (read-modify-write + commit).
+        let _lock = acquire_repo_lock(repo_id).await;
 
         // Resolve the parent directory and build an ancestor chain for
         // walk_up_ancestors to avoid O(d²) re-resolution.
