@@ -14,38 +14,6 @@ use base::error::AppError;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Get encryption key for an encrypted repo if the user has set a password.
-#[allow(dead_code)]
-async fn get_encryption_key_for_repo(
-    state: &AppState,
-    repo_id: &str,
-    user_id: i32,
-) -> Result<Option<(Vec<u8>, Vec<u8>)>, AppError> {
-    let repo_model = state
-        .repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-
-    if repo_model.encrypted == 0 {
-        return Ok(None);
-    }
-
-    if state
-        .password_manager
-        .is_password_set(repo_id, user_id)
-        .await
-    {
-        Ok(state
-            .password_manager
-            .get_decrypt_key(repo_id, user_id)
-            .await)
-    } else {
-        Err(AppError::RepoPasswdRequired)
-    }
-}
-
 /// Compute the actual target directory given the base `parent_dir` and an
 /// optional `relative_path` (e.g. `"myfolder/sub/"` from a folder upload).
 /// When `relative_path` is empty, returns `parent_dir` unchanged.

@@ -574,27 +574,3 @@ pub async fn get_block_download_link(
         .await?;
     Ok(Json(url))
 }
-
-pub async fn delete_file_wrapper(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
-    Query(query): Query<crate::handler::dir::V21DirQuery>,
-) -> Result<Response, AppError> {
-    delete_file_v21(auth, State(state), Path(repo_id), Query(query)).await
-}
-pub async fn delete_file_v21(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
-    Query(query): Query<crate::handler::dir::V21DirQuery>,
-) -> Result<Response, AppError> {
-    let json_result = super::dir::delete_dirent_v21(
-        auth,
-        axum::extract::State(state),
-        axum::extract::Path((repo_id, "file".to_string())),
-        axum::extract::Query(query),
-    )
-    .await?;
-    Ok(json_result.into_response())
-}

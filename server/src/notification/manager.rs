@@ -27,9 +27,6 @@ pub struct ClientState {
 }
 
 impl ClientState {
-    fn read_user(&self) -> RwLockReadGuard<'_, String> {
-        self.user.read().unwrap_or_else(PoisonError::into_inner)
-    }
     fn write_user(&self) -> RwLockWriteGuard<'_, String> {
         self.user.write().unwrap_or_else(PoisonError::into_inner)
     }
@@ -217,36 +214,6 @@ impl NotificationManager {
         if let Some(repo_id) = extract_repo_id(&msg) {
             self.notify_repo(&repo_id, &msg).await;
         }
-    }
-
-    /// Notify a specific user about a repo event.
-    /// Returns the number of clients that were notified.
-    pub async fn notify_user(
-        &self,
-        repo_id: &str,
-        user: &str,
-        message: &NotificationMessage,
-    ) -> usize {
-        let event_value = serde_json::to_value(message).unwrap_or(Value::Null);
-
-        let subs = self.read_subscriptions();
-        let client_ids = match subs.get(repo_id) {
-            Some(ids) => ids.clone(),
-            None => return 0,
-        };
-        drop(subs);
-
-        let clients = self.read_clients();
-        let mut notified = 0;
-        for id in &client_ids {
-            if let Some(client) = clients.get(id) {
-                let u = client.read_user();
-                if *u == user && client.sender.send(event_value.clone()).is_ok() {
-                    notified += 1;
-                }
-            }
-        }
-        notified
     }
 }
 

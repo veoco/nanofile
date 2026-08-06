@@ -23,7 +23,6 @@ pub mod invitations;
 pub mod links;
 pub mod login;
 pub mod metadata;
-pub mod notification;
 pub mod notifications;
 pub mod password;
 pub mod reindex;

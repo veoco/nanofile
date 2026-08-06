@@ -88,13 +88,6 @@ impl TaskManager {
         });
     }
 
-    /// Update the done_count for progress tracking.
-    pub fn update_progress(&self, task_id: &str, done_count: usize) {
-        self.update_state(task_id, |t| {
-            t.done_count = done_count;
-        });
-    }
-
     /// Transition a task from Processing to Completed.
     pub fn complete_task(&self, task_id: &str) {
         self.update_state(task_id, |t| {

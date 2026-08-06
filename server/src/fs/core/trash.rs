@@ -946,12 +946,3 @@ pub async fn restore_deleted_repo(
 
     Ok(())
 }
-
-/// Permanently delete a repo from trash (admin).
-pub async fn permanently_delete_deleted_repo(
-    repos: &Repositories,
-    repo_id: &str,
-) -> Result<(), AppError> {
-    repos.deleted_repo.delete_by_id(repo_id).await?;
-    Ok(())
-}

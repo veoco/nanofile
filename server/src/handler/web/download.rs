@@ -1,10 +1,9 @@
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -12,71 +11,6 @@ use crate::fs::core::download::Downloader;
 use crate::middleware::auth::AuthUser;
 use base::common::FsFileData;
 use base::error::AppError;
-
-/// GET /f/{token} — download via shared link token.
-///
-/// Supports password-protected links via the `X-Seafile-Sharelink-Password`
-/// HTTP header or `password` query parameter.
-/// Returns 404 for expired links and 403 for wrong/missing passwords.
-pub async fn shared_file_download(
-    State(state): State<Arc<AppState>>,
-    Path(token): Path<String>,
-    headers: HeaderMap,
-    Query(params): Query<HashMap<String, String>>,
-) -> Result<Response, AppError> {
-    let link = state
-        .repos
-        .share_link
-        .find_by_token(&token)
-        .await?
-        .ok_or_else(|| AppError::NotFound("link not found".into()))?;
-
-    // Check expiry
-    if let Some(expires_at) = link.expires_at
-        && chrono::Utc::now().timestamp() > expires_at
-    {
-        return Err(AppError::NotFound("link has expired".into()));
-    }
-
-    // Check password if set
-    if let Some(ref stored_hash) = link.password {
-        let provided = headers
-            .get("X-Seafile-Sharelink-Password")
-            .and_then(|v| v.to_str().ok().map(|s| s.to_string()))
-            .or_else(|| params.get("password").cloned())
-            .ok_or_else(|| AppError::BadRequest("password required".into()))?;
-
-        if !crate::service::auth::password::verify_password(
-            &provided,
-            stored_hash,
-            state.config.auth.password_hash_iterations,
-        ) {
-            return Err(AppError::Forbidden);
-        }
-    }
-
-    let (_file_data, block_ids) =
-        Downloader::resolve_blocks(&state.repos, &link.repo_id, &link.path)
-            .await
-            .map_err(|_| AppError::NotFound("file not found".into()))?;
-
-    let stream =
-        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
-
-    // Increment view_cnt asynchronously (fire-and-forget)
-    let share_link_repo = state.repos.share_link.clone();
-    let link_id = link.id;
-    tokio::spawn(async move {
-        let _ = share_link_repo.increment_view_cnt(link_id).await;
-    });
-
-    Ok((
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/octet-stream")],
-        Body::from_stream(stream),
-    )
-        .into_response())
-}
 
 /// Helper: get decryption key for an encrypted repo if password is set.
 ///

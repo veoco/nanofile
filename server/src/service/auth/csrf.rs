@@ -10,8 +10,6 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
-use crate::AppState;
-
 type HmacSha256 = Hmac<Sha256>;
 
 /// Generate a CSRF token for the given session token.
@@ -35,13 +33,6 @@ pub fn extract_session_token(cookie_str: &str) -> Option<&str> {
         .map(|s| s.trim())
         .find(|s| s.starts_with("seahub-session="))
         .and_then(|s| s.strip_prefix("seahub-session="))
-}
-
-/// Generate a CSRF token for the current session in `AppState`.
-/// Returns `None` if no valid session cookie is found.
-pub fn csrf_for_session(state: &AppState, cookie_str: Option<&str>) -> Option<String> {
-    let session_token = cookie_str.and_then(extract_session_token)?;
-    Some(generate_csrf_token(&state.csrf_secret, session_token))
 }
 
 /// Validate a CSRF token from a form field for authenticated users.

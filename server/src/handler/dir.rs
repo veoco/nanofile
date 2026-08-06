@@ -2,7 +2,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::Request,
     response::{IntoResponse, Response},
 };
@@ -303,39 +303,6 @@ pub struct V21DirQuery {
     pub t: Option<String>,
     pub recursive: Option<String>,
     pub with_thumbnail: Option<bool>,
-}
-
-pub async fn delete_dirent_v21(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path((repo_id, obj)): Path<(String, String)>,
-    Query(query): Query<V21DirQuery>,
-) -> Result<Json<serde_json::value::Value>, AppError> {
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
-    let path = query
-        .p
-        .as_deref()
-        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
-    let normalized = safe_normalize_path(path)
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-
-    let svc = state.dir_service();
-    svc.delete_dirent(&repo_id, &obj, &normalized, &auth.email, auth.user_id)
-        .await?;
-
-    // Clean up cached thumbnails for deleted files
-    if obj == "file" {
-        let thumb_svc = state.thumbnail_service();
-        thumb_svc.cleanup(&repo_id, &normalized).await;
-    }
-
-    Ok(Json(serde_json::json!({"success": true})))
 }
 
 pub async fn list_dir_v21(

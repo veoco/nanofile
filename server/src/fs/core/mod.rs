@@ -13,7 +13,6 @@ pub mod store;
 pub mod trash;
 pub mod tree;
 pub mod tree_diff;
-pub mod versioning;
 
 pub use download::{Downloader, stream_blocks};
 pub use file_ops::FileOps;
@@ -23,4 +22,3 @@ pub use size::{adjust_repo_size, compute_repo_size, compute_tree_size, get_entry
 pub use store::{store_fs_dir_object, store_fs_file_object};
 pub use tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
 pub use tree_diff::diff_trees;
-pub use versioning::Versioning;

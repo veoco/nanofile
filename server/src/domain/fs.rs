@@ -5,7 +5,6 @@
 //! functions (to_compact_json, sha1 fs_id) that were previously methods
 //! on those types in `infra::serialization::fs_json`.
 
-use base::common::EMPTY_SHA1;
 use base::common::{FsDirData, FsFileData};
 use sha1::{Digest, Sha1};
 
@@ -58,11 +57,6 @@ pub fn compute_file(data: &FsFileData) -> (String, String) {
     let json = file_to_compact_json(data);
     let fs_id = compute_fs_id(&json);
     (fs_id, json)
-}
-
-/// Check if an fs_id is the empty sentinel (all zeros).
-pub fn is_empty_fs_id(fs_id: &str) -> bool {
-    fs_id == EMPTY_SHA1
 }
 
 // ── Note: store_dir_data / store_file_data moved to fs::core::store ─────
