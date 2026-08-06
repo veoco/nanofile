@@ -129,7 +129,25 @@
                 </div>
                 <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
                     <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">WebDAV 访问</p>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 break-all mb-2" id="webdav-url"></p>
+                    <div class="flex items-start gap-2 mb-2">
+                        <p id="webdav-url" class="flex-1 min-w-0 text-sm text-gray-600 dark:text-gray-300 break-all"></p>
+                        <button type="button" id="copy-url-btn" onclick="copyWebdavUrl()"
+                                class="flex-shrink-0 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
+                            复制
+                        </button>
+                    </div>
+                    <div id="new-key-box" class="hidden mb-2 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 p-2">
+                        <p class="text-xs font-medium text-green-700 dark:text-green-400 mb-1">新密钥已生成，仅显示这一次</p>
+                        <div class="flex items-center gap-2">
+                            <input id="new-key-value" type="text" readonly
+                                   class="flex-1 min-w-0 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-700 font-mono text-sm text-gray-900 dark:text-gray-100 px-2 py-1 break-all"
+                                   value="">
+                            <button type="button" id="copy-new-key-btn" onclick="copyNewKey()"
+                                    class="flex-shrink-0 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-600 transition-colors">复制</button>
+                            <button type="button" onclick="dismissNewKey()"
+                                    class="flex-shrink-0 rounded-lg bg-white dark:bg-surface-700 px-2.5 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">关闭</button>
+                        </div>
+                    </div>
                     <ul id="webdav-key-list" class="text-sm text-gray-900 dark:text-gray-100 space-y-1 mb-2"></ul>
                     <div class="flex gap-2">
                         <input id="webdav-key-name" type="text" placeholder="设备名,如 MacBook"
@@ -199,6 +217,7 @@ function showEditDialog(btn) {
     document.getElementById('edit-size').textContent = btn.getAttribute('data-size');
     document.getElementById('webdav-url').textContent = webdavBaseUrl + '/dav/' + repoId + '/';
     document.getElementById('webdav-key-name').value = '';
+    dismissNewKey();
     loadWebdavKeys(repoId);
     document.getElementById('edit-overlay').classList.remove('hidden');
     setTimeout(function() { document.getElementById('edit-name').focus(); document.getElementById('edit-name').select(); }, 100);
@@ -208,31 +227,52 @@ function hideEditDialog() {
 }
 function loadWebdavKeys(repoId) {
     var listEl = document.getElementById('webdav-key-list');
-    listEl.innerHTML = '<li class="text-xs text-gray-400 dark:text-gray-500">加载中…</li>';
+    listEl.innerHTML = '<li class="text-sm text-gray-400 dark:text-gray-500">加载中…</li>';
     fetch('/api2/repos/' + repoId + '/webdav-keys/', {
         method: 'GET',
         credentials: 'same-origin',
     }).then(function (resp) {
-        if (!resp.ok) { listEl.innerHTML = ''; return; }
+        if (!resp.ok) {
+            listEl.innerHTML = '<li class="text-sm text-gray-400 dark:text-gray-500">加载密钥失败，请重试。</li>';
+            return null;
+        }
         return resp.json();
     }).then(function (data) {
-        if (!data || !data.keys || data.keys.length === 0) {
-            listEl.innerHTML = '<li class="text-xs text-gray-400 dark:text-gray-500">尚未生成 WebDAV 密钥。</li>';
+        if (data === null) return;
+        if (!data.keys || data.keys.length === 0) {
+            listEl.innerHTML = '<li class="text-sm text-gray-400 dark:text-gray-500">尚未生成 WebDAV 密钥。</li>';
             return;
         }
         listEl.innerHTML = '';
         data.keys.forEach(function (k) {
             var li = document.createElement('li');
-            li.className = 'flex items-center justify-between gap-2 text-xs';
-            var info = document.createElement('span');
-            info.className = 'truncate';
-            info.textContent = k.name + ' · ' + new Date(k.created_at * 1000).toLocaleDateString();
+            li.className = 'flex items-center justify-between gap-2 py-1';
+            var left = document.createElement('div');
+            left.className = 'flex items-center min-w-0 gap-2';
+            var icon = document.createElement('span');
+            icon.className = 'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-surface-700 text-gray-400 dark:text-gray-500';
+            icon.innerHTML = '<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+                + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
+                + 'd="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>';
+            var text = document.createElement('div');
+            text.className = 'min-w-0';
+            var name = document.createElement('p');
+            name.className = 'truncate text-sm font-medium text-gray-900 dark:text-gray-100';
+            name.textContent = k.name;
+            var meta = document.createElement('p');
+            meta.className = 'text-xs text-gray-500 dark:text-gray-400';
+            meta.textContent = '创建于 ' + new Date(k.created_at * 1000).toLocaleDateString()
+                + (k.last_used_at ? ' · 上次使用 ' + new Date(k.last_used_at * 1000).toLocaleDateString() : ' · 从未使用');
+            text.appendChild(name);
+            text.appendChild(meta);
+            left.appendChild(icon);
+            left.appendChild(text);
             var del = document.createElement('button');
             del.type = 'button';
-            del.className = 'text-red-500 hover:text-red-700 font-medium flex-shrink-0';
+            del.className = 'flex-shrink-0 text-sm font-medium text-red-500 hover:text-red-700';
             del.textContent = '删除';
             del.onclick = function () { deleteWebdavKey(repoId, k.id); };
-            li.appendChild(info);
+            li.appendChild(left);
             li.appendChild(del);
             listEl.appendChild(li);
         });
@@ -261,12 +301,37 @@ function createWebdavKey() {
         return resp.json();
     }).then(function (data) {
         if (!data) return;
-        alert('已生成 WebDAV 密钥。密钥仅显示这一次,请妥善保存:\n\n' + data.key);
+        document.getElementById('new-key-value').value = data.key;
+        document.getElementById('new-key-box').classList.remove('hidden');
         document.getElementById('webdav-key-name').value = '';
         loadWebdavKeys(repoId);
     }).catch(function () {
         alert('网络错误');
     });
+}
+function copyWebdavUrl() {
+    copyToClipboard(document.getElementById('webdav-url').textContent, 'copy-url-btn');
+}
+function copyNewKey() {
+    var input = document.getElementById('new-key-value');
+    input.select();
+    input.setSelectionRange(0, input.value.length);
+    copyToClipboard(input.value, 'copy-new-key-btn');
+}
+function copyToClipboard(text, btnId) {
+    navigator.clipboard.writeText(text).catch(function() {});
+    flashCopiedBtn(btnId);
+}
+function dismissNewKey() {
+    document.getElementById('new-key-box').classList.add('hidden');
+    document.getElementById('new-key-value').value = '';
+}
+function flashCopiedBtn(id) {
+    var btn = document.getElementById(id);
+    if (btn._copyTimer) { clearTimeout(btn._copyTimer); }
+    var orig = btn.textContent;
+    btn.textContent = '已复制';
+    btn._copyTimer = setTimeout(function () { btn.textContent = orig; btn._copyTimer = null; }, 1500);
 }
 function deleteWebdavKey(repoId, keyId) {
     if (!confirm('确定删除该 WebDAV 密钥?使用它的设备将立即无法访问。')) return;
