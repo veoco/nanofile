@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 
-{% block title %}Trash | Nanofile{% endblock %}
+{% block title %}{{ t.tr("nav.trash") }} | Nanofile{% endblock %}
 
 {% block content %}
 <!-- Header -->
 <div class="sm:flex sm:items-center sm:justify-between">
     <div>
-        <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Trash</h1>
+        <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("nav.trash") }}</h1>
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Deleted files across your libraries.
-            {% if total_count > 0 %}{{ total_count }} item(s) in trash.{% endif %}
+            {{ t.tr("trash.desc") }}
+            {% if total_count > 0 %}{{ t.trf("trash.count", [("n", &total_count.to_string())]) }}{% endif %}
         </p>
     </div>
 </div>
@@ -17,28 +17,28 @@
 <!-- Status banners -->
 {% if restored > 0 || failed > 0 %}
 <div class="mt-4 rounded-lg p-4 text-sm {% if failed > 0 %}bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300{% else %}bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300{% endif %}">
-    {% if restored > 0 %}{{ restored }} item(s) restored successfully.{% endif %}
-    {% if failed > 0 %}{{ failed }} item(s) could not be restored.{% endif %}
+    {% if restored > 0 %}{{ t.trf("trash.restored", [("n", &restored.to_string())]) }}{% endif %}
+    {% if failed > 0 %}{{ t.trf("trash.restore_failed", [("n", &failed.to_string())]) }}{% endif %}
 </div>
 {% endif %}
 {% if cleaned %}
-<div class="mt-4 rounded-lg bg-green-50 dark:bg-green-900/20 p-4 text-sm text-green-700 dark:text-green-300">Trash emptied.</div>
+<div class="mt-4 rounded-lg bg-green-50 dark:bg-green-900/20 p-4 text-sm text-green-700 dark:text-green-300">{{ t.tr("trash.emptied") }}</div>
 {% endif %}
 
 <!-- Search -->
 <div class="mt-4">
     <form action="/trash/" method="GET" class="flex gap-2 max-w-md">
         <input type="text" name="q" value="{{ query }}"
-               placeholder="Search deleted files..."
+               placeholder="{{ t.tr("trash.search_placeholder") }}"
                class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-surface-700 text-gray-900 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
         <button type="submit"
                 class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors">
-            Search
+            {{ t.tr("nav.search") }}
         </button>
         {% if !query.is_empty() %}
         <a href="/trash/"
            class="inline-flex items-center rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
-            Clear
+            {{ t.tr("common.clear") }}
         </a>
         {% endif %}
     </form>
@@ -51,10 +51,10 @@
     <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
     </svg>
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">Trash is empty.</p>
+    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("trash.empty") }}</p>
     {% else %}
-    <p class="text-sm font-medium text-gray-500 dark:text-gray-400">No results found for "{{ query }}".</p>
-    <a href="/trash/" class="mt-2 inline-block text-sm text-brand-500 dark:text-brand-400 hover:underline">Clear search</a>
+    <p class="text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.trf("search.no_results_for", [("query", &query)]) }}</p>
+    <a href="/trash/" class="mt-2 inline-block text-sm text-brand-500 dark:text-brand-400 hover:underline">{{ t.tr("trash.clear_search") }}</a>
     {% endif %}
 </div>
 {% else %}
@@ -62,12 +62,12 @@
     <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
         <thead class="bg-gray-50 dark:bg-surface-700">
             <tr>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Name</th>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Original Path</th>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden md:table-cell">Library</th>
-                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden sm:table-cell">Deleted</th>
-                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Size</th>
-                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{ t.tr("common.name") }}</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{ t.tr("trash.original_path") }}</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden md:table-cell">{{ t.tr("common.library") }}</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden sm:table-cell">{{ t.tr("common.deleted") }}</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{ t.tr("common.size") }}</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{ t.tr("common.actions") }}</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
@@ -94,7 +94,7 @@
                     {% if !item.repo_name.is_empty() %}
                     <a href="/libraries/{{ item.repo_id }}/files/" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.repo_name }}</a>
                     {% else %}
-                    <span class="text-gray-400 dark:text-gray-500">[Deleted]</span>
+                    <span class="text-gray-400 dark:text-gray-500">{{ t.tr("common.deleted_badge") }}</span>
                     {% endif %}
                 </td>
                 <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-right hidden sm:table-cell whitespace-nowrap">
@@ -116,7 +116,7 @@
                             <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                             </svg>
-                            Restore
+                            {{ t.tr("trash.restore") }}
                         </button>
                     </form>
                 </td>
@@ -129,18 +129,18 @@
 <!-- Pagination -->
 {% if total_pages > 1 %}
 <div class="mt-4 flex items-center justify-between">
-    <p class="text-sm text-gray-500 dark:text-gray-400">Page {{ current_page }} of {{ total_pages }}</p>
+    <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.trf("common.page_of", [("page", &current_page.to_string()), ("total", &total_pages.to_string())]) }}</p>
     <div class="flex gap-2">
         {% if current_page > 1 %}
         <a href="/trash/?page={{ current_page - 1 }}&amp;per_page={{ per_page }}{% if !query.is_empty() %}&amp;q={{ query }}{% endif %}"
            class="rounded-lg bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
-            Previous
+            {{ t.tr("common.previous") }}
         </a>
         {% endif %}
         {% if current_page < total_pages %}
         <a href="/trash/?page={{ current_page + 1 }}&amp;per_page={{ per_page }}{% if !query.is_empty() %}&amp;q={{ query }}{% endif %}"
            class="rounded-lg bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
-            Next
+            {{ t.tr("common.next") }}
         </a>
         {% endif %}
     </div>
@@ -151,12 +151,12 @@
 <!-- Clean Trash Confirmation Dialog -->
 <div id="clean-dialog" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="clean-dialog-title" onclick="if(event.target===this)hideCleanDialog()">
     <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-        <h3 id="clean-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Empty Trash</h3>
+        <h3 id="clean-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("trash.empty_title") }}</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
-            This will permanently delete all items in the trash for this library. This action cannot be undone.
+            {{ t.tr("trash.empty_confirm_desc") }}
         </p>
         <div class="mb-4">
-            <label for="clean-repo" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Library</label>
+            <label for="clean-repo" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.library") }}</label>
             <select id="clean-repo" class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                 {% for item in items %}
                 <option value="{{ item.repo_id }}">{{ item.repo_name }}</option>
@@ -166,11 +166,11 @@
         <div class="flex justify-end gap-2">
             <button type="button" onclick="hideCleanDialog()"
                     class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
-                Cancel
+                {{ t.tr("common.cancel") }}
             </button>
             <button onclick="cleanTrash()"
                     class="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors">
-                Delete All
+                {{ t.tr("trash.delete_all") }}
             </button>
         </div>
     </div>
@@ -192,8 +192,8 @@ function hideCleanDialog() {
 function cleanTrash() {
     var select = document.getElementById('clean-repo');
     var repoId = select ? select.value : '';
-    if (!repoId) { alert('Please select a library'); return; }
-    if (!confirm('Permanently delete all trash items for this library?')) return;
+    if (!repoId) { alert(__t('trash.select_library')); return; }
+    if (!confirm(__t('trash.delete_all_confirm'))) return;
     var csrfToken = getCookie('sfcsrftoken');
     if (!csrfToken) {
         window.location.href = '/accounts/login/';
@@ -205,9 +205,9 @@ function cleanTrash() {
         headers: { 'X-CSRFToken': csrfToken },
     }).then(function (r) {
         if (r.ok) window.location.reload();
-        else alert('Failed to clean trash');
+        else alert(__t('trash.clean_failed'));
     }).catch(function () {
-        alert('Network error');
+        alert(__t('common.network_error'));
     });
 }
 </script>

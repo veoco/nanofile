@@ -14,7 +14,7 @@
 </aside>
 
 <!-- Main content — file browser -->
-<main role="main" aria-label="Main content"
+<main role="main" aria-label="{{ t.tr("a11y.main_content") }}"
       class="flex-1 overflow-y-auto p-4 sm:p-6 pb-20 lg:pb-6">
     {% block content %}
     {% include "includes/breadcrumb.html" %}
@@ -34,23 +34,23 @@
     <!-- Rename dialog overlay -->
     <div id="rename-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="rename-dialog-title">
         <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-            <h3 id="rename-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Rename</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Enter a new name.</p>
+            <h3 id="rename-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("common.rename") }}</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("fb.rename_enter_new_name") }}</p>
             <form id="rename-dialog-form" action="/libraries/{{ repo_id }}/files/rename/" method="POST">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="current_dir" value="{{ current_path }}">
                 <input type="hidden" name="repo_name" value="{{ repo_name }}">
                 <input type="hidden" id="rename-old-path" name="p" value="">
-                <input id="rename-input" type="text" name="new_name" placeholder="New name"
+                <input id="rename-input" type="text" name="new_name" placeholder="{{ t.tr("fb.rename_new_name_placeholder") }}"
                        class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5"
                        autofocus>
                 <div class="mt-4 flex justify-end gap-2">
                     <button type="button" class="js-rename-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
-                        Cancel
+                        {{ t.tr("common.cancel") }}
                     </button>
                     <button type="submit"
                             class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600">
-                        Save
+                        {{ t.tr("common.save") }}
                     </button>
                 </div>
             </form>
@@ -60,20 +60,20 @@
     <!-- Directory picker overlay (for batch move/copy) -->
     <div id="dir-picker-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
         <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-md mx-4" onclick="event.stopPropagation()">
-            <h3 id="dir-picker-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Move Items</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">Select destination:</p>
+            <h3 id="dir-picker-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.move_items_title") }}</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">{{ t.tr("fb.move_select_destination") }}</p>
             <!-- Breadcrumb -->
             <div id="dir-picker-breadcrumb" class="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 mb-3 overflow-x-auto whitespace-nowrap"></div>
             <!-- Directory list -->
             <div id="dir-picker-list" class="max-h-60 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-lg p-1.5 space-y-0.5 mb-4">
-                <div class="text-sm text-gray-400 text-center py-4">Loading...</div>
+                <div class="text-sm text-gray-400 text-center py-4">{{ t.tr("fb.loading") }}</div>
             </div>
             <div class="flex justify-end gap-2">
                 <button type="button" class="js-picker-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
-                    Cancel
+                    {{ t.tr("common.cancel") }}
                 </button>
                 <button type="button" class="js-picker-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600">
-                    Move Here
+                    {{ t.tr("fb.move_here") }}
                 </button>
             </div>
         </div>
@@ -82,40 +82,40 @@
     <!-- Share dialog overlay -->
     <div id="share-dialog-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
         <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-            <h3 id="share-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Create Share Link</h3>
+            <h3 id="share-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.create_share_link") }}</h3>
             <p class="js-share-dialog-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
             <div class="space-y-3">
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Password <span class="text-gray-400">(optional)</span></label>
-                    <input type="password" id="share-password-input" placeholder="Leave empty for no password"
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.password") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
+                    <input type="password" id="share-password-input" placeholder="{{ t.tr("fb.leave_empty_no_password") }}"
                            class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Expires in</label>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.expires_in") }}</label>
                     <select id="share-expiry-select"
                             class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
-                        <option value="">Never</option>
-                        <option value="1">1 day</option>
-                        <option value="7">7 days</option>
-                        <option value="30">30 days</option>
+                        <option value="">{{ t.tr("fb.never") }}</option>
+                        <option value="1">{{ t.tr("fb.days_1") }}</option>
+                        <option value="7">{{ t.tr("fb.days_7") }}</option>
+                        <option value="30">{{ t.tr("fb.days_30") }}</option>
                     </select>
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Description <span class="text-gray-400">(optional)</span></label>
-                    <input type="text" id="share-description-input" placeholder="What is this link for?"
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.description") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
+                    <input type="text" id="share-description-input" placeholder="{{ t.tr("fb.what_is_link_for") }}"
                            class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                 </div>
             </div>
             <!-- Link URL display (shown after creation) -->
             <div id="share-link-display" class="hidden space-y-3">
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Share Link URL</label>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.share_link_url") }}</label>
                     <div class="flex gap-2">
                         <input type="text" id="share-link-url" readonly
                                class="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50">
                         <button type="button" onclick="copyShareLinkUrl()"
                                 class="rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white hover:bg-brand-600">
-                            Copy
+                            {{ t.tr("fb.copy") }}
                         </button>
                     </div>
                 </div>
@@ -124,13 +124,13 @@
             <div class="js-share-dialog-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
             <div class="mt-4 flex justify-end gap-2">
                 <button type="button" class="js-share-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
-                    Cancel
+                    {{ t.tr("common.cancel") }}
                 </button>
                 <button type="button" id="share-delete-btn" class="hidden rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50">
-                    Delete
+                    {{ t.tr("common.delete") }}
                 </button>
                 <button type="button" class="js-share-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                    Create
+                    {{ t.tr("common.create") }}
                 </button>
             </div>
         </div>
@@ -139,29 +139,29 @@
     <!-- Upload link dialog overlay -->
     <div id="upload-link-dialog-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
         <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-            <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Upload Link</h3>
+            <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.upload_link") }}</h3>
             <p class="js-ul-dialog-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
 
             <!-- Create form -->
             <div id="ul-create-form" class="space-y-3">
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Password <span class="text-gray-400">(optional)</span></label>
-                    <input type="password" id="ul-password-input" placeholder="Leave empty for no password"
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.password") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
+                    <input type="password" id="ul-password-input" placeholder="{{ t.tr("fb.leave_empty_no_password") }}"
                            class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Expires in</label>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.expires_in") }}</label>
                     <select id="ul-expiry-select"
                             class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
-                        <option value="">Never</option>
-                        <option value="1">1 day</option>
-                        <option value="7">7 days</option>
-                        <option value="30">30 days</option>
+                        <option value="">{{ t.tr("fb.never") }}</option>
+                        <option value="1">{{ t.tr("fb.days_1") }}</option>
+                        <option value="7">{{ t.tr("fb.days_7") }}</option>
+                        <option value="30">{{ t.tr("fb.days_30") }}</option>
                     </select>
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Description <span class="text-gray-400">(optional)</span></label>
-                    <input type="text" id="ul-description-input" placeholder="What is this link for?"
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.description") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
+                    <input type="text" id="ul-description-input" placeholder="{{ t.tr("fb.what_is_link_for") }}"
                            class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                 </div>
             </div>
@@ -169,13 +169,13 @@
             <!-- Link display (shown after creation) -->
             <div id="ul-link-display" class="hidden space-y-3">
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Upload Link URL</label>
+                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.upload_link_url") }}</label>
                     <div class="flex gap-2">
                         <input type="text" id="ul-link-url" readonly
                                class="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50">
                         <button type="button" onclick="copyUploadLinkUrl()"
                                 class="rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white hover:bg-brand-600">
-                            Copy
+                            {{ t.tr("fb.copy") }}
                         </button>
                     </div>
                 </div>
@@ -185,13 +185,13 @@
 
             <div class="mt-4 flex justify-end gap-2">
                 <button type="button" class="js-ul-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
-                    Cancel
+                    {{ t.tr("common.cancel") }}
                 </button>
                 <button type="button" id="ul-delete-btn" class="hidden rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50">
-                    Delete
+                    {{ t.tr("common.delete") }}
                 </button>
                 <button type="button" id="ul-create-btn" class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                    Create
+                    {{ t.tr("common.create") }}
                 </button>
             </div>
         </div>
@@ -201,8 +201,8 @@
     <div id="history-dialog-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="history-dialog-title">
         <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-lg mx-4" onclick="event.stopPropagation()">
             <div class="flex items-center justify-between mb-1">
-                <h3 id="history-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">File History</h3>
-                <button type="button" class="js-history-close text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" aria-label="Close">
+                <h3 id="history-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("fb.file_history") }}</h3>
+                <button type="button" class="js-history-close text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" aria-label="{{ t.tr("common.close") }}">
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
                     </svg>
@@ -210,11 +210,11 @@
             </div>
             <p class="js-history-path text-sm text-gray-500 dark:text-gray-400 mb-3 break-all"></p>
             <div class="js-history-list max-h-80 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-lg p-1.5 space-y-0.5 mb-4">
-                <div class="js-history-loading text-sm text-gray-400 text-center py-4">Loading...</div>
+                <div class="js-history-loading text-sm text-gray-400 text-center py-4">{{ t.tr("fb.loading") }}</div>
             </div>
             <div class="flex justify-end gap-2">
                 <button type="button" class="js-history-close rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
-                    Close
+                    {{ t.tr("common.close") }}
                 </button>
             </div>
         </div>
@@ -226,8 +226,8 @@
             <svg class="mx-auto h-12 w-12 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
             </svg>
-            <p class="mt-3 text-lg font-medium text-gray-700 dark:text-gray-300">Drop files or folders here</p>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">They will be uploaded to the current directory</p>
+            <p class="mt-3 text-lg font-medium text-gray-700 dark:text-gray-300">{{ t.tr("fb.drop_files_here") }}</p>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("fb.will_upload_current_dir") }}</p>
         </div>
     </div>
 </div>
@@ -265,7 +265,7 @@
         linkDisplay.classList.add('hidden');
         deleteBtn.classList.add('hidden');
         cancelBtn.classList.remove('hidden');
-        createBtn.textContent = 'Create';
+        createBtn.textContent = __t('common.create');
         createBtn.disabled = false;
         pwdInput.value = '';
         expirySelect.value = '';
@@ -280,11 +280,11 @@
         linkUrl.value = window.location.origin + url;
         deleteBtn.classList.remove('hidden');
         cancelBtn.classList.add('hidden');
-        createBtn.textContent = 'Close';
+        createBtn.textContent = __t('common.close');
     }
 
     createBtn.addEventListener('click', async function() {
-        if (createBtn.textContent === 'Close') {
+        if (createBtn.textContent === __t('common.close')) {
             overlay.classList.add('hidden');
             return;
         }
@@ -298,7 +298,7 @@
         if (desc) body.description = desc;
 
         createBtn.disabled = true;
-        createBtn.textContent = 'Creating...';
+        createBtn.textContent = __t('fb.creating');
         errorDiv.classList.add('hidden');
 
         try {
@@ -312,7 +312,7 @@
                 showLink('/u/' + data.token + '/');
             } else {
                 var text = await resp.text().catch(function() { return ''; });
-                errorDiv.textContent = text || 'Failed to create upload link';
+                errorDiv.textContent = text || __t('fb.failed_create_upload_link');
                 errorDiv.classList.remove('hidden');
             }
         } catch (err) {
@@ -320,13 +320,13 @@
             errorDiv.classList.remove('hidden');
         } finally {
             createBtn.disabled = false;
-            createBtn.textContent = currentToken ? 'Close' : 'Create';
+            createBtn.textContent = currentToken ? __t('common.close') : __t('common.create');
         }
     });
 
     deleteBtn.addEventListener('click', async function() {
         if (!currentToken) return;
-        if (!confirm('Delete this upload link?')) return;
+        if (!confirm(__t('fb.confirm_delete_upload_link'))) return;
 
         deleteBtn.disabled = true;
         errorDiv.classList.add('hidden');
@@ -341,10 +341,10 @@
                 linkDisplay.classList.add('hidden');
                 deleteBtn.classList.add('hidden');
                 cancelBtn.classList.remove('hidden');
-                createBtn.textContent = 'Create';
+                createBtn.textContent = __t('common.create');
             } else {
                 var text = await resp.text().catch(function() { return ''; });
-                errorDiv.textContent = text || 'Failed to delete upload link';
+                errorDiv.textContent = text || __t('fb.failed_delete_upload_link');
                 errorDiv.classList.remove('hidden');
             }
         } catch (err) {
@@ -412,8 +412,8 @@ document.addEventListener('click', function(e) {
     if (!repoId || !path) return;
     // Only allow upload links for directories
     if (type !== 'dir') {
-        if (window.Toast) window.Toast.error('Upload links can only be created for directories.');
-        else alert('Upload links can only be created for directories.');
+        if (window.Toast) window.Toast.error(__t('fb.upload_links_dir_only'));
+        else alert(__t('fb.upload_links_dir_only'));
         return;
     }
     window.openUploadLinkDialog(repoId, path);

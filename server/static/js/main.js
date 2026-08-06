@@ -2,6 +2,21 @@
 (function () {
   "use strict";
 
+  // ─── Translation helper ────────────────────────────────────────────────
+  // Strings are injected into window.__T by the server (see base.html).
+  // Falls back to the key itself so untranslated strings are easy to spot.
+  function __t(key, args) {
+    var s = (window.__T && window.__T[key]) || key;
+    if (args) {
+      for (var k in args) {
+        s = s.split("{" + k + "}").join(String(args[k]));
+      }
+    }
+    return s;
+  }
+  // Expose for inline <script> blocks in templates.
+  window.__t = __t;
+
   // ─── Toast notification system ────────────────────────────────────────
   var toastContainer = null;
   function initToast() {
@@ -110,26 +125,26 @@
         var adminLink = document.createElement("a");
         adminLink.href = "/sysadmin/users/";
         adminLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
-        adminLink.textContent = "User Management";
+        adminLink.textContent = __t('ui.user_management');
         dropdown.appendChild(adminLink);
 
         var shareLink = document.createElement("a");
         shareLink.href = "/sysadmin/shares/";
         shareLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
-        shareLink.textContent = "Share Management";
+        shareLink.textContent = __t('ui.share_management');
         dropdown.appendChild(shareLink);
 
         var taskLink = document.createElement("a");
         taskLink.href = "/sysadmin/tasks/";
         taskLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
-        taskLink.textContent = "Task Management";
+        taskLink.textContent = __t('ui.task_management');
         dropdown.appendChild(taskLink);
       }
 
       var signOut = document.createElement("a");
       signOut.href = "/accounts/logout/";
       signOut.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
-      signOut.textContent = "Sign out";
+      signOut.textContent = __t('ui.sign_out');
       dropdown.appendChild(signOut);
 
       userMenu.appendChild(dropdown);
@@ -248,7 +263,7 @@
             btn.classList.add("dark:text-gray-600");
           }
           btn.querySelector("svg").setAttribute("fill", "none");
-          btn.title = "Star";
+          btn.title = __t('ui.star');
           btn.dataset.starred = "false";
         }
       } else {
@@ -267,7 +282,7 @@
           }
           btn.classList.add("text-amber-400");
           btn.querySelector("svg").setAttribute("fill", "currentColor");
-          btn.title = "Unstar";
+          btn.title = __t('ui.unstar');
           btn.dataset.starred = "true";
         }
       }
@@ -365,7 +380,7 @@
     confirmOverlay.querySelector(".js-confirm-message").textContent = message;
 
     var okBtn = confirmOverlay.querySelector(".js-confirm-ok");
-    okBtn.textContent = opts.confirmText || "Delete";
+    okBtn.textContent = opts.confirmText || __t('ui.delete');
     okBtn.className =
       "js-confirm-ok rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors " +
       (opts.variant === "danger"
@@ -403,9 +418,9 @@
     var entryType = btn.dataset.type;
 
     var confirmed = await showConfirmDialog(
-      "Delete",
-      'Delete "' + name + '"? This cannot be undone.',
-      { confirmText: "Delete", variant: "danger" }
+      __t('ui.delete'),
+      __t('ui.confirm_delete_named', { name: name }),
+      { confirmText: __t('ui.delete'), variant: "danger" }
     );
     if (!confirmed) return;
 
@@ -430,10 +445,10 @@
         else window.location.reload();
       } else {
         var text = await res.text().catch(function () { return res.statusText; });
-        window.Toast.error("Delete failed: " + text);
+        window.Toast.error(__t('ui.delete_failed', { msg: text }));
       }
     } catch (err) {
-      window.Toast.error("Delete failed: " + err.message);
+      window.Toast.error(__t('ui.delete_failed', { msg: err.message }));
     }
   });
 
@@ -546,9 +561,9 @@
       var name = btn.dataset.name;
 
       var confirmed = await window.ConfirmDialog.confirm(
-        "Restore version",
-        'Restore "' + name + '" to this version? This will overwrite the current file.',
-        { confirmText: "Restore" }
+        __t('ui.restore_version'),
+        __t('ui.confirm_restore_version', { name: name }),
+        { confirmText: __t('ui.restore') }
       );
       if (!confirmed) return;
 
@@ -562,12 +577,12 @@
             encodeURIComponent(commitId),
           { method: "POST" }
         );
-        window.Toast.success('Restored "' + name + '"');
+        window.Toast.success(__t('ui.restored', { name: name }));
         closeHistoryDialog();
         if (window.refreshFileList) window.refreshFileList();
         else window.location.reload();
       } catch (err) {
-        window.Toast.error("Restore failed: " + err.message);
+        window.Toast.error(__t('ui.restore_failed', { msg: err.message }));
       }
     });
   }
@@ -636,7 +651,7 @@
     shareDialogError.classList.add("hidden");
     shareDialogError.textContent = "";
     shareConfirmBtn.disabled = false;
-    shareConfirmBtn.textContent = "Create";
+    shareConfirmBtn.textContent = __t('ui.create');
     shareConfirmBtn.classList.remove("hidden");
     shareCancelBtn.classList.remove("hidden");
     shareDeleteBtn.classList.add("hidden");
@@ -661,7 +676,7 @@
     // ─── Share delete — delete link via API ────────────────────────────
     shareDeleteBtn.addEventListener("click", async function () {
       if (!shareCurrentToken) return;
-      if (!confirm("Delete this share link?")) return;
+      if (!confirm(__t('ui.confirm_delete_share'))) return;
 
       shareDeleteBtn.disabled = true;
       shareDialogError.classList.add("hidden");
@@ -675,12 +690,12 @@
           if (shareCreateForm) shareCreateForm.classList.remove("hidden");
           if (shareLinkDisplay) shareLinkDisplay.classList.add("hidden");
           shareDeleteBtn.classList.add("hidden");
-          shareConfirmBtn.textContent = "Create";
+          shareConfirmBtn.textContent = __t('ui.create');
           shareCancelBtn.classList.remove("hidden");
           shareDialogError.textContent = "";
         } else {
           var text = await resp.text().catch(function () { return ""; });
-          shareDialogError.textContent = text || "Failed to delete share link";
+          shareDialogError.textContent = text || __t('ui.delete_share_failed');
           shareDialogError.classList.remove("hidden");
         }
       } catch (err) {
@@ -743,7 +758,7 @@
         shareConfirmBtn.disabled = false;
         // Don't reset to "Create" if in Close mode (success path sets it to Close)
         if (shareConfirmBtn.textContent !== "Close") {
-          shareConfirmBtn.textContent = "Create";
+          shareConfirmBtn.textContent = __t('ui.create');
         }
       }
     });
@@ -762,9 +777,9 @@
     const repoName = form.dataset.repoName || "";
 
     var confirmed = await showConfirmDialog(
-      "Restore",
-      'Restore "' + objName + '" from ' + repoName + "?",
-      { confirmText: "Restore", variant: "primary" }
+      __t('ui.restore'),
+      __t('ui.confirm_restore', { name: objName, repo: repoName }),
+      { confirmText: __t('ui.restore'), variant: "primary" }
     );
     if (!confirmed) return;
 
@@ -786,10 +801,10 @@
       if (resp.ok) {
         window.location.reload();
       } else {
-        window.Toast.error("Restore failed");
+        window.Toast.error(__t('ui.restore_failed_short'));
       }
     } catch (err) {
-      window.Toast.error("Restore failed: " + err.message);
+      window.Toast.error(__t('ui.restore_failed', { msg: err.message }));
     }
   });
 
@@ -864,11 +879,11 @@
           body: formBody.toString(),
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
         });
-        window.Toast.success('Renamed to "' + newName + '"');
+        window.Toast.success(__t('ui.renamed_to', { name: newName }));
         if (window.refreshFileList) window.refreshFileList();
         else window.location.reload();
       } catch (err) {
-        window.Toast.error("Rename failed: " + err.message);
+        window.Toast.error(__t('ui.rename_failed', { msg: err.message }));
       }
     });
   }
@@ -919,7 +934,7 @@
     var selBtn = document.getElementById("js-select-all-btn");
     if (selBtn) {
       var totalRows = document.querySelectorAll(".js-entry-row").length;
-      selBtn.textContent = selectedPaths.size === totalRows ? "Deselect All" : "Select All";
+      selBtn.textContent = selectedPaths.size === totalRows ? __t('ui.deselect_all') : __t('ui.select_all');
     }
   }
 
@@ -1372,16 +1387,16 @@
     if (selectedPaths.size === 0) return;
 
     var confirmed = await showConfirmDialog(
-      "Delete",
-      "Delete " + selectedPaths.size + " item(s)? This cannot be undone.",
-      { confirmText: "Delete", variant: "danger" }
+      __t('ui.delete'),
+      __t('ui.confirm_delete_n_items', { n: selectedPaths.size }),
+      { confirmText: __t('ui.delete'), variant: "danger" }
     );
     if (!confirmed) return;
 
     var repoId = getRepoId();
-    if (!repoId) { Toast.error("Cannot determine repo"); return; }
+    if (!repoId) { Toast.error(__t('ui.cannot_determine_repo')); return; }
     var parentDir = getCurrentDir();
-    if (!parentDir) { Toast.error("Cannot determine parent directory"); return; }
+    if (!parentDir) { Toast.error(__t('ui.cannot_determine_parent')); return; }
 
     try {
       await window.apiFetch("/api/v2.1/repos/batch-delete-item/", {
@@ -1393,12 +1408,12 @@
           dirents: Array.from(selectedPaths),
         }),
       });
-      Toast.success("Deleted " + selectedPaths.size + " item(s)");
+      Toast.success(__t('ui.deleted_n_items', { n: selectedPaths.size }));
       clearSelection();
       if (window.refreshFileList) window.refreshFileList();
       else window.location.reload();
     } catch (err) {
-      Toast.error("Batch delete failed: " + err.message);
+      Toast.error(__t('ui.batch_delete_failed', { msg: err.message }));
     }
   });
 
@@ -1409,12 +1424,12 @@
 
     var titleEl = document.getElementById("dir-picker-title");
     if (titleEl) {
-      titleEl.textContent = (operation === "move" ? "Move" : "Copy") + " " + selectedPaths.size + " Item(s)";
+      titleEl.textContent = __t(operation === "move" ? 'ui.move_title' : 'ui.copy_title', { n: selectedPaths.size });
     }
 
     var confirmBtn = document.querySelector(".js-picker-confirm");
     if (confirmBtn) {
-      confirmBtn.textContent = operation === "move" ? "Move Here" : "Copy Here";
+      confirmBtn.textContent = operation === "move" ? __t('ui.move_here') : __t('ui.copy_here');
     }
 
     var overlay = document.getElementById("dir-picker-overlay");
@@ -1522,7 +1537,7 @@
 
       // Prevent moving to the same directory (server would create duplicates)
       if (op === "move" && pickerPath === parentDir) {
-        Toast.error("Destination is the same as source");
+        Toast.error(__t('ui.dest_same_as_source'));
         return;
       }
 
@@ -1544,12 +1559,12 @@
             dst_parent_dir: pickerPath,
           }),
         });
-        Toast.success((op === "move" ? "Moved" : "Copied") + " " + selectedPaths.size + " item(s)");
+        Toast.success(__t(op === "move" ? 'ui.moved_n' : 'ui.copied_n', { n: selectedPaths.size }));
         clearSelection();
         if (window.refreshFileList) window.refreshFileList();
         else window.location.reload();
       } catch (err) {
-        Toast.error("Batch " + op + " failed: " + err.message);
+        Toast.error(__t('ui.batch_op_failed', { op: op, msg: err.message }));
       }
     });
   }
@@ -1607,7 +1622,7 @@
       .catch(function (err) {
         console.error("Zip download failed", err);
         if (typeof Toast !== "undefined") {
-          Toast.error("Download failed: " + err.message);
+          Toast.error(__t('ui.download_failed', { msg: err.message }));
         }
       });
   }
@@ -1665,7 +1680,7 @@
       files.push({ repoId: rows[i].dataset.repoId, path: rows[i].dataset.path });
     }
     if (files.length === 0) {
-      window.Toast && Toast.info("No files selected");
+      window.Toast && Toast.info(__t('ui.no_files_selected'));
       return;
     }
 
@@ -1689,16 +1704,16 @@
         }
       }
       if (indexedCount > 0) {
-        window.Toast && Toast.success("Reindexed " + indexedCount + " file(s)");
+        window.Toast && Toast.success(__t('ui.reindexed_n', { n: indexedCount }));
       }
       if (skippedCount > 0) {
         window.Toast && Toast.info(skippedCount + " file(s) skipped (unsupported type)");
       }
     } catch (e) {
-      window.Toast && Toast.error("Reindex failed: " + (e.message || e));
+      window.Toast && Toast.error(__t('ui.reindex_failed', { msg: e.message || e }));
     } finally {
       btn.disabled = false;
-      btn.textContent = "Reindex Selected";
+      btn.textContent = __t('ui.reindex_selected');
     }
   });
 

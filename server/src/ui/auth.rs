@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use crate::repository::api_token::CreateSessionTokenParams;
 use crate::service::auth::password::verify_password;
 use crate::service::auth::password_reset::PasswordResetService;
@@ -25,6 +26,7 @@ use base::error::AppError;
 pub struct LoginTemplate {
     /// Pre-computed static asset URLs with cache-busting hashes.
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     /// Error message to display (None = fresh form).
     pub error: Option<String>,
     /// Number of days the session will be remembered (shown in the UI).
@@ -38,6 +40,7 @@ pub struct LoginTemplate {
 #[template(path = "page/two_factor_login.html")]
 pub struct TwoFactorLoginTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub error: Option<String>,
 }
 
@@ -59,9 +62,13 @@ pub struct TwoFactorAuthForm {
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// GET /accounts/login/ — render the login page.
-pub async fn login_page(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
+pub async fn login_page(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Html<String>, AppError> {
     let tpl = LoginTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
         error: None,
         remember_days: state.config.auth.api_token_ttl_days,
         enable_password_reset: state.config.auth.enable_password_reset,
@@ -114,10 +121,12 @@ async fn create_pending_token(
 
 async fn render_login_page(
     state: &Arc<AppState>,
+    headers: &HeaderMap,
     error: Option<String>,
 ) -> Result<Html<String>, AppError> {
     let tpl = LoginTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(headers, &state.config.ui.default_language),
         error,
         remember_days: state.config.auth.api_token_ttl_days,
         enable_password_reset: state.config.auth.enable_password_reset,
@@ -138,9 +147,17 @@ pub async fn login(
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
-        return render_login_page(&state, Some("Invalid request origin.".to_string()))
-            .await
-            .map(|html| (StatusCode::FORBIDDEN, Html(html)).into_response());
+        return render_login_page(
+            &state,
+            &headers,
+            Some(
+                I18n::from_headers(&headers, &state.config.ui.default_language)
+                    .tr("auth.invalid_origin")
+                    .to_string(),
+            ),
+        )
+        .await
+        .map(|html| (StatusCode::FORBIDDEN, Html(html)).into_response());
     }
 
     // Client IP for rate limiting: TCP peer address (X-Forwarded-For is only
@@ -162,7 +179,12 @@ pub async fn login(
     {
         return render_login_page(
             &state,
-            Some("Too many login attempts. Please try again later.".to_string()),
+            &headers,
+            Some(
+                I18n::from_headers(&headers, &state.config.ui.default_language)
+                    .tr("auth.too_many_attempts")
+                    .to_string(),
+            ),
         )
         .await
         .map(|html| (StatusCode::TOO_MANY_REQUESTS, Html(html)).into_response());
@@ -175,9 +197,17 @@ pub async fn login(
             state
                 .login_rate_limiter
                 .record_failure(&rate_limit_key_user);
-            return render_login_page(&state, Some("Incorrect email or password.".to_string()))
-                .await
-                .map(|html| (StatusCode::OK, Html(html)).into_response());
+            return render_login_page(
+                &state,
+                &headers,
+                Some(
+                    I18n::from_headers(&headers, &state.config.ui.default_language)
+                        .tr("auth.incorrect_credentials")
+                        .to_string(),
+                ),
+            )
+            .await
+            .map(|html| (StatusCode::OK, Html(html)).into_response());
         }
     };
 
@@ -187,9 +217,17 @@ pub async fn login(
         state
             .login_rate_limiter
             .record_failure(&rate_limit_key_user);
-        return render_login_page(&state, Some("Incorrect email or password.".to_string()))
-            .await
-            .map(|html| (StatusCode::OK, Html(html)).into_response());
+        return render_login_page(
+            &state,
+            &headers,
+            Some(
+                I18n::from_headers(&headers, &state.config.ui.default_language)
+                    .tr("auth.incorrect_credentials")
+                    .to_string(),
+            ),
+        )
+        .await
+        .map(|html| (StatusCode::OK, Html(html)).into_response());
     }
 
     if !verify_password(
@@ -201,9 +239,17 @@ pub async fn login(
         state
             .login_rate_limiter
             .record_failure(&rate_limit_key_user);
-        return render_login_page(&state, Some("Incorrect email or password.".to_string()))
-            .await
-            .map(|html| (StatusCode::OK, Html(html)).into_response());
+        return render_login_page(
+            &state,
+            &headers,
+            Some(
+                I18n::from_headers(&headers, &state.config.ui.default_language)
+                    .tr("auth.incorrect_credentials")
+                    .to_string(),
+            ),
+        )
+        .await
+        .map(|html| (StatusCode::OK, Html(html)).into_response());
     }
 
     // Successful login — clear rate limit for this IP and user.
@@ -323,9 +369,13 @@ pub async fn login(
 }
 
 /// GET /accounts/two-factor-auth/ — show the TOTP verification page.
-pub async fn two_factor_auth_page() -> Result<Html<String>, AppError> {
+pub async fn two_factor_auth_page(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Html<String>, AppError> {
     let tpl = TwoFactorLoginTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
         error: None,
     };
     let html = tpl
@@ -344,7 +394,11 @@ pub async fn two_factor_auth(
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
-        return Err(AppError::BadRequest("Invalid request origin.".to_string()));
+        return Err(AppError::BadRequest(
+            I18n::from_headers(&headers, &state.config.ui.default_language)
+                .tr("auth.invalid_origin")
+                .to_string(),
+        ));
     }
 
     // Client IP for rate limiting: TCP peer address (not spoofable XFF).
@@ -366,7 +420,11 @@ pub async fn two_factor_auth(
                 .and_then(|s| s.strip_prefix("seahub-session-pending="))
         })
         .ok_or_else(|| {
-            AppError::BadRequest("Authentication session expired. Please log in again.".into())
+            AppError::BadRequest(
+                I18n::from_headers(&headers, &state.config.ui.default_language)
+                    .tr("auth.session_expired")
+                    .into(),
+            )
         })?;
 
     // Look up the pending token
@@ -378,7 +436,9 @@ pub async fn two_factor_auth(
         .map_err(|_| AppError::internal("database error"))?
         .ok_or_else(|| {
             AppError::BadRequest(
-                "Invalid or expired authentication session. Please log in again.".into(),
+                I18n::from_headers(&headers, &state.config.ui.default_language)
+                    .tr("auth.session_expired_alt")
+                    .into(),
             )
         })?;
 
@@ -388,7 +448,9 @@ pub async fn two_factor_auth(
         if now > expires_at {
             let _ = state.repos.api_token.delete_by_token(pending_token).await;
             return Err(AppError::BadRequest(
-                "Authentication session expired. Please log in again.".into(),
+                I18n::from_headers(&headers, &state.config.ui.default_language)
+                    .tr("auth.session_expired")
+                    .into(),
             ));
         }
     }
@@ -401,7 +463,9 @@ pub async fn two_factor_auth(
         // Delete pending token to force re-login
         let _ = state.repos.api_token.delete_by_token(pending_token).await;
         return Err(AppError::BadRequest(
-            "Too many verification attempts. Please log in again.".into(),
+            I18n::from_headers(&headers, &state.config.ui.default_language)
+                .tr("auth.too_many_verification")
+                .into(),
         ));
     }
 
@@ -451,7 +515,12 @@ pub async fn two_factor_auth(
         state.totp_limiter.record_attempt(&totp_key);
         let tpl = TwoFactorLoginTemplate {
             urls: crate::static_assets::template_urls(),
-            error: Some("Invalid verification code. Please try again.".to_string()),
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            error: Some(
+                I18n::from_headers(&headers, &state.config.ui.default_language)
+                    .tr("auth.invalid_code")
+                    .to_string(),
+            ),
         };
         let html = tpl
             .render()
@@ -585,6 +654,7 @@ pub async fn logout(
 #[template(path = "page/register.html")]
 pub struct RegisterTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub error: Option<String>,
 }
 
@@ -597,9 +667,13 @@ pub struct RegisterForm {
 }
 
 /// GET /accounts/register/ — render the registration form.
-pub async fn register_page() -> Result<Html<String>, AppError> {
+pub async fn register_page(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Html<String>, AppError> {
     let tpl = RegisterTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
         error: None,
     };
     let html = tpl
@@ -618,7 +692,11 @@ pub async fn register(
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
-        return Err(AppError::BadRequest("Invalid request origin.".to_string()));
+        return Err(AppError::BadRequest(
+            I18n::from_headers(&headers, &state.config.ui.default_language)
+                .tr("auth.invalid_origin")
+                .to_string(),
+        ));
     }
 
     // Rate limit: per IP (TCP peer, not spoofable XFF).
@@ -630,14 +708,20 @@ pub async fn register(
     let rl_key = format!("register:{}", client_ip);
     if state.registration_limiter.is_limited(&rl_key) {
         return Err(AppError::BadRequest(
-            "Too many registration attempts. Try again later.".to_string(),
+            I18n::from_headers(&headers, &state.config.ui.default_language)
+                .tr("auth.registration_too_many")
+                .to_string(),
         ));
     }
     state.registration_limiter.record_attempt(&rl_key);
 
     // Validate passwords match before delegating to service.
     if form.password1 != form.password2 {
-        return Err(AppError::BadRequest("Passwords do not match.".to_string()));
+        return Err(AppError::BadRequest(
+            I18n::from_headers(&headers, &state.config.ui.default_language)
+                .tr("auth.passwords_mismatch")
+                .to_string(),
+        ));
     }
 
     let cfg = &state.config.auth;
@@ -724,6 +808,7 @@ pub async fn register(
 #[template(path = "page/password_reset_form.html")]
 pub struct PasswordResetFormTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub error: Option<String>,
 }
 
@@ -731,12 +816,14 @@ pub struct PasswordResetFormTemplate {
 #[template(path = "page/password_reset_done.html")]
 pub struct PasswordResetDoneTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
 }
 
 #[derive(Template)]
 #[template(path = "page/password_reset_confirm.html")]
 pub struct PasswordResetConfirmTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub error: Option<String>,
     /// Whether the token is valid (show form) or invalid (show error).
     pub valid: bool,
@@ -746,6 +833,7 @@ pub struct PasswordResetConfirmTemplate {
 #[template(path = "page/password_reset_complete.html")]
 pub struct PasswordResetCompleteTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
 }
 
 #[derive(Deserialize)]
@@ -760,9 +848,13 @@ pub struct PasswordResetConfirmForm {
 }
 
 /// GET /accounts/password/reset/ — show the password reset request form.
-pub async fn password_reset_page() -> Result<Html<String>, AppError> {
+pub async fn password_reset_page(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Html<String>, AppError> {
     let tpl = PasswordResetFormTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
         error: None,
     };
     let html = tpl
@@ -794,6 +886,7 @@ pub async fn password_reset(
     if !state.config.email.enabled {
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
         };
         let html = tpl
             .render()
@@ -812,6 +905,7 @@ pub async fn password_reset(
         // Show the done page silently to prevent enumeration.
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
         };
         let html = tpl
             .render()
@@ -829,6 +923,7 @@ pub async fn password_reset(
 
     let tpl = PasswordResetDoneTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
     };
     let html = tpl
         .render()
@@ -837,9 +932,13 @@ pub async fn password_reset(
 }
 
 /// GET /accounts/password/reset/done/ — show confirmation (accessed directly, no URL).
-pub async fn password_reset_done() -> Result<Html<String>, AppError> {
+pub async fn password_reset_done(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Html<String>, AppError> {
     let tpl = PasswordResetDoneTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
     };
     let html = tpl
         .render()
@@ -850,6 +949,7 @@ pub async fn password_reset_done() -> Result<Html<String>, AppError> {
 /// GET /accounts/password/reset/{token}/ — show the new password form or error.
 pub async fn password_reset_confirm_page(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Result<Html<String>, AppError> {
     let reset_service = PasswordResetService::new(state.repos.clone());
@@ -857,6 +957,7 @@ pub async fn password_reset_confirm_page(
 
     let tpl = PasswordResetConfirmTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
         error: None,
         valid,
     };
@@ -885,7 +986,12 @@ pub async fn password_reset_confirm(
     if form.password1 != form.password2 {
         let tpl = PasswordResetConfirmTemplate {
             urls: crate::static_assets::template_urls(),
-            error: Some("Passwords do not match.".to_string()),
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            error: Some(
+                I18n::from_headers(&headers, &state.config.ui.default_language)
+                    .tr("auth.passwords_mismatch")
+                    .to_string(),
+            ),
             valid: true,
         };
         let html = tpl
@@ -910,6 +1016,7 @@ pub async fn password_reset_confirm(
         Err(AppError::BadRequest(msg)) => {
             let tpl = PasswordResetConfirmTemplate {
                 urls: crate::static_assets::template_urls(),
+                t: I18n::from_headers(&headers, &state.config.ui.default_language),
                 error: Some(msg),
                 valid: true,
             };
@@ -929,9 +1036,13 @@ pub async fn password_reset_confirm(
 }
 
 /// GET /accounts/password/reset/complete/ — show success page.
-pub async fn password_reset_complete() -> Result<Html<String>, AppError> {
+pub async fn password_reset_complete(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Html<String>, AppError> {
     let tpl = PasswordResetCompleteTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
     };
     let html = tpl
         .render()

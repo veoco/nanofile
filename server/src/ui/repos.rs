@@ -4,6 +4,7 @@ use axum::{extract::State, response::Html};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use crate::ui::files::format_size;
 use base::error::AppError;
 
@@ -15,6 +16,7 @@ use super::auth_extractor::WebUser;
 #[template(path = "repos/list.html")]
 pub struct RepoListTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub repos: Vec<RepoInfo>,
@@ -84,6 +86,7 @@ pub async fn list_repos(
 
     let tpl = RepoListTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email,
         is_admin: user.is_admin,
         repos,

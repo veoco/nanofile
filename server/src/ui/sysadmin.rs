@@ -11,6 +11,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use crate::service::admin::AdminUserService;
 use base::error::AppError;
 
@@ -20,6 +21,7 @@ use super::auth_extractor::WebUser;
 #[template(path = "sysadmin/index.html")]
 pub struct SysAdminTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub csrf_token: Option<String>,
@@ -74,12 +76,16 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
         .into_iter()
         .map(|u| {
             let quota_display = match u.storage_quota {
-                Some(0) => "Unlimited".to_string(),
+                Some(0) => I18n::get(user.language.as_deref())
+                    .tr("common.unlimited")
+                    .to_string(),
                 Some(q) => crate::ui::files::format_size(q),
-                None => format!(
-                    "{} (global)",
-                    crate::ui::files::format_size(state.config.storage.max_storage_bytes as i64)
-                ),
+                None => {
+                    let g = crate::ui::files::format_size(
+                        state.config.storage.max_storage_bytes as i64,
+                    );
+                    I18n::get(user.language.as_deref()).trf("admin.global_quota", &[("size", &g)])
+                }
             };
             UserRow {
                 id: u.id,
@@ -90,16 +96,18 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
                 usage_formatted: crate::ui::files::format_size(u.usage),
                 quota_formatted: quota_display,
                 created_at: format_ts(u.created_at),
-                last_login_at: u
-                    .last_login_at
-                    .map(format_ts)
-                    .unwrap_or_else(|| "Never".to_string()),
+                last_login_at: u.last_login_at.map(format_ts).unwrap_or_else(|| {
+                    I18n::get(user.language.as_deref())
+                        .tr("common.never")
+                        .to_string()
+                }),
             }
         })
         .collect();
 
     let tpl = SysAdminTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email,
         is_admin: user.is_admin,
         csrf_token,
@@ -151,7 +159,11 @@ pub async fn create_user(
             &user.session_token,
         );
         if *token != expected {
-            return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
+            return Err(AppError::BadRequest(
+                I18n::get(user.language.as_deref())
+                    .tr("common.invalid_csrf")
+                    .to_string(),
+            ));
         }
     }
 
@@ -206,7 +218,11 @@ pub async fn update_user(
             &user.session_token,
         );
         if *token != expected {
-            return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
+            return Err(AppError::BadRequest(
+                I18n::get(user.language.as_deref())
+                    .tr("common.invalid_csrf")
+                    .to_string(),
+            ));
         }
     }
 

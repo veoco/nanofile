@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="{{ t.lang }}" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Password Required | Nanofile</title>
+    <title>{{ t.tr("pub.password_required") }} | Nanofile</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -89,16 +89,16 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
             </svg>
         </div>
-        <h1>Password Required</h1>
-        <p>This link is password protected. Please enter the password to continue.</p>
+        <h1>{{ t.tr("pub.password_required") }}</h1>
+        <p>{{ t.tr("pub.password_protected_desc") }}</p>
 
         {% if let Some(error_msg) = error %}
         <div class="error">{{ error_msg }}</div>
         {% endif %}
 
         <form action="{{ form_action }}" method="POST">
-            <input type="password" name="password" placeholder="Enter password" autofocus required>
-            <button type="submit">Submit</button>
+            <input type="password" name="password" placeholder="{{ t.tr("pub.enter_password") }}" autofocus required>
+            <button type="submit">{{ t.tr("common.submit") }}</button>
         </form>
     </div>
 </body>

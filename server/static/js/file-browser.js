@@ -2,6 +2,11 @@
 (function () {
   "use strict";
 
+  // ─── Translation helper ────────────────────────────────────────────────
+  // `__t` and `window.__t` are defined in main.js (loaded first in base.html);
+  // this file reuses that global implementation.
+  var __t = window.__t;
+
   // ─── View mode toggle (list / grid / gallery) ──────────────────────────
   function setMode(m) {
     var listView = document.querySelector(".js-file-list-view");
@@ -208,7 +213,7 @@
       if (starIcon) {
         starIcon.setAttribute("fill", isStarred ? "currentColor" : "none");
       }
-      if (starLabel) starLabel.textContent = isStarred ? "Starred" : "Not starred";
+      if (starLabel) starLabel.textContent = isStarred ? __t('ui.starred') : __t('ui.not_starred');
       starBtn.className =
         "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition-colors " +
         (isStarred
@@ -341,7 +346,7 @@
         reindexBtn.dataset.repoId = d.repoId;
         reindexBtn.dataset.path = d.path;
         reindexBtn.disabled = false;
-        reindexBtn.textContent = "Reindex";
+        reindexBtn.textContent = __t('ui.reindex');
       }
       fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/index-text/?p=" + encodeURIComponent(d.path))
         .then(function (r) { return r.json(); })
@@ -459,20 +464,20 @@
   // Map EXIF field names to human-readable labels and format values.
   function getExifFields(data) {
     var labelMap = {
-      "Make": "Camera Make",
-      "Model": "Camera Model",
-      "DateTimeOriginal": "Date Taken",
-      "ExposureTime": "Exposure",
-      "FNumber": "Aperture",
-      "FocalLength": "Focal Length",
-      "ISOSpeed": "ISO",
-      "Flash": "Flash",
-      "Software": "Software",
-      "GPSLatitude": "GPS Latitude",
-      "GPSLongitude": "GPS Longitude",
-      "PixelXDimension": "Width",
-      "PixelYDimension": "Height",
-      "Orientation": "Orientation"
+      "Make": __t('exif.make'),
+      "Model": __t('exif.model'),
+      "DateTimeOriginal": __t('exif.date_taken'),
+      "ExposureTime": __t('exif.exposure'),
+      "FNumber": __t('exif.aperture'),
+      "FocalLength": __t('exif.focal_length'),
+      "ISOSpeed": __t('exif.iso'),
+      "Flash": __t('exif.flash'),
+      "Software": __t('exif.software'),
+      "GPSLatitude": __t('exif.gps_latitude'),
+      "GPSLongitude": __t('exif.gps_longitude'),
+      "PixelXDimension": __t('exif.width'),
+      "PixelYDimension": __t('exif.height'),
+      "Orientation": __t('exif.orientation')
     };
     // Simple value formatters for certain fields
     var formatters = {
@@ -484,7 +489,7 @@
         var val = parseInt(v, 10);
         if (isNaN(val)) return v;
         // Bit 0: flash fired
-        return (val & 1) ? "Yes" : "No";
+        return (val & 1) ? __t('common.yes') : __t('common.no');
       },
       "PixelXDimension": function (v) { return v.replace(/^"|"$/g, "") + " px"; },
       "PixelYDimension": function (v) { return v.replace(/^"|"$/g, "") + " px"; },
@@ -496,14 +501,14 @@
       "GPSLongitude": function (v) { return v.replace(/^"|"$/g, ""); },
       "Orientation": function (v) {
         var m = {
-          "1": "Normal",
-          "2": "Mirrored",
-          "3": "Upside-down",
-          "4": "Rotated 180°",
-          "5": "Mirrored + 90° CW",
-          "6": "90° CW",
-          "7": "Mirrored + 90° CCW",
-          "8": "90° CCW"
+          "1": __t('exif.orientation_normal'),
+          "2": __t('exif.orientation_mirrored'),
+          "3": __t('exif.orientation_upside_down'),
+          "4": __t('exif.orientation_rotated_180'),
+          "5": __t('exif.orientation_mirrored_90_cw'),
+          "6": __t('exif.orientation_90_cw'),
+          "7": __t('exif.orientation_mirrored_90_ccw'),
+          "8": __t('exif.orientation_90_ccw')
         };
         var val = v.replace(/^"|"$/g, "");
         return m[val] || v;
@@ -530,30 +535,30 @@
   }
 
   function humanType(type, ext) {
-    if (type === "dir") return "Folder";
-    if (!ext) return "File";
+    if (type === "dir") return __t('ft.folder');
+    if (!ext) return __t('ft.file');
     var map = {
-      "PNG": "PNG Image", "JPG": "JPEG Image", "JPEG": "JPEG Image",
-      "GIF": "GIF Image", "WEBP": "WebP Image", "BMP": "BMP Image",
-      "SVG": "SVG Image",
-      "PDF": "PDF Document",
-      "DOC": "Word Document", "DOCX": "Word Document",
-      "XLS": "Excel Spreadsheet", "XLSX": "Excel Spreadsheet",
-      "PPT": "PowerPoint", "PPTX": "PowerPoint",
-      "TXT": "Text File", "MD": "Markdown File",
-      "RS": "Rust Source", "PY": "Python Script", "JS": "JavaScript File",
-      "TS": "TypeScript File", "GO": "Go Source", "JAVA": "Java Source",
-      "C": "C Source", "CPP": "C++ Source", "H": "Header File",
-      "RB": "Ruby Script", "PHP": "PHP Script", "SH": "Shell Script",
-      "HTML": "HTML File", "CSS": "CSS File",
-      "TOML": "TOML File", "JSON": "JSON File", "YAML": "YAML File", "YML": "YAML File",
-      "CSV": "CSV File", "XML": "XML File", "SQL": "SQL File",
-      "ZIP": "ZIP Archive", "TAR": "TAR Archive", "GZ": "GZip Archive",
-      "BZ2": "BZip2 Archive", "7Z": "7-Zip Archive", "RAR": "RAR Archive",
-      "MP4": "MP4 Video", "MOV": "MOV Video", "AVI": "AVI Video",
-      "MKV": "MKV Video", "WEBM": "WebM Video", "WMV": "WMV Video",
-      "MP3": "MP3 Audio", "FLAC": "FLAC Audio", "WAV": "WAV Audio",
-      "ISO": "Disk Image"
+      "PNG": __t('ft.png_image'), "JPG": __t('ft.jpeg_image'), "JPEG": __t('ft.jpeg_image'),
+      "GIF": __t('ft.gif_image'), "WEBP": __t('ft.webp_image'), "BMP": __t('ft.bmp_image'),
+      "SVG": __t('ft.svg_image'),
+      "PDF": __t('ft.pdf_document'),
+      "DOC": __t('ft.word_document'), "DOCX": __t('ft.word_document'),
+      "XLS": __t('ft.excel_spreadsheet'), "XLSX": __t('ft.excel_spreadsheet'),
+      "PPT": __t('ft.powerpoint'), "PPTX": __t('ft.powerpoint'),
+      "TXT": __t('ft.text_file'), "MD": __t('ft.markdown_file'),
+      "RS": __t('ft.rust_source'), "PY": __t('ft.python_script'), "JS": __t('ft.javascript_file'),
+      "TS": __t('ft.typescript_file'), "GO": __t('ft.go_source'), "JAVA": __t('ft.java_source'),
+      "C": __t('ft.c_source'), "CPP": __t('ft.cpp_source'), "H": __t('ft.header_file'),
+      "RB": __t('ft.ruby_script'), "PHP": __t('ft.php_script'), "SH": __t('ft.shell_script'),
+      "HTML": __t('ft.html_file'), "CSS": __t('ft.css_file'),
+      "TOML": __t('ft.toml_file'), "JSON": __t('ft.json_file'), "YAML": __t('ft.yaml_file'), "YML": __t('ft.yaml_file'),
+      "CSV": __t('ft.csv_file'), "XML": __t('ft.xml_file'), "SQL": __t('ft.sql_file'),
+      "ZIP": __t('ft.zip_archive'), "TAR": __t('ft.tar_archive'), "GZ": __t('ft.gz_archive'),
+      "BZ2": __t('ft.bz2_archive'), "7Z": __t('ft.sevenzip_archive'), "RAR": __t('ft.rar_archive'),
+      "MP4": __t('ft.mp4_video'), "MOV": __t('ft.mov_video'), "AVI": __t('ft.avi_video'),
+      "MKV": __t('ft.mkv_video'), "WEBM": __t('ft.webm_video'), "WMV": __t('ft.wmv_video'),
+      "MP3": __t('ft.mp3_audio'), "FLAC": __t('ft.flac_audio'), "WAV": __t('ft.wav_audio'),
+      "ISO": __t('ft.disk_image')
     };
     return map[ext] || ext + " File";
   }
@@ -599,9 +604,9 @@
     })
       .then(function (r) {
         if (r.ok) { window.location.reload(); }
-        else { r.json().then(function (e) { window.Toast && Toast.error(e.error_msg || "Failed"); }); }
+        else { r.json().then(function (e) { window.Toast && Toast.error(e.error_msg || __t('ui.failed')); }); }
       })
-      .catch(function () { window.Toast && Toast.error("Network error"); });
+      .catch(function () { window.Toast && Toast.error(__t('ui.network_error')); });
     hideQuickCreate();
     return false;
   };
@@ -646,7 +651,7 @@
     } catch (e) {
       window.Toast && Toast.error("Reindex failed: " + (e.message || e));
     } finally {
-      btn.textContent = "Reindex";
+      btn.textContent = __t('ui.reindex');
       btn.disabled = false;
     }
   });

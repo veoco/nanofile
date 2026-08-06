@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::fs::core::download::Downloader;
+use crate::i18n::I18n;
 use base::error::AppError;
 use infra::common::util::parent_path_from;
 
@@ -22,6 +23,7 @@ use super::auth_extractor::WebUser;
 #[template(path = "files/browser.html")]
 pub struct FileBrowserTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub csrf_token: String,
@@ -49,6 +51,7 @@ pub struct FileBrowserTemplate {
 #[template(path = "files/browser_core.html")]
 pub struct FileBrowserCoreTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub repo_name: String,
     pub repo_id: String,
     pub current_path: String,
@@ -69,6 +72,7 @@ pub struct FileBrowserCoreTemplate {
 #[template(path = "files/preview_text.html")]
 pub struct PreviewTextTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub repo_name: String,
@@ -87,6 +91,7 @@ pub struct PreviewTextTemplate {
 #[template(path = "files/preview_image.html")]
 pub struct PreviewImageTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub repo_name: String,
@@ -154,18 +159,24 @@ pub fn is_video_file(name: &str) -> bool {
 }
 
 /// Format a unix timestamp into a month label like "June 2026".
-pub fn format_month_label(timestamp: i64) -> String {
+pub fn format_month_label(t: &I18n, timestamp: i64) -> String {
     chrono::DateTime::from_timestamp(timestamp, 0)
-        .map(|dt| dt.format("%B %Y").to_string())
-        .unwrap_or_else(|| "Unknown".to_string())
+        .map(|dt| {
+            if t.lang.starts_with("zh") {
+                dt.format("%Y年%m月").to_string()
+            } else {
+                dt.format("%B %Y").to_string()
+            }
+        })
+        .unwrap_or_else(|| t.tr("common.unknown").to_string())
 }
 
 /// Group already-sorted (by mtime descending) entries by calendar month.
 /// Returns groups in descending month order (newest first).
-pub fn group_entries_by_month(entries: Vec<FileEntry>) -> Vec<GalleryMonthGroup> {
+pub fn group_entries_by_month(t: &I18n, entries: Vec<FileEntry>) -> Vec<GalleryMonthGroup> {
     let mut groups: Vec<GalleryMonthGroup> = Vec::new();
     for entry in entries {
-        let label = format_month_label(entry.mtime);
+        let label = format_month_label(t, entry.mtime);
         if groups.last().map(|g| g.label.as_str()) != Some(label.as_str()) {
             groups.push(GalleryMonthGroup {
                 label,
@@ -331,9 +342,15 @@ pub fn format_size(bytes: i64) -> String {
     }
 }
 
-pub fn format_mtime(timestamp: i64) -> String {
+pub fn format_mtime(t: &I18n, timestamp: i64) -> String {
     chrono::DateTime::from_timestamp(timestamp, 0)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+        .map(|dt| {
+            if t.lang.starts_with("zh") {
+                dt.format("%Y年%m月%d日 %H:%M").to_string()
+            } else {
+                dt.format("%Y-%m-%d %H:%M").to_string()
+            }
+        })
         .unwrap_or_else(|| timestamp.to_string())
 }
 
@@ -398,6 +415,7 @@ async fn file_browser_inner(
     path: String,
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
+    let t = I18n::get(user.language.as_deref());
     let repos = &state.repos;
     verify_repo_access(state.repos.member.as_ref(), user.user_id, &repo_id).await?;
 
@@ -488,7 +506,7 @@ async fn file_browser_inner(
                 size: e.size,
                 size_display: format_size(e.size),
                 mtime: e.mtime,
-                mtime_display: format_mtime(e.mtime),
+                mtime_display: format_mtime(t, e.mtime),
                 icon_color: file_icon_color(&e.name),
                 relative_path,
                 is_previewable,
@@ -558,7 +576,7 @@ async fn file_browser_inner(
         } else {
             vec![]
         };
-        group_entries_by_month(paginated)
+        group_entries_by_month(t, paginated)
     } else {
         vec![]
     };
@@ -597,6 +615,7 @@ async fn file_browser_inner(
     if is_partial {
         let tpl = FileBrowserCoreTemplate {
             urls: crate::static_assets::template_urls(),
+            t,
             repo_name: repo_record.name.clone(),
             repo_id: repo_id.clone(),
             current_path: path.clone(),
@@ -622,6 +641,7 @@ async fn file_browser_inner(
         let current_repo_id = Some(repo_id.clone());
         let tpl = FileBrowserTemplate {
             urls: crate::static_assets::template_urls(),
+            t,
             user_email: user.email,
             is_admin: user.is_admin,
             csrf_token,
@@ -715,6 +735,7 @@ async fn serve_file(
                 .await?;
         let tpl = PreviewImageTemplate {
             urls: crate::static_assets::template_urls(),
+            t: I18n::get(user.language.as_deref()),
             user_email: user.email,
             is_admin: user.is_admin,
             repo_name,
@@ -761,6 +782,7 @@ async fn serve_file(
                 .await?;
         let tpl = PreviewTextTemplate {
             urls: crate::static_assets::template_urls(),
+            t: I18n::get(user.language.as_deref()),
             user_email: user.email,
             is_admin: user.is_admin,
             repo_name,

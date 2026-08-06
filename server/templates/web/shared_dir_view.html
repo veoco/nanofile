@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="{{ t.lang }}" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -167,7 +167,7 @@
 
         <!-- Name -->
         <div class="dir-name">{{ dir_name }}</div>
-        <div class="dir-summary">{{ item_count }} item{% if item_count != 1 %}s{% endif %}</div>
+        <div class="dir-summary">{% if item_count == 1 %}{{ t.trf("pub.item_count_one", [("count", &item_count.to_string())]) }}{% else %}{{ t.trf("pub.item_count_many", [("count", &item_count.to_string())]) }}{% endif %}</div>
 
         {% if let Some(desc) = description %}
         <p style="margin-bottom: 1.5rem; font-size: 0.875rem; color: #6b7280; word-break: break-word; text-align: center;">{{ desc }}</p>
@@ -186,7 +186,7 @@
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:12px;height:12px;">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
                 </svg>
-                Protected
+                {{ t.tr("pub.protected") }}
             </span>
             {% endif %}
         </div>
@@ -197,13 +197,13 @@
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                 </svg>
-                Download ZIP
+                {{ t.tr("pub.download_zip") }}
             </a>
         </div>
 
         {% if expires_at_display != "Never" %}
         <p style="margin-top: 1rem; font-size: 0.8rem; color: #ef4444; text-align: center;">
-            Expires: {{ expires_at_display }}
+            {{ t.tr("pub.expires") }}: {{ expires_at_display }}
         </p>
         {% endif %}
 
@@ -211,7 +211,7 @@
         <hr class="divider">
 
         <div class="breadcrumb">
-            <a href="/d/{{ token }}/{% if !password_query.is_empty() %}?{{ password_query }}{% endif %}">root</a>
+            <a href="/d/{{ token }}/{% if !password_query.is_empty() %}?{{ password_query }}{% endif %}">{{ t.tr("pub.root") }}</a>
             {% if dir_path != "/" %}
             <span>/</span>
             <span>{{ dir_path }}</span>
@@ -219,7 +219,7 @@
         </div>
 
         {% if entries.is_empty() %}
-        <div class="empty">This folder is empty</div>
+        <div class="empty">{{ t.tr("pub.empty_folder") }}</div>
         {% else %}
             {% if let Some(parent) = parent_path %}
             <a href="/d/{{ token }}/?p={{ parent }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry">
@@ -228,7 +228,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
                     </svg>
                 </div>
-                <span class="entry-name" style="color:#6366f1;">.. (parent)</span>
+                <span class="entry-name" style="color:#6366f1;">{{ t.tr("pub.parent_dir") }}</span>
             </a>
             {% endif %}
 
@@ -253,7 +253,7 @@
             {% endfor %}
         {% endif %}
 
-        <div class="footer">Powered by Nanofile</div>
+        <div class="footer">{{ t.tr("pub.powered_by") }}</div>
     </div>
 </body>
 </html>

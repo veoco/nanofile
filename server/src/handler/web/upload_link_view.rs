@@ -1,13 +1,14 @@
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use base::error::AppError;
 
 // ── Templates ─────────────────────────────────────────────────────────────
@@ -16,6 +17,7 @@ use base::error::AppError;
 #[derive(Template)]
 #[template(path = "web/upload_link_view.html")]
 struct UploadLinkViewTemplate {
+    pub t: &'static I18n,
     pub token: String,
     pub repo_id: String,
     pub path: String,
@@ -29,6 +31,7 @@ struct UploadLinkViewTemplate {
 #[derive(Template)]
 #[template(path = "web/share_access_validation.html")]
 struct ShareAccessValidationTemplate {
+    pub t: &'static I18n,
     pub token: String,
     pub error: Option<String>,
     pub form_action: String,
@@ -97,6 +100,7 @@ fn check_password(
 /// GET /u/{token}/ — show the public upload page.
 pub async fn upload_link_view(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(token): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
@@ -113,6 +117,7 @@ pub async fn upload_link_view(
             None
         };
         let tpl = ShareAccessValidationTemplate {
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
             token: token.clone(),
             error,
             form_action: format!("/u/{}/", token),
@@ -132,6 +137,7 @@ pub async fn upload_link_view(
         .unwrap_or_else(|| link.path.clone());
 
     let tpl = UploadLinkViewTemplate {
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
         token: link.token.clone(),
         repo_id: link.repo_id.clone(),
         path: link.path.clone(),
@@ -164,6 +170,7 @@ pub async fn upload_link_view(
 /// redirect to the upload page (the password is NOT carried in the URL).
 pub async fn upload_link_view_post(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
@@ -181,6 +188,7 @@ pub async fn upload_link_view_post(
 
     if !valid {
         let tpl = ShareAccessValidationTemplate {
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
             token: token.clone(),
             error: Some("Incorrect password".to_string()),
             form_action: format!("/u/{}/", token),

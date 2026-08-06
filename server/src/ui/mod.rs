@@ -100,6 +100,10 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/settings/display-name/",
             axum::routing::post(settings::update_display_name),
         )
+        .route(
+            "/settings/language/",
+            axum::routing::post(settings::update_language),
+        )
         // Invitation codes
         .route(
             "/settings/invitations/",

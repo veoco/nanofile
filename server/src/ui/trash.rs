@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::fs::core::trash;
+use crate::i18n::I18n;
 use crate::ui::files::format_size;
 use base::error::AppError;
 
@@ -30,6 +31,7 @@ pub struct TrashQuery {
 #[template(path = "trash/list.html")]
 pub struct TrashListTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub items: Vec<TrashEntryView>,
@@ -129,6 +131,7 @@ pub async fn trash_list_page(
 
     let tpl = TrashListTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email.clone(),
         is_admin: user.is_admin,
         items,

@@ -1,10 +1,10 @@
 {% extends "auth_base.html" %}
 
-{% block title %}Sign In | Nanofile{% endblock %}
+{% block title %}{{ t.tr("auth.sign_in") }} | Nanofile{% endblock %}
 
 {% block heading %}
-<h1 class="text-center text-2xl font-bold text-gray-900">Sign in</h1>
-<p class="mt-1 mb-6 text-center text-sm text-gray-500">Welcome back to your sync server</p>
+<h1 class="text-center text-2xl font-bold text-gray-900">{{ t.tr("auth.sign_in") }}</h1>
+<p class="mt-1 mb-6 text-center text-sm text-gray-500">{{ t.tr("auth.login_welcome") }}</p>
 {% endblock %}
 
 {% block error %}
@@ -16,18 +16,18 @@
 {% block content %}
 <form class="space-y-5" action="/accounts/login/" method="POST">
     <div>
-        <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Email address</label>
+        <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t.tr("auth.email_address") }}</label>
         <input id="email"
                name="email"
                type="email"
                autocomplete="email"
                required
-               placeholder="you@example.com"
+               placeholder="{{ t.tr("auth.email_placeholder") }}"
                class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 text-gray-900 dark:text-gray-100 dark:bg-surface-700  placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm">
     </div>
 
     <div>
-        <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Password</label>
+        <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t.tr("auth.password") }}</label>
         <input id="password"
                name="password"
                type="password"
@@ -45,14 +45,14 @@
                checked
                class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-brand-500 focus:ring-brand-500">
         <label for="remember_me" class="ml-2 block text-sm text-gray-600 dark:text-gray-400">
-            Remember me for {{ remember_days }} days
+            {{ t.trf("auth.remember_me_days", [("days", &remember_days.to_string())]) }}
         </label>
     </div>
 
     <div>
         <button type="submit"
                 class="flex w-full justify-center rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white  transition hover:bg-brand-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500">
-            Sign in
+            {{ t.tr("auth.sign_in") }}
         </button>
     </div>
 </form>
@@ -60,10 +60,10 @@
 
 {% block footer %}
 <div class="mt-6 flex items-center justify-center gap-4 text-sm">
-    <a href="/accounts/register/" class="font-medium text-brand-500 transition hover:text-brand-600 dark:text-brand-400 dark:hover:text-brand-300">Create Account</a>
+    <a href="/accounts/register/" class="font-medium text-brand-500 transition hover:text-brand-600 dark:text-brand-400 dark:hover:text-brand-300">{{ t.tr("auth.create_account") }}</a>
     {% if enable_password_reset %}
     <span class="text-gray-300 dark:text-gray-600">|</span>
-    <a href="/accounts/password/reset/" class="font-medium text-brand-500 transition hover:text-brand-600 dark:text-brand-400 dark:hover:text-brand-300">Forgot password?</a>
+    <a href="/accounts/password/reset/" class="font-medium text-brand-500 transition hover:text-brand-600 dark:text-brand-400 dark:hover:text-brand-300">{{ t.tr("auth.forgot_password") }}</a>
     {% endif %}
 </div>
 {% endblock %}

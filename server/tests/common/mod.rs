@@ -160,6 +160,7 @@ impl TestServer {
             },
             admin_init: Default::default(),
             email: infra::config::EmailConfig { enabled: false },
+            ui: Default::default(),
         };
         // Ensure block directory exists
         std::fs::create_dir_all(&config.storage.block_dir).unwrap();
@@ -264,6 +265,7 @@ pub async fn create_test_user(db: &DatabaseConnection, email: &str, password: &s
         storage_quota: sea_orm::NotSet,
         name: sea_orm::NotSet,
         display_name: sea_orm::NotSet,
+        language: sea_orm::NotSet,
     };
 
     user.insert(db).await.unwrap().id
@@ -286,6 +288,7 @@ pub async fn create_test_admin(db: &DatabaseConnection, email: &str, password: &
         storage_quota: sea_orm::NotSet,
         name: sea_orm::NotSet,
         display_name: sea_orm::NotSet,
+        language: sea_orm::NotSet,
     };
 
     user.insert(db).await.unwrap().id

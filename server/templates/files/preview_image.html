@@ -4,7 +4,7 @@
 
 {% block content %}
 <nav class="flex mb-4 text-sm text-gray-500 flex-wrap items-center">
-    <a href="/libraries/" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">Libraries</a>
+    <a href="/libraries/" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">{{ t.tr("nav.libraries") }}</a>
     <span class="mx-2 flex-shrink-0">/</span>
     <a href="/libraries/{{ repo_id }}/files/" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">{{ repo_name }}</a>
     {% if parent_path != "" %}
@@ -20,13 +20,13 @@
         <span>{{ file_name }}</span>
         <div class="flex items-center gap-2">
             <span class="text-xs text-gray-500 dark:text-gray-400">{{ size_display }}</span>
-            <a href="/libraries/{{ repo_id }}/files/{{ parent_path|urlencode }}" class="text-xs text-brand-500 hover:underline">&larr; Back to folder</a>
+            <a href="/libraries/{{ repo_id }}/files/{{ parent_path|urlencode }}" class="text-xs text-brand-500 hover:underline">&larr; {{ t.tr("fb.back_to_folder") }}</a>
         </div>
     </div>
     <div class="p-4 flex justify-center bg-gray-100 dark:bg-surface-700">
         <img src="/repos/{{ repo_id }}/files/{{ current_path }}" alt="{{ file_name }}"
              class="max-w-full max-h-[80vh] object-contain rounded shadow-sm"
-             onerror="this.parentElement.innerHTML='<div class=\'text-gray-500 dark:text-gray-400 text-sm py-8\'>Image failed to load. <a href=\'/libraries/{{ repo_id }}/files/{{ current_path|urlencode }}?dl=1\' class=\'text-brand-500 hover:underline\'>Download instead</a></div>'">
+             onerror="this.parentElement.innerHTML='<div class=\'text-gray-500 dark:text-gray-400 text-sm py-8\'>' + __t('fb.image_failed_to_load') + ' <a href=\'/libraries/{{ repo_id }}/files/{{ current_path|urlencode }}?dl=1\' class=\'text-brand-500 hover:underline\'>' + __t('fb.download_instead') + '</a></div>'">
     </div>
 </div>
 {% endblock %}

@@ -18,6 +18,29 @@ pub struct Config {
     pub admin_init: AdminInitConfig,
     #[serde(default)]
     pub email: EmailConfig,
+    #[serde(default)]
+    pub ui: UiConfig,
+}
+
+/// Web UI localization settings.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UiConfig {
+    /// Fallback UI language when the user hasn't set a preference and the
+    /// browser's Accept-Language doesn't match a supported language.
+    #[serde(default = "default_ui_language")]
+    pub default_language: String,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            default_language: default_ui_language(),
+        }
+    }
+}
+
+fn default_ui_language() -> String {
+    "en".to_string()
 }
 
 /// Email delivery configuration.
@@ -361,6 +384,7 @@ impl Config {
         env_parse!("NANOFILE_CORS_MAX_AGE_SECS", self.server.cors_max_age_secs);
         env_parse!("NANOFILE_SERVER_WEBDAV_ENABLED", self.server.webdav_enabled);
         env_parse!("NANOFILE_EMAIL_ENABLED", self.email.enabled);
+        env_str!("NANOFILE_UI_DEFAULT_LANGUAGE", self.ui.default_language);
 
         // Admin init env vars
         if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_EMAIL") {

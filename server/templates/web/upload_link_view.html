@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="{{ t.lang }}" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Upload Files | Nanofile</title>
+    <title>{{ t.tr("pub.upload_files") }} | Nanofile</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.ico">
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -191,7 +191,7 @@
 
         <!-- Directory name -->
         <div class="dir-name">{{ dir_name }}</div>
-        <p class="subtitle">Upload files to this folder</p>
+        <p class="subtitle">{{ t.tr("pub.upload_files_to_folder") }}</p>
 
         <!-- Metadata -->
         <div class="meta">
@@ -203,31 +203,31 @@
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:12px;height:12px;">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
                 </svg>
-                Protected
+                {{ t.tr("pub.protected") }}
             </span>
             {% endif %}
         </div>
 
         {% if max_upload_size_mb > 0 %}
-        <p class="limit-hint">Maximum file size: {{ max_upload_size_mb }} MB</p>
+        <p class="limit-hint">{{ t.trf("pub.max_file_size", [("size", &max_upload_size_mb.to_string())]) }}</p>
         {% endif %}
 
         <!-- Drop zone -->
         <div id="drop-zone" class="drop-zone">
-            <p>Drag and drop files here</p>
-            <p class="or">— or —</p>
-            <button type="button" class="browse-btn" onclick="document.getElementById('file-input').click()">Select Files</button>
+            <p>{{ t.tr("pub.drag_drop_files") }}</p>
+            <p class="or">{{ t.tr("pub.or") }}</p>
+            <button type="button" class="browse-btn" onclick="document.getElementById('file-input').click()">{{ t.tr("pub.select_files") }}</button>
             <input type="file" id="file-input" multiple onchange="onFilesSelected(this)">
         </div>
 
         <!-- File list & progress -->
         <div id="file-list" class="file-list"></div>
         <div id="status-bar" class="status-bar" style="display:none">
-            <span class="count" id="status-count">0 files</span>
-            <button class="cancel-all-btn" id="cancel-all-btn" onclick="cancelAll()">Cancel All</button>
+            <span class="count" id="status-count">{{ t.tr("pub.zero_files") }}</span>
+            <button class="cancel-all-btn" id="cancel-all-btn" onclick="cancelAll()">{{ t.tr("common.cancel_all") }}</button>
         </div>
 
-        <div class="footer">Powered by Nanofile</div>
+        <div class="footer">{{ t.tr("pub.powered_by") }}</div>
     </div>
 
     <script>

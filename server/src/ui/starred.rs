@@ -4,6 +4,7 @@ use axum::{extract::State, response::Html};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use base::error::AppError;
 use infra::entity::repo;
 
@@ -13,6 +14,7 @@ use super::auth_extractor::WebUser;
 #[template(path = "starred/list.html")]
 pub struct StarredTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub csrf_token: String,
@@ -78,7 +80,10 @@ pub async fn starred_page(
             path: entry.path.clone(),
             obj_name,
             is_dir: entry.is_dir,
-            mtime_display: crate::ui::files::format_mtime(entry.created_at),
+            mtime_display: crate::ui::files::format_mtime(
+                I18n::get(user.language.as_deref()),
+                entry.created_at,
+            ),
             deleted,
         };
 
@@ -104,6 +109,7 @@ pub async fn starred_page(
         crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = StarredTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email,
         is_admin: user.is_admin,
         csrf_token,

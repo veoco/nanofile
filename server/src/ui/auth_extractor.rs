@@ -25,6 +25,8 @@ pub struct WebUser {
     pub session_token: String,
     /// Whether the user has admin privileges.
     pub is_admin: bool,
+    /// Preferred UI language from the user profile (None = browser default).
+    pub language: Option<String>,
 }
 
 impl WebUser {
@@ -65,6 +67,7 @@ impl WebUser {
             email: user_record.email,
             session_token: token_str.to_string(),
             is_admin: user_record.is_admin,
+            language: user_record.language.clone(),
         })
     }
 }
@@ -132,6 +135,7 @@ impl FromRequestParts<Arc<AppState>> for WebUser {
             email: user_record.email,
             session_token: session_token.to_string(),
             is_admin: user_record.is_admin,
+            language: user_record.language.clone(),
         })
     }
 }

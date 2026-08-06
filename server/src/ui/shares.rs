@@ -13,6 +13,7 @@ use std::sync::Arc;
 use chrono::TimeZone;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use crate::service::auth::token::generate_share_link_token;
 use base::error::AppError;
 use infra::entity::share_link;
@@ -27,10 +28,10 @@ fn format_ts(ts: i64) -> String {
         .to_string()
 }
 
-fn format_ts_opt(ts: Option<i64>) -> String {
+fn format_ts_opt(t: &I18n, ts: Option<i64>) -> String {
     match ts {
         Some(t) => format_ts(t),
-        None => "Never".to_string(),
+        None => t.tr("common.never").to_string(),
     }
 }
 
@@ -38,6 +39,7 @@ fn format_ts_opt(ts: Option<i64>) -> String {
 #[template(path = "shares/list.html")]
 pub struct SharesTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub csrf_token: String,
@@ -140,7 +142,7 @@ pub async fn list_shares(
                 path: s.path.clone(),
                 name,
                 created_at: format_ts(s.created_at),
-                expires_at: format_ts_opt(s.expires_at),
+                expires_at: format_ts_opt(I18n::get(user.language.as_deref()), s.expires_at),
                 has_password: s.password.is_some(),
                 view_cnt: s.view_cnt,
                 s_type: s.s_type.clone(),
@@ -170,7 +172,7 @@ pub async fn list_shares(
                 path: u.path.clone(),
                 name,
                 created_at: format_ts(u.created_at),
-                expires_at: format_ts_opt(u.expires_at),
+                expires_at: format_ts_opt(I18n::get(user.language.as_deref()), u.expires_at),
                 has_password: u.password.is_some(),
                 view_cnt: u.view_cnt,
                 link_url: format!("/u/{}/", u.token),
@@ -190,6 +192,7 @@ pub async fn list_shares(
         crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = SharesTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email,
         is_admin: user.is_admin,
         csrf_token,

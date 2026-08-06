@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block title %}Devices | Nanofile{% endblock %}
+{% block title %}{{ t.tr("device.title") }} | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Devices</h1>
-<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Manage devices connected to your account.</p>
+<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("device.title") }}</h1>
+<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("device.desc") }}</p>
 
 {% if let Some(error) = error %}
 {% include "includes/alert_error.html" %}
@@ -18,7 +18,7 @@
     {% if devices.is_empty() %}
     <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
         <div class="px-4 py-5 sm:px-6">
-            <p class="text-sm text-gray-500 dark:text-gray-400">No connected devices found.</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.tr("device.no_devices") }}</p>
         </div>
     </div>
     {% endif %}
@@ -44,7 +44,7 @@
                             {% if !device.device_name.is_empty() %}
                             {{ device.device_name }}
                             {% else %}
-                            <span class="italic text-gray-400 dark:text-gray-500">Unnamed device</span>
+                            <span class="italic text-gray-400 dark:text-gray-500">{{ t.tr("device.unnamed") }}</span>
                             {% endif %}
                         </p>
                         <p class="text-xs text-gray-500 dark:text-gray-400">
@@ -54,7 +54,7 @@
                             {% endif %}
                         </p>
                         <p class="text-xs text-gray-400 dark:text-gray-500">
-                            Last accessed:
+                            {{ t.tr("device.last_accessed") }}:
                             <span class="select-all inline-block">{{- device.last_accessed -}}</span>
                         </p>
                     </div>
@@ -65,8 +65,8 @@
                     <input type="hidden" name="device_id" value="{{ device.device_id }}">
                     <button type="submit"
                             class="rounded-lg bg-red-600 py-1.5 px-3 text-xs font-semibold text-white hover:bg-red-700 transition-colors"
-                            onclick="return confirm('Unlink this device? It will be signed out and need to re-authenticate.')">
-                        Unlink
+                            onclick="return confirm(__t('device.unlink_confirm'))">
+                        {{ t.tr("device.unlink") }}
                     </button>
                 </form>
             </div>
@@ -76,7 +76,7 @@
 
     <div class="mt-6">
         <a href="/settings/" class="text-sm text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300">
-            &larr; Back to Settings
+            &larr; {{ t.tr("common.back_to_settings") }}
         </a>
     </div>
 </div>

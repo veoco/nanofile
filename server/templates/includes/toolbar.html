@@ -252,7 +252,7 @@ function uploadItem(item) {
     // File size check — reject files exceeding server limit before uploading
     if (maxUploadSizeMb > 0 && item.file.size > maxUploadSizeMb * 1024 * 1024) {
         item.state = 'error';
-        item.error = 'File exceeds maximum upload size of ' + maxUploadSizeMb + 'MB';
+        item.error = __t('fb.file_too_large', { size: maxUploadSizeMb });
         item.xhr = null;
         updateProgressDialog();
         setTimeout(processQueue, 50);
@@ -297,9 +297,9 @@ function uploadFileDirect(item, url) {
             item.state = 'completed';
             item.progress = 100;
         } else {
-            var errorMsg = 'Upload failed (HTTP ' + xhr.status + ')';
+            var errorMsg = __t('fb.upload_failed_http', { status: xhr.status });
             if (xhr.status === 413) {
-                errorMsg = 'File too large — server rejected the upload';
+                errorMsg = __t('fb.file_too_large_rejected');
             } else {
                 try {
                     var resp = JSON.parse(xhr.responseText);
@@ -316,7 +316,7 @@ function uploadFileDirect(item, url) {
 
     xhr.onerror = function () {
         item.state = 'error';
-        item.error = 'Network error';
+        item.error = __t('fb.network_error');
         item.xhr = null;
         updateProgressDialog();
         setTimeout(processQueue, 50);
@@ -449,7 +449,7 @@ function handleChunkError(item, chunkIndex, totalChunks, retryCount) {
         }, delay);
     } else {
         item.state = 'error';
-        item.error = 'Upload failed at chunk ' + (chunkIndex + 1) + '/' + totalChunks;
+        item.error = __t('fb.upload_failed_chunk', { chunk: chunkIndex + 1, total: totalChunks });
         item.xhr = null;
         updateProgressDialog();
         setTimeout(processQueue, 50);
@@ -663,15 +663,14 @@ function updateProgressDialog() {
     var bitrateEl = dialog.querySelector('.upload-bitrate');
 
     if (isActive) {
-        var statusText = uploading > 0 ? 'Uploading...' : (pending > 0 ? 'Waiting...' : 'Paused');
+        var statusText = uploading > 0 ? __t('fb.uploading') : (pending > 0 ? __t('fb.waiting') : __t('fb.paused'));
         headerEl.textContent = statusText;
         bitrateEl.textContent = uploading > 0 ? formatBitrate(currentBitrate) : '';
     } else {
         if (hasFailed) {
-            headerEl.innerHTML = '<span class="text-red-500">' + failed +
-                ' file' + (failed > 1 ? 's' : '') + ' failed to upload</span>';
+            headerEl.innerHTML = '<span class="text-red-500">' + __t('fb.failed_upload_count', { count: failed }) + '</span>';
         } else {
-            headerEl.textContent = 'All files uploaded';
+            headerEl.textContent = __t('fb.all_uploaded');
         }
         bitrateEl.textContent = '';
     }
@@ -695,21 +694,21 @@ function updateProgressDialog() {
 
     // ── Content bar: count + bulk actions ──
     var countEl = dialog.querySelector('.upload-count');
-    countEl.textContent = completed + ' / ' + total + ' File' + (total > 1 ? 's' : '');
+    countEl.textContent = __t('fb.upload_count', { completed: completed, total: total });
 
     var actionsEl = dialog.querySelector('.upload-content-actions');
     if (isActive) {
         var pauseBtnHtml = isUploadPaused
-            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="resumeAllUploads()">Resume All</button>'
-            : '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="pauseAllUploads()">Pause All</button>';
+            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="resumeAllUploads()">' + __t('fb.resume_all') + '</button>'
+            : '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="pauseAllUploads()">' + __t('fb.pause_all') + '</button>';
         var retryAllBtn = hasFailed
-            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="retryAllFailed()">Retry All</button>'
+            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="retryAllFailed()">' + __t('fb.retry_all') + '</button>'
             : '';
-        var cancelAllBtn = '<button class="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-red-100 hover:border-red-300" onclick="cancelAllPending()">Cancel All</button>';
+        var cancelAllBtn = '<button class="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-red-100 hover:border-red-300" onclick="cancelAllPending()">' + __t('fb.cancel_all') + '</button>';
         actionsEl.innerHTML = pauseBtnHtml + retryAllBtn + cancelAllBtn;
     } else {
         var retryAllBtn = hasFailed
-            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="retryAllFailed()">Retry All</button>'
+            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="retryAllFailed()">' + __t('fb.retry_all') + '</button>'
             : '';
         actionsEl.innerHTML = retryAllBtn;
     }
@@ -729,7 +728,7 @@ function updateProgressDialog() {
                         '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
                         '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>' +
                       '</svg>' +
-                      '<span class="text-xs text-blue-600 font-medium">Processing...</span>' +
+                      '<span class="text-xs text-blue-600 font-medium">' + __t('fb.processing') + '</span>' +
                     '</div>';
             } else {
                 var pct = Math.round(item.progress);
@@ -743,42 +742,42 @@ function updateProgressDialog() {
             }
             actionHtml = item.finalizing
                 ? ''  // No pause/cancel during server-side processing
-                : '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-200 active:scale-90 transition-all" onclick="pauseUploadItem(' + item.id + ')" title="Pause">' +
+                : '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-200 active:scale-90 transition-all" onclick="pauseUploadItem(' + item.id + ')" title="' + __t('fb.pause') + '">' +
                   '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>' +
                 '</button>' +
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="Cancel">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="' + __t('common.cancel') + '">' +
                   '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
                 '</button>';
         } else if (item.state === 'pending') {
-            statusHtml = '<span class="text-xs text-gray-400 italic">Waiting...</span>';
+            statusHtml = '<span class="text-xs text-gray-400 italic">' + __t('fb.waiting') + '</span>';
             actionHtml =
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="Cancel">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="' + __t('common.cancel') + '">' +
                   '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
                 '</button>';
         } else if (item.state === 'paused') {
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-amber-600 font-medium"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Paused</span>';
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-amber-600 font-medium"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.paused') + '</span>';
             actionHtml =
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 active:scale-90 transition-all" onclick="resumeUploadItem(' + item.id + ')" title="Resume">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 active:scale-90 transition-all" onclick="resumeUploadItem(' + item.id + ')" title="' + __t('fb.resume') + '">' +
                   '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>' +
                 '</button>' +
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="Cancel">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="' + __t('common.cancel') + '">' +
                   '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
                 '</button>';
         } else if (item.state === 'completed') {
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-green-600 font-medium"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Uploaded</span>';
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-green-600 font-medium"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.uploaded') + '</span>';
             actionHtml = '';
         } else if (item.state === 'error') {
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-red-600 font-medium"><svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate max-w-[7rem]">' + escapeHtml(item.error || 'Error') + '</span></span>';
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-red-600 font-medium"><svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate max-w-[7rem]">' + escapeHtml(item.error || __t('fb.error')) + '</span></span>';
             actionHtml =
                 '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" onclick="retryUploadItem(' + item.id + ')">' +
                   '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
-                  'Retry</button>';
+                  ' + __t('fb.retry') + '</button>';
         } else { // cancelled
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-gray-400"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>Cancelled</span>';
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-gray-400"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' + __t('fb.cancelled') + '</span>';
             actionHtml =
                 '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" onclick="retryUploadItem(' + item.id + ')">' +
                   '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
-                  'Retry</button>';
+                  ' + __t('fb.retry') + '</button>';
         }
 
         listHtml +=
@@ -826,14 +825,14 @@ function submitNewFolder(form) {
         body: JSON.stringify({ p: p }),
     }).then(function (resp) {
         if (resp.ok) {
-            showToast('Folder "' + name + '" created', 'success');
+            showToast(__t('fb.folder_created', { name: name }), 'success');
             if (typeof refreshFileList === 'function') refreshFileList();
             else window.location.reload();
         } else {
-            resp.text().then(function (t) { showToast('Failed: ' + t, 'error'); });
+            resp.text().then(function (t) { showToast(__t('fb.failed_prefix') + t, 'error'); });
         }
     }).catch(function () {
-        showToast('Network error creating folder', 'error');
+        showToast(__t('fb.network_error_folder'), 'error');
     });
 
     return false;
@@ -894,21 +893,21 @@ async function refreshFileList() {
         <svg class="mr-1.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m-5 4h10a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
         </svg>
-        New Folder
+        {{ t.tr("fb.new_folder") }}
     </button>
     <button onclick="triggerUpload()"
             class="inline-flex items-center rounded-md bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-900 dark:hover:text-gray-100">
         <svg class="mr-1.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
         </svg>
-        Upload
+        {{ t.tr("common.upload") }}
     </button>
     <button onclick="triggerFolderUpload()"
             class="inline-flex items-center rounded-md bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-900 dark:hover:text-gray-100">
         <svg class="mr-1.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
         </svg>
-        Upload Folder
+        {{ t.tr("fb.upload_folder") }}
     </button>
 
     <!-- File upload input (multiple file selection) -->
@@ -923,12 +922,12 @@ async function refreshFileList() {
     <div class="shrink-0 flex flex-col bg-gray-50 border-b border-gray-200 cursor-pointer select-none rounded-t-lg" onclick="toggleMinimize()">
         <div class="flex items-center justify-between px-3.5 pt-2.5 pb-1.5">
             <div class="flex items-center gap-2.5 min-w-0">
-                <span class="upload-header-status text-sm font-semibold text-gray-700 whitespace-nowrap">Uploading...</span>
+                <span class="upload-header-status text-sm font-semibold text-gray-700 whitespace-nowrap">{{ t.tr("fb.uploading") }}</span>
                 <span class="upload-bitrate text-xs text-gray-400 whitespace-nowrap"></span>
             </div>
             <div class="flex items-center gap-0.5 shrink-0" onclick="event.stopPropagation()">
-                <button id="minimize-btn" class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 hover:border-gray-300 hover:text-gray-600 active:bg-gray-300 active:scale-[0.88]" onclick="toggleMinimize()" title="Minimize">−</button>
-                <button class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 hover:border-gray-300 hover:text-gray-600 active:bg-gray-300 active:scale-[0.88]" onclick="closeProgressDialog()" title="Close">✕</button>
+                <button id="minimize-btn" class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 hover:border-gray-300 hover:text-gray-600 active:bg-gray-300 active:scale-[0.88]" onclick="toggleMinimize()" title="{{ t.tr("fb.minimize") }}">−</button>
+                <button class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 hover:border-gray-300 hover:text-gray-600 active:bg-gray-300 active:scale-[0.88]" onclick="closeProgressDialog()" title="{{ t.tr("common.close") }}">✕</button>
             </div>
         </div>
         <div class="upload-progress-bar-container h-1 bg-gray-200 mx-3.5 mb-2.5">
@@ -947,24 +946,24 @@ async function refreshFileList() {
 <!-- New Folder dialog overlay -->
 <div id="new-folder-overlay" class="hidden fixed inset-0 z-[1060] flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="new-folder-title" onclick="if(event.target===this)hideNewFolderDialog()">
     <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-        <h3 id="new-folder-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">New Folder</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Enter a name for the new folder.</p>
+        <h3 id="new-folder-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.new_folder") }}</h3>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("fb.new_folder_enter_name") }}</p>
         <form action="/libraries/{{ repo_id }}/files/new-dir/" method="POST" onsubmit="return submitNewFolder(this)">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="current_dir" value="{{ current_path }}">
             <input type="hidden" name="repo_name" value="{{ repo_name }}">
-            <input id="new-folder-input" type="text" name="folder_name" placeholder="Folder name"
+            <input id="new-folder-input" type="text" name="folder_name" placeholder="{{ t.tr("fb.folder_name_placeholder") }}"
                    class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5"
                    onkeydown="if(event.key==='Escape'){event.preventDefault();hideNewFolderDialog();}if(event.key==='Enter'){event.preventDefault();this.form.querySelector('button[type=submit]').click();}"
                    autofocus>
             <div class="mt-4 flex justify-end gap-2">
                 <button type="button" onclick="hideNewFolderDialog()"
                         class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
-                    Cancel
+                    {{ t.tr("common.cancel") }}
                 </button>
                 <button type="submit"
                         class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors">
-                    Create
+                    {{ t.tr("common.create") }}
                 </button>
             </div>
         </form>

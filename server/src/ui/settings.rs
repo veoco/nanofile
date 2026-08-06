@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use crate::service::auth::password::{hash_password, verify_password};
 use base::error::AppError;
 
@@ -19,6 +20,8 @@ use super::auth_extractor::WebUser;
 #[template(path = "settings/index.html")]
 pub struct SettingsTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
+    pub user_language: &'static str,
     pub user_email: String,
     pub user_display_name: String,
     pub error: Option<String>,
@@ -38,6 +41,7 @@ pub struct SettingsTemplate {
 #[template(path = "settings/devices.html")]
 pub struct DevicesTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub active_page: &'static str,
@@ -78,6 +82,12 @@ pub struct DisplayNameForm {
     pub csrf_token: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct LanguageForm {
+    pub language: String,
+    pub csrf_token: Option<String>,
+}
+
 /// GET /profile/ — account settings page.
 pub async fn settings_page(
     user: WebUser,
@@ -102,6 +112,8 @@ pub async fn settings_page(
         crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = SettingsTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
+        user_language: I18n::get(user.language.as_deref()).lang,
         user_email: user.email,
         user_display_name: user_record.nickname(),
         error: None,
@@ -155,9 +167,15 @@ pub async fn change_password(
                 .await?;
         let tpl = SettingsTemplate {
             urls: crate::static_assets::template_urls(),
+            t: I18n::get(user.language.as_deref()),
+            user_language: I18n::get(user.language.as_deref()).lang,
             user_email: user.email.clone(),
             user_display_name: user.email.split('@').next().unwrap_or("").to_string(),
-            error: Some("Incorrect current password.".to_string()),
+            error: Some(
+                I18n::get(user.language.as_deref())
+                    .tr("settings.incorrect_password")
+                    .to_string(),
+            ),
             success: None,
             active_page: "settings",
             two_fa_enabled: false,
@@ -213,6 +231,29 @@ pub async fn update_display_name(
     Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }
 
+/// POST /settings/language/ — update the user's preferred UI language.
+pub async fn update_language(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<LanguageForm>,
+) -> Result<impl IntoResponse, AppError> {
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.csrf_token.as_deref(),
+    )?;
+
+    let normalized = I18n::normalize_lang(&form.language)
+        .ok_or_else(|| AppError::BadRequest("Unsupported language.".to_string()))?;
+    state
+        .repos
+        .user
+        .update_language(user.user_id, Some(normalized.to_string()))
+        .await?;
+
+    Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
+}
+
 /// GET /profile/devices/ — device management page.
 pub async fn devices_page(
     user: WebUser,
@@ -254,6 +295,7 @@ pub async fn devices_page(
 
     let tpl = DevicesTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email,
         is_admin: user.is_admin,
         active_page: "settings",
@@ -284,7 +326,11 @@ pub async fn unlink_device(
             &user.session_token,
         );
         if *token != expected {
-            return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
+            return Err(AppError::BadRequest(
+                I18n::get(user.language.as_deref())
+                    .tr("common.invalid_csrf")
+                    .to_string(),
+            ));
         }
     }
 
@@ -347,7 +393,16 @@ pub async fn upload_avatar(
     let expected_csrf =
         crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     if csrf_token.as_deref() != Some(&expected_csrf) {
-        return render_settings_error(&state, &user, Some("Invalid CSRF token.".to_string())).await;
+        return render_settings_error(
+            &state,
+            &user,
+            Some(
+                I18n::get(user.language.as_deref())
+                    .tr("common.invalid_csrf")
+                    .to_string(),
+            ),
+        )
+        .await;
     }
 
     let (file_name, data) =
@@ -361,7 +416,9 @@ pub async fn upload_avatar(
         Err(e) => {
             let msg = match &e {
                 AppError::BadRequest(m) => m.clone(),
-                _ => "Failed to upload avatar.".to_string(),
+                _ => I18n::get(user.language.as_deref())
+                    .tr("settings.upload_avatar_failed")
+                    .to_string(),
             };
             render_settings_error(&state, &user, Some(msg)).await
         }
@@ -382,6 +439,8 @@ async fn render_settings_error(
         crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = SettingsTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
+        user_language: I18n::get(user.language.as_deref()).lang,
         user_email: user.email.clone(),
         user_display_name: user.email.split('@').next().unwrap_or("").to_string(),
         error,

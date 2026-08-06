@@ -141,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
                         storage_quota: sea_orm::NotSet,
                         name: sea_orm::NotSet,
                         display_name: sea_orm::NotSet,
+                        language: sea_orm::NotSet,
                     };
                     model.insert(state.db.as_ref()).await?;
                     tracing::info!("Admin user '{}' created", admin_email);
@@ -345,6 +346,7 @@ async fn main() -> anyhow::Result<()> {
                 storage_quota: sea_orm::NotSet,
                 name: sea_orm::NotSet,
                 display_name: sea_orm::NotSet,
+                language: sea_orm::NotSet,
             };
 
             model.insert(&db).await?;

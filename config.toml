@@ -72,6 +72,13 @@ registration_max_per_hour = 5
 # Max TOTP verification attempts per user per 5 minutes (0 = unlimited)
 totp_max_attempts = 5
 
+[ui]
+# Environment variables:
+#   NANOFILE_UI_DEFAULT_LANGUAGE
+# Fallback UI language when the user hasn't set a preference and the browser's
+# Accept-Language doesn't match a supported language. Supported: "en", "zh".
+default_language = "en"
+
 [email]
 # Environment variables:
 #   NANOFILE_EMAIL_ENABLED

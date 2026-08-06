@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use crate::ui::files::format_size;
 use base::error::AppError;
 
@@ -17,6 +18,7 @@ use super::auth_extractor::WebUser;
 #[template(path = "search.html")]
 pub struct SearchTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub query: String,
@@ -160,6 +162,7 @@ pub async fn search_page(
         crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = SearchTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email.clone(),
         is_admin: user.is_admin,
         query: q,

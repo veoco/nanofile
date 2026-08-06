@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 
-{% block title %}Search | Nanofile{% endblock %}
+{% block title %}{{ t.tr("nav.search") }} | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Search</h1>
+<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("nav.search") }}</h1>
 
 <form action="/search/" method="GET" class="mt-4 max-w-lg">
     <div class="flex gap-x-2">
         <input type="text" name="q" value="{{ query }}"
-               placeholder="Search files..."
+               placeholder="{{ t.tr("search.placeholder") }}"
                class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
         <button type="submit"
                 class="rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
-            Search
+            {{ t.tr("nav.search") }}
         </button>
     </div>
     <label class="mt-2 flex items-center gap-x-2 text-sm text-gray-600 dark:text-gray-400">
@@ -20,16 +20,16 @@
                {% if !search_filename_only %}checked{% endif %}
                class="rounded border-gray-300 dark:border-gray-600 text-brand-500 focus:ring-brand-500"
                onchange="this.form.submit()">
-        Full-text search (search file contents too)
+        {{ t.tr("search.fulltext") }}
     </label>
 </form>
 
 {% if !query.is_empty() %}
 <div class="mt-8">
-    <p class="text-sm text-gray-500 dark:text-gray-400">Search results for "{{ query }}" ({{ total }} found)</p>
+    <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.trf("search.results_for", [("query", &query), ("total", &total.to_string())]) }}</p>
 
     {% if results.is_empty() %}
-    <p class="mt-4 text-sm text-gray-400 dark:text-gray-500">No results found.</p>
+    <p class="mt-4 text-sm text-gray-400 dark:text-gray-500">{{ t.tr("search.no_results") }}</p>
     {% else %}
     <ul id="search-results"
         class="mt-4 divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-surface-800"
@@ -84,7 +84,7 @@
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
             </svg>
-            <span class="ml-2 text-sm text-gray-400 dark:text-gray-500">Loading more results...</span>
+            <span class="ml-2 text-sm text-gray-400 dark:text-gray-500">{{ t.tr("search.loading_more") }}</span>
         </div>
     </div>
     {% endif %}

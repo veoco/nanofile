@@ -24,6 +24,8 @@ pub trait UserRepository: Send + Sync {
     ) -> Result<user::Model, AppError>;
     async fn update_display_name(&self, user_id: i32, name: Option<String>)
     -> Result<(), AppError>;
+    async fn update_language(&self, user_id: i32, language: Option<String>)
+    -> Result<(), AppError>;
     async fn touch_last_login(&self, user_id: i32, now: i64) -> Result<(), AppError>;
 
     // Admin methods
@@ -99,6 +101,7 @@ impl UserRepository for DbUserRepository {
             storage_quota: sea_orm::NotSet,
             name: sea_orm::NotSet,
             display_name: sea_orm::NotSet,
+            language: sea_orm::NotSet,
         };
         let result = model.insert(self.db.as_ref()).await?;
         Ok(result)
@@ -125,6 +128,7 @@ impl UserRepository for DbUserRepository {
             storage_quota: Set(storage_quota),
             name: sea_orm::NotSet,
             display_name: sea_orm::NotSet,
+            language: sea_orm::NotSet,
         };
         let result = model.insert(self.db.as_ref()).await?;
         Ok(result)
@@ -139,6 +143,22 @@ impl UserRepository for DbUserRepository {
             .filter(user::Column::Id.eq(user_id))
             .set(user::ActiveModel {
                 display_name: Set(name),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn update_language(
+        &self,
+        user_id: i32,
+        language: Option<String>,
+    ) -> Result<(), AppError> {
+        user::Entity::update_many()
+            .filter(user::Column::Id.eq(user_id))
+            .set(user::ActiveModel {
+                language: Set(language),
                 ..Default::default()
             })
             .exec(self.db.as_ref())
@@ -239,6 +259,7 @@ impl UserRepository for DbUserRepository {
             storage_quota: sea_orm::NotSet,
             name: sea_orm::NotSet,
             display_name: sea_orm::NotSet,
+            language: sea_orm::NotSet,
         };
         let result = model.insert(self.db.as_ref()).await?;
         Ok(result)

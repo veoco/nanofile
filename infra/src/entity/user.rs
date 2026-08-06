@@ -25,6 +25,8 @@ pub struct Model {
     pub name: Option<String>,
     /// Display name / nickname — preferred for human-readable display.
     pub display_name: Option<String>,
+    /// Preferred UI language (e.g. "en", "zh"). None = use Accept-Language/default.
+    pub language: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

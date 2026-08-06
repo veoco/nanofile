@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}Libraries | Nanofile{% endblock %}
+{% block title %}{{ t.tr("nav.libraries") }} | Nanofile{% endblock %}
 
 {% block content %}
 <div class="sm:flex sm:items-center sm:justify-between">
     <div>
-        <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Libraries</h1>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Browse and manage your file libraries.</p>
+        <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("nav.libraries") }}</h1>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("repo.browse_desc") }}</p>
     </div>
     <div class="mt-4 sm:mt-0">
         <button onclick="showCreateDialog()"
@@ -14,7 +14,7 @@
             <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
             </svg>
-            New Library
+            {{ t.tr("repo.new_library") }}
         </button>
     </div>
 </div>
@@ -24,8 +24,8 @@
     <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
     </svg>
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">No libraries yet.</p>
-    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Create one using the button above.</p>
+    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("nav.no_libraries") }}</p>
+    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("repo.create_one_hint") }}</p>
 </div>
 {% else %}
 <div class="mt-6 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
@@ -56,21 +56,21 @@
                             data-history-limit="{{ r.history_limit }}"
                             data-history-ttl-days="{{ r.history_ttl_days }}"
                             class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-800 transition-colors"
-                            title="Edit library">
+                            title="{{ t.tr("repo.edit_library") }}">
                         <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                         </svg>
-                        Edit
+                        {{ t.tr("common.edit") }}
                     </button>
                     <button onclick="deleteRepo(this)"
                             data-repo-id="{{ r.id }}"
                             data-repo-name="{{ r.name }}"
                             class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-red-200 dark:border-red-900 bg-white dark:bg-surface-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-700 transition-colors"
-                            title="Delete">
+                            title="{{ t.tr("common.delete") }}">
                         <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                         </svg>
-                        Delete
+                        {{ t.tr("common.delete") }}
                     </button>
                 </div>
             </div>
@@ -83,22 +83,22 @@
 {# ─── Create Library Dialog ─── #}
 <div id="create-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="create-dialog-title" onclick="if(event.target===this)hideCreateDialog()">
     <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-        <h3 id="create-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">New Library</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Enter a name for the new library.</p>
+        <h3 id="create-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("repo.new_library") }}</h3>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("repo.new_library_desc") }}</p>
         <form action="/libraries/create/" method="POST" onsubmit="return submitCreate(this)">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input id="create-input" type="text" name="name" placeholder="Library name"
+            <input id="create-input" type="text" name="name" placeholder="{{ t.tr("repo.name") }}"
                    class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5"
                    onkeydown="if(event.key==='Escape'){event.preventDefault();hideCreateDialog();}if(event.key==='Enter'){event.preventDefault();this.form.querySelector('button[type=submit]').click();}"
                    autofocus>
             <div class="mt-4 flex justify-end gap-2">
                 <button type="button" onclick="hideCreateDialog()"
                         class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
-                    Cancel
+                    {{ t.tr("common.cancel") }}
                 </button>
                 <button type="submit"
                         class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors">
-                    Create
+                    {{ t.tr("common.create") }}
                 </button>
             </div>
         </form>
@@ -108,72 +108,72 @@
 {# ─── Edit Library Dialog ─── #}
 <div id="edit-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="edit-dialog-title" onclick="if(event.target===this)hideEditDialog()">
     <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-        <h3 id="edit-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">Edit Library</h3>
+        <h3 id="edit-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">{{ t.tr("repo.edit_library") }}</h3>
         <form id="edit-form" action="" method="POST" onsubmit="return submitEdit(this)">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" id="edit-repo-id" name="id" value="">
             <div class="space-y-4">
                 <div>
-                    <label for="edit-name" class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Name</label>
+                    <label for="edit-name" class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">{{ t.tr("common.name") }}</label>
                     <input id="edit-name" type="text" name="name"
                            class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5"
                            onkeydown="if(event.key==='Escape'){event.preventDefault();hideEditDialog();}"
                            autofocus>
                 </div>
                 <div>
-                    <label for="edit-description" class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Description</label>
+                    <label for="edit-description" class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">{{ t.tr("common.description") }}</label>
                     <textarea id="edit-description" name="description" rows="3"
                               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5 resize-none"></textarea>
                 </div>
                 <div>
-                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Size</p>
+                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">{{ t.tr("common.size") }}</p>
                     <p class="text-sm text-gray-900 dark:text-gray-100" id="edit-size"></p>
                 </div>
                 <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
-                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">历史设置</p>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">每次文件修改生成一个新版本。0 表示不限制。</p>
+                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">{{ t.tr("repo.history_settings") }}</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">{{ t.tr("repo.history_settings_desc") }}</p>
                     <div class="grid grid-cols-2 gap-2">
                         <div>
-                            <label for="edit-history-limit" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">保留版本数</label>
+                            <label for="edit-history-limit" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">{{ t.tr("repo.history_limit") }}</label>
                             <input id="edit-history-limit" type="number" min="0"
                                    class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                         </div>
                         <div>
-                            <label for="edit-history-ttl-days" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">保留天数</label>
+                            <label for="edit-history-ttl-days" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">{{ t.tr("repo.history_ttl_days") }}</label>
                             <input id="edit-history-ttl-days" type="number" min="0"
                                    class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                         </div>
                     </div>
                 </div>
                 <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
-                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">WebDAV 访问</p>
+                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">{{ t.tr("webdav.access") }}</p>
                     <div class="flex items-start gap-2 mb-2">
                         <p id="webdav-url" class="flex-1 min-w-0 text-sm text-gray-600 dark:text-gray-300 break-all"></p>
                         <button type="button" id="copy-url-btn" onclick="copyWebdavUrl()"
                                 class="flex-shrink-0 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
-                            复制
+                            {{ t.tr("webdav.copy") }}
                         </button>
                     </div>
                     <div id="new-key-box" class="hidden mb-2 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 p-2">
-                        <p class="text-xs font-medium text-green-700 dark:text-green-400 mb-1">新密钥已生成，仅显示这一次</p>
+                        <p class="text-xs font-medium text-green-700 dark:text-green-400 mb-1">{{ t.tr("webdav.new_key_generated") }}</p>
                         <div class="flex items-center gap-2">
                             <input id="new-key-value" type="text" readonly
                                    class="flex-1 min-w-0 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-700 font-mono text-sm text-gray-900 dark:text-gray-100 px-2 py-1 break-all"
                                    value="">
                             <button type="button" id="copy-new-key-btn" onclick="copyNewKey()"
-                                    class="flex-shrink-0 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-600 transition-colors">复制</button>
+                                    class="flex-shrink-0 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-600 transition-colors">{{ t.tr("webdav.copy") }}</button>
                             <button type="button" onclick="dismissNewKey()"
-                                    class="flex-shrink-0 rounded-lg bg-white dark:bg-surface-700 px-2.5 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">关闭</button>
+                                    class="flex-shrink-0 rounded-lg bg-white dark:bg-surface-700 px-2.5 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">{{ t.tr("common.close") }}</button>
                         </div>
                     </div>
                     <ul id="webdav-key-list" class="text-sm text-gray-900 dark:text-gray-100 space-y-1 mb-2"></ul>
                     <div class="flex gap-2">
-                        <input id="webdav-key-name" type="text" placeholder="设备名,如 MacBook"
+                        <input id="webdav-key-name" type="text" placeholder="{{ t.tr("webdav.device_name_placeholder") }}"
                                class="block flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2"
                                onkeydown="if(event.key==='Enter'){event.preventDefault();createWebdavKey();}">
                         <button type="button" onclick="createWebdavKey()"
                                 class="rounded-lg bg-brand-500 px-3 py-2 text-xs font-medium text-white hover:bg-brand-600 transition-colors">
-                            生成密钥
+                            {{ t.tr("webdav.generate_key") }}
                         </button>
                     </div>
                 </div>
@@ -181,11 +181,11 @@
             <div class="mt-6 flex justify-end gap-2">
                 <button type="button" onclick="hideEditDialog()"
                         class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
-                    Cancel
+                    {{ t.tr("common.cancel") }}
                 </button>
                 <button type="submit"
                         class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors">
-                    Save
+                    {{ t.tr("common.save") }}
                 </button>
             </div>
         </form>
@@ -219,10 +219,10 @@ function submitCreate(form) {
         if (resp.ok) {
             window.location.reload();
         } else {
-            alert('Failed to create library: ' + resp.status);
+            alert(__t('repo.create_failed') + resp.status);
         }
     }).catch(function () {
-        alert('Network error');
+        alert(__t('common.network_error'));
     });
     return false;
 }
@@ -247,20 +247,20 @@ function hideEditDialog() {
 }
 function loadWebdavKeys(repoId) {
     var listEl = document.getElementById('webdav-key-list');
-    listEl.innerHTML = '<li class="text-sm text-gray-400 dark:text-gray-500">加载中…</li>';
+    listEl.innerHTML = '<li class="text-sm text-gray-400 dark:text-gray-500">' + __t('webdav.loading') + '</li>';
     fetch('/api2/repos/' + repoId + '/webdav-keys/', {
         method: 'GET',
         credentials: 'same-origin',
     }).then(function (resp) {
         if (!resp.ok) {
-            listEl.innerHTML = '<li class="text-sm text-gray-400 dark:text-gray-500">加载密钥失败，请重试。</li>';
+            listEl.innerHTML = '<li class="text-sm text-gray-400 dark:text-gray-500">' + __t('webdav.load_keys_failed') + '</li>';
             return null;
         }
         return resp.json();
     }).then(function (data) {
         if (data === null) return;
         if (!data.keys || data.keys.length === 0) {
-            listEl.innerHTML = '<li class="text-sm text-gray-400 dark:text-gray-500">尚未生成 WebDAV 密钥。</li>';
+            listEl.innerHTML = '<li class="text-sm text-gray-400 dark:text-gray-500">' + __t('webdav.no_keys') + '</li>';
             return;
         }
         listEl.innerHTML = '';
@@ -281,8 +281,13 @@ function loadWebdavKeys(repoId) {
             name.textContent = k.name;
             var meta = document.createElement('p');
             meta.className = 'text-xs text-gray-500 dark:text-gray-400';
-            meta.textContent = '创建于 ' + new Date(k.created_at * 1000).toLocaleDateString()
-                + (k.last_used_at ? ' · 上次使用 ' + new Date(k.last_used_at * 1000).toLocaleDateString() : ' · 从未使用');
+            var firstUsed = new Date(k.created_at * 1000).toLocaleDateString();
+            meta.textContent = __t('webdav.created_at', { date: firstUsed });
+            if (k.last_used_at) {
+                meta.textContent += ' · ' + __t('webdav.last_used_at', { date: new Date(k.last_used_at * 1000).toLocaleDateString() });
+            } else {
+                meta.textContent += ' · ' + __t('webdav.never_used');
+            }
             text.appendChild(name);
             text.appendChild(meta);
             left.appendChild(icon);
@@ -290,7 +295,7 @@ function loadWebdavKeys(repoId) {
             var del = document.createElement('button');
             del.type = 'button';
             del.className = 'flex-shrink-0 text-sm font-medium text-red-500 hover:text-red-700';
-            del.textContent = '删除';
+            del.textContent = __t('common.delete');
             del.onclick = function () { deleteWebdavKey(repoId, k.id); };
             li.appendChild(left);
             li.appendChild(del);
@@ -315,7 +320,7 @@ function createWebdavKey() {
         body: JSON.stringify({ name: name }),
     }).then(function (resp) {
         if (!resp.ok) {
-            alert('生成密钥失败: ' + resp.status);
+            alert(__t('webdav.generate_failed') + resp.status);
             return;
         }
         return resp.json();
@@ -326,7 +331,7 @@ function createWebdavKey() {
         document.getElementById('webdav-key-name').value = '';
         loadWebdavKeys(repoId);
     }).catch(function () {
-        alert('网络错误');
+        alert(__t('common.network_error'));
     });
 }
 function copyWebdavUrl() {
@@ -350,11 +355,11 @@ function flashCopiedBtn(id) {
     var btn = document.getElementById(id);
     if (btn._copyTimer) { clearTimeout(btn._copyTimer); }
     var orig = btn.textContent;
-    btn.textContent = '已复制';
+    btn.textContent = __t('webdav.copied');
     btn._copyTimer = setTimeout(function () { btn.textContent = orig; btn._copyTimer = null; }, 1500);
 }
 function deleteWebdavKey(repoId, keyId) {
-    if (!confirm('确定删除该 WebDAV 密钥?使用它的设备将立即无法访问。')) return;
+    if (!confirm(__t('webdav.delete_key_confirm'))) return;
     var csrfToken = getCookie('sfcsrftoken');
     fetch('/api2/repos/' + repoId + '/webdav-keys/' + keyId + '/', {
         method: 'DELETE',
@@ -364,17 +369,17 @@ function deleteWebdavKey(repoId, keyId) {
         if (resp.ok) {
             loadWebdavKeys(repoId);
         } else {
-            alert('删除密钥失败: ' + resp.status);
+            alert(__t('webdav.delete_failed') + resp.status);
         }
     }).catch(function () {
-        alert('网络错误');
+        alert(__t('common.network_error'));
     });
 }
 function submitEdit(form) {
     var repoId = document.getElementById('edit-repo-id').value;
     var newName = document.getElementById('edit-name').value.trim();
     var newDesc = document.getElementById('edit-description').value.trim();
-    if (!newName) { alert('Library name cannot be empty.'); return false; }
+    if (!newName) { alert(__t('repo.name_empty')); return false; }
     hideEditDialog();
     var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
     var historyLimit = numOrNull('edit-history-limit');
@@ -396,10 +401,10 @@ function submitEdit(form) {
         if (resp.ok) {
             window.location.reload();
         } else {
-            alert('Failed to update library: ' + resp.status);
+            alert(__t('repo.update_failed') + resp.status);
         }
     }).catch(function () {
-        alert('Network error');
+        alert(__t('common.network_error'));
     });
     return false;
 }
@@ -410,7 +415,7 @@ function deleteRepo(btn) {
     var csrfToken = getCookie('sfcsrftoken');
     if (!csrfToken) { window.location.href = '/accounts/login/'; return; }
 
-    if (!confirm('Delete library "' + repoName + '"? All files will be permanently lost.')) return;
+    if (!confirm(__t('repo.delete_confirm', { name: repoName }))) return;
 
     fetch('/api2/repos/' + repoId + '/', {
         method: 'DELETE',
@@ -420,10 +425,10 @@ function deleteRepo(btn) {
         if (resp.ok) {
             window.location.reload();
         } else {
-            alert('Failed to delete library: ' + resp.status);
+            alert(__t('repo.delete_failed') + resp.status);
         }
     }).catch(function () {
-        alert('Network error');
+        alert(__t('common.network_error'));
     });
 }
 

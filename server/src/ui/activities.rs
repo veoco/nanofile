@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -14,6 +15,7 @@ use super::auth_extractor::WebUser;
 #[template(path = "activities/list.html")]
 pub struct ActivitiesTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub activities: Vec<ActivityView>,
@@ -104,7 +106,8 @@ pub async fn activities_page(
                 .unwrap_or_default()
         };
 
-        let formatted = super::files::format_mtime(e.created_at);
+        let formatted =
+            super::files::format_mtime(I18n::get(user.language.as_deref()), e.created_at);
 
         let time_iso = DateTime::from_timestamp(e.created_at, 0)
             .map(|dt| dt.to_rfc3339())
@@ -163,6 +166,7 @@ pub async fn activities_page(
 
     let tpl = ActivitiesTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email,
         is_admin: user.is_admin,
         activities,

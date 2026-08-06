@@ -13,6 +13,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use crate::service::user::{InvitationInfo, InvitationService};
 use crate::ui::auth_extractor::WebUser;
 use base::error::AppError;
@@ -21,6 +22,7 @@ use base::error::AppError;
 #[template(path = "settings/invitations.html")]
 pub struct InvitationsTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub active_page: &'static str,
@@ -57,6 +59,7 @@ pub async fn list_invitations(
         crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = InvitationsTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email,
         is_admin: user.is_admin,
         active_page: "settings",

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
+use crate::i18n::I18n;
 use base::common::FsFileData;
 use base::error::AppError;
 use infra::common::{EMPTY_SHA1, S_IFDIR};
@@ -53,6 +54,7 @@ fn stream_blocks(
 #[derive(Template)]
 #[template(path = "web/share_view.html")]
 struct ShareViewTemplate {
+    pub t: &'static I18n,
     pub file_name: String,
     pub file_ext: String,
     pub file_size: String,
@@ -67,6 +69,7 @@ struct ShareViewTemplate {
 #[derive(Template)]
 #[template(path = "web/share_access_validation.html")]
 struct ShareAccessValidationTemplate {
+    pub t: &'static I18n,
     pub token: String,
     pub error: Option<String>,
     pub form_action: String,
@@ -136,6 +139,7 @@ pub async fn shared_file_view(
             None
         };
         let tpl = ShareAccessValidationTemplate {
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
             token: token.clone(),
             error,
             form_action: format!("/f/{}/", token),
@@ -204,6 +208,7 @@ pub async fn shared_file_view(
     }
 
     let tpl = ShareViewTemplate {
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
         file_name: file_name.clone(),
         file_ext,
         file_size: format_size(file_size),
@@ -225,6 +230,7 @@ pub async fn shared_file_view(
 /// POST /f/{token}/ — validate password, redirect with password in URL.
 pub async fn shared_file_view_post(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
@@ -243,6 +249,7 @@ pub async fn shared_file_view_post(
     if !valid {
         // Show password form again with error
         let tpl = ShareAccessValidationTemplate {
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
             token: token.clone(),
             error: Some("Incorrect password".to_string()),
             form_action: format!("/f/{}/", token),
@@ -263,6 +270,7 @@ pub async fn shared_file_view_post(
 #[derive(Template)]
 #[template(path = "web/shared_dir_view.html")]
 struct SharedDirViewTemplate {
+    pub t: &'static I18n,
     pub token: String,
     pub dir_name: String,
     pub dir_path: String,
@@ -410,6 +418,7 @@ pub async fn shared_dir_view(
             None
         };
         let tpl = ShareAccessValidationTemplate {
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
             token: token.clone(),
             error,
             form_action: format!("/f/{}/", token),
@@ -602,6 +611,7 @@ pub async fn shared_dir_view(
         }
     );
     let tpl = SharedDirViewTemplate {
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
         token: link.token.clone(),
         dir_name,
         dir_path: sub_path.to_string(),
@@ -690,6 +700,7 @@ pub async fn shared_dir_file_view(
 /// POST /d/{token}/ — validate password, redirect with password in URL.
 pub async fn shared_dir_view_post(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
@@ -707,6 +718,7 @@ pub async fn shared_dir_view_post(
 
     if !valid {
         let tpl = ShareAccessValidationTemplate {
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
             token: token.clone(),
             error: Some("Incorrect password".to_string()),
             form_action: format!("/d/{}/", token),

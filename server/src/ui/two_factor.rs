@@ -15,6 +15,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use crate::service::auth::password::verify_password;
 use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
@@ -27,6 +28,7 @@ use super::auth_extractor::WebUser;
 #[template(path = "settings/two_factor.html")]
 pub struct TwoFactorTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub active_page: &'static str,
@@ -89,6 +91,7 @@ async fn render_page(
         crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
     let tpl = TwoFactorTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email.clone(),
         is_admin: user.is_admin,
         active_page: "settings",
@@ -261,7 +264,11 @@ pub async fn verify_2fa(
             &user,
             &state,
             None,
-            Some("Two-factor authentication is now enabled. Save your backup codes below \u{2014} they will not be shown again.".to_string()),
+            Some(
+                I18n::get(user.language.as_deref())
+                    .tr("twofactor.enabled_save_codes")
+                    .to_string(),
+            ),
             Some(fresh_codes),
         )
         .await
@@ -270,7 +277,11 @@ pub async fn verify_2fa(
         render_page(
             &user,
             &state,
-            Some("Invalid verification code. Please try again.".to_string()),
+            Some(
+                I18n::get(user.language.as_deref())
+                    .tr("auth.invalid_code")
+                    .to_string(),
+            ),
             None,
             None,
         )
@@ -292,7 +303,11 @@ pub async fn disable_2fa(
             &user.session_token,
         );
         if *token != expected {
-            return Err(AppError::BadRequest("Invalid CSRF token.".to_string()));
+            return Err(AppError::BadRequest(
+                I18n::get(user.language.as_deref())
+                    .tr("common.invalid_csrf")
+                    .to_string(),
+            ));
         }
     }
 
@@ -311,7 +326,11 @@ pub async fn disable_2fa(
         return render_page(
             &user,
             &state,
-            Some("Incorrect password.".to_string()),
+            Some(
+                I18n::get(user.language.as_deref())
+                    .tr("twofactor.incorrect_password")
+                    .to_string(),
+            ),
             None,
             None,
         )

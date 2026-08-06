@@ -11,6 +11,7 @@
 pub mod domain;
 pub mod fs;
 pub mod handler;
+pub mod i18n;
 pub mod indexer;
 pub mod middleware;
 pub mod notification;

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use chrono::TimeZone;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -24,10 +25,10 @@ fn format_ts(ts: i64) -> String {
         .to_string()
 }
 
-fn format_ts_opt(ts: Option<i64>) -> String {
+fn format_ts_opt(t: &I18n, ts: Option<i64>) -> String {
     match ts {
         Some(t) => format_ts(t),
-        None => "Never".to_string(),
+        None => t.tr("common.never").to_string(),
     }
 }
 
@@ -35,6 +36,7 @@ fn format_ts_opt(ts: Option<i64>) -> String {
 #[template(path = "adminshares/list.html")]
 pub struct AdminSharesTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     pub user_email: String,
     pub is_admin: bool,
     pub csrf_token: Option<String>,
@@ -156,7 +158,7 @@ pub async fn list_all_shares(
                     .cloned()
                     .unwrap_or_default(),
                 created_at: format_ts(s.created_at),
-                expires_at: format_ts_opt(s.expires_at),
+                expires_at: format_ts_opt(I18n::get(user.language.as_deref()), s.expires_at),
                 has_password: s.password.is_some(),
                 view_cnt: s.view_cnt,
                 s_type: s.s_type.clone(),
@@ -190,7 +192,7 @@ pub async fn list_all_shares(
                     .cloned()
                     .unwrap_or_default(),
                 created_at: format_ts(u.created_at),
-                expires_at: format_ts_opt(u.expires_at),
+                expires_at: format_ts_opt(I18n::get(user.language.as_deref()), u.expires_at),
                 has_password: u.password.is_some(),
                 view_cnt: u.view_cnt,
                 link_url: format!("/u/{}/", u.token),
@@ -221,6 +223,7 @@ pub async fn list_all_shares(
 
     let tpl = AdminSharesTemplate {
         urls: crate::static_assets::template_urls(),
+        t: I18n::get(user.language.as_deref()),
         user_email: user.email,
         is_admin: user.is_admin,
         csrf_token,

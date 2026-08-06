@@ -1,20 +1,20 @@
 {% extends "base.html" %}
 
-{% block title %}Shares | Nanofile{% endblock %}
+{% block title %}{{ t.tr("nav.shares") }} | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Shares</h1>
-<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Manage shared links and upload links for your libraries.</p>
+<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("nav.shares") }}</h1>
+<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("share.manage_desc") }}</p>
 
 <!-- Tab bar -->
 <div class="mt-4 flex gap-4 border-b border-gray-200 dark:border-gray-700">
     <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium border-b-2 {% if active_tab == "share-links" %}tab-btn--active text-brand-600 dark:text-brand-400 border-brand-600 dark:border-brand-400{% else %}text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300{% endif %}"
             data-tab="share-links" onclick="switchTab('share-links')">
-        Share Links ({{ share_links.len() }})
+        {{ t.tr("share.links") }} ({{ share_links.len() }})
     </button>
     <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium border-b-2 {% if active_tab == "upload-links" %}tab-btn--active text-brand-600 dark:text-brand-400 border-brand-600 dark:border-brand-400{% else %}text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300{% endif %}"
             data-tab="upload-links" onclick="switchTab('upload-links')">
-        Upload Links ({{ upload_links.len() }})
+        {{ t.tr("uploadlink.links") }} ({{ upload_links.len() }})
     </button>
 </div>
 
@@ -25,8 +25,8 @@
     <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/>
     </svg>
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">No shares yet.</p>
-    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Share a file or folder from the file browser to create one.</p>
+    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("share.no_shares") }}</p>
+    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("share.no_shares_hint") }}</p>
 </div>
 {% endif %}
 
@@ -36,15 +36,15 @@
         <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead class="bg-gray-50 dark:bg-surface-700">
                 <tr>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Library</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Name</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Type</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Created</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Expires</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Description</th>
-                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Views</th>
-                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Password</th>
-                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Actions</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.library") }}</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.name") }}</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.type") }}</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.created") }}</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.expires") }}</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.description") }}</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.views") }}</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.password") }}</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.actions") }}</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
@@ -62,12 +62,12 @@
                         {% if s.s_type == "d" %}
                         <span class="inline-flex items-center gap-1">
                             <svg class="h-3.5 w-3.5 text-amber-500" fill="currentColor" viewBox="0 0 24 24"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>
-                            Folder
+                            {{ t.tr("common.folder") }}
                         </span>
                         {% else %}
                         <span class="inline-flex items-center gap-1">
                             <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
-                            File
+                            {{ t.tr("common.file") }}
                         </span>
                         {% endif %}
                     </td>
@@ -85,10 +85,10 @@
                         {% if s.has_password %}
                         <span class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
                             <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-                            Yes
+                            {{ t.tr("common.yes") }}
                         </span>
                         {% else %}
-                        <span class="text-xs text-gray-400">No</span>
+                        <span class="text-xs text-gray-400">{{ t.tr("common.no") }}</span>
                         {% endif %}
                     </td>
                     <td class="px-4 py-3 text-sm text-right">
@@ -98,15 +98,15 @@
                                     data-path="{{ s.path }}"
                                     data-expires="{{ s.expires_at }}"
                                     data-description="{{ s.description.as_deref().unwrap_or("") }}"
-                                    title="Edit share link">
+                                    title="{{ t.tr("share.edit_link") }}">
                                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                                 </svg>
                             </button>
-                            <form action="/shares/{{ s.token }}/delete/" method="POST" class="delete-form inline" onsubmit="return confirm('Delete this share link?');">
+                            <form action="/shares/{{ s.token }}/delete/" method="POST" class="delete-form inline" onsubmit="return confirm(__t('share.delete_confirm'));">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="tab" value="{{ active_tab }}">
-                                <button type="submit" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors" title="Delete share link">
+                                <button type="submit" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors" title="{{ t.tr("share.delete_link") }}">
                                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                                     </svg>
@@ -130,8 +130,8 @@
     <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
     </svg>
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">No upload links yet.</p>
-    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Create an upload link from the file browser to allow others to upload files.</p>
+    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("uploadlink.no_links") }}</p>
+    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("uploadlink.no_links_hint") }}</p>
 </div>
 {% endif %}
 
@@ -141,14 +141,14 @@
         <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead class="bg-gray-50 dark:bg-surface-700">
                 <tr>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Library</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Name</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Created</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Expires</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Description</th>
-                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Uploads</th>
-                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Password</th>
-                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Actions</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.library") }}</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.name") }}</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.created") }}</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.expires") }}</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.description") }}</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.uploads") }}</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.password") }}</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{{ t.tr("common.actions") }}</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
@@ -176,10 +176,10 @@
                         {% if u.has_password %}
                         <span class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
                             <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-                            Yes
+                            {{ t.tr("common.yes") }}
                         </span>
                         {% else %}
-                        <span class="text-xs text-gray-400">No</span>
+                        <span class="text-xs text-gray-400">{{ t.tr("common.no") }}</span>
                         {% endif %}
                     </td>
                     <td class="px-4 py-3 text-sm text-right">
@@ -189,15 +189,15 @@
                                     data-path="{{ u.path }}"
                                     data-expires="{{ u.expires_at }}"
                                     data-description="{{ u.description.as_deref().unwrap_or("") }}"
-                                    title="Edit upload link">
+                                    title="{{ t.tr("uploadlink.edit_link") }}">
                                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                                 </svg>
                             </button>
-                            <form action="/shares/upload/{{ u.token }}/delete/" method="POST" class="delete-form inline" onsubmit="return confirm('Delete this upload link?');">
+                            <form action="/shares/upload/{{ u.token }}/delete/" method="POST" class="delete-form inline" onsubmit="return confirm(__t('uploadlink.delete_confirm'));">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="tab" value="{{ active_tab }}">
-                                <button type="submit" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors" title="Delete upload link">
+                                <button type="submit" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors" title="{{ t.tr("uploadlink.delete_link") }}">
                                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                                     </svg>
@@ -217,47 +217,47 @@
 <!-- Edit dialog overlay -->
 <div id="share-edit-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
     <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Edit Share Link</h3>
+        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("share.edit_link_title") }}</h3>
         <p class="js-edit-share-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
         <div class="space-y-3">
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Token <span class="text-gray-400">(read-only)</span></label>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("share.token") }} <span class="text-gray-400">{{ t.tr("share.readonly") }}</span></label>
                 <input type="text" id="edit-token-input" readonly
                        class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50 dark:bg-surface-700">
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Password <span class="text-gray-400">(leave empty to keep current)</span></label>
-                <input type="password" id="edit-password-input" placeholder="New password"
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.password") }} <span class="text-gray-400">{{ t.tr("share.password_keep") }}</span></label>
+                <input type="password" id="edit-password-input" placeholder="{{ t.tr("settings.new_password") }}"
                        class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                 <label class="flex items-center gap-1.5 mt-1.5 cursor-pointer">
                     <input type="checkbox" id="edit-password-clear" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
-                    <span class="text-xs text-gray-500 dark:text-gray-400">Remove password</span>
+                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ t.tr("share.remove_password") }}</span>
                 </label>
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Expires in</label>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("share.expires_in") }}</label>
                 <select id="edit-expiry-select"
                         class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
-                    <option value="">Never</option>
-                    <option value="1">1 day</option>
-                    <option value="7">7 days</option>
-                    <option value="30">30 days</option>
-                    <option value="clear">Clear expiry</option>
+                    <option value="">{{ t.tr("common.never") }}</option>
+                    <option value="1">{{ t.tr("share.expiry_1d") }}</option>
+                    <option value="7">{{ t.tr("share.expiry_7d") }}</option>
+                    <option value="30">{{ t.tr("share.expiry_30d") }}</option>
+                    <option value="clear">{{ t.tr("share.clear_expiry") }}</option>
                 </select>
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
-                <input type="text" id="edit-description-input" placeholder="What is this link for?"
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.description") }}</label>
+                <input type="text" id="edit-description-input" placeholder="{{ t.tr("share.link_purpose_placeholder") }}"
                        class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
             </div>
         </div>
         <div class="js-edit-share-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
         <div class="mt-4 flex justify-end gap-2">
             <button type="button" class="js-edit-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
-                Cancel
+                {{ t.tr("common.cancel") }}
             </button>
             <button type="button" class="js-edit-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                Save
+                {{ t.tr("common.save") }}
             </button>
         </div>
     </div>
@@ -266,47 +266,47 @@
 <!-- Upload link edit dialog overlay -->
 <div id="ul-edit-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
     <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">Edit Upload Link</h3>
+        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("uploadlink.edit_link_title") }}</h3>
         <p class="js-ul-edit-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
         <div class="space-y-3">
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Token <span class="text-gray-400">(read-only)</span></label>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("share.token") }} <span class="text-gray-400">{{ t.tr("share.readonly") }}</span></label>
                 <input type="text" id="ul-edit-token-input" readonly
                        class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50 dark:bg-surface-700">
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Password <span class="text-gray-400">(leave empty to keep current)</span></label>
-                <input type="password" id="ul-edit-password-input" placeholder="New password"
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.password") }} <span class="text-gray-400">{{ t.tr("share.password_keep") }}</span></label>
+                <input type="password" id="ul-edit-password-input" placeholder="{{ t.tr("settings.new_password") }}"
                        class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
                 <label class="flex items-center gap-1.5 mt-1.5 cursor-pointer">
                     <input type="checkbox" id="ul-edit-password-clear" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
-                    <span class="text-xs text-gray-500 dark:text-gray-400">Remove password</span>
+                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ t.tr("share.remove_password") }}</span>
                 </label>
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Expires in</label>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("share.expires_in") }}</label>
                 <select id="ul-edit-expiry-select"
                         class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
-                    <option value="">Never</option>
-                    <option value="1">1 day</option>
-                    <option value="7">7 days</option>
-                    <option value="30">30 days</option>
-                    <option value="clear">Clear expiry</option>
+                    <option value="">{{ t.tr("common.never") }}</option>
+                    <option value="1">{{ t.tr("share.expiry_1d") }}</option>
+                    <option value="7">{{ t.tr("share.expiry_7d") }}</option>
+                    <option value="30">{{ t.tr("share.expiry_30d") }}</option>
+                    <option value="clear">{{ t.tr("share.clear_expiry") }}</option>
                 </select>
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
-                <input type="text" id="ul-edit-description-input" placeholder="What is this link for?"
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.description") }}</label>
+                <input type="text" id="ul-edit-description-input" placeholder="{{ t.tr("share.link_purpose_placeholder") }}"
                        class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
             </div>
         </div>
         <div class="js-ul-edit-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
         <div class="mt-4 flex justify-end gap-2">
             <button type="button" class="js-ul-edit-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
-                Cancel
+                {{ t.tr("common.cancel") }}
             </button>
             <button type="button" class="js-ul-edit-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                Save
+                {{ t.tr("common.save") }}
             </button>
         </div>
     </div>
@@ -371,7 +371,7 @@ function switchTab(name) {
         descInput.value = btn.dataset.description || "";
         errorDiv.classList.add("hidden");
         confirmBtn.disabled = false;
-        confirmBtn.textContent = "Save";
+        confirmBtn.textContent = __t('common.save');
         overlay.classList.remove("hidden");
     });
 
@@ -406,7 +406,7 @@ function switchTab(name) {
         body.description = desc || null;
 
         confirmBtn.disabled = true;
-        confirmBtn.textContent = "Saving...";
+        confirmBtn.textContent = __t('common.saving');
         errorDiv.classList.add("hidden");
 
         try {
@@ -428,7 +428,7 @@ function switchTab(name) {
             errorDiv.classList.remove("hidden");
         } finally {
             confirmBtn.disabled = false;
-            confirmBtn.textContent = "Save";
+            confirmBtn.textContent = __t('common.save');
         }
     });
 })();
@@ -457,7 +457,7 @@ function switchTab(name) {
         descInput.value = btn.dataset.description || "";
         errorDiv.classList.add("hidden");
         confirmBtn.disabled = false;
-        confirmBtn.textContent = "Save";
+        confirmBtn.textContent = __t('common.save');
         overlay.classList.remove("hidden");
     });
 
@@ -487,7 +487,7 @@ function switchTab(name) {
         body.description = desc || null;
 
         confirmBtn.disabled = true;
-        confirmBtn.textContent = "Saving...";
+        confirmBtn.textContent = __t('common.saving');
         errorDiv.classList.add("hidden");
 
         try {
@@ -508,7 +508,7 @@ function switchTab(name) {
             errorDiv.classList.remove("hidden");
         } finally {
             confirmBtn.disabled = false;
-            confirmBtn.textContent = "Save";
+            confirmBtn.textContent = __t('common.save');
         }
     });
 })();
