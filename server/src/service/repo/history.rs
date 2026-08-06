@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::{read_fs_file_data, resolve_fs_id};
 use crate::repository::Repositories;
-use base::common::{FsDirData, FsFileData};
+use base::common::{EMPTY_SHA1, FsDirData, FsFileData};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{get_head_root_id, parent_path_from};
@@ -42,7 +42,7 @@ async fn collect_files(
     visited: &mut HashSet<String>,
 ) -> Result<(), AppError> {
     // EMPTY_SHA1 is the sentinel for empty directories — no fs_object record.
-    if root_id == "0000000000000000000000000000000000000000" {
+    if root_id == EMPTY_SHA1 {
         return Ok(());
     }
     if !visited.insert(root_id.to_string()) {

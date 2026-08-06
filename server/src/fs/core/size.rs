@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::EMPTY_SHA1;
+use infra::common::util::basename;
 use infra::serialization::S_IFDIR;
 
 use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
@@ -108,7 +109,7 @@ pub async fn get_entry_total_size(
         Some((parent, _)) => parent,
         None => "/",
     };
-    let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+    let name = basename(path);
 
     let repo_record = repos
         .repo

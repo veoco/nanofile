@@ -6,10 +6,13 @@ use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::trash;
 use crate::notification::events::FileLockEvent;
 use crate::repository::Repositories;
-use base::common::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::activity_log;
-use infra::common::util::{get_head_commit_id, get_head_root_id, parent_path_from};
+use infra::common::util::{
+    basename, get_head_commit_id, get_head_root_id, get_head_root_id_opt, parent_path_from,
+    timestamp_rfc3339,
+};
 use infra::serialization::S_IFREG;
 
 /// Parsed upload data, extracted from multipart at the handler layer.
@@ -35,7 +38,7 @@ pub(crate) async fn rename_file_entry(
         .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
     let parent_path = parent_path_from(path);
-    let old_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+    let old_name = basename(path);
 
     let head_root_id = get_head_root_id(db, repo_id).await?;
     let parent_fs_id = crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
@@ -472,7 +475,7 @@ impl FileService {
         user_id: i32,
     ) -> Result<(), AppError> {
         let db = self.db();
-        let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+        let name = basename(path);
         let parent_path = parent_path_from(path);
 
         let head_root_id = get_head_root_id(db, repo_id).await?;
@@ -583,7 +586,7 @@ impl FileService {
         let db = self.db();
         let head_root_id = get_head_root_id(db, repo_id).await?;
 
-        let file_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+        let file_name = basename(path);
         let parent_path = parent_path_from(path);
 
         let old_parent_fs_id =
@@ -725,7 +728,7 @@ impl FileService {
             .await
             .map_err(|_| AppError::NotFound("file not found".into()))?;
 
-        if file_fs_id == "0000000000000000000000000000000000000000" {
+        if file_fs_id == EMPTY_SHA1 {
             return Err(AppError::BadRequest(
                 "path is a directory, not a file".into(),
             ));
@@ -744,7 +747,7 @@ impl FileService {
         }
 
         let parent_path = parent_path_from(path);
-        let file_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+        let file_name = basename(path);
 
         let parent_fs_id =
             crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
@@ -804,9 +807,7 @@ impl FileService {
             "permission": permission,
             "mtime": entry.mtime,
             "size": entry.size,
-            "last_modified": chrono::DateTime::from_timestamp(entry.mtime, 0)
-                .map(|d| d.to_rfc3339())
-                .unwrap_or_default(),
+            "last_modified": timestamp_rfc3339(entry.mtime),
             "last_modifier_name": entry.modifier,
             "last_modifier_email": modifier_email,
             "last_modifier_contact_email": modifier_email,
@@ -1028,7 +1029,7 @@ impl FileService {
         let file_fs_id = crate::fs::core::store_fs_file_object(db, repo_id, &file_fs_data).await?;
 
         let parent_fs_id = if parent_path == "/" {
-            match get_head_root_id_no_err(&self.repos, repo_id).await? {
+            match get_head_root_id_opt(db, repo_id).await? {
                 Some(root_id) => root_id,
                 None => {
                     let empty_dir = FsDirData {
@@ -1040,7 +1041,7 @@ impl FileService {
                 }
             }
         } else {
-            let head_root_id = get_head_root_id_no_err(&self.repos, repo_id)
+            let head_root_id = get_head_root_id_opt(db, repo_id)
                 .await?
                 .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
             crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
@@ -1098,28 +1099,6 @@ impl FileService {
         }
         uploaded
     }
-}
-
-/// Like get_head_root_id but returns None instead of error on empty repo.
-async fn get_head_root_id_no_err(
-    repos: &Repositories,
-    repo_id: &str,
-) -> Result<Option<String>, AppError> {
-    let repo_record = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
-    let head_commit_id = match repo_record.head_commit_id {
-        Some(id) => id,
-        None => return Ok(None),
-    };
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Head commit not found".to_string()))?;
-    Ok(Some(head.root_id))
 }
 
 /// Record a deleted entry to the trash table.

@@ -14,6 +14,7 @@ use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use base::error::AppError;
 use infra::activity_log;
+use infra::common::util::timestamp_rfc3339;
 
 #[derive(Deserialize)]
 pub struct Trash2Query {
@@ -245,9 +246,7 @@ pub async fn list_deleted_repos(
                 "owner_contact_email": auth.email,
                 "head_commit_id": r.head_id,
                 "size": r.size,
-                "del_time": chrono::DateTime::from_timestamp(r.del_time, 0)
-                    .map(|d| d.to_rfc3339())
-                    .unwrap_or_default(),
+                "del_time": timestamp_rfc3339(r.del_time),
                 "org_id": -1,
                 "encrypted": false,
             })

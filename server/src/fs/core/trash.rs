@@ -10,6 +10,7 @@ use crate::repository::Repositories;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
+use infra::common::util::timestamp_rfc3339;
 use infra::entity::{deleted_repo, file_trash, repo, repo_member};
 use infra::serialization::S_IFDIR;
 
@@ -236,9 +237,7 @@ fn map_trash_rows_to_entries(
             TrashEntry {
                 parent_dir: m.path.clone(),
                 obj_name: m.obj_name.clone(),
-                deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
-                    .map(|d| d.to_rfc3339())
-                    .unwrap_or_default(),
+                deleted_time: timestamp_rfc3339(m.delete_time),
                 commit_id: m.commit_id.clone(),
                 is_dir: m.obj_type == "dir",
                 size: m.size,
@@ -355,9 +354,7 @@ pub async fn list_trash_cursor(
         .map(|m| TrashEntry {
             parent_dir: m.path,
             obj_name: m.obj_name,
-            deleted_time: chrono::DateTime::from_timestamp(m.delete_time, 0)
-                .map(|d| d.to_rfc3339())
-                .unwrap_or_default(),
+            deleted_time: timestamp_rfc3339(m.delete_time),
             commit_id: m.commit_id,
             is_dir: m.obj_type == "dir",
             size: m.size,

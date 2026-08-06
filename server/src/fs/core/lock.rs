@@ -209,13 +209,7 @@ mod tests {
     async fn test_check_locks_skip_when_no_locks() {
         let db = setup_lock_test_db().await;
 
-        let result = check_commit_file_locks(
-            &db,
-            "test-repo",
-            "0000000000000000000000000000000000000000", // EMPTY_SHA1
-            1,
-        )
-        .await;
+        let result = check_commit_file_locks(&db, "test-repo", infra::common::EMPTY_SHA1, 1).await;
         assert!(result.is_ok(), "empty tree should always succeed");
     }
 

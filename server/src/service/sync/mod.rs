@@ -7,7 +7,7 @@ use sea_orm::DatabaseConnection;
 use crate::indexer::TextIndexer;
 use crate::repository::Repositories;
 use crate::service::auth::token::generate_sync_token;
-use base::common::SEAF_METADATA_TYPE_DIR;
+use base::common::{EMPTY_SHA1, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::serialization::pack_fs;
 use infra::storage::DynBlockStorage;
@@ -308,7 +308,7 @@ impl SyncService {
         repo_id: &str,
         parent_id: &str,
     ) -> Result<bool, AppError> {
-        if parent_id == "0000000000000000000000000000000000000000" {
+        if parent_id == EMPTY_SHA1 {
             return Ok(true);
         }
         Ok(self
@@ -354,7 +354,7 @@ impl SyncService {
         missing: &mut Vec<String>,
         size_delta: &mut i64,
     ) -> Result<(), AppError> {
-        if new_root_id == "0000000000000000000000000000000000000000" {
+        if new_root_id == EMPTY_SHA1 {
             return Ok(());
         }
 
@@ -496,7 +496,7 @@ impl SyncService {
     ) -> Result<(), AppError> {
         let mut stack: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
         while let Some((fs_id, path)) = stack.pop() {
-            if fs_id == "0000000000000000000000000000000000000000" {
+            if fs_id == EMPTY_SHA1 {
                 continue;
             }
             let obj = match self
@@ -599,7 +599,7 @@ impl SyncService {
             .ok_or_else(|| AppError::Internal("commit not found".into()))?;
 
         let base_root_id: Option<String> = if let Some(ref parent_id) = new_commit.parent_id
-            && parent_id != "0000000000000000000000000000000000000000"
+            && parent_id != EMPTY_SHA1
         {
             self.find_commit(repo_id, parent_id)
                 .await?
@@ -672,7 +672,7 @@ impl SyncService {
             let is_wiki = self.is_wiki_repo(repo_id).await?;
 
             let old_root = if let Some(ref parent_id) = new_commit.parent_id
-                && parent_id != "0000000000000000000000000000000000000000"
+                && parent_id != EMPTY_SHA1
             {
                 self.find_commit(repo_id, parent_id)
                     .await?

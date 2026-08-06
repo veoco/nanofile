@@ -44,20 +44,31 @@ pub fn extract_multipart_field(bytes: &[u8], field_name: &str) -> Option<String>
 
 /// Get the root_fs_id from the repo's head commit for path resolution.
 pub async fn get_head_root_id(db: &DatabaseConnection, repo_id: &str) -> Result<String, AppError> {
+    get_head_root_id_opt(db, repo_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))
+}
+
+/// Like `get_head_root_id` but returns `Ok(None)` when the repo has no head
+/// commit yet (vs. an error for a missing repo or head commit record).
+pub async fn get_head_root_id_opt(
+    db: &DatabaseConnection,
+    repo_id: &str,
+) -> Result<Option<String>, AppError> {
     let repo_record = repo::Entity::find_by_id(repo_id)
         .one(db)
         .await?
         .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
-    let head_commit_id = repo_record
-        .head_commit_id
-        .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))?;
+    let Some(head_commit_id) = repo_record.head_commit_id else {
+        return Ok(None);
+    };
     let head = commit::Entity::find()
         .filter(commit::Column::RepoId.eq(repo_id))
         .filter(commit::Column::CommitId.eq(&head_commit_id))
         .one(db)
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".to_string()))?;
-    Ok(head.root_id)
+    Ok(Some(head.root_id))
 }
 
 /// Get the head commit ID for a repo, without resolving the root fs_id.
@@ -82,6 +93,46 @@ pub fn parent_path_from(path: &str) -> &str {
         Some(("", _)) => "/",
         Some((parent, _)) => parent,
         None => "/",
+    }
+}
+
+/// Extract the final path segment (filename or directory name).
+/// `/dir/file.txt` → `file.txt`,  `/dir/` → `""`,  `/` → `""`
+pub fn basename(path: &str) -> &str {
+    path.rsplit_once('/').map(|(_, name)| name).unwrap_or("")
+}
+
+/// Join a parent path and a name, avoiding a doubled slash at the root.
+/// `("/", "a")` → `/a`,  `("/dir", "a")` → `/dir/a`
+pub fn join_path(parent: &str, name: &str) -> String {
+    if parent == "/" {
+        format!("/{name}")
+    } else {
+        format!("{parent}/{name}")
+    }
+}
+
+/// Format a Unix timestamp (seconds) as an RFC3339 string, or `""` when the
+/// timestamp cannot be represented as a `DateTime`.
+pub fn timestamp_rfc3339(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts, 0)
+        .map(|d| d.to_rfc3339())
+        .unwrap_or_default()
+}
+
+/// Format a byte count as a human-readable size (`B`/`KB`/`MB`/`GB`/`TB`).
+pub fn format_size(size: i64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut s = size as f64;
+    let mut unit = 0;
+    while s >= 1024.0 && unit < UNITS.len() - 1 {
+        s /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", size, UNITS[unit])
+    } else {
+        format!("{:.1} {}", s, UNITS[unit])
     }
 }
 

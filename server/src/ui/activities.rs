@@ -1,13 +1,13 @@
 /// Web UI file activities page.
 use askama::Template;
 use axum::{extract::State, response::Html};
-use chrono::DateTime;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
 use base::error::AppError;
+use infra::common::util::timestamp_rfc3339;
 
 use super::auth_extractor::WebUser;
 
@@ -109,9 +109,7 @@ pub async fn activities_page(
         let formatted =
             super::files::format_mtime(I18n::get(user.language.as_deref()), e.created_at);
 
-        let time_iso = DateTime::from_timestamp(e.created_at, 0)
-            .map(|dt| dt.to_rfc3339())
-            .unwrap_or_default();
+        let time_iso = timestamp_rfc3339(e.created_at);
 
         let old_path_display = e.old_path.as_deref().unwrap_or("").to_string();
 

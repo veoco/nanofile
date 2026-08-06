@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
-use base::common::SEAF_METADATA_TYPE_DIR;
+use base::common::{EMPTY_SHA1, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 
 pub struct ThumbnailService {
@@ -84,7 +84,7 @@ impl ThumbnailService {
                 .await
                 .map_err(|_| AppError::NotFound("file not found".into()))?;
 
-        if file_fs_id == "0000000000000000000000000000000000000000" {
+        if file_fs_id == EMPTY_SHA1 {
             return Err(AppError::BadRequest("path is a directory".into()));
         }
 

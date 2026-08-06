@@ -88,29 +88,6 @@ pub struct ZipTaskResponse {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-/// Look up the repo head commit's root fs_id.
-async fn resolve_head_root(state: &AppState, repo_id: &str) -> Result<String, AppError> {
-    let repo_model = state
-        .repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
-
-    let head_commit_id = repo_model
-        .head_commit_id
-        .ok_or_else(|| AppError::NotFound("Repository has no commits".into()))?;
-
-    let head_commit = state
-        .repos
-        .commit
-        .find_by_id(&head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
-
-    Ok(head_commit.root_id)
-}
-
 /// Determine the zip filename (without extension) based on the request.
 #[allow(unused_variables)]
 fn determine_zip_name(parent_dir: &str, dirents: &[String]) -> String {
@@ -155,7 +132,7 @@ pub async fn zip_task_handler(
     }
 
     // Resolve head commit root
-    let root_fs_id = resolve_head_root(&state, &repo_id).await?;
+    let root_fs_id = infra::common::util::get_head_root_id(&state.db, &repo_id).await?;
 
     // Collect files (recursively for directories)
     let files = collect_selected_entries(

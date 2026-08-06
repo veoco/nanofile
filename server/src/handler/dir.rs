@@ -15,7 +15,7 @@ use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use base::error::AppError;
 use base::sanitize::safe_normalize_path;
-use infra::common::DirEntry;
+use infra::common::{DirEntry, EMPTY_SHA1};
 
 #[derive(Deserialize)]
 pub struct DirQuery {
@@ -174,7 +174,7 @@ pub async fn delete_dir(
     access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
     Query(query): Query<DirQuery>,
-) -> Result<(), AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let repo_id = &access.repo_id;
 
     let path = safe_normalize_path(
@@ -186,7 +186,8 @@ pub async fn delete_dir(
 
     let svc = state.dir_service();
     svc.delete_dir(repo_id, &path, &access.user.email, access.user.user_id)
-        .await
+        .await?;
+    Ok(ok_json())
 }
 
 #[derive(Deserialize)]
@@ -361,9 +362,8 @@ pub async fn list_dir_v21(
         if !dir_id.is_empty() {
             headers.insert(
                 HeaderName::from_static("oid"),
-                HeaderValue::from_str(&dir_id).unwrap_or_else(|_| {
-                    HeaderValue::from_static("0000000000000000000000000000000000000000")
-                }),
+                HeaderValue::from_str(&dir_id)
+                    .unwrap_or_else(|_| HeaderValue::from_static(EMPTY_SHA1)),
             );
         }
         let body = serde_json::json!({
@@ -391,9 +391,7 @@ pub async fn list_dir_v21(
     if !dir_id.is_empty() {
         headers.insert(
             HeaderName::from_static("oid"),
-            HeaderValue::from_str(&dir_id).unwrap_or_else(|_| {
-                HeaderValue::from_static("0000000000000000000000000000000000000000")
-            }),
+            HeaderValue::from_str(&dir_id).unwrap_or_else(|_| HeaderValue::from_static(EMPTY_SHA1)),
         );
     }
 

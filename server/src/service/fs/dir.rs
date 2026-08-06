@@ -5,11 +5,11 @@ use sea_orm::DatabaseConnection;
 
 use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
-use base::common::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
+use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::DirEntry;
-use infra::common::util::{get_head_commit_id, get_head_root_id, parent_path_from};
+use infra::common::util::{basename, get_head_commit_id, get_head_root_id, parent_path_from};
 use infra::serialization::S_IFDIR;
 
 // ── Free-standing pub(crate) helpers (used by src/ui/files.rs) ──────────
@@ -116,7 +116,7 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
     let mut modifier_emails: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     while let Some((fs_id, parent_path)) = stack.pop() {
-        if fs_id == "0000000000000000000000000000000000000000" {
+        if fs_id == EMPTY_SHA1 {
             continue;
         }
 
@@ -215,7 +215,7 @@ pub(crate) async fn create_dir_by_path(
         "/".to_string()
     };
 
-    let dir_fs_id = "0000000000000000000000000000000000000000".to_string();
+    let dir_fs_id = EMPTY_SHA1.to_string();
     let now = chrono::Utc::now().timestamp();
 
     let parent_fs_id = if parent_path == "/" {
@@ -295,7 +295,7 @@ async fn rename_dir_entry(
     user_id: i32,
 ) -> Result<(), AppError> {
     let parent_path = parent_path_from(path);
-    let old_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+    let old_name = basename(path);
 
     let head_root_id = get_head_root_id(db, repo_id).await?;
     let parent_fs_id = crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
@@ -443,7 +443,7 @@ impl DirService {
         user_id: i32,
     ) -> Result<(), AppError> {
         let db = self.db();
-        let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+        let name = basename(path);
         let parent_path = parent_path_from(path);
 
         let deleted_size = crate::fs::core::get_entry_total_size(&self.repos, repo_id, path)
@@ -500,7 +500,7 @@ impl DirService {
 
         let head_root_id = get_head_root_id(db, repo_id).await?;
         let parent_path = parent_path_from(path);
-        let dir_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+        let dir_name = basename(path);
 
         let old_parent_fs_id =
             crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
@@ -729,7 +729,7 @@ impl DirService {
         user_id: i32,
     ) -> Result<(), AppError> {
         let db = self.db();
-        let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+        let name = basename(path);
         let parent_path = parent_path_from(path);
 
         let repo_model = self
@@ -1044,7 +1044,7 @@ async fn copy_fs_tree(
 ) -> Result<(), AppError> {
     let mut stack = vec![root_fs_id.to_string()];
     while let Some(fs_id) = stack.pop() {
-        if fs_id == "0000000000000000000000000000000000000000" {
+        if fs_id == EMPTY_SHA1 {
             continue;
         }
         let obj = repos

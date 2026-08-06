@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
 use base::error::AppError;
-use infra::common::util::parent_path_from;
+use infra::common::util::{basename, parent_path_from};
 
 use crate::AppState;
 use crate::service::fs::file::UploadedFile;
@@ -328,9 +328,9 @@ async fn do_move(
     dst: &str,
 ) -> Result<(), AppError> {
     let src_parent = parent_path_from(src);
-    let src_name = src.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+    let src_name = basename(src);
     let dst_parent = parent_path_from(dst);
-    let dst_name = dst.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+    let dst_name = basename(dst);
 
     let is_dir = entry_metadata(&state.repos, &auth.repo_id, src)
         .await?
@@ -401,9 +401,9 @@ async fn do_copy(
     dst: &str,
 ) -> Result<(), AppError> {
     let src_parent = parent_path_from(src);
-    let src_name = src.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+    let src_name = basename(src);
     let dst_parent = parent_path_from(dst);
-    let dst_name = dst.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+    let dst_name = basename(dst);
 
     let names = vec![src_name.to_string()];
     state

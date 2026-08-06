@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::middleware::auth::SyncAuth;
+use base::common::EMPTY_SHA1;
 use base::error::AppError;
 use infra::serialization::pack_fs;
 
@@ -87,8 +88,7 @@ pub async fn fs_id_list(
         .ok_or_else(|| AppError::BadRequest("missing server-head parameter".into()))?;
 
     let dir_only = !query.dir_only.as_deref().unwrap_or("").is_empty();
-    let empty_hash = "0000000000000000000000000000000000000000";
-    if server_head == empty_hash {
+    if server_head == EMPTY_SHA1 {
         return Ok(Json(vec![]));
     }
 
@@ -99,7 +99,7 @@ pub async fn fs_id_list(
         .ok_or_else(|| AppError::NotFound("server commit not found".into()))?;
 
     if let Some(ref client_head) = query.client_head {
-        if client_head == empty_hash {
+        if client_head == EMPTY_SHA1 {
             let collected = svc.collect_fs_ids(&repo_id, &server_root).await?;
             let result = if dir_only {
                 svc.filter_dir_ids(&repo_id, &collected).await?

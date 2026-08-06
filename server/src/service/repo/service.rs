@@ -7,6 +7,7 @@ use crate::repository::Repositories;
 use crate::service::auth::token::generate_sync_token;
 use base::error::AppError;
 use infra::activity_log;
+use infra::common::util::{format_size, timestamp_rfc3339};
 use infra::entity::repo;
 
 // ── Response types ──────────────────────────────────────────────────────
@@ -696,17 +697,8 @@ impl RepoService {
             if let Some(r) = repos.repo.find_by_id(&m.repo_id).await? {
                 let is_owner = r.owner_id == user_id;
                 let repo_type = if is_owner { "mine" } else { "shared" };
-                let (owner_email, owner_name) = if is_owner {
-                    (
-                        email.to_string(),
-                        email.split('@').next().unwrap_or("").to_string(),
-                    )
-                } else {
-                    match repos.user.find_by_id(r.owner_id).await? {
-                        Some(u) => (u.email.clone(), u.nickname()),
-                        None => (String::new(), String::new()),
-                    }
-                };
+                let (owner_email, owner_name) =
+                    resolve_owner(repos, r.owner_id, email, is_owner).await?;
 
                 repos_list.push(V21RepoInfo {
                     repo_id: r.id,
@@ -716,9 +708,7 @@ impl RepoService {
                     encrypted: r.encrypted != 0,
                     type_: repo_type.to_string(),
                     size: r.size,
-                    last_modified: chrono::DateTime::from_timestamp(r.updated_at, 0)
-                        .map(|d| d.to_rfc3339())
-                        .unwrap_or_default(),
+                    last_modified: timestamp_rfc3339(r.updated_at),
                     mtime: r.updated_at,
                     owner_email,
                     owner_name,
@@ -750,17 +740,7 @@ impl RepoService {
 
         let is_owner = r.owner_id == user_id;
         let repo_type = if is_owner { "mine" } else { "shared" };
-        let (owner_email, owner_name) = if is_owner {
-            (
-                email.to_string(),
-                email.split('@').next().unwrap_or("").to_string(),
-            )
-        } else {
-            match repos.user.find_by_id(r.owner_id).await? {
-                Some(u) => (u.email.clone(), u.nickname()),
-                None => (String::new(), String::new()),
-            }
-        };
+        let (owner_email, owner_name) = resolve_owner(repos, r.owner_id, email, is_owner).await?;
 
         Ok(V21RepoInfo {
             repo_id: r.id,
@@ -770,9 +750,7 @@ impl RepoService {
             encrypted: r.encrypted != 0,
             type_: repo_type.to_string(),
             size: r.size,
-            last_modified: chrono::DateTime::from_timestamp(r.updated_at, 0)
-                .map(|d| d.to_rfc3339())
-                .unwrap_or_default(),
+            last_modified: timestamp_rfc3339(r.updated_at),
             mtime: r.updated_at,
             owner_email,
             owner_name,
@@ -801,25 +779,31 @@ pub async fn load_left_panel_repos(
             repo_list.push(LeftPanelRepo {
                 id: r.id,
                 name: r.name,
-                size_display: format_repo_size(r.size),
+                size_display: format_size(r.size),
             });
         }
     }
     Ok(repo_list)
 }
 
-fn format_repo_size(bytes: i64) -> String {
-    if bytes == 0 {
-        return "0 B".to_string();
-    }
-    let units = ["B", "KB", "MB", "GB", "TB"];
-    let i = (bytes as f64).log(1024.0).floor() as usize;
-    let i = i.min(units.len() - 1);
-    let val = bytes as f64 / (1024u64.pow(i as u32) as f64);
-    if i == 0 {
-        format!("{} {}", val as i64, units[i])
+/// Resolve a repo owner's email + display name, using the requester's email
+/// when the requester owns the repo.
+async fn resolve_owner(
+    repos: &Repositories,
+    owner_id: i32,
+    requester_email: &str,
+    is_owner: bool,
+) -> Result<(String, String), AppError> {
+    if is_owner {
+        Ok((
+            requester_email.to_string(),
+            requester_email.split('@').next().unwrap_or("").to_string(),
+        ))
     } else {
-        format!("{:.1} {}", val, units[i])
+        match repos.user.find_by_id(owner_id).await? {
+            Some(u) => Ok((u.email.clone(), u.nickname())),
+            None => Ok((String::new(), String::new())),
+        }
     }
 }
 

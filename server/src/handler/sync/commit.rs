@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::middleware::auth::SyncAuth;
+use base::common::EMPTY_SHA1;
 use base::error::AppError;
 
 #[derive(Serialize)]
@@ -46,7 +47,7 @@ pub async fn get_head_commit(
 
     let head_commit_id = repo_model
         .head_commit_id
-        .unwrap_or_else(|| "0000000000000000000000000000000000000000".to_string());
+        .unwrap_or_else(|| EMPTY_SHA1.to_string());
 
     Ok(Json(HeadCommitResponse {
         is_corrupted: 0,
@@ -65,13 +66,13 @@ pub async fn get_commit(
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-    if commit_id == "0000000000000000000000000000000000000000" {
+    if commit_id == EMPTY_SHA1 {
         let empty_commit = base::common::CommitData {
             commit_id: commit_id.clone(),
             repo_id: repo_id.clone(),
-            root_id: "0000000000000000000000000000000000000000".to_string(),
+            root_id: EMPTY_SHA1.to_string(),
             creator_name: "".to_string(),
-            creator: "0000000000000000000000000000000000000000".to_string(),
+            creator: EMPTY_SHA1.to_string(),
             description: "".to_string(),
             ctime: 0,
             parent_id: None,
@@ -103,7 +104,7 @@ pub async fn get_commit(
         repo_id: commit_model.repo_id.clone(),
         root_id: commit_model.root_id.clone(),
         creator_name: commit_model.creator_name.clone(),
-        creator: "0000000000000000000000000000000000000000".to_string(),
+        creator: EMPTY_SHA1.to_string(),
         description: commit_model.description.clone(),
         ctime: commit_model.ctime,
         parent_id: commit_model.parent_id.clone(),

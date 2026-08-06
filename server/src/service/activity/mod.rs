@@ -2,7 +2,7 @@
 
 use crate::repository::Repositories;
 use base::error::AppError;
-use chrono::DateTime;
+use infra::common::util::timestamp_rfc3339;
 
 /// Service for activity-related operations.
 pub struct ActivityService;
@@ -166,9 +166,7 @@ impl ActivityService {
                 "details": details,
                 "count": count,
                 "old_repo_name": old_repo_name,
-                "time": DateTime::from_timestamp(a.created_at, 0)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_default(),
+                "time": timestamp_rfc3339(a.created_at),
             }));
         }
 

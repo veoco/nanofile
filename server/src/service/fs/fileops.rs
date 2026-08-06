@@ -7,7 +7,7 @@ use crate::repository::Repositories;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
-use infra::common::util::{generate_unique_filename, get_head_root_id};
+use infra::common::util::{generate_unique_filename, get_head_root_id, join_path};
 use infra::serialization::S_IFDIR;
 
 /// Parse colon-separated file_names into a Vec<String>.
@@ -107,11 +107,7 @@ impl FileOpsService {
                 .iter()
                 .filter_map(|name| {
                     let entry = parent_data.dirents.iter().find(|d| d.name == *name)?;
-                    let fp = if parent_dir == "/" {
-                        format!("/{name}")
-                    } else {
-                        format!("{parent_dir}/{name}")
-                    };
+                    let fp = join_path(parent_dir, name);
                     Some(crate::fs::core::trash::TrashItem {
                         path: fp,
                         obj_type: if entry.mode & S_IFDIR != 0 {
@@ -158,11 +154,7 @@ impl FileOpsService {
 
         // Log activity
         for name in file_names {
-            let fp = if parent_dir == "/" {
-                format!("/{name}")
-            } else {
-                format!("{parent_dir}/{name}")
-            };
+            let fp = join_path(parent_dir, name);
             let entry = parent_data.dirents.iter().find(|d| d.name == *name);
             let is_dir = entry.is_some_and(|d| d.mode & S_IFDIR != 0);
             activity_log::log_activity(
@@ -184,11 +176,7 @@ impl FileOpsService {
         // Remove from full-text search index
         if let Some(indexer) = &self.indexer {
             for name in file_names {
-                let fp = if parent_dir == "/" {
-                    format!("/{name}")
-                } else {
-                    format!("{parent_dir}/{name}")
-                };
+                let fp = join_path(parent_dir, name);
                 if let Err(e) = indexer.delete_file(repo_id, &fp) {
                     tracing::warn!("Failed to delete index for {fp}: {e}");
                 }
@@ -320,11 +308,7 @@ impl FileOpsService {
 
         // Log activity
         for entry in &entries_to_add {
-            let fp = if dst_dir == "/" {
-                format!("/{}", entry.name)
-            } else {
-                format!("{dst_dir}/{}", entry.name)
-            };
+            let fp = join_path(dst_dir, &entry.name);
             let obj_type = if entry.mode & S_IFDIR != 0 {
                 "dir"
             } else {
@@ -349,11 +333,7 @@ impl FileOpsService {
         // Index copied files
         if let Some(indexer) = &self.indexer {
             for entry in &entries_to_add {
-                let fp = if dst_dir == "/" {
-                    format!("/{}", entry.name)
-                } else {
-                    format!("{dst_dir}/{}", entry.name)
-                };
+                let fp = join_path(dst_dir, &entry.name);
                 if let Err(e) = indexer.reindex_file(repo_id, &fp, &self.block_store).await {
                     tracing::warn!("Failed to index copied file {}: {e}", entry.name);
                 }
@@ -527,16 +507,8 @@ impl FileOpsService {
 
         // Log activity
         for entry in &entries_to_add {
-            let old_fp = if src_parent_dir == "/" {
-                format!("/{}", entry.name)
-            } else {
-                format!("{src_parent_dir}/{}", entry.name)
-            };
-            let new_fp = if dst_dir == "/" {
-                format!("/{}", entry.name)
-            } else {
-                format!("{dst_dir}/{}", entry.name)
-            };
+            let old_fp = join_path(src_parent_dir, &entry.name);
+            let new_fp = join_path(dst_dir, &entry.name);
             let obj_type = if entry.mode & S_IFDIR != 0 {
                 "dir"
             } else {
@@ -561,16 +533,8 @@ impl FileOpsService {
         // Update full-text search index
         if let Some(indexer) = &self.indexer {
             for entry in &entries_to_move {
-                let old_fp = if src_parent_dir == "/" {
-                    format!("/{}", entry.name)
-                } else {
-                    format!("{src_parent_dir}/{}", entry.name)
-                };
-                let new_fp = if dst_dir == "/" {
-                    format!("/{}", entry.name)
-                } else {
-                    format!("{dst_dir}/{}", entry.name)
-                };
+                let old_fp = join_path(src_parent_dir, &entry.name);
+                let new_fp = join_path(dst_dir, &entry.name);
                 if let Err(e) = indexer.delete_file(repo_id, &old_fp) {
                     tracing::warn!("Failed to delete old index on batch move: {e}");
                 }

@@ -14,7 +14,7 @@ use crate::AppState;
 use crate::fs::core::download::Downloader;
 use crate::i18n::I18n;
 use base::error::AppError;
-use infra::common::util::parent_path_from;
+use infra::common::util::{basename, parent_path_from};
 
 use super::auth_extractor::WebUser;
 
@@ -701,7 +701,7 @@ async fn serve_file(
     let is_text = is_previewable_file(&file_name);
 
     if is_image {
-        let size_display = get_file_size(&state.repos, &repo_id, &path)
+        let size_display = get_file_size(&state.db, &state.repos, &repo_id, &path)
             .await
             .map(format_size)
             .unwrap_or_else(|_| "?".to_string());
@@ -766,7 +766,7 @@ async fn serve_file(
         let raw_parent = parent_path_from(&path);
         let parent_path = raw_parent.trim_start_matches('/').to_string();
 
-        let size_display = get_file_size(&state.repos, &repo_id, &path)
+        let size_display = get_file_size(&state.db, &state.repos, &repo_id, &path)
             .await
             .map(format_size)
             .unwrap_or_else(|_| "?".to_string());
@@ -813,13 +813,14 @@ async fn serve_file(
 
 /// Resolve a file's size from the FS tree without downloading its content.
 async fn get_file_size(
+    db: &sea_orm::DatabaseConnection,
     repos: &crate::repository::Repositories,
     repo_id: &str,
     path: &str,
 ) -> Result<i64, AppError> {
-    let head_root_id = get_head_root_id(repos, repo_id).await?;
+    let head_root_id = infra::common::util::get_head_root_id(db, repo_id).await?;
     let parent_path = parent_path_from(path);
-    let file_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+    let file_name = basename(path);
 
     if parent_path == "/" {
         // Root-level file: resolve from root's directory listing
@@ -850,30 +851,6 @@ async fn get_file_size(
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
-
-/// Get the root fs_id from the repo's head commit for path resolution.
-async fn get_head_root_id(
-    repos: &crate::repository::Repositories,
-    repo_id: &str,
-) -> Result<String, AppError> {
-    let repo_record = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
-
-    let head_commit_id = repo_record
-        .head_commit_id
-        .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))?;
-
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Head commit not found".to_string()))?;
-
-    Ok(head.root_id)
-}
 
 pub(crate) fn mime_guess(filename: &str) -> &'static str {
     if filename.ends_with(".txt")

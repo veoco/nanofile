@@ -1,6 +1,6 @@
 use crate::domain;
 use crate::repository::Repositories;
-use base::common::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::crypto::random_key::encrypt_block;
 use infra::entity::{commit, repo};
@@ -175,7 +175,7 @@ impl FileOps {
             repo_id: repo_id.to_string(),
             root_id: root_fs_id.clone(),
             creator_name: modifier.to_string(),
-            creator: "0000000000000000000000000000000000000000".to_string(),
+            creator: EMPTY_SHA1.to_string(),
             description: format!("Added {}", name),
             ctime: now,
             parent_id: parent_commit_id.clone(),
@@ -491,7 +491,7 @@ impl FileOps {
             repo_id: repo_id.to_string(),
             root_id: root_fs_id.to_string(),
             creator_name: creator_name.to_string(),
-            creator: "0000000000000000000000000000000000000000".to_string(),
+            creator: EMPTY_SHA1.to_string(),
             description: description.to_string(),
             ctime: now,
             parent_id: parent_commit_id.clone(),

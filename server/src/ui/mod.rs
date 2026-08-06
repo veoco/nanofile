@@ -198,17 +198,4 @@ pub(crate) fn format_ts_opt(t: &I18n, ts: Option<i64>) -> String {
 }
 
 /// Format a byte count as a human-readable size (`B`/`KB`/`MB`/`GB`/`TB`).
-pub fn format_size(size: i64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut s = size as f64;
-    let mut unit = 0;
-    while s >= 1024.0 && unit < UNITS.len() - 1 {
-        s /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{} {}", size, UNITS[unit])
-    } else {
-        format!("{:.1} {}", s, UNITS[unit])
-    }
-}
+pub use infra::common::util::format_size;

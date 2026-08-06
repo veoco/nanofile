@@ -5,6 +5,7 @@ use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
 use base::error::AppError;
 use chrono::{DateTime, Utc};
+use infra::common::util::basename;
 use infra::serialization::S_IFDIR;
 
 #[derive(serde::Serialize)]
@@ -134,7 +135,7 @@ impl StarredService {
                 Some((parent, _)) => parent,
                 None => "/",
             };
-            let name = clean_path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+            let name = basename(clean_path);
 
             let head_cid = repo_record
                 .head_commit_id

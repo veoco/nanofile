@@ -4,7 +4,7 @@ use axum::http::{HeaderMap, StatusCode};
 use percent_encoding::{AsciiSet, CONTROLS};
 
 use base::error::AppError;
-use infra::common::util::parent_path_from;
+use infra::common::util::{basename, parent_path_from};
 use infra::serialization::S_IFDIR;
 
 use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
@@ -135,7 +135,7 @@ pub async fn entry_metadata(
         .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
     let parent = parent_path_from(path);
-    let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
+    let name = basename(path);
     let parent_fs_id = match resolve_fs_id(repos, repo_id, &head.root_id, parent).await {
         Ok(id) => id,
         Err(_) => return Ok(None),

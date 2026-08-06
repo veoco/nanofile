@@ -77,9 +77,7 @@ pub async fn diff_trees(
     new_root_id: &str,
 ) -> Result<Vec<FsChange>, AppError> {
     // If there is no old tree or it is the empty sentinel, everything is new.
-    let no_old_tree = old_root_id.is_none()
-        || old_root_id == Some(EMPTY_SHA1)
-        || old_root_id == Some("0000000000000000000000000000000000000000");
+    let no_old_tree = old_root_id.is_none() || old_root_id == Some(EMPTY_SHA1);
 
     if no_old_tree {
         let mut entries = HashMap::new();

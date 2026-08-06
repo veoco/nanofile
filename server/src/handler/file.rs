@@ -6,7 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base::sanitize::safe_normalize_path;
-use infra::common::util::extract_multipart_field;
+use infra::common::{EMPTY_SHA1, util::extract_multipart_field};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -77,9 +77,7 @@ pub async fn download_file(
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
         HeaderName::from_static("oid"),
-        HeaderValue::from_str(&file_fs_id).unwrap_or_else(|_| {
-            HeaderValue::from_static("0000000000000000000000000000000000000000")
-        }),
+        HeaderValue::from_str(&file_fs_id).unwrap_or_else(|_| HeaderValue::from_static(EMPTY_SHA1)),
     );
 
     Ok((resp_headers, Json(url)).into_response())
@@ -230,7 +228,7 @@ pub async fn delete_file(
     access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
     Query(query): Query<FileQuery>,
-) -> Result<(), AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let repo_id = &access.repo_id;
 
     let path = safe_normalize_path(
@@ -242,7 +240,8 @@ pub async fn delete_file(
 
     let svc = state.file_service();
     svc.delete_file(repo_id, &path, &access.user.email, access.user.user_id)
-        .await
+        .await?;
+    Ok(ok_json())
 }
 
 #[derive(Deserialize)]

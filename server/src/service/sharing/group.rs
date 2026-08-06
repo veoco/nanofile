@@ -1,5 +1,6 @@
 use crate::repository::Repositories;
 use base::error::AppError;
+use infra::common::util::timestamp_rfc3339;
 
 /// List groups for a user in the official `/api/v2.1/groups/` response format.
 ///
@@ -42,9 +43,7 @@ pub async fn list_groups_v21(
             admins.push(email.clone());
         }
 
-        let created_at = chrono::DateTime::from_timestamp(g.created_at, 0)
-            .map(|d| d.to_rfc3339())
-            .unwrap_or_default();
+        let created_at = timestamp_rfc3339(g.created_at);
 
         let mut info = serde_json::json!({
             "id": g.id,

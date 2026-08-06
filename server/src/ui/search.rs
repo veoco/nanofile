@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::i18n::I18n;
 use crate::ui::files::format_size;
+use base::common::EMPTY_SHA1;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -124,7 +125,7 @@ pub async fn search_page(
                 _ => continue,
             };
 
-            if head.root_id == "0000000000000000000000000000000000000000" {
+            if head.root_id == EMPTY_SHA1 {
                 continue;
             }
 
@@ -196,7 +197,7 @@ async fn resolve_file_metadata(
         .await
         .ok()??;
     let root_id = &head.root_id;
-    if root_id == "0000000000000000000000000000000000000000" {
+    if root_id == EMPTY_SHA1 {
         return None;
     }
 
@@ -294,7 +295,7 @@ async fn search_fs_tree(
     let mut stack: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
 
     while let Some((fs_id, path)) = stack.pop() {
-        if fs_id == "0000000000000000000000000000000000000000" {
+        if fs_id == EMPTY_SHA1 {
             continue;
         }
 
