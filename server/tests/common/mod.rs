@@ -59,7 +59,13 @@ impl TestServer {
     /// Start a server with a specific `webdav_enabled` setting (for testing
     /// the WebDAV global switch).
     pub async fn start_with_webdav_enabled(webdav_enabled: bool) -> Self {
-        Self::start_full(false, false, 30, 90, webdav_enabled).await
+        Self::start_full(false, false, 30, 90, webdav_enabled, false).await
+    }
+
+    /// Start a server with the email backend enabled (for password-reset
+    /// integration tests; the full flow mints a token).
+    pub async fn start_with_email_enabled() -> Self {
+        Self::start_full(false, false, 30, 90, true, true).await
     }
 
     async fn start_with_config(
@@ -74,6 +80,7 @@ impl TestServer {
             ping_interval,
             client_timeout,
             true,
+            false,
         )
         .await
     }
@@ -84,6 +91,7 @@ impl TestServer {
         ping_interval: u64,
         client_timeout: u64,
         webdav_enabled: bool,
+        email_enabled: bool,
     ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -159,7 +167,9 @@ impl TestServer {
                 index_dir: std::env::temp_dir().join(format!("nf-test-{}-index", port)),
             },
             admin_init: Default::default(),
-            email: infra::config::EmailConfig { enabled: false },
+            email: infra::config::EmailConfig {
+                enabled: email_enabled,
+            },
             ui: Default::default(),
         };
         // Ensure block directory exists

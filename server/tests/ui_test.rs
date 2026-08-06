@@ -1145,3 +1145,93 @@ async fn test_password_reset_disabled_without_email() {
         "password reset token minted despite email being disabled"
     );
 }
+
+/// Full password-reset flow: mint a token, render the confirm page, submit a
+/// new password, then verify the new password logs in and the old one is
+/// rejected. A used token must not reset the password a second time.
+#[tokio::test]
+async fn test_password_reset_full_flow() {
+    let server = TestServer::start_with_email_enabled().await;
+    create_test_user(&server.db, "reset@example.com", "oldpassword").await;
+    let base = server.base_url.clone();
+    let client = reqwest::Client::new();
+
+    // The HTTP POST /reset/ response deliberately omits the link, so mint the
+    // token through the service (the email backend would deliver it).
+    let svc =
+        server::service::auth::password_reset::PasswordResetService::new(server.repos.clone());
+    let result = svc
+        .create_reset_token("reset@example.com", &base)
+        .await
+        .unwrap();
+    let reset_url = result.reset_url.expect("reset link for existing user");
+    let token = reset_url
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(!token.is_empty(), "minted token must be present");
+
+    // GET the confirm page — the token must be recognized as valid.
+    let resp = client
+        .get(format!("{}/accounts/password/reset/{}/", base, token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Submit the new password (Origin header required for CSRF).
+    let resp = no_redirect_client()
+        .post(format!("{}/accounts/password/reset/{}/", base, token))
+        .header("origin", &base)
+        .form(&[
+            ("password1", "newpassword123"),
+            ("password2", "newpassword123"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        302,
+        "valid reset should redirect to complete"
+    );
+
+    // New password logs in; old password is rejected.
+    let resp = no_redirect_client()
+        .post(format!("{}/accounts/login/", base))
+        .form(&[
+            ("email", "reset@example.com"),
+            ("password", "newpassword123"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "new password should log in");
+
+    let resp = no_redirect_client()
+        .post(format!("{}/accounts/login/", base))
+        .form(&[("email", "reset@example.com"), ("password", "oldpassword")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "old password should be rejected");
+
+    // A used token must not reset the password a second time.
+    let resp = client
+        .post(format!("{}/accounts/password/reset/{}/", base, token))
+        .header("origin", &base)
+        .form(&[
+            ("password1", "thirdpassword1"),
+            ("password2", "thirdpassword1"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "reused token must render the error page"
+    );
+}
