@@ -320,3 +320,39 @@ async fn test_upload_blks_commit_rejects_invalid_filename() {
         );
     }
 }
+
+/// Security: commit mode must verify the declared `file_size` against the
+/// real block bytes — a low-balled size must not dodge the quota check.
+#[tokio::test]
+async fn test_upload_blks_commit_rejects_size_lie() {
+    let f = TestFixture::new().await;
+
+    let resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let url: String = resp.json().await.unwrap();
+
+    // Upload a real block whose content is 5 bytes.
+    let data = b"hello";
+    let block_id = {
+        use sha1::{Digest, Sha1};
+        let mut h = Sha1::new();
+        h.update(data);
+        hex::encode(h.finalize())
+    };
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(data.to_vec()).file_name(block_id.clone()),
+    );
+    let resp = f.client.post_multipart_url(&url, form).await;
+    assert_eq!(resp.status(), 200, "block upload should succeed");
+
+    // Commit claims file_size=3 while the real block is 5 bytes.
+    let form = reqwest::multipart::Form::new()
+        .text("commitonly", "1")
+        .text("parent_dir", "/")
+        .text("file_name", "real.txt")
+        .text("file_size", "3")
+        .text("blockids", format!(r#"["{block_id}"]"#));
+    let resp = f.client.post_multipart_url(&url, form).await;
+    assert_eq!(resp.status(), 400, "size lie must be rejected");
+}

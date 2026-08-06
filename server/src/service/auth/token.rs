@@ -15,13 +15,13 @@ pub fn generate_sync_token() -> String {
 }
 
 pub fn generate_share_link_token() -> String {
-    let mut token = [0u8; 12];
+    let mut token = [0u8; 16];
     rand::rng().fill_bytes(&mut token);
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, token)
 }
 
 pub fn generate_upload_link_token() -> String {
-    let mut token = [0u8; 12];
+    let mut token = [0u8; 16];
     rand::rng().fill_bytes(&mut token);
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, token)
 }

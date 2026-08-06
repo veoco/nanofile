@@ -178,7 +178,9 @@ pub async fn zip_task_handler(
     // Purge abandoned tasks and enforce the in-memory cap.
     cleanup_expired(now);
     {
-        let mut tasks = zip_tasks().lock().expect("zip task mutex poisoned");
+        let mut tasks = zip_tasks()
+            .lock()
+            .map_err(|_| AppError::Internal("zip task registry poisoned".into()))?;
         if tasks.len() >= MAX_ZIP_TASKS {
             return Err(AppError::TooManyRequests);
         }
@@ -208,7 +210,9 @@ pub async fn zip_download_handler(
 ) -> Result<Response, AppError> {
     // Look up the task
     let task = {
-        let mut tasks = zip_tasks().lock().expect("zip task mutex poisoned");
+        let mut tasks = zip_tasks()
+            .lock()
+            .map_err(|_| AppError::Internal("zip task registry poisoned".into()))?;
         tasks
             .remove(&token)
             .ok_or_else(|| AppError::NotFound("Zip task not found or expired".into()))?

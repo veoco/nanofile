@@ -1075,16 +1075,6 @@ pub async fn upload_blks_api(
             .ok_or_else(|| AppError::BadRequest("file_size required for commit".into()))?;
         let replace = fields.get("replace").map(|s| s.as_str()) == Some("1");
 
-        // Pre-check storage quota against the declared file size before
-        // assembling the file from its blocks.
-        crate::service::fs::quota::check_upload_quota(
-            &state.repos,
-            info.user_id,
-            file_size,
-            state.config.storage.max_storage_bytes,
-        )
-        .await?;
-
         // Parse blockids JSON array
         let block_ids: Vec<String> = serde_json::from_str(blockids_str)
             .map_err(|_| AppError::BadRequest("invalid blockids JSON array".into()))?;
@@ -1093,17 +1083,39 @@ pub async fn upload_blks_api(
             return Err(AppError::BadRequest("blockids cannot be empty".into()));
         }
 
-        // Verify all blocks exist in block store.
+        // Verify all blocks exist in block store and sum their real sizes.
         // Reject malformed / path-traversal ids outright — a valid block id
         // is exactly 40 hex chars (content-addressed SHA-1).
+        let mut real_size: i64 = 0;
         for bid in &block_ids {
             if bid.len() != 40 || !bid.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return Err(AppError::BadRequest(format!("invalid block id: {bid}")));
             }
-            if !state.block_store.has_block(bid).await {
-                return Err(AppError::BadRequest(format!("block not found: {bid}")));
-            }
+            let sz = state
+                .block_store
+                .block_size(bid)
+                .await
+                .map_err(|_| AppError::BadRequest(format!("block not found: {bid}")))?;
+            real_size += sz;
         }
+
+        // The declared size must match the real block bytes, so a client
+        // can't low-ball `file_size` to dodge the quota check.
+        if real_size != file_size {
+            return Err(AppError::BadRequest(
+                "file_size does not match the uploaded blocks".into(),
+            ));
+        }
+
+        // Pre-check storage quota against the actual block bytes before
+        // assembling the file from its blocks.
+        crate::service::fs::quota::check_upload_quota(
+            &state.repos,
+            info.user_id,
+            real_size,
+            state.config.storage.max_storage_bytes,
+        )
+        .await?;
 
         // Create FsFileData from block IDs
         let file_fs_data = base::common::FsFileData {
