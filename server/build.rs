@@ -6,7 +6,7 @@
 ///   2. `npx @tailwindcss/cli` (Node.js npx, available on most systems)
 ///   3. Writes a minimal placeholder (app compiles but UI is unstyled)
 use std::path::Path;
-use std::process::{Command, exit};
+use std::process::Command;
 
 fn main() {
     let ts = std::time::SystemTime::now()
@@ -14,6 +14,10 @@ fn main() {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     println!("cargo:rustc-env=NANOFILE_BUILD_TS={}", ts);
+
+    // Only regenerate the CSS when one of its inputs changes.
+    println!("cargo:rerun-if-changed=static/css/input.css");
+    println!("cargo:rerun-if-changed=templates/");
 
     let project_root = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let output_path = Path::new(&project_root).join("static/css/app.css");
@@ -34,10 +38,14 @@ fn main() {
         return;
     }
 
-    eprintln!("error: Tailwind CSS generation failed.");
-    eprintln!("  Install:  npm install tailwindcss @tailwindcss/cli");
-    eprintln!("  Or use standalone: https://github.com/tailwindlabs/tailwindcss/releases");
-    exit(1);
+    // No Tailwind available — fall back to a placeholder so the build still
+    // succeeds with an unstyled UI (matches the documented "optional Tailwind"
+    // setup in the README and the module doc comment above).
+    eprintln!("warning: Tailwind CSS unavailable; UI will be unstyled.");
+    let _ = std::fs::write(
+        &output_path,
+        "/* Tailwind CSS unavailable — UI rendered unstyled. */\n",
+    );
 }
 
 fn run_tailwind(cmd: &str, extra_args: &[&str], input: &Path, output: &Path) -> bool {

@@ -213,7 +213,15 @@ async fn main() -> anyhow::Result<()> {
                 .layer(RequestBodyLimitLayer::new(
                     (config.server.max_upload_size_mb * 1024 * 1024) as usize,
                 ))
-                .layer(tower_http::trace::TraceLayer::new_for_http())
+                .layer(
+                    tower_http::trace::TraceLayer::new_for_http()
+                        .on_request(
+                            tower_http::trace::DefaultOnRequest::new().level(tracing::Level::INFO),
+                        )
+                        .on_response(
+                            tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
+                        ),
+                )
                 .layer(TimeoutLayer::with_status_code(
                     StatusCode::REQUEST_TIMEOUT,
                     std::time::Duration::from_secs(config.server.request_timeout_secs),
