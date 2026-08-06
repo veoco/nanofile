@@ -10,7 +10,7 @@ use crate::repository::Repositories;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
-use infra::common::util::timestamp_rfc3339;
+use infra::common::util::{get_head_commit_id, timestamp_rfc3339};
 use infra::entity::{deleted_repo, file_trash, repo, repo_member};
 use infra::serialization::S_IFDIR;
 
@@ -117,6 +117,54 @@ pub async fn add_to_trash(
         .await?;
 
     Ok(())
+}
+
+/// Record a single deleted entry in the trash table, resolving its id, size
+/// and type from the parent directory data.
+///
+/// Best-effort: failures are logged and swallowed so a trash-record problem
+/// never blocks the actual deletion.
+pub async fn record_deleted_entry(
+    db: &DatabaseConnection,
+    repos: &Repositories,
+    repo_id: &str,
+    full_path: &str,
+    name: &str,
+    user_email: &str,
+    parent_fs_id: &str,
+) {
+    let head_commit_id = match get_head_commit_id(db, repo_id).await {
+        Ok(id) => id,
+        Err(_) => return,
+    };
+    let parent_dir_data =
+        match crate::fs::core::read_fs_dir_data(repos, repo_id, parent_fs_id).await {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+    let Some(entry) = parent_dir_data.dirents.iter().find(|d| d.name == name) else {
+        return;
+    };
+    let obj_type = if entry.mode & S_IFDIR != 0 {
+        "dir"
+    } else {
+        "file"
+    };
+    if let Err(e) = add_to_trash(
+        repos,
+        repo_id,
+        full_path,
+        obj_type,
+        &entry.id,
+        &entry.name,
+        entry.size,
+        &head_commit_id,
+        user_email,
+    )
+    .await
+    {
+        tracing::warn!("Failed to record trash for {full_path}: {e}");
+    }
 }
 
 /// Insert multiple deleted items into `file_trash` in a single batch.

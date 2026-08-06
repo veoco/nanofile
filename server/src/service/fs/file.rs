@@ -10,7 +10,7 @@ use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADAT
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{
-    basename, get_head_commit_id, get_head_root_id, get_head_root_id_opt, parent_path_from,
+    basename, get_head_root_id, get_head_root_id_opt, join_path, parent_path_from,
     timestamp_rfc3339,
 };
 use infra::serialization::S_IFREG;
@@ -23,9 +23,13 @@ pub struct UploadedFile {
     pub replace: bool,
 }
 
-// ── Rename file entry (pub(crate), used across handlers) ────────────────
+// ── Rename entry (pub(crate), shared by file and dir services) ───────────
 
-pub(crate) async fn rename_file_entry(
+/// Rename a file or directory entry in place.
+///
+/// `is_dir` controls the commit description, activity type and error wording;
+/// filenames are validated for files only (preserving legacy behavior).
+pub(crate) async fn rename_entry(
     db: &DatabaseConnection,
     repos: &Repositories,
     repo_id: &str,
@@ -33,9 +37,12 @@ pub(crate) async fn rename_file_entry(
     new_name: &str,
     modifier: &str,
     user_id: i32,
+    is_dir: bool,
 ) -> Result<(), AppError> {
-    base::sanitize::validate_filename(new_name)
-        .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
+    if !is_dir {
+        base::sanitize::validate_filename(new_name)
+            .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
+    }
 
     let parent_path = parent_path_from(path);
     let old_name = basename(path);
@@ -53,7 +60,13 @@ pub(crate) async fn rename_file_entry(
         .iter()
         .find(|d| d.name == old_name)
         .map(|d| d.id.clone())
-        .ok_or_else(|| AppError::NotFound("file not found".into()))?;
+        .ok_or_else(|| {
+            AppError::NotFound(if is_dir {
+                "directory not found".into()
+            } else {
+                "file not found".into()
+            })
+        })?;
 
     FileOps::update_dir_tree_and_commit(
         db,
@@ -62,7 +75,11 @@ pub(crate) async fn rename_file_entry(
         parent_path,
         &parent_fs_id,
         modifier,
-        &format!("Renamed {old_name}"),
+        &if is_dir {
+            format!("Renamed directory {old_name}")
+        } else {
+            format!("Renamed {old_name}")
+        },
         crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
             if let Some(d) = dirents.iter_mut().find(|d| d.id == child_id) {
@@ -74,16 +91,12 @@ pub(crate) async fn rename_file_entry(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let new_path = if parent_path == "/" {
-        format!("/{new_name}")
-    } else {
-        format!("{parent_path}/{new_name}")
-    };
+    let new_path = join_path(parent_path, new_name);
     activity_log::log_activity(
         db,
         repo_id,
         "rename",
-        "file",
+        if is_dir { "dir" } else { "file" },
         &new_path,
         user_id,
         Some(path),
@@ -94,7 +107,7 @@ pub(crate) async fn rename_file_entry(
     )
     .await;
 
-    // Update starred items with the new file path
+    // Update starred items with the new path (dirs move all items inside).
     if let Err(e) = repos
         .starred
         .update_paths_for_rename(path, &new_path, repo_id)
@@ -104,6 +117,149 @@ pub(crate) async fn rename_file_entry(
     }
 
     Ok(())
+}
+
+// ── Move entry (shared by file and dir services) ─────────────────────────
+
+/// Move a file or directory to a new parent directory using the two-phase
+/// commit sequence (remove from old parent, commit, re-add to new parent).
+///
+/// `is_dir` controls the commit description, activity type and error wording.
+/// The caller is responsible for index updates (files only).
+pub(crate) async fn move_entry(
+    db: &DatabaseConnection,
+    repos: &Repositories,
+    repo_id: &str,
+    path: &str,
+    new_parent_dir: &str,
+    email: &str,
+    user_id: i32,
+    is_dir: bool,
+) -> Result<String, AppError> {
+    let head_root_id = get_head_root_id(db, repo_id).await?;
+    let entry_name = basename(path);
+    let parent_path = parent_path_from(path);
+
+    let old_parent_fs_id =
+        crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("resolve old parent failed: {e}")))?;
+
+    let old_parent_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &old_parent_fs_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("read old parent failed: {e}")))?;
+    let entry = old_parent_data
+        .dirents
+        .iter()
+        .find(|d| d.name == entry_name)
+        .ok_or_else(|| {
+            AppError::NotFound(if is_dir {
+                "directory not found".into()
+            } else {
+                "file not found".into()
+            })
+        })?;
+
+    let entry_fs_id = entry.id.clone();
+    let entry_mode = entry.mode;
+    let entry_size = entry.size;
+
+    // new_parent_dir should already be validated by handler, but we use
+    // safe_normalize_path for defensive programming. If it fails, it's an
+    // internal error (handler bug).
+    let new_parent_path = base::sanitize::safe_normalize_path(new_parent_dir)
+        .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
+    let _ = crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, &new_parent_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("resolve dest parent failed: {e}")))?;
+
+    let intermediate_root = FileOps::update_dir_tree_no_commit(
+        db,
+        repos,
+        repo_id,
+        parent_path,
+        &old_parent_fs_id,
+        crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
+        |dirents| {
+            dirents.retain(|d| d.name != entry_name);
+            Ok(())
+        },
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    FileOps::create_commit(
+        repos,
+        repo_id,
+        &intermediate_root,
+        email,
+        &if is_dir {
+            format!("Moved directory {entry_name}")
+        } else {
+            format!("Moved {entry_name}")
+        },
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let new_head_root = get_head_root_id(db, repo_id).await?;
+    let new_dst_fs_id =
+        crate::fs::core::resolve_fs_id(repos, repo_id, &new_head_root, &new_parent_path)
+            .await
+            .map_err(|e| {
+                AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
+            })?;
+
+    let now = chrono::Utc::now().timestamp();
+    let email_clone = email.to_string();
+    let entry_name_clone = entry_name.to_string();
+    FileOps::update_dir_tree_and_commit(
+        db,
+        repos,
+        repo_id,
+        &new_parent_path,
+        &new_dst_fs_id,
+        email,
+        &if is_dir {
+            format!("Moved directory {entry_name}")
+        } else {
+            format!("Moved {entry_name}")
+        },
+        crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
+        |dirents| {
+            if !dirents.iter().any(|d| d.name == entry_name_clone) {
+                dirents.push(DirEntryData {
+                    id: entry_fs_id.clone(),
+                    mode: entry_mode,
+                    modifier: email_clone.clone(),
+                    mtime: now,
+                    name: entry_name_clone.clone(),
+                    size: entry_size,
+                });
+            }
+            Ok(())
+        },
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let new_path = join_path(&new_parent_path, entry_name);
+    activity_log::log_activity(
+        db,
+        repo_id,
+        "move",
+        if is_dir { "dir" } else { "file" },
+        &new_path,
+        user_id,
+        Some(path),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+
+    Ok(new_path)
 }
 
 // ── FileService ─────────────────────────────────────────────────────────
@@ -498,7 +654,8 @@ impl FileService {
         };
 
         // Record deleted entry to trash before tree update
-        record_delete_file_trash(db, &self.repos, repo_id, path, name, email, &parent_fs_id).await;
+        trash::record_deleted_entry(db, &self.repos, repo_id, path, name, email, &parent_fs_id)
+            .await;
 
         FileOps::update_dir_tree_and_commit(
             db,
@@ -542,7 +699,7 @@ impl FileService {
         email: &str,
         user_id: i32,
     ) -> Result<(), AppError> {
-        rename_file_entry(
+        rename_entry(
             self.db(),
             &self.repos,
             repo_id,
@@ -550,6 +707,7 @@ impl FileService {
             new_name,
             email,
             user_id,
+            false,
         )
         .await?;
 
@@ -583,121 +741,17 @@ impl FileService {
         email: &str,
         user_id: i32,
     ) -> Result<(), AppError> {
-        let db = self.db();
-        let head_root_id = get_head_root_id(db, repo_id).await?;
-
-        let file_name = basename(path);
-        let parent_path = parent_path_from(path);
-
-        let old_parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
-                .await
-                .map_err(|e| AppError::Internal(format!("resolve old parent failed: {e}")))?;
-
-        let old_parent_data =
-            crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &old_parent_fs_id)
-                .await
-                .map_err(|e| AppError::Internal(format!("read old parent failed: {e}")))?;
-        let file_entry = old_parent_data
-            .dirents
-            .iter()
-            .find(|d| d.name == file_name)
-            .ok_or_else(|| AppError::NotFound("file not found".into()))?;
-
-        let file_fs_id = file_entry.id.clone();
-        let file_mode = file_entry.mode;
-        let file_size = file_entry.size;
-
-        // dst_dir should already be validated by handler, but we use safe_normalize_path
-        // for defensive programming. If it fails, it's an internal error (handler bug).
-        let new_parent_path = base::sanitize::safe_normalize_path(dst_dir)
-            .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
-        let _ =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, &new_parent_path)
-                .await
-                .map_err(|e| AppError::Internal(format!("resolve dest parent failed: {e}")))?;
-
-        let intermediate_root = FileOps::update_dir_tree_no_commit(
-            db,
+        let new_path = move_entry(
+            self.db(),
             &self.repos,
             repo_id,
-            parent_path,
-            &old_parent_fs_id,
-            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
-            |dirents| {
-                dirents.retain(|d| d.name != file_name);
-                Ok(())
-            },
-        )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-        FileOps::create_commit(
-            &self.repos,
-            repo_id,
-            &intermediate_root,
+            path,
+            dst_dir,
             email,
-            &format!("Moved {file_name}"),
-        )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-        let new_head_root = get_head_root_id(db, repo_id).await?;
-        let new_dst_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &new_head_root, &new_parent_path)
-                .await
-                .map_err(|e| {
-                    AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
-                })?;
-
-        let now = chrono::Utc::now().timestamp();
-        let email_clone = email.to_string();
-        let file_name_clone = file_name.to_string();
-        FileOps::update_dir_tree_and_commit(
-            db,
-            &self.repos,
-            repo_id,
-            &new_parent_path,
-            &new_dst_fs_id,
-            email,
-            &format!("Moved {file_name}"),
-            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
-            |dirents| {
-                if !dirents.iter().any(|d| d.name == file_name_clone) {
-                    dirents.push(DirEntryData {
-                        id: file_fs_id.clone(),
-                        mode: file_mode,
-                        modifier: email_clone.clone(),
-                        mtime: now,
-                        name: file_name_clone.clone(),
-                        size: file_size,
-                    });
-                }
-                Ok(())
-            },
-        )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-        let new_path = if new_parent_path == "/" {
-            format!("/{file_name}")
-        } else {
-            format!("{new_parent_path}/{file_name}")
-        };
-        activity_log::log_activity(
-            db,
-            repo_id,
-            "move",
-            "file",
-            &new_path,
             user_id,
-            Some(path),
-            None,
-            None,
-            None,
-            None,
+            false,
         )
-        .await;
+        .await?;
 
         // Update full-text search index
         if let Some(indexer) = &self.indexer {
@@ -1098,45 +1152,5 @@ impl FileService {
             }
         }
         uploaded
-    }
-}
-
-/// Record a deleted entry to the trash table.
-async fn record_delete_file_trash(
-    db: &sea_orm::DatabaseConnection,
-    repos: &Repositories,
-    repo_id: &str,
-    path: &str,
-    name: &str,
-    email: &str,
-    parent_fs_id: &str,
-) {
-    let head_commit_id = match get_head_commit_id(db, repo_id).await {
-        Ok(id) => id,
-        Err(_) => return,
-    };
-    let parent_dir_data =
-        match crate::fs::core::read_fs_dir_data(repos, repo_id, parent_fs_id).await {
-            Ok(d) => d,
-            Err(_) => return,
-        };
-    let entry = match parent_dir_data.dirents.iter().find(|d| d.name == name) {
-        Some(e) => e,
-        None => return,
-    };
-    if let Err(e) = trash::add_to_trash(
-        repos,
-        repo_id,
-        path,
-        "file",
-        &entry.id,
-        &entry.name,
-        entry.size,
-        &head_commit_id,
-        email,
-    )
-    .await
-    {
-        tracing::warn!("Failed to record trash for {path}: {e}");
     }
 }

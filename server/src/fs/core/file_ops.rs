@@ -408,26 +408,16 @@ impl FileOps {
         ancestor_chain: &[(String, String)],
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
     ) -> Result<String, AppError> {
-        let _lock = acquire_repo_lock(repo_id).await;
-        let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
-        update_fn(&mut parent_data.dirents)?;
-
-        let new_parent_fs_id =
-            crate::fs::core::store_fs_dir_object(db, repo_id, &parent_data).await?;
-
-        let root_fs_id = if parent_path == "/" {
-            new_parent_fs_id.clone()
-        } else {
-            Self::walk_up_ancestors(
-                repos,
-                db,
-                repo_id,
-                parent_path,
-                &new_parent_fs_id,
-                ancestor_chain,
-            )
-            .await?
-        };
+        let root_fs_id = Self::apply_tree_update(
+            db,
+            repos,
+            repo_id,
+            parent_path,
+            parent_fs_id,
+            ancestor_chain,
+            update_fn,
+        )
+        .await?;
 
         Self::create_commit(repos, repo_id, &root_fs_id, modifier, description).await?;
 
@@ -449,6 +439,30 @@ impl FileOps {
         ancestor_chain: &[(String, String)],
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
     ) -> Result<String, AppError> {
+        Self::apply_tree_update(
+            db,
+            repos,
+            repo_id,
+            parent_path,
+            parent_fs_id,
+            ancestor_chain,
+            update_fn,
+        )
+        .await
+    }
+
+    /// Shared body of the two `update_dir_tree_*` helpers: lock the repo,
+    /// apply `update_fn` to the parent directory, persist it and walk up the
+    /// ancestor chain to recompute the root fs_id.
+    async fn apply_tree_update(
+        db: &DatabaseConnection,
+        repos: &Repositories,
+        repo_id: &str,
+        parent_path: &str,
+        parent_fs_id: &str,
+        ancestor_chain: &[(String, String)],
+        update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
+    ) -> Result<String, AppError> {
         let _lock = acquire_repo_lock(repo_id).await;
         let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
@@ -456,8 +470,8 @@ impl FileOps {
         let new_parent_fs_id =
             crate::fs::core::store_fs_dir_object(db, repo_id, &parent_data).await?;
 
-        let root_fs_id = if parent_path == "/" {
-            new_parent_fs_id.clone()
+        if parent_path == "/" {
+            Ok(new_parent_fs_id)
         } else {
             Self::walk_up_ancestors(
                 repos,
@@ -467,10 +481,8 @@ impl FileOps {
                 &new_parent_fs_id,
                 ancestor_chain,
             )
-            .await?
-        };
-
-        Ok(root_fs_id)
+            .await
+        }
     }
 
     /// Create a commit with the given root_fs_id and update the repo's HEAD.
