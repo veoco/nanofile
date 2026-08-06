@@ -18,6 +18,7 @@ pub mod notification;
 pub mod repository;
 pub mod routes;
 pub mod scheduler;
+pub mod scheduler_setup;
 pub mod sdoc;
 pub mod service;
 pub mod static_assets;
@@ -32,16 +33,15 @@ use sea_orm::DatabaseConnection;
 use sha2::Digest;
 use tokio_util::sync::CancellationToken;
 
-use crate::fs::core::gc::GcManager;
 use crate::fs::task_manager::TaskManager;
 use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
-use crate::scheduler::{Scheduler, TaskOutput};
+use crate::scheduler::Scheduler;
 use crate::service::auth::access_token::AccessTokenManager;
+use crate::service::auth::rate_limit::AuthRateLimiters;
 use infra::config::Config;
 use infra::crypto::password_manager::PasswordManager;
-use infra::rate_limit::{GenericRateLimiter, LoginRateLimiter};
 use infra::storage::DynBlockStorage;
 
 /// Unified application state injected into all axum handlers.
@@ -64,16 +64,9 @@ pub struct AppState {
     pub indexer: Option<TextIndexer>,
     /// Repository interfaces for data access (wraps SeaORM entity queries).
     pub repos: Arc<crate::repository::Repositories>,
-    /// Login rate limiter (tracks failed attempts per IP).
-    pub login_rate_limiter: Arc<LoginRateLimiter>,
-    /// Password reset rate limiter (per IP).
-    pub password_reset_limiter: Arc<GenericRateLimiter>,
-    /// User registration rate limiter (per IP).
-    pub registration_limiter: Arc<GenericRateLimiter>,
-    /// TOTP verification rate limiter (per user+IP).
-    pub totp_limiter: Arc<GenericRateLimiter>,
-    /// 2FA disable rate limiter (per user, password brute-force prevention).
-    pub disable_2fa_limiter: Arc<GenericRateLimiter>,
+    /// Aggregated authentication rate limiters (login, reset, registration,
+    /// TOTP, 2FA-disable).
+    pub auth_limiters: Arc<AuthRateLimiters>,
     /// Server-wide secret for CSRF token generation.
     pub csrf_secret: Arc<Vec<u8>>,
     /// Temporary file manager for resumable/chunked uploads.
@@ -116,47 +109,7 @@ impl AppState {
                 None
             };
 
-        // Continuous: event listener (forwards repo-update events to WebSocket subscribers).
-        if let Some(ref mgr) = notification_manager {
-            let mgr = mgr.clone();
-            scheduler.spawn_continuous("event listener", move |token| async move {
-                mgr.run_event_listener(token).await;
-            });
-        }
-
-        // Periodic: JWT token expiry check (hourly).
-        if let Some(ref mgr) = notification_manager {
-            let mgr = mgr.clone();
-            scheduler.spawn_periodic("token expiry check", 3600, move || {
-                let mgr = mgr.clone();
-                async move {
-                    mgr.check_expired_tokens().await;
-                    TaskOutput::success("ok", None)
-                }
-            });
-        }
-
-        let login_rate_limiter = Arc::new(LoginRateLimiter::new(
-            config.auth.max_login_attempts,
-            config.auth.lockout_duration_secs,
-        ));
-
-        let password_reset_limiter = Arc::new(GenericRateLimiter::new(
-            config.auth.password_reset_max_per_hour.max(1),
-            3600,
-        ));
-        let registration_limiter = Arc::new(GenericRateLimiter::new(
-            config.auth.registration_max_per_hour.max(1),
-            3600,
-        ));
-        let totp_limiter = Arc::new(GenericRateLimiter::new(
-            config.auth.totp_max_attempts.max(1),
-            300,
-        ));
-        let disable_2fa_limiter = Arc::new(GenericRateLimiter::new(
-            config.auth.totp_max_attempts.max(1),
-            300,
-        ));
+        let auth_limiters = AuthRateLimiters::new(&config.auth);
 
         // Derive the CSRF secret from the server-wide secret_key via SHA-256.
         let mut hasher = sha2::Sha256::new();
@@ -164,91 +117,13 @@ impl AppState {
         hasher.update(config.server.secret_key.as_bytes());
         let csrf_secret = Arc::new(hasher.finalize().to_vec());
 
-        // Periodic: password cache cleanup (every 5 minutes).
         let password_manager = Arc::new(PasswordManager::new());
-        {
-            let pm = password_manager.clone();
-            scheduler.spawn_periodic("password cache cleanup", 300, move || {
-                let pm = pm.clone();
-                async move {
-                    let count = pm.cleanup_expired_once().await;
-                    if count > 0 {
-                        TaskOutput::success(
-                            format!("Evicted {count} expired password cache entries"),
-                            Some(count),
-                        )
-                    } else {
-                        TaskOutput::success("no expired entries", None)
-                    }
-                }
-            });
-        }
 
         let db = Arc::new(db);
         let repos = Arc::new(crate::repository::Repositories::new(db.clone()));
 
-        // Periodic: expired share link cleanup (hourly).
-        {
-            let repos = repos.clone();
-            scheduler.spawn_periodic("share link cleanup", 3600, move || {
-                let repos = repos.clone();
-                async move {
-                    let now = chrono::Utc::now().timestamp();
-                    match repos.share_link.delete_expired(now).await {
-                        Ok(count) if count > 0 => TaskOutput::success(
-                            format!("Cleaned up {count} expired share links"),
-                            Some(count),
-                        ),
-                        Ok(_) => TaskOutput::success("no expired share links", None),
-                        Err(e) => {
-                            TaskOutput::error(format!("Failed to clean expired share links: {e}"))
-                        }
-                    }
-                }
-            });
-        }
-
-        // Periodic: expired upload link cleanup (hourly).
-        {
-            let repos = repos.clone();
-            scheduler.spawn_periodic("upload link cleanup", 3600, move || {
-                let repos = repos.clone();
-                async move {
-                    let now = chrono::Utc::now().timestamp();
-                    match repos.upload_link.delete_expired(now).await {
-                        Ok(count) if count > 0 => TaskOutput::success(
-                            format!("Cleaned up {count} expired upload links"),
-                            Some(count),
-                        ),
-                        Ok(_) => TaskOutput::success("no expired upload links", None),
-                        Err(e) => {
-                            TaskOutput::error(format!("Failed to clean expired upload links: {e}"))
-                        }
-                    }
-                }
-            });
-        }
-
-        // Periodic: garbage collection (configurable interval).
-        let gc_config = config.gc.clone();
-        if gc_config.enabled {
-            let repos_for_gc = repos.clone();
-            scheduler.spawn_periodic("gc", gc_config.interval_hours * 3600, move || {
-                let repos = repos_for_gc.clone();
-                async move {
-                    match GcManager::garbage_collect(&repos).await {
-                        Ok(count) if count > 0 => TaskOutput::success(
-                            format!("GC removed {count} unreferenced FS objects"),
-                            Some(count),
-                        ),
-                        Ok(_) => TaskOutput::success("GC completed: nothing to remove", None),
-                        Err(e) => TaskOutput::error(format!("GC failed: {e}")),
-                    }
-                }
-            });
-        }
-
-        // Periodic: index background committer (every 30 seconds).
+        // Full-text indexer (its commit task is registered below alongside the
+        // other background tasks).
         let indexer = if config.index.enabled {
             match TextIndexer::new(&config.index.index_dir, Some(repos.clone())) {
                 Ok(idx) => {
@@ -256,20 +131,6 @@ impl AppState {
                         "Full-text indexer initialized at {:?}",
                         config.index.index_dir
                     );
-                    {
-                        let idx = idx.clone();
-                        scheduler.spawn_periodic("index commit", 30, move || {
-                            let idx = idx.clone();
-                            async move {
-                                match idx.commit() {
-                                    Ok(()) => TaskOutput::success("index committed", None),
-                                    Err(e) => TaskOutput::error(format!(
-                                        "Background index commit failed: {e}"
-                                    )),
-                                }
-                            }
-                        });
-                    }
                     Some(idx)
                 }
                 Err(e) => {
@@ -283,6 +144,17 @@ impl AppState {
             None
         };
 
+        // Register all background tasks (event listener, token expiry, cache
+        // cleanup, share/upload link cleanup, gc, index commit).
+        crate::scheduler_setup::register_default_tasks(
+            &scheduler,
+            &repos,
+            notification_manager.as_ref(),
+            &password_manager,
+            &config.gc,
+            indexer.as_ref(),
+        );
+
         Self {
             repos,
             db,
@@ -293,11 +165,7 @@ impl AppState {
             task_manager: Arc::new(TaskManager::new()),
             notification_manager,
             indexer,
-            login_rate_limiter,
-            password_reset_limiter,
-            registration_limiter,
-            totp_limiter,
-            disable_2fa_limiter,
+            auth_limiters,
             csrf_secret,
             temp_file_manager,
             shutdown_token,
@@ -366,7 +234,7 @@ impl AppState {
             self.repos.clone(),
             self.config.auth.password_hash_iterations,
             self.config.auth.api_token_ttl_days,
-            self.login_rate_limiter.clone(),
+            self.auth_limiters.login.clone(),
         )
     }
 
@@ -378,7 +246,7 @@ impl AppState {
         crate::service::auth::two_factor::TwoFactorService::new(
             self.repos.clone(),
             self.config.auth.password_hash_iterations,
-            self.disable_2fa_limiter.clone(),
+            self.auth_limiters.disable_2fa.clone(),
         )
     }
 
@@ -388,14 +256,6 @@ impl AppState {
 
     pub fn admin_service(&self) -> crate::service::admin::AdminService {
         crate::service::admin::AdminService::new(self.repos.clone())
-    }
-
-    pub fn device_service(&self) -> crate::service::user::DeviceService {
-        crate::service::user::DeviceService::new(self.repos.clone())
-    }
-
-    pub fn invitation_service(&self) -> crate::service::user::InvitationService {
-        crate::service::user::InvitationService::new(self.repos.clone())
     }
 
     pub fn sdoc_service(&self) -> crate::service::sdoc::SdocService {

@@ -174,8 +174,8 @@ pub async fn login(
     let rate_limit_key_user = format!("login:user:{}", form.email);
 
     // Check rate limit before any DB or password work.
-    if state.login_rate_limiter.is_locked(&rate_limit_key_ip)
-        || state.login_rate_limiter.is_locked(&rate_limit_key_user)
+    if state.auth_limiters.login.is_locked(&rate_limit_key_ip)
+        || state.auth_limiters.login.is_locked(&rate_limit_key_user)
     {
         return render_login_page(
             &state,
@@ -193,9 +193,10 @@ pub async fn login(
     let user_record = match state.repos.user.find_by_email(&form.email).await? {
         Some(u) => u,
         None => {
-            state.login_rate_limiter.record_failure(&rate_limit_key_ip);
+            state.auth_limiters.login.record_failure(&rate_limit_key_ip);
             state
-                .login_rate_limiter
+                .auth_limiters
+                .login
                 .record_failure(&rate_limit_key_user);
             return render_login_page(
                 &state,
@@ -213,9 +214,10 @@ pub async fn login(
 
     if !user_record.is_active {
         // Use the same generic error to avoid user-enumeration attacks (matching seahub).
-        state.login_rate_limiter.record_failure(&rate_limit_key_ip);
+        state.auth_limiters.login.record_failure(&rate_limit_key_ip);
         state
-            .login_rate_limiter
+            .auth_limiters
+            .login
             .record_failure(&rate_limit_key_user);
         return render_login_page(
             &state,
@@ -235,9 +237,10 @@ pub async fn login(
         &user_record.password_hash,
         state.config.auth.password_hash_iterations,
     ) {
-        state.login_rate_limiter.record_failure(&rate_limit_key_ip);
+        state.auth_limiters.login.record_failure(&rate_limit_key_ip);
         state
-            .login_rate_limiter
+            .auth_limiters
+            .login
             .record_failure(&rate_limit_key_user);
         return render_login_page(
             &state,
@@ -253,8 +256,8 @@ pub async fn login(
     }
 
     // Successful login — clear rate limit for this IP and user.
-    state.login_rate_limiter.clear(&rate_limit_key_ip);
-    state.login_rate_limiter.clear(&rate_limit_key_user);
+    state.auth_limiters.login.clear(&rate_limit_key_ip);
+    state.auth_limiters.login.clear(&rate_limit_key_user);
 
     // ── Check for 2FA ─────────────────────────────────────────────────
     let two_fa = state.repos.user_2fa.find_by_user_id(user_record.id).await?;
@@ -459,7 +462,7 @@ pub async fn two_factor_auth(
 
     // Rate limit: per user+IP.
     let totp_key = format!("totp:{}:{}", user_id, client_ip);
-    if state.totp_limiter.is_limited(&totp_key) {
+    if state.auth_limiters.totp.is_limited(&totp_key) {
         // Delete pending token to force re-login
         let _ = state.repos.api_token.delete_by_token(pending_token).await;
         return Err(AppError::BadRequest(
@@ -512,7 +515,7 @@ pub async fn two_factor_auth(
     };
 
     if !code_valid && !backup_valid {
-        state.totp_limiter.record_attempt(&totp_key);
+        state.auth_limiters.totp.record_attempt(&totp_key);
         let tpl = TwoFactorLoginTemplate {
             urls: crate::static_assets::template_urls(),
             t: I18n::from_headers(&headers, &state.config.ui.default_language),
@@ -529,7 +532,7 @@ pub async fn two_factor_auth(
     }
 
     // ── TOTP verified — create real session ────────────────────────
-    state.totp_limiter.clear(&totp_key);
+    state.auth_limiters.totp.clear(&totp_key);
     // Delete the pending token
     let _ = state.repos.api_token.delete_by_token(pending_token).await;
 
@@ -706,14 +709,14 @@ pub async fn register(
         &state.config.server.trusted_proxies,
     );
     let rl_key = format!("register:{}", client_ip);
-    if state.registration_limiter.is_limited(&rl_key) {
+    if state.auth_limiters.registration.is_limited(&rl_key) {
         return Err(AppError::BadRequest(
             I18n::from_headers(&headers, &state.config.ui.default_language)
                 .tr("auth.registration_too_many")
                 .to_string(),
         ));
     }
-    state.registration_limiter.record_attempt(&rl_key);
+    state.auth_limiters.registration.record_attempt(&rl_key);
 
     // Validate passwords match before delegating to service.
     if form.password1 != form.password2 {
@@ -901,7 +904,7 @@ pub async fn password_reset(
         &state.config.server.trusted_proxies,
     );
     let rl_key = format!("password_reset:{}", client_ip);
-    if state.password_reset_limiter.is_limited(&rl_key) {
+    if state.auth_limiters.password_reset.is_limited(&rl_key) {
         // Show the done page silently to prevent enumeration.
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
@@ -912,7 +915,7 @@ pub async fn password_reset(
             .map_err(|e| AppError::internal(e.to_string()))?;
         return Ok(Html(html));
     }
-    state.password_reset_limiter.record_attempt(&rl_key);
+    state.auth_limiters.password_reset.record_attempt(&rl_key);
 
     // Mint a token that will be emailed to the account owner (delivery backend
     // not yet wired up). The response deliberately does not contain it.

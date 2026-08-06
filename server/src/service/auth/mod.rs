@@ -4,6 +4,7 @@ pub mod csrf;
 pub mod login;
 pub mod password;
 pub mod password_reset;
+pub mod rate_limit;
 pub mod registration;
 pub mod s2fa;
 pub mod sso;
