@@ -241,62 +241,21 @@ impl FileService {
         let parent_dir = upload.parent_dir;
         let replace = upload.replace;
 
-        if file_name.is_empty() {
-            return Err(AppError::BadRequest("no file provided".into()));
-        }
-
-        base::sanitize::validate_filename(&file_name)
-            .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
-
-        let file_path = if parent_dir == "/" {
-            format!("/{file_name}")
-        } else {
-            format!("{parent_dir}/{file_name}")
-        };
-
-        let old_size = if replace {
-            crate::fs::core::get_entry_total_size(&self.repos, repo_id, &file_path)
-                .await
-                .ok()
-                .unwrap_or(0)
-        } else {
-            0
-        };
-
-        // Check storage quota before accepting the upload.
-        crate::handler::web::quota::check_upload_quota(
-            &self.repos,
-            user_id,
-            file_data.len() as i64,
-            self.config.storage.max_storage_bytes,
-        )
-        .await?;
-
-        let db = self.db();
-        FileOps::create_file(
-            db,
-            &self.repos,
-            repo_id,
-            &parent_dir,
-            &file_name,
-            &file_data,
-            email,
-            replace,
-            &self.block_store,
-            None,
-        )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-        let op_type = if replace { "edit" } else { "create" };
-        activity_log::log_activity(
-            db, repo_id, op_type, "file", &file_path, user_id, None, None, None, None, None,
-        )
-        .await;
-
-        crate::fs::core::adjust_repo_size(&self.repos, repo_id, file_data.len() as i64 - old_size)
+        let _fs_id = self
+            .upload_file_committed(
+                repo_id,
+                &parent_dir,
+                &file_name,
+                &file_data,
+                email,
+                Some(user_id),
+                None,
+                false,
+                Some(replace),
+            )
             .await?;
 
+        // Full-text index the uploaded file (web uploads index lazily on read).
         if let Some(indexer) = &self.indexer {
             let full_path = if parent_dir.ends_with('/') {
                 format!("{parent_dir}{file_name}")
@@ -313,6 +272,196 @@ impl FileService {
             } else if replace && let Err(e) = indexer.delete_file(repo_id, &full_path) {
                 tracing::warn!("Failed to delete index for {file_name}: {e}");
             }
+        }
+
+        Ok(())
+    }
+
+    /// Write a file into a repo and commit it, returning the new `fs_id`.
+    ///
+    /// This is the canonical write path shared by `upload_file` and the web
+    /// upload handlers. It handles old-size detection, storage-quota checks,
+    /// optional directory creation, encryption, repo-size adjustment and
+    /// activity logging in one place.
+    ///
+    /// `replace`:
+    /// - `Some(true)` — overwrite the existing entry (logged as "edit")
+    /// - `Some(false)` — never overwrite
+    /// - `None` — auto-detect from whether the file already exists
+    pub async fn upload_file_committed(
+        &self,
+        repo_id: &str,
+        target_dir: &str,
+        filename: &str,
+        data: &[u8],
+        modifier: &str,
+        user_id: Option<i32>,
+        enc_key: Option<(&[u8], &[u8])>,
+        ensure_dir: bool,
+        replace: Option<bool>,
+    ) -> Result<String, AppError> {
+        base::sanitize::validate_filename(filename)
+            .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
+
+        let fp = if target_dir == "/" {
+            format!("/{filename}")
+        } else {
+            format!("{}/{}", target_dir.trim_end_matches('/'), filename)
+        };
+
+        // Detect the existing entry to decide old-size / replace / op_type.
+        let size_result = crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await;
+        let file_exists = size_result.is_ok();
+        let old_size = size_result.ok().unwrap_or(0);
+        let replace_eff = replace.unwrap_or(file_exists);
+        let old_size_eff = if replace_eff { old_size } else { 0 };
+
+        // Check storage quota before accepting the upload.
+        if let Some(uid) = user_id {
+            crate::service::fs::quota::check_upload_quota(
+                &self.repos,
+                uid,
+                data.len() as i64,
+                self.config.storage.max_storage_bytes,
+            )
+            .await?;
+        }
+
+        // Ensure the target directory exists (folder uploads with missing subdirs).
+        if ensure_dir && let Some(uid) = user_id {
+            self.ensure_dir_recursive(repo_id, target_dir, modifier, uid)
+                .await?;
+        }
+
+        let fs_id = FileOps::create_file(
+            self.db(),
+            &self.repos,
+            repo_id,
+            target_dir,
+            filename,
+            data,
+            modifier,
+            replace_eff,
+            &self.block_store,
+            enc_key,
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
+
+        // Adjust repo size (delta = new_size - old_size).
+        crate::fs::core::adjust_repo_size(&self.repos, repo_id, data.len() as i64 - old_size_eff)
+            .await?;
+
+        // Log activity.
+        if let Some(uid) = user_id {
+            let op_type = if replace_eff { "edit" } else { "create" };
+            activity_log::log_activity(
+                self.db(),
+                repo_id,
+                op_type,
+                "file",
+                &fp,
+                uid,
+                None,
+                Some(data.len() as i64),
+                Some(&fs_id),
+                None,
+                None,
+            )
+            .await;
+        }
+
+        Ok(fs_id)
+    }
+
+    /// Recursively create any missing directory components below `path`.
+    async fn ensure_dir_recursive(
+        &self,
+        repo_id: &str,
+        path: &str,
+        email: &str,
+        user_id: i32,
+    ) -> Result<(), AppError> {
+        if path == "/" {
+            return Ok(());
+        }
+
+        // Quick check: if the head commit root can't be resolved, the repo is empty.
+        if get_head_root_id(self.db(), repo_id).await.is_err() {
+            return Ok(());
+        }
+
+        let parts: Vec<&str> = path
+            .trim_start_matches('/')
+            .split('/')
+            .filter(|p| !p.is_empty())
+            .collect();
+
+        let mut current = String::from("/");
+        for part in parts {
+            let next = if current == "/" {
+                format!("/{part}")
+            } else {
+                format!("{current}/{part}")
+            };
+
+            // Check if this component already exists.
+            let root_id = get_head_root_id(self.db(), repo_id).await?;
+            if crate::fs::core::resolve_fs_id(&self.repos, repo_id, &root_id, &next)
+                .await
+                .is_err()
+            {
+                crate::service::fs::dir::create_dir_by_path(
+                    self.db(),
+                    &self.repos,
+                    email,
+                    user_id,
+                    repo_id,
+                    &next,
+                )
+                .await?;
+            }
+            current = next;
+        }
+
+        Ok(())
+    }
+
+    /// Detect the existing entry, adjust repo size and log activity — the
+    /// shared tail of the block-commit upload path (`upload_blks_api`).
+    ///
+    /// `op_type` is derived from whether the file actually exists, not from a
+    /// client-supplied `replace` flag.
+    pub async fn finalize_upload(
+        &self,
+        repo_id: &str,
+        fp: &str,
+        fs_id: &str,
+        size: i64,
+        user_id: Option<i32>,
+    ) -> Result<(), AppError> {
+        let size_result = crate::fs::core::get_entry_total_size(&self.repos, repo_id, fp).await;
+        let file_exists = size_result.is_ok();
+        let old_size = size_result.ok().unwrap_or(0);
+
+        crate::fs::core::adjust_repo_size(&self.repos, repo_id, size - old_size).await?;
+
+        if let Some(uid) = user_id {
+            let op_type = if file_exists { "edit" } else { "create" };
+            activity_log::log_activity(
+                self.db(),
+                repo_id,
+                op_type,
+                "file",
+                fp,
+                uid,
+                None,
+                Some(size),
+                Some(fs_id),
+                None,
+                None,
+            )
+            .await;
         }
 
         Ok(())

@@ -51,7 +51,7 @@ async fn check_quota(
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-    crate::handler::web::quota::check_upload_quota(
+    crate::service::fs::quota::check_upload_quota(
         &state.repos,
         repo_record.owner_id,
         delta,
