@@ -113,6 +113,7 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
 
     let mut stack: Vec<(String, String)> = vec![(dir_id.clone(), path.to_string())];
     let mut entries: Vec<DirEntry> = Vec::new();
+    let mut modifier_emails: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     while let Some((fs_id, parent_path)) = stack.pop() {
         if fs_id == "0000000000000000000000000000000000000000" {
@@ -128,7 +129,7 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
             let is_dir = dirent.mode & S_IFDIR != 0;
             let modifier_email = dirent.modifier.clone();
 
-            let mut entry = DirEntry {
+            entries.push(DirEntry {
                 id: dirent.id.clone(),
                 entry_type: if is_dir {
                     "dir".to_string()
@@ -143,20 +144,11 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
                 parent_dir: Some(parent_path.clone()),
                 modifier_name: None,
                 modifier_contact_email: None,
-            };
+            });
 
             if !is_dir && !modifier_email.is_empty() {
-                let modifier_name = repos
-                    .user
-                    .find_by_email(&modifier_email)
-                    .await?
-                    .map(|u| u.nickname())
-                    .unwrap_or_else(|| modifier_email.split('@').next().unwrap_or("").to_string());
-                entry.modifier_name = Some(modifier_name);
-                entry.modifier_contact_email = Some(modifier_email);
+                modifier_emails.insert(modifier_email);
             }
-
-            entries.push(entry);
 
             if is_dir {
                 let child_path = if parent_path == "/" {
@@ -166,6 +158,28 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
                 };
                 stack.push((dirent.id.clone(), child_path));
             }
+        }
+    }
+
+    // Batch-fetch modifier nicknames for all distinct emails in one query.
+    let emails: Vec<String> = modifier_emails.into_iter().collect();
+    let nickname_by_email: std::collections::HashMap<String, String> = repos
+        .user
+        .find_by_emails(&emails)
+        .await?
+        .into_iter()
+        .map(|u| (u.email.clone(), u.nickname()))
+        .collect();
+
+    for entry in &mut entries {
+        if entry.entry_type == "file" && !entry.modifier.is_empty() {
+            let fallback = entry.modifier.split('@').next().unwrap_or("").to_string();
+            let nickname = nickname_by_email
+                .get(&entry.modifier)
+                .cloned()
+                .unwrap_or(fallback);
+            entry.modifier_name = Some(nickname);
+            entry.modifier_contact_email = Some(entry.modifier.clone());
         }
     }
 
@@ -739,15 +753,25 @@ impl DirService {
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
 
-        let deleted_size: i64 = crate::fs::core::get_entry_total_size(&self.repos, repo_id, path)
-            .await
-            .unwrap_or_default();
+        let parent_dir_data =
+            crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
+                .await
+                .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
+
+        // Resolve the entry size from the parent dirents (files O(1);
+        // directories walk their subtree once) instead of re-resolving the path.
+        let deleted_size: i64 = match parent_dir_data.dirents.iter().find(|d| d.name == name) {
+            Some(entry) if entry.mode & S_IFDIR != 0 => {
+                crate::fs::core::compute_tree_size(&self.repos, repo_id, &entry.id)
+                    .await
+                    .unwrap_or_default()
+            }
+            Some(entry) => entry.size,
+            None => 0,
+        };
 
         // Trash: record deleted entry before tree update
-        if let Ok(parent_dir_data) =
-            crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id).await
-            && let Some(entry) = parent_dir_data.dirents.iter().find(|d| d.name == name)
-        {
+        if let Some(entry) = parent_dir_data.dirents.iter().find(|d| d.name == name) {
             let obj_type = if entry.mode & S_IFDIR != 0 {
                 "dir"
             } else {

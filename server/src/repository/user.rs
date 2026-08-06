@@ -10,7 +10,11 @@ use infra::entity::user;
 #[async_trait]
 pub trait UserRepository: Send + Sync {
     async fn find_by_id(&self, user_id: i32) -> Result<Option<user::Model>, AppError>;
+    /// Fetch several users by id in one query (for list pages with N+1 lookups).
+    async fn find_by_ids(&self, user_ids: &[i32]) -> Result<Vec<user::Model>, AppError>;
     async fn find_by_email(&self, email: &str) -> Result<Option<user::Model>, AppError>;
+    /// Fetch several users by email in one query (for directory listings).
+    async fn find_by_emails(&self, emails: &[String]) -> Result<Vec<user::Model>, AppError>;
     async fn find_by_email_like(&self, pattern: &str) -> Result<Vec<user::Model>, AppError>;
     async fn exists_by_email(&self, email: &str) -> Result<bool, AppError>;
     async fn create(&self, email: String, password_hash: String) -> Result<user::Model, AppError>;
@@ -65,10 +69,30 @@ impl UserRepository for DbUserRepository {
             .await?)
     }
 
+    async fn find_by_ids(&self, user_ids: &[i32]) -> Result<Vec<user::Model>, AppError> {
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(user::Entity::find()
+            .filter(user::Column::Id.is_in(user_ids.to_vec()))
+            .all(self.db.as_ref())
+            .await?)
+    }
+
     async fn find_by_email(&self, email: &str) -> Result<Option<user::Model>, AppError> {
         Ok(user::Entity::find()
             .filter(user::Column::Email.eq(email))
             .one(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_emails(&self, emails: &[String]) -> Result<Vec<user::Model>, AppError> {
+        if emails.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(user::Entity::find()
+            .filter(user::Column::Email.is_in(emails.to_vec()))
+            .all(self.db.as_ref())
             .await?)
     }
 

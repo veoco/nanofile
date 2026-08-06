@@ -72,21 +72,24 @@ impl FileOpsService {
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
 
-        let mut total_deleted: i64 = 0;
-        for name in file_names {
-            let fp = if parent_dir == "/" {
-                format!("/{name}")
-            } else {
-                format!("{parent_dir}/{name}")
-            };
-            if let Ok(sz) = crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await {
-                total_deleted += sz;
-            }
-        }
-
         let parent_data = crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
             .await
             .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
+
+        // Sum sizes from the parent dirents instead of re-resolving each path
+        // (files are O(1); directories walk their subtree once).
+        let mut total_deleted: i64 = 0;
+        for entry in file_names
+            .iter()
+            .filter_map(|name| parent_data.dirents.iter().find(|d| d.name == *name))
+        {
+            if entry.mode & S_IFDIR != 0 {
+                total_deleted +=
+                    crate::fs::core::compute_tree_size(&self.repos, repo_id, &entry.id).await?;
+            } else {
+                total_deleted += entry.size;
+            }
+        }
 
         let names_to_delete = file_names.to_vec();
 

@@ -1128,6 +1128,16 @@ pub async fn upload_blks_api(
             .await
             .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
 
+        // Determine the pre-commit state of the target entry from the parent
+        // dirents (avoids a fresh head-commit path resolution in finalize_upload).
+        let parent_data =
+            crate::fs::core::read_fs_dir_data(&state.repos, &info.repo_id, &parent_fs_id)
+                .await
+                .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
+        let existing = parent_data.dirents.iter().find(|d| d.name == *file_name);
+        let file_exists = existing.is_some();
+        let old_size = existing.map(|d| d.size).unwrap_or(0);
+
         // Add file entry to parent directory
         let entry_name = file_name.clone();
         let modifier_name = info.username.clone();
@@ -1175,7 +1185,15 @@ pub async fn upload_blks_api(
         // Adjust repo size and log activity (op_type from actual existence).
         state
             .file_service()
-            .finalize_upload(&info.repo_id, &fp, &file_fs_id, file_size, uid)
+            .finalize_upload(
+                &info.repo_id,
+                &fp,
+                &file_fs_id,
+                file_size,
+                uid,
+                file_exists,
+                old_size,
+            )
             .await?;
 
         return Ok(Json(json!({"id": file_fs_id})));

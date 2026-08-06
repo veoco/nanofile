@@ -427,8 +427,9 @@ impl FileService {
         Ok(())
     }
 
-    /// Detect the existing entry, adjust repo size and log activity — the
-    /// shared tail of the block-commit upload path (`upload_blks_api`).
+    /// Adjust repo size and log activity — the shared tail of the block-commit
+    /// upload path (`upload_blks_api`). The caller resolves the entry state
+    /// (`file_exists` / `old_size`) from the parent dirents it already holds.
     ///
     /// `op_type` is derived from whether the file actually exists, not from a
     /// client-supplied `replace` flag.
@@ -439,11 +440,9 @@ impl FileService {
         fs_id: &str,
         size: i64,
         user_id: Option<i32>,
+        file_exists: bool,
+        old_size: i64,
     ) -> Result<(), AppError> {
-        let size_result = crate::fs::core::get_entry_total_size(&self.repos, repo_id, fp).await;
-        let file_exists = size_result.is_ok();
-        let old_size = size_result.ok().unwrap_or(0);
-
         crate::fs::core::adjust_repo_size(&self.repos, repo_id, size - old_size).await?;
 
         if let Some(uid) = user_id {
@@ -479,16 +478,24 @@ impl FileService {
         let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("");
         let parent_path = parent_path_from(path);
 
-        let deleted_size = crate::fs::core::get_entry_total_size(&self.repos, repo_id, path)
-            .await
-            .ok()
-            .unwrap_or(0);
-
         let head_root_id = get_head_root_id(db, repo_id).await?;
         let parent_fs_id =
             crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+
+        // Resolve the entry size from the parent dirents (files O(1);
+        // directories walk their subtree once) instead of re-resolving the path.
+        let parent_data = crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
+            .await
+            .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
+        let deleted_size = match parent_data.dirents.iter().find(|d| d.name == name) {
+            Some(entry) if entry.mode & infra::serialization::S_IFDIR != 0 => {
+                crate::fs::core::compute_tree_size(&self.repos, repo_id, &entry.id).await?
+            }
+            Some(entry) => entry.size,
+            None => 0,
+        };
 
         // Record deleted entry to trash before tree update
         record_delete_file_trash(db, &self.repos, repo_id, path, name, email, &parent_fs_id).await;

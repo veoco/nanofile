@@ -67,16 +67,22 @@ impl ActivityService {
             .count_by_repo_ids_filtered(repo_ids, op_user_id, repo_id, Some(user_id))
             .await?;
 
+        // Batch-fetch the distinct users referenced by this page (avoid N+1).
+        let ids: Vec<i32> = activities.iter().map(|a| a.user_id).collect();
+        let users_by_id: std::collections::HashMap<i32, (String, String)> = repos
+            .user
+            .find_by_ids(&ids)
+            .await?
+            .into_iter()
+            .map(|u| (u.id, (u.nickname(), u.email)))
+            .collect();
+
         let mut items: Vec<serde_json::Value> = Vec::new();
         for a in &activities {
             let detail_value: serde_json::Value = serde_json::from_str(&a.detail)
                 .unwrap_or(serde_json::Value::Object(Default::default()));
 
-            let user = repos.user.find_by_id(a.user_id).await?;
-            let (user_name, user_email) = match user {
-                Some(u) => (u.nickname(), u.email),
-                None => (String::new(), String::new()),
-            };
+            let (user_name, user_email) = users_by_id.get(&a.user_id).cloned().unwrap_or_default();
 
             // Absolute avatar URL (seahub returns a full URL via api_avatar_url;
             // the Android client loads this field directly with Glide).
