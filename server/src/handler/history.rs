@@ -101,7 +101,7 @@ pub async fn get_file_revision_v21(
         path.user.user_id,
     )
     .await?;
-    let stream = crate::handler::web::download::stream_blocks(
+    let stream = crate::fs::core::download::stream_blocks(
         file_data.block_ids,
         state.block_store.clone(),
         dec_key,

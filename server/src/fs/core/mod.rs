@@ -15,7 +15,7 @@ pub mod tree;
 pub mod tree_diff;
 pub mod versioning;
 
-pub use download::Downloader;
+pub use download::{Downloader, stream_blocks};
 pub use file_ops::FileOps;
 pub use gc::GcManager;
 pub use lock::{check_commit_file_locks, upsert_lock_timestamp};

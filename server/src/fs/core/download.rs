@@ -1,6 +1,7 @@
 use crate::repository::Repositories;
 use base::common::FsFileData;
 use base::error::AppError;
+use futures::{Stream, StreamExt};
 use infra::crypto::random_key::decrypt_block;
 use infra::storage::DynBlockStorage;
 
@@ -78,4 +79,34 @@ impl Downloader {
 
         Ok((file_data.clone(), file_data.block_ids))
     }
+}
+
+/// Build a streaming body that reads and yields blocks one at a time.
+///
+/// `block_ids` — list of block SHA-1 hashes to stream.
+/// `block_store` — content-addressed block storage backend.
+/// `enc_key` — optional decryption key (None = plaintext blocks).
+pub fn stream_blocks(
+    block_ids: Vec<String>,
+    block_store: DynBlockStorage,
+    enc_key: Option<(Vec<u8>, Vec<u8>)>,
+) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static {
+    futures::stream::iter(block_ids.into_iter().map(move |block_id| {
+        let store = block_store.clone();
+        let key = enc_key.clone();
+        async move {
+            let data = store
+                .read_block(&block_id)
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            let data = match &key {
+                Some((k, iv)) => {
+                    decrypt_block(&data, k, iv).map_err(|e| std::io::Error::other(e.to_string()))?
+                }
+                None => data,
+            };
+            Ok(bytes::Bytes::from(data))
+        }
+    }))
+    .buffered(4)
 }

@@ -108,7 +108,7 @@ async fn get_handler(
         return (StatusCode::OK, resp_headers).into_response();
     }
     let stream =
-        crate::handler::web::download::stream_blocks(block_ids, state.block_store.clone(), None);
+        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
     (StatusCode::OK, resp_headers, Body::from_stream(stream)).into_response()
 }
 

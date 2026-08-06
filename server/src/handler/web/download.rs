@@ -4,7 +4,6 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use futures::{Stream, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,35 +12,6 @@ use crate::fs::core::download::Downloader;
 use crate::middleware::auth::AuthUser;
 use base::common::FsFileData;
 use base::error::AppError;
-
-/// Build a streaming body that reads and yields blocks one at a time.
-///
-/// `block_ids` — list of block SHA-1 hashes to stream.
-/// `block_store` — content-addressed block storage backend.
-/// `enc_key` — optional decryption key (None = plaintext blocks).
-pub(crate) fn stream_blocks(
-    block_ids: Vec<String>,
-    block_store: infra::storage::DynBlockStorage,
-    enc_key: Option<(Vec<u8>, Vec<u8>)>,
-) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static {
-    futures::stream::iter(block_ids.into_iter().map(move |block_id| {
-        let store = block_store.clone();
-        let key = enc_key.clone();
-        async move {
-            let data = store
-                .read_block(&block_id)
-                .await
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            let data = match &key {
-                Some((k, iv)) => infra::crypto::random_key::decrypt_block(&data, k, iv)
-                    .map_err(|e| std::io::Error::other(e.to_string()))?,
-                None => data,
-            };
-            Ok(bytes::Bytes::from(data))
-        }
-    }))
-    .buffered(4)
-}
 
 /// GET /f/{token} — download via shared link token.
 ///
@@ -90,7 +60,8 @@ pub async fn shared_file_download(
             .await
             .map_err(|_| AppError::NotFound("file not found".into()))?;
 
-    let stream = stream_blocks(block_ids, state.block_store.clone(), None);
+    let stream =
+        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
 
     // Increment view_cnt asynchronously (fire-and-forget)
     let share_link_repo = state.repos.share_link.clone();
@@ -170,7 +141,8 @@ pub async fn repo_file_download(
         .await
         .map_err(|_| AppError::NotFound("file not found".into()))?;
 
-    let stream = stream_blocks(block_ids, state.block_store.clone(), dec_key);
+    let stream =
+        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), dec_key);
 
     Ok((
         StatusCode::OK,
@@ -220,7 +192,8 @@ pub async fn download_api(
 
     // We don't know the size upfront when streaming, so use
     // Transfer-Encoding: chunked (omit Content-Length).
-    let stream = stream_blocks(block_ids, state.block_store.clone(), dec_key);
+    let stream =
+        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), dec_key);
 
     let mut headers = HeaderMap::new();
     headers.insert(

@@ -6,7 +6,6 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 use chrono::TimeZone;
-use futures::{Stream, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -22,32 +21,6 @@ use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
-
-// ── Stream blocks helper (copied from download.rs) ────────────────────────
-
-fn stream_blocks(
-    block_ids: Vec<String>,
-    block_store: infra::storage::DynBlockStorage,
-    enc_key: Option<(Vec<u8>, Vec<u8>)>,
-) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static {
-    futures::stream::iter(block_ids.into_iter().map(move |block_id| {
-        let store = block_store.clone();
-        let key = enc_key.clone();
-        async move {
-            let data = store
-                .read_block(&block_id)
-                .await
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            let data = match &key {
-                Some((k, iv)) => infra::crypto::random_key::decrypt_block(&data, k, iv)
-                    .map_err(|e| std::io::Error::other(e.to_string()))?,
-                None => data,
-            };
-            Ok(bytes::Bytes::from(data))
-        }
-    }))
-    .buffered(4)
-}
 
 // ── Templates ─────────────────────────────────────────────────────────────
 
@@ -160,7 +133,8 @@ pub async fn shared_file_view(
             .rsplit_once('/')
             .map(|(_, n)| n)
             .unwrap_or(&link.path);
-        let stream = stream_blocks(block_ids, state.block_store.clone(), None);
+        let stream =
+            crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
 
         crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
@@ -679,7 +653,8 @@ pub async fn shared_dir_file_view(
         .rsplit_once('/')
         .map(|(_, n)| n.to_string())
         .unwrap_or_else(|| full_path.clone());
-    let stream = stream_blocks(block_ids, state.block_store.clone(), None);
+    let stream =
+        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
 
     let mut headers = HeaderMap::new();
     headers.insert(
