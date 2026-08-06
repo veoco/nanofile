@@ -60,8 +60,10 @@ async fn create_upload_link_impl(
     description: Option<String>,
     creator_id: i32,
 ) -> Result<UploadLinkInfo, AppError> {
-    // Only repo members may create upload links into a repo.
-    crate::domain::permission::check_repo_read_permission(
+    // An upload link grants anonymous *write* access to the repo, so only
+    // members with write permission may create one (a read-only member must
+    // not be able to mint a link that bypasses their read-only role).
+    crate::domain::permission::check_repo_write_permission(
         repos.member.as_ref(),
         repo_id,
         creator_id,

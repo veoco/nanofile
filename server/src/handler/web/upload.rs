@@ -366,6 +366,15 @@ pub async fn upload_aj(
         .unwrap_or("");
     let target_dir = compute_target_dir(parent_dir, relative_path)?;
 
+    // Authorization: this endpoint trusts the client-supplied repo_id, so the
+    // caller must actually be a member with write access to the repo.
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        repo_id,
+        user.user_id,
+    )
+    .await?;
+
     if !file_data.is_empty() {
         // Try chunked upload path first (returns Some if Content-Range was present)
         let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
@@ -445,6 +454,14 @@ pub async fn update_api(
     }
 
     if !file_data.is_empty() && !file_path.is_empty() {
+        // Authorization: repo_id is client-supplied, so require write access.
+        crate::domain::permission::check_repo_write_permission(
+            state.repos.member.as_ref(),
+            &repo_id,
+            user.user_id,
+        )
+        .await?;
+
         let parent = file_path
             .rsplit_once('/')
             .map(|(p, _)| if p.is_empty() { "/" } else { p })
@@ -515,6 +532,14 @@ pub async fn update_aj(
     let target_file = fields
         .get("target_file")
         .ok_or_else(|| AppError::BadRequest("target_file required".into()))?;
+
+    // Authorization: the repo_id is client-supplied, so require write access.
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        repo_id,
+        user.user_id,
+    )
+    .await?;
 
     if !file_data.is_empty() {
         let parent = target_file

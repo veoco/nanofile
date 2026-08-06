@@ -166,6 +166,15 @@ pub async fn block_download(
 
     let repo_id = &info.repo_id;
 
+    // Re-check read permission: the token outlives membership, so a user
+    // removed from the repo must not keep reading blocks.
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        repo_id,
+        info.user_id,
+    )
+    .await?;
+
     // Look up the file by its fs_id in the fs_objects table.
     let file_obj = state
         .repos

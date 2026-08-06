@@ -3,6 +3,21 @@ mod common;
 use common::TestFixture;
 use common::create_test_user;
 
+/// Insert a `repo_members` row granting `user_id` the given permission.
+async fn add_member(f: &TestFixture, user_id: i32, permission: &str) {
+    use sea_orm::ActiveModelTrait;
+    infra::entity::repo_member::ActiveModel {
+        id: sea_orm::NotSet,
+        repo_id: sea_orm::Set(f.repo_id.clone()),
+        user_id: sea_orm::Set(user_id),
+        permission: sea_orm::Set(permission.to_string()),
+        created_at: sea_orm::Set(chrono::Utc::now().timestamp()),
+    }
+    .insert(f.server.db.as_ref())
+    .await
+    .unwrap();
+}
+
 /// U.1 — POST /api/v2.1/upload-links/ → create basic upload link
 #[tokio::test]
 async fn test_upload_link_create_basic() {
@@ -586,6 +601,83 @@ async fn test_upload_link_create_non_member_forbidden() {
         )
         .await;
     assert_eq!(resp.status(), 403);
+}
+
+/// Security: a read-only member must not be able to create an anonymous
+/// *write* upload link into the repo (previously only read permission was
+/// checked, letting read-only members mint links that bypass their role).
+#[tokio::test]
+async fn test_upload_link_create_readonly_member_forbidden() {
+    let f = TestFixture::new().await;
+    let b_id = create_test_user(f.server.db.as_ref(), "ro@example.com", "password123").await;
+    add_member(&f, b_id, "r").await;
+
+    let resp = f.client.login("ro@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let b_token = body["token"].as_str().unwrap().to_string();
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&b_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+}
+
+/// Security: the no-token web upload endpoints trust a client-supplied
+/// repo_id, so a non-member with a valid session must be rejected (H1 —
+/// previously any authenticated user could upload into any repo).
+#[tokio::test]
+async fn test_web_upload_rejects_non_member() {
+    let server = common::TestServer::start().await;
+
+    // Owner: user + repo.
+    let _owner_id = create_test_user(&server.db, "owner@example.com", "ownerpass").await;
+    let owner_client = server.client();
+    let resp = owner_client.login("owner@example.com", "ownerpass").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let owner_token = body["token"].as_str().unwrap().to_string();
+    let repo_id = common::create_test_repo(&owner_client, &owner_token, "victim-repo").await;
+
+    // Intruder: a valid user who is NOT a member of the repo.
+    create_test_user(&server.db, "intruder@example.com", "intruderpass").await;
+
+    // Browser session for the intruder (WebUser). Disable redirect following
+    // so the login response's 302 isn't consumed into the landing page.
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let resp = client
+        .post(format!("{}/accounts/login/", server.base_url))
+        .form(&[
+            ("email", "intruder@example.com"),
+            ("password", "intruderpass"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "login should succeed");
+
+    // Try to upload into the owner's repo via the no-token /upload-aj/ endpoint.
+    let part = reqwest::multipart::Part::bytes(b"hello".to_vec()).file_name("pwned.txt");
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("repo_id", repo_id.clone())
+        .text("parent_dir", "/")
+        .text("relative_path", "");
+    let resp = client
+        .post(format!("{}/upload-aj/", server.base_url))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403, "non-member upload must be rejected");
 }
 
 /// Security: a password-protected upload link must not yield an upload URL
