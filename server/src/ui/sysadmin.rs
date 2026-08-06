@@ -6,13 +6,13 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
 use crate::service::admin::AdminUserService;
+use crate::ui::format_ts;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -123,11 +123,6 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
         Ok(html) => Html(html).into_response(),
         Err(e) => AppError::internal(e.to_string()).into_response(),
     }
-}
-
-fn format_ts(ts: i64) -> String {
-    let dt: DateTime<Utc> = DateTime::from_timestamp(ts, 0).unwrap_or_default();
-    dt.format("%Y-%m-%d %H:%M").to_string()
 }
 
 // ─── POST handlers ────────────────────────────────────────────────────────

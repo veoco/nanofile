@@ -519,11 +519,8 @@ pub async fn file_uploaded_bytes(
     // the actual byte offset.  This takes precedence over the block-count
     // approach (which is used by the block-level resume protocol).
     if let (Some(parent_dir), Some(file_name)) = (&query.parent_dir, &query.file_name) {
-        let file_path = if parent_dir == "/" {
-            format!("/{file_name}")
-        } else {
-            format!("{}/{}", parent_dir.trim_end_matches('/'), file_name)
-        };
+        let file_path = base::sanitize::safe_join_path(parent_dir, file_name)
+            .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
         if let Some(bytes) = state
             .temp_file_manager
             .get_uploaded_bytes(repo_id, &file_path)

@@ -303,11 +303,8 @@ impl FileService {
         base::sanitize::validate_filename(filename)
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
-        let fp = if target_dir == "/" {
-            format!("/{filename}")
-        } else {
-            format!("{}/{}", target_dir.trim_end_matches('/'), filename)
-        };
+        let fp = base::sanitize::safe_join_path(target_dir, filename)
+            .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
 
         // Detect the existing entry to decide old-size / replace / op_type.
         let size_result = crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await;

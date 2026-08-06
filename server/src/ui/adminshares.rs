@@ -9,28 +9,12 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::TimeZone;
-
 use crate::AppState;
 use crate::i18n::I18n;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
-
-fn format_ts(ts: i64) -> String {
-    chrono::Utc
-        .timestamp_opt(ts, 0)
-        .unwrap()
-        .format("%Y-%m-%d %H:%M")
-        .to_string()
-}
-
-fn format_ts_opt(t: &I18n, ts: Option<i64>) -> String {
-    match ts {
-        Some(t) => format_ts(t),
-        None => t.tr("common.never").to_string(),
-    }
-}
+use super::{format_ts, format_ts_opt};
 
 #[derive(Template)]
 #[template(path = "adminshares/list.html")]

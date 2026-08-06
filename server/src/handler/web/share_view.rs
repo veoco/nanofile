@@ -5,22 +5,18 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
-use chrono::TimeZone;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::fs::core::download::Downloader;
-use crate::fs::core::tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
+use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
+use crate::fs::zip::{collect_dir_entries, stream_zip};
 use crate::i18n::I18n;
+use crate::ui::{format_size, format_ts};
 use base::common::FsFileData;
 use base::error::AppError;
-use infra::common::{EMPTY_SHA1, S_IFDIR};
-
-use async_zip::tokio::write::ZipFileWriter;
-use async_zip::{Compression, ZipEntryBuilder};
-use futures::io::AsyncWriteExt;
-use tokio_util::io::ReaderStream;
+use infra::common::S_IFDIR;
 
 // ── Templates ─────────────────────────────────────────────────────────────
 
@@ -49,26 +45,6 @@ struct ShareAccessValidationTemplate {
 }
 
 // ── Handler helpers ───────────────────────────────────────────────────────
-
-fn format_size(size: i64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut s = size as f64;
-    let mut unit = 0;
-    while s >= 1024.0 && unit < UNITS.len() - 1 {
-        s /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{} {}", size, UNITS[unit])
-    } else {
-        format!("{:.1} {}", s, UNITS[unit])
-    }
-}
-
-fn format_timestamp(ts: i64) -> String {
-    let dt = chrono::Utc.timestamp_opt(ts, 0).unwrap();
-    dt.format("%Y-%m-%d %H:%M").to_string()
-}
 
 /// Resolve file metadata from the repo.
 async fn resolve_file_meta(
@@ -170,10 +146,10 @@ pub async fn shared_file_view(
         .unwrap_or_else(|| "?".to_string());
     let file_size = _file_data.size;
     let expires_display = match link.expires_at {
-        Some(ts) => format_timestamp(ts),
+        Some(ts) => format_ts(ts),
         None => "Never".to_string(),
     };
-    let created_display = format_timestamp(link.created_at);
+    let created_display = format_ts(link.created_at);
 
     let mut download_url = format!("/f/{}/?dl=1", link.token);
     // Pass password through to download URL if provided
@@ -267,99 +243,6 @@ struct DirEntryInfo {
     pub full_path: String,
 }
 
-/// Recursively collect all files under a directory for ZIP streaming.
-#[allow(dead_code)]
-struct ZipEntry {
-    path_in_zip: String,
-    block_ids: Vec<String>,
-    size: i64,
-}
-
-async fn collect_zip_entries(
-    repos: &crate::repository::Repositories,
-    repo_id: &str,
-    root_fs_id: &str,
-    dir_path: &str,
-    zip_prefix: &str,
-) -> Result<Vec<ZipEntry>, AppError> {
-    let dir_id = if dir_path == "/" {
-        root_fs_id.to_string()
-    } else {
-        resolve_fs_id(repos, repo_id, root_fs_id, dir_path)
-            .await
-            .map_err(|_| AppError::NotFound("Directory not found".into()))?
-    };
-
-    let mut entries = Vec::new();
-    let mut stack: Vec<(String, String)> = vec![(dir_id, zip_prefix.to_string())];
-
-    while let Some((fs_id, prefix)) = stack.pop() {
-        if fs_id == EMPTY_SHA1 {
-            continue;
-        }
-        let dir_data = match read_fs_dir_data(repos, repo_id, &fs_id).await {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-        for dirent in &dir_data.dirents {
-            let is_dir = dirent.mode & S_IFDIR != 0;
-            let entry_path = if prefix.is_empty() {
-                dirent.name.clone()
-            } else {
-                format!("{}/{}", prefix, dirent.name)
-            };
-            if is_dir {
-                stack.push((dirent.id.clone(), entry_path));
-            } else {
-                let file_data = match read_fs_file_data(repos, repo_id, &dirent.id).await {
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
-                entries.push(ZipEntry {
-                    path_in_zip: entry_path,
-                    block_ids: file_data.block_ids,
-                    size: file_data.size,
-                });
-            }
-        }
-    }
-    Ok(entries)
-}
-
-/// Stream a ZIP archive over HTTP using async_zip duplex.
-fn stream_zip(
-    block_store: infra::storage::DynBlockStorage,
-    files: Vec<ZipEntry>,
-) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
-    let (duplex_writer, duplex_reader) = tokio::io::duplex(64 * 1024);
-
-    tokio::spawn(async move {
-        let mut zip = ZipFileWriter::with_tokio(duplex_writer);
-        for entry in &files {
-            let builder =
-                ZipEntryBuilder::new(entry.path_in_zip.clone().into(), Compression::Deflate);
-            let mut entry_writer = zip
-                .write_entry_stream(builder)
-                .await
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            for block_id in &entry.block_ids {
-                let data = block_store.read_block(block_id).await?;
-                entry_writer.write_all(&data).await?;
-            }
-            entry_writer
-                .close()
-                .await
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-        }
-        zip.close()
-            .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        Ok::<(), std::io::Error>(())
-    });
-
-    ReaderStream::new(duplex_reader)
-}
-
 /// GET /d/{token}/ — show directory file listing, or ?dl=1 to download ZIP.
 pub async fn shared_dir_view(
     State(state): State<Arc<AppState>>,
@@ -433,7 +316,7 @@ pub async fn shared_dir_view(
         } else {
             dir_name
         };
-        let files = collect_zip_entries(
+        let files = collect_dir_entries(
             &state.repos,
             &link.repo_id,
             &head_commit.root_id,
@@ -443,7 +326,7 @@ pub async fn shared_dir_view(
         .await?;
 
         crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
-        let stream = stream_zip(state.block_store.clone(), files);
+        let stream = stream_zip(state.block_store.clone(), files, None);
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -564,10 +447,10 @@ pub async fn shared_dir_view(
     let item_count = entries.len();
 
     let expires_display = match link.expires_at {
-        Some(ts) => format_timestamp(ts),
+        Some(ts) => format_ts(ts),
         None => "Never".to_string(),
     };
-    let created_display = format_timestamp(link.created_at);
+    let created_display = format_ts(link.created_at);
 
     let pw_query = if let Some(pwd) = params.get("password") {
         format!("&password={}", pwd)

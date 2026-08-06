@@ -132,11 +132,8 @@ async fn try_handle_chunked(
         .await?;
     }
 
-    let file_path = if target_dir == "/" {
-        format!("/{file_name}")
-    } else {
-        format!("{}/{}", target_dir.trim_end_matches('/'), file_name)
-    };
+    let file_path = base::sanitize::safe_join_path(target_dir, file_name)
+        .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
 
     // Ensure temp file exists
     temp_mgr
@@ -1103,11 +1100,8 @@ pub async fn upload_blks_api(
         let now = chrono::Utc::now().timestamp();
 
         // Full path of the assembled file (for activity logging).
-        let fp = if target_dir == "/" {
-            format!("/{}", file_name)
-        } else {
-            format!("{}/{}", target_dir.trim_end_matches('/'), file_name)
-        };
+        let fp = base::sanitize::safe_join_path(&target_dir, file_name)
+            .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
 
         // Resolve parent directory and capture ancestor chain for the
         // subsequent walk_up_ancestors (avoids O(d²) re-resolution).

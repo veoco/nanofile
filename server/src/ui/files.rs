@@ -328,20 +328,7 @@ fn file_extension(name: &str) -> Option<String> {
     Some(ext.to_uppercase())
 }
 
-pub fn format_size(bytes: i64) -> String {
-    const KB: i64 = 1024;
-    const MB: i64 = KB * 1024;
-    const GB: i64 = MB * 1024;
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
+pub use super::format_size;
 
 pub fn format_mtime(t: &I18n, timestamp: i64) -> String {
     chrono::DateTime::from_timestamp(timestamp, 0)
