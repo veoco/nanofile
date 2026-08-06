@@ -1,9 +1,20 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::sea_query::Expr;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
+    QuerySelect, Set,
+};
 use std::sync::Arc;
 
 use base::error::AppError;
 use infra::entity::{commit, repo};
+
+/// Row shape for `SELECT SUM(size) AS total FROM repos WHERE owner_id = ?`.
+/// `total` is `Option` because SQL `SUM` yields NULL when no rows match.
+#[derive(FromQueryResult)]
+struct TotalSize {
+    total: Option<i64>,
+}
 
 /// Parameters for creating a new repo.
 pub struct CreateRepoParams {
@@ -25,6 +36,8 @@ pub struct CreateRepoParams {
 pub trait RepoRepository: Send + Sync {
     async fn find_by_id(&self, repo_id: &str) -> Result<Option<repo::Model>, AppError>;
     async fn find_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError>;
+    /// Sum the `size` of all repos owned by a user, in a single SQL query.
+    async fn sum_size_by_owner(&self, user_id: i32) -> Result<i64, AppError>;
     /// Get all repos (used by garbage collection).
     async fn find_all(&self) -> Result<Vec<repo::Model>, AppError>;
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
@@ -112,6 +125,18 @@ impl RepoRepository for DbRepoRepository {
             .filter(repo::Column::OwnerId.eq(user_id))
             .all(self.db.as_ref())
             .await?)
+    }
+
+    async fn sum_size_by_owner(&self, user_id: i32) -> Result<i64, AppError> {
+        let row: Option<TotalSize> = repo::Entity::find()
+            .filter(repo::Column::OwnerId.eq(user_id))
+            .select_only()
+            .column_as(Expr::col(repo::Column::Size).sum(), "total")
+            .into_model()
+            .one(self.db.as_ref())
+            .await
+            .map_err(|e| AppError::internal(format!("sum_size_by_owner: {e}")))?;
+        Ok(row.and_then(|r| r.total).unwrap_or(0))
     }
 
     async fn find_all(&self) -> Result<Vec<repo::Model>, AppError> {

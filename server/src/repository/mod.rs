@@ -162,9 +162,9 @@ impl Repositories {
         }
     }
 
-    /// Compute total storage usage for a user (sum of all owned repo sizes).
+    /// Compute total storage usage for a user (sum of all owned repo sizes,
+    /// computed in SQL rather than pulling every repo row).
     pub async fn compute_user_usage(&self, user_id: i32) -> Result<i64, AppError> {
-        let owned_repos = self.repo.find_by_owner_id(user_id).await?;
-        Ok(owned_repos.iter().map(|r| r.size).sum())
+        self.repo.sum_size_by_owner(user_id).await
     }
 }

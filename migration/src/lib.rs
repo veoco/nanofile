@@ -38,6 +38,7 @@ mod m20260705_000001_add_storage_quota_to_users;
 mod m20260802_000001_create_webdav_keys;
 mod m20260806_000001_add_history_settings_to_repos;
 mod m20260806_000002_add_language_to_users;
+mod m20260806_000003_add_perf_indexes;
 
 pub struct Migrator;
 
@@ -82,6 +83,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260802_000001_create_webdav_keys::Migration),
             Box::new(m20260806_000001_add_history_settings_to_repos::Migration),
             Box::new(m20260806_000002_add_language_to_users::Migration),
+            Box::new(m20260806_000003_add_perf_indexes::Migration),
         ]
     }
 }
