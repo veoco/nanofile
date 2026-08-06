@@ -8,6 +8,7 @@ use crate::repository::Repositories;
 use crate::service::auth::password::hash_password;
 use crate::service::auth::token::generate_share_link_token;
 use base::error::AppError;
+use infra::entity::share_link;
 
 /// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
@@ -97,6 +98,22 @@ fn share_link_url(s_type: &str, token: &str, base_url: &str) -> String {
     }
 }
 
+/// Map a share-link model to its API response shape.
+fn share_link_info_from_model(l: &share_link::Model, base_url: &str) -> ShareLinkInfo {
+    ShareLinkInfo {
+        token: l.token.clone(),
+        link: share_link_url(&l.s_type, &l.token, base_url),
+        repo_id: l.repo_id.clone(),
+        path: l.path.clone(),
+        created_at: l.created_at,
+        has_password: l.password.is_some(),
+        expire_at: l.expires_at,
+        s_type: l.s_type.clone(),
+        view_cnt: l.view_cnt,
+        description: l.description.clone(),
+    }
+}
+
 /// Result returned by `beshare_repo`.
 pub struct BeshareResult {
     pub already_shared: bool,
@@ -112,19 +129,8 @@ pub async fn list_share_links(
     let links = repos.share_link.find_by_creator_id(user_id).await?;
 
     let infos: Vec<ShareLinkInfo> = links
-        .into_iter()
-        .map(|l| ShareLinkInfo {
-            token: l.token.clone(),
-            link: share_link_url(&l.s_type, &l.token, base_url),
-            repo_id: l.repo_id,
-            path: l.path,
-            created_at: l.created_at,
-            has_password: l.password.is_some(),
-            expire_at: l.expires_at,
-            s_type: l.s_type,
-            view_cnt: l.view_cnt,
-            description: l.description,
-        })
+        .iter()
+        .map(|l| share_link_info_from_model(l, base_url))
         .collect();
 
     Ok(infos)
@@ -142,19 +148,8 @@ pub async fn list_share_links_for_path(
         .await?;
 
     let infos: Vec<ShareLinkInfo> = links
-        .into_iter()
-        .map(|l| ShareLinkInfo {
-            token: l.token.clone(),
-            link: share_link_url(&l.s_type, &l.token, base_url),
-            repo_id: l.repo_id,
-            path: l.path,
-            created_at: l.created_at,
-            has_password: l.password.is_some(),
-            expire_at: l.expires_at,
-            s_type: l.s_type,
-            view_cnt: l.view_cnt,
-            description: l.description,
-        })
+        .iter()
+        .map(|l| share_link_info_from_model(l, base_url))
         .collect();
 
     Ok(infos)
@@ -299,20 +294,7 @@ pub async fn get_share_link_v21(
         return Err(AppError::NotFound("Share link not found".into()));
     }
 
-    let link_url = share_link_url(&link.s_type, &link.token, base_url);
-
-    Ok(ShareLinkInfo {
-        token: link.token,
-        link: link_url,
-        repo_id: link.repo_id,
-        path: link.path,
-        created_at: link.created_at,
-        has_password: link.password.is_some(),
-        expire_at: link.expires_at,
-        s_type: link.s_type,
-        view_cnt: link.view_cnt,
-        description: link.description,
-    })
+    Ok(share_link_info_from_model(&link, base_url))
 }
 
 pub async fn delete_share_link_v21(

@@ -112,23 +112,8 @@ impl UserRepository for DbUserRepository {
     }
 
     async fn create(&self, email: String, password_hash: String) -> Result<user::Model, AppError> {
-        let now = chrono::Utc::now().timestamp();
-        let model = user::ActiveModel {
-            id: sea_orm::NotSet,
-            email: Set(email),
-            password_hash: Set(password_hash),
-            is_active: Set(true),
-            is_admin: Set(false),
-            created_at: Set(now),
-            last_login_at: sea_orm::NotSet,
-            invited_by: Set(None),
-            storage_quota: sea_orm::NotSet,
-            name: sea_orm::NotSet,
-            display_name: sea_orm::NotSet,
-            language: sea_orm::NotSet,
-        };
-        let result = model.insert(self.db.as_ref()).await?;
-        Ok(result)
+        self.create_with_params(email, password_hash, false, true, None)
+            .await
     }
 
     async fn create_with_params(
@@ -141,18 +126,13 @@ impl UserRepository for DbUserRepository {
     ) -> Result<user::Model, AppError> {
         let now = chrono::Utc::now().timestamp();
         let model = user::ActiveModel {
-            id: sea_orm::NotSet,
             email: Set(email),
             password_hash: Set(password_hash),
             is_active: Set(is_active),
             is_admin: Set(is_admin),
             created_at: Set(now),
-            last_login_at: sea_orm::NotSet,
-            invited_by: Set(None),
             storage_quota: Set(storage_quota),
-            name: sea_orm::NotSet,
-            display_name: sea_orm::NotSet,
-            language: sea_orm::NotSet,
+            ..Default::default()
         };
         let result = model.insert(self.db.as_ref()).await?;
         Ok(result)
@@ -272,18 +252,13 @@ impl UserRepository for DbUserRepository {
     ) -> Result<user::Model, AppError> {
         let now = chrono::Utc::now().timestamp();
         let model = user::ActiveModel {
-            id: sea_orm::NotSet,
             email: Set(email),
             password_hash: Set(password_hash),
             is_active: Set(true),
             is_admin: Set(false),
             created_at: Set(now),
-            last_login_at: sea_orm::NotSet,
             invited_by: Set(invited_by),
-            storage_quota: sea_orm::NotSet,
-            name: sea_orm::NotSet,
-            display_name: sea_orm::NotSet,
-            language: sea_orm::NotSet,
+            ..Default::default()
         };
         let result = model.insert(self.db.as_ref()).await?;
         Ok(result)

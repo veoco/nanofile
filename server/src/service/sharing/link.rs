@@ -6,6 +6,7 @@ use crate::repository::Repositories;
 use crate::service::auth::password::hash_password;
 use crate::service::auth::token::{generate_share_link_token, generate_upload_link_token};
 use base::error::AppError;
+use infra::entity::upload_link;
 
 // ── Response types ────────────────────────────────────────────────────
 
@@ -23,6 +24,31 @@ pub struct UploadLinkInfo {
 fn upload_link_url(token: &str, base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
     format!("{base}/u/{token}/")
+}
+
+/// v2.1 list-item JSON for an upload link (no repo name / obj_name).
+fn upload_link_json(l: &upload_link::Model) -> serde_json::Value {
+    serde_json::json!({
+        "token": l.token,
+        "repo_id": l.repo_id,
+        "path": l.path,
+        "has_password": l.password.is_some(),
+        "expire_at": l.expires_at,
+        "view_cnt": l.view_cnt,
+        "description": l.description,
+    })
+}
+
+/// Object name for a path: `/` → `/`, otherwise the final path segment.
+fn upload_link_obj_name(path: &str) -> String {
+    if path == "/" {
+        "/".to_string()
+    } else {
+        path.trim_end_matches('/')
+            .rsplit_once('/')
+            .map(|(_, n)| n.to_string())
+            .unwrap_or_else(|| path.to_string())
+    }
 }
 
 // ── Upload link operations (v2) ───────────────────────────────────────
@@ -132,20 +158,7 @@ pub async fn list_upload_links_v21(
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let links = repos.upload_link.find_by_creator_id(user_id).await?;
 
-    let items: Vec<serde_json::Value> = links
-        .into_iter()
-        .map(|l| {
-            serde_json::json!({
-                "token": l.token,
-                "repo_id": l.repo_id,
-                "path": l.path,
-                "has_password": l.password.is_some(),
-                "expire_at": l.expires_at,
-                "view_cnt": l.view_cnt,
-                "description": l.description,
-            })
-        })
-        .collect();
+    let items: Vec<serde_json::Value> = links.iter().map(upload_link_json).collect();
 
     Ok(items)
 }
@@ -159,20 +172,7 @@ pub async fn list_upload_links_for_path(
         .upload_link
         .find_by_repo_and_path(repo_id, path)
         .await?;
-    let items: Vec<serde_json::Value> = links
-        .into_iter()
-        .map(|l| {
-            serde_json::json!({
-                "token": l.token,
-                "repo_id": l.repo_id,
-                "path": l.path,
-                "has_password": l.password.is_some(),
-                "expire_at": l.expires_at,
-                "view_cnt": l.view_cnt,
-                "description": l.description,
-            })
-        })
-        .collect();
+    let items: Vec<serde_json::Value> = links.iter().map(upload_link_json).collect();
     Ok(items)
 }
 
@@ -254,15 +254,7 @@ pub async fn get_upload_link_v21(
         .await?
         .ok_or_else(|| AppError::NotFound("Upload link not found".into()))?;
 
-    let obj_name = if link.path == "/" {
-        "/".to_string()
-    } else {
-        link.path
-            .trim_end_matches('/')
-            .rsplit_once('/')
-            .map(|(_, n)| n.to_string())
-            .unwrap_or_else(|| link.path.clone())
-    };
+    let obj_name = upload_link_obj_name(&link.path);
 
     Ok(serde_json::json!({
         "token": link.token,
@@ -333,15 +325,7 @@ pub async fn list_upload_links_for_repo_v21(
     let items: Vec<serde_json::Value> = links
         .into_iter()
         .map(|l| {
-            let obj_name = if l.path == "/" {
-                "/".to_string()
-            } else {
-                l.path
-                    .trim_end_matches('/')
-                    .rsplit_once('/')
-                    .map(|(_, n)| n.to_string())
-                    .unwrap_or_else(|| l.path.clone())
-            };
+            let obj_name = upload_link_obj_name(&l.path);
 
             serde_json::json!({
                 "token": l.token,
