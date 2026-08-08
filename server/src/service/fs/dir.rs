@@ -416,6 +416,16 @@ impl DirService {
         )
         .await;
 
+        // Drop orphaned tag rows for the deleted subtree.
+        if let Err(e) = self
+            .repos
+            .file_tag
+            .delete_by_path_prefix(repo_id, path)
+            .await
+        {
+            tracing::warn!("Failed to delete file tags for {path}: {e}");
+        }
+
         Ok(())
     }
 

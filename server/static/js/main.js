@@ -1090,6 +1090,7 @@
           thumbnailUrlLarge: selRow.dataset.thumbnailUrlLarge,
           isPreviewable: selRow.dataset.isPreviewable === "true",
           downloadUrl: dlUrl,
+          recordId: selRow.dataset.recordId,
         });
       }
       return;
@@ -1267,6 +1268,8 @@
       var sort = (typeof window.getSort === "function") ? window.getSort() : null;
       if (sort) url += '&sort=' + sort.sort + '&sort_order=' + sort.sort_order;
     }
+    var tag = (typeof window.getTagFilter === "function") ? window.getTagFilter() : "";
+    if (tag) url += '&tag=' + encodeURIComponent(tag);
 
     try {
       var resp = await fetch(url);

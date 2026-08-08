@@ -199,7 +199,7 @@ impl AppState {
     }
 
     pub fn metadata_service(&self) -> crate::service::fs::metadata::MetadataService {
-        crate::service::fs::metadata::MetadataService::new(self.repos.clone())
+        crate::service::fs::metadata::MetadataService::new(self.db.clone(), self.repos.clone())
     }
 
     pub fn fileops_service(&self) -> crate::service::fs::fileops::FileOpsService {

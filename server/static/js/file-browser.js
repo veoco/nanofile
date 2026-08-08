@@ -134,6 +134,27 @@
     if (btn) { setSort(btn.dataset.sort); return; }
   });
 
+  // ─── Tag filter ──────────────────────────────────────────────────────
+  window.getTagFilter = function () {
+    var sb = document.querySelector(".js-sort-bar");
+    return sb ? (sb.dataset.tagFilter || "") : "";
+  };
+
+  function applyTagFilter(name) {
+    var sb = document.querySelector(".js-sort-bar");
+    if (!sb) return;
+    var current = sb.dataset.tagFilter || "";
+    sb.dataset.tagFilter = current === name ? "" : name;
+    if (typeof window.refreshFileList === "function") window.refreshFileList();
+  }
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-tag-filter-btn");
+    if (btn) { e.stopPropagation(); applyTagFilter(btn.dataset.tag); return; }
+    var entryTag = e.target.closest(".js-entry-tag");
+    if (entryTag) { e.stopPropagation(); applyTagFilter(entryTag.dataset.tag); }
+  });
+
   // Initialize sort UI from server-rendered data attributes
   initSortUI();
 
@@ -298,6 +319,136 @@
           })
           .catch(function () { /* ignore */ });
       }
+    }
+
+    // ── Tags (fetch for the selected item) ──
+    var tagsSection = ct.querySelector(".js-rp-tags-section");
+    var tagsList = ct.querySelector(".js-rp-tags-list");
+    var tagInput = ct.querySelector(".js-rp-tag-input");
+    var tagDatalist = ct.querySelector("#js-rp-tag-options");
+    var noTags = ct.querySelector(".js-rp-no-tags");
+    var addTagBtn = ct.querySelector(".js-rp-tag-add");
+    if (tagsSection && tagsList && d.repoId && d.recordId) {
+      tagsSection.classList.add("hidden");
+      tagsList.innerHTML = "";
+      noTags.classList.add("hidden");
+
+      var repoId = d.repoId;
+      var recordId = d.recordId;
+      var allTags = [];   // [{id, name, color}]
+      var fileTagIds = []; // tag ids currently attached
+
+      function renderTagChips() {
+        tagsList.innerHTML = "";
+        noTags.classList.toggle("hidden", fileTagIds.length > 0);
+        fileTagIds.forEach(function (tid) {
+          var tag = allTags.find(function (t) { return String(t.id) === String(tid); });
+          if (!tag) return;
+          var chip = document.createElement("span");
+          chip.className = "js-rp-tag-chip inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-gray-700 dark:text-gray-200";
+          chip.style.backgroundColor = (tag.color || "#e6e6e6") + "33";
+          chip.innerHTML =
+            '<span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color:' + escapeHtml(tag.color || "#e6e6e6") + ';"></span>' +
+            escapeHtml(tag.name) +
+            '<button type="button" class="js-rp-tag-remove hover:text-red-500" data-tag-id="' + encodeURIComponent(tag.id) + '" title="' + escapeHtml(__t('fb.remove_tag')) + '">' +
+            '  <svg class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>' +
+            "</button>";
+          tagsList.appendChild(chip);
+        });
+      }
+
+      function saveTags(nextTagIds) {
+        return window.apiFetch(
+          "/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/file-tags/",
+          {
+            method: "PUT",
+            body: JSON.stringify({ file_tags_data: [{ record_id: recordId, tags: nextTagIds }] }),
+          }
+        ).then(function () {
+          fileTagIds = nextTagIds;
+          renderTagChips();
+          if (typeof window.refreshFileList === "function") window.refreshFileList();
+        });
+      }
+
+      // Load repo tags + this file's current tags.
+      var pathForQuery = d.path || "/" + (d.name || "");
+      var slash = pathForQuery.lastIndexOf("/");
+      var parentDir = slash <= 0 ? "/" : pathForQuery.slice(0, slash);
+      var fileName = slash <= 0 ? pathForQuery.replace(/^\//, "") : pathForQuery.slice(slash + 1);
+
+      Promise.all([
+        window.apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/tags/?start=0&limit=1000").then(function (r) { return r.json(); }),
+        window.apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/record/?parent_dir=" + encodeURIComponent(parentDir) + "&name=" + encodeURIComponent(fileName) + "&file_name=" + encodeURIComponent(fileName)).then(function (r) { return r.json(); }),
+      ]).then(function (results) {
+        var tagData = results[0] || {};
+        var recData = results[1] || {};
+        allTags = (tagData.results || []).map(function (t) {
+          return { id: t._id, name: t._tag_name, color: t._tag_color };
+        });
+        if (tagDatalist) {
+          tagDatalist.innerHTML = "";
+          allTags.forEach(function (t) {
+            var opt = document.createElement("option");
+            opt.value = t.name;
+            tagDatalist.appendChild(opt);
+          });
+        }
+        var rec = (recData.results || [])[0] || {};
+        fileTagIds = (rec._tags || []).map(function (l) { return l.row_id; });
+        renderTagChips();
+        tagsSection.classList.remove("hidden");
+      }).catch(function () {
+        tagsSection.classList.add("hidden");
+      });
+
+      if (addTagBtn && tagInput) {
+        addTagBtn.onclick = function () {
+          var name = (tagInput.value || "").trim();
+          if (!name) return;
+          var existing = allTags.find(function (t) { return t.name === name; });
+          var p;
+          if (existing) {
+            p = Promise.resolve(existing.id);
+          } else {
+            var colors = ["#ff9800", "#f44336", "#4caf50", "#2196f3", "#9c27b0", "#00bcd4", "#ffeb3b", "#8bc34a", "#ff5722", "#3f51b5"];
+            var color = colors[Math.floor(Math.random() * colors.length)];
+            p = window.apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/tags/", {
+              method: "POST",
+              body: JSON.stringify({ tags_data: [{ _tag_name: name, _tag_color: color }] }),
+            }).then(function (r) { return r.json(); }).then(function (data) {
+              var created = (data.tags || [])[0];
+              allTags.push({ id: created._id, name: created._tag_name, color: created._tag_color });
+              if (tagDatalist) {
+                var opt = document.createElement("option");
+                opt.value = created._tag_name;
+                tagDatalist.appendChild(opt);
+              }
+              return created._id;
+            });
+          }
+          p.then(function (tid) {
+            var next = fileTagIds.slice();
+            if (next.indexOf(tid) === -1) next.push(tid);
+            tagInput.value = "";
+            return saveTags(next);
+          }).catch(function () {
+            if (window.Toast && window.Toast.error) window.Toast.error(__t('fb.add_tag_failed'));
+          });
+        };
+
+        tagsList.onclick = function (e) {
+          var rm = e.target.closest(".js-rp-tag-remove");
+          if (!rm) return;
+          var tid = decodeURIComponent(rm.dataset.tagId);
+          var next = fileTagIds.filter(function (id) { return String(id) !== String(tid); });
+          saveTags(next).catch(function () {
+            if (window.Toast && window.Toast.error) window.Toast.error(__t('fb.remove_tag_failed'));
+          });
+        };
+      }
+    } else if (tagsSection) {
+      tagsSection.classList.add("hidden");
     }
 
     // Upload links (directories only)

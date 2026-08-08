@@ -12,6 +12,8 @@ pub trait MetadataConfigRepository: Send + Sync {
         repo_id: &str,
     ) -> Result<Option<metadata_config::Model>, AppError>;
     async fn upsert(&self, repo_id: &str, enabled: bool) -> Result<(), AppError>;
+    /// Enable/disable the file-tag feature, creating the config row if needed.
+    async fn set_tags_enabled(&self, repo_id: &str, enabled: bool) -> Result<(), AppError>;
 }
 
 pub struct DbMetadataConfigRepository {
@@ -61,6 +63,42 @@ impl MetadataConfigRepository for DbMetadataConfigRepository {
                     id: sea_orm::NotSet,
                     repo_id: Set(repo_id.to_string()),
                     enabled: Set(Some(enabled)),
+                    tags_enabled: Set(Some(true)),
+                    created_at: Set(now),
+                })
+                .exec(db)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn set_tags_enabled(&self, repo_id: &str, enabled: bool) -> Result<(), AppError> {
+        let db = self.db.as_ref();
+        let now = chrono::Utc::now().timestamp();
+
+        let existing = metadata_config::Entity::find()
+            .filter(metadata_config::Column::RepoId.eq(repo_id))
+            .one(db)
+            .await?;
+
+        match existing {
+            Some(_c) => {
+                metadata_config::Entity::update_many()
+                    .filter(metadata_config::Column::RepoId.eq(repo_id))
+                    .set(metadata_config::ActiveModel {
+                        tags_enabled: Set(Some(enabled)),
+                        ..Default::default()
+                    })
+                    .exec(db)
+                    .await?;
+            }
+            None => {
+                metadata_config::Entity::insert(metadata_config::ActiveModel {
+                    id: sea_orm::NotSet,
+                    repo_id: Set(repo_id.to_string()),
+                    enabled: Set(Some(true)),
+                    tags_enabled: Set(Some(enabled)),
                     created_at: Set(now),
                 })
                 .exec(db)

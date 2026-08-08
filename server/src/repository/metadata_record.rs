@@ -9,12 +9,24 @@ use infra::entity::metadata_record;
 pub trait MetadataRecordRepository: Send + Sync {
     async fn find_by_repo_id(&self, repo_id: &str)
     -> Result<Vec<metadata_record::Model>, AppError>;
+    async fn find_by_repo_and_path(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<metadata_record::Model>, AppError>;
     async fn upsert(
         &self,
         repo_id: &str,
         file_path: &str,
         key: &str,
         value: Option<&str>,
+    ) -> Result<(), AppError>;
+    /// Store multiple (key, value) pairs for a file path.
+    async fn upsert_many(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+        fields: &[(String, Option<String>)],
     ) -> Result<(), AppError>;
 }
 
@@ -36,6 +48,18 @@ impl MetadataRecordRepository for DbMetadataRecordRepository {
     ) -> Result<Vec<metadata_record::Model>, AppError> {
         Ok(metadata_record::Entity::find()
             .filter(metadata_record::Column::RepoId.eq(repo_id))
+            .all(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_repo_and_path(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<metadata_record::Model>, AppError> {
+        Ok(metadata_record::Entity::find()
+            .filter(metadata_record::Column::RepoId.eq(repo_id))
+            .filter(metadata_record::Column::FilePath.eq(file_path))
             .all(self.db.as_ref())
             .await?)
     }
@@ -68,6 +92,19 @@ impl MetadataRecordRepository for DbMetadataRecordRepository {
         })
         .exec(db)
         .await?;
+        Ok(())
+    }
+
+    async fn upsert_many(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+        fields: &[(String, Option<String>)],
+    ) -> Result<(), AppError> {
+        for (key, value) in fields {
+            self.upsert(repo_id, file_path, key, value.as_deref())
+                .await?;
+        }
         Ok(())
     }
 }

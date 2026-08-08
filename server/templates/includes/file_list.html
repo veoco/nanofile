@@ -23,7 +23,8 @@
 <!-- View toggle + sort + selection actions (sort buttons hidden in gallery mode) -->
 <div class="js-sort-bar flex items-center gap-1 px-4 pt-2 pb-1"
      data-sort-field="{{ sort_field }}"
-     data-sort-order="{{ sort_order }}">
+     data-sort-order="{{ sort_order }}"
+     data-tag-filter="{{ current_tag.as_deref().unwrap_or("") }}">
     <button class="js-view-list p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 text-brand-500" title="{{ t.tr("fb.list_view") }}" aria-label="{{ t.tr("fb.switch_to_list_view") }}">
         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
@@ -66,6 +67,26 @@
         </svg>
     </button>
     </span>
+    {% if !folder_tags.is_empty() || current_tag.is_some() %}
+    <span class="js-tag-filter flex items-center gap-1">
+        <span class="text-gray-300 dark:text-gray-600 select-none">|</span>
+        {% for tag in folder_tags %}
+        <button type="button"
+                class="js-tag-filter-btn px-1.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1
+                {% if current_tag.as_deref() == Some(tag.name.as_str()) %}text-brand-500 bg-brand-50 dark:bg-brand-900/20{% else %}text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300{% endif %}"
+                data-tag="{{ tag.name }}"
+                title="{{ t.trf("fb.filter_by_tag", [("name", &tag.name)]) }}">
+            <span class="inline-block h-2 w-2 rounded-full" style="background-color: {{ tag.color }};"></span>
+            {{ tag.name }}
+            {% if current_tag.as_deref() == Some(tag.name.as_str()) %}
+            <svg class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+            {% endif %}
+        </button>
+        {% endfor %}
+    </span>
+    {% endif %}
     <div class="flex-1 min-w-0"></div>
     <!-- Selection actions (shown when items are selected) -->
     <span id="js-selection-info" class="hidden flex items-center gap-1 text-xs text-brand-600 dark:text-brand-400 font-medium whitespace-nowrap">
@@ -123,7 +144,8 @@
          data-modifier-email="{{ entry.modifier_email }}"
          data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
          data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
-         data-is-previewable="{{ entry.is_previewable }}">
+         data-is-previewable="{{ entry.is_previewable }}"
+         data-record-id="{{ entry.record_id }}">
         {% if entry.entry_type == "dir" %}
         <!-- Folder icon -->
         <div class="h-9 min-w-9 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
@@ -137,6 +159,19 @@
                 {{ entry.name }}/
             </a>
             <div class="text-xs text-gray-400 dark:text-gray-500">{{ entry.mtime_display }}</div>
+            {% if !entry.tags.is_empty() %}
+            <div class="flex items-center gap-1 mt-1 flex-wrap">
+                {% for tag in entry.tags %}
+                <button type="button" class="js-entry-tag inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium text-gray-700 dark:text-gray-200 hover:opacity-80 transition-opacity"
+                        style="background-color: {{ tag.color }}33;"
+                        data-tag="{{ tag.name }}"
+                        title="{{ t.trf("fb.filter_by_tag", [("name", &tag.name)]) }}">
+                    <span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color: {{ tag.color }};"></span>
+                    {{ tag.name }}
+                </button>
+                {% endfor %}
+            </div>
+            {% endif %}
         </div>
         <div class="flex items-center gap-0.5">
             <button data-toggle-star
@@ -221,6 +256,19 @@
                 {% if entry.entry_type == "file" %}<span>{{ entry.size_display }}</span>{% endif %}
                 <span>{{ entry.mtime_display }}</span>
             </div>
+            {% if !entry.tags.is_empty() %}
+            <div class="flex items-center gap-1 mt-1 flex-wrap">
+                {% for tag in entry.tags %}
+                <button type="button" class="js-entry-tag inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium text-gray-700 dark:text-gray-200 hover:opacity-80 transition-opacity"
+                        style="background-color: {{ tag.color }}33;"
+                        data-tag="{{ tag.name }}"
+                        title="{{ t.trf("fb.filter_by_tag", [("name", &tag.name)]) }}">
+                    <span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color: {{ tag.color }};"></span>
+                    {{ tag.name }}
+                </button>
+                {% endfor %}
+            </div>
+            {% endif %}
         </div>
         <div class="flex items-center gap-0.5">
             <button data-toggle-star
@@ -308,7 +356,8 @@
          data-modifier-email="{{ entry.modifier_email }}"
          data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
          data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
-         data-is-previewable="{{ entry.is_previewable }}">
+         data-is-previewable="{{ entry.is_previewable }}"
+         data-record-id="{{ entry.record_id }}">
         {% if entry.entry_type == "dir" %}
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
             <svg class="h-14 w-14 text-amber-400" fill="currentColor" viewBox="0 0 24 24">

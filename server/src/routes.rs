@@ -254,11 +254,24 @@ fn v2_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/v2.1/repos/{repo_id}/metadata/tags/",
-            get(crate::handler::metadata::get_file_tags),
+            get(crate::handler::metadata::get_repo_tags)
+                .post(crate::handler::metadata::create_repo_tags)
+                .put(crate::handler::metadata::update_repo_tags)
+                .delete(crate::handler::metadata::delete_repo_tags),
+        )
+        .route(
+            "/api/v2.1/repos/{repo_id}/metadata/tags-status/",
+            get(crate::handler::metadata::get_tags_status)
+                .put(crate::handler::metadata::update_tags_status)
+                .delete(crate::handler::metadata::delete_tags_status),
+        )
+        .route(
+            "/api/v2.1/repos/{repo_id}/metadata/tag-files/{tag_id}/",
+            get(crate::handler::metadata::get_tag_files),
         )
         .route(
             "/api/v2.1/repos/{repo_id}/metadata/file-tags/",
-            put(crate::handler::metadata::update_file_tags),
+            put(crate::handler::metadata::set_file_tags),
         )
         .route(
             "/api/v2.1/repos/{repo_id}/related-users/",

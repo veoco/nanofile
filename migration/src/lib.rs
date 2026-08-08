@@ -56,6 +56,7 @@ migrations!(
     m20260806_000001_add_history_settings_to_repos,
     m20260806_000002_add_language_to_users,
     m20260806_000003_add_perf_indexes,
+    m20260808_000001_create_repo_tags,
 );
 
 #[cfg(test)]

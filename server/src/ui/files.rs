@@ -7,7 +7,7 @@ use axum::{
     response::{Html, IntoResponse},
 };
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::AppState;
@@ -46,6 +46,10 @@ pub struct FileBrowserTemplate {
     pub sort_field: String,
     pub sort_order: String,
     pub gallery_groups: Vec<GalleryMonthGroup>,
+    /// Distinct tags used in the current folder, for the sort-bar filter.
+    pub folder_tags: Vec<TagChip>,
+    /// The currently active tag filter (tag name), if any.
+    pub current_tag: Option<String>,
 }
 
 #[derive(Template)]
@@ -67,6 +71,10 @@ pub struct FileBrowserCoreTemplate {
     pub sort_field: String,
     pub sort_order: String,
     pub gallery_groups: Vec<GalleryMonthGroup>,
+    /// Distinct tags used in the current folder, for the sort-bar filter.
+    pub folder_tags: Vec<TagChip>,
+    /// The currently active tag filter (tag name), if any.
+    pub current_tag: Option<String>,
 }
 
 #[derive(Template)]
@@ -133,6 +141,17 @@ pub struct FileEntry {
     pub is_video: bool,
     /// Email of the user who last modified this entry.
     pub modifier_email: String,
+    /// Tags attached to this entry (name + color), for rendering tag chips.
+    pub tags: Vec<TagChip>,
+    /// Metadata record id (hex-encoded path) used by the tag editor APIs.
+    pub record_id: String,
+}
+
+/// A display tag attached to a file entry.
+#[derive(Clone)]
+pub struct TagChip {
+    pub name: String,
+    pub color: String,
 }
 
 /// A group of file entries belonging to the same calendar month, used by gallery view.
@@ -359,6 +378,8 @@ pub struct FileBrowserQuery {
     pub per_page: Option<u32>,
     pub sort: Option<String>,       // "name" | "mtime" | "size"
     pub sort_order: Option<String>, // "asc" | "desc"
+    /// Filter the current folder to entries carrying this tag name.
+    pub tag: Option<String>,
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -448,6 +469,43 @@ async fn file_browser_inner(
         .map(|s| s.path.trim_end_matches('/').to_string())
         .collect();
 
+    // Batch-load tags for the current folder's entries so each row can render
+    // its tag chips and the sort-bar filter knows which tags exist here.
+    let folder_paths: Vec<String> = entries_data
+        .1
+        .iter()
+        .map(|e| {
+            if path == "/" {
+                format!("/{}", e.name)
+            } else {
+                format!("{}/{}", path.trim_end_matches('/'), e.name)
+            }
+        })
+        .collect();
+    let tag_details = state
+        .repos
+        .file_tag
+        .find_tag_details_by_paths(&repo_id, &folder_paths)
+        .await?;
+    let mut tags_by_path: HashMap<String, Vec<TagChip>> = HashMap::new();
+    let mut folder_tags: Vec<TagChip> = Vec::new();
+    for d in tag_details {
+        let chip = TagChip {
+            name: d.tag_name.clone(),
+            color: d.tag_color.clone(),
+        };
+        tags_by_path
+            .entry(d.file_path.clone())
+            .or_default()
+            .push(chip);
+        if !folder_tags.iter().any(|t| t.name == d.tag_name) {
+            folder_tags.push(TagChip {
+                name: d.tag_name,
+                color: d.tag_color,
+            });
+        }
+    }
+
     let mut entries: Vec<FileEntry> = entries_data
         .1
         .into_iter()
@@ -504,9 +562,18 @@ async fn file_browser_inner(
                 image_thumbnail_url_large: thumb_url_large,
                 is_video: entry_is_video,
                 modifier_email: e.modifier.clone(),
+                tags: tags_by_path.get(&full_path).cloned().unwrap_or_default(),
+                record_id: crate::service::fs::metadata::MetadataService::record_id_from_path(
+                    &full_path,
+                ),
             }
         })
         .collect();
+
+    // Apply the tag filter (current folder only, non-recursive).
+    if let Some(tag) = query.tag.as_deref().filter(|t| !t.is_empty()) {
+        entries.retain(|e| e.tags.iter().any(|t| t.name == tag));
+    }
 
     // Sort: directories first, then by configurable field and order
     let sort_field = query.sort.as_deref().unwrap_or("name");
@@ -617,6 +684,8 @@ async fn file_browser_inner(
             sort_field: sort_field.to_string(),
             sort_order: sort_order.to_string(),
             gallery_groups,
+            folder_tags: folder_tags.clone(),
+            current_tag: query.tag.clone().filter(|t| !t.is_empty()),
         };
         let html = tpl
             .render()
@@ -647,6 +716,8 @@ async fn file_browser_inner(
             sort_field: sort_field.to_string(),
             sort_order: sort_order.to_string(),
             gallery_groups,
+            folder_tags,
+            current_tag: query.tag.filter(|t| !t.is_empty()),
         };
         let html = tpl
             .render()
@@ -906,6 +977,8 @@ mod tests {
             image_thumbnail_url_large: None,
             is_video: false,
             modifier_email: String::new(),
+            tags: Vec::new(),
+            record_id: String::new(),
         }
     }
 

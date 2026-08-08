@@ -116,6 +116,15 @@ pub(crate) async fn rename_entry(
         tracing::warn!("Failed to update starred path for {path}: {e}");
     }
 
+    // Sync file tags to the new path.
+    if let Err(e) = repos
+        .file_tag
+        .update_paths_for_rename(path, &new_path, repo_id)
+        .await
+    {
+        tracing::warn!("Failed to update file tag paths for {path}: {e}");
+    }
+
     Ok(())
 }
 
@@ -258,6 +267,15 @@ pub(crate) async fn move_entry(
         None,
     )
     .await;
+
+    // Sync file tags to the new path (dirs move all items inside).
+    if let Err(e) = repos
+        .file_tag
+        .update_paths_for_rename(path, &new_path, repo_id)
+        .await
+    {
+        tracing::warn!("Failed to update file tag paths for {path}: {e}");
+    }
 
     Ok(new_path)
 }
@@ -686,6 +704,16 @@ impl FileService {
             db, repo_id, "delete", "file", path, user_id, None, None, None, None, None,
         )
         .await;
+
+        // Drop orphaned tag rows for the deleted path.
+        if let Err(e) = self
+            .repos
+            .file_tag
+            .delete_by_path_prefix(repo_id, path)
+            .await
+        {
+            tracing::warn!("Failed to delete file tags for {path}: {e}");
+        }
 
         Ok(())
     }

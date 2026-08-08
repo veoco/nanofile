@@ -17,6 +17,7 @@ pub mod metadata_record;
 pub mod password_reset_token;
 pub mod repo;
 pub mod repo_member;
+pub mod repo_tag;
 pub mod s2fa_token;
 pub mod sdoc_comment;
 pub mod share_link;

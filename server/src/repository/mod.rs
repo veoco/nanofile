@@ -25,6 +25,7 @@ pub mod metadata_config;
 pub mod metadata_record;
 pub mod password_reset_token;
 pub mod repo;
+pub mod repo_tag;
 pub mod s2fa_token;
 pub mod sdoc_comment;
 pub mod share_link;
@@ -63,6 +64,7 @@ use crate::repository::metadata_config::*;
 use crate::repository::metadata_record::*;
 use crate::repository::password_reset_token::*;
 use crate::repository::repo::*;
+use crate::repository::repo_tag::*;
 use crate::repository::s2fa_token::*;
 use crate::repository::sdoc_comment::*;
 use crate::repository::share_link::*;
@@ -107,6 +109,7 @@ pub struct Repositories {
     pub client_login_token: Arc<dyn ClientLoginTokenRepository>,
     pub metadata_config: Arc<dyn MetadataConfigRepository>,
     pub metadata_record: Arc<dyn MetadataRecordRepository>,
+    pub repo_tag: Arc<dyn RepoTagRepository>,
     pub file_tag: Arc<dyn FileTagRepository>,
     pub file_trash: Arc<dyn FileTrashRepository>,
     pub deleted_repo: Arc<dyn DeletedRepoRepository>,
@@ -151,6 +154,7 @@ impl Repositories {
             client_login_token: Arc::new(DbClientLoginTokenRepository::new(db.clone())),
             metadata_config: Arc::new(DbMetadataConfigRepository::new(db.clone())),
             metadata_record: Arc::new(DbMetadataRecordRepository::new(db.clone())),
+            repo_tag: Arc::new(DbRepoTagRepository::new(db.clone())),
             file_tag: Arc::new(DbFileTagRepository::new(db.clone())),
             file_trash: Arc::new(DbFileTrashRepository::new(db.clone())),
             deleted_repo: Arc::new(DbDeletedRepoRepository::new(db.clone())),

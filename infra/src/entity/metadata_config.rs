@@ -9,6 +9,8 @@ pub struct Model {
     #[sea_orm(not_null, length = 36)]
     pub repo_id: String,
     pub enabled: Option<bool>,
+    /// Whether the file-tag feature is enabled for this repo.
+    pub tags_enabled: Option<bool>,
     #[sea_orm(not_null)]
     pub created_at: i64,
 }
