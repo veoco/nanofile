@@ -196,19 +196,36 @@
     var extBadge = ct.querySelector(".js-rp-ext-badge");
     var folderIcon = ct.querySelector(".js-rp-folder-icon");
     var videoIcon = ct.querySelector(".js-rp-video-icon");
+    var videoEl = ct.querySelector(".js-rp-video");
+
+    // Stop any previously-playing video before switching selection.
+    if (videoEl) {
+      videoEl.pause();
+      videoEl.removeAttribute("src");
+      videoEl.load();
+      videoEl.poster = "";
+    }
 
     // Hide all preview variants first
     if (thumbImg) { thumbImg.classList.add("hidden"); thumbImg.src = ""; }
     if (extBadge) extBadge.classList.add("hidden");
     if (folderIcon) folderIcon.classList.add("hidden");
     if (videoIcon) videoIcon.classList.add("hidden");
+    if (videoEl) videoEl.classList.add("hidden");
 
     if (d.type === "dir") {
       if (folderIcon) folderIcon.classList.remove("hidden");
+    } else if (d.isVideo) {
+      // Inline playback via the Range-capable streaming endpoint; the frame
+      // thumbnail (if any) doubles as the native poster.
+      if (videoEl && d.repoId && d.path) {
+        var encPath = d.path.split("/").map(encodeURIComponent).join("/");
+        videoEl.src = "/libraries/" + encodeURIComponent(d.repoId) + "/files/" + encPath;
+        videoEl.poster = d.thumbnailUrlLarge || d.thumbnailUrl || "";
+        videoEl.classList.remove("hidden");
+      }
     } else if (d.thumbnailUrlLarge || d.thumbnailUrl) {
       if (thumbImg) { thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
-    } else if (d.isVideo && videoIcon) {
-      if (videoIcon) videoIcon.classList.remove("hidden");
     } else if (d.extension && extBadge) {
       extBadge.textContent = d.extension;
       extBadge.classList.remove("hidden");
@@ -521,7 +538,7 @@
     var exifContent = ct.querySelector(".js-rp-exif-content");
     var noExif = ct.querySelector(".js-rp-no-exif");
 
-    if (exifSection && d.type !== "dir" && d.thumbnailUrl && d.repoId && d.path) {
+    if (exifSection && d.type !== "dir" && !d.isVideo && d.thumbnailUrl && d.repoId && d.path) {
       fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/exif/?p=" + encodeURIComponent(d.path))
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -601,6 +618,14 @@
     var ph = document.querySelector(".js-rp-placeholder");
     var ct = document.querySelector(".js-rp-content");
     var mc = document.querySelector(".js-rp-multi-content");
+    // Stop any playing video so it doesn't keep buffering in the background.
+    var videoEl = ct ? ct.querySelector(".js-rp-video") : null;
+    if (videoEl) {
+      videoEl.pause();
+      videoEl.removeAttribute("src");
+      videoEl.load();
+      videoEl.poster = "";
+    }
     if (ph) ph.classList.remove("hidden");
     if (ct) ct.classList.add("hidden");
     if (mc) mc.classList.add("hidden");
@@ -708,6 +733,7 @@
       "BZ2": __t('ft.bz2_archive'), "7Z": __t('ft.sevenzip_archive'), "RAR": __t('ft.rar_archive'),
       "MP4": __t('ft.mp4_video'), "MOV": __t('ft.mov_video'), "AVI": __t('ft.avi_video'),
       "MKV": __t('ft.mkv_video'), "WEBM": __t('ft.webm_video'), "WMV": __t('ft.wmv_video'),
+      "FLV": __t('ft.flv_video'), "3GP": __t('ft.3gp_video'),
       "MP3": __t('ft.mp3_audio'), "FLAC": __t('ft.flac_audio'), "WAV": __t('ft.wav_audio'),
       "ISO": __t('ft.disk_image')
     };

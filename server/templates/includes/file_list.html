@@ -145,6 +145,7 @@
          data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
          data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
          data-is-previewable="{{ entry.is_previewable }}"
+         data-is-video="{{ entry.is_video }}"
          data-record-id="{{ entry.record_id }}">
         {% if entry.entry_type == "dir" %}
         <!-- Folder icon -->
@@ -357,6 +358,7 @@
          data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
          data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
          data-is-previewable="{{ entry.is_previewable }}"
+         data-is-video="{{ entry.is_video }}"
          data-record-id="{{ entry.record_id }}">
         {% if entry.entry_type == "dir" %}
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
@@ -412,14 +414,27 @@
                  data-modifier-email="{{ entry.modifier_email }}"
                  data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
                  data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
-                 data-is-previewable="{{ entry.is_previewable }}">
+                 data-is-previewable="{{ entry.is_previewable }}"
+                 data-is-video="{{ entry.is_video }}">
                 {% if entry.is_video %}
+                {% if let Some(thumb_url) = entry.image_thumbnail_url_large %}
+                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy">
+                <span class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <span class="h-8 w-8 rounded-full bg-black/45 flex items-center justify-center">
+                        <svg class="h-4 w-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M8 5v14l11-7z"/>
+                        </svg>
+                    </span>
+                </span>
+                <span class="absolute top-1 right-1 text-[10px] text-white/70 font-medium leading-none">{{ entry.extension.as_deref().unwrap_or("") }}</span>
+                {% else %}
                 <div class="w-full h-full flex items-center justify-center bg-gray-800 dark:bg-gray-900 pointer-events-none">
                     <span class="absolute top-1 right-1 text-[10px] text-white/70 font-medium leading-none">{{ entry.extension.as_deref().unwrap_or("") }}</span>
                     <svg class="h-8 w-8 text-white/80" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M8 5v14l11-7z"/>
                     </svg>
                 </div>
+                {% endif %}
                 {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
                 <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy">
                 {% else %}

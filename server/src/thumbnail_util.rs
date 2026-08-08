@@ -54,6 +54,15 @@ pub fn is_supported_image_ext(ext: &str) -> bool {
     matches!(ext, "bmp" | "gif" | "ico" | "jpg" | "jpeg" | "png" | "webp")
 }
 
+/// Whether an extension is a video file that can be thumbnailed via ffmpeg.
+/// Single source of truth — the UI's `is_video_file` delegates to this.
+pub fn is_video_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        "mp4" | "mov" | "avi" | "mkv" | "webm" | "wmv" | "flv" | "3gp"
+    )
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────
 
 /// Decode raw image bytes and apply any EXIF orientation tag.

@@ -1,6 +1,10 @@
+use futures::StreamExt;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use tokio::io::AsyncWriteExt;
 
 use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
@@ -12,6 +16,10 @@ pub struct ThumbnailService {
     repos: Arc<Repositories>,
     block_store: infra::storage::DynBlockStorage,
     block_dir: Arc<PathBuf>,
+    /// Scratch directory for streaming video files before ffmpeg extracts a frame.
+    temp_dir: Arc<PathBuf>,
+    /// Path to the `ffmpeg` binary ("ffmpeg" by default).
+    ffmpeg_path: Arc<String>,
 }
 
 impl ThumbnailService {
@@ -19,11 +27,15 @@ impl ThumbnailService {
         repos: Arc<Repositories>,
         block_store: infra::storage::DynBlockStorage,
         block_dir: Arc<PathBuf>,
+        temp_dir: Arc<PathBuf>,
+        ffmpeg_path: Arc<String>,
     ) -> Self {
         Self {
             repos,
             block_store,
             block_dir,
+            temp_dir,
+            ffmpeg_path,
         }
     }
 
@@ -128,45 +140,52 @@ impl ThumbnailService {
             // Stale — fall through to regenerate
         }
 
-        // Check if this is a supported image file
+        // Supported sources are images (decoded in-process) and videos (frame
+        // extracted via ffmpeg). Anything else has no thumbnail.
         let ext = std::path::Path::new(&file_name)
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
-
-        if !crate::thumbnail_util::is_supported_image_ext(&ext) {
+        let is_image = crate::thumbnail_util::is_supported_image_ext(&ext);
+        let is_video = crate::thumbnail_util::is_video_ext(&ext);
+        if !is_image && !is_video {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
-        // Skip huge images and cap the in-memory read; decoding a truncated
-        // multi-hundred-MB image would waste CPU and memory for no benefit.
-        const MAX_THUMBNAIL_SOURCE: i64 = 32 * 1024 * 1024;
-        let (file_data, _block_ids) =
-            Downloader::resolve_blocks(&self.repos, repo_id, &normalized_path)
-                .await
-                .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
-        if file_data.size > MAX_THUMBNAIL_SOURCE {
-            return Err(AppError::NotFound("thumbnail not available".into()));
-        }
+        let thumbnail_data = if is_image {
+            // Skip huge images and cap the in-memory read; decoding a truncated
+            // multi-hundred-MB image would waste CPU and memory for no benefit.
+            const MAX_THUMBNAIL_SOURCE: i64 = 32 * 1024 * 1024;
+            let (file_data, _block_ids) =
+                Downloader::resolve_blocks(&self.repos, repo_id, &normalized_path)
+                    .await
+                    .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
+            if file_data.size > MAX_THUMBNAIL_SOURCE {
+                return Err(AppError::NotFound("thumbnail not available".into()));
+            }
 
-        let content = Downloader::download_file_limited(
-            &self.repos,
-            repo_id,
-            &normalized_path,
-            &self.block_store,
-            None,
-            MAX_THUMBNAIL_SOURCE as usize,
-        )
-        .await
-        .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
+            let content = Downloader::download_file_limited(
+                &self.repos,
+                repo_id,
+                &normalized_path,
+                &self.block_store,
+                None,
+                MAX_THUMBNAIL_SOURCE as usize,
+            )
+            .await
+            .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
 
-        let thumbnail_data = tokio::task::spawn_blocking(move || {
-            crate::thumbnail_util::generate_thumbnail(&content, size)
-        })
-        .await
-        .map_err(|e| AppError::Internal(format!("thumbnail generation panicked: {e}")))?
-        .map_err(|e| AppError::Internal(format!("thumbnail generation failed: {e}")))?;
+            tokio::task::spawn_blocking(move || {
+                crate::thumbnail_util::generate_thumbnail(&content, size)
+            })
+            .await
+            .map_err(|e| AppError::Internal(format!("thumbnail generation panicked: {e}")))?
+            .map_err(|e| AppError::Internal(format!("thumbnail generation failed: {e}")))?
+        } else {
+            self.generate_video_thumbnail(repo_id, &normalized_path, size)
+                .await?
+        };
 
         // ── Store thumbnail for future requests ──
         let thumbnail_dir = self.thumbnail_repo_dir(repo_id);
@@ -206,6 +225,85 @@ impl ThumbnailService {
         }
 
         Ok(thumbnail_data)
+    }
+
+    /// Generate a thumbnail for a video file by extracting one frame with ffmpeg.
+    ///
+    /// The video is streamed to a scratch file under `temp_dir` (so ffmpeg can
+    /// seek), a frame is captured around 1s in (falling back to the first frame
+    /// on failure), and the result is fitted/resized to `size` and re-encoded as
+    /// PNG by the shared image util. Returns `NotFound` when ffmpeg is unavailable
+    /// or generation fails — the UI then shows the plain play-icon placeholder.
+    async fn generate_video_thumbnail(
+        &self,
+        repo_id: &str,
+        normalized_path: &str,
+        size: u32,
+    ) -> Result<Vec<u8>, AppError> {
+        if !ffmpeg_available(&self.ffmpeg_path) {
+            return Err(AppError::NotFound("thumbnail not available".into()));
+        }
+
+        // Skip absurdly large sources — extracting a frame would stream gigabytes.
+        const MAX_VIDEO_SOURCE: i64 = 2 * 1024 * 1024 * 1024;
+        let (file_data, block_ids) =
+            Downloader::resolve_blocks(&self.repos, repo_id, normalized_path)
+                .await
+                .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
+        if file_data.size > MAX_VIDEO_SOURCE {
+            return Err(AppError::NotFound("thumbnail not available".into()));
+        }
+
+        // Stream the whole video to a scratch file so ffmpeg can fast-seek.
+        let scratch_dir = self.temp_dir.join("video_thumbs");
+        tokio::fs::create_dir_all(&scratch_dir)
+            .await
+            .map_err(|e| AppError::Internal(format!("create scratch dir failed: {e}")))?;
+        let scratch_video = scratch_dir.join(format!(
+            "{}_{}.vid",
+            repo_id,
+            thumbnail_key(repo_id, normalized_path)
+        ));
+        let scratch_png = scratch_video.with_extension("png");
+
+        let write_result: Result<(), std::io::Error> = async {
+            let mut out = tokio::fs::File::create(&scratch_video).await?;
+            let mut stream =
+                crate::fs::core::download::stream_blocks(block_ids, self.block_store.clone(), None);
+            while let Some(chunk) = stream.next().await {
+                out.write_all(&chunk?).await?;
+            }
+            out.flush().await
+        }
+        .await;
+        if write_result.is_err() {
+            let _ = tokio::fs::remove_file(&scratch_video).await;
+            return Err(AppError::NotFound("thumbnail not available".into()));
+        }
+
+        let ffmpeg = self.ffmpeg_path.to_string();
+        let src = scratch_video.clone();
+        let dst = scratch_png.clone();
+        let extracted =
+            tokio::task::spawn_blocking(move || extract_video_frame(&ffmpeg, &src, &dst))
+                .await
+                .map_err(|e| AppError::Internal(format!("ffmpeg panicked: {e}")))?;
+
+        let _ = tokio::fs::remove_file(&scratch_video).await;
+        if !extracted {
+            let _ = tokio::fs::remove_file(&scratch_png).await;
+            return Err(AppError::NotFound("thumbnail not available".into()));
+        }
+
+        let png = tokio::fs::read(&scratch_png)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let _ = tokio::fs::remove_file(&scratch_png).await;
+
+        tokio::task::spawn_blocking(move || crate::thumbnail_util::generate_thumbnail(&png, size))
+            .await
+            .map_err(|e| AppError::Internal(format!("thumbnail generation panicked: {e}")))?
+            .map_err(|e| AppError::Internal(format!("thumbnail generation failed: {e}")))
     }
 
     /// Remove all cached thumbnails (disk + DB) for a given repo path.
@@ -272,6 +370,52 @@ impl ThumbnailService {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
+/// Whether the configured ffmpeg binary exists and runs. Cached for the
+/// process lifetime (the path comes from config and doesn't change at runtime).
+fn ffmpeg_available(ffmpeg: &str) -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Command::new(ffmpeg)
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+}
+
+/// Run ffmpeg to extract one frame from `src` into `dst` (a PNG). Tries a frame
+/// ~1s in (skips dark intros), falling back to the first frame on failure.
+/// Returns true when a frame was written.
+fn extract_video_frame(ffmpeg: &str, src: &std::path::Path, dst: &std::path::Path) -> bool {
+    let extract = |ss: Option<&str>| {
+        let mut cmd = Command::new(ffmpeg);
+        cmd.arg("-y")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-hide_banner");
+        if let Some(ss) = ss {
+            cmd.arg("-ss").arg(ss);
+        }
+        cmd.arg("-i")
+            .arg(src)
+            .arg("-frames:v")
+            .arg("1")
+            .arg("-vf")
+            .arg("scale=min(1024\\,iw):-2")
+            .arg("-f")
+            .arg("image2")
+            .arg(dst)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    extract(Some("1")) || extract(None)
+}
+
 /// Build a deterministic, collision-free filename prefix for a thumbnail.
 /// Uses SHA256(repo_id + path) — matching seahub's `generate_thumbnail_key()` approach
 /// but with SHA-256 instead of MD5 (seahub uses MD5, but SHA-256 is already a dependency).
@@ -288,4 +432,62 @@ fn thumbnail_key(repo_id: &str, path: &str) -> String {
 /// Replaced by `thumbnail_key()` which avoids path collisions.
 fn normalize_path_for_file(path: &str) -> String {
     path.trim_matches('/').replace('/', "_")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Extract a frame from a synthetic ffmpeg-generated video and verify the
+    /// output is a decodable PNG that the shared thumbnail fitter accepts.
+    /// Skips silently when ffmpeg isn't installed on the host (CI installs it).
+    #[test]
+    fn extract_video_frame_writes_png() {
+        if !ffmpeg_available("ffmpeg") {
+            eprintln!("ffmpeg not available; skipping video thumbnail test");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "nanofile_vthumb_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("test.mp4");
+        let dst = dir.join("frame.png");
+
+        // Generate a small synthetic video (2s of test pattern).
+        let status = Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("testsrc=duration=2:size=320x240:rate=10")
+            .arg("-pix_fmt")
+            .arg("yuv420p")
+            .arg(&src)
+            .status()
+            .expect("failed to spawn ffmpeg");
+        assert!(status.success(), "ffmpeg failed to create test video");
+
+        let ok = extract_video_frame("ffmpeg", &src, &dst);
+        let _ = std::fs::remove_file(&src);
+        assert!(ok, "ffmpeg frame extraction failed");
+
+        let bytes = std::fs::read(&dst).unwrap();
+        let _ = std::fs::remove_file(&dst);
+        let decoded =
+            image::load_from_memory(&bytes).expect("extracted frame is not a valid image");
+        assert!(decoded.width() > 0 && decoded.height() > 0);
+
+        let thumb = crate::thumbnail_util::generate_thumbnail(&bytes, 48)
+            .expect("thumbnail fitter failed on extracted frame");
+        assert!(!thumb.is_empty());
+    }
 }

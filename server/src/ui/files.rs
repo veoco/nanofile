@@ -3,7 +3,7 @@ use askama::Template;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse},
 };
 use serde::Deserialize;
@@ -133,11 +133,11 @@ pub struct FileEntry {
     pub starred: bool,
     /// File extension in uppercase (e.g. "PDF", "PNG"), None for directories.
     pub extension: Option<String>,
-    /// Thumbnail URL for image files at list-view scale (48px), None otherwise.
+    /// Thumbnail URL for image/video files at list-view scale (48px), None otherwise.
     pub image_thumbnail_url: Option<String>,
-    /// Thumbnail URL for image files at grid-view scale (256px), None otherwise.
+    /// Thumbnail URL for image/video files at grid-view scale (256px), None otherwise.
     pub image_thumbnail_url_large: Option<String>,
-    /// Whether this file is a video (used for gallery view rendering).
+    /// Whether this file is a video (used for gallery/right-panel rendering).
     pub is_video: bool,
     /// Email of the user who last modified this entry.
     pub modifier_email: String,
@@ -169,12 +169,7 @@ pub fn is_video_file(name: &str) -> bool {
     std::path::Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| {
-            matches!(
-                e.to_ascii_lowercase().as_str(),
-                "mp4" | "mov" | "avi" | "mkv" | "webm" | "wmv" | "flv" | "3gp"
-            )
-        })
+        .map(|e| crate::thumbnail_util::is_video_ext(&e.to_ascii_lowercase()))
         .unwrap_or(false)
 }
 
@@ -400,9 +395,10 @@ pub async fn file_browser_root(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
+    headers: HeaderMap,
     Query(query): Query<FileBrowserQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    file_browser_inner(user, state, repo_id, "/".to_string(), query).await
+    file_browser_inner(user, state, repo_id, "/".to_string(), headers, query).await
 }
 
 /// GET /library/{id}/{name}/{*path} — repo file browser (any path).
@@ -410,11 +406,12 @@ pub async fn file_browser(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Path((repo_id, path)): Path<(String, String)>,
+    headers: HeaderMap,
     Query(query): Query<FileBrowserQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let path = base::sanitize::safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-    file_browser_inner(user, state, repo_id, path, query).await
+    file_browser_inner(user, state, repo_id, path, headers, query).await
 }
 
 async fn file_browser_inner(
@@ -422,6 +419,7 @@ async fn file_browser_inner(
     state: Arc<AppState>,
     repo_id: String,
     path: String,
+    headers: HeaderMap,
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
     let t = I18n::get(user.language.as_deref());
@@ -450,7 +448,7 @@ async fn file_browser_inner(
         Err(AppError::NotFound(_)) => {
             // Path doesn't resolve as a directory — likely points to a file.
             // Fall through to file serving.
-            return serve_file(user, state, repo_id, path, query)
+            return serve_file(user, state, repo_id, path, headers, query)
                 .await
                 .map(IntoResponse::into_response);
         }
@@ -528,7 +526,9 @@ async fn file_browser_inner(
             };
             let is_image_file = e.entry_type == "file" && is_thumbnail_image(&e.name);
             let entry_is_video = e.entry_type == "file" && is_video_file(&e.name);
-            let thumb_url = if is_image_file {
+            // Images and videos both get thumbnails (videos via ffmpeg frame extraction).
+            let needs_thumb = is_image_file || entry_is_video;
+            let thumb_url = if needs_thumb {
                 Some(format!(
                     "/api2/repos/{}/thumbnail/?p={}&size=48",
                     repo_id,
@@ -537,7 +537,7 @@ async fn file_browser_inner(
             } else {
                 None
             };
-            let thumb_url_large = if is_image_file {
+            let thumb_url_large = if needs_thumb {
                 Some(format!(
                     "/api2/repos/{}/thumbnail/?p={}&size=256",
                     repo_id,
@@ -733,6 +733,7 @@ async fn serve_file(
     state: Arc<AppState>,
     repo_id: String,
     path: String,
+    headers: HeaderMap,
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
     let path = base::sanitize::safe_normalize_path(&path)
@@ -753,6 +754,56 @@ async fn serve_file(
             [
                 (header::CONTENT_TYPE, content_type),
                 (header::CONTENT_DISPOSITION, &disposition),
+            ],
+            Body::from_stream(stream),
+        )
+            .into_response());
+    }
+
+    // Video — stream inline with Range support so the HTML5 player can seek.
+    if is_video_file(&file_name) {
+        let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
+            .await
+            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
+        let total = file_data.size.max(0) as u64;
+        let content_type = mime_guess(&file_name);
+        let range = headers
+            .get(header::RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|r| crate::fs::core::download::parse_range(r, total));
+
+        if let Some((start, end)) = range {
+            let stream = crate::fs::core::download::range_stream(
+                block_ids,
+                state.block_store.clone(),
+                None,
+                start,
+                end,
+            );
+            let content_range = format!("bytes {start}-{end}/{total}");
+            let content_length = (end - start + 1).to_string();
+            return Ok((
+                StatusCode::PARTIAL_CONTENT,
+                [
+                    (header::CONTENT_TYPE, content_type),
+                    (header::ACCEPT_RANGES, "bytes"),
+                    (header::CONTENT_RANGE, content_range.as_str()),
+                    (header::CONTENT_LENGTH, content_length.as_str()),
+                ],
+                Body::from_stream(stream),
+            )
+                .into_response());
+        }
+
+        let stream =
+            crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
+        let content_length = total.to_string();
+        return Ok((
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::ACCEPT_RANGES, "bytes"),
+                (header::CONTENT_LENGTH, content_length.as_str()),
             ],
             Body::from_stream(stream),
         )
@@ -943,6 +994,22 @@ pub(crate) fn mime_guess(filename: &str) -> &'static str {
         "image/jpeg"
     } else if filename.ends_with(".gif") {
         "image/gif"
+    } else if filename.ends_with(".mp4") {
+        "video/mp4"
+    } else if filename.ends_with(".webm") {
+        "video/webm"
+    } else if filename.ends_with(".mov") {
+        "video/quicktime"
+    } else if filename.ends_with(".3gp") {
+        "video/3gpp"
+    } else if filename.ends_with(".mkv") {
+        "video/x-matroska"
+    } else if filename.ends_with(".avi") {
+        "video/x-msvideo"
+    } else if filename.ends_with(".wmv") {
+        "video/x-ms-wmv"
+    } else if filename.ends_with(".flv") {
+        "video/x-flv"
     } else if filename.ends_with(".pdf") {
         "application/pdf"
     } else {

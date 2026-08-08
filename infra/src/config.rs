@@ -196,6 +196,15 @@ pub struct StorageConfig {
     pub block_dir: PathBuf,
     pub temp_dir: PathBuf,
     pub max_storage_bytes: u64,
+    /// Path to the `ffmpeg` binary used to generate video thumbnails. When the
+    /// binary isn't found, video files fall back to a play-icon placeholder.
+    /// Env: NANOFILE_STORAGE_FFMPEG_PATH
+    #[serde(default = "default_ffmpeg_path")]
+    pub ffmpeg_path: String,
+}
+
+fn default_ffmpeg_path() -> String {
+    "ffmpeg".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -323,6 +332,7 @@ impl Config {
         env_str!("NANOFILE_DATABASE_URL", self.database.url);
         env_path!("NANOFILE_STORAGE_BLOCK_DIR", self.storage.block_dir);
         env_path!("NANOFILE_STORAGE_TEMP_DIR", self.storage.temp_dir);
+        env_str!("NANOFILE_STORAGE_FFMPEG_PATH", self.storage.ffmpeg_path);
         env_parse!(
             "NANOFILE_STORAGE_MAX_STORAGE_BYTES",
             self.storage.max_storage_bytes

@@ -130,6 +130,7 @@ impl TestServer {
                     .join(format!("nf-test-{}", port))
                     .join("tmp"),
                 max_storage_bytes: 10_737_418_240,
+                ffmpeg_path: "ffmpeg".to_string(),
             },
             auth: infra::config::AuthConfig {
                 password_hash_iterations: 1000,

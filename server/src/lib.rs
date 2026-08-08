@@ -224,6 +224,8 @@ impl AppState {
             self.repos.clone(),
             self.block_store.clone(),
             self.block_dir.clone(),
+            Arc::new(self.config.storage.temp_dir.clone()),
+            Arc::new(self.config.storage.ffmpeg_path.clone()),
         )
     }
 
