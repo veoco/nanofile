@@ -32,12 +32,12 @@
                placeholder="{{ t.tr("trash.search_placeholder") }}"
                class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-surface-700 text-gray-900 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
         <button type="submit"
-                class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors">
+                class="flex-shrink-0 whitespace-nowrap rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors">
             {{ t.tr("nav.search") }}
         </button>
         {% if !query.is_empty() %}
         <a href="/trash/"
-           class="inline-flex items-center rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
+           class="inline-flex flex-shrink-0 whitespace-nowrap items-center rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
             {{ t.tr("common.clear") }}
         </a>
         {% endif %}
