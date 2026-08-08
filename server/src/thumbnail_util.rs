@@ -63,6 +63,16 @@ pub fn is_video_ext(ext: &str) -> bool {
     )
 }
 
+/// Whether an extension is an audio file whose embedded cover art can be
+/// extracted as a thumbnail via ffmpeg. Single source of truth — the UI's
+/// `is_audio_file` delegates to this.
+pub fn is_audio_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "wma" | "opus"
+    )
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────
 
 /// Decode raw image bytes and apply any EXIF orientation tag.

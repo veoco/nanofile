@@ -221,6 +221,11 @@ ft.3gp_video = "3GP Video"
 ft.mp3_audio = "MP3 Audio"
 ft.flac_audio = "FLAC Audio"
 ft.wav_audio = "WAV Audio"
+ft.ogg_audio = "OGG Audio"
+ft.m4a_audio = "M4A Audio"
+ft.aac_audio = "AAC Audio"
+ft.wma_audio = "WMA Audio"
+ft.opus_audio = "Opus Audio"
 ft.disk_image = "Disk Image"
 
 # Auth / public pages (from template agent)

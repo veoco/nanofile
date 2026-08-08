@@ -140,8 +140,9 @@ impl ThumbnailService {
             // Stale — fall through to regenerate
         }
 
-        // Supported sources are images (decoded in-process) and videos (frame
-        // extracted via ffmpeg). Anything else has no thumbnail.
+        // Supported sources are images (decoded in-process) and audio/video
+        // (a frame or embedded cover art extracted via ffmpeg). Anything else
+        // has no thumbnail.
         let ext = std::path::Path::new(&file_name)
             .extension()
             .and_then(|e| e.to_str())
@@ -149,7 +150,8 @@ impl ThumbnailService {
             .unwrap_or_default();
         let is_image = crate::thumbnail_util::is_supported_image_ext(&ext);
         let is_video = crate::thumbnail_util::is_video_ext(&ext);
-        if !is_image && !is_video {
+        let is_audio = crate::thumbnail_util::is_audio_ext(&ext);
+        if !is_image && !is_video && !is_audio {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
@@ -183,7 +185,12 @@ impl ThumbnailService {
             .map_err(|e| AppError::Internal(format!("thumbnail generation panicked: {e}")))?
             .map_err(|e| AppError::Internal(format!("thumbnail generation failed: {e}")))?
         } else {
-            self.generate_video_thumbnail(repo_id, &normalized_path, size)
+            let kind = if is_video {
+                MediaKind::Video
+            } else {
+                MediaKind::Audio
+            };
+            self.generate_media_thumbnail(repo_id, &normalized_path, size, kind)
                 .await?
         };
 
@@ -227,18 +234,20 @@ impl ThumbnailService {
         Ok(thumbnail_data)
     }
 
-    /// Generate a thumbnail for a video file by extracting one frame with ffmpeg.
+    /// Generate a thumbnail for an audio/video file via ffmpeg.
     ///
-    /// The video is streamed to a scratch file under `temp_dir` (so ffmpeg can
-    /// seek), a frame is captured around 1s in (falling back to the first frame
-    /// on failure), and the result is fitted/resized to `size` and re-encoded as
-    /// PNG by the shared image util. Returns `NotFound` when ffmpeg is unavailable
-    /// or generation fails — the UI then shows the plain play-icon placeholder.
-    async fn generate_video_thumbnail(
+    /// The file is streamed to a scratch file under `temp_dir` so ffmpeg can
+    /// seek. For video a frame is captured ~1s in (falling back to the first
+    /// frame); for audio the embedded cover art is extracted. The result is
+    /// fitted/resized to `size` and re-encoded as PNG by the shared image util.
+    /// Returns `NotFound` when ffmpeg is unavailable or no frame/cover exists —
+    /// the UI then falls back to an extension badge / play icon.
+    async fn generate_media_thumbnail(
         &self,
         repo_id: &str,
         normalized_path: &str,
         size: u32,
+        kind: MediaKind,
     ) -> Result<Vec<u8>, AppError> {
         if !ffmpeg_available(&self.ffmpeg_path) {
             return Err(AppError::NotFound("thumbnail not available".into()));
@@ -254,20 +263,20 @@ impl ThumbnailService {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
-        // Stream the whole video to a scratch file so ffmpeg can fast-seek.
-        let scratch_dir = self.temp_dir.join("video_thumbs");
+        // Stream the whole media file to a scratch file so ffmpeg can seek.
+        let scratch_dir = self.temp_dir.join("media_thumbs");
         tokio::fs::create_dir_all(&scratch_dir)
             .await
             .map_err(|e| AppError::Internal(format!("create scratch dir failed: {e}")))?;
-        let scratch_video = scratch_dir.join(format!(
-            "{}_{}.vid",
+        let scratch_media = scratch_dir.join(format!(
+            "{}_{}.bin",
             repo_id,
             thumbnail_key(repo_id, normalized_path)
         ));
-        let scratch_png = scratch_video.with_extension("png");
+        let scratch_png = scratch_media.with_extension("png");
 
         let write_result: Result<(), std::io::Error> = async {
-            let mut out = tokio::fs::File::create(&scratch_video).await?;
+            let mut out = tokio::fs::File::create(&scratch_media).await?;
             let mut stream =
                 crate::fs::core::download::stream_blocks(block_ids, self.block_store.clone(), None);
             while let Some(chunk) = stream.next().await {
@@ -277,19 +286,19 @@ impl ThumbnailService {
         }
         .await;
         if write_result.is_err() {
-            let _ = tokio::fs::remove_file(&scratch_video).await;
+            let _ = tokio::fs::remove_file(&scratch_media).await;
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
         let ffmpeg = self.ffmpeg_path.to_string();
-        let src = scratch_video.clone();
+        let src = scratch_media.clone();
         let dst = scratch_png.clone();
         let extracted =
-            tokio::task::spawn_blocking(move || extract_video_frame(&ffmpeg, &src, &dst))
+            tokio::task::spawn_blocking(move || extract_media_frame(&ffmpeg, kind, &src, &dst))
                 .await
                 .map_err(|e| AppError::Internal(format!("ffmpeg panicked: {e}")))?;
 
-        let _ = tokio::fs::remove_file(&scratch_video).await;
+        let _ = tokio::fs::remove_file(&scratch_media).await;
         if !extracted {
             let _ = tokio::fs::remove_file(&scratch_png).await;
             return Err(AppError::NotFound("thumbnail not available".into()));
@@ -370,6 +379,15 @@ impl ThumbnailService {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
+/// What kind of media a ffmpeg-based thumbnail should extract.
+#[derive(Clone, Copy)]
+enum MediaKind {
+    /// A frame from the video stream (~1s in, first frame as fallback).
+    Video,
+    /// The embedded cover art (attached picture) of an audio file.
+    Audio,
+}
+
 /// Whether the configured ffmpeg binary exists and runs. Cached for the
 /// process lifetime (the path comes from config and doesn't change at runtime).
 fn ffmpeg_available(ffmpeg: &str) -> bool {
@@ -385,11 +403,24 @@ fn ffmpeg_available(ffmpeg: &str) -> bool {
     })
 }
 
-/// Run ffmpeg to extract one frame from `src` into `dst` (a PNG). Tries a frame
-/// ~1s in (skips dark intros), falling back to the first frame on failure.
-/// Returns true when a frame was written.
-fn extract_video_frame(ffmpeg: &str, src: &std::path::Path, dst: &std::path::Path) -> bool {
-    let extract = |ss: Option<&str>| {
+/// Run ffmpeg to extract one image from `src` into `dst` (a PNG).
+///
+/// - `Video`: grabs a frame ~1s in (skips dark intros), falling back to the
+///   first frame on failure.
+/// - `Audio`: extracts the embedded cover art via `-map 0:v:0` (no seek).
+///
+/// Returns true when an image was written.
+fn extract_media_frame(
+    ffmpeg: &str,
+    kind: MediaKind,
+    src: &std::path::Path,
+    dst: &std::path::Path,
+) -> bool {
+    let mut attempts: Vec<Option<&str>> = vec![None];
+    if matches!(kind, MediaKind::Video) {
+        attempts = vec![Some("1"), None];
+    }
+    for ss in attempts {
         let mut cmd = Command::new(ffmpeg);
         cmd.arg("-y")
             .arg("-loglevel")
@@ -398,9 +429,11 @@ fn extract_video_frame(ffmpeg: &str, src: &std::path::Path, dst: &std::path::Pat
         if let Some(ss) = ss {
             cmd.arg("-ss").arg(ss);
         }
-        cmd.arg("-i")
-            .arg(src)
-            .arg("-frames:v")
+        cmd.arg("-i").arg(src);
+        if matches!(kind, MediaKind::Audio) {
+            cmd.arg("-map").arg("0:v:0");
+        }
+        cmd.arg("-frames:v")
             .arg("1")
             .arg("-vf")
             .arg("scale=min(1024\\,iw):-2")
@@ -408,12 +441,12 @@ fn extract_video_frame(ffmpeg: &str, src: &std::path::Path, dst: &std::path::Pat
             .arg("image2")
             .arg(dst)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    };
-    extract(Some("1")) || extract(None)
+            .stderr(std::process::Stdio::null());
+        if cmd.status().map(|s| s.success()).unwrap_or(false) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Build a deterministic, collision-free filename prefix for a thumbnail.
@@ -476,7 +509,7 @@ mod tests {
             .expect("failed to spawn ffmpeg");
         assert!(status.success(), "ffmpeg failed to create test video");
 
-        let ok = extract_video_frame("ffmpeg", &src, &dst);
+        let ok = extract_media_frame("ffmpeg", MediaKind::Video, &src, &dst);
         let _ = std::fs::remove_file(&src);
         assert!(ok, "ffmpeg frame extraction failed");
 
@@ -488,6 +521,71 @@ mod tests {
 
         let thumb = crate::thumbnail_util::generate_thumbnail(&bytes, 48)
             .expect("thumbnail fitter failed on extracted frame");
+        assert!(!thumb.is_empty());
+    }
+
+    /// Build an m4a with embedded cover art and verify `extract_media_frame`
+    /// (Audio) pulls the cover out as a decodable PNG. Skips without ffmpeg.
+    #[test]
+    fn extract_audio_cover_writes_png() {
+        if !ffmpeg_available("ffmpeg") {
+            eprintln!("ffmpeg not available; skipping audio cover test");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "nanofile_athumb_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("cover.m4a");
+        let dst = dir.join("cover.png");
+
+        // 1s sine tone as audio + a 1-frame pattern as attached cover art.
+        let status = Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("sine=frequency=440:duration=1")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("testsrc=size=64x64:rate=1:duration=1")
+            .arg("-map")
+            .arg("0:a")
+            .arg("-map")
+            .arg("1:v")
+            .arg("-c:a")
+            .arg("aac")
+            .arg("-c:v")
+            .arg("mjpeg")
+            .arg("-disposition:v")
+            .arg("attached_pic")
+            .arg("-shortest")
+            .arg(&src)
+            .status()
+            .expect("failed to spawn ffmpeg");
+        assert!(status.success(), "ffmpeg failed to create test audio");
+
+        let ok = extract_media_frame("ffmpeg", MediaKind::Audio, &src, &dst);
+        let _ = std::fs::remove_file(&src);
+        assert!(ok, "audio cover extraction failed");
+
+        let bytes = std::fs::read(&dst).unwrap();
+        let _ = std::fs::remove_file(&dst);
+        let decoded =
+            image::load_from_memory(&bytes).expect("extracted cover is not a valid image");
+        assert!(decoded.width() > 0 && decoded.height() > 0);
+
+        let thumb = crate::thumbnail_util::generate_thumbnail(&bytes, 48)
+            .expect("thumbnail fitter failed on extracted cover");
         assert!(!thumb.is_empty());
     }
 }

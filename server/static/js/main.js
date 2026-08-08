@@ -1090,6 +1090,7 @@
           thumbnailUrlLarge: selRow.dataset.thumbnailUrlLarge,
           isPreviewable: selRow.dataset.isPreviewable === "true",
           isVideo: selRow.dataset.isVideo === "true",
+          isAudio: selRow.dataset.isAudio === "true",
           downloadUrl: dlUrl,
           recordId: selRow.dataset.recordId,
         });

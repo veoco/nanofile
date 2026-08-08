@@ -221,6 +221,11 @@ ft.3gp_video = "3GP 视频"
 ft.mp3_audio = "MP3 音频"
 ft.flac_audio = "FLAC 音频"
 ft.wav_audio = "WAV 音频"
+ft.ogg_audio = "OGG 音频"
+ft.m4a_audio = "M4A 音频"
+ft.aac_audio = "AAC 音频"
+ft.wma_audio = "WMA 音频"
+ft.opus_audio = "Opus 音频"
 ft.disk_image = "磁盘镜像"
 
 # Auth / public pages (from template agent)

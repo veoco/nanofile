@@ -197,14 +197,12 @@
     var folderIcon = ct.querySelector(".js-rp-folder-icon");
     var videoIcon = ct.querySelector(".js-rp-video-icon");
     var videoEl = ct.querySelector(".js-rp-video");
+    var audioIcon = ct.querySelector(".js-rp-audio-icon");
+    var audioRow = ct.querySelector(".js-rp-audio-row");
+    var audioEl = ct.querySelector(".js-rp-audio");
 
-    // Stop any previously-playing video before switching selection.
-    if (videoEl) {
-      videoEl.pause();
-      videoEl.removeAttribute("src");
-      videoEl.load();
-      videoEl.poster = "";
-    }
+    // Stop any previously-playing media before switching selection.
+    stopRightPanelMedia();
 
     // Hide all preview variants first
     if (thumbImg) { thumbImg.classList.add("hidden"); thumbImg.src = ""; }
@@ -212,6 +210,8 @@
     if (folderIcon) folderIcon.classList.add("hidden");
     if (videoIcon) videoIcon.classList.add("hidden");
     if (videoEl) videoEl.classList.add("hidden");
+    if (audioIcon) audioIcon.classList.add("hidden");
+    if (audioRow) audioRow.classList.add("hidden");
 
     if (d.type === "dir") {
       if (folderIcon) folderIcon.classList.remove("hidden");
@@ -223,6 +223,19 @@
         videoEl.src = "/libraries/" + encodeURIComponent(d.repoId) + "/files/" + encPath;
         videoEl.poster = d.thumbnailUrlLarge || d.thumbnailUrl || "";
         videoEl.classList.remove("hidden");
+      }
+    } else if (d.isAudio) {
+      // Cover art (if any) as the poster; otherwise a music note. The player
+      // bar sits just below the preview box.
+      if (audioRow && d.repoId && d.path) {
+        audioEl.src = "/libraries/" + encodeURIComponent(d.repoId) + "/files/" +
+          d.path.split("/").map(encodeURIComponent).join("/");
+        audioRow.classList.remove("hidden");
+      }
+      if (d.thumbnailUrlLarge || d.thumbnailUrl) {
+        if (thumbImg) { thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
+      } else if (audioIcon) {
+        audioIcon.classList.remove("hidden");
       }
     } else if (d.thumbnailUrlLarge || d.thumbnailUrl) {
       if (thumbImg) { thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
@@ -538,7 +551,7 @@
     var exifContent = ct.querySelector(".js-rp-exif-content");
     var noExif = ct.querySelector(".js-rp-no-exif");
 
-    if (exifSection && d.type !== "dir" && !d.isVideo && d.thumbnailUrl && d.repoId && d.path) {
+    if (exifSection && d.type !== "dir" && !d.isVideo && !d.isAudio && d.thumbnailUrl && d.repoId && d.path) {
       fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/exif/?p=" + encodeURIComponent(d.path))
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -613,19 +626,41 @@
     }
   };
 
+  // Pause and unload any media element currently playing in the right panel.
+  function stopRightPanelMedia() {
+    var v = document.querySelector(".js-rp-video");
+    if (v) {
+      v.pause();
+      v.removeAttribute("src");
+      v.load();
+      v.poster = "";
+    }
+    var a = document.querySelector(".js-rp-audio");
+    if (a) {
+      a.pause();
+      a.removeAttribute("src");
+      a.load();
+    }
+  }
+
+  // Called when a thumbnail <img> fails to load (e.g. audio without cover art,
+  // or ffmpeg unavailable) — fall back to the extension badge next to it.
+  window.thumbFailed = function (img) {
+    img.style.display = "none";
+    var fb = img.parentElement ? img.parentElement.querySelector(".js-thb-fallback") : null;
+    if (fb) {
+      fb.classList.remove("hidden");
+      fb.classList.add("flex");
+    }
+  };
+
   // Reset right panel to placeholder state
   window.resetRightPanel = function () {
     var ph = document.querySelector(".js-rp-placeholder");
     var ct = document.querySelector(".js-rp-content");
     var mc = document.querySelector(".js-rp-multi-content");
-    // Stop any playing video so it doesn't keep buffering in the background.
-    var videoEl = ct ? ct.querySelector(".js-rp-video") : null;
-    if (videoEl) {
-      videoEl.pause();
-      videoEl.removeAttribute("src");
-      videoEl.load();
-      videoEl.poster = "";
-    }
+    // Stop any playing media so it doesn't keep buffering in the background.
+    stopRightPanelMedia();
     if (ph) ph.classList.remove("hidden");
     if (ct) ct.classList.add("hidden");
     if (mc) mc.classList.add("hidden");
@@ -735,6 +770,8 @@
       "MKV": __t('ft.mkv_video'), "WEBM": __t('ft.webm_video'), "WMV": __t('ft.wmv_video'),
       "FLV": __t('ft.flv_video'), "3GP": __t('ft.3gp_video'),
       "MP3": __t('ft.mp3_audio'), "FLAC": __t('ft.flac_audio'), "WAV": __t('ft.wav_audio'),
+      "OGG": __t('ft.ogg_audio'), "M4A": __t('ft.m4a_audio'), "AAC": __t('ft.aac_audio'),
+      "WMA": __t('ft.wma_audio'), "OPUS": __t('ft.opus_audio'),
       "ISO": __t('ft.disk_image')
     };
     return map[ext] || ext + " File";

@@ -133,12 +133,14 @@ pub struct FileEntry {
     pub starred: bool,
     /// File extension in uppercase (e.g. "PDF", "PNG"), None for directories.
     pub extension: Option<String>,
-    /// Thumbnail URL for image/video files at list-view scale (48px), None otherwise.
+    /// Thumbnail URL for image/audio/video files at list-view scale (48px), None otherwise.
     pub image_thumbnail_url: Option<String>,
-    /// Thumbnail URL for image/video files at grid-view scale (256px), None otherwise.
+    /// Thumbnail URL for image/audio/video files at grid-view scale (256px), None otherwise.
     pub image_thumbnail_url_large: Option<String>,
     /// Whether this file is a video (used for gallery/right-panel rendering).
     pub is_video: bool,
+    /// Whether this file is an audio file (inline playback + cover thumbnails).
+    pub is_audio: bool,
     /// Email of the user who last modified this entry.
     pub modifier_email: String,
     /// Tags attached to this entry (name + color), for rendering tag chips.
@@ -170,6 +172,16 @@ pub fn is_video_file(name: &str) -> bool {
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| crate::thumbnail_util::is_video_ext(&e.to_ascii_lowercase()))
+        .unwrap_or(false)
+}
+
+/// Returns true if the file extension indicates an audio file.
+/// Used to enable inline playback and cover-art thumbnails.
+pub fn is_audio_file(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| crate::thumbnail_util::is_audio_ext(&e.to_ascii_lowercase()))
         .unwrap_or(false)
 }
 
@@ -526,8 +538,11 @@ async fn file_browser_inner(
             };
             let is_image_file = e.entry_type == "file" && is_thumbnail_image(&e.name);
             let entry_is_video = e.entry_type == "file" && is_video_file(&e.name);
-            // Images and videos both get thumbnails (videos via ffmpeg frame extraction).
-            let needs_thumb = is_image_file || entry_is_video;
+            let entry_is_audio = e.entry_type == "file" && is_audio_file(&e.name);
+            // Images get in-process thumbnails; audio/video via ffmpeg (frame or
+            // embedded cover art). Audio without cover art falls back to an
+            // extension badge on the client (thumbnail endpoint returns 404).
+            let needs_thumb = is_image_file || entry_is_video || entry_is_audio;
             let thumb_url = if needs_thumb {
                 Some(format!(
                     "/api2/repos/{}/thumbnail/?p={}&size=48",
@@ -561,6 +576,7 @@ async fn file_browser_inner(
                 image_thumbnail_url: thumb_url,
                 image_thumbnail_url_large: thumb_url_large,
                 is_video: entry_is_video,
+                is_audio: entry_is_audio,
                 modifier_email: e.modifier.clone(),
                 tags: tags_by_path.get(&full_path).cloned().unwrap_or_default(),
                 record_id: crate::service::fs::metadata::MetadataService::record_id_from_path(
@@ -760,8 +776,8 @@ async fn serve_file(
             .into_response());
     }
 
-    // Video — stream inline with Range support so the HTML5 player can seek.
-    if is_video_file(&file_name) {
+    // Audio/video — stream inline with Range support so the HTML5 player can seek.
+    if is_video_file(&file_name) || is_audio_file(&file_name) {
         let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
             .await
             .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
@@ -1010,6 +1026,20 @@ pub(crate) fn mime_guess(filename: &str) -> &'static str {
         "video/x-ms-wmv"
     } else if filename.ends_with(".flv") {
         "video/x-flv"
+    } else if filename.ends_with(".mp3") {
+        "audio/mpeg"
+    } else if filename.ends_with(".flac") {
+        "audio/flac"
+    } else if filename.ends_with(".wav") {
+        "audio/wav"
+    } else if filename.ends_with(".ogg") || filename.ends_with(".opus") {
+        "audio/ogg"
+    } else if filename.ends_with(".m4a") {
+        "audio/mp4"
+    } else if filename.ends_with(".aac") {
+        "audio/aac"
+    } else if filename.ends_with(".wma") {
+        "audio/x-ms-wma"
     } else if filename.ends_with(".pdf") {
         "application/pdf"
     } else {
@@ -1043,6 +1073,7 @@ mod tests {
             image_thumbnail_url: None,
             image_thumbnail_url_large: None,
             is_video: false,
+            is_audio: false,
             modifier_email: String::new(),
             tags: Vec::new(),
             record_id: String::new(),

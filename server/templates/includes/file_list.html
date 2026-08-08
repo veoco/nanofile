@@ -146,6 +146,7 @@
          data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
          data-is-previewable="{{ entry.is_previewable }}"
          data-is-video="{{ entry.is_video }}"
+         data-is-audio="{{ entry.is_audio }}"
          data-record-id="{{ entry.record_id }}">
         {% if entry.entry_type == "dir" %}
         <!-- Folder icon -->
@@ -234,7 +235,9 @@
         <!-- File icon: extension badge or image thumbnail -->
         {% if let Some(thumb_url) = entry.image_thumbnail_url %}
         <div class="h-9 w-9 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden">
-            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy">
+            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy"
+                 onerror="window.thumbFailed(this)">
+            <span class="js-thb-fallback hidden text-[10px] leading-none font-semibold {{ entry.icon_color }}" title="{{ entry.extension.as_deref().unwrap_or("?") }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(3) }}</span>
         </div>
         {% else %}
         <div class="h-9 w-9 rounded-md bg-gray-100 dark:bg-surface-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
@@ -359,6 +362,7 @@
          data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
          data-is-previewable="{{ entry.is_previewable }}"
          data-is-video="{{ entry.is_video }}"
+         data-is-audio="{{ entry.is_audio }}"
          data-record-id="{{ entry.record_id }}">
         {% if entry.entry_type == "dir" %}
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
@@ -368,7 +372,9 @@
         </div>
         {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
         <div class="aspect-square rounded-md flex items-center justify-center mb-2 overflow-hidden">
-            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy">
+            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy"
+                 onerror="window.thumbFailed(this)">
+            <span class="js-thb-fallback hidden text-xl font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
         </div>
         {% else %}
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
@@ -415,10 +421,15 @@
                  data-thumbnail-url="{{ entry.image_thumbnail_url.as_deref().unwrap_or("") }}"
                  data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
                  data-is-previewable="{{ entry.is_previewable }}"
-                 data-is-video="{{ entry.is_video }}">
+                 data-is-video="{{ entry.is_video }}"
+                 data-is-audio="{{ entry.is_audio }}">
                 {% if entry.is_video %}
                 {% if let Some(thumb_url) = entry.image_thumbnail_url_large %}
-                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy">
+                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy"
+                     onerror="window.thumbFailed(this)">
+                <span class="js-thb-fallback hidden absolute inset-0 items-center justify-center text-gray-400 pointer-events-none">
+                    <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
+                </span>
                 <span class="absolute inset-0 flex items-center justify-center pointer-events-none">
                     <span class="h-8 w-8 rounded-full bg-black/45 flex items-center justify-center">
                         <svg class="h-4 w-4 text-white" fill="currentColor" viewBox="0 0 24 24">
@@ -436,7 +447,11 @@
                 </div>
                 {% endif %}
                 {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
-                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy">
+                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy"
+                     onerror="window.thumbFailed(this)">
+                <span class="js-thb-fallback hidden absolute inset-0 items-center justify-center text-gray-400 pointer-events-none">
+                    <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
+                </span>
                 {% else %}
                 <div class="w-full h-full flex items-center justify-center text-gray-400 pointer-events-none">
                     <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
