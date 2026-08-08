@@ -1,4 +1,9 @@
 use crate::repository::Repositories;
+use axum::{
+    body::Body,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
+};
 use base::common::FsFileData;
 use base::error::AppError;
 use futures::{Stream, StreamExt};
@@ -205,7 +210,9 @@ pub fn range_stream(
     end: u64,
 ) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static {
     let iter = block_ids.into_iter();
-    futures::stream::unfold((iter, start, false), move |(mut iter, mut pos, done)| {
+    // Track the cumulative byte offset starting from the file's first block.
+    // (`start`/`end` are captured by the `move` closure below.)
+    futures::stream::unfold((iter, 0u64, false), move |(mut iter, mut pos, done)| {
         let store = block_store.clone();
         let key = enc_key.clone();
         async move {
@@ -258,9 +265,165 @@ pub fn range_stream(
     })
 }
 
+/// Parameters for building a file-download HTTP response with Range support.
+pub struct FileDownloadParams {
+    pub block_ids: Vec<String>,
+    pub block_store: DynBlockStorage,
+    /// Optional decryption key (key, iv) — passed through to the streamers.
+    pub enc_key: Option<(Vec<u8>, Vec<u8>)>,
+    /// Total file size in bytes (used for `Content-Length` / `Content-Range`).
+    pub total_size: u64,
+    pub content_type: &'static str,
+    /// `attachment; filename="..."` to force download, `None` for inline.
+    pub content_disposition: Option<String>,
+    /// Raw value of the request's `Range` header, if any.
+    pub range_header: Option<String>,
+}
+
+/// Build a streaming file response honoring a single `Range` request.
+///
+/// A satisfiable `Range` header yields `206 Partial Content` with
+/// `Content-Range` and a slice stream; otherwise the full body is served with
+/// `200 OK`. Both cases advertise `Accept-Ranges: bytes` and set
+/// `Content-Length`, so download managers can display progress and resume an
+/// interrupted transfer with a follow-up `Range` request.
+pub fn file_download_response(p: FileDownloadParams) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(p.content_type),
+    );
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if let Some(disposition) = p.content_disposition {
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_str(&disposition)
+                .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+        );
+    }
+
+    if let Some((start, end)) = p.range_header.and_then(|r| parse_range(&r, p.total_size)) {
+        headers.insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes {start}-{end}/{}", p.total_size))
+                .expect("Content-Range header value must be valid ASCII"),
+        );
+        headers.insert(
+            header::CONTENT_LENGTH,
+            HeaderValue::from_str(&(end - start + 1).to_string())
+                .expect("Content-Length header value must be valid ASCII"),
+        );
+        let stream = range_stream(p.block_ids, p.block_store, p.enc_key, start, end);
+        return (
+            StatusCode::PARTIAL_CONTENT,
+            headers,
+            Body::from_stream(stream),
+        )
+            .into_response();
+    }
+
+    headers.insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&p.total_size.to_string())
+            .expect("Content-Length header value must be valid ASCII"),
+    );
+    let stream = stream_blocks(p.block_ids, p.block_store, p.enc_key);
+    (StatusCode::OK, headers, Body::from_stream(stream)).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_range;
+    use super::range_stream;
+    use futures::StreamExt;
+    use infra::storage::{BlockStorageBackend, DynBlockStorage};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    /// In-memory block store for exercising `range_stream` across block boundaries.
+    #[derive(Debug)]
+    struct MockStore {
+        blocks: Mutex<HashMap<String, Vec<u8>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl BlockStorageBackend for MockStore {
+        async fn has_block(&self, block_id: &str) -> bool {
+            self.blocks.lock().unwrap().contains_key(block_id)
+        }
+        async fn read_block(&self, block_id: &str) -> Result<Vec<u8>, std::io::Error> {
+            self.blocks
+                .lock()
+                .unwrap()
+                .get(block_id)
+                .cloned()
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "missing block"))
+        }
+        async fn write_block(&self, _data: &[u8]) -> Result<String, std::io::Error> {
+            unimplemented!()
+        }
+        async fn remove_block(&self, _block_id: &str) -> Result<(), std::io::Error> {
+            unimplemented!()
+        }
+        async fn block_size(&self, _block_id: &str) -> Result<i64, std::io::Error> {
+            unimplemented!()
+        }
+        async fn list_blocks(&self) -> Result<Vec<String>, std::io::Error> {
+            unimplemented!()
+        }
+    }
+
+    async fn collect_range(
+        store: DynBlockStorage,
+        block_ids: Vec<String>,
+        start: u64,
+        end: u64,
+    ) -> Vec<u8> {
+        range_stream(block_ids, store, None, start, end)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .flat_map(|r| r.unwrap().to_vec())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn range_stream_slices_single_block() {
+        let content: Vec<u8> = (0..100u8).collect();
+        let store = Arc::new(MockStore {
+            blocks: Mutex::new(HashMap::from([("b1".to_string(), content.clone())])),
+        });
+        let got = collect_range(store, vec!["b1".to_string()], 10, 19).await;
+        assert_eq!(got, &content[10..20]);
+    }
+
+    #[tokio::test]
+    async fn range_stream_skips_earlier_blocks() {
+        // Three blocks of 40 bytes each → file content is bytes 0..120.
+        let mut blocks = HashMap::new();
+        let mut content = Vec::new();
+        for (i, id) in ["a", "b", "c"].iter().enumerate() {
+            let chunk: Vec<u8> = ((i as u8) * 40..((i as u8) + 1) * 40).collect();
+            blocks.insert(id.to_string(), chunk);
+            content.extend_from_slice(&(i as u8 * 40..(i as u8 + 1) * 40).collect::<Vec<u8>>());
+        }
+        let store = Arc::new(MockStore {
+            blocks: Mutex::new(blocks),
+        });
+        let ids = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        // Range spans the middle block and part of the last block.
+        let got = collect_range(store.clone(), ids.clone(), 50, 99).await;
+        assert_eq!(got, &content[50..100]);
+
+        // Open-ended range in the last block (end == total - 1, as parse_range yields).
+        let got = collect_range(store.clone(), ids.clone(), 110, 119).await;
+        assert_eq!(got, &content[110..120]);
+
+        // Range starting at 0 → full content.
+        let got = collect_range(store, ids, 0, 119).await;
+        assert_eq!(got, content);
+    }
 
     #[test]
     fn parse_range_full() {

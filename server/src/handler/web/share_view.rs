@@ -101,31 +101,31 @@ pub async fn shared_file_view(
 
     // Handle ?dl=1 — download the file directly
     if params.get("dl").map(|s| s.as_str()) == Some("1") {
-        let (_file_data, block_ids) =
+        let (file_data, block_ids) =
             resolve_file_meta(&state.repos, &link.repo_id, &link.path).await?;
 
         let filename = link
             .path
             .rsplit_once('/')
             .map(|(_, n)| n)
-            .unwrap_or(&link.path);
-        let stream =
-            crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
+            .unwrap_or(&link.path)
+            .to_string();
 
         crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/octet-stream"),
-        );
-        headers.insert(
-            HeaderName::from_static("content-disposition"),
-            HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
-                .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
-        );
-
-        return Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response());
+        let disposition = format!("attachment; filename=\"{}\"", filename);
+        let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+        return Ok(crate::fs::core::download::file_download_response(
+            crate::fs::core::download::FileDownloadParams {
+                block_ids,
+                block_store: state.block_store.clone(),
+                enc_key: None,
+                total_size: file_data.size.max(0) as u64,
+                content_type: "application/octet-stream",
+                content_disposition: Some(disposition),
+                range_header: range_header.map(|s| s.to_string()),
+            },
+        ));
     }
 
     // Show HTML preview page
@@ -527,8 +527,7 @@ pub async fn shared_dir_file_view(
         format!("{}/{}", link.path.trim_end_matches('/'), file_path)
     };
 
-    let (_file_data, block_ids) =
-        resolve_file_meta(&state.repos, &link.repo_id, &full_path).await?;
+    let (file_data, block_ids) = resolve_file_meta(&state.repos, &link.repo_id, &full_path).await?;
 
     crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
@@ -536,21 +535,19 @@ pub async fn shared_dir_file_view(
         .rsplit_once('/')
         .map(|(_, n)| n.to_string())
         .unwrap_or_else(|| full_path.clone());
-    let stream =
-        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
-
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
-    );
-    headers.insert(
-        HeaderName::from_static("content-disposition"),
-        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
-            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
-    );
-
-    Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())
+    let disposition = format!("attachment; filename=\"{}\"", filename);
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    Ok(crate::fs::core::download::file_download_response(
+        crate::fs::core::download::FileDownloadParams {
+            block_ids,
+            block_store: state.block_store.clone(),
+            enc_key: None,
+            total_size: file_data.size.max(0) as u64,
+            content_type: "application/octet-stream",
+            content_disposition: Some(disposition),
+            range_header: range_header.map(|s| s.to_string()),
+        },
+    ))
 }
 
 // ── POST handler for directory share password ─────────────────────────

@@ -45,6 +45,58 @@ async fn test_share_link_create_and_download() {
     assert_eq!(&content[..], b"share content");
 }
 
+/// H.1a — Range requests on /f/{token}/?dl=1 (resumable shared download).
+#[tokio::test]
+async fn test_share_link_download_range() {
+    let f = TestFixture::new().await;
+    let content: Vec<u8> = (0..50u8).collect();
+
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "shared.bin", &content)
+        .await;
+    assert!(up.status().is_success(), "upload failed");
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/shared.bin" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "create share link failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    // Full download → 200 + Content-Length + Accept-Ranges.
+    let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
+    assert_eq!(dl.status(), 200);
+    let headers = dl.headers().clone();
+    assert_eq!(
+        headers.get("content-length").and_then(|v| v.to_str().ok()),
+        Some("50")
+    );
+    assert_eq!(
+        headers.get("accept-ranges").and_then(|v| v.to_str().ok()),
+        Some("bytes")
+    );
+
+    // Range request → 206 + exact slice.
+    let dl = f
+        .client
+        .get_with_range(&format!("/f/{}/?dl=1", token), None, "bytes=20-29")
+        .await;
+    assert_eq!(dl.status(), 206);
+    let headers = dl.headers().clone();
+    assert_eq!(
+        headers.get("content-range").and_then(|v| v.to_str().ok()),
+        Some("bytes 20-29/50")
+    );
+    let body = dl.bytes().await.unwrap();
+    assert_eq!(&body[..], &content[20..30]);
+}
+
 /// H.2 — Share link with password protection
 #[tokio::test]
 async fn test_share_link_with_password() {

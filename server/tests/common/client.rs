@@ -46,6 +46,20 @@ impl TestClient {
         req.send().await.unwrap()
     }
 
+    /// GET request with a `Range` header (for resumable-download tests).
+    pub async fn get_with_range(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        range: &str,
+    ) -> reqwest::Response {
+        let mut req = self.client.get(self.url(path)).header("Range", range);
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
+        req.send().await.unwrap()
+    }
+
     /// POST with JSON body and optional Bearer token.
     pub async fn post_json(
         &self,

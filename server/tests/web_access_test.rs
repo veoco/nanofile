@@ -33,6 +33,74 @@ async fn test_repo_files_download() {
     assert_eq!(&body[..], b"hello web");
 }
 
+/// E.1.5a — Range requests on /repos/{repo_id}/files/{path} (resumable download).
+#[tokio::test]
+async fn test_repo_files_download_range() {
+    let f = TestFixture::new().await;
+    let content: Vec<u8> = (0..100u8).collect();
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "range.bin", &content)
+        .await;
+    assert!(up.status().is_success(), "upload failed");
+
+    // Full download → 200 with Content-Length + Accept-Ranges.
+    let resp = f
+        .client
+        .get(
+            &format!("/repos/{}/files/range.bin", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let headers = resp.headers().clone();
+    assert_eq!(
+        headers.get("content-length").and_then(|v| v.to_str().ok()),
+        Some("100")
+    );
+    assert_eq!(
+        headers.get("accept-ranges").and_then(|v| v.to_str().ok()),
+        Some("bytes")
+    );
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(&body[..], &content[..]);
+
+    // Bounded range → 206 + Content-Range + exact slice.
+    let resp = f
+        .client
+        .get_with_range(
+            &format!("/repos/{}/files/range.bin", f.repo_id),
+            Some(&f.api_token),
+            "bytes=10-19",
+        )
+        .await;
+    assert_eq!(resp.status(), 206);
+    let headers = resp.headers().clone();
+    assert_eq!(
+        headers.get("content-range").and_then(|v| v.to_str().ok()),
+        Some("bytes 10-19/100")
+    );
+    assert_eq!(
+        headers.get("content-length").and_then(|v| v.to_str().ok()),
+        Some("10")
+    );
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(&body[..], &content[10..20]);
+
+    // Open-ended range → 206 with the remainder.
+    let resp = f
+        .client
+        .get_with_range(
+            &format!("/repos/{}/files/range.bin", f.repo_id),
+            Some(&f.api_token),
+            "bytes=90-",
+        )
+        .await;
+    assert_eq!(resp.status(), 206);
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(&body[..], &content[90..]);
+}
+
 #[tokio::test]
 async fn test_repo_files_unauthorized() {
     let server = common::TestServer::start().await;

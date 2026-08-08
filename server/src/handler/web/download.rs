@@ -1,7 +1,6 @@
 use axum::{
-    body::Body,
     extract::{Path, State},
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use std::sync::Arc;
@@ -53,6 +52,7 @@ pub async fn repo_file_download(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path((repo_id, path)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let normalized = if path.starts_with('/') {
         path
@@ -71,19 +71,22 @@ pub async fn repo_file_download(
     // Check if repo is encrypted and if password is set
     let dec_key = get_decryption_key_for_repo(&state, &repo_id, auth.user_id).await?;
 
-    let (_file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &normalized)
+    let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &normalized)
         .await
         .map_err(|_| AppError::NotFound("file not found".into()))?;
 
-    let stream =
-        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), dec_key);
-
-    Ok((
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/octet-stream")],
-        Body::from_stream(stream),
-    )
-        .into_response())
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    Ok(crate::fs::core::download::file_download_response(
+        crate::fs::core::download::FileDownloadParams {
+            block_ids,
+            block_store: state.block_store.clone(),
+            enc_key: dec_key,
+            total_size: file_data.size.max(0) as u64,
+            content_type: "application/octet-stream",
+            content_disposition: None,
+            range_header: range_header.map(|s| s.to_string()),
+        },
+    ))
 }
 
 /// GET /download-api/{token} — Token-authenticated file download.
@@ -94,6 +97,7 @@ pub async fn repo_file_download(
 pub async fn download_api(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let info = state
         .token_manager
@@ -120,27 +124,23 @@ pub async fn download_api(
     // Check if repo is encrypted and if password is set
     let dec_key = get_decryption_key_for_repo(&state, &repo_id, info.user_id).await?;
 
-    let (_file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
+    let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
         .await
         .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
 
-    // We don't know the size upfront when streaming, so use
-    // Transfer-Encoding: chunked (omit Content-Length).
-    let stream =
-        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), dec_key);
-
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        HeaderName::from_static("content-type"),
-        HeaderValue::from_static("application/octet-stream"),
-    );
-    headers.insert(
-        HeaderName::from_static("content-disposition"),
-        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
-            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
-    );
-
-    Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())
+    let disposition = format!("attachment; filename=\"{}\"", filename);
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    Ok(crate::fs::core::download::file_download_response(
+        crate::fs::core::download::FileDownloadParams {
+            block_ids,
+            block_store: state.block_store.clone(),
+            enc_key: dec_key,
+            total_size: file_data.size.max(0) as u64,
+            content_type: "application/octet-stream",
+            content_disposition: Some(disposition),
+            range_header: range_header.map(|s| s.to_string()),
+        },
+    ))
 }
 
 /// `GET /blks/{token}/{file_id}/{block_id}`

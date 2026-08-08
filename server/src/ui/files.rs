@@ -1,9 +1,8 @@
 /// Web UI file browser handlers.
 use askama::Template;
 use axum::{
-    body::Body,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, header},
     response::{Html, IntoResponse},
 };
 use serde::Deserialize;
@@ -758,22 +757,23 @@ async fn serve_file(
 
     // ?dl=1 → force download (streamed so large files aren't buffered).
     if query.dl.as_deref() == Some("1") {
-        let (_file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
+        let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
             .await
             .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
-        let stream =
-            crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
-        let content_type = mime_guess(&file_name);
+        let total = file_data.size.max(0) as u64;
         let disposition = format!("attachment; filename=\"{}\"", file_name);
-        return Ok((
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, content_type),
-                (header::CONTENT_DISPOSITION, &disposition),
-            ],
-            Body::from_stream(stream),
-        )
-            .into_response());
+        let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+        return Ok(crate::fs::core::download::file_download_response(
+            crate::fs::core::download::FileDownloadParams {
+                block_ids,
+                block_store: state.block_store.clone(),
+                enc_key: None,
+                total_size: total,
+                content_type: mime_guess(&file_name),
+                content_disposition: Some(disposition),
+                range_header: range_header.map(|s| s.to_string()),
+            },
+        ));
     }
 
     // Audio/video — stream inline with Range support so the HTML5 player can seek.
@@ -782,48 +782,18 @@ async fn serve_file(
             .await
             .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
         let total = file_data.size.max(0) as u64;
-        let content_type = mime_guess(&file_name);
-        let range = headers
-            .get(header::RANGE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|r| crate::fs::core::download::parse_range(r, total));
-
-        if let Some((start, end)) = range {
-            let stream = crate::fs::core::download::range_stream(
+        let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+        return Ok(crate::fs::core::download::file_download_response(
+            crate::fs::core::download::FileDownloadParams {
                 block_ids,
-                state.block_store.clone(),
-                None,
-                start,
-                end,
-            );
-            let content_range = format!("bytes {start}-{end}/{total}");
-            let content_length = (end - start + 1).to_string();
-            return Ok((
-                StatusCode::PARTIAL_CONTENT,
-                [
-                    (header::CONTENT_TYPE, content_type),
-                    (header::ACCEPT_RANGES, "bytes"),
-                    (header::CONTENT_RANGE, content_range.as_str()),
-                    (header::CONTENT_LENGTH, content_length.as_str()),
-                ],
-                Body::from_stream(stream),
-            )
-                .into_response());
-        }
-
-        let stream =
-            crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
-        let content_length = total.to_string();
-        return Ok((
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, content_type),
-                (header::ACCEPT_RANGES, "bytes"),
-                (header::CONTENT_LENGTH, content_length.as_str()),
-            ],
-            Body::from_stream(stream),
-        )
-            .into_response());
+                block_store: state.block_store.clone(),
+                enc_key: None,
+                total_size: total,
+                content_type: mime_guess(&file_name),
+                content_disposition: None,
+                range_header: range_header.map(|s| s.to_string()),
+            },
+        ));
     }
 
     // Image preview
@@ -935,18 +905,22 @@ async fn serve_file(
     }
 
     // Binary files — serve raw bytes inline (streamed).
-    let (_file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
+    let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
         .await
         .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
-    let stream =
-        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
-    let content_type = mime_guess(&file_name);
-    Ok((
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, content_type)],
-        Body::from_stream(stream),
-    )
-        .into_response())
+    let total = file_data.size.max(0) as u64;
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    Ok(crate::fs::core::download::file_download_response(
+        crate::fs::core::download::FileDownloadParams {
+            block_ids,
+            block_store: state.block_store.clone(),
+            enc_key: None,
+            total_size: total,
+            content_type: mime_guess(&file_name),
+            content_disposition: None,
+            range_header: range_header.map(|s| s.to_string()),
+        },
+    ))
 }
 
 /// Resolve a file's size from the FS tree without downloading its content.

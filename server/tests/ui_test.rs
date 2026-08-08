@@ -565,6 +565,60 @@ async fn test_download_file_returns_content() {
 }
 
 #[tokio::test]
+async fn test_download_file_range_resume() {
+    let fixture = TestFixture::new().await;
+
+    let content: Vec<u8> = (0..40u8).collect();
+    fixture
+        .client
+        .upload_file(
+            &fixture.api_token,
+            &fixture.repo_id,
+            "/",
+            "resume.bin",
+            &content,
+        )
+        .await;
+
+    let client = login_client(&fixture).await;
+    let url = format!(
+        "{}/libraries/{}/files/resume.bin?dl=1",
+        fixture.server.base_url, fixture.repo_id
+    );
+
+    // Full request → 200 + Content-Length + Accept-Ranges.
+    let resp = client.get(&url).send().await.unwrap();
+    assert_eq!(resp.status(), 200, "download should return 200");
+    let headers = resp.headers().clone();
+    assert_eq!(
+        headers.get("content-length").and_then(|v| v.to_str().ok()),
+        Some("40")
+    );
+    assert_eq!(
+        headers.get("accept-ranges").and_then(|v| v.to_str().ok()),
+        Some("bytes")
+    );
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(&body[..], &content[..]);
+
+    // Range → 206 + exact slice (download manager resuming mid-transfer).
+    let resp = client
+        .get(&url)
+        .header("Range", "bytes=15-24")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 206, "Range request should return 206");
+    let headers = resp.headers().clone();
+    assert_eq!(
+        headers.get("content-range").and_then(|v| v.to_str().ok()),
+        Some("bytes 15-24/40")
+    );
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(&body[..], &content[15..25]);
+}
+
+#[tokio::test]
 async fn test_file_preview_text() {
     let fixture = TestFixture::new().await;
 
