@@ -220,6 +220,25 @@
         </div>
     </div>
 
+    <!-- Quick preview dialog overlay (dblclick on a file row) -->
+    <div id="quick-preview-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="quick-preview-title">
+        <div class="relative bg-white dark:bg-surface-800 rounded-xl shadow-xl max-w-4xl w-[min(92vw,900px)] max-h-[90vh] flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+            <div class="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+                <h3 id="quick-preview-title" class="js-qp-title text-sm font-semibold text-gray-900 dark:text-gray-100 truncate"></h3>
+                <button type="button" class="js-qp-close p-1.5 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors" aria-label="{{ t.tr("common.close") }}">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="flex-1 overflow-auto flex items-center justify-center p-4 bg-gray-50 dark:bg-surface-900">
+                <img class="js-qp-img hidden max-w-full max-h-[75vh] object-contain" src="" alt="">
+                <video class="js-qp-video hidden max-w-full max-h-[75vh] object-contain bg-black rounded-lg" controls playsinline preload="metadata"></video>
+                <audio class="js-qp-audio hidden w-full" controls preload="metadata"></audio>
+                <pre class="js-qp-text hidden w-full max-h-[70vh] overflow-auto whitespace-pre-wrap break-words text-xs text-gray-700 dark:text-gray-300 bg-white dark:bg-surface-800 rounded-lg p-4"></pre>
+                <div class="js-qp-unsupported hidden text-sm text-gray-400 dark:text-gray-500"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Drop zone overlay (shown during drag-over) -->
     <div class="drop-overlay hidden absolute inset-0 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-brand-500 bg-brand-50/90 dark:bg-brand-500/10">
         <div class="text-center">

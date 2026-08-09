@@ -675,6 +675,128 @@
     if (mc) mc.classList.add("hidden");
   };
 
+  // ─── Quick preview modal (dblclick on a file row) ─────────────────────
+  var QUICK_PREVIEW_IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "tiff", "tif", "heic", "heif", "avif"];
+  var QUICK_PREVIEW_TEXT_LIMIT = 1024 * 1024; // 1MB
+
+  function isQuickPreviewImage(name) {
+    var i = name.lastIndexOf(".");
+    if (i === -1) return false;
+    return QUICK_PREVIEW_IMAGE_EXTS.indexOf(name.slice(i + 1).toLowerCase()) !== -1;
+  }
+
+  function showQuickPreviewUnsupported() {
+    var overlay = document.getElementById("quick-preview-overlay");
+    if (!overlay) return;
+    var unsupported = overlay.querySelector(".js-qp-unsupported");
+    if (unsupported) {
+      unsupported.textContent = __t("fb.preview_failed");
+      unsupported.classList.remove("hidden");
+    }
+  }
+
+  function resetQuickPreview() {
+    var overlay = document.getElementById("quick-preview-overlay");
+    if (!overlay) return;
+    var img = overlay.querySelector(".js-qp-img");
+    var video = overlay.querySelector(".js-qp-video");
+    var audio = overlay.querySelector(".js-qp-audio");
+    var text = overlay.querySelector(".js-qp-text");
+    var unsupported = overlay.querySelector(".js-qp-unsupported");
+    if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
+    if (audio) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
+    if (img) { img.removeAttribute("src"); img.onerror = null; }
+    if (text) text.textContent = "";
+    [img, video, audio, text, unsupported].forEach(function (el) {
+      if (el) el.classList.add("hidden");
+    });
+  }
+
+  window.hideQuickPreview = function () {
+    var overlay = document.getElementById("quick-preview-overlay");
+    if (!overlay) return;
+    resetQuickPreview();
+    overlay.classList.add("hidden");
+  };
+
+  window.openQuickPreview = function (row) {
+    var overlay = document.getElementById("quick-preview-overlay");
+    if (!overlay) return;
+    resetQuickPreview();
+
+    var repoId = row.dataset.repoId;
+    var path = row.dataset.path;
+    var name = row.dataset.name || "";
+    var isVideo = row.dataset.isVideo === "true";
+    var isAudio = row.dataset.isAudio === "true";
+    var isPreviewable = row.dataset.isPreviewable === "true";
+    if (!repoId || !path) return;
+
+    var encPath = path.split("/").map(encodeURIComponent).join("/");
+    var title = overlay.querySelector(".js-qp-title");
+    if (title) title.textContent = name;
+
+    var img = overlay.querySelector(".js-qp-img");
+    var video = overlay.querySelector(".js-qp-video");
+    var audio = overlay.querySelector(".js-qp-audio");
+    var text = overlay.querySelector(".js-qp-text");
+
+    if (isVideo) {
+      video.src = "/libraries/" + encodeURIComponent(repoId) + "/files/" + encPath;
+      video.classList.remove("hidden");
+    } else if (isAudio) {
+      audio.src = "/libraries/" + encodeURIComponent(repoId) + "/files/" + encPath;
+      audio.classList.remove("hidden");
+    } else if (isPreviewable && isQuickPreviewImage(name)) {
+      img.src = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
+      img.onerror = function () {
+        img.classList.add("hidden");
+        showQuickPreviewUnsupported();
+      };
+      img.classList.remove("hidden");
+    } else if (isPreviewable) {
+      // Text / code — fetch the first 1MB via Range; huge files are truncated.
+      var fileSize = parseInt(row.dataset.size, 10);
+      var url = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
+      fetch(url, { headers: { Range: "bytes=0-" + (QUICK_PREVIEW_TEXT_LIMIT - 1) } })
+        .then(function (res) {
+          if (!res.ok) { showQuickPreviewUnsupported(); return null; }
+          return res.text();
+        })
+        .then(function (content) {
+          if (content === null) return;
+          text.textContent = content;
+          if (!isNaN(fileSize) && fileSize > QUICK_PREVIEW_TEXT_LIMIT) {
+            text.textContent += "\n\n-- (truncated, showing first 1MB) --";
+          }
+          text.classList.remove("hidden");
+        })
+        .catch(function () { showQuickPreviewUnsupported(); });
+    } else {
+      showQuickPreviewUnsupported();
+    }
+
+    overlay.classList.remove("hidden");
+  };
+
+  // Quick preview modal event bindings (close button, backdrop, ESC).
+  (function () {
+    var overlay = document.getElementById("quick-preview-overlay");
+    if (!overlay) return;
+    var close = overlay.querySelector(".js-qp-close");
+    if (close) close.addEventListener("click", function () { window.hideQuickPreview(); });
+    overlay.addEventListener("click", function (e) {
+      if (e.target === overlay) window.hideQuickPreview();
+    });
+  })();
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") {
+      var overlay = document.getElementById("quick-preview-overlay");
+      if (overlay && !overlay.classList.contains("hidden")) window.hideQuickPreview();
+    }
+  });
+
   // ─── Helpers ─────────────────────────────────────────────────────────
   function setText(container, selector, val) {
     var el = container.querySelector(selector);

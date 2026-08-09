@@ -1052,6 +1052,30 @@
     updateSelectionPanel();
   });
 
+  // Row dblclick — open quick-preview modal for previewable files.
+  // Single clicks already handle selection; dblclick adds inline preview.
+  document.addEventListener("dblclick", function (e) {
+    var row = e.target.closest(".js-entry-row");
+    if (!row) return;
+    // Ignore dblclicks on the filename link (navigates) or buttons.
+    if (e.target.closest("a") || e.target.closest("button")) return;
+    var name = row.dataset.name;
+    if (!name) return;
+    // Directories and non-previewable files do nothing.
+    if (row.dataset.type === "dir") return;
+    if (row.dataset.isPreviewable !== "true" &&
+        row.dataset.isVideo !== "true" &&
+        row.dataset.isAudio !== "true") return;
+    // A dblclick fires two single clicks first; the second one toggles this
+    // single-selected row off. Re-select it so it stays selected.
+    clearSelection();
+    selectedPaths.add(name);
+    row.classList.add("selected");
+    updateSelectionBar();
+    updateSelectionPanel();
+    if (typeof window.openQuickPreview === "function") window.openQuickPreview(row);
+  });
+
   function getSelectedItems() {
     var items = [];
     document.querySelectorAll(".js-entry-row.selected").forEach(function (r) {
