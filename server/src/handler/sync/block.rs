@@ -136,7 +136,7 @@ pub async fn put_block(
 
     let block_store = state.block_store.clone();
     block_store
-        .write_block(&data)
+        .write_block_with_id(&block_id, &data)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 

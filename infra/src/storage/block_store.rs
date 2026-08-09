@@ -118,6 +118,26 @@ impl BlockStorageBackend for BlockStorage {
         Ok(block_id)
     }
 
+    async fn write_block_with_id(
+        &self,
+        block_id: &str,
+        data: &[u8],
+    ) -> Result<String, std::io::Error> {
+        // The caller has already computed `block_id` as the SHA-1 of `data`
+        // (and verified it), so write under it directly without re-hashing.
+        let path = self.block_path(block_id);
+
+        // Same dedup semantics as `write_block`.
+        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Ok(block_id.to_string());
+        }
+
+        self.ensure_dirs().await?;
+
+        tokio::fs::write(&path, data).await?;
+        Ok(block_id.to_string())
+    }
+
     async fn remove_block(&self, block_id: &str) -> Result<(), std::io::Error> {
         if !Self::is_valid_block_id(block_id) {
             return Ok(());

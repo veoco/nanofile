@@ -1258,7 +1258,7 @@ pub async fn upload_blks_api(
 
         state
             .block_store
-            .write_block(data)
+            .write_block_with_id(block_id, data)
             .await
             .map_err(|e| AppError::Internal(format!("failed to write block {block_id}: {e}")))?;
     }

@@ -18,6 +18,17 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     /// Write raw block data, computing and returning its SHA-1 ID.
     async fn write_block(&self, data: &[u8]) -> Result<String, std::io::Error>;
 
+    /// Write raw block data under a pre-computed SHA-1 ID, skipping the
+    /// re-hash inside `write_block`. Defaults to the hashing path so backends
+    /// that cannot take the ID for granted still work.
+    async fn write_block_with_id(
+        &self,
+        _block_id: &str,
+        data: &[u8],
+    ) -> Result<String, std::io::Error> {
+        self.write_block(data).await
+    }
+
     /// Delete a block file from disk.
     async fn remove_block(&self, block_id: &str) -> Result<(), std::io::Error>;
 
