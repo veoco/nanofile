@@ -1,6 +1,6 @@
 use sea_orm::DatabaseConnection;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::AccessTokenManager;
 use crate::repository::Repositories;
@@ -654,17 +654,52 @@ impl RepoService {
         repo_ids: &[&str],
         user_id: i32,
     ) -> Result<HashMap<String, String>, AppError> {
+        let ids: Vec<String> = repo_ids.iter().map(|s| s.to_string()).collect();
+
+        // Batch-load repos (existence + owner), memberships and existing sync
+        // tokens so the whole batch is ~3 queries instead of 2-3 per repo.
+        let repo_map: HashMap<String, repo::Model> = repos
+            .repo
+            .find_by_ids(&ids)
+            .await?
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
+        let memberships = repos.member.find_by_repo_ids(&ids, user_id).await?;
+        let member_repo_ids: HashSet<&str> =
+            memberships.iter().map(|m| m.repo_id.as_str()).collect();
+        let token_rows = repos
+            .sync_token
+            .find_by_repos_and_user(&ids, user_id)
+            .await?;
+        let token_map: HashMap<&str, &infra::entity::sync_token::Model> =
+            token_rows.iter().map(|t| (t.repo_id.as_str(), t)).collect();
+
         let mut result = HashMap::new();
         for repo_id in repo_ids {
-            match ensure_sync_token(repos, repo_id, user_id).await {
-                Ok(token) => {
-                    result.insert(repo_id.to_string(), token);
-                }
-                Err(AppError::Forbidden) | Err(AppError::NotFound(_)) => {
-                    // Not a member / repo doesn't exist → skip, don't error.
-                }
-                Err(e) => return Err(e),
+            // Repo deleted → skip (was NotFound).
+            let Some(repo_model) = repo_map.get(*repo_id) else {
+                continue;
+            };
+            // Owner has access even without a member row; memberships grant
+            // read access. Non-members are skipped (was Forbidden).
+            let has_access = repo_model.owner_id == user_id || member_repo_ids.contains(*repo_id);
+            if !has_access {
+                continue;
             }
+            let token = match token_map.get(*repo_id) {
+                Some(t) => t.token.clone(),
+                None => {
+                    let value = generate_sync_token();
+                    let now = chrono::Utc::now().timestamp();
+                    repos
+                        .sync_token
+                        .create(repo_id, user_id, value.clone(), None, now)
+                        .await?;
+                    value
+                }
+            };
+            result.insert(repo_id.to_string(), token);
         }
         Ok(result)
     }

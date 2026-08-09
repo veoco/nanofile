@@ -56,6 +56,13 @@ pub trait MemberRepository: Send + Sync {
         repo_id: &str,
         user_id: i32,
     ) -> Result<Option<(i32, Option<String>)>, AppError>;
+
+    /// Batch fetch a user's membership rows across many repos (chunked `IN`).
+    async fn find_by_repo_ids(
+        &self,
+        repo_ids: &[String],
+        user_id: i32,
+    ) -> Result<Vec<repo_member::Model>, AppError>;
 }
 
 pub struct DbMemberRepository {
@@ -177,5 +184,27 @@ impl MemberRepository for DbMemberRepository {
                 (owner_id, permission)
             });
         Ok(row)
+    }
+
+    async fn find_by_repo_ids(
+        &self,
+        repo_ids: &[String],
+        user_id: i32,
+    ) -> Result<Vec<repo_member::Model>, AppError> {
+        if repo_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // SQLite has a ~999 bound on bound parameters; chunk the IN list.
+        const IN_BATCH: usize = 500;
+        let mut out = Vec::new();
+        for chunk in repo_ids.chunks(IN_BATCH) {
+            let rows = repo_member::Entity::find()
+                .filter(repo_member::Column::RepoId.is_in(chunk.iter().cloned()))
+                .filter(repo_member::Column::UserId.eq(user_id))
+                .all(self.db.as_ref())
+                .await?;
+            out.extend(rows);
+        }
+        Ok(out)
     }
 }
