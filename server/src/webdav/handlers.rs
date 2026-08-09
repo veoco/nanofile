@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::extract::{Path, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use base::error::AppError;
@@ -232,6 +233,22 @@ async fn delete_handler(state: &Arc<AppState>, auth: &WebDavAuth, path: &str) ->
     }
 }
 
+/// `entry_metadata` with per-path memoization for handlers that probe the
+/// same paths several times (MOVE/COPY probes src and dst twice each).
+async fn cached_entry_metadata(
+    cache: &mut HashMap<String, Option<(bool, i64, i64)>>,
+    repos: &crate::repository::Repositories,
+    repo_id: &str,
+    path: &str,
+) -> Option<Option<(bool, i64, i64)>> {
+    if let Some(v) = cache.get(path) {
+        return Some(*v);
+    }
+    let v = entry_metadata(repos, repo_id, path).await.ok()?;
+    cache.insert(path.to_string(), v);
+    Some(v)
+}
+
 async fn move_copy_handler(
     state: &Arc<AppState>,
     auth: &WebDavAuth,
@@ -239,6 +256,10 @@ async fn move_copy_handler(
     headers: &HeaderMap,
     is_move: bool,
 ) -> Response {
+    // Memoize per-path metadata so repeated probes of src/dst don't re-resolve
+    // the repo record + head commit every time.
+    let mut meta_cache: HashMap<String, Option<(bool, i64, i64)>> = HashMap::new();
+
     if auth.permission != "rw" {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -260,7 +281,9 @@ async fn move_copy_handler(
         return StatusCode::FORBIDDEN.into_response();
     }
     // Moving/copying a directory into its own subtree is invalid.
-    if let Ok(Some((true, _, _))) = entry_metadata(&state.repos, &auth.repo_id, src_path).await {
+    if let Some(Some((true, _, _))) =
+        cached_entry_metadata(&mut meta_cache, &state.repos, &auth.repo_id, src_path).await
+    {
         let prefix = format!("{}/", src_path);
         if dst_path.starts_with(&prefix) {
             return StatusCode::FORBIDDEN.into_response();
@@ -271,24 +294,21 @@ async fn move_copy_handler(
 
     // Destination parent must exist.
     let dst_parent = parent_path_from(&dst_path);
-    match entry_metadata(&state.repos, &auth.repo_id, dst_parent).await {
-        Ok(Some((true, _, _))) => {}
+    match cached_entry_metadata(&mut meta_cache, &state.repos, &auth.repo_id, dst_parent).await {
+        Some(Some((true, _, _))) => {}
         _ => return StatusCode::CONFLICT.into_response(),
     }
 
-    let dst_existed = matches!(
-        entry_metadata(&state.repos, &auth.repo_id, &dst_path).await,
-        Ok(Some(_))
-    );
+    let dst_meta =
+        cached_entry_metadata(&mut meta_cache, &state.repos, &auth.repo_id, &dst_path).await;
+    let dst_existed = matches!(dst_meta, Some(Some(_)));
     if dst_existed {
         if !overwrite {
             return StatusCode::PRECONDITION_FAILED.into_response();
         }
         // Remove the target first so batch_copy/batch_move don't auto-rename
         // the entry (WebDAV Overwrite semantics).
-        if let Ok(Some((is_dir, _, _))) =
-            entry_metadata(&state.repos, &auth.repo_id, &dst_path).await
-        {
+        if let Some(Some((is_dir, _, _))) = dst_meta {
             let obj = if is_dir { "dir" } else { "file" };
             if state
                 .dir_service()

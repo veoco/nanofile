@@ -134,14 +134,20 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
             .map_err(|_| WebDavAuthError::Unauthorized)?
             .ok_or(WebDavAuthError::Unauthorized)?;
 
-        // Best-effort last_used_at update (fire-and-forget).
-        {
+        // Best-effort last_used_at update (fire-and-forget), throttled to once
+        // per hour per key so high-frequency WebDAV traffic does not write on
+        // every request.
+        let now = chrono::Utc::now().timestamp();
+        const THROTTLE_SECS: i64 = 60 * 60;
+        let needs_update = match key_model.last_used_at {
+            Some(ts) => now - ts >= THROTTLE_SECS,
+            None => true,
+        };
+        if needs_update {
             let repo = state.repos.webdav_key.clone();
             let key_id = key_model.id;
             tokio::spawn(async move {
-                let _ = repo
-                    .update_last_used_at(key_id, chrono::Utc::now().timestamp())
-                    .await;
+                let _ = repo.update_last_used_at(key_id, now).await;
             });
         }
 

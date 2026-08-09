@@ -111,54 +111,67 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
         }
     };
 
-    let mut stack: Vec<(String, String)> = vec![(dir_id.clone(), path.to_string())];
+    // Level frontier: each level reads all its directories with one batched
+    // `IN` query instead of one query per directory.
+    let mut frontier: Vec<(String, String)> = vec![(dir_id.clone(), path.to_string())];
     let mut entries: Vec<DirEntry> = Vec::new();
     let mut modifier_emails: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    while let Some((fs_id, parent_path)) = stack.pop() {
-        if fs_id == EMPTY_SHA1 {
-            continue;
-        }
-
-        let dir_data = match crate::fs::core::read_fs_dir_data(repos, repo_id, &fs_id).await {
-            Ok(d) => d,
-            Err(_) => continue,
+    while !frontier.is_empty() {
+        let ids: Vec<String> = frontier
+            .iter()
+            .map(|(fs_id, _)| fs_id.clone())
+            .filter(|id| id != EMPTY_SHA1)
+            .collect();
+        let dir_map = match crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &ids).await {
+            Ok(m) => m,
+            Err(_) => break,
         };
+        let mut next: Vec<(String, String)> = Vec::new();
 
-        for dirent in &dir_data.dirents {
-            let is_dir = dirent.mode & S_IFDIR != 0;
-            let modifier_email = dirent.modifier.clone();
+        for (fs_id, parent_path) in &frontier {
+            // Missing/EMPTY dirs are absent from the batch map → skip.
+            let Some(dir_data) = dir_map.get(fs_id) else {
+                continue;
+            };
 
-            entries.push(DirEntry {
-                id: dirent.id.clone(),
-                entry_type: if is_dir {
-                    "dir".to_string()
-                } else {
-                    "file".to_string()
-                },
-                name: dirent.name.clone(),
-                size: dirent.size,
-                mtime: dirent.mtime,
-                permission: "rw".to_string(),
-                modifier: modifier_email.clone(),
-                parent_dir: Some(parent_path.clone()),
-                modifier_name: None,
-                modifier_contact_email: None,
-            });
+            for dirent in &dir_data.dirents {
+                let is_dir = dirent.mode & S_IFDIR != 0;
+                let modifier_email = dirent.modifier.clone();
 
-            if !is_dir && !modifier_email.is_empty() {
-                modifier_emails.insert(modifier_email);
-            }
+                entries.push(DirEntry {
+                    id: dirent.id.clone(),
+                    entry_type: if is_dir {
+                        "dir".to_string()
+                    } else {
+                        "file".to_string()
+                    },
+                    name: dirent.name.clone(),
+                    size: dirent.size,
+                    mtime: dirent.mtime,
+                    permission: "rw".to_string(),
+                    modifier: modifier_email.clone(),
+                    parent_dir: Some(parent_path.clone()),
+                    modifier_name: None,
+                    modifier_contact_email: None,
+                });
 
-            if is_dir {
-                let child_path = if parent_path == "/" {
-                    format!("/{}", dirent.name)
-                } else {
-                    format!("{}/{}", parent_path, dirent.name)
-                };
-                stack.push((dirent.id.clone(), child_path));
+                if !is_dir && !modifier_email.is_empty() {
+                    modifier_emails.insert(modifier_email);
+                }
+
+                if is_dir {
+                    let child_path = if parent_path == "/" {
+                        format!("/{}", dirent.name)
+                    } else {
+                        format!("{}/{}", parent_path, dirent.name)
+                    };
+                    next.push((dirent.id.clone(), child_path));
+                }
             }
         }
+
+        frontier = next;
     }
 
     // Batch-fetch modifier nicknames for all distinct emails in one query.
