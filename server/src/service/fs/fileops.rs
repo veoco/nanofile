@@ -69,11 +69,9 @@ impl FileOpsService {
 
         // Resolve the parent dir and its ancestor chain once, so the tree
         // update below walks ancestors in O(d) instead of re-resolving every
-        // level from the root (O(d²)).
+        // level from the root (O(d²)). NotFound propagates as 404.
         let (parent_fs_id, ancestor_chain) =
-            FileOps::resolve_fs_id_chain(&self.repos, repo_id, parent_dir)
-                .await
-                .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
+            FileOps::resolve_fs_id_chain(&self.repos, repo_id, parent_dir).await?;
 
         let parent_data = crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
             .await
@@ -216,9 +214,7 @@ impl FileOpsService {
         // Resolve the source parent dir (chain unused here — the destination
         // tree update below carries the ancestor chain).
         let (src_parent_fs_id, _) =
-            FileOps::resolve_fs_id_chain(&self.repos, repo_id, src_parent_dir)
-                .await
-                .map_err(|e| AppError::Internal(format!("resolve source dir failed: {e}")))?;
+            FileOps::resolve_fs_id_chain(&self.repos, repo_id, src_parent_dir).await?;
 
         let src_parent_data =
             crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &src_parent_fs_id)
@@ -246,9 +242,7 @@ impl FileOpsService {
         }
 
         let (dst_parent_fs_id, dst_ancestor_chain) =
-            FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir)
-                .await
-                .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
+            FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir).await?;
 
         let dst_parent_data =
             crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &dst_parent_fs_id)
@@ -383,9 +377,7 @@ impl FileOpsService {
         // Resolve the source parent dir and its ancestor chain once, so the
         // step-1 tree update walks ancestors in O(d) instead of O(d²).
         let (src_parent_fs_id, src_ancestor_chain) =
-            FileOps::resolve_fs_id_chain(&self.repos, repo_id, src_parent_dir)
-                .await
-                .map_err(|e| AppError::Internal(format!("resolve source dir failed: {e}")))?;
+            FileOps::resolve_fs_id_chain(&self.repos, repo_id, src_parent_dir).await?;
 
         let src_parent_data =
             crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &src_parent_fs_id)
@@ -413,9 +405,7 @@ impl FileOpsService {
         }
 
         // Pre-validate the destination exists before mutating the source tree.
-        let _ = FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir)
-            .await
-            .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
+        let _ = FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir).await?;
 
         // Step 1: Remove entries from source
         // O(1) membership lookup for the per-entry retain filter below,
@@ -462,11 +452,7 @@ impl FileOpsService {
         // resolve_fs_id_chain reads the repo's latest head commit (the one
         // created by step 1), matching the previous new_head_root behaviour.
         let (new_dst_fs_id, dst_ancestor_chain) =
-            FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir)
-                .await
-                .map_err(|e| {
-                    AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
-                })?;
+            FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir).await?;
 
         let new_dst_data = crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &new_dst_fs_id)
             .await
