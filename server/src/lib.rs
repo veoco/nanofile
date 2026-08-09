@@ -27,6 +27,7 @@ pub mod thumbnail_util;
 pub mod ui;
 pub mod webdav;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -79,6 +80,23 @@ pub struct AppState {
     pub password_manager: Arc<PasswordManager>,
     /// Unified scheduler for all periodic and continuous background tasks.
     pub scheduler: Arc<Scheduler>,
+    /// In-memory progress of background full-text reindex tasks, keyed by
+    /// task_id. Stored on AppState because `admin_service()` builds a new
+    /// `AdminService` per request.
+    pub reindex_tasks: Arc<std::sync::Mutex<HashMap<String, ReindexProgress>>>,
+}
+
+/// Progress of a background reindex task (`POST /api2/reindex/`).
+#[derive(Clone, Default, serde::Serialize)]
+pub struct ReindexProgress {
+    /// `"running"` | `"completed"` | `"failed"`.
+    pub state: String,
+    pub repo_id: String,
+    pub done_count: u64,
+    pub total: u64,
+    pub indexed: u64,
+    pub skipped: u64,
+    pub error: Option<String>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -173,6 +191,7 @@ impl AppState {
             shutdown_token,
             password_manager,
             scheduler,
+            reindex_tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 

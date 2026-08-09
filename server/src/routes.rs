@@ -95,6 +95,10 @@ fn v1_routes() -> Router<Arc<AppState>> {
         )
         .route("/api2/search/", get(crate::handler::search::search))
         .route("/api2/reindex/", post(crate::handler::reindex::reindex))
+        .route(
+            "/api2/reindex-progress/",
+            get(crate::handler::reindex::reindex_progress),
+        )
         .nest("/api2/admin", crate::handler::users::admin_user_routes())
         .route(
             "/api2/index-file-text/",

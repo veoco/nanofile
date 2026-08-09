@@ -445,7 +445,7 @@ async fn test_reindex_endpoint() {
     let before: serde_json::Value = resp.json().await.unwrap();
     assert!(!before["results"].as_array().unwrap().is_empty());
 
-    // Call the reindex endpoint
+    // Call the reindex endpoint — starts a background task.
     let resp = f
         .client
         .post_json(
@@ -457,7 +457,27 @@ async fn test_reindex_endpoint() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");
-    assert!(body["indexed"].as_u64().unwrap() >= 1);
+    let task_id = body["task_id"].as_str().unwrap().to_string();
+
+    // Poll until the background reindex task completes.
+    let mut progress: serde_json::Value = serde_json::json!({});
+    for _ in 0..100 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let resp = f
+            .client
+            .get(
+                &format!("/api2/reindex-progress/?task_id={task_id}"),
+                Some(token),
+            )
+            .await;
+        assert_eq!(resp.status(), 200);
+        progress = resp.json().await.unwrap();
+        if progress["state"] == "completed" || progress["state"] == "failed" {
+            break;
+        }
+    }
+    assert_eq!(progress["state"], "completed");
+    assert!(progress["indexed"].as_u64().unwrap() >= 1);
 }
 
 /// Upload a binary image, then use index_file_text to associate extracted text.

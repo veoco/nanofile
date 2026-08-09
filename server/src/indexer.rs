@@ -284,18 +284,23 @@ impl TextIndexer {
         fullpath: &str,
         block_store: &DynBlockStorage,
     ) -> Result<bool, AppError> {
+        // Only the file prefix is indexed; whole files are not loaded.
+        const MAX_REINDEX_BYTES: usize = 8 * 1024 * 1024;
         let filename = fullpath
             .rsplit_once('/')
             .map(|(_, name)| name)
             .unwrap_or(fullpath);
 
-        // Read file content from block storage.
-        let data = match crate::fs::core::download::Downloader::download_file(
+        // Read file content from block storage. Cap the read so huge files
+        // don't get loaded fully into memory just for indexing — the prefix is
+        // sufficient for searchable content.
+        let data = match crate::fs::core::download::Downloader::download_file_limited(
             self.repos(),
             repo_id,
             fullpath,
             block_store,
             None,
+            MAX_REINDEX_BYTES,
         )
         .await
         {

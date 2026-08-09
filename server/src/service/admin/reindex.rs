@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use futures::StreamExt;
+
 use super::collect_file_paths;
 use crate::indexer::TextIndexer;
 use crate::repository::Repositories;
@@ -67,11 +69,16 @@ impl AdminService {
     }
 
     /// Rebuild the full-text search index for all files in a repository.
+    ///
+    /// Files are reindexed with bounded concurrency (whole-file reads +
+    /// Tantivy writes are heavy); `on_progress` is called after each file with
+    /// `(done_count, total)` so a background task can report progress.
     pub async fn reindex(
         &self,
         indexer: &TextIndexer,
         repo_id: &str,
         block_store: &DynBlockStorage,
+        mut on_progress: impl FnMut(u64, u64) + Send + 'static,
     ) -> Result<(u64, u64), AppError> {
         let repo_model = self
             .repos
@@ -96,16 +103,34 @@ impl AdminService {
         }
 
         let file_paths = collect_file_paths(&self.repos, repo_id, &head.root_id).await?;
+        let total = file_paths.len() as u64;
+
+        let results: Vec<Result<bool, AppError>> = futures::stream::iter(file_paths)
+            .map(|fullpath| {
+                let indexer = indexer.clone();
+                let block_store = block_store.clone();
+                let rid = repo_id.to_string();
+                async move {
+                    Ok(indexer
+                        .reindex_file(&rid, &fullpath, &block_store)
+                        .await
+                        .unwrap_or(false))
+                }
+            })
+            .buffer_unordered(8)
+            .collect::<Vec<_>>()
+            .await;
 
         let mut indexed = 0u64;
         let mut skipped = 0u64;
-
-        for fullpath in &file_paths {
-            match indexer.reindex_file(repo_id, fullpath, block_store).await {
+        let mut done = 0u64;
+        for r in results {
+            match r {
                 Ok(true) => indexed += 1,
-                Ok(false) => skipped += 1,
-                Err(_) => skipped += 1,
+                _ => skipped += 1,
             }
+            done += 1;
+            on_progress(done, total);
         }
 
         Ok((indexed, skipped))
