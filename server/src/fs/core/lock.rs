@@ -7,6 +7,9 @@ use base::common::{EMPTY_SHA1, FsDirData};
 use base::error::AppError;
 use infra::entity::{file_lock_timestamp, fs_object, locked_file};
 
+/// SQLite has a ~999 bound on bound parameters; chunk IN / NOT IN lists.
+const IN_BATCH: usize = 500;
+
 /// Walk the FS tree of a commit and check whether any file in the tree
 /// is locked by a different user. Returns `AppError::Locked(path)` with
 /// 403 if a lock conflict is found.
@@ -37,54 +40,84 @@ pub async fn check_commit_file_locks(
         return Ok(());
     }
 
-    let mut stack: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
+    // Load every lock for the repo once and index it by path; previously each
+    // file in the tree issued its own locked_file query.
+    let locks: std::collections::HashMap<String, i32> = locked_file::Entity::find()
+        .filter(locked_file::Column::RepoId.eq(repo_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|l| (l.path, l.user_id))
+        .collect();
 
-    while let Some((fs_id, path)) = stack.pop() {
-        if fs_id == EMPTY_SHA1 {
-            continue;
+    // Level frontier: each level reads all its fs_objects with one batched
+    // `IN` query instead of one query per file/directory.
+    let mut frontier: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
+
+    while !frontier.is_empty() {
+        let ids: Vec<String> = frontier
+            .iter()
+            .map(|(fs_id, _)| fs_id.clone())
+            .filter(|id| id != EMPTY_SHA1)
+            .collect();
+        let obj_map = fetch_objects_batched(db, repo_id, &ids).await?;
+        let mut next: Vec<(String, String)> = Vec::new();
+
+        for (fs_id, path) in &frontier {
+            // Missing/EMPTY dirs are absent from the batch map → skip.
+            let Some(obj) = obj_map.get(fs_id) else {
+                continue;
+            };
+
+            match obj.obj_type {
+                1 => {
+                    // File — check if locked by another user
+                    if let Some(&owner) = locks.get(path)
+                        && owner != user_id
+                    {
+                        return Err(AppError::Locked(path.clone()));
+                    }
+                }
+                3 => {
+                    let dir_data: FsDirData = serde_json::from_str(&obj.data)
+                        .map_err(|e| AppError::Internal(format!("invalid dir object: {e}")))?;
+                    for entry in &dir_data.dirents {
+                        let child_path = if path.is_empty() {
+                            entry.name.clone()
+                        } else {
+                            format!("{}/{}", path, entry.name)
+                        };
+                        next.push((entry.id.clone(), child_path));
+                    }
+                }
+                _ => {}
+            }
         }
 
-        let obj = fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.eq(&fs_id))
-            .one(db)
-            .await?;
-
-        let Some(obj) = obj else {
-            continue;
-        };
-
-        match obj.obj_type {
-            1 => {
-                // File — check if locked by another user
-                let lock = locked_file::Entity::find()
-                    .filter(locked_file::Column::RepoId.eq(repo_id))
-                    .filter(locked_file::Column::Path.eq(&path))
-                    .one(db)
-                    .await?;
-                if let Some(lock) = lock
-                    && lock.user_id != user_id
-                {
-                    return Err(AppError::Locked(path));
-                }
-            }
-            3 => {
-                let dir_data: FsDirData = serde_json::from_str(&obj.data)
-                    .map_err(|e| AppError::Internal(format!("invalid dir object: {e}")))?;
-                for entry in &dir_data.dirents {
-                    let child_path = if path.is_empty() {
-                        entry.name.clone()
-                    } else {
-                        format!("{}/{}", path, entry.name)
-                    };
-                    stack.push((entry.id.clone(), child_path));
-                }
-            }
-            _ => {}
-        }
+        frontier = next;
     }
 
     Ok(())
+}
+
+/// Fetch fs_objects for a repo by fs_ids in IN batches (SQLite ~999 bound cap).
+async fn fetch_objects_batched(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    fs_ids: &[String],
+) -> Result<std::collections::HashMap<String, fs_object::Model>, AppError> {
+    let mut map = std::collections::HashMap::new();
+    for chunk in fs_ids.chunks(IN_BATCH) {
+        let rows = fs_object::Entity::find()
+            .filter(fs_object::Column::RepoId.eq(repo_id))
+            .filter(fs_object::Column::FsId.is_in(chunk))
+            .all(db)
+            .await?;
+        for row in rows {
+            map.insert(row.fs_id.clone(), row);
+        }
+    }
+    Ok(map)
 }
 
 /// Upsert the file lock timestamp for a repo (used by clients for cache invalidation).
