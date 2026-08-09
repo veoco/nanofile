@@ -100,12 +100,11 @@ pub async fn fs_id_list(
 
     if let Some(ref client_head) = query.client_head {
         if client_head == EMPTY_SHA1 {
-            let collected = svc.collect_fs_ids(&repo_id, &server_root).await?;
-            let result = if dir_only {
-                svc.filter_dir_ids(&repo_id, &collected).await?
-            } else {
-                collected.into_iter().collect()
-            };
+            let result: Vec<String> = svc
+                .collect_fs_ids(&repo_id, &server_root, dir_only)
+                .await?
+                .into_iter()
+                .collect();
             return Ok(Json(result));
         }
 
@@ -116,12 +115,11 @@ pub async fn fs_id_list(
         }
     }
 
-    let collected = svc.collect_fs_ids(&repo_id, &server_root).await?;
-    let result = if dir_only {
-        svc.filter_dir_ids(&repo_id, &collected).await?
-    } else {
-        collected.into_iter().collect()
-    };
+    let result: Vec<String> = svc
+        .collect_fs_ids(&repo_id, &server_root, dir_only)
+        .await?
+        .into_iter()
+        .collect();
     Ok(Json(result))
 }
 

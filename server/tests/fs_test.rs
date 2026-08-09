@@ -344,6 +344,66 @@ async fn test_fs_id_list_with_matching_client_head() {
     assert!(fs_ids.is_empty());
 }
 
+/// dir-only fs-id-list returns only directory ids (root + subdir), excluding
+/// file ids, without a second traversal pass.
+#[tokio::test]
+async fn test_fs_id_list_dir_only_returns_only_dirs() {
+    let (server, _api_token, repo_id, sync_token) = setup_repo().await;
+    let client = server.client();
+
+    let sub_dir = make_dir_fs_data(vec![]);
+    let (sub_fs_id, sub_rc) = make_fs_entry(&sub_dir);
+
+    let root_dir = make_dir_fs_data(vec![
+        DirEntryData {
+            id: sub_fs_id.clone(),
+            mode: 16384, // S_IFDIR
+            modifier: "test@example.com".to_string(),
+            mtime: chrono::Utc::now().timestamp(),
+            name: "subdir".to_string(),
+            size: 0,
+        },
+        DirEntryData {
+            id: random_hex_id(),
+            mode: 33188, // S_IFREG
+            modifier: "test@example.com".to_string(),
+            mtime: chrono::Utc::now().timestamp(),
+            name: "file.txt".to_string(),
+            size: 100,
+        },
+    ]);
+    let (root_fs_id, root_rc) = make_fs_entry(&root_dir);
+
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[(sub_fs_id.clone(), sub_rc), (root_fs_id.clone(), root_rc)],
+    )
+    .await;
+
+    let commit_id = push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
+
+    let resp = client
+        .fs_id_list_with_dir_only(&sync_token, &repo_id, &commit_id, "1")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let fs_ids: Vec<String> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+    assert!(fs_ids.contains(&root_fs_id));
+    assert!(fs_ids.contains(&sub_fs_id));
+    assert_eq!(
+        fs_ids.len(),
+        2,
+        "dir-only must exclude file ids, got {fs_ids:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_check_blocks_partial_exists() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;

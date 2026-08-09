@@ -183,12 +183,17 @@ impl SyncService {
     }
 
     /// Recursively collect all fs_ids under a given root fs_id.
+    ///
+    /// When `dir_only` is true only directory objects are returned; the
+    /// traversal still walks every object to discover children.
     pub async fn collect_fs_ids(
         &self,
         repo_id: &str,
         root_fs_id: &str,
+        dir_only: bool,
     ) -> Result<HashSet<String>, AppError> {
-        let mut collected = HashSet::new();
+        let mut visited = HashSet::new();
+        let mut result = HashSet::new();
         // Level frontier: each level fetches all its fs_objects with one
         // batched `IN` query (O(#objects) → O(depth)).
         let mut frontier = vec![root_fs_id.to_string()];
@@ -200,48 +205,28 @@ impl SyncService {
                 .await?;
             let mut next = Vec::new();
             for fs_obj in objects {
-                if collected.contains(&fs_obj.fs_id) {
+                if visited.contains(&fs_obj.fs_id) {
                     continue;
                 }
-                collected.insert(fs_obj.fs_id.clone());
-                if fs_obj.obj_type == SEAF_METADATA_TYPE_DIR as i8
+                visited.insert(fs_obj.fs_id.clone());
+                let is_dir = fs_obj.obj_type == SEAF_METADATA_TYPE_DIR as i8;
+                if is_dir
                     && let Ok(dir_data) =
                         serde_json::from_str::<base::common::FsDirData>(&fs_obj.data)
                 {
                     for entry in &dir_data.dirents {
-                        if !collected.contains(&entry.id) {
+                        if !visited.contains(&entry.id) {
                             next.push(entry.id.clone());
                         }
                     }
                 }
+                if !dir_only || is_dir {
+                    result.insert(fs_obj.fs_id.clone());
+                }
             }
             frontier = next;
         }
-        Ok(collected)
-    }
-
-    /// Filter fs_ids to only include directory objects.
-    pub async fn filter_dir_ids(
-        &self,
-        repo_id: &str,
-        ids: &HashSet<String>,
-    ) -> Result<Vec<String>, AppError> {
-        let id_list: Vec<String> = ids.iter().cloned().collect();
-        let objects = self
-            .repos
-            .fs_object
-            .find_by_repo_and_fs_ids(repo_id, &id_list)
-            .await?;
-        let dir_set: HashSet<String> = objects
-            .iter()
-            .filter(|obj| obj.obj_type == SEAF_METADATA_TYPE_DIR as i8)
-            .map(|obj| obj.fs_id.clone())
-            .collect();
-        Ok(ids
-            .iter()
-            .filter(|id| dir_set.contains(*id))
-            .cloned()
-            .collect())
+        Ok(result)
     }
 
     /// Batch fetch FS objects for given fs_ids.
