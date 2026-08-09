@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::repository::Repositories;
 use crate::service::auth::backup_codes::BackupCodeManager;
-use crate::service::auth::password::verify_password;
+use crate::service::auth::password::verify_password_async;
 use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
 use infra::rate_limit::GenericRateLimiter;
@@ -96,11 +96,13 @@ impl TwoFactorService {
             .await?
             .ok_or(AppError::Unauthorized)?;
 
-        if !verify_password(
-            password,
-            &user_record.password_hash,
+        if !verify_password_async(
+            password.to_string(),
+            user_record.password_hash.clone(),
             self.password_hash_iterations,
-        ) {
+        )
+        .await
+        {
             return Err(AppError::Unauthorized);
         }
 

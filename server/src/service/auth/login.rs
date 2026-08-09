@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::repository::Repositories;
-use crate::service::auth::password::verify_password;
+use crate::service::auth::password::verify_password_async;
 use crate::service::auth::s2fa::{S2FA_TTL_SECONDS, generate_s2fa_token};
 use crate::service::auth::token::generate_api_token;
 use crate::service::auth::totp::TotpManager;
@@ -103,11 +103,13 @@ impl LoginService {
         };
 
         // ── Verify password ───────────────────────────────────────────────
-        if !verify_password(
-            password,
-            &user_record.password_hash,
+        if !verify_password_async(
+            password.to_string(),
+            user_record.password_hash.clone(),
             self.password_hash_iterations,
-        ) {
+        )
+        .await
+        {
             record_failure();
             return Ok(LoginResult::BadCredentials);
         }

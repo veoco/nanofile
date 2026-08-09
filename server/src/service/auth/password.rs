@@ -21,6 +21,28 @@ pub fn hash_password(password: &str, iterations: u32) -> String {
     format!("{}:{}", hex::encode(salt), hex::encode(hash))
 }
 
+/// Async wrapper running PBKDF2 off the tokio executor.
+///
+/// Password hashing/verification is CPU-bound (tens to hundreds of ms at the
+/// configured iteration count); running it synchronously inside an async
+/// handler would stall a worker thread and delay unrelated requests.
+pub async fn verify_password_async(
+    password: String,
+    password_hash: String,
+    iterations: u32,
+) -> bool {
+    tokio::task::spawn_blocking(move || verify_password(&password, &password_hash, iterations))
+        .await
+        .unwrap_or(false)
+}
+
+/// Async wrapper around [`hash_password`]; see [`verify_password_async`].
+pub async fn hash_password_async(password: String, iterations: u32) -> String {
+    tokio::task::spawn_blocking(move || hash_password(&password, iterations))
+        .await
+        .unwrap_or_default()
+}
+
 /// Verify a password against a stored hash using constant-time comparison.
 ///
 /// Format: `hex(salt):hex(hash)` as produced by `hash_password`.

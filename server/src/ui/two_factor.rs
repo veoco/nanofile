@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
-use crate::service::auth::password::verify_password;
+use crate::service::auth::password::verify_password_async;
 use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
 
@@ -312,11 +312,13 @@ pub async fn disable_2fa(
         .await?
         .ok_or(AppError::Unauthorized)?;
 
-    if !verify_password(
-        &form.password,
-        &user_record.password_hash,
+    if !verify_password_async(
+        form.password.clone(),
+        user_record.password_hash.clone(),
         state.config.auth.password_hash_iterations,
-    ) {
+    )
+    .await
+    {
         return render_page(
             &user,
             &state,

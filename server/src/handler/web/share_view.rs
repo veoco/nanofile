@@ -77,7 +77,8 @@ pub async fn shared_file_view(
         &link,
         provided_pwd,
         state.config.auth.password_hash_iterations,
-    )?;
+    )
+    .await?;
 
     // If password is required but not provided, show password form
     if link.password.is_some() && !pw_ok {
@@ -190,11 +191,12 @@ pub async fn shared_file_view_post(
         .get("password")
         .ok_or_else(|| AppError::BadRequest("password required".into()))?;
 
-    let valid = crate::service::auth::password::verify_password(
-        password,
-        &link.password.unwrap_or_default(),
+    let valid = crate::service::auth::password::verify_password_async(
+        password.clone(),
+        link.password.clone().unwrap_or_default(),
         state.config.auth.password_hash_iterations,
-    );
+    )
+    .await;
 
     if !valid {
         // Show password form again with error
@@ -266,7 +268,8 @@ pub async fn shared_dir_view(
         &link,
         provided_pwd,
         state.config.auth.password_hash_iterations,
-    )?;
+    )
+    .await?;
 
     if link.password.is_some() && !pw_ok {
         let error = if params.contains_key("password") {
@@ -511,7 +514,8 @@ pub async fn shared_dir_file_view(
         &link,
         provided_pwd,
         state.config.auth.password_hash_iterations,
-    )?;
+    )
+    .await?;
     if link.password.is_some() && !pw_ok {
         return if params.contains_key("password") {
             Err(AppError::Forbidden)
@@ -565,11 +569,12 @@ pub async fn shared_dir_view_post(
         .get("password")
         .ok_or_else(|| AppError::BadRequest("password required".into()))?;
 
-    let valid = crate::service::auth::password::verify_password(
-        password,
-        &link.password.unwrap_or_default(),
+    let valid = crate::service::auth::password::verify_password_async(
+        password.clone(),
+        link.password.clone().unwrap_or_default(),
         state.config.auth.password_hash_iterations,
-    );
+    )
+    .await;
 
     if !valid {
         let tpl = ShareAccessValidationTemplate {

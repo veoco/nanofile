@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
-use crate::service::auth::password::{hash_password, verify_password};
+use crate::service::auth::password::{hash_password_async, verify_password_async};
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -147,11 +147,13 @@ pub async fn change_password(
         .map_err(|e| AppError::internal(format!("db error: {e}")))?
         .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
-    if !verify_password(
-        &form.old_password,
-        &user_record.password_hash,
+    if !verify_password_async(
+        form.old_password.clone(),
+        user_record.password_hash.clone(),
         state.config.auth.password_hash_iterations,
-    ) {
+    )
+    .await
+    {
         let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
         let tpl = SettingsTemplate {
             urls: ctx.urls,
@@ -174,10 +176,11 @@ pub async fn change_password(
         return Ok((StatusCode::OK, Html(html)).into_response());
     }
 
-    let new_hash = hash_password(
-        &form.new_password,
+    let new_hash = hash_password_async(
+        form.new_password.clone(),
         state.config.auth.password_hash_iterations,
-    );
+    )
+    .await;
     state
         .repos
         .user

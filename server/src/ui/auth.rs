@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::i18n::I18n;
 use crate::repository::api_token::CreateSessionTokenParams;
-use crate::service::auth::password::verify_password;
+use crate::service::auth::password::verify_password_async;
 use crate::service::auth::password_reset::PasswordResetService;
 use crate::service::auth::registration::{RegistrationParams, RegistrationService};
 use crate::service::auth::token::generate_api_token;
@@ -232,11 +232,13 @@ pub async fn login(
         .map(|html| (StatusCode::OK, Html(html)).into_response());
     }
 
-    if !verify_password(
-        &form.password,
-        &user_record.password_hash,
+    if !verify_password_async(
+        form.password.clone(),
+        user_record.password_hash.clone(),
         state.config.auth.password_hash_iterations,
-    ) {
+    )
+    .await
+    {
         state
             .auth_limiters
             .login

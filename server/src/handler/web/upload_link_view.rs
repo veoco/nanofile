@@ -73,7 +73,7 @@ async fn validate_upload_link(
 }
 
 /// Check whether the password in the request matches the stored hash.
-fn check_password(
+async fn check_password(
     link: &infra::entity::upload_link::Model,
     params: &HashMap<String, String>,
     password_hash_iterations: u32,
@@ -86,11 +86,14 @@ fn check_password(
     let provided = params.get("password");
 
     match provided {
-        Some(pwd) => crate::service::auth::password::verify_password(
-            pwd,
-            stored_hash,
-            password_hash_iterations,
-        ),
+        Some(pwd) => {
+            crate::service::auth::password::verify_password_async(
+                pwd.clone(),
+                stored_hash.clone(),
+                password_hash_iterations,
+            )
+            .await
+        }
         None => false,
     }
 }
@@ -107,7 +110,7 @@ pub async fn upload_link_view(
     let link = validate_upload_link(&state, &token).await?;
 
     // Password check
-    let pw_ok = check_password(&link, &params, state.config.auth.password_hash_iterations);
+    let pw_ok = check_password(&link, &params, state.config.auth.password_hash_iterations).await;
 
     // If password is required but not provided, show password form
     if link.password.is_some() && !pw_ok {
@@ -180,11 +183,12 @@ pub async fn upload_link_view_post(
         .get("password")
         .ok_or_else(|| AppError::BadRequest("password required".into()))?;
 
-    let valid = crate::service::auth::password::verify_password(
-        password,
-        &link.password.unwrap_or_default(),
+    let valid = crate::service::auth::password::verify_password_async(
+        password.clone(),
+        link.password.clone().unwrap_or_default(),
         state.config.auth.password_hash_iterations,
-    );
+    )
+    .await;
 
     if !valid {
         let tpl = ShareAccessValidationTemplate {

@@ -593,7 +593,7 @@ pub async fn resolve_share_link(
 }
 
 /// Check whether the password in the request matches the stored hash.
-pub fn check_share_link_password(
+pub async fn check_share_link_password(
     link: &infra::entity::share_link::Model,
     provided_password: Option<&str>,
     password_hash_iterations: u32,
@@ -604,11 +604,12 @@ pub fn check_share_link_password(
     };
 
     match provided_password {
-        Some(pwd) => Ok(crate::service::auth::password::verify_password(
-            pwd,
-            stored_hash,
+        Some(pwd) => Ok(crate::service::auth::password::verify_password_async(
+            pwd.to_string(),
+            stored_hash.clone(),
             password_hash_iterations,
-        )),
+        )
+        .await),
         None => Ok(false),
     }
 }
