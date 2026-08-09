@@ -8,7 +8,7 @@ use crate::service::auth::token::{ensure_sync_token, generate_sync_token};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{format_size, timestamp_rfc3339};
-use infra::entity::repo;
+use infra::entity::{repo, user};
 
 // ── Response types ──────────────────────────────────────────────────────
 
@@ -164,11 +164,21 @@ impl RepoService {
     ) -> Result<Vec<RepoInfo>, AppError> {
         let memberships = repos.member.find_by_user_id(user_id).await?;
 
+        // Batch-load all member repos in one query instead of one per member.
+        let repo_ids: Vec<String> = memberships.iter().map(|m| m.repo_id.clone()).collect();
+        let repos_map: HashMap<String, repo::Model> = repos
+            .repo
+            .find_by_ids(&repo_ids)
+            .await?
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
+
         let mut result = Vec::new();
         for m in memberships {
-            if let Some(r) = repos.repo.find_by_id(&m.repo_id).await? {
+            if let Some(r) = repos_map.get(&m.repo_id) {
                 result.push(build_repo_info_from_model(
-                    &r,
+                    r,
                     email,
                     &m.permission,
                     user_id,
@@ -667,28 +677,51 @@ impl RepoService {
     ) -> Result<V21RepoListResponse, AppError> {
         let memberships = repos.member.find_by_user_id(user_id).await?;
 
+        // Batch-load all member repos, then the profiles of non-owned repos'
+        // owners, in two queries instead of 1-2 per repo.
+        let repo_ids: Vec<String> = memberships.iter().map(|m| m.repo_id.clone()).collect();
+        let repos_map: HashMap<String, repo::Model> = repos
+            .repo
+            .find_by_ids(&repo_ids)
+            .await?
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
+        let owner_ids: Vec<i32> = repos_map
+            .values()
+            .filter(|r| r.owner_id != user_id)
+            .map(|r| r.owner_id)
+            .collect();
+        let owners: HashMap<i32, user::Model> = repos
+            .user
+            .find_by_ids(&owner_ids)
+            .await?
+            .into_iter()
+            .map(|u| (u.id, u))
+            .collect();
+
         let mut repos_list = Vec::new();
         for m in &memberships {
-            if let Some(r) = repos.repo.find_by_id(&m.repo_id).await? {
-                let is_owner = r.owner_id == user_id;
-                let repo_type = if is_owner { "mine" } else { "shared" };
-                let (owner_email, owner_name) =
-                    resolve_owner(repos, r.owner_id, email, is_owner).await?;
+            let Some(r) = repos_map.get(&m.repo_id) else {
+                continue;
+            };
+            let is_owner = r.owner_id == user_id;
+            let repo_type = if is_owner { "mine" } else { "shared" };
+            let (owner_email, owner_name) = resolve_owner(r.owner_id, email, is_owner, &owners);
 
-                repos_list.push(V21RepoInfo {
-                    repo_id: r.id,
-                    repo_name: r.name,
-                    repo_desc: r.description,
-                    permission: m.permission.clone(),
-                    encrypted: r.encrypted != 0,
-                    type_: repo_type.to_string(),
-                    size: r.size,
-                    last_modified: timestamp_rfc3339(r.updated_at),
-                    mtime: r.updated_at,
-                    owner_email,
-                    owner_name,
-                });
-            }
+            repos_list.push(V21RepoInfo {
+                repo_id: r.id.clone(),
+                repo_name: r.name.clone(),
+                repo_desc: r.description.clone(),
+                permission: m.permission.clone(),
+                encrypted: r.encrypted != 0,
+                type_: repo_type.to_string(),
+                size: r.size,
+                last_modified: timestamp_rfc3339(r.updated_at),
+                mtime: r.updated_at,
+                owner_email,
+                owner_name,
+            });
         }
 
         Ok(V21RepoListResponse { repos: repos_list })
@@ -715,7 +748,16 @@ impl RepoService {
 
         let is_owner = r.owner_id == user_id;
         let repo_type = if is_owner { "mine" } else { "shared" };
-        let (owner_email, owner_name) = resolve_owner(repos, r.owner_id, email, is_owner).await?;
+        let owners: HashMap<i32, user::Model> = if is_owner {
+            HashMap::new()
+        } else {
+            let mut m = HashMap::new();
+            if let Some(u) = repos.user.find_by_id(r.owner_id).await? {
+                m.insert(u.id, u);
+            }
+            m
+        };
+        let (owner_email, owner_name) = resolve_owner(r.owner_id, email, is_owner, &owners);
 
         Ok(V21RepoInfo {
             repo_id: r.id,
@@ -748,12 +790,22 @@ pub async fn load_left_panel_repos(
 ) -> Result<Vec<LeftPanelRepo>, AppError> {
     let members = repos.member.find_by_user_id(user_id).await?;
 
+    // Batch-load member repos in one query instead of one per member.
+    let repo_ids: Vec<String> = members.iter().map(|m| m.repo_id.clone()).collect();
+    let repos_map: HashMap<String, repo::Model> = repos
+        .repo
+        .find_by_ids(&repo_ids)
+        .await?
+        .into_iter()
+        .map(|r| (r.id.clone(), r))
+        .collect();
+
     let mut repo_list = Vec::with_capacity(members.len());
     for m in members {
-        if let Some(r) = repos.repo.find_by_id(&m.repo_id).await? {
+        if let Some(r) = repos_map.get(&m.repo_id) {
             repo_list.push(LeftPanelRepo {
-                id: r.id,
-                name: r.name,
+                id: r.id.clone(),
+                name: r.name.clone(),
                 size_display: format_size(r.size),
             });
         }
@@ -763,21 +815,23 @@ pub async fn load_left_panel_repos(
 
 /// Resolve a repo owner's email + display name, using the requester's email
 /// when the requester owns the repo.
-async fn resolve_owner(
-    repos: &Repositories,
+///
+/// `owners` is a pre-fetched id → user map; callers batch-load it once.
+fn resolve_owner(
     owner_id: i32,
     requester_email: &str,
     is_owner: bool,
-) -> Result<(String, String), AppError> {
+    owners: &HashMap<i32, user::Model>,
+) -> (String, String) {
     if is_owner {
-        Ok((
+        (
             requester_email.to_string(),
             requester_email.split('@').next().unwrap_or("").to_string(),
-        ))
+        )
     } else {
-        match repos.user.find_by_id(owner_id).await? {
-            Some(u) => Ok((u.email.clone(), u.nickname())),
-            None => Ok((String::new(), String::new())),
+        match owners.get(&owner_id) {
+            Some(u) => (u.email.clone(), u.nickname()),
+            None => (String::new(), String::new()),
         }
     }
 }
