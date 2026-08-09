@@ -14,7 +14,7 @@ use infra::storage::DynBlockStorage;
 /// Reindex a file in the background so the full-file read + index write
 /// doesn't block the sync commit response. The 30s background committer
 /// persists the writer afterwards, so the index converges within that window.
-fn spawn_reindex(
+pub(crate) fn spawn_reindex(
     indexer: TextIndexer,
     block_store: DynBlockStorage,
     repo_id: String,

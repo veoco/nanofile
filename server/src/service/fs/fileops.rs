@@ -4,10 +4,11 @@ use sea_orm::DatabaseConnection;
 
 use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
+use crate::service::sync::spawn_reindex;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
-use infra::common::util::{generate_unique_filename, get_head_root_id, join_path};
+use infra::common::util::{generate_unique_filename, join_path};
 use infra::serialization::S_IFDIR;
 
 /// Parse colon-separated file_names into a Vec<String>.
@@ -65,10 +66,12 @@ impl FileOpsService {
         }
 
         let db = self.db();
-        let head_root_id = get_head_root_id(db, repo_id).await?;
 
-        let parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_dir)
+        // Resolve the parent dir and its ancestor chain once, so the tree
+        // update below walks ancestors in O(d) instead of re-resolving every
+        // level from the root (O(d²)).
+        let (parent_fs_id, ancestor_chain) =
+            FileOps::resolve_fs_id_chain(&self.repos, repo_id, parent_dir)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
 
@@ -147,7 +150,7 @@ impl FileOpsService {
             &parent_fs_id,
             email,
             &format!("Deleted {} items", names_to_delete.len()),
-            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
+            &ancestor_chain,
             |dirents| {
                 dirents.retain(|d| !names_to_delete_set.contains(d.name.as_str()));
                 Ok(())
@@ -209,10 +212,11 @@ impl FileOpsService {
         }
 
         let db = self.db();
-        let head_root_id = get_head_root_id(db, repo_id).await?;
 
-        let src_parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, src_parent_dir)
+        // Resolve the source parent dir (chain unused here — the destination
+        // tree update below carries the ancestor chain).
+        let (src_parent_fs_id, _) =
+            FileOps::resolve_fs_id_chain(&self.repos, repo_id, src_parent_dir)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve source dir failed: {e}")))?;
 
@@ -241,8 +245,8 @@ impl FileOpsService {
             });
         }
 
-        let dst_parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, dst_dir)
+        let (dst_parent_fs_id, dst_ancestor_chain) =
+            FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
 
@@ -291,7 +295,7 @@ impl FileOpsService {
             &dst_parent_fs_id,
             email,
             &description,
-            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
+            &dst_ancestor_chain,
             |dirents| {
                 for entry in &entries_to_add {
                     if dirents.iter().any(|d| d.name == entry.name) {
@@ -334,13 +338,17 @@ impl FileOpsService {
             .await;
         }
 
-        // Index copied files
+        // Index copied files in the background — reindexing reads the whole
+        // file from block storage and must not block the batch-copy response.
         if let Some(indexer) = &self.indexer {
             for entry in &entries_to_add {
                 let fp = join_path(dst_dir, &entry.name);
-                if let Err(e) = indexer.reindex_file(repo_id, &fp, &self.block_store).await {
-                    tracing::warn!("Failed to index copied file {}: {e}", entry.name);
-                }
+                spawn_reindex(
+                    indexer.clone(),
+                    self.block_store.clone(),
+                    repo_id.to_string(),
+                    fp,
+                );
             }
         }
 
@@ -371,10 +379,11 @@ impl FileOpsService {
         }
 
         let db = self.db();
-        let head_root_id = get_head_root_id(db, repo_id).await?;
 
-        let src_parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, src_parent_dir)
+        // Resolve the source parent dir and its ancestor chain once, so the
+        // step-1 tree update walks ancestors in O(d) instead of O(d²).
+        let (src_parent_fs_id, src_ancestor_chain) =
+            FileOps::resolve_fs_id_chain(&self.repos, repo_id, src_parent_dir)
                 .await
                 .map_err(|e| AppError::Internal(format!("resolve source dir failed: {e}")))?;
 
@@ -403,7 +412,8 @@ impl FileOpsService {
             });
         }
 
-        let _ = crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, dst_dir)
+        // Pre-validate the destination exists before mutating the source tree.
+        let _ = FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir)
             .await
             .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
 
@@ -419,7 +429,7 @@ impl FileOpsService {
             repo_id,
             src_parent_dir,
             &src_parent_fs_id,
-            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
+            &src_ancestor_chain,
             |dirents| {
                 dirents.retain(|d| !src_names_for_closure.contains(d.name.as_str()));
                 Ok(())
@@ -448,11 +458,11 @@ impl FileOpsService {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        // Step 2: Add entries to destination
-        let new_head_root = get_head_root_id(db, repo_id).await?;
-
-        let new_dst_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &new_head_root, dst_dir)
+        // Step 2: Add entries to destination.
+        // resolve_fs_id_chain reads the repo's latest head commit (the one
+        // created by step 1), matching the previous new_head_root behaviour.
+        let (new_dst_fs_id, dst_ancestor_chain) =
+            FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir)
                 .await
                 .map_err(|e| {
                     AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
@@ -492,7 +502,7 @@ impl FileOpsService {
             &new_dst_fs_id,
             email,
             &remove_desc,
-            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
+            &dst_ancestor_chain,
             |dirents| {
                 for entry in &entries_to_add {
                     if dirents.iter().any(|d| d.name == entry.name) {
@@ -536,7 +546,9 @@ impl FileOpsService {
             .await;
         }
 
-        // Update full-text search index
+        // Update full-text search index. Deleting the old entry is cheap and
+        // stays synchronous; reindexing reads the whole file, so it runs in
+        // the background.
         if let Some(indexer) = &self.indexer {
             for entry in &entries_to_move {
                 let old_fp = join_path(src_parent_dir, &entry.name);
@@ -544,12 +556,12 @@ impl FileOpsService {
                 if let Err(e) = indexer.delete_file(repo_id, &old_fp) {
                     tracing::warn!("Failed to delete old index on batch move: {e}");
                 }
-                if let Err(e) = indexer
-                    .reindex_file(repo_id, &new_fp, &self.block_store)
-                    .await
-                {
-                    tracing::warn!("Failed to reindex on batch move: {e}");
-                }
+                spawn_reindex(
+                    indexer.clone(),
+                    self.block_store.clone(),
+                    repo_id.to_string(),
+                    new_fp,
+                );
             }
         }
 
