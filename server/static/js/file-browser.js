@@ -177,6 +177,10 @@
   };
 
   // ─── Right panel ─────────────────────────────────────────────────────
+  // Monotonic id used to discard stale right-panel tag responses when the
+  // selection changes faster than the metadata requests resolve.
+  var rpTagsReqId = 0;
+
   window.openRightPanel = function (d) {
     // d = { name, type, starred, extension, path, repoId, modifierEmail,
     //       thumbnailUrl, thumbnailUrlLarge, isPreviewable, downloadUrl, isVideo }
@@ -362,9 +366,13 @@
     var noTags = ct.querySelector(".js-rp-no-tags");
     var addTagBtn = ct.querySelector(".js-rp-tag-add");
     if (tagsSection && tagsList && d.repoId && d.recordId) {
-      tagsSection.classList.add("hidden");
+      // Keep the section visible while tags load so the panel layout doesn't
+      // shift when they arrive; the chip row height is reserved via min-h.
+      tagsSection.classList.remove("hidden");
       tagsList.innerHTML = "";
       noTags.classList.add("hidden");
+      if (tagInput) tagInput.value = "";
+      var tagsReqId = ++rpTagsReqId; // discard stale responses from earlier selections
 
       var repoId = d.repoId;
       var recordId = d.recordId;
@@ -414,6 +422,7 @@
         window.apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/tags/?start=0&limit=1000").then(function (r) { return r.json(); }),
         window.apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/record/?parent_dir=" + encodeURIComponent(parentDir) + "&name=" + encodeURIComponent(fileName) + "&file_name=" + encodeURIComponent(fileName)).then(function (r) { return r.json(); }),
       ]).then(function (results) {
+        if (tagsReqId !== rpTagsReqId) return; // stale response
         var tagData = results[0] || {};
         var recData = results[1] || {};
         allTags = (tagData.results || []).map(function (t) {
@@ -430,9 +439,9 @@
         var rec = (recData.results || [])[0] || {};
         fileTagIds = (rec._tags || []).map(function (l) { return l.row_id; });
         renderTagChips();
-        tagsSection.classList.remove("hidden");
       }).catch(function () {
-        tagsSection.classList.add("hidden");
+        if (tagsReqId !== rpTagsReqId) return; // stale response
+        noTags.classList.remove("hidden");
       });
 
       if (addTagBtn && tagInput) {

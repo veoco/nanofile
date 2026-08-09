@@ -422,7 +422,8 @@
                  data-thumbnail-url-large="{{ entry.image_thumbnail_url_large.as_deref().unwrap_or("") }}"
                  data-is-previewable="{{ entry.is_previewable }}"
                  data-is-video="{{ entry.is_video }}"
-                 data-is-audio="{{ entry.is_audio }}">
+                 data-is-audio="{{ entry.is_audio }}"
+                 data-record-id="{{ entry.record_id }}">
                 {% if entry.is_video %}
                 {% if let Some(thumb_url) = entry.image_thumbnail_url_large %}
                 <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy"
