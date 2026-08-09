@@ -82,67 +82,112 @@ pub async fn search_page(
         // Phase 1: Full-text search via Tantivy (when available).
         // This runs for both filename-only and content searches, avoiding
         // the expensive FS tree walk for filename matching.
+        let mut index_ok = false;
         if let Some(indexer) = &state.indexer {
             let ft_results = match indexer
                 .search(&q, &repo_ids, 200, 0, search_filename_only)
                 .await
             {
-                Ok(r) => r,
+                Ok(r) => {
+                    index_ok = true;
+                    r
+                }
                 Err(e) => {
                     tracing::warn!("Tantivy search failed: {e}");
                     Vec::new()
                 }
             };
+            // Group hits by repo so the repo record + head commit are
+            // resolved once per repo instead of once per hit.
+            let mut repo_cache: std::collections::HashMap<String, (String, String)> =
+                std::collections::HashMap::new();
             for (found_repo_id, found_fullpath) in &ft_results {
                 if !seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
                     continue;
                 }
-                if let Some(item) =
-                    resolve_file_metadata(&state.repos, found_repo_id, found_fullpath).await
+                let (repo_name, root_id) = if let Some(t) = repo_cache.get(found_repo_id) {
+                    t.clone()
+                } else {
+                    let repo_record = match state.repos.repo.find_by_id(found_repo_id).await {
+                        Ok(Some(r)) => r,
+                        _ => continue,
+                    };
+                    let head_commit_id = match &repo_record.head_commit_id {
+                        Some(id) => id.clone(),
+                        None => continue,
+                    };
+                    let head = match state
+                        .repos
+                        .commit
+                        .find_by_repo_and_commit_id(found_repo_id, &head_commit_id)
+                        .await
+                    {
+                        Ok(Some(h)) => h,
+                        _ => continue,
+                    };
+                    if head.root_id == EMPTY_SHA1 {
+                        continue;
+                    }
+                    let t = (repo_record.name.clone(), head.root_id.clone());
+                    repo_cache.insert(found_repo_id.clone(), t.clone());
+                    t
+                };
+                if let Some(item) = resolve_file_metadata(
+                    &state.repos,
+                    found_repo_id,
+                    &repo_name,
+                    &root_id,
+                    found_fullpath,
+                )
+                .await
                 {
                     all_results.push(item);
                 }
             }
         }
 
-        // Phase 2: Filename search via FS tree walk (fallback for repos
-        // not covered by the index, or when the indexer is disabled).
-        for repo_id in &repo_ids {
-            let repo_record = match state.repos.repo.find_by_id(repo_id).await {
-                Ok(Some(r)) => r,
-                _ => continue,
-            };
+        // Phase 2: Filename search via FS tree walk. Skip it when a full-text
+        // index already produced filename results (see indexer.rs) — the walk
+        // issues one DB query per directory in the repo. Fall back to it when
+        // there is no index or the index query failed.
+        if !(search_filename_only && index_ok) {
+            for repo_id in &repo_ids {
+                let repo_record = match state.repos.repo.find_by_id(repo_id).await {
+                    Ok(Some(r)) => r,
+                    _ => continue,
+                };
 
-            let head_commit_id = match &repo_record.head_commit_id {
-                Some(id) => id.clone(),
-                None => continue,
-            };
+                let head_commit_id = match &repo_record.head_commit_id {
+                    Some(id) => id.clone(),
+                    None => continue,
+                };
 
-            let head = match state
-                .repos
-                .commit
-                .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-                .await
-            {
-                Ok(Some(h)) => h,
-                _ => continue,
-            };
+                let head = match state
+                    .repos
+                    .commit
+                    .find_by_repo_and_commit_id(repo_id, &head_commit_id)
+                    .await
+                {
+                    Ok(Some(h)) => h,
+                    _ => continue,
+                };
 
-            if head.root_id == EMPTY_SHA1 {
-                continue;
+                if head.root_id == EMPTY_SHA1 {
+                    continue;
+                }
+
+                search_fs_tree(
+                    &state.repos,
+                    repo_id,
+                    &repo_record.name,
+                    &head.root_id,
+                    "",
+                    &q,
+                    &mut all_results,
+                    &mut seen,
+                )
+                .await;
             }
-
-            search_fs_tree(
-                &state.repos,
-                repo_id,
-                &repo_record.name,
-                &head.root_id,
-                "",
-                &q,
-                &mut all_results,
-                &mut seen,
-            )
-            .await;
         }
 
         // Sort: directories first, then by name.
@@ -187,19 +232,16 @@ pub async fn search_page(
 
 /// Resolve file metadata from DB to build a SearchResultItem for a
 /// (repo_id, fullpath) pair discovered by full-text search.
+///
+/// `repo_name`/`root_id` are resolved once per repo by the caller so the
+/// repo record + head commit are not re-fetched for every hit.
 async fn resolve_file_metadata(
     repos: &crate::repository::Repositories,
     repo_id: &str,
+    repo_name: &str,
+    root_id: &str,
     fullpath: &str,
 ) -> Option<SearchResultItem> {
-    let repo_record = repos.repo.find_by_id(repo_id).await.ok()??;
-    let head_commit_id = repo_record.head_commit_id.as_ref()?;
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, head_commit_id)
-        .await
-        .ok()??;
-    let root_id = &head.root_id;
     if root_id == EMPTY_SHA1 {
         return None;
     }
@@ -219,7 +261,7 @@ async fn resolve_file_metadata(
     };
 
     let parent_fs_id = if parent_path == "/" {
-        root_id.clone()
+        root_id.to_string()
     } else {
         crate::fs::core::resolve_fs_id(repos, repo_id, root_id, parent_path)
             .await
@@ -247,7 +289,7 @@ async fn resolve_file_metadata(
 
     Some(SearchResultItem {
         repo_id: repo_id.to_string(),
-        repo_name: repo_record.name,
+        repo_name: repo_name.to_string(),
         name: entry.name.clone(),
         oid: entry.id.clone(),
         last_modified: entry.mtime,
@@ -295,62 +337,75 @@ async fn search_fs_tree(
     seen: &mut std::collections::HashSet<(String, String)>,
 ) {
     let keyword_lower = keyword.to_lowercase();
-    let mut stack: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
+    // Level frontier: each level reads all its directories with one batched
+    // `IN` query (O(#dirs) → O(depth)).
+    let mut frontier: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
 
-    while let Some((fs_id, path)) = stack.pop() {
-        if fs_id == EMPTY_SHA1 {
-            continue;
-        }
-
-        let dir_data = match crate::fs::core::read_fs_dir_data(repos, repo_id, &fs_id).await {
-            Ok(data) => data,
-            Err(_) => continue,
+    while !frontier.is_empty() {
+        let ids: Vec<String> = frontier
+            .iter()
+            .map(|(fs_id, _)| fs_id.clone())
+            .filter(|id| id != EMPTY_SHA1)
+            .collect();
+        let dir_map = match crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &ids).await {
+            Ok(m) => m,
+            Err(_) => break,
         };
+        let mut next: Vec<(String, String)> = Vec::new();
 
-        for entry in &dir_data.dirents {
-            let full_path = if path.is_empty() {
-                format!("/{}", entry.name)
-            } else if path.starts_with('/') {
-                format!("{}/{}", path, entry.name)
-            } else {
-                format!("/{}/{}", path, entry.name)
+        for (fs_id, path) in &frontier {
+            // Missing/EMPTY dirs are absent from the batch map → skip.
+            let Some(dir_data) = dir_map.get(fs_id) else {
+                continue;
             };
 
-            if entry.name.to_lowercase().contains(&keyword_lower) {
-                let key = (repo_id.to_string(), full_path.clone());
-                if !seen.insert(key) {
-                    continue; // Already seen from full-text search
-                }
-                let is_dir = entry.mode & infra::serialization::S_IFDIR != 0;
-                let dir_url = if is_dir {
-                    format!("/libraries/{}/files{}", repo_id, full_path)
+            for entry in &dir_data.dirents {
+                let full_path = if path.is_empty() {
+                    format!("/{}", entry.name)
+                } else if path.starts_with('/') {
+                    format!("{}/{}", path, entry.name)
                 } else {
-                    let parent = full_path
-                        .rsplit_once('/')
-                        .map(|(parent, _)| parent)
-                        .unwrap_or("/");
-                    format!("/libraries/{}/files{}", repo_id, parent)
+                    format!("/{}/{}", path, entry.name)
                 };
-                results.push(SearchResultItem {
-                    repo_id: repo_id.to_string(),
-                    repo_name: repo_name.to_string(),
-                    name: entry.name.clone(),
-                    oid: entry.id.clone(),
-                    last_modified: entry.mtime,
-                    last_modified_readable: chrono::DateTime::from_timestamp(entry.mtime, 0)
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                        .unwrap_or_else(|| entry.mtime.to_string()),
-                    size_display: format_size(entry.size),
-                    fullpath: full_path.clone(),
-                    size: entry.size,
-                    is_dir,
-                    dir_url,
-                });
-            }
 
-            if entry.mode & infra::serialization::S_IFDIR != 0 {
-                stack.push((entry.id.clone(), full_path));
+                if entry.name.to_lowercase().contains(&keyword_lower) {
+                    let key = (repo_id.to_string(), full_path.clone());
+                    if !seen.insert(key) {
+                        continue; // Already seen from full-text search
+                    }
+                    let is_dir = entry.mode & infra::serialization::S_IFDIR != 0;
+                    let dir_url = if is_dir {
+                        format!("/libraries/{}/files{}", repo_id, full_path)
+                    } else {
+                        let parent = full_path
+                            .rsplit_once('/')
+                            .map(|(parent, _)| parent)
+                            .unwrap_or("/");
+                        format!("/libraries/{}/files{}", repo_id, parent)
+                    };
+                    results.push(SearchResultItem {
+                        repo_id: repo_id.to_string(),
+                        repo_name: repo_name.to_string(),
+                        name: entry.name.clone(),
+                        oid: entry.id.clone(),
+                        last_modified: entry.mtime,
+                        last_modified_readable: chrono::DateTime::from_timestamp(entry.mtime, 0)
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                            .unwrap_or_else(|| entry.mtime.to_string()),
+                        size_display: format_size(entry.size),
+                        fullpath: full_path.clone(),
+                        size: entry.size,
+                        is_dir,
+                        dir_url,
+                    });
+                }
+
+                if entry.mode & infra::serialization::S_IFDIR != 0 {
+                    next.push((entry.id.clone(), full_path));
+                }
             }
         }
+
+        frontier = next;
     }
 }

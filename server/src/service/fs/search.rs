@@ -61,12 +61,49 @@ impl SearchService {
             {
                 Ok(ft_results) => {
                     index_ok = true;
+                    // Group hits by repo so the repo record + head commit are
+                    // resolved once per repo instead of once per hit.
+                    let mut repo_cache: std::collections::HashMap<String, (String, String)> =
+                        std::collections::HashMap::new();
                     for (found_repo_id, found_fullpath) in &ft_results {
                         if !seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
                             continue;
                         }
+                        let (repo_name, root_id) = if let Some(t) = repo_cache.get(found_repo_id) {
+                            t.clone()
+                        } else {
+                            let repo_record = match self.repos.repo.find_by_id(found_repo_id).await
+                            {
+                                Ok(Some(r)) => r,
+                                _ => continue,
+                            };
+                            let head_commit_id = match &repo_record.head_commit_id {
+                                Some(id) => id.clone(),
+                                None => continue,
+                            };
+                            let head = match self
+                                .repos
+                                .commit
+                                .find_by_repo_and_commit_id(found_repo_id, &head_commit_id)
+                                .await
+                            {
+                                Ok(Some(h)) => h,
+                                _ => continue,
+                            };
+                            if head.root_id == EMPTY_SHA1 {
+                                continue;
+                            }
+                            let t = (repo_record.name.clone(), head.root_id.clone());
+                            repo_cache.insert(found_repo_id.clone(), t.clone());
+                            t
+                        };
                         if let Some(meta) = self
-                            .resolve_file_metadata(found_repo_id, found_fullpath)
+                            .resolve_file_metadata(
+                                found_repo_id,
+                                &repo_name,
+                                &root_id,
+                                found_fullpath,
+                            )
                             .await
                         {
                             all_results.push(meta);
@@ -170,20 +207,17 @@ impl SearchService {
     }
 
     /// Resolve file metadata to build a FileSearchResult.
+    ///
+    /// `repo_name`/`root_id` are resolved once per repo by the caller (see
+    /// [`SearchService::search`]) so the repo record + head commit are not
+    /// re-fetched for every hit.
     async fn resolve_file_metadata(
         &self,
         repo_id: &str,
+        repo_name: &str,
+        root_id: &str,
         fullpath: &str,
     ) -> Option<FileSearchResult> {
-        let repo_record = self.repos.repo.find_by_id(repo_id).await.ok()??;
-        let head_commit_id = repo_record.head_commit_id.as_ref()?;
-        let head = self
-            .repos
-            .commit
-            .find_by_repo_and_commit_id(repo_id, head_commit_id)
-            .await
-            .ok()??;
-        let root_id = &head.root_id;
         if root_id == EMPTY_SHA1 {
             return None;
         }
@@ -205,7 +239,7 @@ impl SearchService {
         };
 
         let parent_fs_id = if parent_path == "/" {
-            root_id.clone()
+            root_id.to_string()
         } else {
             crate::fs::core::resolve_fs_id(&self.repos, repo_id, root_id, &parent_path)
                 .await
@@ -231,7 +265,7 @@ impl SearchService {
 
         Some(FileSearchResult {
             repo_id: repo_id.to_string(),
-            repo_name: repo_record.name,
+            repo_name: repo_name.to_string(),
             name: entry.name.clone(),
             oid: entry.id.clone(),
             last_modified: entry.mtime,
