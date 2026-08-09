@@ -205,7 +205,7 @@
     stopRightPanelMedia();
 
     // Hide all preview variants first
-    if (thumbImg) { thumbImg.classList.add("hidden"); thumbImg.style.display = ""; thumbImg.src = ""; }
+    if (thumbImg) { thumbImg.classList.add("hidden"); thumbImg.style.display = ""; thumbImg.removeAttribute("src"); }
     if (extBadge) extBadge.classList.add("hidden");
     if (folderIcon) folderIcon.classList.add("hidden");
     if (videoIcon) videoIcon.classList.add("hidden");
@@ -647,6 +647,10 @@
   // or ffmpeg unavailable) — fall back to the extension badge next to it.
   window.thumbFailed = function (img) {
     img.style.display = "none";
+    // Ignore errors for thumbnails that are not part of the active preview (e.g.
+    // a just-cleared right-panel thumbnail); otherwise the fallback badge below
+    // would be revealed for the previously selected file.
+    if (img.classList.contains("hidden")) return;
     // List thumbnails: show the small extension fallback badge next to the icon.
     var fb = img.parentElement ? img.parentElement.querySelector(".js-thb-fallback") : null;
     if (fb) {
