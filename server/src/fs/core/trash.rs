@@ -753,11 +753,10 @@ async fn build_repo_name_lookup(
     repos: &Repositories,
     repo_ids: &[String],
 ) -> Result<HashMap<String, String>, AppError> {
+    // One batched IN query instead of one query per repo (P3-4).
     let mut names = HashMap::new();
-    for rid in repo_ids {
-        if let Some(r) = repos.repo.find_by_id(rid).await? {
-            names.insert(rid.clone(), r.name);
-        }
+    for r in repos.repo.find_by_ids(repo_ids).await? {
+        names.insert(r.id.clone(), r.name);
     }
     Ok(names)
 }
