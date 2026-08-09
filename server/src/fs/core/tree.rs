@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use crate::repository::Repositories;
-use base::common::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+use base::common::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE};
 use base::error::AppError;
 use infra::common::EMPTY_SHA1;
+use infra::entity::fs_object;
 
 /// Read and parse a directory fs_object (FsDirData) from the database.
 pub async fn read_fs_dir_data(
@@ -43,6 +46,83 @@ pub async fn read_fs_file_data(
     let data: FsFileData =
         serde_json::from_str(&obj.data).map_err(|e| AppError::internal(e.to_string()))?;
     Ok(data)
+}
+
+/// SQLite's variable limit (~999) caps `IN` clause width; chunk ID lists so
+/// wide directories never trip it.
+const IN_BATCH: usize = 500;
+
+/// Fetch the given fs_objects in one batched `IN` query per chunk, keyed by
+/// fs_id. Missing ids are simply absent from the map.
+async fn fetch_fs_object_map(
+    repos: &Repositories,
+    repo_id: &str,
+    fs_ids: &[String],
+) -> Result<HashMap<String, fs_object::Model>, AppError> {
+    let mut map = HashMap::with_capacity(fs_ids.len());
+    for chunk in fs_ids.chunks(IN_BATCH) {
+        for obj in repos
+            .fs_object
+            .find_by_repo_and_fs_ids(repo_id, chunk)
+            .await?
+        {
+            map.insert(obj.fs_id.clone(), obj);
+        }
+    }
+    Ok(map)
+}
+
+/// Batch version of `read_fs_dir_data` for a list of directory ids.
+///
+/// `EMPTY_SHA1` sentinels are skipped and non-directory / missing ids are
+/// absent from the result map, mirroring the per-id semantics
+/// (`Err(_) => continue`).
+pub async fn read_fs_dir_data_batch(
+    repos: &Repositories,
+    repo_id: &str,
+    fs_ids: &[String],
+) -> Result<HashMap<String, FsDirData>, AppError> {
+    let ids: Vec<String> = fs_ids
+        .iter()
+        .filter(|id| *id != EMPTY_SHA1)
+        .cloned()
+        .collect();
+    let map = fetch_fs_object_map(repos, repo_id, &ids).await?;
+    let mut out = HashMap::with_capacity(map.len());
+    for (fs_id, obj) in map {
+        if obj.obj_type != SEAF_METADATA_TYPE_DIR as i8 {
+            continue;
+        }
+        let data: FsDirData =
+            serde_json::from_str(&obj.data).map_err(|e| AppError::internal(e.to_string()))?;
+        out.insert(fs_id, data);
+    }
+    Ok(out)
+}
+
+/// Batch version of `read_fs_file_data` for a list of file ids. Non-file ids
+/// are absent from the result map.
+pub async fn read_fs_file_data_batch(
+    repos: &Repositories,
+    repo_id: &str,
+    fs_ids: &[String],
+) -> Result<HashMap<String, FsFileData>, AppError> {
+    let ids: Vec<String> = fs_ids
+        .iter()
+        .filter(|id| *id != EMPTY_SHA1)
+        .cloned()
+        .collect();
+    let map = fetch_fs_object_map(repos, repo_id, &ids).await?;
+    let mut out = HashMap::with_capacity(map.len());
+    for (fs_id, obj) in map {
+        if obj.obj_type != SEAF_METADATA_TYPE_FILE as i8 {
+            continue;
+        }
+        let data: FsFileData =
+            serde_json::from_str(&obj.data).map_err(|e| AppError::internal(e.to_string()))?;
+        out.insert(fs_id, data);
+    }
+    Ok(out)
 }
 
 /// Traverse the FS tree from root_fs_id following path segments,

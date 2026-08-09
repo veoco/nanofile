@@ -20,5 +20,8 @@ pub use gc::GcManager;
 pub use lock::{check_commit_file_locks, upsert_lock_timestamp};
 pub use size::{adjust_repo_size, compute_repo_size, compute_tree_size, get_entry_total_size};
 pub use store::{store_fs_dir_object, store_fs_file_object};
-pub use tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
+pub use tree::{
+    read_fs_dir_data, read_fs_dir_data_batch, read_fs_file_data, read_fs_file_data_batch,
+    resolve_fs_id,
+};
 pub use tree_diff::diff_trees;

@@ -1,12 +1,10 @@
-use std::collections::VecDeque;
-
 use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::EMPTY_SHA1;
 use infra::common::util::basename;
 use infra::serialization::S_IFDIR;
 
-use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
+use crate::fs::core::{read_fs_dir_data, read_fs_dir_data_batch, resolve_fs_id};
 
 /// Compute the total size of all files in a repository by recursively
 /// traversing the FS tree from the repo's head commit.
@@ -45,26 +43,29 @@ pub async fn compute_tree_size(
     }
 
     let mut total: i64 = 0;
-    let mut queue = VecDeque::new();
-    queue.push_back(root_fs_id.to_string());
+    // Level frontier: each level reads all its directories with one batched
+    // `IN` query (O(#dirs) → O(depth)).
+    let mut frontier: Vec<String> = vec![root_fs_id.to_string()];
 
-    while let Some(fs_id) = queue.pop_front() {
-        if fs_id == EMPTY_SHA1 {
-            continue;
-        }
+    while !frontier.is_empty() {
+        let dir_map = read_fs_dir_data_batch(repos, repo_id, &frontier).await?;
+        let mut next: Vec<String> = Vec::new();
 
-        let dir_data = match read_fs_dir_data(repos, repo_id, &fs_id).await {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-
-        for entry in &dir_data.dirents {
-            if entry.mode & S_IFDIR != 0 {
-                queue.push_back(entry.id.clone());
-            } else {
-                total += entry.size;
+        for fs_id in &frontier {
+            // Missing/EMPTY dirs are absent from the batch map → skip.
+            let Some(dir_data) = dir_map.get(fs_id) else {
+                continue;
+            };
+            for entry in &dir_data.dirents {
+                if entry.mode & S_IFDIR != 0 {
+                    next.push(entry.id.clone());
+                } else {
+                    total += entry.size;
+                }
             }
         }
+
+        frontier = next;
     }
 
     Ok(total)

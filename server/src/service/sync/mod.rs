@@ -141,27 +141,33 @@ impl SyncService {
         root_fs_id: &str,
     ) -> Result<HashSet<String>, AppError> {
         let mut collected = HashSet::new();
-        let mut stack = vec![root_fs_id.to_string()];
-        while let Some(fs_id) = stack.pop() {
-            if collected.contains(&fs_id) {
-                continue;
-            }
-            if let Some(fs_obj) = self
+        // Level frontier: each level fetches all its fs_objects with one
+        // batched `IN` query (O(#objects) → O(depth)).
+        let mut frontier = vec![root_fs_id.to_string()];
+        while !frontier.is_empty() {
+            let objects = self
                 .repos
                 .fs_object
-                .find_by_repo_and_fs_id(repo_id, &fs_id)
-                .await?
-            {
-                collected.insert(fs_id);
+                .find_by_repo_and_fs_ids(repo_id, &frontier)
+                .await?;
+            let mut next = Vec::new();
+            for fs_obj in objects {
+                if collected.contains(&fs_obj.fs_id) {
+                    continue;
+                }
+                collected.insert(fs_obj.fs_id.clone());
                 if fs_obj.obj_type == SEAF_METADATA_TYPE_DIR as i8
                     && let Ok(dir_data) =
                         serde_json::from_str::<base::common::FsDirData>(&fs_obj.data)
                 {
                     for entry in &dir_data.dirents {
-                        stack.push(entry.id.clone());
+                        if !collected.contains(&entry.id) {
+                            next.push(entry.id.clone());
+                        }
                     }
                 }
             }
+            frontier = next;
         }
         Ok(collected)
     }
@@ -352,115 +358,141 @@ impl SyncService {
                 prefix: String,
             }
 
-            let mut stack: Vec<DiffFrame> = vec![DiffFrame {
+            // Level frontier: each level fetches all base and new directories
+            // with two batched IN queries instead of two queries per frame.
+            let mut frontier: Vec<DiffFrame> = vec![DiffFrame {
                 base_fs_id: Some(base_root.to_string()),
                 new_fs_id: new_root_id.to_string(),
                 prefix: String::new(),
             }];
 
-            while let Some(frame) = stack.pop() {
-                let Some(ref base_fs) = frame.base_fs_id else {
-                    let new_dir = match crate::fs::core::read_fs_dir_data(
-                        &self.repos,
-                        repo_id,
-                        &frame.new_fs_id,
-                    )
-                    .await
-                    {
-                        Ok(d) => d,
-                        Err(_) => continue,
-                    };
-                    for entry in &new_dir.dirents {
-                        let child = if frame.prefix.is_empty() {
-                            entry.name.clone()
-                        } else {
-                            format!("{}/{}", frame.prefix, entry.name)
-                        };
-                        if entry.mode & infra::serialization::S_IFDIR != 0 {
-                            stack.push(DiffFrame {
-                                base_fs_id: None,
-                                new_fs_id: entry.id.clone(),
-                                prefix: child,
-                            });
-                        } else {
-                            *size_delta += entry.size;
-                            self.check_file_blocks(repo_id, &entry.id, &child, missing)
-                                .await?;
-                        }
+            while !frontier.is_empty() {
+                let mut new_ids = Vec::new();
+                let mut base_ids = Vec::new();
+                for frame in &frontier {
+                    new_ids.push(frame.new_fs_id.clone());
+                    if let Some(b) = &frame.base_fs_id {
+                        base_ids.push(b.clone());
                     }
-                    continue;
+                }
+                let new_map =
+                    crate::fs::core::read_fs_dir_data_batch(&self.repos, repo_id, &new_ids).await?;
+                let base_map = if base_ids.is_empty() {
+                    HashMap::new()
+                } else {
+                    crate::fs::core::read_fs_dir_data_batch(&self.repos, repo_id, &base_ids).await?
                 };
 
-                if *base_fs == frame.new_fs_id {
-                    continue;
-                }
-                if *base_fs == infra::common::EMPTY_SHA1 {
-                    stack.push(DiffFrame {
-                        base_fs_id: None,
-                        new_fs_id: frame.new_fs_id,
-                        prefix: frame.prefix,
-                    });
-                    continue;
-                }
+                // Files needing block checks are batched into one file-object
+                // fetch per level.
+                let mut pending_files: Vec<(String, String)> = Vec::new();
+                let mut next: Vec<DiffFrame> = Vec::new();
 
-                let base_dir =
-                    match crate::fs::core::read_fs_dir_data(&self.repos, repo_id, base_fs).await {
-                        Ok(d) => d,
-                        Err(_) => continue,
-                    };
-                let new_dir =
-                    match crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &frame.new_fs_id)
-                        .await
-                    {
-                        Ok(d) => d,
-                        Err(_) => continue,
-                    };
-
-                let base_map: HashMap<&str, &base::common::DirEntryData> = base_dir
-                    .dirents
-                    .iter()
-                    .map(|d| (d.name.as_str(), d))
-                    .collect();
-
-                for new_entry in &new_dir.dirents {
-                    let child = if frame.prefix.is_empty() {
-                        new_entry.name.clone()
-                    } else {
-                        format!("{}/{}", frame.prefix, new_entry.name)
-                    };
-                    let is_dir = new_entry.mode & infra::serialization::S_IFDIR != 0;
-                    match base_map.get(new_entry.name.as_str()) {
-                        None => {
-                            if is_dir {
-                                stack.push(DiffFrame {
+                for frame in &frontier {
+                    let Some(base_fs) = &frame.base_fs_id else {
+                        let Some(new_dir) = new_map.get(&frame.new_fs_id) else {
+                            continue;
+                        };
+                        for entry in &new_dir.dirents {
+                            let child = if frame.prefix.is_empty() {
+                                entry.name.clone()
+                            } else {
+                                format!("{}/{}", frame.prefix, entry.name)
+                            };
+                            if entry.mode & infra::serialization::S_IFDIR != 0 {
+                                next.push(DiffFrame {
                                     base_fs_id: None,
-                                    new_fs_id: new_entry.id.clone(),
+                                    new_fs_id: entry.id.clone(),
                                     prefix: child,
                                 });
                             } else {
-                                *size_delta += new_entry.size;
-                                self.check_file_blocks(repo_id, &new_entry.id, &child, missing)
-                                    .await?;
+                                *size_delta += entry.size;
+                                pending_files.push((entry.id.clone(), child));
                             }
                         }
-                        Some(base_entry) => {
-                            if new_entry.id == base_entry.id {
-                                continue;
+                        continue;
+                    };
+
+                    if *base_fs == frame.new_fs_id {
+                        continue;
+                    }
+                    if *base_fs == infra::common::EMPTY_SHA1 {
+                        next.push(DiffFrame {
+                            base_fs_id: None,
+                            new_fs_id: frame.new_fs_id.clone(),
+                            prefix: frame.prefix.clone(),
+                        });
+                        continue;
+                    }
+
+                    let (Some(base_dir), Some(new_dir)) =
+                        (base_map.get(base_fs), new_map.get(&frame.new_fs_id))
+                    else {
+                        continue;
+                    };
+
+                    let base_entries: HashMap<&str, &base::common::DirEntryData> = base_dir
+                        .dirents
+                        .iter()
+                        .map(|d| (d.name.as_str(), d))
+                        .collect();
+
+                    for new_entry in &new_dir.dirents {
+                        let child = if frame.prefix.is_empty() {
+                            new_entry.name.clone()
+                        } else {
+                            format!("{}/{}", frame.prefix, new_entry.name)
+                        };
+                        let is_dir = new_entry.mode & infra::serialization::S_IFDIR != 0;
+                        match base_entries.get(new_entry.name.as_str()) {
+                            None => {
+                                if is_dir {
+                                    next.push(DiffFrame {
+                                        base_fs_id: None,
+                                        new_fs_id: new_entry.id.clone(),
+                                        prefix: child,
+                                    });
+                                } else {
+                                    *size_delta += new_entry.size;
+                                    pending_files.push((new_entry.id.clone(), child));
+                                }
                             }
-                            if is_dir && (base_entry.mode & infra::serialization::S_IFDIR != 0) {
-                                stack.push(DiffFrame {
-                                    base_fs_id: Some(base_entry.id.clone()),
-                                    new_fs_id: new_entry.id.clone(),
-                                    prefix: child,
-                                });
-                            } else {
-                                *size_delta += new_entry.size - base_entry.size;
-                                self.check_file_blocks(repo_id, &new_entry.id, &child, missing)
-                                    .await?;
+                            Some(base_entry) => {
+                                if new_entry.id == base_entry.id {
+                                    continue;
+                                }
+                                if is_dir && (base_entry.mode & infra::serialization::S_IFDIR != 0)
+                                {
+                                    next.push(DiffFrame {
+                                        base_fs_id: Some(base_entry.id.clone()),
+                                        new_fs_id: new_entry.id.clone(),
+                                        prefix: child,
+                                    });
+                                } else {
+                                    *size_delta += new_entry.size - base_entry.size;
+                                    pending_files.push((new_entry.id.clone(), child));
+                                }
                             }
                         }
                     }
                 }
+
+                if !pending_files.is_empty() {
+                    let file_ids: Vec<String> =
+                        pending_files.iter().map(|(id, _)| id.clone()).collect();
+                    let file_map =
+                        crate::fs::core::read_fs_file_data_batch(&self.repos, repo_id, &file_ids)
+                            .await?;
+                    for (fs_id, path) in &pending_files {
+                        if let Some(file_data) = file_map.get(fs_id)
+                            && self.check_blocks_concurrent(&file_data.block_ids).await
+                        {
+                            missing.push(path.clone());
+                        }
+                    }
+                }
+
+                frontier = next;
             }
         } else {
             self.full_check_blocks(repo_id, new_root_id, missing, size_delta)
@@ -477,66 +509,62 @@ impl SyncService {
         missing: &mut Vec<String>,
         size_total: &mut i64,
     ) -> Result<(), AppError> {
-        let mut stack: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
-        while let Some((fs_id, path)) = stack.pop() {
-            if fs_id == EMPTY_SHA1 {
-                continue;
-            }
-            let obj = match self
+        struct Frame {
+            fs_id: String,
+            path: String,
+        }
+
+        // Level frontier: each level fetches all its fs_objects with one
+        // batched IN query (O(#objects) → O(depth)).
+        let mut frontier: Vec<Frame> = vec![Frame {
+            fs_id: root_id.to_string(),
+            path: String::new(),
+        }];
+
+        while !frontier.is_empty() {
+            let ids: Vec<String> = frontier
+                .iter()
+                .map(|f| f.fs_id.clone())
+                .filter(|id| id != EMPTY_SHA1)
+                .collect();
+            let objects = self
                 .repos
                 .fs_object
-                .find_by_repo_and_fs_id(repo_id, &fs_id)
-                .await?
-            {
-                Some(o) => o,
-                None => continue,
-            };
-            if obj.obj_type == 1 {
-                let file_data: base::common::FsFileData = serde_json::from_str(&obj.data)
-                    .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
-                *size_total += file_data.size;
-                if self.check_blocks_concurrent(&file_data.block_ids).await {
-                    missing.push(path.clone());
-                }
-            } else if obj.obj_type == 3 {
-                let dir_data: base::common::FsDirData = serde_json::from_str(&obj.data)
-                    .map_err(|e| AppError::Internal(format!("invalid dir object: {e}")))?;
-                for entry in &dir_data.dirents {
-                    let child_path = if path.is_empty() {
-                        entry.name.clone()
-                    } else {
-                        format!("{}/{}", path, entry.name)
-                    };
-                    stack.push((entry.id.clone(), child_path));
+                .find_by_repo_and_fs_ids(repo_id, &ids)
+                .await?;
+            let obj_map: HashMap<String, infra::entity::fs_object::Model> =
+                objects.into_iter().map(|o| (o.fs_id.clone(), o)).collect();
+            let mut next: Vec<Frame> = Vec::new();
+
+            for frame in &frontier {
+                let Some(obj) = obj_map.get(&frame.fs_id) else {
+                    continue;
+                };
+                if obj.obj_type == 1 {
+                    let file_data: base::common::FsFileData = serde_json::from_str(&obj.data)
+                        .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
+                    *size_total += file_data.size;
+                    if self.check_blocks_concurrent(&file_data.block_ids).await {
+                        missing.push(frame.path.clone());
+                    }
+                } else if obj.obj_type == 3 {
+                    let dir_data: base::common::FsDirData = serde_json::from_str(&obj.data)
+                        .map_err(|e| AppError::Internal(format!("invalid dir object: {e}")))?;
+                    for entry in &dir_data.dirents {
+                        let child_path = if frame.path.is_empty() {
+                            entry.name.clone()
+                        } else {
+                            format!("{}/{}", frame.path, entry.name)
+                        };
+                        next.push(Frame {
+                            fs_id: entry.id.clone(),
+                            path: child_path,
+                        });
+                    }
                 }
             }
-        }
-        Ok(())
-    }
 
-    async fn check_file_blocks(
-        &self,
-        repo_id: &str,
-        fs_id: &str,
-        path: &str,
-        missing: &mut Vec<String>,
-    ) -> Result<(), AppError> {
-        let obj = match self
-            .repos
-            .fs_object
-            .find_by_repo_and_fs_id(repo_id, fs_id)
-            .await?
-        {
-            Some(o) => o,
-            None => return Ok(()),
-        };
-        if obj.obj_type != 1 {
-            return Ok(());
-        }
-        let file_data: base::common::FsFileData = serde_json::from_str(&obj.data)
-            .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
-        if self.check_blocks_concurrent(&file_data.block_ids).await {
-            missing.push(path.to_string());
+            frontier = next;
         }
         Ok(())
     }

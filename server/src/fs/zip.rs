@@ -8,7 +8,9 @@ use tokio_util::io::ReaderStream;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 
-use crate::fs::core::tree::{read_fs_dir_data, read_fs_file_data, resolve_fs_id};
+use crate::fs::core::tree::{
+    read_fs_dir_data, read_fs_dir_data_batch, read_fs_file_data_batch, resolve_fs_id,
+};
 use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::{EMPTY_SHA1, S_IFDIR};
@@ -44,39 +46,55 @@ pub async fn collect_dir_entries(
     };
 
     let mut entries = Vec::new();
-    let mut stack: Vec<(String, String)> = vec![(dir_id, zip_prefix.to_string())];
+    // Level frontier for directories; file ids are collected per level and
+    // fetched in one batched query (O(#dirs)+O(#files) → O(depth)+1).
+    let mut frontier: Vec<(String, String)> = vec![(dir_id, zip_prefix.to_string())];
+    let mut pending_files: Vec<(String, String)> = Vec::new();
 
-    while let Some((fs_id, prefix)) = stack.pop() {
-        if fs_id == EMPTY_SHA1 {
-            continue;
-        }
+    while !frontier.is_empty() {
+        let ids: Vec<String> = frontier
+            .iter()
+            .map(|(fs_id, _)| fs_id.clone())
+            .filter(|id| id != EMPTY_SHA1)
+            .collect();
+        let dir_map = read_fs_dir_data_batch(repos, repo_id, &ids).await?;
+        let mut next: Vec<(String, String)> = Vec::new();
 
-        let dir_data = match read_fs_dir_data(repos, repo_id, &fs_id).await {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-
-        for dirent in &dir_data.dirents {
-            let is_dir = dirent.mode & S_IFDIR != 0;
-            let entry_path = if prefix.is_empty() {
-                dirent.name.clone()
-            } else {
-                format!("{prefix}/{}", dirent.name)
+        for (fs_id, prefix) in &frontier {
+            // Missing/EMPTY dirs are absent from the batch map → skip.
+            let Some(dir_data) = dir_map.get(fs_id) else {
+                continue;
             };
 
-            if is_dir {
-                // Recurse into subdirectory
-                stack.push((dirent.id.clone(), entry_path));
-            } else {
-                // Read file block IDs
-                let file_data = match read_fs_file_data(repos, repo_id, &dirent.id).await {
-                    Ok(f) => f,
-                    Err(_) => continue,
+            for dirent in &dir_data.dirents {
+                let is_dir = dirent.mode & S_IFDIR != 0;
+                let entry_path = if prefix.is_empty() {
+                    dirent.name.clone()
+                } else {
+                    format!("{prefix}/{}", dirent.name)
                 };
 
+                if is_dir {
+                    // Recurse into subdirectory
+                    next.push((dirent.id.clone(), entry_path));
+                } else {
+                    pending_files.push((dirent.id.clone(), entry_path));
+                }
+            }
+        }
+
+        frontier = next;
+    }
+
+    // Fetch all file block IDs in one batched query.
+    if !pending_files.is_empty() {
+        let file_ids: Vec<String> = pending_files.iter().map(|(id, _)| id.clone()).collect();
+        let file_map = read_fs_file_data_batch(repos, repo_id, &file_ids).await?;
+        for (fs_id, entry_path) in pending_files {
+            if let Some(file_data) = file_map.get(&fs_id) {
                 entries.push(ZipFileEntry {
                     path_in_zip: entry_path,
-                    block_ids: file_data.block_ids,
+                    block_ids: file_data.block_ids.clone(),
                     size: file_data.size,
                 });
             }
@@ -106,6 +124,7 @@ pub async fn collect_selected_entries(
         .map_err(|e| AppError::NotFound(format!("Not a directory: {e}")))?;
 
     let mut all_files = Vec::new();
+    let mut pending_files: Vec<(String, String)> = Vec::new();
 
     for name in dirents {
         // Find the entry in the parent directory
@@ -128,14 +147,21 @@ pub async fn collect_selected_entries(
                 collect_dir_entries(repos, repo_id, root_fs_id, &dir_path, name).await?;
             all_files.extend(sub_files);
         } else {
-            // Single file
-            let file_data = read_fs_file_data(repos, repo_id, &entry.id)
-                .await
-                .map_err(|_| AppError::NotFound(format!("File data not found: {name}")))?;
+            pending_files.push((entry.id.clone(), name.clone()));
+        }
+    }
 
+    // Fetch all selected file block IDs in one batched query.
+    if !pending_files.is_empty() {
+        let file_ids: Vec<String> = pending_files.iter().map(|(id, _)| id.clone()).collect();
+        let file_map = read_fs_file_data_batch(repos, repo_id, &file_ids).await?;
+        for (fs_id, name) in pending_files {
+            let file_data = file_map
+                .get(&fs_id)
+                .ok_or_else(|| AppError::NotFound(format!("File data not found: {name}")))?;
             all_files.push(ZipFileEntry {
-                path_in_zip: name.clone(),
-                block_ids: file_data.block_ids,
+                path_in_zip: name,
+                block_ids: file_data.block_ids.clone(),
                 size: file_data.size,
             });
         }

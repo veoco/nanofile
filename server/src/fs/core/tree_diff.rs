@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::fs::core::tree::read_fs_dir_data;
+use crate::fs::core::tree::read_fs_dir_data_batch;
 use crate::repository::Repositories;
 use base::common::DirEntryData;
 use base::error::AppError;
@@ -23,9 +23,12 @@ pub struct FsChange {
     pub old_path: Option<String>,
 }
 
-/// Walk an FS tree from `root_fs_id` using an explicit stack (no recursion)
+/// Walk an FS tree from `root_fs_id` using a level frontier (no recursion)
 /// and populate `out` with every entry's path → (DirEntryData).
 /// Directories are included too.
+///
+/// Each level reads all its directories with one batched `IN` query instead
+/// of one query per directory (O(#dirs) → O(depth)).
 async fn collect_entries(
     repos: &Repositories,
     repo_id: &str,
@@ -33,34 +36,46 @@ async fn collect_entries(
     prefix: &str,
     out: &mut HashMap<String, DirEntryData>,
 ) -> Result<(), AppError> {
-    struct StackFrame {
+    struct Frame {
         fs_id: String,
         prefix: String,
     }
 
-    let mut stack = vec![StackFrame {
+    let mut frontier: Vec<Frame> = vec![Frame {
         fs_id: root_fs_id.to_string(),
         prefix: prefix.to_string(),
     }];
 
-    while let Some(frame) = stack.pop() {
-        let dir = read_fs_dir_data(repos, repo_id, &frame.fs_id).await?;
-        for entry in &dir.dirents {
-            let entry_path = if frame.prefix.is_empty() {
-                format!("/{}", entry.name)
-            } else {
-                format!("{}/{}", frame.prefix, entry.name)
-            };
-            out.insert(entry_path.clone(), entry.clone());
+    while !frontier.is_empty() {
+        let ids: Vec<String> = frontier.iter().map(|f| f.fs_id.clone()).collect();
+        let dir_map = read_fs_dir_data_batch(repos, repo_id, &ids).await?;
+        let mut next: Vec<Frame> = Vec::new();
 
-            // Push subdirectories onto the stack for further traversal.
-            if entry.mode & 0o40000 != 0 {
-                stack.push(StackFrame {
-                    fs_id: entry.id.clone(),
-                    prefix: entry_path,
-                });
+        for frame in &frontier {
+            // Missing/EMPTY dirs are absent from the batch map → skip (same as
+            // the per-id `Err(_) => continue` behaviour).
+            let Some(dir) = dir_map.get(&frame.fs_id) else {
+                continue;
+            };
+            for entry in &dir.dirents {
+                let entry_path = if frame.prefix.is_empty() {
+                    format!("/{}", entry.name)
+                } else {
+                    format!("{}/{}", frame.prefix, entry.name)
+                };
+                out.insert(entry_path.clone(), entry.clone());
+
+                // Push subdirectories onto the next frontier level.
+                if entry.mode & 0o40000 != 0 {
+                    next.push(Frame {
+                        fs_id: entry.id.clone(),
+                        prefix: entry_path,
+                    });
+                }
             }
         }
+
+        frontier = next;
     }
     Ok(())
 }

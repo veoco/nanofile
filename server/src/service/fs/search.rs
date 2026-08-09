@@ -253,59 +253,70 @@ async fn search_fs_tree(
     seen: &mut std::collections::HashSet<(String, String)>,
 ) {
     let keyword_lower = keyword.to_lowercase();
-    let mut stack: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
+    // Level frontier: each level reads all its directories with one batched
+    // `IN` query (O(#dirs) → O(depth)).
+    let mut frontier: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
 
-    while let Some((fs_id, path)) = stack.pop() {
-        if fs_id == EMPTY_SHA1 {
-            continue;
-        }
-
-        let dir_data = match crate::fs::core::read_fs_dir_data(repos, repo_id, &fs_id).await {
-            Ok(data) => data,
-            Err(_) => continue,
+    while !frontier.is_empty() {
+        let ids: Vec<String> = frontier
+            .iter()
+            .map(|(fs_id, _)| fs_id.clone())
+            .filter(|id| id != EMPTY_SHA1)
+            .collect();
+        let dir_map = match crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &ids).await {
+            Ok(m) => m,
+            Err(_) => break,
         };
+        let mut next: Vec<(String, String)> = Vec::new();
 
-        for entry in &dir_data.dirents {
-            let full_path = if path.is_empty() {
-                format!("/{}", entry.name)
-            } else if path.starts_with('/') {
-                format!("{}/{}", path, entry.name)
-            } else {
-                format!("/{}/{}", path, entry.name)
+        for (fs_id, path) in &frontier {
+            // Missing/EMPTY dirs are absent from the batch map → skip.
+            let Some(dir_data) = dir_map.get(fs_id) else {
+                continue;
             };
 
-            if entry.name.to_lowercase().contains(&keyword_lower) {
-                let key = (repo_id.to_string(), full_path.clone());
-                if !seen.insert(key) {
-                    // Already seen
+            for entry in &dir_data.dirents {
+                let full_path = if path.is_empty() {
+                    format!("/{}", entry.name)
+                } else if path.starts_with('/') {
+                    format!("{}/{}", path, entry.name)
                 } else {
-                    let is_dir = entry.mode & S_IFDIR != 0;
-                    let dir_url = if is_dir {
-                        format!("/libraries/{}/files{}", repo_id, full_path)
-                    } else {
-                        let parent = full_path
-                            .rsplit_once('/')
-                            .map(|(parent, _)| parent)
-                            .unwrap_or("/");
-                        format!("/libraries/{}/files{}", repo_id, parent)
-                    };
-                    results.push(FileSearchResult {
-                        repo_id: repo_id.to_string(),
-                        repo_name: repo_name.to_string(),
-                        name: entry.name.clone(),
-                        oid: entry.id.clone(),
-                        last_modified: entry.mtime,
-                        fullpath: full_path.clone(),
-                        size: entry.size,
-                        is_dir,
-                        dir_url,
-                    });
+                    format!("/{}/{}", path, entry.name)
+                };
+
+                if entry.name.to_lowercase().contains(&keyword_lower) {
+                    let key = (repo_id.to_string(), full_path.clone());
+                    if seen.insert(key) {
+                        let is_dir = entry.mode & S_IFDIR != 0;
+                        let dir_url = if is_dir {
+                            format!("/libraries/{}/files{}", repo_id, full_path)
+                        } else {
+                            let parent = full_path
+                                .rsplit_once('/')
+                                .map(|(parent, _)| parent)
+                                .unwrap_or("/");
+                            format!("/libraries/{}/files{}", repo_id, parent)
+                        };
+                        results.push(FileSearchResult {
+                            repo_id: repo_id.to_string(),
+                            repo_name: repo_name.to_string(),
+                            name: entry.name.clone(),
+                            oid: entry.id.clone(),
+                            last_modified: entry.mtime,
+                            fullpath: full_path.clone(),
+                            size: entry.size,
+                            is_dir,
+                            dir_url,
+                        });
+                    }
+                }
+
+                if entry.mode & S_IFDIR != 0 {
+                    next.push((entry.id.clone(), full_path));
                 }
             }
-
-            if entry.mode & S_IFDIR != 0 {
-                stack.push((entry.id.clone(), full_path));
-            }
         }
+
+        frontier = next;
     }
 }
