@@ -624,11 +624,15 @@ impl SyncService {
         loop {
             attempt += 1;
 
-            let current_head = self
+            // Fetch the repo once per CAS attempt: `current_head` gates the
+            // retry loop and `name` is reused below for batch activity logging
+            // (no per-change repo lookup).
+            let repo_model = self
                 .find_repo(repo_id)
                 .await?
-                .ok_or_else(|| AppError::Internal("repo not found".into()))?
-                .head_commit_id;
+                .ok_or_else(|| AppError::Internal("repo not found".into()))?;
+            let current_head = repo_model.head_commit_id;
+            let repo_name = repo_model.name;
 
             let is_same_commit = current_head.as_deref() == Some(new_head);
             if is_same_commit {
@@ -664,7 +668,7 @@ impl SyncService {
                 None
             };
 
-            let mut changes = tree_diff::diff_trees(
+            let changes = tree_diff::diff_trees(
                 &self.repos,
                 repo_id,
                 old_root.as_deref(),
@@ -677,30 +681,43 @@ impl SyncService {
                 let is_reverted =
                     commit_desc.starts_with("Reverted") || commit_desc.starts_with("Recovered");
 
-                for change in &mut changes {
-                    if is_reverted && (change.op_type == "create" || change.op_type == "edit") {
-                        change.op_type = "recover";
-                    }
+                // Collect activity items up-front so the batch write below
+                // runs one repo lookup (already done above) plus one query per
+                // (op_type, obj_type) group, instead of ~3 per change.
+                let items: Vec<infra::activity_log::ActivityItem> = changes
+                    .iter()
+                    .filter_map(|c| {
+                        let mut op = c.op_type;
+                        if is_reverted && (op == "create" || op == "edit") {
+                            op = "recover";
+                        }
 
-                    if EXCLUDED_ACTIVITY_PREFIXES
-                        .iter()
-                        .any(|p| change.path.starts_with(p))
-                    {
-                        continue;
-                    }
+                        if EXCLUDED_ACTIVITY_PREFIXES
+                            .iter()
+                            .any(|p| c.path.starts_with(p))
+                        {
+                            return None;
+                        }
 
-                    infra::activity_log::log_activity(
+                        Some(infra::activity_log::ActivityItem {
+                            op_type: op,
+                            obj_type: c.obj_type,
+                            path: c.path.clone(),
+                            old_path: c.old_path.clone(),
+                            size: Some(c.size),
+                            obj_id: Some(c.obj_id.clone()),
+                        })
+                    })
+                    .collect();
+
+                if !items.is_empty() {
+                    infra::activity_log::log_activity_batch(
                         self.db.as_ref(),
                         repo_id,
-                        change.op_type,
-                        change.obj_type,
-                        &change.path,
+                        &new_commit.commit_id,
+                        &repo_name,
                         user_id,
-                        change.old_path.as_deref(),
-                        Some(change.size),
-                        Some(&change.obj_id),
-                        None,
-                        None,
+                        items,
                     )
                     .await;
                 }

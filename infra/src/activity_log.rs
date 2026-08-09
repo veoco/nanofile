@@ -19,6 +19,7 @@
 /// All errors are logged via `tracing::warn!` but never propagated — activity
 /// logging must not break the calling operation.
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set};
+use std::collections::HashMap;
 
 use crate::entity::{activity, repo};
 
@@ -176,6 +177,204 @@ pub async fn log_activity(
     .await
     {
         tracing::warn!("Failed to log activity ({op_type} {path}): {e}");
+    }
+}
+
+/// Lightweight activity entry for batched logging.
+///
+/// Kept in `infra` (no dependency on the server crate's `FsChange`) so the
+/// sync commit path can log many items with one function call.
+pub struct ActivityItem {
+    pub op_type: &'static str,
+    pub obj_type: &'static str,
+    pub path: String,
+    pub old_path: Option<String>,
+    pub size: Option<i64>,
+    pub obj_id: Option<String>,
+}
+
+/// Build the `detail` JSON object for a single item (mirrors `log_activity`).
+fn build_detail_map(
+    item: &ActivityItem,
+    repo_name: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut detail_map = serde_json::Map::new();
+    if let Some(s) = item.size {
+        detail_map.insert("size".to_string(), serde_json::json!(s));
+    }
+    if let Some(id) = &item.obj_id {
+        detail_map.insert("obj_id".to_string(), serde_json::json!(id));
+    }
+    detail_map.insert("path".to_string(), serde_json::json!(item.path));
+    if !repo_name.is_empty() {
+        detail_map.insert("repo_name".to_string(), serde_json::json!(repo_name));
+    }
+    if let Some(op) = &item.old_path {
+        detail_map.insert("old_path".to_string(), serde_json::json!(op));
+    }
+    detail_map
+}
+
+/// Construct an `activity::ActiveModel` row from an item.
+fn to_active_model(
+    repo_id: &str,
+    commit_id: &str,
+    repo_name: &str,
+    user_id: i32,
+    now: i64,
+    item: &ActivityItem,
+) -> activity::ActiveModel {
+    let detail_json = serde_json::to_string(&build_detail_map(item, repo_name))
+        .unwrap_or_else(|_| "{}".to_string());
+    activity::ActiveModel {
+        id: sea_orm::NotSet,
+        repo_id: Set(repo_id.to_string()),
+        commit_id: Set(commit_id.to_string()),
+        op_type: Set(item.op_type.to_string()),
+        obj_type: Set(item.obj_type.to_string()),
+        path: Set(item.path.clone()),
+        old_path: Set(item.old_path.clone()),
+        user_id: Set(user_id),
+        created_at: Set(now),
+        detail: Set(detail_json),
+    }
+}
+
+/// Parse a stored `detail` into the array of items it holds, reshaping a lone
+/// object into a single-element array using only the allowed keys (matches the
+/// single-item aggregation path).
+fn parse_detail_array(detail: &str) -> Vec<serde_json::Value> {
+    match serde_json::from_str::<serde_json::Value>(detail) {
+        Ok(serde_json::Value::Array(arr)) => arr,
+        Ok(serde_json::Value::Object(obj)) => {
+            let allowed_keys: [&str; 6] = [
+                "obj_id",
+                "size",
+                "old_path",
+                "repo_name",
+                "old_repo_name",
+                "path",
+            ];
+            let filtered: serde_json::Value = allowed_keys
+                .iter()
+                .filter_map(|k| obj.get(*k).map(|v| ((*k).to_string(), v.clone())))
+                .collect::<serde_json::Map<_, _>>()
+                .into();
+            vec![filtered]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Batch-log file activity on hot commit paths.
+///
+/// `commit_id` and `repo_name` are supplied by the caller (already fetched
+/// once for the whole commit), so no per-item repo lookup is needed —
+/// eliminating the N+1 query on large sync commits.
+///
+/// `create`/`delete` keep the 5-minute batch-aggregation semantics of
+/// `log_activity`, grouped by `(op_type, obj_type)` so only one aggregation
+/// query runs per group instead of one per item. All other op types insert
+/// directly with a single `insert_many`. Best-effort: failures are logged
+/// via `tracing::warn!` and never propagated.
+#[allow(clippy::too_many_arguments)]
+pub async fn log_activity_batch(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    commit_id: &str,
+    repo_name: &str,
+    user_id: i32,
+    items: Vec<ActivityItem>,
+) {
+    let now = chrono::Utc::now().timestamp();
+
+    // Non-aggregating ops (edit/rename/move/recover) insert in one statement.
+    let direct: Vec<&ActivityItem> = items
+        .iter()
+        .filter(|i| i.op_type != "create" && i.op_type != "delete")
+        .collect();
+    if !direct.is_empty() {
+        let models: Vec<activity::ActiveModel> = direct
+            .iter()
+            .map(|i| to_active_model(repo_id, commit_id, repo_name, user_id, now, i))
+            .collect();
+        if let Err(e) = activity::Entity::insert_many(models).exec(db).await {
+            tracing::warn!("Failed to batch insert activities: {e}");
+        }
+    }
+
+    // create/delete aggregate into a recent batch row within 5 minutes,
+    // grouped by (op_type, obj_type).
+    let mut groups: HashMap<(&str, &str), Vec<&ActivityItem>> = HashMap::new();
+    for item in items
+        .iter()
+        .filter(|i| i.op_type == "create" || i.op_type == "delete")
+    {
+        groups
+            .entry((item.op_type, item.obj_type))
+            .or_default()
+            .push(item);
+    }
+
+    for ((op_type, obj_type), group_items) in groups {
+        let batch_types = [op_type.to_string(), format!("batch_{op_type}")];
+        let cutoff = now - 300; // 5-minute window
+
+        let recent = activity::Entity::find()
+            .filter(activity::Column::RepoId.eq(repo_id))
+            .filter(activity::Column::UserId.eq(user_id))
+            .filter(activity::Column::ObjType.eq(obj_type))
+            .filter(activity::Column::OpType.is_in(batch_types))
+            .filter(activity::Column::CreatedAt.gt(cutoff))
+            .order_by_desc(activity::Column::CreatedAt)
+            .one(db)
+            .await;
+
+        match recent {
+            Ok(Some(row)) => {
+                let mut detail_array = parse_detail_array(&row.detail);
+                let mut remaining: Vec<&ActivityItem> = Vec::new();
+                for item in &group_items {
+                    if detail_array.len() >= ACTIVITY_MAX_AGGREGATE_ITEMS {
+                        remaining.push(item);
+                    } else {
+                        detail_array
+                            .push(serde_json::Value::Object(build_detail_map(item, repo_name)));
+                    }
+                }
+
+                if detail_array.len() > parse_detail_array(&row.detail).len() {
+                    let updated_detail =
+                        serde_json::to_string(&detail_array).unwrap_or_else(|_| "[]".to_string());
+                    let mut active: activity::ActiveModel = row.into();
+                    active.op_type = Set(format!("batch_{op_type}"));
+                    active.detail = Set(updated_detail);
+                    active.created_at = Set(now);
+                    if let Err(e) = activity::Entity::update(active).exec(db).await {
+                        tracing::warn!("Failed to update aggregated activity: {e}");
+                    }
+                }
+
+                if !remaining.is_empty() {
+                    let models: Vec<activity::ActiveModel> = remaining
+                        .iter()
+                        .map(|i| to_active_model(repo_id, commit_id, repo_name, user_id, now, i))
+                        .collect();
+                    if let Err(e) = activity::Entity::insert_many(models).exec(db).await {
+                        tracing::warn!("Failed to insert remaining aggregated activities: {e}");
+                    }
+                }
+            }
+            Ok(None) | Err(_) => {
+                let models: Vec<activity::ActiveModel> = group_items
+                    .iter()
+                    .map(|i| to_active_model(repo_id, commit_id, repo_name, user_id, now, i))
+                    .collect();
+                if let Err(e) = activity::Entity::insert_many(models).exec(db).await {
+                    tracing::warn!("Failed to insert aggregated activities: {e}");
+                }
+            }
+        }
     }
 }
 
