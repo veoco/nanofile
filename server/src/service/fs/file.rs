@@ -6,7 +6,7 @@ use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::trash;
 use crate::notification::events::FileLockEvent;
 use crate::repository::Repositories;
-use base::common::{DirEntryData, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{
@@ -549,6 +549,10 @@ impl FileService {
     }
 
     /// Recursively create any missing directory components below `path`.
+    ///
+    /// Resolves the root once and walks down one level at a time, reading only
+    /// the current directory, instead of re-resolving the whole prefix from
+    /// root per level (O(d²) resolve → O(d)).
     async fn ensure_dir_recursive(
         &self,
         repo_id: &str,
@@ -561,9 +565,10 @@ impl FileService {
         }
 
         // Quick check: if the head commit root can't be resolved, the repo is empty.
-        if get_head_root_id(self.db(), repo_id).await.is_err() {
-            return Ok(());
-        }
+        let root_id = match get_head_root_id(self.db(), repo_id).await {
+            Ok(root_id) => root_id,
+            Err(_) => return Ok(()),
+        };
 
         let parts: Vec<&str> = path
             .trim_start_matches('/')
@@ -571,6 +576,7 @@ impl FileService {
             .filter(|p| !p.is_empty())
             .collect();
 
+        let mut current_fs_id = root_id;
         let mut current = String::from("/");
         for part in parts {
             let next = if current == "/" {
@@ -579,21 +585,27 @@ impl FileService {
                 format!("{current}/{part}")
             };
 
-            // Check if this component already exists.
-            let root_id = get_head_root_id(self.db(), repo_id).await?;
-            if crate::fs::core::resolve_fs_id(&self.repos, repo_id, &root_id, &next)
-                .await
-                .is_err()
-            {
-                crate::service::fs::dir::create_dir_by_path(
-                    self.db(),
-                    &self.repos,
-                    email,
-                    user_id,
-                    repo_id,
-                    &next,
-                )
-                .await?;
+            let dir_data =
+                crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &current_fs_id).await?;
+            match dir_data.dirents.iter().find(|e| e.name == part) {
+                Some(entry) => {
+                    current_fs_id = entry.id.clone();
+                }
+                None => {
+                    crate::service::fs::dir::create_dir_by_path(
+                        self.db(),
+                        &self.repos,
+                        email,
+                        user_id,
+                        repo_id,
+                        &next,
+                    )
+                    .await?;
+                    // A freshly created directory has no fs_object yet (the
+                    // EMPTY_SHA1 sentinel); read_fs_dir_data treats it as an
+                    // empty dir, so the walk can continue into it.
+                    current_fs_id = EMPTY_SHA1.to_string();
+                }
             }
             current = next;
         }
