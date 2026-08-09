@@ -121,9 +121,13 @@ async fn try_handle_chunked(
         )));
     }
 
-    // Pre-check storage quota against the declared total size so over-quota
-    // uploads fail before consuming chunks / assembling the file.
-    if let Some(uid) = user_id {
+    // Pre-check storage quota once (on the first chunk) against the declared
+    // total size so over-quota uploads fail before consuming the whole file.
+    // The result only depends on `file_size`, so re-checking every chunk is
+    // wasted work; the final assembly path re-checks quota as a backstop.
+    if start == 0
+        && let Some(uid) = user_id
+    {
         crate::service::fs::quota::check_upload_quota(
             &state.repos,
             uid,
@@ -1087,17 +1091,30 @@ pub async fn upload_blks_api(
         // Verify all blocks exist in block store and sum their real sizes.
         // Reject malformed / path-traversal ids outright — a valid block id
         // is exactly 40 hex chars (content-addressed SHA-1).
+        if let Some(bad) = block_ids
+            .iter()
+            .find(|bid| bid.len() != 40 || !bid.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err(AppError::BadRequest(format!("invalid block id: {bad}")));
+        }
+        // Stat the blocks concurrently; order does not matter for a sum.
+        use futures::StreamExt;
+        let sizes: Vec<Result<i64, AppError>> = futures::stream::iter(block_ids.iter().cloned())
+            .map(|bid| {
+                let store = state.block_store.clone();
+                async move {
+                    store
+                        .block_size(&bid)
+                        .await
+                        .map_err(|_| AppError::BadRequest(format!("block not found: {bid}")))
+                }
+            })
+            .buffered(8)
+            .collect()
+            .await;
         let mut real_size: i64 = 0;
-        for bid in &block_ids {
-            if bid.len() != 40 || !bid.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err(AppError::BadRequest(format!("invalid block id: {bid}")));
-            }
-            let sz = state
-                .block_store
-                .block_size(bid)
-                .await
-                .map_err(|_| AppError::BadRequest(format!("block not found: {bid}")))?;
-            real_size += sz;
+        for sz in sizes {
+            real_size += sz?;
         }
 
         // The declared size must match the real block bytes, so a client

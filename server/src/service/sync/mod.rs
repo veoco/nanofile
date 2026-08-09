@@ -523,9 +523,48 @@ impl SyncService {
                     let file_map =
                         crate::fs::core::read_fs_file_data_batch(&self.repos, repo_id, &file_ids)
                             .await?;
+
+                    // Deduplicate block ids across all files in this level and
+                    // check them once, instead of re-checking shared blocks per
+                    // file.
+                    let unique_ids: Vec<String> = {
+                        let mut seen = std::collections::HashSet::new();
+                        file_map
+                            .values()
+                            .flat_map(|f| f.block_ids.iter())
+                            .filter(|id| seen.insert(id.as_str()))
+                            .cloned()
+                            .collect()
+                    };
+                    let missing_ids: std::collections::HashSet<String> = {
+                        const BATCH_SIZE: usize = 8;
+                        let store = self.block_store.clone();
+                        let mut missing_set = std::collections::HashSet::new();
+                        for chunk in unique_ids.chunks(BATCH_SIZE) {
+                            let futures: Vec<_> = chunk
+                                .iter()
+                                .map(|id| {
+                                    let store = store.clone();
+                                    let id = id.clone();
+                                    async move { !store.has_block(&id).await }
+                                })
+                                .collect();
+                            let present: Vec<bool> = futures::future::join_all(futures).await;
+                            for (id, ok) in chunk.iter().zip(present) {
+                                if !ok {
+                                    missing_set.insert(id.clone());
+                                }
+                            }
+                        }
+                        missing_set
+                    };
+
                     for (fs_id, path) in &pending_files {
                         if let Some(file_data) = file_map.get(fs_id)
-                            && self.check_blocks_concurrent(&file_data.block_ids).await
+                            && file_data
+                                .block_ids
+                                .iter()
+                                .any(|bid| missing_ids.contains(bid.as_str()))
                         {
                             missing.push(path.clone());
                         }

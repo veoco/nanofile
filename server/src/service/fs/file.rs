@@ -1175,13 +1175,20 @@ impl FileService {
         let Some(blockids_str) = blockids else {
             return 0;
         };
-        let mut uploaded: i64 = 0;
-        for bid in blockids_str.split(',') {
-            let bid = bid.trim();
-            if !bid.is_empty() && self.block_store.has_block(bid).await {
-                uploaded += 1;
-            }
-        }
-        uploaded
+        let ids: Vec<String> = blockids_str
+            .split(',')
+            .map(|b| b.trim().to_string())
+            .filter(|b| !b.is_empty())
+            .collect();
+        use futures::StreamExt;
+        let present: Vec<bool> = futures::stream::iter(ids)
+            .map(|bid| {
+                let store = self.block_store.clone();
+                async move { store.has_block(&bid).await }
+            })
+            .buffered(8)
+            .collect()
+            .await;
+        present.into_iter().filter(|&ok| ok).count() as i64
     }
 }
