@@ -219,7 +219,36 @@ pub fn range_stream(
             if done {
                 return None;
             }
-            let block_id = iter.next()?;
+
+            // Fast-forward past blocks that lie entirely before `start`. For
+            // plaintext repos the stored block size equals the logical size, so
+            // a cheap stat is enough — no need to read + decrypt a whole block
+            // only to discard it (a tail `Range` request / resume would
+            // otherwise read and decrypt nearly the entire file prefix).
+            // Encrypted repos are skipped here because the ciphertext length
+            // includes PKCS7 padding and cannot be used as a logical offset.
+            if key.is_none() && pos < start {
+                loop {
+                    let next_id = match iter.clone().next() {
+                        Some(id) => id,
+                        None => return Some((Ok(bytes::Bytes::new()), (iter, pos, true))),
+                    };
+                    let size = match store.block_size(&next_id).await {
+                        Ok(s) if s >= 0 => s as u64,
+                        _ => break, // fall through to the read path
+                    };
+                    if pos + size > start {
+                        break; // next block intersects the range
+                    }
+                    pos += size;
+                    iter.next(); // consume the skipped block
+                }
+            }
+
+            let block_id = match iter.next() {
+                Some(id) => id,
+                None => return Some((Ok(bytes::Bytes::new()), (iter, pos, true))),
+            };
             let data = match store.read_block(&block_id).await {
                 Ok(d) => d,
                 Err(e) => {
@@ -365,8 +394,13 @@ mod tests {
         async fn remove_block(&self, _block_id: &str) -> Result<(), std::io::Error> {
             unimplemented!()
         }
-        async fn block_size(&self, _block_id: &str) -> Result<i64, std::io::Error> {
-            unimplemented!()
+        async fn block_size(&self, block_id: &str) -> Result<i64, std::io::Error> {
+            self.blocks
+                .lock()
+                .unwrap()
+                .get(block_id)
+                .map(|v| v.len() as i64)
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "missing block"))
         }
         async fn list_blocks(&self) -> Result<Vec<String>, std::io::Error> {
             unimplemented!()

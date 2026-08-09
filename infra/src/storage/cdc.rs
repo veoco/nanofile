@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 const POLY: u64 = 0xbfe6b8a5bf378d83;
 const WINDOW_SIZE: usize = 48;
 const BREAK_VALUE: u32 = 0x0013;
@@ -76,28 +78,9 @@ impl RabinState {
     }
 
     fn new() -> Self {
-        let poly = POLY;
-        let xshift = Self::fls64(poly) - 1;
-        let shift = xshift - 8;
-
-        // Precompute T[256]: T[j] = (j * x^62 mod poly) | (j << 62)
-        let t1 = Self::polymod(0, 1u64 << xshift, poly);
-        let mut t = [0u64; 256];
-        for j in 0..256u64 {
-            t[j as usize] = Self::polymmult(j, t1, poly) | (j << xshift);
-        }
-
-        // Precompute U[256]: U[i] = i * x^(8*WINDOW_SIZE) mod poly
-        let mut sizeshift: u64 = 1;
-        for _ in 1..WINDOW_SIZE {
-            let idx = (sizeshift >> shift) as usize;
-            sizeshift = (sizeshift << 8) ^ t[idx];
-        }
-        let mut u = [0u64; 256];
-        for i in 0..256u64 {
-            u[i as usize] = Self::polymmult(i, sizeshift, poly);
-        }
-
+        // Copy the precomputed tables (4 KiB) rather than recomputing them —
+        // the tables depend only on POLY/WINDOW_SIZE, not on chunk content.
+        let (shift, t, u) = *RABIN_TABLES;
         Self {
             window: [0; WINDOW_SIZE],
             pos: 0,
@@ -148,6 +131,39 @@ impl RabinState {
         self.fingerprint as u32
     }
 }
+
+/// Precomputed Rabin lookup tables for `POLY`/`WINDOW_SIZE`.
+///
+/// `T[256]`, `U[256]` and `shift` depend only on the two compile-time
+/// constants above — never on file content — so they are computed exactly
+/// once and reused by every `RabinState::new()`. Recomputing them per chunk
+/// wasted ~512 `polymult`/`polymod` bit-operations (~75k integer ops) for
+/// every chunk in `file_chunk_cdc`.
+static RABIN_TABLES: LazyLock<(usize, [u64; 256], [u64; 256])> = LazyLock::new(|| {
+    let poly = POLY;
+    let xshift = RabinState::fls64(poly) - 1;
+    let shift = xshift - 8;
+
+    // Precompute T[256]: T[j] = (j * x^62 mod poly) | (j << 62)
+    let t1 = RabinState::polymod(0, 1u64 << xshift, poly);
+    let mut t = [0u64; 256];
+    for j in 0..256u64 {
+        t[j as usize] = RabinState::polymmult(j, t1, poly) | (j << xshift);
+    }
+
+    // Precompute U[256]: U[i] = i * x^(8*WINDOW_SIZE) mod poly
+    let mut sizeshift: u64 = 1;
+    for _ in 1..WINDOW_SIZE {
+        let idx = (sizeshift >> shift) as usize;
+        sizeshift = (sizeshift << 8) ^ t[idx];
+    }
+    let mut u = [0u64; 256];
+    for i in 0..256u64 {
+        u[i as usize] = RabinState::polymmult(i, sizeshift, poly);
+    }
+
+    (shift, t, u)
+});
 
 pub fn calculate_chunk_sizes(file_size: usize) -> (usize, usize, usize) {
     let (avg, min, max) = if file_size >= 8 * 1024 * 1024 * 1024 {

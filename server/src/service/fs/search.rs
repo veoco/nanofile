@@ -53,64 +53,71 @@ impl SearchService {
         let mut all_results: Vec<FileSearchResult> = Vec::new();
 
         // Phase 1: Full-text search via Tantivy
+        let mut index_ok = false;
         if let Some(indexer) = &self.indexer {
-            let ft_results = match indexer.search(q, &repo_ids, 200, 0, search_filename_only) {
-                Ok(r) => r,
+            match indexer.search(q, &repo_ids, 200, 0, search_filename_only) {
+                Ok(ft_results) => {
+                    index_ok = true;
+                    for (found_repo_id, found_fullpath) in &ft_results {
+                        if !seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
+                            continue;
+                        }
+                        if let Some(meta) = self
+                            .resolve_file_metadata(found_repo_id, found_fullpath)
+                            .await
+                        {
+                            all_results.push(meta);
+                        }
+                    }
+                }
                 Err(e) => {
                     tracing::warn!("Tantivy search failed: {e}");
-                    Vec::new()
-                }
-            };
-            for (found_repo_id, found_fullpath) in &ft_results {
-                if !seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
-                    continue;
-                }
-                if let Some(meta) = self
-                    .resolve_file_metadata(found_repo_id, found_fullpath)
-                    .await
-                {
-                    all_results.push(meta);
                 }
             }
         }
 
-        // Phase 2: Filename search
-        for repo_id in &repo_ids {
-            let repo_record = match self.repos.repo.find_by_id(repo_id).await {
-                Ok(Some(r)) => r,
-                _ => continue,
-            };
+        // Phase 2: Filename search. Skip the per-repo full-tree walk when a
+        // full-text index already produced filename results (see indexer.rs) —
+        // the walk issues one DB query per directory in the repo. Fall back to
+        // it when there is no index or the index query failed.
+        if !(search_filename_only && index_ok) {
+            for repo_id in &repo_ids {
+                let repo_record = match self.repos.repo.find_by_id(repo_id).await {
+                    Ok(Some(r)) => r,
+                    _ => continue,
+                };
 
-            let head_commit_id = match &repo_record.head_commit_id {
-                Some(id) => id.clone(),
-                None => continue,
-            };
+                let head_commit_id = match &repo_record.head_commit_id {
+                    Some(id) => id.clone(),
+                    None => continue,
+                };
 
-            let head = match self
-                .repos
-                .commit
-                .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-                .await
-            {
-                Ok(Some(h)) => h,
-                _ => continue,
-            };
+                let head = match self
+                    .repos
+                    .commit
+                    .find_by_repo_and_commit_id(repo_id, &head_commit_id)
+                    .await
+                {
+                    Ok(Some(h)) => h,
+                    _ => continue,
+                };
 
-            if head.root_id == EMPTY_SHA1 {
-                continue;
+                if head.root_id == EMPTY_SHA1 {
+                    continue;
+                }
+
+                search_fs_tree(
+                    &self.repos,
+                    repo_id,
+                    &repo_record.name,
+                    &head.root_id,
+                    "",
+                    q,
+                    &mut all_results,
+                    &mut seen,
+                )
+                .await;
             }
-
-            search_fs_tree(
-                &self.repos,
-                repo_id,
-                &repo_record.name,
-                &head.root_id,
-                "",
-                q,
-                &mut all_results,
-                &mut seen,
-            )
-            .await;
         }
 
         // Sort: directories first, then by name
@@ -185,18 +192,19 @@ impl SearchService {
             .collect();
 
         let name = segments.last()?;
+        // Local String — previously this was Box::leak'd on every hit, leaking
+        // one allocation per search result.
         let parent_path = if segments.len() <= 1 {
-            "/"
+            String::from("/")
         } else {
             let parent_segments = &segments[..segments.len() - 1];
-            let path = format!("/{}", parent_segments.join("/"));
-            Box::leak(path.into_boxed_str())
+            format!("/{}", parent_segments.join("/"))
         };
 
         let parent_fs_id = if parent_path == "/" {
             root_id.clone()
         } else {
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, root_id, parent_path)
+            crate::fs::core::resolve_fs_id(&self.repos, repo_id, root_id, &parent_path)
                 .await
                 .ok()?
         };

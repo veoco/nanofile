@@ -8,11 +8,18 @@ use crate::storage::BlockStorageBackend;
 #[derive(Debug)]
 pub struct BlockStorage {
     base_dir: PathBuf,
+    /// Guards one-time creation of the 256 prefix directories. Prefix dirs are
+    /// static after the first write, so we create them once instead of stat-ing
+    /// them on every block write.
+    dirs_ready: tokio::sync::OnceCell<()>,
 }
 
 impl BlockStorage {
     pub fn new(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+        Self {
+            base_dir,
+            dirs_ready: tokio::sync::OnceCell::new(),
+        }
     }
 
     /// Block IDs are content-addressed SHA-1 hashes: exactly 40 lowercase hex.
@@ -25,6 +32,26 @@ impl BlockStorage {
         // `is_valid_block_id`, but write_block also routes through here).
         let prefix = block_id.get(..2).unwrap_or(block_id);
         self.base_dir.join(prefix).join(block_id)
+    }
+
+    /// Create the 256 prefix directories once, off the async executor.
+    /// `OnceCell::get_or_try_init` runs the init future at most once and keeps
+    /// the result, so a failure surfaces on this and all subsequent calls.
+    async fn ensure_dirs(&self) -> Result<(), std::io::Error> {
+        self.dirs_ready
+            .get_or_try_init(|| async {
+                let base = self.base_dir.clone();
+                tokio::task::spawn_blocking(move || -> Result<(), std::io::Error> {
+                    for i in 0..=0xFFu16 {
+                        std::fs::create_dir_all(base.join(format!("{i:02x}")))?;
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))?
+            })
+            .await
+            .map(|_| ())
     }
 
     /// Read and decrypt a block.
@@ -76,9 +103,16 @@ impl BlockStorageBackend for BlockStorage {
         let block_id = sha1_hex(data);
         let path = self.block_path(&block_id);
 
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+        // Content-addressed storage: identical content yields the same SHA-1,
+        // so skip the write when the block already exists. Re-uploads and sync
+        // retries hit this path constantly.
+        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Ok(block_id);
         }
+
+        // Prefix directories are static after the first write; create all 256
+        // of them once instead of stat-ing the parent on every block write.
+        self.ensure_dirs().await?;
 
         tokio::fs::write(&path, data).await?;
         Ok(block_id)
@@ -161,6 +195,17 @@ mod tests {
         assert!(store.block_size(&id).await.unwrap() > 0);
         store.remove_block(&id).await.unwrap();
         assert!(!store.has_block(&id).await);
+    }
+
+    #[tokio::test]
+    async fn write_block_dedup_returns_same_id() {
+        let (_root, store) = temp_storage();
+        // Content-addressed writes are idempotent: re-writing identical content
+        // short-circuits and returns the same block id.
+        let id1 = store.write_block(b"same content").await.unwrap();
+        let id2 = store.write_block(b"same content").await.unwrap();
+        assert_eq!(id1, id2);
+        assert!(store.has_block(&id1).await);
     }
 
     #[tokio::test]

@@ -78,12 +78,15 @@ impl FileOps {
             let chunk_data = &data[*offset..*offset + size];
             // If encryption key is provided, encrypt the chunk before writing.
             // Seafile encrypts each block individually with a per-block random IV.
-            let chunk_to_write = if let Some((key, iv)) = enc_key {
-                encrypt_block(chunk_data, key, iv)
-            } else {
-                chunk_data.to_vec()
+            // The plaintext branch passes the original slice through to avoid an
+            // extra whole-block copy on the write hot path.
+            let block_id = match enc_key {
+                Some((key, iv)) => {
+                    let encrypted = encrypt_block(chunk_data, key, iv);
+                    block_store.write_block(&encrypted).await?
+                }
+                None => block_store.write_block(chunk_data).await?,
             };
-            let block_id = block_store.write_block(&chunk_to_write).await?;
             block_ids.push(block_id);
             total_size += *size as i64;
         }

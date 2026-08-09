@@ -92,6 +92,10 @@ impl FileOpsService {
         }
 
         let names_to_delete = file_names.to_vec();
+        // O(1) membership lookup for the per-entry retain filter below,
+        // instead of Vec::contains's O(n) scan per retained entry.
+        let names_to_delete_set: std::collections::HashSet<&str> =
+            names_to_delete.iter().map(String::as_str).collect();
 
         // Record trash
         let trash_head_commit_id: Option<String> = self
@@ -145,7 +149,7 @@ impl FileOpsService {
             &format!("Deleted {} items", names_to_delete.len()),
             crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
             |dirents| {
-                dirents.retain(|d| !names_to_delete.contains(&d.name));
+                dirents.retain(|d| !names_to_delete_set.contains(d.name.as_str()));
                 Ok(())
             },
         )
@@ -404,8 +408,10 @@ impl FileOpsService {
             .map_err(|e| AppError::Internal(format!("resolve dest dir failed: {e}")))?;
 
         // Step 1: Remove entries from source
-        let src_names_for_closure: Vec<String> =
-            entries_to_move.iter().map(|e| e.name.clone()).collect();
+        // O(1) membership lookup for the per-entry retain filter below,
+        // instead of Vec::contains's O(n) scan per retained entry.
+        let src_names_for_closure: std::collections::HashSet<&str> =
+            entries_to_move.iter().map(|e| e.name.as_str()).collect();
 
         let intermediate_root = FileOps::update_dir_tree_no_commit(
             db,
@@ -415,7 +421,7 @@ impl FileOpsService {
             &src_parent_fs_id,
             crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
             |dirents| {
-                dirents.retain(|d| !src_names_for_closure.contains(&d.name));
+                dirents.retain(|d| !src_names_for_closure.contains(d.name.as_str()));
                 Ok(())
             },
         )
