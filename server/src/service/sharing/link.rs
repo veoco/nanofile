@@ -352,6 +352,13 @@ pub async fn clean_invalid_upload_links_v21(
     user_id: i32,
 ) -> Result<i32, AppError> {
     let links = repos.upload_link.find_by_creator_id(user_id).await?;
+
+    // Batch-check repo existence in one query instead of one per link.
+    let repo_ids: Vec<String> = links.iter().map(|l| l.repo_id.clone()).collect();
+    let repo_rows = repos.repo.find_by_ids(&repo_ids).await?;
+    let existing: std::collections::HashSet<&str> =
+        repo_rows.iter().map(|r| r.id.as_str()).collect();
+
     let mut deleted = 0i32;
 
     for link in &links {
@@ -365,11 +372,8 @@ pub async fn clean_invalid_upload_links_v21(
         }
 
         // Check if repo still exists
-        if !should_delete {
-            let repo_exists = repos.repo.find_by_id(&link.repo_id).await?.is_some();
-            if !repo_exists {
-                should_delete = true;
-            }
+        if !should_delete && !existing.contains(link.repo_id.as_str()) {
+            should_delete = true;
         }
 
         if should_delete {

@@ -832,3 +832,62 @@ async fn test_upload_link_view_page_expired() {
     let page = f.client.get(&format!("/u/{}/", token), None).await;
     assert_eq!(page.status(), 404, "expired upload link must return 404");
 }
+
+/// U.18 — DELETE /api/v2.1/upload-links/clean-invalid/ — removes expired
+/// links while keeping valid ones.
+#[tokio::test]
+async fn test_upload_link_clean_invalid_removes_expired() {
+    let f = TestFixture::new().await;
+
+    // Valid link (repo exists, not expired) → must survive.
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({"repo_id": f.repo_id, "path": "/"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let keep_token = body["token"].as_str().unwrap().to_string();
+
+    // Expired link (negative expire_days) → must be cleaned.
+    let resp2 = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({"repo_id": f.repo_id, "path": "/", "expire_days": -1}),
+        )
+        .await;
+    assert_eq!(resp2.status(), 200);
+    let body2: serde_json::Value = resp2.json().await.unwrap();
+    let expired_token = body2["token"].as_str().unwrap().to_string();
+
+    let clean = f
+        .client
+        .delete("/api/v2.1/upload-links/clean-invalid/", Some(&f.api_token))
+        .await;
+    assert_eq!(clean.status(), 200);
+    let clean_body: serde_json::Value = clean.json().await.unwrap();
+    assert_eq!(clean_body["deleted"], 1);
+
+    // Valid link survives, expired link is gone.
+    let keep = f
+        .client
+        .get(
+            &format!("/api/v2.1/upload-links/{}/", keep_token),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(keep.status(), 200);
+    let gone = f
+        .client
+        .get(
+            &format!("/api/v2.1/upload-links/{}/", expired_token),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(gone.status(), 404);
+}
