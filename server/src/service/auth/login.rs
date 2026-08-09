@@ -80,16 +80,17 @@ impl LoginService {
         let rate_limit_key_ip = format!("login:ip:{client_ip}");
         let rate_limit_key_user = format!("login:user:{username}");
 
-        if self.login_rate_limiter.is_locked(&rate_limit_key_ip)
-            || self.login_rate_limiter.is_locked(&rate_limit_key_user)
+        if self
+            .login_rate_limiter
+            .is_any_locked(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()])
         {
             return Ok(LoginResult::RateLimited);
         }
 
         // ── Record failure helper ─────────────────────────────────────────
         let record_failure = || {
-            self.login_rate_limiter.record_failure(&rate_limit_key_ip);
-            self.login_rate_limiter.record_failure(&rate_limit_key_user);
+            self.login_rate_limiter
+                .record_failures(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()]);
         };
 
         // ── Find user ─────────────────────────────────────────────────────

@@ -174,8 +174,10 @@ pub async fn login(
     let rate_limit_key_user = format!("login:user:{}", form.email);
 
     // Check rate limit before any DB or password work.
-    if state.auth_limiters.login.is_locked(&rate_limit_key_ip)
-        || state.auth_limiters.login.is_locked(&rate_limit_key_user)
+    if state
+        .auth_limiters
+        .login
+        .is_any_locked(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()])
     {
         return render_login_page(
             &state,
@@ -193,11 +195,10 @@ pub async fn login(
     let user_record = match state.repos.user.find_by_email(&form.email).await? {
         Some(u) => u,
         None => {
-            state.auth_limiters.login.record_failure(&rate_limit_key_ip);
             state
                 .auth_limiters
                 .login
-                .record_failure(&rate_limit_key_user);
+                .record_failures(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()]);
             return render_login_page(
                 &state,
                 &headers,
@@ -214,11 +215,10 @@ pub async fn login(
 
     if !user_record.is_active {
         // Use the same generic error to avoid user-enumeration attacks (matching seahub).
-        state.auth_limiters.login.record_failure(&rate_limit_key_ip);
         state
             .auth_limiters
             .login
-            .record_failure(&rate_limit_key_user);
+            .record_failures(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()]);
         return render_login_page(
             &state,
             &headers,
@@ -237,11 +237,10 @@ pub async fn login(
         &user_record.password_hash,
         state.config.auth.password_hash_iterations,
     ) {
-        state.auth_limiters.login.record_failure(&rate_limit_key_ip);
         state
             .auth_limiters
             .login
-            .record_failure(&rate_limit_key_user);
+            .record_failures(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()]);
         return render_login_page(
             &state,
             &headers,

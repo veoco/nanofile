@@ -49,11 +49,23 @@ impl GenericRateLimiter {
         let now = Self::now();
         let cutoff = now - self.window_secs;
         let mut map = self.lock();
-        if let Some(timestamps) = map.get_mut(key) {
-            timestamps.retain(|&t| t > cutoff);
-            timestamps.len() as u32 >= self.max_attempts
-        } else {
+        let (stale, limited) = match map.get_mut(key) {
+            Some(timestamps) => {
+                timestamps.retain(|&t| t > cutoff);
+                (
+                    timestamps.is_empty(),
+                    timestamps.len() as u32 >= self.max_attempts,
+                )
+            }
+            None => (false, false),
+        };
+        if stale {
+            // All attempts expired — drop the key so the map doesn't grow
+            // without bound on continuously-failing keys.
+            map.remove(key);
             false
+        } else {
+            limited
         }
     }
 
