@@ -2,6 +2,7 @@
 //! (`handler/web/zip_download.rs`) and the shared-link directory view
 //! (`handler/web/share_view.rs`).
 
+use futures::StreamExt;
 use futures::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
@@ -178,8 +179,9 @@ pub async fn collect_selected_entries(
 /// the local file header has zero CRC/size, and the real values are emitted
 /// after the compressed data.
 ///
-/// Each block is read one at a time (~2 MB) and decrypted when `enc_key` is
-/// `Some`.
+/// Blocks are read + decrypted with bounded concurrency via
+/// [`stream_blocks`](crate::fs::core::stream_blocks), then written into each
+/// entry in order (the ZIP writer is single-threaded).
 pub fn stream_zip(
     block_store: infra::storage::DynBlockStorage,
     files: Vec<ZipFileEntry>,
@@ -201,14 +203,16 @@ pub fn stream_zip(
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-            for block_id in &entry.block_ids {
-                let data = block_store.read_block(block_id).await?;
-                let data = if let Some((ref key, ref iv)) = enc_key {
-                    infra::crypto::random_key::decrypt_block(&data, key, iv)
-                        .map_err(|e| std::io::Error::other(e.to_string()))?
-                } else {
-                    data
-                };
+            // Read + decrypt blocks with bounded concurrency, write in order.
+            // stream_blocks buffers (default 4) so disk I/O and decryption
+            // overlap across blocks while preserving block order.
+            let mut blocks = Box::pin(crate::fs::core::stream_blocks(
+                entry.block_ids.clone(),
+                block_store.clone(),
+                enc_key.clone(),
+            ));
+            while let Some(data) = blocks.next().await {
+                let data = data?;
                 entry_writer.write_all(&data).await?;
             }
 
