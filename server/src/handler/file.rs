@@ -360,7 +360,7 @@ pub async fn file_index_text(
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
 
-    let content = indexer.get_indexed_content(repo_id, &path)?;
+    let content = indexer.get_indexed_content(repo_id, &path).await?;
 
     Ok(Json(serde_json::json!({"content": content})))
 }

@@ -650,7 +650,7 @@ impl DirService {
 
         // Remove from full-text search index
         if let Some(indexer) = &self.indexer
-            && let Err(e) = indexer.delete_file(repo_id, path)
+            && let Err(e) = indexer.delete_file_async(repo_id, path).await
         {
             tracing::warn!("Failed to delete index for {path}: {e}");
         }

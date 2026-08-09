@@ -46,7 +46,7 @@ impl AdminService {
     }
 
     /// Index a single file with custom extracted text.
-    pub fn index_file_text(
+    pub async fn index_file_text(
         &self,
         indexer: &TextIndexer,
         repo_id: &str,
@@ -64,7 +64,8 @@ impl AdminService {
             .unwrap_or(&fullpath);
 
         indexer
-            .index_file(repo_id, &fullpath, filename, text)
+            .index_file_async(repo_id, &fullpath, filename, text)
+            .await
             .map_err(|e| AppError::Internal(format!("index failed: {e}")))
     }
 

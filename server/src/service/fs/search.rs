@@ -55,7 +55,10 @@ impl SearchService {
         // Phase 1: Full-text search via Tantivy
         let mut index_ok = false;
         if let Some(indexer) = &self.indexer {
-            match indexer.search(q, &repo_ids, 200, 0, search_filename_only) {
+            match indexer
+                .search(q, &repo_ids, 200, 0, search_filename_only)
+                .await
+            {
                 Ok(ft_results) => {
                     index_ok = true;
                     for (found_repo_id, found_fullpath) in &ft_results {

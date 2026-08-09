@@ -182,7 +182,7 @@ impl FileOpsService {
         if let Some(indexer) = &self.indexer {
             for name in file_names {
                 let fp = join_path(parent_dir, name);
-                if let Err(e) = indexer.delete_file(repo_id, &fp) {
+                if let Err(e) = indexer.delete_file_async(repo_id, &fp).await {
                     tracing::warn!("Failed to delete index for {fp}: {e}");
                 }
             }
@@ -539,7 +539,7 @@ impl FileOpsService {
             for entry in &entries_to_move {
                 let old_fp = join_path(src_parent_dir, &entry.name);
                 let new_fp = join_path(dst_dir, &entry.name);
-                if let Err(e) = indexer.delete_file(repo_id, &old_fp) {
+                if let Err(e) = indexer.delete_file_async(repo_id, &old_fp).await {
                     tracing::warn!("Failed to delete old index on batch move: {e}");
                 }
                 spawn_reindex(

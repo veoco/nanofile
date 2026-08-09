@@ -810,13 +810,13 @@ impl SyncService {
                             );
                         }
                         "delete" => {
-                            if let Err(e) = indexer.delete_file(repo_id, &change.path) {
+                            if let Err(e) = indexer.delete_file_async(repo_id, &change.path).await {
                                 tracing::warn!("sync delete index {}: {e}", change.path);
                             }
                         }
                         "rename" | "move" => {
                             if let Some(ref old_path) = change.old_path {
-                                let _ = indexer.delete_file(repo_id, old_path);
+                                let _ = indexer.delete_file_async(repo_id, old_path).await;
                             }
                             spawn_reindex(
                                 indexer.clone(),

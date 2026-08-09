@@ -129,14 +129,18 @@ pub fn register_default_tasks(
     }
 
     // Periodic: index background committer (every 30 seconds).
+    // Runs on a blocking thread so the Tantivy fsync doesn't stall the runtime.
     if let Some(idx) = indexer {
         let idx = idx.clone();
         scheduler.spawn_periodic("index commit", 30, move || {
             let idx = idx.clone();
             async move {
-                match idx.commit() {
-                    Ok(()) => TaskOutput::success("index committed", None),
-                    Err(e) => TaskOutput::error(format!("Background index commit failed: {e}")),
+                match tokio::task::spawn_blocking(move || idx.commit()).await {
+                    Ok(Ok(())) => TaskOutput::success("index committed", None),
+                    Ok(Err(e)) => TaskOutput::error(format!("Background index commit failed: {e}")),
+                    Err(e) => {
+                        TaskOutput::error(format!("Background index commit task failed: {e}"))
+                    }
                 }
             }
         });

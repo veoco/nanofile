@@ -443,10 +443,13 @@ impl FileService {
             };
             if crate::indexer::is_indexable_text(&file_name, &file_data) {
                 let content = String::from_utf8_lossy(&file_data);
-                if let Err(e) = indexer.index_file(repo_id, &full_path, &file_name, &content) {
+                if let Err(e) = indexer
+                    .index_file_async(repo_id, &full_path, &file_name, &content)
+                    .await
+                {
                     tracing::warn!("Failed to index file {file_name}: {e}");
                 }
-            } else if replace && let Err(e) = indexer.delete_file(repo_id, &full_path) {
+            } else if replace && let Err(e) = indexer.delete_file_async(repo_id, &full_path).await {
                 tracing::warn!("Failed to delete index for {file_name}: {e}");
             }
         }
@@ -705,7 +708,7 @@ impl FileService {
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
         if let Some(indexer) = &self.indexer
-            && let Err(e) = indexer.delete_file(repo_id, path)
+            && let Err(e) = indexer.delete_file_async(repo_id, path).await
         {
             tracing::warn!("Failed to delete index for {path}: {e}");
         }
@@ -758,7 +761,7 @@ impl FileService {
                 let parent = parent_path_from(path);
                 format!("{parent}/{new_name}")
             };
-            if let Err(e) = indexer.delete_file(repo_id, path) {
+            if let Err(e) = indexer.delete_file_async(repo_id, path).await {
                 tracing::warn!("Failed to delete old index on rename: {e}");
             }
             if let Err(e) = indexer
@@ -795,7 +798,7 @@ impl FileService {
 
         // Update full-text search index
         if let Some(indexer) = &self.indexer {
-            if let Err(e) = indexer.delete_file(repo_id, path) {
+            if let Err(e) = indexer.delete_file_async(repo_id, path).await {
                 tracing::warn!("Failed to delete old index on move: {e}");
             }
             if let Err(e) = indexer

@@ -83,7 +83,10 @@ pub async fn search_page(
         // This runs for both filename-only and content searches, avoiding
         // the expensive FS tree walk for filename matching.
         if let Some(indexer) = &state.indexer {
-            let ft_results = match indexer.search(&q, &repo_ids, 200, 0, search_filename_only) {
+            let ft_results = match indexer
+                .search(&q, &repo_ids, 200, 0, search_filename_only)
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("Tantivy search failed: {e}");

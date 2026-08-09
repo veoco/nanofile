@@ -257,6 +257,45 @@ impl TextIndexer {
         Ok(())
     }
 
+    /// Run `commit` on a blocking thread so the fsync doesn't stall the async
+    /// executor.
+    pub async fn commit_async(&self) -> Result<(), AppError> {
+        let idx = self.clone();
+        tokio::task::spawn_blocking(move || idx.commit())
+            .await
+            .map_err(|e| AppError::internal(format!("indexer commit task failed: {e}")))?
+    }
+
+    /// Run `index_file` on a blocking thread (tokenization is CPU-heavy).
+    pub async fn index_file_async(
+        &self,
+        repo_id: &str,
+        fullpath: &str,
+        filename: &str,
+        content: &str,
+    ) -> Result<(), AppError> {
+        let idx = self.clone();
+        let repo_id = repo_id.to_string();
+        let fullpath = fullpath.to_string();
+        let filename = filename.to_string();
+        let content = content.to_string();
+        tokio::task::spawn_blocking(move || {
+            idx.index_file(&repo_id, &fullpath, &filename, &content)
+        })
+        .await
+        .map_err(|e| AppError::internal(format!("indexer index task failed: {e}")))?
+    }
+
+    /// Run `delete_file` on a blocking thread.
+    pub async fn delete_file_async(&self, repo_id: &str, fullpath: &str) -> Result<(), AppError> {
+        let idx = self.clone();
+        let repo_id = repo_id.to_string();
+        let fullpath = fullpath.to_string();
+        tokio::task::spawn_blocking(move || idx.delete_file(&repo_id, &fullpath))
+            .await
+            .map_err(|e| AppError::internal(format!("indexer delete task failed: {e}")))?
+    }
+
     /// Whether there are uncommitted index operations since the last commit.
     fn has_pending(&self) -> bool {
         self.pending.load(Ordering::Relaxed) > 0
@@ -315,11 +354,12 @@ impl TextIndexer {
 
         if is_indexable_text(filename, &data) {
             let content = String::from_utf8_lossy(&data);
-            self.index_file(repo_id, fullpath, filename, &content)?;
+            self.index_file_async(repo_id, fullpath, filename, &content)
+                .await?;
             Ok(true)
         } else {
             // Not indexable — clean up any old index entry.
-            self.delete_file(repo_id, fullpath)?;
+            self.delete_file_async(repo_id, fullpath).await?;
             Ok(false)
         }
     }
@@ -339,7 +379,7 @@ impl TextIndexer {
     /// Returns a list of `(repo_id, fullpath)` tuples matching the keyword.
     /// Results are limited by `limit` and offset by `offset`.
     /// If `repo_ids` is non-empty, only results from those repos are returned.
-    pub fn search(
+    pub async fn search(
         &self,
         keyword: &str,
         repo_ids: &[String],
@@ -351,11 +391,12 @@ impl TextIndexer {
             return Ok(Vec::new());
         }
 
-        // If there are uncommitted index operations, commit them so the reader
-        // can pick up the latest content. When nothing changed since the last
-        // commit (the common read-only case) we skip the writer lock + fsync.
+        // If there are uncommitted index operations, commit them (on a blocking
+        // thread) so the reader can pick up the latest content. When nothing
+        // changed since the last commit (the common read-only case) we skip
+        // the writer lock + fsync.
         if self.has_pending()
-            && let Err(e) = self.commit()
+            && let Err(e) = self.commit_async().await
         {
             tracing::warn!("search: commit before search failed: {e}");
         }
@@ -568,15 +609,20 @@ impl TextIndexer {
     ///
     /// Returns `Some(content)` if the file is in the index, or `None` if it
     /// hasn't been indexed (e.g. binary file or not yet processed).
-    pub fn get_indexed_content(
+    pub async fn get_indexed_content(
         &self,
         repo_id: &str,
         fullpath: &str,
     ) -> Result<Option<String>, AppError> {
-        // Commit any pending documents first so we can see freshly-indexed files.
-        if let Err(e) = self.commit() {
+        // Commit any pending documents first (on a blocking thread) so we can
+        // see freshly-indexed files. Unlike before, a read with nothing
+        // pending no longer triggers an fsync.
+        if self.has_pending()
+            && let Err(e) = self.commit_async().await
+        {
             tracing::warn!("get_indexed_content: commit failed: {e}");
-        } else if let Err(e) = self.reader.reload() {
+        }
+        if let Err(e) = self.reader.reload() {
             tracing::warn!("get_indexed_content: reload failed: {e}");
         }
 
@@ -731,7 +777,7 @@ mod tests {
         // Commit so the reader can pick up the new document.
         indexer.commit()?;
 
-        let results = indexer.search("hello", &[], 10, 0, false)?;
+        let results = indexer.search("hello", &[], 10, 0, false).await?;
         assert_eq!(
             results.len(),
             1,
@@ -741,7 +787,7 @@ mod tests {
         assert_eq!(results[0], ("repo-1".to_string(), "/hello.txt".to_string()));
 
         // Search for content (not filename).
-        let results = indexer.search("test file", &[], 10, 0, false)?;
+        let results = indexer.search("test file", &[], 10, 0, false).await?;
         assert_eq!(results.len(), 1, "should find 'test file' in content");
         assert_eq!(results[0], ("repo-1".to_string(), "/hello.txt".to_string()));
 
@@ -759,12 +805,16 @@ mod tests {
         // Commit so the reader can pick up the new documents.
         indexer.commit()?;
 
-        let results = indexer.search("alpha", &["repo-1".to_string()], 10, 0, false)?;
+        let results = indexer
+            .search("alpha", &["repo-1".to_string()], 10, 0, false)
+            .await?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "repo-1");
 
         // Scoped to wrong repo — no results.
-        let results = indexer.search("alpha", &["repo-2".to_string()], 10, 0, false)?;
+        let results = indexer
+            .search("alpha", &["repo-2".to_string()], 10, 0, false)
+            .await?;
         assert_eq!(results.len(), 0);
 
         Ok(())
@@ -777,12 +827,12 @@ mod tests {
 
         indexer.index_file("repo-1", "/hello.txt", "hello.txt", "Hello World")?;
         indexer.commit()?;
-        assert_eq!(indexer.search("hello", &[], 10, 0, false)?.len(), 1);
+        assert_eq!(indexer.search("hello", &[], 10, 0, false).await?.len(), 1);
 
         indexer.delete_file("repo-1", "/hello.txt")?;
         indexer.commit()?;
 
-        assert_eq!(indexer.search("hello", &[], 10, 0, false)?.len(), 0);
+        assert_eq!(indexer.search("hello", &[], 10, 0, false).await?.len(), 0);
 
         Ok(())
     }
@@ -795,7 +845,7 @@ mod tests {
         indexer.index_file("repo-1", "/file.txt", "file.txt", "old content")?;
         indexer.commit()?;
 
-        let results = indexer.search("old", &[], 10, 0, false)?;
+        let results = indexer.search("old", &[], 10, 0, false).await?;
         assert_eq!(results.len(), 1);
 
         // Index same path with new content.
@@ -803,9 +853,9 @@ mod tests {
         indexer.commit()?;
 
         // Old content should no longer match.
-        assert_eq!(indexer.search("old", &[], 10, 0, false)?.len(), 0);
+        assert_eq!(indexer.search("old", &[], 10, 0, false).await?.len(), 0);
         // New content should match.
-        assert_eq!(indexer.search("new", &[], 10, 0, false)?.len(), 1);
+        assert_eq!(indexer.search("new", &[], 10, 0, false).await?.len(), 1);
 
         Ok(())
     }
@@ -824,15 +874,15 @@ mod tests {
         indexer.commit()?;
 
         // First page: limit=3, offset=0
-        let results = indexer.search("content", &[], 3, 0, false)?;
+        let results = indexer.search("content", &[], 3, 0, false).await?;
         assert_eq!(results.len(), 3, "first page should have 3");
 
         // Second page: limit=3, offset=3
-        let results = indexer.search("content", &[], 3, 3, false)?;
+        let results = indexer.search("content", &[], 3, 3, false).await?;
         assert_eq!(results.len(), 3, "second page should have 3");
 
         // Last page: limit=3, offset=9
-        let results = indexer.search("content", &[], 3, 9, false)?;
+        let results = indexer.search("content", &[], 3, 9, false).await?;
         assert_eq!(results.len(), 1, "last page should have 1");
 
         Ok(())

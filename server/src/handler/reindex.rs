@@ -64,7 +64,8 @@ pub async fn index_file_text(
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
 
-    svc.index_file_text(indexer, &req.repo_id, &req.path, &req.text)?;
+    svc.index_file_text(indexer, &req.repo_id, &req.path, &req.text)
+        .await?;
 
     Ok(Json(IndexFileTextResponse {
         status: "ok".to_string(),
