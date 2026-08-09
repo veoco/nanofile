@@ -40,8 +40,10 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // We need to split the websocket into read/write halves.
     // Since axum's WebSocket doesn't implement futures::Stream/Sink directly,
-    // we use two tasks connected by an mpsc channel for outgoing messages.
-    let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
+    // we use two tasks connected by a bounded mpsc channel for outgoing
+    // messages. Messages are pre-serialized bytes; the channel bounds how much
+    // a slow client can buffer before notifications start being dropped.
+    let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(64);
     let (client_id, _client_state) = notif_mgr.register_client(tx);
 
     // Use a mutex to serialize writes to the WebSocket
@@ -128,8 +130,11 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
     let write_id = client_id;
 
     let write_task = tokio::spawn(async move {
-        while let Some(value) = rx.recv().await {
-            let text = serde_json::to_string(&value).unwrap_or_default();
+        while let Some(bytes) = rx.recv().await {
+            // Bytes are already serialized (shared Arc from the manager);
+            // only the UTF-8 check is done here. The content is JSON we
+            // produced, so lossy/empty fallbacks never trigger in practice.
+            let text = String::from_utf8((*bytes).to_vec()).unwrap_or_default();
             let mut ws_lock = ws_write.lock().await;
             if ws_lock.send(Message::Text(text.into())).await.is_err() {
                 break;

@@ -1,5 +1,4 @@
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,8 +18,9 @@ pub struct ClientState {
     pub user: RwLock<String>,
     /// Repos this client is subscribed to.
     pub subscribed_repos: RwLock<HashSet<String>>,
-    /// Channel to send outgoing messages to this client's write loop.
-    pub sender: mpsc::UnboundedSender<Value>,
+    /// Bounded channel to send outgoing (pre-serialized) messages to this
+    /// client's write loop.
+    pub sender: mpsc::Sender<Arc<[u8]>>,
     /// JWT token expiration timestamps per repo (repo_id → unix timestamp).
     /// Used by the periodic expiry checker to evict expired subscriptions.
     pub token_expirations: RwLock<HashMap<String, i64>>,
@@ -88,7 +88,7 @@ impl NotificationManager {
     }
 
     /// Register a new client and return its assigned ID and sender channel.
-    pub fn register_client(&self, sender: mpsc::UnboundedSender<Value>) -> (u64, Arc<ClientState>) {
+    pub fn register_client(&self, sender: mpsc::Sender<Arc<[u8]>>) -> (u64, Arc<ClientState>) {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let client = Arc::new(ClientState {
             user: RwLock::new(String::new()),
@@ -188,9 +188,12 @@ impl NotificationManager {
     }
 
     /// Notify all subscribers of a repo about an event.
-    /// If a message channel is full, the client is skipped (non-blocking).
+    ///
+    /// The message is serialized once and the bytes shared across subscribers.
+    /// If a client's bounded channel is full, that client is skipped
+    /// (non-blocking) rather than unboundedly buffering.
     pub async fn notify_repo(&self, repo_id: &str, message: &NotificationMessage) {
-        let event_value = serde_json::to_value(message).unwrap_or(Value::Null);
+        let bytes: Arc<[u8]> = Arc::from(serde_json::to_vec(message).unwrap_or_default());
 
         let subs = self.read_subscriptions();
         let client_ids = match subs.get(repo_id) {
@@ -202,7 +205,7 @@ impl NotificationManager {
         let clients = self.read_clients();
         for id in &client_ids {
             if let Some(client) = clients.get(id) {
-                let _ = client.sender.send(event_value.clone());
+                let _ = client.sender.try_send(bytes.clone());
             }
         }
     }
@@ -304,8 +307,9 @@ impl NotificationManager {
                     repo_id: repo_id.clone(),
                 };
                 let msg: NotificationMessage = event.into();
-                if let Ok(value) = serde_json::to_value(&msg) {
-                    let _ = client.sender.send(value);
+                if let Ok(bytes) = serde_json::to_vec(&msg) {
+                    let bytes: Arc<[u8]> = Arc::from(bytes);
+                    let _ = client.sender.try_send(bytes);
                 }
             }
         }
