@@ -1100,7 +1100,7 @@
       var selRow = document.querySelector(".js-entry-row.selected");
       if (selRow && typeof window.openRightPanel === "function") {
         var dlUrl = selRow.dataset.type !== "dir"
-          ? "/libraries/" + selRow.dataset.repoId + "/files/" + selRow.dataset.path + "?dl=1"
+          ? "/repos/" + selRow.dataset.repoId + "/files/" + selRow.dataset.path + "?dl=1"
           : "";
         window.openRightPanel({
           name: selRow.dataset.name,

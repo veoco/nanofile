@@ -1,8 +1,9 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -47,11 +48,22 @@ pub(crate) async fn get_decryption_key_for_repo(
     }
 }
 
-/// GET /repos/{repo_id}/files/{*path} — direct file download with auth.
+#[derive(Deserialize)]
+pub struct RepoFileQuery {
+    /// `?dl=1` forces `Content-Disposition: attachment` (download).
+    pub dl: Option<String>,
+}
+
+/// GET /repos/{repo_id}/files/{*path} — the unified web file-content endpoint.
+///
+/// Serves the raw bytes with Range support and a strong ETag, so browsers can
+/// inline images/video, download with `?dl=1`, and revalidate with
+/// `If-None-Match` (304) instead of re-downloading large originals.
 pub async fn repo_file_download(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path((repo_id, path)): Path<(String, String)>,
+    Query(query): Query<RepoFileQuery>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let normalized = if path.starts_with('/') {
@@ -75,16 +87,51 @@ pub async fn repo_file_download(
         .await
         .map_err(|_| AppError::NotFound("file not found".into()))?;
 
+    let file_name = normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or("download")
+        .to_string();
+
+    // Strong ETag: the block IDs are content-addressed, so identical content
+    // always yields the same validator and any edit changes it.
+    let etag = format!(
+        "\"{}\"",
+        infra::crypto::fs_id::sha1_hex(block_ids.join("|").as_bytes())
+    );
+
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+
+    // Conditional request: a matching validator with no Range → 304, skipping
+    // the block reads entirely. Range requests must still stream their slice.
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok());
+    let matches = match if_none_match {
+        Some("*") => true,
+        Some(v) => v.split(',').any(|t| t.trim() == etag),
+        None => false,
+    };
+    if matches && range_header.is_none() {
+        return Ok(StatusCode::NOT_MODIFIED.into_response());
+    }
+
+    let content_disposition = if query.dl.as_deref() == Some("1") {
+        Some(format!("attachment; filename=\"{}\"", file_name))
+    } else {
+        None
+    };
+
     Ok(crate::fs::core::download::file_download_response(
         crate::fs::core::download::FileDownloadParams {
             block_ids,
             block_store: state.block_store.clone(),
             enc_key: dec_key,
             total_size: file_data.size.max(0) as u64,
-            content_type: "application/octet-stream",
-            content_disposition: None,
+            content_type: crate::ui::files::mime_guess(&file_name),
+            content_disposition,
             range_header: range_header.map(|s| s.to_string()),
+            etag: Some(etag),
         },
     ))
 }
@@ -139,6 +186,7 @@ pub async fn download_api(
             content_type: "application/octet-stream",
             content_disposition: Some(disposition),
             range_header: range_header.map(|s| s.to_string()),
+            etag: None,
         },
     ))
 }

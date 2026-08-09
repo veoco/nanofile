@@ -20,13 +20,18 @@
         <span>{{ file_name }}</span>
         <div class="flex items-center gap-2">
             <span class="text-xs text-gray-500 dark:text-gray-400">{{ size_display }}</span>
+            <a href="/repos/{{ repo_id }}/files/{{ current_path }}?dl=1" class="text-xs text-brand-500 hover:underline">{{ t.tr("fb.download_instead") }}</a>
             <a href="/libraries/{{ repo_id }}/files/{{ parent_path|urlencode }}" class="text-xs text-brand-500 hover:underline">&larr; {{ t.tr("fb.back_to_folder") }}</a>
         </div>
     </div>
     <div class="p-4 flex justify-center bg-gray-100 dark:bg-surface-700">
-        <img src="/repos/{{ repo_id }}/files/{{ current_path }}" alt="{{ file_name }}"
-             class="max-w-full max-h-[80vh] object-contain rounded shadow-sm"
-             onerror="this.parentElement.innerHTML='<div class=\'text-gray-500 dark:text-gray-400 text-sm py-8\'>' + __t('fb.image_failed_to_load') + ' <a href=\'/repos/{{ repo_id }}/files/{{ current_path|urlencode }}?dl=1\' class=\'text-brand-500 hover:underline\'>' + __t('fb.download_instead') + '</a></div>'">
+        {% if is_video %}
+        <video src="/repos/{{ repo_id }}/files/{{ current_path }}" controls preload="metadata"
+               class="max-w-full max-h-[80vh] rounded shadow-sm"></video>
+        {% else %}
+        <audio src="/repos/{{ repo_id }}/files/{{ current_path }}" controls preload="metadata"
+               class="w-full max-w-xl"></audio>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

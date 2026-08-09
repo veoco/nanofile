@@ -2,8 +2,7 @@
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, header},
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Redirect},
 };
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -132,6 +131,28 @@ pub struct PreviewImageTemplate {
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
+}
+
+/// Video/audio preview page. Embeds an HTML5 `<video>`/`<audio>` whose `src`
+/// points at the unified `/repos/...` content endpoint (Range-capable), so
+/// `/libraries/...` itself never serves media bytes.
+#[derive(Template)]
+#[template(path = "files/preview_media.html")]
+pub struct PreviewMediaTemplate {
+    pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
+    pub user_email: String,
+    pub is_admin: bool,
+    pub repo_name: String,
+    pub file_name: String,
+    pub repo_id: String,
+    pub current_path: String,
+    pub parent_path: String,
+    pub size_display: String,
+    pub active_page: &'static str,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
+    pub is_video: bool,
 }
 
 // ─── Data types ──────────────────────────────────────────────────────────────
@@ -519,7 +540,7 @@ pub struct BreadcrumbItem {
 
 // ─── Request types ───────────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct FileBrowserQuery {
     pub partial: Option<String>,
     pub dl: Option<String>,
@@ -550,10 +571,9 @@ pub async fn file_browser_root(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
-    headers: HeaderMap,
     Query(query): Query<FileBrowserQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    file_browser_inner(user, state, repo_id, "/".to_string(), headers, query).await
+    file_browser_inner(user, state, repo_id, "/".to_string(), query).await
 }
 
 /// GET /library/{id}/{name}/{*path} — repo file browser (any path).
@@ -561,12 +581,11 @@ pub async fn file_browser(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Path((repo_id, path)): Path<(String, String)>,
-    headers: HeaderMap,
     Query(query): Query<FileBrowserQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let path = base::sanitize::safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-    file_browser_inner(user, state, repo_id, path, headers, query).await
+    file_browser_inner(user, state, repo_id, path, query).await
 }
 
 async fn file_browser_inner(
@@ -574,7 +593,6 @@ async fn file_browser_inner(
     state: Arc<AppState>,
     repo_id: String,
     path: String,
-    headers: HeaderMap,
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
     let t = I18n::get(user.language.as_deref());
@@ -587,6 +605,28 @@ async fn file_browser_inner(
         .find_by_id(&repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
+
+    // Media / image / text extensions are unambiguously files — serve the
+    // preview page directly instead of first attempting (and failing) a
+    // directory listing. If the name is actually a directory (misleading
+    // extension), the preview errors and we fall back to the listing below.
+    let file_name = path.rsplit('/').next().unwrap_or("");
+    if is_video_file(file_name) || is_audio_file(file_name) || is_previewable_file(file_name) {
+        match serve_file(
+            user.clone(),
+            state.clone(),
+            repo_id.clone(),
+            path.clone(),
+            query.clone(),
+        )
+        .await
+        {
+            Ok(resp) => return Ok(resp.into_response()),
+            Err(_) => {
+                // Not actually a file — fall through to the directory listing.
+            }
+        }
+    }
 
     // Try to list directory entries from the FS object tree.
     // If the path points to a file (not a directory), fall through to file serving.
@@ -603,7 +643,7 @@ async fn file_browser_inner(
         Err(AppError::NotFound(_)) => {
             // Path doesn't resolve as a directory — likely points to a file.
             // Fall through to file serving.
-            return serve_file(user, state, repo_id, path, headers, query)
+            return serve_file(user, state, repo_id, path, query)
                 .await
                 .map(IntoResponse::into_response);
         }
@@ -843,6 +883,29 @@ async fn file_browser_inner(
     }
 }
 
+/// Characters left unencoded in a path segment (same set browsers leave alone).
+const PATH_SAFE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
+
+/// Build the unified `/repos/{repo}/files/{path}` content URL, percent-encoding
+/// each path segment (matching the browser-side `encodeURIComponent` per segment).
+fn content_url(repo_id: &str, path: &str, dl: bool) -> String {
+    let encoded: String = path
+        .trim_start_matches('/')
+        .split('/')
+        .map(|seg| percent_encoding::utf8_percent_encode(seg, PATH_SAFE).to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    let mut url = format!("/repos/{repo_id}/files/{encoded}");
+    if dl {
+        url.push_str("?dl=1");
+    }
+    url
+}
+
 /// Serve a file directly from the repo (preview or download).
 /// Called by `file_browser_inner` when the path points to a file, not a directory.
 async fn serve_file(
@@ -850,52 +913,59 @@ async fn serve_file(
     state: Arc<AppState>,
     repo_id: String,
     path: String,
-    headers: HeaderMap,
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
     let path = base::sanitize::safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
     let file_name = path.rsplit('/').next().unwrap_or("file").to_string();
 
-    // ?dl=1 → force download (streamed so large files aren't buffered).
+    // ?dl=1 → force download. Content lives on the unified /repos/ endpoint,
+    // which serves attachment disposition + ETag/304 caching.
     if query.dl.as_deref() == Some("1") {
-        let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
-            .await
-            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
-        let total = file_data.size.max(0) as u64;
-        let disposition = format!("attachment; filename=\"{}\"", file_name);
-        let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-        return Ok(crate::fs::core::download::file_download_response(
-            crate::fs::core::download::FileDownloadParams {
-                block_ids,
-                block_store: state.block_store.clone(),
-                enc_key: None,
-                total_size: total,
-                content_type: mime_guess(&file_name),
-                content_disposition: Some(disposition),
-                range_header: range_header.map(|s| s.to_string()),
-            },
-        ));
+        return Ok(Redirect::to(&content_url(&repo_id, &path, true)).into_response());
     }
 
-    // Audio/video — stream inline with Range support so the HTML5 player can seek.
+    // Audio/video — render a media preview page. The embedded player streams
+    // from the unified /repos/ endpoint (Range-capable), so /libraries/ itself
+    // never serves media bytes and video range requests skip the directory try.
     if is_video_file(&file_name) || is_audio_file(&file_name) {
-        let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
+        let is_video = is_video_file(&file_name);
+        let size_display = get_file_size(&state.db, &state.repos, &repo_id, &path)
             .await
-            .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
-        let total = file_data.size.max(0) as u64;
-        let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-        return Ok(crate::fs::core::download::file_download_response(
-            crate::fs::core::download::FileDownloadParams {
-                block_ids,
-                block_store: state.block_store.clone(),
-                enc_key: None,
-                total_size: total,
-                content_type: mime_guess(&file_name),
-                content_disposition: None,
-                range_header: range_header.map(|s| s.to_string()),
-            },
-        ));
+            .map(format_size)
+            .unwrap_or_else(|_| "?".to_string());
+        let repo_name = state
+            .repos
+            .repo
+            .find_by_id(&repo_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?
+            .name;
+        let raw_parent = parent_path_from(&path);
+        let parent_path = raw_parent.trim_start_matches('/').to_string();
+        let left_panel_repos =
+            crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id)
+                .await?;
+        let tpl = PreviewMediaTemplate {
+            urls: crate::static_assets::template_urls(),
+            t: I18n::get(user.language.as_deref()),
+            user_email: user.email,
+            is_admin: user.is_admin,
+            repo_name,
+            file_name,
+            repo_id: repo_id.clone(),
+            current_path: path.trim_start_matches('/').to_string(),
+            parent_path,
+            size_display,
+            active_page: "repos",
+            left_panel_repos,
+            current_repo_id: Some(repo_id),
+            is_video,
+        };
+        let html = tpl
+            .render()
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        return Ok(Html(html).into_response());
     }
 
     // Image preview
@@ -1000,23 +1070,10 @@ async fn serve_file(
         return Ok(Html(html).into_response());
     }
 
-    // Binary files — serve raw bytes inline (streamed).
-    let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
-        .await
-        .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
-    let total = file_data.size.max(0) as u64;
-    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-    Ok(crate::fs::core::download::file_download_response(
-        crate::fs::core::download::FileDownloadParams {
-            block_ids,
-            block_store: state.block_store.clone(),
-            enc_key: None,
-            total_size: total,
-            content_type: mime_guess(&file_name),
-            content_disposition: None,
-            range_header: range_header.map(|s| s.to_string()),
-        },
-    ))
+    // Non-preview binary files — redirect to the unified content endpoint. The
+    // browser inlines/downloads per Content-Type exactly as before, but
+    // /libraries/ itself never serves bytes.
+    Ok(Redirect::to(&content_url(&repo_id, &path, false)).into_response())
 }
 
 /// Resolve a file's size from the FS tree without downloading its content.

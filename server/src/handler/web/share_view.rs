@@ -125,6 +125,7 @@ pub async fn shared_file_view(
                 content_type: "application/octet-stream",
                 content_disposition: Some(disposition),
                 range_header: range_header.map(|s| s.to_string()),
+                etag: None,
             },
         ));
     }
@@ -533,6 +534,7 @@ pub async fn shared_dir_file_view(
             content_type: "application/octet-stream",
             content_disposition: Some(disposition),
             range_header: range_header.map(|s| s.to_string()),
+            etag: None,
         },
     ))
 }

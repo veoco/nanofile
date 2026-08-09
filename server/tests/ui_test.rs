@@ -550,18 +550,41 @@ async fn test_download_file_returns_content() {
         .await;
 
     let client = login_client(&fixture).await;
+    let url = format!(
+        "{}/repos/{}/files/download.txt",
+        fixture.server.base_url, fixture.repo_id
+    );
+    let resp = client.get(&url).send().await.unwrap();
+
+    assert_eq!(resp.status(), 200, "download should return 200");
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("private, max-age=604800"),
+        "content endpoint should advertise a cache window"
+    );
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .to_string();
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "Download test content", "should return file content");
+
+    // Conditional revalidation → 304 without re-sending the body.
     let resp = client
-        .get(format!(
-            "{}/libraries/{}/files/download.txt?dl=1",
-            fixture.server.base_url, fixture.repo_id
-        ))
+        .get(&url)
+        .header("If-None-Match", etag)
         .send()
         .await
         .unwrap();
-
-    assert_eq!(resp.status(), 200, "download should return 200");
-    let body = resp.text().await.unwrap();
-    assert_eq!(body, "Download test content", "should return file content");
+    assert_eq!(
+        resp.status(),
+        304,
+        "matching If-None-Match should return 304"
+    );
 }
 
 #[tokio::test]
@@ -582,7 +605,7 @@ async fn test_download_file_range_resume() {
 
     let client = login_client(&fixture).await;
     let url = format!(
-        "{}/libraries/{}/files/resume.bin?dl=1",
+        "{}/repos/{}/files/resume.bin",
         fixture.server.base_url, fixture.repo_id
     );
 

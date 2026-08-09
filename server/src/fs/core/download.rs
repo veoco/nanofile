@@ -307,6 +307,9 @@ pub struct FileDownloadParams {
     pub content_disposition: Option<String>,
     /// Raw value of the request's `Range` header, if any.
     pub range_header: Option<String>,
+    /// Strong validator (e.g. `"<sha1-of-blocks>"`) sent as `ETag` so browsers
+    /// can revalidate with `If-None-Match` instead of re-downloading the body.
+    pub etag: Option<String>,
 }
 
 /// Build a streaming file response honoring a single `Range` request.
@@ -323,6 +326,18 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
         HeaderValue::from_static(p.content_type),
     );
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    // Content is immutable for a given set of block IDs, so a long private
+    // cache window plus a strong ETag lets browsers skip re-downloading large
+    // originals across repeat views (matching the thumbnail cache policy).
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=604800"),
+    );
+    if let Some(etag) = p.etag.as_ref()
+        && let Ok(v) = HeaderValue::from_str(etag)
+    {
+        headers.insert(header::ETAG, v);
+    }
     if let Some(disposition) = p.content_disposition {
         headers.insert(
             header::CONTENT_DISPOSITION,

@@ -234,7 +234,7 @@
       // thumbnail (if any) doubles as the native poster.
       if (videoEl && d.repoId && d.path) {
         var encPath = d.path.split("/").map(encodeURIComponent).join("/");
-        videoEl.src = "/libraries/" + encodeURIComponent(d.repoId) + "/files/" + encPath;
+        videoEl.src = "/repos/" + encodeURIComponent(d.repoId) + "/files/" + encPath;
         videoEl.poster = d.thumbnailUrlLarge || d.thumbnailUrl || "";
         videoEl.classList.remove("hidden");
       }
@@ -242,7 +242,7 @@
       // Cover art (if any) as the poster; otherwise a music note. The player
       // bar sits just below the preview box.
       if (audioRow && d.repoId && d.path) {
-        audioEl.src = "/libraries/" + encodeURIComponent(d.repoId) + "/files/" +
+        audioEl.src = "/repos/" + encodeURIComponent(d.repoId) + "/files/" +
           d.path.split("/").map(encodeURIComponent).join("/");
         audioRow.classList.remove("hidden");
       }
@@ -779,10 +779,10 @@
     var text = overlay.querySelector(".js-qp-text");
 
     if (isVideo) {
-      video.src = "/libraries/" + encodeURIComponent(repoId) + "/files/" + encPath;
+      video.src = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
       video.classList.remove("hidden");
     } else if (isAudio) {
-      audio.src = "/libraries/" + encodeURIComponent(repoId) + "/files/" + encPath;
+      audio.src = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
       audio.classList.remove("hidden");
     } else if (isPreviewable && isQuickPreviewImage(name)) {
       img.src = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
