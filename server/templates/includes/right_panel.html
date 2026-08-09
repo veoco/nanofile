@@ -20,9 +20,9 @@
         <!-- Scrollable info area -->
         <div class="flex-1 overflow-y-auto">
             <!-- Preview -->
-            <div class="js-rp-preview flex items-center justify-center">
+            <div class="js-rp-preview flex flex-col items-center justify-center">
                 <div class="w-full aspect-[4/3] flex items-center justify-center overflow-hidden bg-gray-100 dark:bg-surface-700">
-                    <img class="js-rp-thumb-img hidden w-full h-full object-contain" src="" alt="">
+                    <img class="js-rp-thumb-img hidden w-full h-full object-contain" src="" alt="" onerror="window.thumbFailed(this)">
                     <span class="js-rp-ext-badge hidden text-4xl font-bold"></span>
                     <svg class="js-rp-folder-icon hidden h-20 w-20 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>

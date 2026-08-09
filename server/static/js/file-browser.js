@@ -205,7 +205,7 @@
     stopRightPanelMedia();
 
     // Hide all preview variants first
-    if (thumbImg) { thumbImg.classList.add("hidden"); thumbImg.src = ""; }
+    if (thumbImg) { thumbImg.classList.add("hidden"); thumbImg.style.display = ""; thumbImg.src = ""; }
     if (extBadge) extBadge.classList.add("hidden");
     if (folderIcon) folderIcon.classList.add("hidden");
     if (videoIcon) videoIcon.classList.add("hidden");
@@ -233,12 +233,12 @@
         audioRow.classList.remove("hidden");
       }
       if (d.thumbnailUrlLarge || d.thumbnailUrl) {
-        if (thumbImg) { thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
+        if (thumbImg) { thumbImg.dataset.extension = d.extension || ""; thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
       } else if (audioIcon) {
         audioIcon.classList.remove("hidden");
       }
     } else if (d.thumbnailUrlLarge || d.thumbnailUrl) {
-      if (thumbImg) { thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
+      if (thumbImg) { thumbImg.dataset.extension = d.extension || ""; thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
     } else if (d.extension && extBadge) {
       extBadge.textContent = d.extension;
       extBadge.classList.remove("hidden");
@@ -647,10 +647,19 @@
   // or ffmpeg unavailable) — fall back to the extension badge next to it.
   window.thumbFailed = function (img) {
     img.style.display = "none";
+    // List thumbnails: show the small extension fallback badge next to the icon.
     var fb = img.parentElement ? img.parentElement.querySelector(".js-thb-fallback") : null;
     if (fb) {
       fb.classList.remove("hidden");
       fb.classList.add("flex");
+      return;
+    }
+    // Right-panel thumbnails (e.g. audio without cover art): fall back to the
+    // large extension badge, same as unknown files.
+    var extBadge = document.querySelector(".js-rp-content .js-rp-ext-badge");
+    if (extBadge) {
+      extBadge.textContent = img.dataset && img.dataset.extension ? img.dataset.extension : "?";
+      extBadge.classList.remove("hidden");
     }
   };
 
