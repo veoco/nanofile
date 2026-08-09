@@ -366,18 +366,20 @@
     // ── Share Links (fetch existing links for this file) ──
     var shareSection = ct.querySelector(".js-rp-share-links-section");
     var shareList = ct.querySelector(".js-rp-share-links-list");
-    var noLinks = ct.querySelector(".js-rp-no-share-links");
-    if (shareSection && shareList && noLinks) {
-      shareSection.classList.add("hidden");
-      noLinks.classList.add("hidden");
+    if (shareSection && shareList) {
       if (d.repoId && d.path) {
+        // Show the section right away with the loading hint in the reserved
+        // (min-h-5) list row, so the panel layout doesn't shift when the links
+        // arrive; only the list content is swapped, not the whole section.
+        shareSection.classList.remove("hidden");
+        shareList.innerHTML = '<div class="js-rp-share-links-loading text-xs text-gray-400 dark:text-gray-500 italic">' + escapeHtml(__t('fb.loading')) + '</div>';
         fetch("/api/v2.1/share-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
           .then(function (r) { return r.json(); })
           .then(function (data) {
             var links = data || [];
             shareList.innerHTML = "";
             if (links.length === 0) {
-              noLinks.classList.remove("hidden");
+              shareList.innerHTML = '<div class="js-rp-no-share-links text-xs text-gray-400 dark:text-gray-500 italic">' + escapeHtml(__t('fb.no_share_links')) + '</div>';
             } else {
               links.forEach(function (link) {
                 var div = document.createElement("div");
@@ -390,9 +392,11 @@
                 shareList.appendChild(div);
               });
             }
-            shareSection.classList.remove("hidden");
           })
           .catch(function () { /* ignore */ });
+      } else {
+        // No repo/path context for this item — keep the section hidden.
+        shareSection.classList.add("hidden");
       }
     }
 

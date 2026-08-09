@@ -142,10 +142,13 @@
                 </svg>
                 {{ t.tr("fb.share_links") }}
             </h4>
-            <div class="js-rp-share-links-list space-y-1 max-h-32 overflow-y-auto">
-                <!-- Populated by JS -->
+            <!-- The section is revealed as soon as an item is selected; the list
+                 row reserves min-h-5 so the panel doesn't jump when links arrive.
+                 The loading text is replaced in place by the links or the
+                 "no share links" hint — no section-wide hidden toggle. -->
+            <div class="js-rp-share-links-list space-y-1 max-h-32 overflow-y-auto min-h-5">
+                <div class="js-rp-share-links-loading text-xs text-gray-400 dark:text-gray-500 italic">{{ t.tr("fb.loading") }}</div>
             </div>
-            <div class="js-rp-no-share-links hidden text-xs text-gray-400 dark:text-gray-500">{{ t.tr("fb.no_share_links") }}</div>
         </div>
 
         <!-- Upload Links (fetched from API for the selected dir) -->
