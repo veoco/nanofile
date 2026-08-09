@@ -3,9 +3,9 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
 use crate::fs::core::file_ops::FileOps;
-use crate::fs::core::{read_fs_file_data, resolve_fs_id};
+use crate::fs::core::{read_fs_dir_data_batch, read_fs_file_data, resolve_fs_id};
 use crate::repository::Repositories;
-use base::common::{EMPTY_SHA1, FsDirData, FsFileData};
+use base::common::{EMPTY_SHA1, FsFileData};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{get_head_root_id, parent_path_from};
@@ -49,47 +49,41 @@ async fn collect_files(
         return Ok(()); // Already visited this dir
     }
 
-    let obj = repos
-        .fs_object
-        .find_by_repo_and_fs_id(repo_id, root_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("fs object not found".into()))?;
+    // Level frontier: each level reads all its directories with one batched
+    // `IN` query (O(#dirs) → O(depth)), mirroring `compute_tree_size`.
+    let mut frontier: Vec<(String, String)> = vec![(root_id.to_string(), prefix.to_string())];
+    while !frontier.is_empty() {
+        let ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
+        let dir_map = read_fs_dir_data_batch(repos, repo_id, &ids).await?;
+        let mut next: Vec<(String, String)> = Vec::new();
 
-    if obj.obj_type == 1i8 {
-        // File
-        let file_data: FsFileData =
-            serde_json::from_str(&obj.data).map_err(|e| AppError::Internal(e.to_string()))?;
-        files.insert(prefix.to_string(), file_data.size);
-    } else if obj.obj_type == 3i8 {
-        // Directory
-        let dir_data: FsDirData =
-            serde_json::from_str(&obj.data).map_err(|e| AppError::Internal(e.to_string()))?;
-
-        for entry in &dir_data.dirents {
-            let child_path = if prefix == "/" {
-                format!("/{}", entry.name)
-            } else {
-                format!("{}/{}", prefix, entry.name)
+        for (fs_id, dir_prefix) in &frontier {
+            // Missing/EMPTY dirs are absent from the batch map → skip.
+            let Some(dir_data) = dir_map.get(fs_id) else {
+                continue;
             };
+            for entry in &dir_data.dirents {
+                let child_path = if dir_prefix == "/" {
+                    format!("/{}", entry.name)
+                } else {
+                    format!("{}/{}", dir_prefix, entry.name)
+                };
 
-            if entry.mode == S_IFREG || entry.size > 0 {
-                // File entry
-                files.insert(child_path.clone(), entry.size);
-            } else if entry.mode == S_IFDIR {
-                // Directory entry - recurse
-                Box::pin(collect_files(
-                    repos,
-                    repo_id,
-                    &entry.id,
-                    &child_path,
-                    files,
-                    visited,
-                ))
-                .await?;
-            } else {
-                // Skip — could be a symlink or other type
+                if entry.mode == S_IFREG || entry.size > 0 {
+                    // File entry
+                    files.insert(child_path.clone(), entry.size);
+                } else if entry.mode == S_IFDIR {
+                    // Directory entry - schedule for the next level
+                    if visited.insert(entry.id.clone()) {
+                        next.push((entry.id.clone(), child_path));
+                    }
+                } else {
+                    // Skip — could be a symlink or other type
+                }
             }
         }
+
+        frontier = next;
     }
 
     Ok(())
