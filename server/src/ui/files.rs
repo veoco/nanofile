@@ -13,6 +13,7 @@ use crate::AppState;
 use crate::fs::core::download::Downloader;
 use crate::i18n::I18n;
 use base::error::AppError;
+use infra::common::DirEntry;
 use infra::common::util::{basename, parent_path_from};
 
 use super::auth_extractor::WebUser;
@@ -237,6 +238,115 @@ pub fn sort_entries(entries: &mut [FileEntry], sort: &str, sort_order: &str) {
             cmp
         }
     });
+}
+
+/// Build the full path (leading `/`) for a directory entry, matching the
+/// handler's prior `FileEntry` construction logic.
+fn entry_full_path(path: &str, name: &str) -> String {
+    if path == "/" {
+        format!("/{name}")
+    } else {
+        format!("{}/{}", path.trim_end_matches('/'), name)
+    }
+}
+
+/// Sort dirents exactly like `sort_entries` sorts `FileEntry`: directories
+/// always first, then by name/mtime/size with the requested order.
+fn sort_dirents(dirents: &mut [DirEntry], sort: &str, sort_order: &str) {
+    dirents.sort_by(|a, b| {
+        if a.entry_type != b.entry_type {
+            return if a.entry_type == "dir" {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        let cmp = match sort {
+            "mtime" => a.mtime.cmp(&b.mtime),
+            "size" => a.size.cmp(&b.size),
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        };
+        if sort_order == "desc" {
+            cmp.reverse()
+        } else {
+            cmp
+        }
+    });
+}
+
+/// A media dirent is a file that can show a thumbnail (image/audio/video).
+fn is_media_dirent(e: &DirEntry) -> bool {
+    e.entry_type == "file"
+        && (is_video_file(&e.name) || is_audio_file(&e.name) || is_thumbnail_image(&e.name))
+}
+
+/// Build the display `FileEntry` for a single dirent (called only on the
+/// current page slice after sorting/pagination, so cost scales with page size).
+fn build_file_entry(
+    t: &I18n,
+    repo_id: &str,
+    path: &str,
+    e: &DirEntry,
+    starred_set: &HashSet<String>,
+    tags_by_path: &HashMap<String, Vec<TagChip>>,
+) -> FileEntry {
+    let relative_path = if path == "/" {
+        e.name.clone()
+    } else {
+        format!("{}/{}", path.trim_start_matches('/'), e.name)
+    };
+    let full_path = entry_full_path(path, &e.name);
+    let is_previewable = is_previewable_file(&e.name);
+    let ext = if e.entry_type == "file" {
+        file_extension(&e.name)
+    } else {
+        None
+    };
+    let is_image_file = e.entry_type == "file" && is_thumbnail_image(&e.name);
+    let entry_is_video = e.entry_type == "file" && is_video_file(&e.name);
+    let entry_is_audio = e.entry_type == "file" && is_audio_file(&e.name);
+    // Images get in-process thumbnails; audio/video via ffmpeg (frame or
+    // embedded cover art). Audio without cover art falls back to an
+    // extension badge on the client (thumbnail endpoint returns 404).
+    let needs_thumb = is_image_file || entry_is_video || entry_is_audio;
+    let thumb_url = if needs_thumb {
+        Some(format!(
+            "/api2/repos/{}/thumbnail/?p={}&size=48",
+            repo_id,
+            urlencode_path(&full_path)
+        ))
+    } else {
+        None
+    };
+    let thumb_url_large = if needs_thumb {
+        Some(format!(
+            "/api2/repos/{}/thumbnail/?p={}&size=256",
+            repo_id,
+            urlencode_path(&full_path)
+        ))
+    } else {
+        None
+    };
+    FileEntry {
+        name: e.name.clone(),
+        entry_type: e.entry_type.clone(),
+        size: e.size,
+        size_display: format_size(e.size),
+        mtime: e.mtime,
+        mtime_display: format_mtime(t, e.mtime),
+        icon_color: file_icon_color(&e.name),
+        relative_path,
+        is_previewable,
+        starred: starred_set.contains(&full_path),
+        extension: ext,
+        image_thumbnail_url: thumb_url,
+        image_thumbnail_url_large: thumb_url_large,
+        is_video: entry_is_video,
+        is_audio: entry_is_audio,
+        modifier_email: e.modifier.clone(),
+        tags: tags_by_path.get(&full_path).cloned().unwrap_or_default(),
+        record_id: crate::service::fs::metadata::MetadataService::record_id_from_path(&full_path),
+    }
 }
 
 /// Returns true if the file extension is one that the thumbnail service supports
@@ -529,94 +639,27 @@ async fn file_browser_inner(
         }
     }
 
-    let mut entries: Vec<FileEntry> = entries_data
-        .1
-        .into_iter()
-        .map(|e| {
-            let relative_path = if path == "/" {
-                e.name.clone()
-            } else {
-                format!("{}/{}", path.trim_start_matches('/'), e.name)
-            };
-            let full_path = if path == "/" {
-                format!("/{}", e.name)
-            } else {
-                format!("{}/{}", path.trim_end_matches('/'), e.name)
-            };
-            let is_previewable = is_previewable_file(&e.name);
-            let ext = if e.entry_type == "file" {
-                file_extension(&e.name)
-            } else {
-                None
-            };
-            let is_image_file = e.entry_type == "file" && is_thumbnail_image(&e.name);
-            let entry_is_video = e.entry_type == "file" && is_video_file(&e.name);
-            let entry_is_audio = e.entry_type == "file" && is_audio_file(&e.name);
-            // Images get in-process thumbnails; audio/video via ffmpeg (frame or
-            // embedded cover art). Audio without cover art falls back to an
-            // extension badge on the client (thumbnail endpoint returns 404).
-            let needs_thumb = is_image_file || entry_is_video || entry_is_audio;
-            let thumb_url = if needs_thumb {
-                Some(format!(
-                    "/api2/repos/{}/thumbnail/?p={}&size=48",
-                    repo_id,
-                    urlencode_path(&full_path)
-                ))
-            } else {
-                None
-            };
-            let thumb_url_large = if needs_thumb {
-                Some(format!(
-                    "/api2/repos/{}/thumbnail/?p={}&size=256",
-                    repo_id,
-                    urlencode_path(&full_path)
-                ))
-            } else {
-                None
-            };
-            FileEntry {
-                name: e.name.clone(),
-                entry_type: e.entry_type,
-                size: e.size,
-                size_display: format_size(e.size),
-                mtime: e.mtime,
-                mtime_display: format_mtime(t, e.mtime),
-                icon_color: file_icon_color(&e.name),
-                relative_path,
-                is_previewable,
-                starred: starred_set.contains(&full_path),
-                extension: ext,
-                image_thumbnail_url: thumb_url,
-                image_thumbnail_url_large: thumb_url_large,
-                is_video: entry_is_video,
-                is_audio: entry_is_audio,
-                modifier_email: e.modifier.clone(),
-                tags: tags_by_path.get(&full_path).cloned().unwrap_or_default(),
-                record_id: crate::service::fs::metadata::MetadataService::record_id_from_path(
-                    &full_path,
-                ),
-            }
-        })
-        .collect();
+    // Sort/filter/paginate on the lightweight dirent level first, then build
+    // `FileEntry` only for the current page slice. This keeps the cost
+    // proportional to the page size instead of the whole folder.
+    let mut dirents = entries_data.1;
 
     // Apply the tag filter (current folder only, non-recursive).
     if let Some(tag) = query.tag.as_deref().filter(|t| !t.is_empty()) {
-        entries.retain(|e| e.tags.iter().any(|t| t.name == tag));
+        dirents.retain(|e| {
+            let full_path = entry_full_path(&path, &e.name);
+            tags_by_path
+                .get(&full_path)
+                .map(|chips| chips.iter().any(|c| c.name == tag))
+                .unwrap_or(false)
+        });
     }
 
-    // Sort: directories first, then by configurable field and order
-    let sort_field = query.sort.as_deref().unwrap_or("name");
-    let sort_order = query.sort_order.as_deref().unwrap_or("asc");
-    sort_entries(&mut entries, sort_field, sort_order);
-
-    // In-memory pagination (FS tree is content-addressed, can't SQL-paginate)
-    let total = entries.len() as i64;
+    let total = dirents.len() as i64;
     let per_page = query.per_page.unwrap_or(200).min(500) as usize;
     let page = query.page.unwrap_or(1).max(1) as usize;
-    let offset = (page - 1) * per_page;
-    let has_more = offset + per_page < total as usize;
 
-    // Determine view mode after pagination so gallery can use the same page slice
+    // Determine view mode before building so we only pay for the active view.
     let render_view = match query.view.as_deref() {
         Some("list") => "list",
         Some("grid") => "grid",
@@ -624,46 +667,56 @@ async fn file_browser_inner(
         _ => "all",
     };
 
-    // Gallery groups: built from ALL entries sorted by mtime desc, independently paginated.
-    // This ensures gallery maintains correct reverse-chronological order regardless
-    // of the configured sort used by list/grid views.
-    let mut gallery_media: Vec<FileEntry> = Vec::new();
-    let gallery_total: i64;
-    if render_view == "gallery" || render_view == "all" {
-        let mut media: Vec<FileEntry> = entries
-            .iter()
-            .filter(|e| e.entry_type == "file" && (e.is_video || e.image_thumbnail_url.is_some()))
-            .cloned()
-            .collect();
-        media.sort_by_key(|b| std::cmp::Reverse(b.mtime)); // mtime descending
-        gallery_total = media.len() as i64;
-        gallery_media = media;
+    // Sort: directories first, then by configurable field and order
+    let sort_field = query.sort.as_deref().unwrap_or("name");
+    let sort_order = query.sort_order.as_deref().unwrap_or("asc");
+
+    // list/grid view: sort dirents, paginate, then build FileEntry per page row.
+    let entries: Vec<FileEntry>;
+    let has_more: bool;
+    if render_view == "list" || render_view == "grid" || render_view == "all" {
+        sort_dirents(&mut dirents, sort_field, sort_order);
+        let offset = (page - 1) * per_page;
+        if offset < dirents.len() {
+            let end = (offset + per_page).min(dirents.len());
+            has_more = end < dirents.len();
+            entries = dirents[offset..end]
+                .iter()
+                .map(|d| build_file_entry(t, &repo_id, &path, d, &starred_set, &tags_by_path))
+                .collect();
+        } else {
+            has_more = false;
+            entries = Vec::new();
+        }
     } else {
-        gallery_total = 0;
+        has_more = false;
+        entries = Vec::new();
     }
 
-    // Now paginate entries for list/grid views
-    entries = if offset < entries.len() {
-        let end = (offset + per_page).min(entries.len());
-        entries[offset..end].to_vec()
-    } else {
-        vec![]
-    };
-
-    // Build gallery month groups from the mtime-desc sorted media (paginated independently)
-    let gallery_groups: Vec<GalleryMonthGroup> = if render_view == "gallery" || render_view == "all"
-    {
-        let gallery_offset = (page - 1) * per_page;
-        let paginated: Vec<FileEntry> = if gallery_offset < gallery_media.len() {
-            let end = (gallery_offset + per_page).min(gallery_media.len());
-            gallery_media[gallery_offset..end].to_vec()
+    // Gallery view: media dirents sorted by mtime desc, independently paginated,
+    // then FileEntry built only for the page. Gallery keeps reverse-chronological
+    // order regardless of the configured sort used by list/grid views.
+    let gallery_groups: Vec<GalleryMonthGroup>;
+    let gallery_total: i64;
+    if render_view == "gallery" || render_view == "all" {
+        let mut media: Vec<&DirEntry> = dirents.iter().filter(|d| is_media_dirent(d)).collect();
+        media.sort_by_key(|d| std::cmp::Reverse(d.mtime)); // mtime descending
+        gallery_total = media.len() as i64;
+        let offset = (page - 1) * per_page;
+        let paginated: Vec<FileEntry> = if offset < media.len() {
+            let end = (offset + per_page).min(media.len());
+            media[offset..end]
+                .iter()
+                .map(|d| build_file_entry(t, &repo_id, &path, d, &starred_set, &tags_by_path))
+                .collect()
         } else {
-            vec![]
+            Vec::new()
         };
-        group_entries_by_month(t, paginated)
+        gallery_groups = group_entries_by_month(t, paginated);
     } else {
-        vec![]
-    };
+        gallery_groups = Vec::new();
+        gallery_total = 0;
+    }
 
     // In gallery-only mode, override pagination info to reflect media counts
     let (effective_total, effective_has_more) = if render_view == "gallery" {
@@ -734,10 +787,10 @@ async fn file_browser_inner(
             current_path: path,
             breadcrumbs,
             entries,
-            total,
-            has_more,
+            total: effective_total,
+            has_more: effective_has_more,
             page: page as u32,
-            render_view: "all",
+            render_view,
             active_page: "repos",
             left_panel_repos: ctx.left_panel_repos,
             current_repo_id,
@@ -1180,5 +1233,84 @@ mod tests {
         sort_entries(&mut entries, "invalid_field", "asc");
         assert_eq!(entries[0].name, "a");
         assert_eq!(entries[1].name, "b");
+    }
+
+    fn make_dirent(name: &str, entry_type: &str, size: i64, mtime: i64) -> DirEntry {
+        DirEntry {
+            id: String::new(),
+            entry_type: entry_type.to_string(),
+            name: name.to_string(),
+            size,
+            mtime,
+            permission: "rw".to_string(),
+            modifier: String::new(),
+            parent_dir: None,
+            modifier_name: None,
+            modifier_contact_email: None,
+        }
+    }
+
+    #[test]
+    fn test_sort_dirents_name_asc_dirs_first() {
+        let mut dirents = vec![
+            make_dirent("b", "file", 0, 3),
+            make_dirent("a", "dir", 0, 2),
+            make_dirent("c", "file", 0, 1),
+            make_dirent("d", "dir", 0, 4),
+        ];
+        sort_dirents(&mut dirents, "name", "asc");
+        assert_eq!(dirents[0].name, "a"); // dir first
+        assert_eq!(dirents[1].name, "d"); // dir second
+        assert_eq!(dirents[2].name, "b"); // file
+        assert_eq!(dirents[3].name, "c");
+    }
+
+    #[test]
+    fn test_sort_dirents_name_desc() {
+        let mut dirents = vec![
+            make_dirent("b", "file", 0, 0),
+            make_dirent("a", "file", 0, 0),
+            make_dirent("c", "dir", 0, 0),
+        ];
+        sort_dirents(&mut dirents, "name", "desc");
+        assert_eq!(dirents[0].name, "c"); // dir first
+        assert_eq!(dirents[1].name, "b"); // files: desc order
+        assert_eq!(dirents[2].name, "a");
+    }
+
+    #[test]
+    fn test_sort_dirents_size_and_mtime() {
+        let mut by_size = vec![
+            make_dirent("big", "file", 1000, 0),
+            make_dirent("small", "file", 10, 0),
+            make_dirent("dir1", "dir", 999, 0),
+        ];
+        sort_dirents(&mut by_size, "size", "asc");
+        assert_eq!(by_size[0].name, "dir1");
+        assert_eq!(by_size[1].name, "small");
+        assert_eq!(by_size[2].name, "big");
+
+        let mut by_mtime = vec![
+            make_dirent("old", "file", 0, 10),
+            make_dirent("new", "file", 0, 100),
+            make_dirent("dir1", "dir", 0, 50),
+        ];
+        sort_dirents(&mut by_mtime, "mtime", "desc");
+        assert_eq!(by_mtime[0].name, "dir1");
+        assert_eq!(by_mtime[1].name, "new");
+        assert_eq!(by_mtime[2].name, "old");
+    }
+
+    #[test]
+    fn test_sort_dirents_case_insensitive() {
+        let mut dirents = vec![
+            make_dirent("B", "file", 0, 0),
+            make_dirent("a", "file", 0, 0),
+            make_dirent("c", "file", 0, 0),
+        ];
+        sort_dirents(&mut dirents, "name", "asc");
+        assert_eq!(dirents[0].name, "a");
+        assert_eq!(dirents[1].name, "B");
+        assert_eq!(dirents[2].name, "c");
     }
 }

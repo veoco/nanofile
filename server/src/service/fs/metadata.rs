@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
@@ -39,7 +40,7 @@ impl MetadataService {
     pub fn record_id_from_path(path: &str) -> String {
         let mut s = String::with_capacity(path.len() * 2);
         for b in path.as_bytes() {
-            s.push_str(&format!("{b:02x}"));
+            let _ = write!(s, "{b:02x}");
         }
         s
     }

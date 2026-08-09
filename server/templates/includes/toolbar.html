@@ -855,12 +855,13 @@ window.getVisibleView = function () {
     return 'list';
 };
 
-async function refreshFileList() {
+async function refreshFileList(viewOverride) {
     var url = window.location.pathname;
-    var view = getVisibleView();
+    var view = viewOverride || getVisibleView();
     var sep = url.indexOf('?') !== -1 ? '&' : '?';
-    // Always render both views so switching views shows entries
-    url = url + sep + 'partial=1&view=all';
+    // Render only the active view (single-view mode); switching to a view whose
+    // container is empty triggers a reload of that view.
+    url = url + sep + 'partial=1&view=' + view;
     var sort = (typeof window.getSort === "function") ? window.getSort() : null;
     if (sort) {
         url += '&sort=' + sort.sort + '&sort_order=' + sort.sort_order;
@@ -879,6 +880,7 @@ async function refreshFileList() {
                 if (typeof window.setMode === "function") window.setMode(view);
                 if (typeof window.initSortUI === "function") window.initSortUI();
                 if (typeof window.initInfiniteScroll === "function") window.initInfiniteScroll();
+                if (typeof window.applyViewParams === "function") window.applyViewParams();
             } else {
                 window.location.reload();
             }

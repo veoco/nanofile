@@ -71,19 +71,53 @@
     return "list";
   };
 
+  // Attach the current view mode to every /files/ link so a full-page navigation
+  // renders only the active view instead of all three.
+  function applyViewParams() {
+    var v = localStorage.getItem("fileViewMode") || "list";
+    var links = document.querySelectorAll('a[href*="/files/"]');
+    for (var i = 0; i < links.length; i++) {
+      try {
+        var u = new URL(links[i].href);
+        if (u.searchParams.get("view") !== v) u.searchParams.set("view", v);
+        links[i].href = u.toString();
+      } catch (_) {}
+    }
+  }
+  window.applyViewParams = applyViewParams;
+
+  // Whether the given view container currently holds any rendered rows.
+  function viewHasContent(m) {
+    var el = m === "list" ? document.querySelector(".js-file-list-view")
+           : m === "grid" ? document.querySelector(".js-file-grid-view")
+           : document.querySelector(".js-gallery-view");
+    if (!el) return false;
+    return !!el.querySelector(".js-entry-row, .gallery-month-group");
+  }
+
+  // Switch view; a container that is empty (single-view render only fills the
+  // active view) is loaded via a partial refresh of that view.
+  function switchTo(m) {
+    setMode(m);
+    if (!viewHasContent(m) && typeof window.refreshFileList === "function") {
+      window.refreshFileList(m);
+    }
+  }
+
   // Event delegation on document so view toggle works after partial refresh
   document.addEventListener("click", function (e) {
     var btn = e.target.closest(".js-view-list");
-    if (btn) { setMode("list"); return; }
+    if (btn) { switchTo("list"); return; }
     btn = e.target.closest(".js-view-grid");
-    if (btn) { setMode("grid"); return; }
+    if (btn) { switchTo("grid"); return; }
     btn = e.target.closest(".js-view-gallery");
-    if (btn) { setMode("gallery"); }
+    if (btn) { switchTo("gallery"); }
   });
 
   // Initialize mode from localStorage on page load
   var mode = localStorage.getItem("fileViewMode") || "list";
   setMode(mode);
+  applyViewParams();
 
   // ─── Sort controls ──────────────────────────────────────────────────
   function applySortUI(field, order) {
