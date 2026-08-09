@@ -2,6 +2,7 @@ use crate::domain;
 use crate::repository::Repositories;
 use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
+use futures::StreamExt;
 use infra::crypto::random_key::encrypt_block;
 use infra::entity::{commit, repo};
 use infra::events;
@@ -71,25 +72,41 @@ impl FileOps {
         // same repo proceed.
         let file_chunks = infra::storage::cdc::file_chunk_cdc(data);
 
-        let mut block_ids = Vec::new();
-        let mut total_size: i64 = 0;
+        // Write blocks concurrently (encryption is CPU-bound, block I/O is
+        // disk-bound — overlapping them raises throughput for large files).
+        // `.buffered(4)` preserves input order, so block_ids stay in chunk
+        // order. Blocks are content-addressed and this runs outside the
+        // per-repo write lock, so concurrent writers can't race here.
+        let results: Vec<Result<(usize, String), AppError>> =
+            futures::stream::iter(file_chunks.iter().cloned().enumerate())
+                .map(|(idx, (offset, size))| {
+                    let chunk_data = &data[offset..offset + size];
+                    let store = block_store.clone();
+                    async move {
+                        // Seafile encrypts each block individually with a
+                        // per-block random IV. The plaintext branch passes the
+                        // original slice through, avoiding a whole-block copy.
+                        let block_id = match enc_key {
+                            Some((key, iv)) => {
+                                let encrypted = encrypt_block(chunk_data, key, iv);
+                                store.write_block(&encrypted).await?
+                            }
+                            None => store.write_block(chunk_data).await?,
+                        };
+                        Ok((idx, block_id))
+                    }
+                })
+                .buffered(4)
+                .collect::<Vec<_>>()
+                .await;
 
-        for (offset, size) in &file_chunks {
-            let chunk_data = &data[*offset..*offset + size];
-            // If encryption key is provided, encrypt the chunk before writing.
-            // Seafile encrypts each block individually with a per-block random IV.
-            // The plaintext branch passes the original slice through to avoid an
-            // extra whole-block copy on the write hot path.
-            let block_id = match enc_key {
-                Some((key, iv)) => {
-                    let encrypted = encrypt_block(chunk_data, key, iv);
-                    block_store.write_block(&encrypted).await?
-                }
-                None => block_store.write_block(chunk_data).await?,
-            };
+        let mut block_ids = Vec::with_capacity(file_chunks.len());
+        for r in results {
+            let (idx, block_id) = r?;
+            debug_assert_eq!(idx, block_ids.len(), "buffered preserves input order");
             block_ids.push(block_id);
-            total_size += *size as i64;
         }
+        let total_size: i64 = file_chunks.iter().map(|(_, size)| *size as i64).sum();
 
         let file_fs_data = FsFileData {
             block_ids,
