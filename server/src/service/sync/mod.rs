@@ -51,23 +51,74 @@ impl SyncService {
     }
 
     /// Get all repos accessible to a user with their sync tokens.
+    ///
+    /// Batch-loads repos, owners and sync tokens so the total work is a
+    /// handful of queries instead of ~4-5 per member repo.
     pub async fn accessible_repos(&self, user_id: i32) -> Result<Vec<AccessibleRepo>, AppError> {
         let memberships = self.repos.member.find_by_user_id(user_id).await?;
-        let mut result = Vec::new();
-        for member in &memberships {
-            let r = self.repos.repo.find_by_id(&member.repo_id).await?;
-            if let Some(r) = r {
-                let token = self.get_or_create_sync_token(&r.id, user_id).await?;
-                let owner = self.repos.user.find_by_id(r.owner_id).await?;
-                result.push(AccessibleRepo {
-                    repo_id: r.id.clone(),
-                    repo_name: r.name,
-                    repo_desc: r.description,
-                    owner_email: owner.map(|u| u.email).unwrap_or_default(),
-                    token,
-                    permission: member.permission.clone(),
-                });
+
+        // Distinct repo ids across memberships.
+        let mut repo_ids: Vec<String> = Vec::with_capacity(memberships.len());
+        let mut seen: HashSet<&str> = HashSet::with_capacity(memberships.len());
+        for m in &memberships {
+            if seen.insert(m.repo_id.as_str()) {
+                repo_ids.push(m.repo_id.clone());
             }
+        }
+
+        let repos = self.repos.repo.find_by_ids(&repo_ids).await?;
+        let repo_by_id: HashMap<&str, &infra::entity::repo::Model> =
+            repos.iter().map(|r| (r.id.as_str(), r)).collect();
+
+        // Distinct owner ids for the batch owner lookup.
+        let mut owner_ids: Vec<i32> = Vec::new();
+        let mut owner_seen: HashSet<i32> = HashSet::new();
+        for r in &repos {
+            if owner_seen.insert(r.owner_id) {
+                owner_ids.push(r.owner_id);
+            }
+        }
+        let owners = self.repos.user.find_by_ids(&owner_ids).await?;
+        let owner_email: HashMap<i32, String> =
+            owners.iter().map(|u| (u.id, u.email.clone())).collect();
+
+        // Existing sync tokens for all member repos in a single query.
+        let tokens = self
+            .repos
+            .sync_token
+            .find_by_repos_and_user(&repo_ids, user_id)
+            .await?;
+        let token_by_repo: HashMap<&str, &infra::entity::sync_token::Model> =
+            tokens.iter().map(|t| (t.repo_id.as_str(), t)).collect();
+
+        let mut result = Vec::with_capacity(memberships.len());
+        for member in &memberships {
+            let Some(r) = repo_by_id.get(member.repo_id.as_str()) else {
+                continue; // repo deleted → skip, matching the previous behavior
+            };
+            let token = match token_by_repo.get(r.id.as_str()) {
+                Some(t) => t.token.clone(),
+                None => {
+                    // Membership already grants access, so the permission
+                    // re-check inside ensure_sync_token is redundant here.
+                    // Create the token directly.
+                    let value = crate::service::auth::token::generate_sync_token();
+                    let now = chrono::Utc::now().timestamp();
+                    self.repos
+                        .sync_token
+                        .create(&r.id, user_id, value.clone(), None, now)
+                        .await?;
+                    value
+                }
+            };
+            result.push(AccessibleRepo {
+                repo_id: r.id.clone(),
+                repo_name: r.name.clone(),
+                repo_desc: r.description.clone(),
+                owner_email: owner_email.get(&r.owner_id).cloned().unwrap_or_default(),
+                token,
+                permission: member.permission.clone(),
+            });
         }
         Ok(result)
     }
@@ -108,13 +159,10 @@ impl SyncService {
         &self,
         repo_ids: &[String],
     ) -> Result<HashMap<String, String>, AppError> {
-        let mut commits = HashMap::new();
-        for repo_id in repo_ids {
-            let repo_model = self.repos.repo.find_by_id(repo_id).await?;
-            if let Some(r) = repo_model
-                && let Some(head_id) = &r.head_commit_id
-            {
-                commits.insert(repo_id.clone(), head_id.clone());
+        let mut commits = HashMap::with_capacity(repo_ids.len());
+        for r in self.repos.repo.find_by_ids(repo_ids).await? {
+            if let Some(head_id) = &r.head_commit_id {
+                commits.insert(r.id, head_id.clone());
             }
         }
         Ok(commits)
@@ -322,14 +370,6 @@ impl SyncService {
             .find_by_repo_and_commit_id(repo_id, parent_id)
             .await?
             .is_some())
-    }
-
-    async fn get_or_create_sync_token(
-        &self,
-        repo_id: &str,
-        user_id: i32,
-    ) -> Result<String, AppError> {
-        crate::service::auth::token::ensure_sync_token(&self.repos, repo_id, user_id).await
     }
 
     // ── Branch update (sync protocol) ──────────────────────────────────

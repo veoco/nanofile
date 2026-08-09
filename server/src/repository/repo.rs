@@ -35,6 +35,9 @@ pub struct CreateRepoParams {
 #[async_trait]
 pub trait RepoRepository: Send + Sync {
     async fn find_by_id(&self, repo_id: &str) -> Result<Option<repo::Model>, AppError>;
+    /// Fetch multiple repos by id in one query (chunked to stay under the
+    /// SQLite variable limit). Repos that don't exist are simply absent.
+    async fn find_by_ids(&self, repo_ids: &[String]) -> Result<Vec<repo::Model>, AppError>;
     async fn find_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError>;
     /// Sum the `size` of all repos owned by a user, in a single SQL query.
     async fn sum_size_by_owner(&self, user_id: i32) -> Result<i64, AppError>;
@@ -116,6 +119,23 @@ impl RepoRepository for DbRepoRepository {
         Ok(repo::Entity::find_by_id(repo_id)
             .one(self.db.as_ref())
             .await?)
+    }
+
+    async fn find_by_ids(&self, repo_ids: &[String]) -> Result<Vec<repo::Model>, AppError> {
+        if repo_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // SQLite has a ~999 bound on bound parameters; chunk the IN list.
+        const IN_BATCH: usize = 500;
+        let mut out = Vec::new();
+        for chunk in repo_ids.chunks(IN_BATCH) {
+            let rows = repo::Entity::find()
+                .filter(repo::Column::Id.is_in(chunk))
+                .all(self.db.as_ref())
+                .await?;
+            out.extend(rows);
+        }
+        Ok(out)
     }
 
     async fn find_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError> {

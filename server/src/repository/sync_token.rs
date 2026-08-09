@@ -12,6 +12,13 @@ pub trait SyncTokenRepository: Send + Sync {
         repo_id: &str,
         user_id: i32,
     ) -> Result<Option<sync_token::Model>, AppError>;
+    /// Fetch tokens for many (repo, user) pairs in one query (chunked to stay
+    /// under the SQLite variable limit). Used to batch `accessible_repos`.
+    async fn find_by_repos_and_user(
+        &self,
+        repo_ids: &[String],
+        user_id: i32,
+    ) -> Result<Vec<sync_token::Model>, AppError>;
     async fn find_by_token(&self, token: &str) -> Result<Option<sync_token::Model>, AppError>;
     async fn find_by_token_and_repo(
         &self,
@@ -62,6 +69,28 @@ impl SyncTokenRepository for DbSyncTokenRepository {
             .filter(sync_token::Column::UserId.eq(user_id))
             .one(self.db.as_ref())
             .await?)
+    }
+
+    async fn find_by_repos_and_user(
+        &self,
+        repo_ids: &[String],
+        user_id: i32,
+    ) -> Result<Vec<sync_token::Model>, AppError> {
+        if repo_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // SQLite has a ~999 bound on bound parameters; chunk the IN list.
+        const IN_BATCH: usize = 500;
+        let mut out = Vec::new();
+        for chunk in repo_ids.chunks(IN_BATCH) {
+            let rows = sync_token::Entity::find()
+                .filter(sync_token::Column::RepoId.is_in(chunk))
+                .filter(sync_token::Column::UserId.eq(user_id))
+                .all(self.db.as_ref())
+                .await?;
+            out.extend(rows);
+        }
+        Ok(out)
     }
 
     async fn find_by_token(&self, token: &str) -> Result<Option<sync_token::Model>, AppError> {
