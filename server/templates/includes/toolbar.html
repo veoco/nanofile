@@ -849,19 +849,15 @@ function escapeAttr(str) {
 }
 
 // ─── Partial refresh ───
-window.getVisibleView = function () {
-    var gridView = document.querySelector('.js-file-grid-view');
-    if (gridView && !gridView.classList.contains('hidden')) return 'grid';
-    return 'list';
-};
-
-async function refreshFileList(viewOverride) {
+async function refreshFileList() {
+    // Render all three views (view=all) so view switching stays a pure
+    // client-side toggle after a mutation. The _viewRefreshing counter
+    // suppresses pagination while a refresh is in flight so the infinite-scroll
+    // observer doesn't load page 2 into the soon-to-be-replaced DOM.
+    window._viewRefreshing = (window._viewRefreshing || 0) + 1;
     var url = window.location.pathname;
-    var view = viewOverride || getVisibleView();
     var sep = url.indexOf('?') !== -1 ? '&' : '?';
-    // Render only the active view (single-view mode); switching to a view whose
-    // container is empty triggers a reload of that view.
-    url = url + sep + 'partial=1&view=' + view;
+    url = url + sep + 'partial=1&view=all';
     var sort = (typeof window.getSort === "function") ? window.getSort() : null;
     if (sort) {
         url += '&sort=' + sort.sort + '&sort_order=' + sort.sort_order;
@@ -877,10 +873,9 @@ async function refreshFileList(viewOverride) {
             var container = document.querySelector('.file-list-container');
             if (container) {
                 container.outerHTML = html;
-                if (typeof window.setMode === "function") window.setMode(view);
+                if (typeof window.setMode === "function") window.setMode(localStorage.getItem("fileViewMode") || "list");
                 if (typeof window.initSortUI === "function") window.initSortUI();
                 if (typeof window.initInfiniteScroll === "function") window.initInfiniteScroll();
-                if (typeof window.applyViewParams === "function") window.applyViewParams();
                 // A full refresh replaces the list with page 1 — start at the top so
                 // the user isn't dropped at the bottom of the re-sorted/reloaded list
                 // (which used to trigger an immediate load-more of page 2).
@@ -894,6 +889,8 @@ async function refreshFileList(viewOverride) {
         }
     } catch (_) {
         window.location.reload();
+    } finally {
+        window._viewRefreshing = Math.max(0, (window._viewRefreshing || 1) - 1);
     }
 }
 </script>

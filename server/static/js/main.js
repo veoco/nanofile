@@ -1272,6 +1272,9 @@
   };
 
   window.loadMoreEntries = async function () {
+    // A partial refresh (upload/delete/sort) is replacing the list; don't load
+    // page 2 into the old DOM that is about to be swapped out.
+    if (window._viewRefreshing) return;
     var container = getVisibleViewContainer();
     if (!container) return;
     var btn = document.querySelector(".js-load-more-btn");

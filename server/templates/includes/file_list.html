@@ -396,8 +396,8 @@
 <!-- Gallery View (hidden by default) -->
 <div class="js-gallery-view hidden"
      data-page="{{ page }}"
-     data-total="{{ total }}"
-     data-has-more="{% if has_more %}true{% else %}false{% endif %}">
+     data-total="{{ gallery_total }}"
+     data-has-more="{% if gallery_has_more %}true{% else %}false{% endif %}">
     {% if render_view != "list" && render_view != "grid" %}
     {% for group in gallery_groups %}
     <div class="gallery-month-group bg-white dark:bg-surface-900">

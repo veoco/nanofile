@@ -40,8 +40,13 @@ pub struct FileBrowserTemplate {
     pub is_empty: bool,
     pub total: i64,
     pub has_more: bool,
+    /// Gallery paginates the media subset independently (mtime-desc), so its
+    /// total/has_more differ from the list/grid all-file counts.
+    pub gallery_total: i64,
+    pub gallery_has_more: bool,
     pub page: u32,
-    /// "all" = render both views (full page), "list" = only list, "grid" = only grid
+    /// "all" = render all three views (full page), "list" = only list,
+    /// "grid" = only grid, "gallery" = only gallery
     pub render_view: &'static str,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
@@ -74,8 +79,13 @@ pub struct FileBrowserCoreTemplate {
     pub is_empty: bool,
     pub total: i64,
     pub has_more: bool,
+    /// Gallery paginates the media subset independently (mtime-desc), so its
+    /// total/has_more differ from the list/grid all-file counts.
+    pub gallery_total: i64,
+    pub gallery_has_more: bool,
     pub page: u32,
-    /// "all" = render both views (full page), "list" = only list, "grid" = only grid
+    /// "all" = render all three views (full page), "list" = only list,
+    /// "grid" = only grid, "gallery" = only gallery
     pub render_view: &'static str,
     pub csrf_token: String,
     pub sort_field: String,
@@ -669,12 +679,19 @@ async fn file_browser_inner(
     let per_page = query.per_page.unwrap_or(200).min(500) as usize;
     let page = query.page.unwrap_or(1).max(1) as usize;
 
-    // Determine view mode before building so we only pay for the active view.
-    let render_view = match query.view.as_deref() {
-        Some("list") => "list",
-        Some("grid") => "grid",
-        Some("gallery") => "gallery",
-        _ => "all",
+    // Full-page loads always render all three views so view switching is a pure
+    // client-side class toggle with no network round-trip. Partial reloads
+    // (pagination / post-mutation refresh) render only the requested view.
+    let is_partial = query.partial.as_deref() == Some("1");
+    let render_view = if is_partial {
+        match query.view.as_deref() {
+            Some("list") => "list",
+            Some("grid") => "grid",
+            Some("gallery") => "gallery",
+            _ => "all",
+        }
+    } else {
+        "all"
     };
 
     // Sort: directories first, then by configurable field and order
@@ -728,12 +745,10 @@ async fn file_browser_inner(
         gallery_total = 0;
     }
 
-    // In gallery-only mode, override pagination info to reflect media counts
-    let (effective_total, effective_has_more) = if render_view == "gallery" {
-        (gallery_total, page * per_page < gallery_total as usize)
-    } else {
-        (total, has_more)
-    };
+    // Gallery paginates the media subset independently (mtime-desc); expose
+    // both the all-file counts (list/grid) and the media counts (gallery) to
+    // the template so each view container carries its own pagination state.
+    let gallery_has_more = page * per_page < gallery_total as usize;
 
     // The folder-level empty state applies to list/grid/all renders. In gallery-only
     // mode `entries` is intentionally empty (gallery is built from `gallery_groups`),
@@ -760,8 +775,6 @@ async fn file_browser_inner(
         }
     }
 
-    let is_partial = query.partial.as_deref() == Some("1");
-
     let csrf_token =
         crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
 
@@ -775,8 +788,10 @@ async fn file_browser_inner(
             breadcrumbs: breadcrumbs.clone(),
             entries,
             is_empty,
-            total: effective_total,
-            has_more: effective_has_more,
+            total,
+            has_more,
+            gallery_total,
+            gallery_has_more,
             page: page as u32,
             render_view,
             csrf_token,
@@ -805,8 +820,10 @@ async fn file_browser_inner(
             breadcrumbs,
             entries,
             is_empty,
-            total: effective_total,
-            has_more: effective_has_more,
+            total,
+            has_more,
+            gallery_total,
+            gallery_has_more,
             page: page as u32,
             render_view,
             active_page: "repos",
