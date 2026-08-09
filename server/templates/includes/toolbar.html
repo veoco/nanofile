@@ -771,13 +771,13 @@ function updateProgressDialog() {
             actionHtml =
                 '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" onclick="retryUploadItem(' + item.id + ')">' +
                   '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
-                  ' + __t('fb.retry') + '</button>';
+                  __t('fb.retry') + '</button>';
         } else { // cancelled
             statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-gray-400"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' + __t('fb.cancelled') + '</span>';
             actionHtml =
                 '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" onclick="retryUploadItem(' + item.id + ')">' +
                   '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
-                  ' + __t('fb.retry') + '</button>';
+                  __t('fb.retry') + '</button>';
         }
 
         listHtml +=
@@ -881,6 +881,11 @@ async function refreshFileList(viewOverride) {
                 if (typeof window.initSortUI === "function") window.initSortUI();
                 if (typeof window.initInfiniteScroll === "function") window.initInfiniteScroll();
                 if (typeof window.applyViewParams === "function") window.applyViewParams();
+                // A full refresh replaces the list with page 1 — start at the top so
+                // the user isn't dropped at the bottom of the re-sorted/reloaded list
+                // (which used to trigger an immediate load-more of page 2).
+                var mainEl = document.querySelector("main");
+                if (mainEl) mainEl.scrollTop = 0;
             } else {
                 window.location.reload();
             }

@@ -1,4 +1,4 @@
-{% if entries.is_empty() %}
+{% if is_empty %}
 <div class="px-4 py-12 text-center">
     <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
@@ -236,7 +236,7 @@
         {% if let Some(thumb_url) = entry.image_thumbnail_url %}
         <div class="h-9 w-9 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden">
             <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy"
-                 onerror="window.thumbFailed(this)">
+                 onerror="window.thumbFailed&&window.thumbFailed(this)">
             <span class="js-thb-fallback hidden text-[10px] leading-none font-semibold {{ entry.icon_color }}" title="{{ entry.extension.as_deref().unwrap_or("?") }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(3) }}</span>
         </div>
         {% else %}
@@ -373,7 +373,7 @@
         {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
         <div class="aspect-square rounded-md flex items-center justify-center mb-2 overflow-hidden">
             <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy"
-                 onerror="window.thumbFailed(this)">
+                 onerror="window.thumbFailed&&window.thumbFailed(this)">
             <span class="js-thb-fallback hidden text-xl font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
         </div>
         {% else %}
@@ -427,7 +427,7 @@
                 {% if entry.is_video %}
                 {% if let Some(thumb_url) = entry.image_thumbnail_url_large %}
                 <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy"
-                     onerror="window.thumbFailed(this)">
+                     onerror="window.thumbFailed&&window.thumbFailed(this)">
                 <span class="js-thb-fallback hidden absolute inset-0 items-center justify-center text-gray-400 pointer-events-none">
                     <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
                 </span>
@@ -449,7 +449,7 @@
                 {% endif %}
                 {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
                 <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy"
-                     onerror="window.thumbFailed(this)">
+                     onerror="window.thumbFailed&&window.thumbFailed(this)">
                 <span class="js-thb-fallback hidden absolute inset-0 items-center justify-center text-gray-400 pointer-events-none">
                     <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
                 </span>

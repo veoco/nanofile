@@ -99,6 +99,10 @@
   // active view) is loaded via a partial refresh of that view.
   function switchTo(m) {
     setMode(m);
+    // Each view starts at page 1; reset the scroll so the user isn't dropped at
+    // the bottom of the shorter target view (which used to auto-load page 2).
+    var main = document.querySelector("main");
+    if (main) main.scrollTop = 0;
     if (!viewHasContent(m) && typeof window.refreshFileList === "function") {
       window.refreshFileList(m);
     }
@@ -397,14 +401,12 @@
     var tagsList = ct.querySelector(".js-rp-tags-list");
     var tagInput = ct.querySelector(".js-rp-tag-input");
     var tagDatalist = ct.querySelector("#js-rp-tag-options");
-    var noTags = ct.querySelector(".js-rp-no-tags");
     var addTagBtn = ct.querySelector(".js-rp-tag-add");
     if (tagsSection && tagsList && d.repoId && d.recordId) {
       // Keep the section visible while tags load so the panel layout doesn't
       // shift when they arrive; the chip row height is reserved via min-h.
       tagsSection.classList.remove("hidden");
       tagsList.innerHTML = "";
-      noTags.classList.add("hidden");
       if (tagInput) tagInput.value = "";
       var tagsReqId = ++rpTagsReqId; // discard stale responses from earlier selections
 
@@ -415,7 +417,16 @@
 
       function renderTagChips() {
         tagsList.innerHTML = "";
-        noTags.classList.toggle("hidden", fileTagIds.length > 0);
+        // When the file has no tags, render the hint inside the chip row (the
+        // slot that would hold chips) so there's no blank reserved area and the
+        // row height stays stable — no separate "no tags" line below the input.
+        if (fileTagIds.length === 0) {
+          tagsList.innerHTML =
+            '<span class="js-rp-no-tags text-xs text-gray-400 dark:text-gray-500 italic">' +
+            escapeHtml(__t('fb.no_tags')) +
+            "</span>";
+          return;
+        }
         fileTagIds.forEach(function (tid) {
           var tag = allTags.find(function (t) { return String(t.id) === String(tid); });
           if (!tag) return;
@@ -475,7 +486,7 @@
         renderTagChips();
       }).catch(function () {
         if (tagsReqId !== rpTagsReqId) return; // stale response
-        noTags.classList.remove("hidden");
+        renderTagChips(); // fileTagIds is empty → shows the "no tags" hint
       });
 
       if (addTagBtn && tagInput) {

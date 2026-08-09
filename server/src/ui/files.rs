@@ -33,6 +33,11 @@ pub struct FileBrowserTemplate {
     pub current_path: String,
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub entries: Vec<FileEntry>,
+    /// Whether the *currently rendered view* has content (drives the folder-level
+    /// empty state). For gallery-only renders `entries` is intentionally empty
+    /// (gallery is built from `gallery_groups`), so the empty state must be
+    /// view-aware instead of gating on `entries.is_empty()`.
+    pub is_empty: bool,
     pub total: i64,
     pub has_more: bool,
     pub page: u32,
@@ -62,6 +67,11 @@ pub struct FileBrowserCoreTemplate {
     pub current_path: String,
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub entries: Vec<FileEntry>,
+    /// Whether the *currently rendered view* has content (drives the folder-level
+    /// empty state). For gallery-only renders `entries` is intentionally empty
+    /// (gallery is built from `gallery_groups`), so the empty state must be
+    /// view-aware instead of gating on `entries.is_empty()`.
+    pub is_empty: bool,
     pub total: i64,
     pub has_more: bool,
     pub page: u32,
@@ -725,6 +735,12 @@ async fn file_browser_inner(
         (total, has_more)
     };
 
+    // The folder-level empty state applies to list/grid/all renders. In gallery-only
+    // mode `entries` is intentionally empty (gallery is built from `gallery_groups`),
+    // so gating on `entries.is_empty()` would wrongly show the empty-folder state for
+    // every media folder; the gallery container renders its own "no photos or videos".
+    let is_empty = render_view != "gallery" && entries.is_empty();
+
     // Build breadcrumb items from current_path.
     // Each item's path is relative (no leading /) for use in URL construction.
     let mut breadcrumbs: Vec<BreadcrumbItem> = Vec::new();
@@ -758,6 +774,7 @@ async fn file_browser_inner(
             current_path: path.clone(),
             breadcrumbs: breadcrumbs.clone(),
             entries,
+            is_empty,
             total: effective_total,
             has_more: effective_has_more,
             page: page as u32,
@@ -787,6 +804,7 @@ async fn file_browser_inner(
             current_path: path,
             breadcrumbs,
             entries,
+            is_empty,
             total: effective_total,
             has_more: effective_has_more,
             page: page as u32,
