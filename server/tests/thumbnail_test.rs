@@ -70,3 +70,43 @@ async fn test_thumbnail_oversized_size_rejected() {
         .await;
     assert_eq!(resp.status(), 400);
 }
+
+/// TIFF (the newly added in-process image format) thumbnails are served as PNG.
+#[tokio::test]
+async fn test_tiff_thumbnail_generated() {
+    let f = TestFixture::new().await;
+
+    let mut img = image::RgbaImage::new(32, 32);
+    for p in img.pixels_mut() {
+        *p = image::Rgba([1u8, 2, 3, 255]);
+    }
+    let mut buf = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut buf, image::ImageFormat::Tiff)
+        .expect("TIFF encode failed");
+
+    let resp = f
+        .client
+        .upload_file(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            "photo.tiff",
+            &buf.into_inner(),
+        )
+        .await;
+    assert!(resp.status().is_success());
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/thumbnail/?p=/photo.tiff&size=48", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(ct, Some("image/png"));
+}

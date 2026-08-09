@@ -51,7 +51,10 @@ pub fn generate_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError
 
 /// Check whether a file extension corresponds to a supported thumbnail format.
 pub fn is_supported_image_ext(ext: &str) -> bool {
-    matches!(ext, "bmp" | "gif" | "ico" | "jpg" | "jpeg" | "png" | "webp")
+    matches!(
+        ext,
+        "bmp" | "gif" | "ico" | "jpg" | "jpeg" | "png" | "webp" | "tiff" | "tif"
+    )
 }
 
 /// Whether an extension is a video file that can be thumbnailed via ffmpeg.
@@ -71,6 +74,20 @@ pub fn is_audio_ext(ext: &str) -> bool {
         ext,
         "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "wma" | "opus"
     )
+}
+
+/// Whether an extension is a still image that the in-process image crate
+/// cannot decode but ffmpeg can (HEIC/HEIF photos, AVIF web images). These
+/// take the ffmpeg thumbnail path like video/audio. Single source of truth.
+pub fn is_ffmpeg_image_ext(ext: &str) -> bool {
+    matches!(ext, "heic" | "heif" | "avif")
+}
+
+/// Whether an extension can produce a thumbnail via either the in-process
+/// image decoder or ffmpeg. Used by the UI to decide whether to advertise a
+/// thumbnail URL for a file.
+pub fn is_thumbnail_image_ext(ext: &str) -> bool {
+    is_supported_image_ext(ext) || is_ffmpeg_image_ext(ext)
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────

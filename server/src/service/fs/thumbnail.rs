@@ -140,18 +140,19 @@ impl ThumbnailService {
             // Stale — fall through to regenerate
         }
 
-        // Supported sources are images (decoded in-process) and audio/video
-        // (a frame or embedded cover art extracted via ffmpeg). Anything else
-        // has no thumbnail.
+        // Supported sources are images (decoded in-process, or via ffmpeg for
+        // HEIC/HEIF/AVIF) and audio/video (a frame or embedded cover art
+        // extracted via ffmpeg). Anything else has no thumbnail.
         let ext = std::path::Path::new(&file_name)
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
         let is_image = crate::thumbnail_util::is_supported_image_ext(&ext);
+        let is_ffmpeg_image = crate::thumbnail_util::is_ffmpeg_image_ext(&ext);
         let is_video = crate::thumbnail_util::is_video_ext(&ext);
         let is_audio = crate::thumbnail_util::is_audio_ext(&ext);
-        if !is_image && !is_video && !is_audio {
+        if !is_image && !is_ffmpeg_image && !is_video && !is_audio {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
@@ -187,6 +188,8 @@ impl ThumbnailService {
         } else {
             let kind = if is_video {
                 MediaKind::Video
+            } else if is_ffmpeg_image {
+                MediaKind::Image
             } else {
                 MediaKind::Audio
             };
@@ -253,13 +256,11 @@ impl ThumbnailService {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
-        // Skip absurdly large sources — extracting a frame would stream gigabytes.
-        const MAX_VIDEO_SOURCE: i64 = 2 * 1024 * 1024 * 1024;
         let (file_data, block_ids) =
             Downloader::resolve_blocks(&self.repos, repo_id, normalized_path)
                 .await
                 .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
-        if file_data.size > MAX_VIDEO_SOURCE {
+        if file_data.size > max_ffmpeg_source(kind) {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
@@ -386,6 +387,18 @@ enum MediaKind {
     Video,
     /// The embedded cover art (attached picture) of an audio file.
     Audio,
+    /// A still image (HEIC/HEIF/AVIF) decoded by ffmpeg's image demuxer.
+    Image,
+}
+
+/// Source-file size cap for ffmpeg thumbnails. Still images (HEIC/AVIF photos)
+/// are capped tighter than video/audio — decoding a huge image needs lots of
+/// memory for little benefit, and phone photos are typically a few MB.
+fn max_ffmpeg_source(kind: MediaKind) -> i64 {
+    match kind {
+        MediaKind::Image => 256 * 1024 * 1024,
+        MediaKind::Video | MediaKind::Audio => 2 * 1024 * 1024 * 1024,
+    }
 }
 
 /// Whether the configured ffmpeg binary exists and runs. Cached for the
@@ -408,6 +421,8 @@ fn ffmpeg_available(ffmpeg: &str) -> bool {
 /// - `Video`: grabs a frame ~1s in (skips dark intros), falling back to the
 ///   first frame on failure.
 /// - `Audio`: extracts the embedded cover art via `-map 0:v:0` (no seek).
+/// - `Image`: decodes a still image (HEIC/HEIF/AVIF) via the image demuxer
+///   (no seek, no `-map`).
 ///
 /// Returns true when an image was written.
 fn extract_media_frame(
@@ -587,5 +602,101 @@ mod tests {
         let thumb = crate::thumbnail_util::generate_thumbnail(&bytes, 48)
             .expect("thumbnail fitter failed on extracted cover");
         assert!(!thumb.is_empty());
+    }
+
+    /// Decode a still image (HEIC/HEIF/AVIF path) via `extract_media_frame` and
+    /// verify the output is a decodable PNG the shared fitter accepts.
+    /// Skips silently when ffmpeg isn't installed on the host.
+    #[test]
+    fn extract_image_writes_png() {
+        if !ffmpeg_available("ffmpeg") {
+            eprintln!("ffmpeg not available; skipping image thumbnail test");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "nanofile_ithumb_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("test.jpg");
+        let dst = dir.join("frame.png");
+
+        // Generate a single static test frame.
+        let status = Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("testsrc=size=320x240:rate=1:duration=1")
+            .arg("-frames:v")
+            .arg("1")
+            .arg(&src)
+            .status()
+            .expect("failed to spawn ffmpeg");
+        assert!(status.success(), "ffmpeg failed to create test image");
+
+        let ok = extract_media_frame("ffmpeg", MediaKind::Image, &src, &dst);
+        let _ = std::fs::remove_file(&src);
+        assert!(ok, "ffmpeg image extraction failed");
+
+        let bytes = std::fs::read(&dst).unwrap();
+        let _ = std::fs::remove_file(&dst);
+        let decoded =
+            image::load_from_memory(&bytes).expect("extracted image is not a valid image");
+        assert!(decoded.width() > 0 && decoded.height() > 0);
+
+        let thumb = crate::thumbnail_util::generate_thumbnail(&bytes, 48)
+            .expect("thumbnail fitter failed on extracted image");
+        assert!(!thumb.is_empty());
+    }
+
+    /// Encode a synthetic TIFF in-process and verify the in-process thumbnail
+    /// path (image crate + shared fitter) accepts it.
+    #[test]
+    fn tiff_in_process_thumbnail() {
+        let mut img = image::RgbaImage::new(64, 64);
+        for p in img.pixels_mut() {
+            *p = image::Rgba([10u8, 20, 30, 255]);
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut bytes, image::ImageFormat::Tiff)
+            .expect("TIFF encode failed");
+        let data = bytes.into_inner();
+
+        let thumb = crate::thumbnail_util::generate_thumbnail(&data, 32)
+            .expect("thumbnail fitter failed on TIFF");
+        assert!(!thumb.is_empty());
+    }
+
+    /// The extension classification is the single source of truth for which
+    /// format takes which thumbnail path.
+    #[test]
+    fn extension_classification() {
+        use crate::thumbnail_util::{
+            is_ffmpeg_image_ext, is_supported_image_ext, is_thumbnail_image_ext,
+        };
+
+        assert!(is_supported_image_ext("tiff"));
+        assert!(is_supported_image_ext("tif"));
+        assert!(!is_supported_image_ext("heic"));
+        assert!(!is_supported_image_ext("avif"));
+
+        assert!(is_ffmpeg_image_ext("heic"));
+        assert!(is_ffmpeg_image_ext("heif"));
+        assert!(is_ffmpeg_image_ext("avif"));
+        assert!(!is_ffmpeg_image_ext("png"));
+        assert!(!is_ffmpeg_image_ext("tiff"));
+
+        assert!(is_thumbnail_image_ext("tiff"));
+        assert!(is_thumbnail_image_ext("heic"));
+        assert!(is_thumbnail_image_ext("avif"));
+        assert!(!is_thumbnail_image_ext("svg"));
     }
 }

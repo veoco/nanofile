@@ -240,26 +240,47 @@ pub fn sort_entries(entries: &mut [FileEntry], sort: &str, sort_order: &str) {
 }
 
 /// Returns true if the file extension is one that the thumbnail service supports
-/// for generating image thumbnails.
+/// for generating image thumbnails (in-process image formats, plus HEIC/HEIF/AVIF
+/// decoded via ffmpeg).
 fn is_thumbnail_image(name: &str) -> bool {
     std::path::Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| crate::thumbnail_util::is_supported_image_ext(&e.to_lowercase()))
+        .map(|e| crate::thumbnail_util::is_thumbnail_image_ext(&e.to_lowercase()))
+        .unwrap_or(false)
+}
+
+/// Returns true if the file is a still image the browser can render in the
+/// full-page preview. Includes SVG (browser-native, no thumbnail) plus the
+/// ffmpeg-only formats (HEIC/HEIF/AVIF). Case-insensitive.
+fn is_preview_image_file(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e.to_lowercase().as_str(),
+                "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "gif"
+                    | "webp"
+                    | "bmp"
+                    | "svg"
+                    | "tiff"
+                    | "tif"
+                    | "heic"
+                    | "heif"
+                    | "avif"
+            )
+        })
         .unwrap_or(false)
 }
 
 pub fn is_previewable_file(name: &str) -> bool {
     let name = &name.to_ascii_lowercase();
     // Images
-    if name.ends_with(".png")
-        || name.ends_with(".jpg")
-        || name.ends_with(".jpeg")
-        || name.ends_with(".gif")
-        || name.ends_with(".webp")
-        || name.ends_with(".bmp")
-        || name.ends_with(".svg")
-    {
+    if is_preview_image_file(name) {
         return true;
     }
     // Text / code
@@ -292,14 +313,7 @@ pub fn is_previewable_file(name: &str) -> bool {
 }
 
 fn file_icon_color(name: &str) -> &'static str {
-    if name.ends_with(".png")
-        || name.ends_with(".jpg")
-        || name.ends_with(".jpeg")
-        || name.ends_with(".gif")
-        || name.ends_with(".webp")
-        || name.ends_with(".bmp")
-        || name.ends_with(".svg")
-    {
+    if is_preview_image_file(name) {
         "text-purple-500"
     } else if name.ends_with(".rs")
         || name.ends_with(".py")
@@ -797,13 +811,7 @@ async fn serve_file(
     }
 
     // Image preview
-    let is_image = file_name.ends_with(".png")
-        || file_name.ends_with(".jpg")
-        || file_name.ends_with(".jpeg")
-        || file_name.ends_with(".gif")
-        || file_name.ends_with(".webp")
-        || file_name.ends_with(".bmp")
-        || file_name.ends_with(".svg");
+    let is_image = is_preview_image_file(&file_name);
 
     // Text/code preview
     let is_text = is_previewable_file(&file_name);
