@@ -123,7 +123,7 @@ impl ExifService {
 }
 
 /// Check whether a GPS coordinate field has at least one non-zero rational
-/// component (avoids displaying "NaN deg NaN min NaN sec" for invalid data).
+/// component (avoids displaying a "NaN° NaN′ NaN″" coordinate for invalid data).
 fn has_valid_gps(exif: &exif::Exif, coord_tag: exif::Tag) -> bool {
     if let Some(field) = exif.get_field(coord_tag, exif::In::PRIMARY)
         && let exif::Value::Rational(vals) = &field.value
@@ -147,11 +147,28 @@ fn insert_gps_field(
     ) {
         fields.insert(
             key.to_string(),
-            serde_json::Value::String(format!(
-                "{} {}",
-                coord.display_value(),
-                coord_ref.display_value()
-            )),
+            serde_json::Value::String(format_gps_dms(coord, coord_ref)),
         );
     }
+}
+
+/// Format a GPS coordinate as `31° 25′ 46.5816″ N` (symbols instead of the
+/// exif crate's "deg/min/sec" words); the hemisphere letter is kept as-is.
+fn format_gps_dms(coord: &exif::Field, coord_ref: &exif::Field) -> String {
+    let dms = match &coord.value {
+        exif::Value::Rational(vals) if vals.len() >= 3 => {
+            let comp = |r: &exif::Rational| {
+                let v = r.to_f64();
+                if v.is_nan() { 0.0 } else { v }
+            };
+            format!(
+                "{}° {}′ {}″",
+                comp(&vals[0]),
+                comp(&vals[1]),
+                comp(&vals[2])
+            )
+        }
+        _ => coord.display_value().to_string(),
+    };
+    format!("{dms} {}", coord_ref.display_value())
 }

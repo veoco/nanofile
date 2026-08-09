@@ -1112,6 +1112,8 @@
           modifierEmail: selRow.dataset.modifierEmail,
           thumbnailUrl: selRow.dataset.thumbnailUrl,
           thumbnailUrlLarge: selRow.dataset.thumbnailUrlLarge,
+          size: selRow.dataset.size,
+          sizeDisplay: selRow.dataset.sizeDisplay,
           isPreviewable: selRow.dataset.isPreviewable === "true",
           isVideo: selRow.dataset.isVideo === "true",
           isAudio: selRow.dataset.isAudio === "true",

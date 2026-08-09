@@ -275,6 +275,9 @@
     // ── Details ──
     setText(ct, ".js-rp-path", d.path || "");
 
+    // ── Size ──
+    setText(ct, ".js-rp-size", d.type === "dir" ? "-" : (d.sizeDisplay || ""));
+
     // ── Actions ──
     // Download
     var downloadRow = ct.querySelector(".js-rp-download-row");
