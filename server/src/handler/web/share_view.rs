@@ -352,23 +352,6 @@ pub async fn shared_dir_view(
     let current_path = base::sanitize::safe_join_path(&link.path, sub_path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    // Get repo head commit and resolve directory
-    let repo_model = state
-        .repos
-        .repo
-        .find_by_id(&link.repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repo not found".into()))?;
-    let head_commit_id = repo_model
-        .head_commit_id
-        .ok_or_else(|| AppError::BadRequest("Repo has no commits".into()))?;
-    let head_commit = state
-        .repos
-        .commit
-        .find_by_id(&head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::Internal("Head commit not found".into()))?;
-
     let dir_id = resolve_fs_id(
         &state.repos,
         &link.repo_id,

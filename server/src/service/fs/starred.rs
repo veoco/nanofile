@@ -69,13 +69,38 @@ impl StarredService {
             }
         }
 
+        // Cache the head commit per repo so mtime resolution does not re-fetch
+        // the head commit for every starred item in the same repo.
+        let mut head_cache: HashMap<String, Option<infra::entity::commit::Model>> = HashMap::new();
+        for entry in &entries {
+            if !head_cache.contains_key(&entry.repo_id) {
+                let head = match repo_cache.get(&entry.repo_id).and_then(|o| o.as_ref()) {
+                    Some(repo) => match &repo.head_commit_id {
+                        Some(cid) => self.repos.commit.find_by_id(cid).await?,
+                        None => None,
+                    },
+                    None => None,
+                };
+                head_cache.insert(entry.repo_id.clone(), head);
+            }
+        }
+
         let mut starred_repos = Vec::new();
         let mut starred_folders = Vec::new();
         let mut starred_files = Vec::new();
 
         for entry in &entries {
             let repo_opt = repo_cache.get(&entry.repo_id).and_then(|o| o.as_ref());
-            let item = build_item_json(&self.repos, entry, repo_opt, email, &user_nickname).await;
+            let head_opt = head_cache.get(&entry.repo_id).and_then(|o| o.as_ref());
+            let item = build_item_json(
+                &self.repos,
+                entry,
+                repo_opt,
+                head_opt,
+                email,
+                &user_nickname,
+            )
+            .await;
 
             if entry.path == "/" {
                 starred_repos.push(item);
@@ -174,6 +199,16 @@ impl StarredService {
             .map(|u| u.nickname())
             .unwrap_or_else(|| email.split('@').next().unwrap_or("").to_string());
 
+        // Resolve the head commit once for mtime resolution (no-op for repo stars).
+        let head_for_json = if normalized_path == "/" {
+            None
+        } else {
+            match repo_record.head_commit_id.as_ref() {
+                Some(cid) => self.repos.commit.find_by_id(cid).await?,
+                None => None,
+            }
+        };
+
         // Check for duplicate
         let existing = self
             .repos
@@ -186,6 +221,7 @@ impl StarredService {
                 &self.repos,
                 entry,
                 Some(&repo_record),
+                head_for_json.as_ref(),
                 email,
                 &user_nickname,
             )
@@ -218,6 +254,7 @@ impl StarredService {
             &self.repos,
             &new_entry,
             Some(&repo_record),
+            head_for_json.as_ref(),
             email,
             &user_nickname,
         )
@@ -260,6 +297,7 @@ async fn build_item_json(
     repos: &Repositories,
     entry: &infra::entity::starred_file::Model,
     repo_opt: Option<&infra::entity::repo::Model>,
+    head_opt: Option<&infra::entity::commit::Model>,
     auth_email: &str,
     user_nickname: &str,
 ) -> serde_json::Value {
@@ -278,8 +316,8 @@ async fn build_item_json(
             .rsplit_once('/')
             .map(|(_, n)| n.to_string())
             .unwrap_or_default();
-        let (m, d) = if let Some(repo) = repo_opt {
-            get_entry_mtime_or_deleted(repos, repo, entry).await
+        let (m, d) = if repo_opt.is_some() {
+            get_entry_mtime_or_deleted(repos, entry, head_opt).await
         } else {
             (0, true)
         };
@@ -303,21 +341,11 @@ async fn build_item_json(
 
 async fn get_entry_mtime_or_deleted(
     repos: &Repositories,
-    repo: &infra::entity::repo::Model,
     entry: &infra::entity::starred_file::Model,
+    head: Option<&infra::entity::commit::Model>,
 ) -> (i64, bool) {
-    let head_cid = match repo.head_commit_id.as_ref() {
-        Some(c) => c.clone(),
-        None => return (0, true),
-    };
-
-    let head = match repos
-        .commit
-        .find_by_repo_and_commit_id(&repo.id, &head_cid)
-        .await
-    {
-        Ok(Some(h)) => h,
-        _ => return (0, true),
+    let Some(head) = head else {
+        return (0, true);
     };
 
     let path = entry.path.trim_end_matches('/');

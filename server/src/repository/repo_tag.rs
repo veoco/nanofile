@@ -15,6 +15,8 @@ pub struct TagInput {
 pub trait RepoTagRepository: Send + Sync {
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<repo_tag::Model>, AppError>;
     async fn find_by_id(&self, id: i32) -> Result<Option<repo_tag::Model>, AppError>;
+    /// Fetch multiple tags by id in one query (chunked for SQLite).
+    async fn find_by_ids(&self, ids: &[i32]) -> Result<Vec<repo_tag::Model>, AppError>;
     async fn find_by_repo_and_name(
         &self,
         repo_id: &str,
@@ -63,6 +65,22 @@ impl RepoTagRepository for DbRepoTagRepository {
         Ok(repo_tag::Entity::find_by_id(id)
             .one(self.db.as_ref())
             .await?)
+    }
+
+    async fn find_by_ids(&self, ids: &[i32]) -> Result<Vec<repo_tag::Model>, AppError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        const IN_BATCH: usize = 500;
+        let mut out = Vec::new();
+        for chunk in ids.chunks(IN_BATCH) {
+            let rows = repo_tag::Entity::find()
+                .filter(repo_tag::Column::Id.is_in(chunk.to_vec()))
+                .all(self.db.as_ref())
+                .await?;
+            out.extend(rows);
+        }
+        Ok(out)
     }
 
     async fn find_by_repo_and_name(

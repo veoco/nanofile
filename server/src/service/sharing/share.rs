@@ -8,7 +8,7 @@ use crate::repository::Repositories;
 use crate::service::auth::password::hash_password;
 use crate::service::auth::token::generate_share_link_token;
 use base::error::AppError;
-use infra::entity::share_link;
+use infra::entity::{share_link, user};
 
 /// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
@@ -449,12 +449,21 @@ pub async fn list_share_members(
 ) -> Result<Vec<ShareMember>, AppError> {
     let members = repos.member.find_by_repo_id(repo_id).await?;
 
+    // Batch-load all member users in one query instead of one per member.
+    let user_ids: Vec<i32> = members.iter().map(|m| m.user_id).collect();
+    let users: std::collections::HashMap<i32, user::Model> = repos
+        .user
+        .find_by_ids(&user_ids)
+        .await?
+        .into_iter()
+        .map(|u| (u.id, u))
+        .collect();
+
     let mut result = Vec::new();
     for m in members {
-        let user_record = repos.user.find_by_id(m.user_id).await?;
-        if let Some(u) = user_record {
+        if let Some(u) = users.get(&m.user_id) {
             result.push(ShareMember {
-                email: u.email,
+                email: u.email.clone(),
                 permission: m.permission,
                 created_at: m.created_at,
             });

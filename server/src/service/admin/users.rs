@@ -29,10 +29,20 @@ impl AdminUserService {
     /// List all users with their storage usage.
     pub async fn list_users(&self) -> Result<Vec<UserAdminInfo>, AppError> {
         let users = self.repos.user.find_all().await?;
-        let mut result = Vec::with_capacity(users.len());
 
+        // One grouped SUM query for all owners instead of one per user.
+        let user_ids: Vec<i32> = users.iter().map(|u| u.id).collect();
+        let usage_by_owner: std::collections::HashMap<i32, i64> = self
+            .repos
+            .repo
+            .sum_sizes_by_owner(&user_ids)
+            .await?
+            .into_iter()
+            .collect();
+
+        let mut result = Vec::with_capacity(users.len());
         for u in users {
-            let usage = self.compute_usage(u.id).await?;
+            let usage = usage_by_owner.get(&u.id).copied().unwrap_or(0);
             result.push(UserAdminInfo {
                 id: u.id,
                 email: u.email,

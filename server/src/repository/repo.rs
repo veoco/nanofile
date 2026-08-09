@@ -16,6 +16,13 @@ struct TotalSize {
     total: Option<i64>,
 }
 
+/// Row shape for `SELECT owner_id, SUM(size) AS total FROM repos GROUP BY owner_id`.
+#[derive(FromQueryResult)]
+struct OwnerTotal {
+    owner_id: i32,
+    total: Option<i64>,
+}
+
 /// Parameters for creating a new repo.
 pub struct CreateRepoParams {
     pub id: String,
@@ -41,6 +48,9 @@ pub trait RepoRepository: Send + Sync {
     async fn find_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError>;
     /// Sum the `size` of all repos owned by a user, in a single SQL query.
     async fn sum_size_by_owner(&self, user_id: i32) -> Result<i64, AppError>;
+    /// Sum the `size` of repos per owner, grouped in one query, for the given
+    /// owner ids. Pairs with a total of 0 are omitted.
+    async fn sum_sizes_by_owner(&self, user_ids: &[i32]) -> Result<Vec<(i32, i64)>, AppError>;
     /// Get all repos (used by garbage collection).
     async fn find_all(&self) -> Result<Vec<repo::Model>, AppError>;
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
@@ -155,6 +165,26 @@ impl RepoRepository for DbRepoRepository {
             .await
             .map_err(|e| AppError::internal(format!("sum_size_by_owner: {e}")))?;
         Ok(row.and_then(|r| r.total).unwrap_or(0))
+    }
+
+    async fn sum_sizes_by_owner(&self, user_ids: &[i32]) -> Result<Vec<(i32, i64)>, AppError> {
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<OwnerTotal> = repo::Entity::find()
+            .filter(repo::Column::OwnerId.is_in(user_ids.to_vec()))
+            .select_only()
+            .column_as(repo::Column::OwnerId, "owner_id")
+            .column_as(Expr::col(repo::Column::Size).sum(), "total")
+            .group_by(repo::Column::OwnerId)
+            .into_model()
+            .all(self.db.as_ref())
+            .await
+            .map_err(|e| AppError::internal(format!("sum_sizes_by_owner: {e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.owner_id, r.total.unwrap_or(0)))
+            .collect())
     }
 
     async fn find_all(&self) -> Result<Vec<repo::Model>, AppError> {

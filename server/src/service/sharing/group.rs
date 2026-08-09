@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::util::timestamp_rfc3339;
+use infra::entity::{group, user};
 
 /// List groups for a user in the official `/api/v2.1/groups/` response format.
 ///
@@ -15,13 +18,31 @@ pub async fn list_groups_v21(
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let memberships = repos.group_member.find_by_user_id(user_id).await?;
 
+    // Batch-load member groups and their creators in two queries.
+    let group_ids: Vec<i32> = memberships.iter().map(|m| m.group_id).collect();
+    let groups: HashMap<i32, group::Model> = repos
+        .group
+        .find_by_ids(&group_ids)
+        .await?
+        .into_iter()
+        .map(|g| (g.id, g))
+        .collect();
+    let creator_ids: Vec<i32> = groups.values().map(|g| g.creator_id).collect();
+    let creators: HashMap<i32, user::Model> = repos
+        .user
+        .find_by_ids(&creator_ids)
+        .await?
+        .into_iter()
+        .map(|u| (u.id, u))
+        .collect();
+
     let mut result = Vec::new();
     for m in &memberships {
-        let Some(g) = repos.group.find_by_id(m.group_id).await? else {
+        let Some(g) = groups.get(&m.group_id) else {
             continue;
         };
 
-        let creator_email = repos.user.find_by_id(g.creator_id).await?.map(|u| u.email);
+        let creator_email = creators.get(&g.creator_id).map(|u| u.email.clone());
 
         // admins: members whose role is Owner/Admin (case-insensitive),
         // plus the group creator (the owner) even if their role is unset.
@@ -48,7 +69,7 @@ pub async fn list_groups_v21(
         let mut info = serde_json::json!({
             "id": g.id,
             "parent_group_id": 0,
-            "name": g.name,
+            "name": g.name.clone(),
             "owner": creator_email.unwrap_or_default(),
             "created_at": created_at,
             "admins": admins,
@@ -70,10 +91,28 @@ pub async fn list_groups(
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let memberships = repos.group_member.find_by_user_id(user_id).await?;
 
+    // Batch-load member groups and their creators in two queries.
+    let group_ids: Vec<i32> = memberships.iter().map(|m| m.group_id).collect();
+    let groups: HashMap<i32, group::Model> = repos
+        .group
+        .find_by_ids(&group_ids)
+        .await?
+        .into_iter()
+        .map(|g| (g.id, g))
+        .collect();
+    let creator_ids: Vec<i32> = groups.values().map(|g| g.creator_id).collect();
+    let creators: HashMap<i32, user::Model> = repos
+        .user
+        .find_by_ids(&creator_ids)
+        .await?
+        .into_iter()
+        .map(|u| (u.id, u))
+        .collect();
+
     let mut result = Vec::new();
     for m in &memberships {
-        if let Some(g) = repos.group.find_by_id(m.group_id).await? {
-            let creator = repos.user.find_by_id(g.creator_id).await?;
+        if let Some(g) = groups.get(&m.group_id) {
+            let creator = creators.get(&g.creator_id);
 
             let member_count = repos
                 .group_member
@@ -84,8 +123,8 @@ pub async fn list_groups(
 
             result.push(serde_json::json!({
                 "id": g.id,
-                "name": g.name,
-                "creator_name": creator.as_ref().map(|u| u.nickname()).unwrap_or_default(),
+                "name": g.name.clone(),
+                "creator_name": creator.map(|u| u.nickname()).unwrap_or_default(),
                 "created_at": g.created_at,
                 "member_count": member_count,
             }));
@@ -102,15 +141,33 @@ pub async fn groups_and_contacts(
 ) -> Result<serde_json::Value, AppError> {
     let memberships = repos.group_member.find_by_user_id(user_id).await?;
 
+    // Batch-load member groups and their creators in two queries.
+    let group_ids: Vec<i32> = memberships.iter().map(|m| m.group_id).collect();
+    let groups: HashMap<i32, group::Model> = repos
+        .group
+        .find_by_ids(&group_ids)
+        .await?
+        .into_iter()
+        .map(|g| (g.id, g))
+        .collect();
+    let creator_ids: Vec<i32> = groups.values().map(|g| g.creator_id).collect();
+    let creators: HashMap<i32, user::Model> = repos
+        .user
+        .find_by_ids(&creator_ids)
+        .await?
+        .into_iter()
+        .map(|u| (u.id, u))
+        .collect();
+
     let mut groups_list = Vec::new();
     for m in &memberships {
-        if let Some(g) = repos.group.find_by_id(m.group_id).await? {
-            let creator = repos.user.find_by_id(g.creator_id).await?;
+        if let Some(g) = groups.get(&m.group_id) {
+            let creator = creators.get(&g.creator_id);
 
             groups_list.push(serde_json::json!({
                 "id": g.id,
-                "name": g.name,
-                "creator_name": creator.as_ref().map(|u| u.nickname()).unwrap_or_default(),
+                "name": g.name.clone(),
+                "creator_name": creator.map(|u| u.nickname()).unwrap_or_default(),
                 "created_at": g.created_at,
             }));
         }

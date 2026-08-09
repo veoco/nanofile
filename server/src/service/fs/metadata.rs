@@ -394,9 +394,19 @@ impl MetadataService {
             .file_tag
             .find_by_repo_and_path(repo_id, file_path)
             .await?;
+        // Batch-load the referenced tags in one query instead of one per link.
+        let tag_ids: Vec<i32> = links.iter().map(|l| l.repo_tag_id).collect();
+        let tags: std::collections::HashMap<i32, repo_tag::Model> = self
+            .repos
+            .repo_tag
+            .find_by_ids(&tag_ids)
+            .await?
+            .into_iter()
+            .map(|t| (t.id, t))
+            .collect();
         let mut out = Vec::with_capacity(links.len());
         for link in links {
-            if let Some(tag) = self.repos.repo_tag.find_by_id(link.repo_tag_id).await? {
+            if let Some(tag) = tags.get(&link.repo_tag_id) {
                 out.push(serde_json::json!({
                     "row_id": tag.id.to_string(),
                     "display_value": tag.name,
