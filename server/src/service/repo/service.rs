@@ -380,7 +380,13 @@ impl RepoService {
 
         let new_name = validate_repo_name(new_name)?;
 
-        // Log repo rename activity (before update, so detail captures the old name)
+        let now = chrono::Utc::now().timestamp();
+        repos.repo.rename_repo(repo_id, &new_name, now).await?;
+
+        // Log repo rename activity after the update so the detail captures the
+        // new name, while old_path/old_repo_name hold the previous name. The
+        // Android client renders rename events as "old_name => name", so
+        // old_path must be non-null to avoid a client-side crash.
         activity_log::log_activity(
             db,
             repo_id,
@@ -388,16 +394,13 @@ impl RepoService {
             "repo",
             "/",
             user_id,
-            None,
+            Some(&r.name),
             None,
             None,
             Some(&r.name),
             None,
         )
         .await;
-
-        let now = chrono::Utc::now().timestamp();
-        repos.repo.rename_repo(repo_id, &new_name, now).await?;
 
         Ok(())
     }
@@ -439,23 +442,13 @@ impl RepoService {
             ));
         }
 
-        // Log rename activity (before update, so detail captures the old name)
-        if validated_name.is_some() {
-            activity_log::log_activity(
-                db,
-                repo_id,
-                "rename",
-                "repo",
-                "/",
-                user_id,
-                None,
-                None,
-                None,
-                Some(&r.name),
-                None,
-            )
-            .await;
-        }
+        // Only record a rename activity when the name actually changes.
+        // Clients commonly echo the current name back when updating a repo's
+        // description, which must not be logged as a rename.
+        let name_changed = matches!(
+            (validated_name.as_deref(), r.name.as_str()),
+            (Some(new_name), old) if new_name != old
+        );
 
         repos
             .repo
@@ -468,6 +461,25 @@ impl RepoService {
                 now,
             )
             .await?;
+
+        // Log the rename activity after the update so the detail captures the
+        // new name, with old_path/old_repo_name holding the previous name.
+        if name_changed {
+            activity_log::log_activity(
+                db,
+                repo_id,
+                "rename",
+                "repo",
+                "/",
+                user_id,
+                Some(&r.name),
+                None,
+                None,
+                Some(&r.name),
+                None,
+            )
+            .await;
+        }
 
         Ok(())
     }

@@ -448,6 +448,21 @@ impl TestClient {
             .unwrap()
     }
 
+    /// POST /api2/repos/{repo_id}/?op=update with a JSON body containing the
+    /// repo name (server only accepts JSON for op=update).
+    pub async fn update_repo(&self, token: &str, repo_id: &str, name: &str) -> reqwest::Response {
+        self.client
+            .post(format!(
+                "{}/api2/repos/{}/?op=update",
+                self.base_url, repo_id
+            ))
+            .bearer_auth(token)
+            .json(&serde_json::json!({"repo_name": name}))
+            .send()
+            .await
+            .unwrap()
+    }
+
     pub async fn download_info(&self, token: &str, repo_id: &str) -> reqwest::Response {
         self.client
             .get(format!(

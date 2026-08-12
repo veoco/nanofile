@@ -1222,6 +1222,13 @@ async fn test_activity_repo_rename_logged() {
     let rename_event = find_event(&events, "rename").expect("rename event should exist");
     assert_eq!(rename_event["obj_type"], "repo");
     assert_eq!(rename_event["path"], "/");
+    // The Android client renders rename as "old_name => name" and crashes on a
+    // null old_name, so old_name/old_path must carry the previous repo name
+    // and name/repo_name the new one.
+    assert_eq!(rename_event["old_name"], "test-repo");
+    assert_eq!(rename_event["old_path"], "test-repo");
+    assert_eq!(rename_event["name"], "renamed-repo");
+    assert_eq!(rename_event["repo_name"], "renamed-repo");
 }
 
 /// Repo rename → response includes old_repo_name field
@@ -1229,11 +1236,12 @@ async fn test_activity_repo_rename_logged() {
 async fn test_activity_repo_rename_old_repo_name() {
     let f = TestFixture::new().await;
     let old_name = "test-repo"; // TestFixture default repo name
+    let new_name = "renamed-repo-2";
 
     // Rename the repo
     let resp = f
         .client
-        .rename_repo(&f.api_token, &f.repo_id, "renamed-repo-2")
+        .rename_repo(&f.api_token, &f.repo_id, new_name)
         .await;
     assert_eq!(resp.status(), 200, "rename repo failed");
 
@@ -1244,12 +1252,69 @@ async fn test_activity_repo_rename_old_repo_name() {
         old_name,
         "old_repo_name should be the original repo name"
     );
-
-    // Verify repo_name in the response is the name at event time (the old name),
-    // not the current DB name (which is "renamed-repo-2").
+    // old_name must not be null (Android client crashes on rename with a null
+    // old_name), so it should fall back to the original repo name.
+    assert_eq!(
+        rename_event["old_name"].as_str().unwrap_or(""),
+        old_name,
+        "old_name should be the original repo name"
+    );
+    // repo_name is the name at event time, which (logged after the rename) is
+    // the new name.
     assert_eq!(
         rename_event["repo_name"].as_str().unwrap_or(""),
-        old_name,
-        "repo_name should reflect the name at event time (old name)"
+        new_name,
+        "repo_name should reflect the name after rename (new name)"
     );
+}
+
+/// POST /api2/repos/{repo_id}/?op=update echoing the current name must NOT
+/// log a rename activity — clients (e.g. HarmonyOS/Android) commonly send the
+/// name back when updating a repo's description, and doing so previously made
+/// a freshly created library show up as "renamed" in the activity feed.
+#[tokio::test]
+async fn test_activity_update_same_name_no_rename_event() {
+    let f = TestFixture::new().await;
+
+    let (events_before, _) = get_activities(&f, 1, 25).await;
+    let count_before = events_before.len();
+
+    // Echo the current name back via op=update.
+    let resp = f
+        .client
+        .update_repo(&f.api_token, &f.repo_id, "test-repo")
+        .await;
+    assert_eq!(resp.status(), 200, "update repo failed");
+
+    let (events_after, _) = get_activities(&f, 1, 25).await;
+    assert_eq!(
+        events_after.len(),
+        count_before,
+        "same-name update must not add an activity"
+    );
+    assert!(
+        find_event(&events_after, "rename").is_none(),
+        "no rename event expected for a same-name update"
+    );
+}
+
+/// op=update with an actually different name logs a rename+repo event with the
+/// old name carried in old_name/old_path/old_repo_name.
+#[tokio::test]
+async fn test_activity_update_renames_when_name_changes() {
+    let f = TestFixture::new().await;
+    let new_name = "updated-repo-name";
+
+    let resp = f
+        .client
+        .update_repo(&f.api_token, &f.repo_id, new_name)
+        .await;
+    assert_eq!(resp.status(), 200, "update repo failed");
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let rename_event = find_event(&events, "rename").expect("rename event should exist");
+    assert_eq!(rename_event["obj_type"], "repo");
+    assert_eq!(rename_event["old_name"], "test-repo");
+    assert_eq!(rename_event["old_repo_name"], "test-repo");
+    assert_eq!(rename_event["name"], new_name);
 }

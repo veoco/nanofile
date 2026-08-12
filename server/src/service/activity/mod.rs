@@ -140,11 +140,21 @@ impl ActivityService {
                     .unwrap_or_default()
             };
 
-            // old_name = basename of old_path.
+            // old_name = basename of old_path. Repo rename events recorded
+            // before this fix carry a null old_path; fall back to
+            // old_repo_name so the Android client (which renders rename as
+            // "old_name => name") never receives a null old_name.
             let old_name = a
                 .old_path
                 .as_deref()
-                .and_then(|p| p.rsplit_once('/').map(|(_, n)| n.to_string()));
+                .and_then(|p| p.rsplit_once('/').map(|(_, n)| n.to_string()))
+                .or_else(|| {
+                    if a.obj_type == "repo" && a.op_type == "rename" {
+                        old_repo_name.clone()
+                    } else {
+                        None
+                    }
+                });
 
             items.push(serde_json::json!({
                 "id": a.id,
