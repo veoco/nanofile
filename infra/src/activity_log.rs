@@ -26,6 +26,10 @@ use crate::entity::{activity, repo};
 /// Maximum number of items in a batch-aggregated activity detail array.
 const ACTIVITY_MAX_AGGREGATE_ITEMS: usize = 200;
 
+/// Window (seconds) within which repeated edits of the same path collapse into
+/// a single activity row (matching seafevents' `save_user_activities`).
+const EDIT_DEDUP_WINDOW: i64 = 1800;
+
 /// Log a file operation activity.
 ///
 /// Parameters:
@@ -158,6 +162,29 @@ pub async fn log_activity(
         }
     }
 
+    // Repeated edits of the same path within the window only refresh the
+    // existing record's timestamp (seafevents `save_user_activities`).
+    if op_type == "edit" {
+        let cutoff = now - EDIT_DEDUP_WINDOW;
+        if let Ok(Some(recent)) = activity::Entity::find()
+            .filter(activity::Column::RepoId.eq(repo_id))
+            .filter(activity::Column::UserId.eq(user_id))
+            .filter(activity::Column::Path.eq(path))
+            .filter(activity::Column::OpType.eq("edit"))
+            .filter(activity::Column::CreatedAt.gt(cutoff))
+            .order_by_desc(activity::Column::CreatedAt)
+            .one(db)
+            .await
+        {
+            let mut active: activity::ActiveModel = recent.into();
+            active.created_at = Set(now);
+            if let Err(e) = activity::Entity::update(active).exec(db).await {
+                tracing::warn!("Failed to update deduped edit activity ({path}): {e}");
+            }
+            return;
+        }
+    }
+
     // Insert a new activity record (single-operation or fallback).
     let detail_json = serde_json::to_string(&detail_map).unwrap_or_else(|_| "{}".to_string());
 
@@ -274,9 +301,10 @@ fn parse_detail_array(detail: &str) -> Vec<serde_json::Value> {
 ///
 /// `create`/`delete` keep the 5-minute batch-aggregation semantics of
 /// `log_activity`, grouped by `(op_type, obj_type)` so only one aggregation
-/// query runs per group instead of one per item. All other op types insert
-/// directly with a single `insert_many`. Best-effort: failures are logged
-/// via `tracing::warn!` and never propagated.
+/// query runs per group instead of one per item. Other op types insert
+/// directly with a single `insert_many`, except `edit` which is deduplicated
+/// per path within a 30-minute window (matching `log_activity`). Best-effort:
+/// failures are logged via `tracing::warn!` and never propagated.
 #[allow(clippy::too_many_arguments)]
 pub async fn log_activity_batch(
     db: &DatabaseConnection,
@@ -288,19 +316,33 @@ pub async fn log_activity_batch(
 ) {
     let now = chrono::Utc::now().timestamp();
 
-    // Non-aggregating ops (edit/rename/move/recover) insert in one statement.
+    // Non-aggregating ops (rename/move/recover) insert in one statement; edit
+    // ops are deduplicated per path within a 30-minute window.
     let direct: Vec<&ActivityItem> = items
         .iter()
         .filter(|i| i.op_type != "create" && i.op_type != "delete")
         .collect();
-    if !direct.is_empty() {
-        let models: Vec<activity::ActiveModel> = direct
+    let edit_items: Vec<&ActivityItem> = direct
+        .iter()
+        .copied()
+        .filter(|i| i.op_type == "edit")
+        .collect();
+    let other_direct: Vec<&ActivityItem> = direct
+        .iter()
+        .copied()
+        .filter(|i| i.op_type != "edit")
+        .collect();
+    if !other_direct.is_empty() {
+        let models: Vec<activity::ActiveModel> = other_direct
             .iter()
             .map(|i| to_active_model(repo_id, commit_id, repo_name, user_id, now, i))
             .collect();
         if let Err(e) = activity::Entity::insert_many(models).exec(db).await {
             tracing::warn!("Failed to batch insert activities: {e}");
         }
+    }
+    if !edit_items.is_empty() {
+        dedup_edit_items(db, repo_id, commit_id, repo_name, user_id, now, &edit_items).await;
     }
 
     // create/delete aggregate into a recent batch row within 5 minutes,
@@ -375,6 +417,61 @@ pub async fn log_activity_batch(
                 }
             }
         }
+    }
+}
+
+/// Deduplicate `edit` activity items: for each path, if a recent edit row
+/// (same repo/user/path within `EDIT_DEDUP_WINDOW`) exists, refresh its
+/// timestamp; otherwise insert a new row.
+async fn dedup_edit_items(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    commit_id: &str,
+    repo_name: &str,
+    user_id: i32,
+    now: i64,
+    items: &[&ActivityItem],
+) {
+    let cutoff = now - EDIT_DEDUP_WINDOW;
+    let paths: Vec<&str> = items.iter().map(|i| i.path.as_str()).collect();
+
+    // One query for all recent edit rows in this repo/user within the window,
+    // ordered newest-first so the first row per path is the dedup target.
+    let recent_rows = activity::Entity::find()
+        .filter(activity::Column::RepoId.eq(repo_id))
+        .filter(activity::Column::UserId.eq(user_id))
+        .filter(activity::Column::OpType.eq("edit"))
+        .filter(activity::Column::CreatedAt.gt(cutoff))
+        .filter(activity::Column::Path.is_in(paths))
+        .order_by_desc(activity::Column::CreatedAt)
+        .all(db)
+        .await
+        .unwrap_or_default();
+
+    let mut latest_by_path: HashMap<String, &activity::Model> = HashMap::new();
+    for row in &recent_rows {
+        latest_by_path.entry(row.path.clone()).or_insert(row);
+    }
+
+    let mut to_insert: Vec<activity::ActiveModel> = Vec::new();
+    for item in items {
+        if let Some(row) = latest_by_path.get(&item.path) {
+            let mut active: activity::ActiveModel = (*row).clone().into();
+            active.created_at = Set(now);
+            if let Err(e) = activity::Entity::update(active).exec(db).await {
+                tracing::warn!("Failed to update deduped edit activity: {e}");
+            }
+        } else {
+            to_insert.push(to_active_model(
+                repo_id, commit_id, repo_name, user_id, now, item,
+            ));
+        }
+    }
+
+    if !to_insert.is_empty()
+        && let Err(e) = activity::Entity::insert_many(to_insert).exec(db).await
+    {
+        tracing::warn!("Failed to insert deduped edit activities: {e}");
     }
 }
 

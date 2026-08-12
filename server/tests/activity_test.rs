@@ -3,7 +3,11 @@ mod common;
 use common::TestFixture;
 use common::create_test_user;
 use sea_orm::ColumnTrait;
+use sea_orm::ConnectionTrait;
+use sea_orm::DatabaseBackend;
 use sea_orm::EntityTrait;
+use sea_orm::QueryFilter;
+use sea_orm::Statement;
 use serde_json::Value;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -1317,4 +1321,140 @@ async fn test_activity_update_renames_when_name_changes() {
     assert_eq!(rename_event["old_name"], "test-repo");
     assert_eq!(rename_event["old_repo_name"], "test-repo");
     assert_eq!(rename_event["name"], new_name);
+}
+
+/// Repeated overwrites of the same path within 30 minutes collapse into a
+/// single edit activity (matching seafevents' `save_user_activities`).
+#[tokio::test]
+async fn test_activity_edit_dedup() {
+    let f = TestFixture::new().await;
+    // Distinct contents per overwrite avoid content-address collisions.
+    for i in 0..3u32 {
+        let data = format!("content-{i}").into_bytes();
+        let resp = f
+            .client
+            .upload_file(&f.api_token, &f.repo_id, "/", "dedup.txt", &data)
+            .await;
+        assert_eq!(
+            resp.status(),
+            200,
+            "upload {i} failed: {:?}",
+            resp.text().await
+        );
+    }
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let edits: Vec<&Value> = events.iter().filter(|ev| ev["op_type"] == "edit").collect();
+    assert_eq!(
+        edits.len(),
+        1,
+        "expected exactly 1 edit event for repeated overwrites, got {edits:?}"
+    );
+}
+
+/// Overwrites of distinct paths each produce their own edit activity.
+#[tokio::test]
+async fn test_activity_edit_distinct_paths() {
+    let f = TestFixture::new().await;
+    for name in ["a.txt", "b.txt"] {
+        for i in 0..2u32 {
+            let data = format!("{name}-{i}").into_bytes();
+            let resp = f
+                .client
+                .upload_file(&f.api_token, &f.repo_id, "/", name, &data)
+                .await;
+            assert_eq!(
+                resp.status(),
+                200,
+                "upload {name} {i} failed: {:?}",
+                resp.text().await
+            );
+        }
+    }
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let edits: Vec<&Value> = events.iter().filter(|ev| ev["op_type"] == "edit").collect();
+    assert_eq!(
+        edits.len(),
+        2,
+        "expected 2 edit events (a.txt, b.txt), got {edits:?}"
+    );
+}
+
+/// avatar_url must stay well-formed even when the author has been deleted
+/// (empty email in the activity row).
+#[tokio::test]
+async fn test_activity_avatar_deleted_user() {
+    let f = TestFixture::new().await;
+    let api_token2 = create_second_user(&f).await;
+
+    // Share the repo with user2 so their activity is visible to user1.
+    let share_resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "user",
+                "user": "user2@test.com",
+                "permission": "rw",
+            }),
+        )
+        .await;
+    assert_eq!(share_resp.status(), 200, "share repo with user2 failed");
+
+    // user2 uploads a file in the shared repo (upload path logs an activity).
+    let resp = f
+        .client
+        .upload_file(
+            &api_token2,
+            &f.repo_id,
+            "/",
+            "user2-file.txt",
+            b"user2-content",
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "user2 upload failed: {:?}",
+        resp.text().await
+    );
+
+    // Delete user2 directly from the DB while keeping their activity rows:
+    // disable FK enforcement so the cascade-delete does not remove them,
+    // simulating a residual activity for a deleted author.
+    let db = &*f.server.db;
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "PRAGMA foreign_keys = OFF".to_owned(),
+    ))
+    .await
+    .unwrap();
+    infra::entity::user::Entity::delete_many()
+        .filter(infra::entity::user::Column::Email.eq("user2@test.com"))
+        .exec(db)
+        .await
+        .unwrap();
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "PRAGMA foreign_keys = ON".to_owned(),
+    ))
+    .await
+    .unwrap();
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let ev = events
+        .iter()
+        .find(|e| e["obj_type"] == "file")
+        .expect("user2 file-create event should exist");
+    let avatar = ev["avatar_url"].as_str().unwrap_or("");
+    assert!(
+        avatar.starts_with("http"),
+        "avatar_url should be absolute, got: {avatar}"
+    );
+    assert!(
+        !avatar.contains("user//resized"),
+        "avatar_url must not contain an empty email segment, got: {avatar}"
+    );
 }

@@ -85,11 +85,20 @@ impl ActivityService {
             let (user_name, user_email) = users_by_id.get(&a.user_id).cloned().unwrap_or_default();
 
             // Absolute avatar URL (seahub returns a full URL via api_avatar_url;
-            // the Android client loads this field directly with Glide).
+            // the Android client loads this field directly with Glide). When the
+            // author no longer exists (empty email), use a placeholder so the
+            // URL is well-formed; the avatar route serves the default avatar.
             let avatar_url = format!(
                 "{}{}",
                 base_url,
-                crate::service::user::primary_avatar_url(&user_email, 256)
+                crate::service::user::primary_avatar_url(
+                    if user_email.is_empty() {
+                        "deleted"
+                    } else {
+                        &user_email
+                    },
+                    256
+                )
             );
 
             // Build details array, count, and extract old_repo_name.

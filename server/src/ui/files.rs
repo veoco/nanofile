@@ -532,6 +532,49 @@ pub fn format_mtime(t: &I18n, timestamp: i64) -> String {
         .unwrap_or_else(|| timestamp.to_string())
 }
 
+/// Relative time matching the Android client's `translateCommitTime`:
+/// "Just now" → N seconds → N minutes → N hours → N days → absolute date
+/// (>= 14 days).
+pub fn format_relative_time(t: &I18n, now: i64, timestamp: i64) -> String {
+    let diff = now - timestamp;
+    if diff <= 0 {
+        return t.tr("activity.just_now").to_string();
+    }
+    let seconds = diff;
+    let minutes = seconds / 60;
+    let hours = seconds / 3600;
+    let days = seconds / 86400;
+
+    if days >= 14 {
+        return chrono::DateTime::from_timestamp(timestamp, 0)
+            .map(|dt| {
+                if t.lang.starts_with("zh") {
+                    dt.format("%Y年%m月%d日").to_string()
+                } else {
+                    dt.format("%Y-%m-%d").to_string()
+                }
+            })
+            .unwrap_or_else(|| t.tr("activity.just_now").to_string());
+    }
+    if days > 0 {
+        return t.trf("activity.days_ago", &[("n", days.to_string())]);
+    }
+    if hours > 0 {
+        return t.trf("activity.hours_ago", &[("n", hours.to_string())]);
+    }
+    if minutes > 0 {
+        return t.trf("activity.minutes_ago", &[("n", minutes.to_string())]);
+    }
+    t.trf("activity.seconds_ago", &[("n", seconds.to_string())])
+}
+
+/// UTC calendar-day key (`YYYY-MM-DD`) used to group activity rows by day.
+pub fn day_key(timestamp: i64) -> String {
+    chrono::DateTime::from_timestamp(timestamp, 0)
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_default()
+}
+
 #[derive(Clone)]
 pub struct BreadcrumbItem {
     pub label: String,

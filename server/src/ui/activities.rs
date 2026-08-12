@@ -31,11 +31,25 @@ pub struct ActivityView {
     pub repo_name: String,
     pub path: String,
     pub name: String,
+    pub old_name: Option<String>,
     pub old_path: Option<String>,
     pub old_path_display: String,
+    /// Android-style operation label (e.g. "Created file", "Renamed folder").
+    pub operation_label: String,
     pub author_email: String,
+    pub author_name: String,
+    /// Relative avatar URL (`/avatars/user/{email}/resized/32/`); empty when
+    /// the author no longer exists.
+    pub author_avatar_url: String,
+    /// Relative-time display, matching the Android client.
     pub time_display: String,
     pub time_iso: String,
+    /// UTC day key (`YYYY-MM-DD`) for grouping consecutive rows.
+    pub day_key: String,
+    /// Grouping header label (Today / Yesterday / date).
+    pub day_label: String,
+    /// True when this row starts a new day group (differs from the previous row).
+    pub show_day_header: bool,
     /// Number of items in a batch operation (1 for single operations).
     pub batch_count: usize,
     /// File names extracted from detail JSON (empty for single operations).
@@ -47,6 +61,68 @@ pub struct ActivityView {
 impl ActivityView {
     pub fn has_old_path(&self) -> bool {
         self.old_path.is_some()
+    }
+}
+
+/// Android-style operation label matching seadroid's `SystemSwitchUtils.obj_type`.
+fn operation_label(t: &I18n, op_type: &str, obj_type: &str, count: usize) -> String {
+    let plural = count > 1;
+    match (op_type, obj_type) {
+        ("create", "repo") => t.tr("activity.created_library").to_string(),
+        ("create", "dir") => {
+            if plural {
+                t.trf("activity.created_some_folders", &[("n", count.to_string())])
+            } else {
+                t.tr("activity.created_new_folder").to_string()
+            }
+        }
+        ("create", "file") => {
+            if plural {
+                t.trf("activity.created_some_files", &[("n", count.to_string())])
+            } else {
+                t.tr("activity.created_new_file").to_string()
+            }
+        }
+        ("batch_create", "dir") => {
+            t.trf("activity.created_some_folders", &[("n", count.to_string())])
+        }
+        ("batch_create", "file") => {
+            t.trf("activity.created_some_files", &[("n", count.to_string())])
+        }
+        ("delete", "repo") => t.tr("activity.deleted_library").to_string(),
+        ("delete", "dir") => {
+            if plural {
+                t.trf("activity.deleted_some_folders", &[("n", count.to_string())])
+            } else {
+                t.tr("activity.deleted_folder").to_string()
+            }
+        }
+        ("delete", "file") => {
+            if plural {
+                t.trf("activity.deleted_some_files", &[("n", count.to_string())])
+            } else {
+                t.tr("activity.deleted_file").to_string()
+            }
+        }
+        ("batch_delete", "dir") => {
+            t.trf("activity.deleted_some_folders", &[("n", count.to_string())])
+        }
+        ("batch_delete", "file") => {
+            t.trf("activity.deleted_some_files", &[("n", count.to_string())])
+        }
+        ("edit", "repo") => t.tr("activity.edited_library").to_string(),
+        ("edit", "dir") => t.tr("activity.edited_folder").to_string(),
+        ("edit", "file") => t.tr("activity.edited_file").to_string(),
+        ("rename", "repo") => t.tr("activity.renamed_library").to_string(),
+        ("rename", "dir") => t.tr("activity.renamed_folder").to_string(),
+        ("rename", "file") => t.tr("activity.renamed_file").to_string(),
+        ("move", "dir") => t.tr("activity.moved_folder").to_string(),
+        ("move", "file") => t.tr("activity.moved_file").to_string(),
+        ("recover", "repo") => t.tr("activity.recovered_library").to_string(),
+        ("recover", "dir") => t.tr("activity.recovered_folder").to_string(),
+        ("recover", "file") => t.tr("activity.recovered_file").to_string(),
+        ("clean-up-trash", _) => t.tr("activity.trash_cleaned").to_string(),
+        _ => t.tr("activity.operation").to_string(),
     }
 }
 
@@ -62,6 +138,11 @@ pub async fn activities_page(
         .find_recent_by_user(user.user_id, 50)
         .await?;
 
+    let now = chrono::Utc::now().timestamp();
+    let t = I18n::get(user.language.as_deref());
+    let today_key = super::files::day_key(now);
+    let yesterday_key = super::files::day_key(now - 86_400);
+
     // Batch-load repo names
     let mut repo_cache: HashMap<String, Option<String>> = HashMap::new();
     for e in &events {
@@ -72,17 +153,18 @@ pub async fn activities_page(
         }
     }
 
-    // Batch-load user emails
-    let mut user_cache: HashMap<i32, Option<String>> = HashMap::new();
+    // Batch-load user (nickname, email)
+    let mut user_cache: HashMap<i32, Option<(String, String)>> = HashMap::new();
     for e in &events {
         #[allow(clippy::map_entry)]
         if !user_cache.contains_key(&e.user_id) {
             let u = state.repos.user.find_by_id(e.user_id).await?;
-            user_cache.insert(e.user_id, u.map(|u| u.email));
+            user_cache.insert(e.user_id, u.map(|u| (u.nickname(), u.email)));
         }
     }
 
     let mut activities = Vec::with_capacity(events.len());
+    let mut prev_day_key: Option<String> = None;
 
     for e in &events {
         let repo_name = repo_cache
@@ -91,7 +173,7 @@ pub async fn activities_page(
             .flatten()
             .unwrap_or_default();
 
-        let email = user_cache
+        let (author_name, email) = user_cache
             .get(&e.user_id)
             .cloned()
             .flatten()
@@ -106,10 +188,26 @@ pub async fn activities_page(
                 .unwrap_or_default()
         };
 
-        let formatted =
-            super::files::format_mtime(I18n::get(user.language.as_deref()), e.created_at);
+        let formatted = super::files::format_relative_time(t, now, e.created_at);
 
         let time_iso = timestamp_rfc3339(e.created_at);
+
+        // Group by UTC calendar day; label recent days (Today/Yesterday).
+        let day_key = super::files::day_key(e.created_at);
+        let day_label = if day_key == today_key {
+            t.tr("activity.today").to_string()
+        } else if day_key == yesterday_key {
+            t.tr("activity.yesterday").to_string()
+        } else {
+            day_key.clone()
+        };
+        let show_day_header = prev_day_key.as_deref() != Some(day_key.as_str());
+        prev_day_key = Some(day_key.clone());
+
+        let author_avatar_url = crate::service::user::primary_avatar_url(
+            if email.is_empty() { "deleted" } else { &email },
+            32,
+        );
 
         let old_path_display = e.old_path.as_deref().unwrap_or("").to_string();
 
@@ -144,6 +242,13 @@ pub async fn activities_page(
                 _ => (1, vec![], None),
             };
 
+        let old_name = e
+            .old_path
+            .as_deref()
+            .and_then(|p| p.rsplit_once('/').map(|(_, n)| n.to_string()));
+
+        let operation_label = operation_label(t, &e.op_type, &e.obj_type, batch_count);
+
         activities.push(ActivityView {
             op_type: e.op_type.clone(),
             obj_type: e.obj_type.clone(),
@@ -151,11 +256,18 @@ pub async fn activities_page(
             repo_name,
             path: e.path.clone(),
             name,
+            old_name,
             old_path: e.old_path.clone(),
             old_path_display,
+            operation_label,
             author_email: email,
+            author_name,
+            author_avatar_url,
             time_display: formatted,
             time_iso,
+            day_key,
+            day_label,
+            show_day_header,
             batch_count,
             detail_items,
             old_repo_name,
