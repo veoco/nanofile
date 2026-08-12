@@ -190,6 +190,20 @@ impl FileOps {
         let repo_model = repos.repo.find_by_id(repo_id).await?;
         let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
 
+        // Identical re-upload leaves the FS tree unchanged: the head commit
+        // already reflects this state. Skip creating a redundant commit
+        // (matches official seafile and avoids a commit_id collision when a
+        // duplicate write lands in the same second).
+        if let Some(head_id) = parent_commit_id.as_deref() {
+            let head_commit = repos
+                .commit
+                .find_by_repo_and_commit_id(repo_id, head_id)
+                .await?;
+            if head_commit.is_some_and(|c| c.root_id == root_fs_id) {
+                return Ok(file_fs_id);
+            }
+        }
+
         let commit_data = base::common::CommitData {
             commit_id: String::new(),
             repo_id: repo_id.to_string(),
@@ -517,6 +531,20 @@ impl FileOps {
 
         let repo_model = repos.repo.find_by_id(repo_id).await?;
         let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
+
+        // Skip a commit when the tree didn't actually change. Defensive: a
+        // no-op delete/move/rename would otherwise produce a commit_id
+        // collision (unique (repo_id, commit_id)) when issued in the same
+        // second with an unchanged root.
+        if let Some(head_id) = parent_commit_id.as_deref() {
+            let head_commit = repos
+                .commit
+                .find_by_repo_and_commit_id(repo_id, head_id)
+                .await?;
+            if head_commit.is_some_and(|c| c.root_id == root_fs_id) {
+                return Ok(());
+            }
+        }
 
         let commit_data = base::common::CommitData {
             commit_id: String::new(),

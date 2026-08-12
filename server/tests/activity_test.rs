@@ -1458,3 +1458,59 @@ async fn test_activity_avatar_deleted_user() {
         "avatar_url must not contain an empty email segment, got: {avatar}"
     );
 }
+
+/// Uploading identical content twice to the same path must succeed and not
+/// create a second commit — the head commit already reflects that state
+/// (regression: a same-second duplicate write collided on (repo_id, commit_id)
+/// and returned 500).
+#[tokio::test]
+async fn test_upload_identical_content_no_500() {
+    let f = TestFixture::new().await;
+    let data = b"same-content-123";
+
+    let resp1 = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "dup.txt", data)
+        .await;
+    assert_eq!(
+        resp1.status(),
+        200,
+        "first upload failed: {:?}",
+        resp1.text().await
+    );
+
+    let resp2 = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "dup.txt", data)
+        .await;
+    assert_eq!(
+        resp2.status(),
+        200,
+        "identical re-upload must not 500: {:?}",
+        resp2.text().await
+    );
+
+    // The head commit must be unchanged (only one commit exists).
+    let db = &*f.server.db;
+    let commits = infra::entity::commit::Entity::find()
+        .filter(infra::entity::commit::Column::RepoId.eq(&f.repo_id))
+        .all(db)
+        .await
+        .unwrap();
+    assert_eq!(
+        commits.len(),
+        1,
+        "expected a single commit for identical re-upload, got {}",
+        commits.len()
+    );
+    let head = infra::entity::repo::Entity::find_by_id(&f.repo_id)
+        .one(db)
+        .await
+        .unwrap()
+        .expect("repo should exist");
+    assert_eq!(
+        commits[0].commit_id,
+        head.head_commit_id.expect("repo should have a head commit"),
+        "head commit must be unchanged"
+    );
+}
