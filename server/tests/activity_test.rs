@@ -655,6 +655,10 @@ async fn test_activity_repo_created_logged() {
     assert_eq!(create_ev["obj_type"], "repo");
     assert_eq!(create_ev["repo_id"], f.repo_id);
     assert!(!create_ev["repo_name"].as_str().unwrap_or("").is_empty());
+    assert_eq!(
+        create_ev["name"], "",
+        "repo create event name should be empty (official semantics)"
+    );
 }
 
 #[tokio::test]

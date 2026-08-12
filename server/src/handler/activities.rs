@@ -16,7 +16,6 @@ pub struct ActivitiesQuery {
     pub per_page: Option<u32>,
     pub repo_id: Option<String>,
     pub op_user: Option<String>,
-    pub avatar_size: Option<u32>,
 }
 
 /// GET /api/v2.1/activities/

@@ -139,9 +139,17 @@ impl ActivityService {
                 _ => String::new(),
             };
 
-            // name is the basename of path (or repo_name for repo-level events).
+            // name is the basename of path. Official seahub: repo events always
+            // have path="/", so name="". Exception: nanofile's own repo-rename
+            // events (no equivalent in official seahub) keep the new repo name
+            // so the Android client renders "old_name => name" correctly (see
+            // the old_name fallback below).
             let name = if a.obj_type == "repo" {
-                repo_name.clone()
+                if a.op_type == "rename" {
+                    repo_name.clone()
+                } else {
+                    String::new()
+                }
             } else {
                 a.path
                     .rsplit_once('/')
