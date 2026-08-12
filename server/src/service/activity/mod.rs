@@ -173,7 +173,13 @@ impl ActivityService {
                     }
                 });
 
-            items.push(serde_json::json!({
+            // Historical debt: official seahub conditionally emits old_path
+            // (move/rename), old_name (rename) and old_repo_name (rename+repo).
+            // We emit them on every event because seadroid renders renames as
+            // "old_name => name" and NPEs on a missing old_name (an official
+            // client-side bug on repo renames). Aligning would break the
+            // Android client; revisit in a future major version.
+            let mut ev = serde_json::json!({
                 "id": a.id,
                 "op_type": a.op_type,
                 "obj_type": a.obj_type,
@@ -187,6 +193,9 @@ impl ActivityService {
                 "author_email": user_email,
                 "author_name": user_name,
                 "author_contact_email": user_email,
+                // nanofile has no login_id/profile concept; official seahub
+                // returns "" when the author has no configured login_id.
+                "login_id": "",
                 "avatar_url": avatar_url,
                 "user_name": user_name,
                 "user_email": user_email,
@@ -194,7 +203,17 @@ impl ActivityService {
                 "count": count,
                 "old_repo_name": old_repo_name,
                 "time": timestamp_rfc3339(a.created_at),
-            }));
+            });
+
+            // Official seahub emits a top-level days field only for
+            // clean-up-trash events.
+            if a.op_type == "clean-up-trash"
+                && let Some(days) = detail_value.get("days").and_then(|v| v.as_i64())
+            {
+                ev["days"] = serde_json::json!(days);
+            }
+
+            items.push(ev);
         }
 
         Ok(serde_json::json!({"events": items, "total_count": total}))

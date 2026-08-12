@@ -427,6 +427,10 @@ async fn test_activity_response_fields() {
     assert_eq!(ev["author_email"], f.email);
     assert_eq!(ev["author_name"], f.email.split('@').next().unwrap_or(""));
     assert_eq!(ev["author_contact_email"], f.email);
+    assert_eq!(
+        ev["login_id"], "",
+        "login_id should be an empty string (no profile/login_id concept)"
+    );
     // avatar_url must be an absolute URL (Android loads it directly with Glide).
     let avatar_url = ev["avatar_url"].as_str().unwrap_or("");
     assert!(
@@ -1517,4 +1521,32 @@ async fn test_upload_identical_content_no_500() {
         head.head_commit_id.expect("repo should have a head commit"),
         "head commit must be unchanged"
     );
+}
+
+/// clean-up-trash events carry a top-level days field (official seahub emits
+/// `days` only for this op type).
+#[tokio::test]
+async fn test_activity_cleanup_trash_days() {
+    let f = TestFixture::new().await;
+
+    // DELETE /api/v2.1/repos/{repo_id}/trash/ with a JSON body keep_days
+    let resp = reqwest::Client::new()
+        .delete(format!(
+            "{}/api/v2.1/repos/{}/trash/",
+            f.server.base_url, f.repo_id
+        ))
+        .bearer_auth(&f.api_token)
+        .json(&serde_json::json!({"keep_days": 30}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "clean trash failed");
+
+    let (events, _) = get_activities(&f, 1, 10).await;
+    let ev = events
+        .iter()
+        .find(|e| e["op_type"] == "clean-up-trash")
+        .expect("clean-up-trash event should exist");
+    assert_eq!(ev["obj_type"], "repo");
+    assert_eq!(ev["days"], 30, "top-level days should be emitted");
 }
