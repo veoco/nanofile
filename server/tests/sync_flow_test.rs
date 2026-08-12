@@ -311,6 +311,243 @@ async fn test_incremental_upload() {
 }
 
 #[tokio::test]
+async fn test_incremental_upload_second_commit() {
+    // Regression test for the diff-path block check in `check_commit_blocks`.
+    // A commit with a parent diffs base_root vs new_root; the first commit
+    // (parent=None) takes `full_check_blocks`. Previously the diff path
+    // inverted the missing-block set, so any file whose blocks were all
+    // uploaded was reported as missing -> update-branch returned 446 and the
+    // desktop client showed "Failed to upload file blocks".
+    let (server, _api_token, repo_id, sync_token) = setup_repo().await;
+    let client = server.client();
+    use infra::crypto::fs_id::sha1_hex;
+
+    // ── First commit (parent=None): upload a.txt ──
+    let a_block_data = b"block data for a.txt";
+    let a_block_id = sha1_hex(a_block_data);
+    let resp = client
+        .put_block(&sync_token, &repo_id, &a_block_id, a_block_data.to_vec())
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let a_file = FsFileData {
+        block_ids: vec![a_block_id],
+        size: 100,
+        obj_type: 1,
+        version: 1,
+    };
+    let a_file_json = serde_json::to_string(&a_file).unwrap();
+    let a_file_fs_id = sha1_hex(a_file_json.as_bytes());
+    let a_file_compressed = pack_fs::compress_fs_data(a_file_json.as_bytes()).unwrap();
+
+    let a_entry = DirEntryData {
+        id: a_file_fs_id.clone(),
+        mode: 33188,
+        modifier: "test@example.com".to_string(),
+        mtime: chrono::Utc::now().timestamp(),
+        name: "a.txt".to_string(),
+        size: 100,
+    };
+    let root1 = FsDirData {
+        dirents: vec![a_entry.clone()],
+        obj_type: 3,
+        version: 1,
+    };
+    let root1_json = serde_json::to_string(&root1).unwrap();
+    let root1_fs_id = sha1_hex(root1_json.as_bytes());
+    let root1_compressed = pack_fs::compress_fs_data(root1_json.as_bytes()).unwrap();
+
+    let mut pack1 = Vec::new();
+    pack1.extend_from_slice(a_file_fs_id.as_bytes());
+    pack1.extend_from_slice(&(a_file_compressed.len() as u32).to_be_bytes());
+    pack1.extend_from_slice(&a_file_compressed);
+    pack1.extend_from_slice(root1_fs_id.as_bytes());
+    pack1.extend_from_slice(&(root1_compressed.len() as u32).to_be_bytes());
+    pack1.extend_from_slice(&root1_compressed);
+    let resp = client.recv_fs(&sync_token, &repo_id, pack1).await;
+    assert_eq!(resp.status(), 200);
+
+    let commit1_id = random_hex_id();
+    let now = chrono::Utc::now().timestamp();
+    let commit1 = CommitData {
+        commit_id: commit1_id.clone(),
+        repo_id: repo_id.clone(),
+        root_id: root1_fs_id.clone(),
+        creator_name: "test@example.com".to_string(),
+        creator: "0000000000000000000000000000000000000000".to_string(),
+        description: "first commit".to_string(),
+        ctime: now,
+        parent_id: None,
+        second_parent_id: None,
+        repo_name: None,
+        repo_desc: None,
+        repo_category: None,
+        encrypted: None,
+        enc_version: None,
+        magic: None,
+        key: None,
+        version: 1,
+    };
+    let json1 = serde_json::to_string(&commit1).unwrap();
+    let resp = client
+        .put_commit(&sync_token, &repo_id, &commit1_id, json1.into_bytes())
+        .await;
+    assert_eq!(resp.status(), 200);
+    let resp = client
+        .update_branch(&sync_token, &repo_id, &commit1_id)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // ── Second commit (parent=commit1): add b.txt ──
+    let b_block_data = b"block data for b.txt";
+    let b_block_id = sha1_hex(b_block_data);
+    let resp = client
+        .put_block(&sync_token, &repo_id, &b_block_id, b_block_data.to_vec())
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let b_file = FsFileData {
+        block_ids: vec![b_block_id],
+        size: 100,
+        obj_type: 1,
+        version: 1,
+    };
+    let b_file_json = serde_json::to_string(&b_file).unwrap();
+    let b_file_fs_id = sha1_hex(b_file_json.as_bytes());
+    let b_file_compressed = pack_fs::compress_fs_data(b_file_json.as_bytes()).unwrap();
+
+    let b_entry = DirEntryData {
+        id: b_file_fs_id.clone(),
+        mode: 33188,
+        modifier: "test@example.com".to_string(),
+        mtime: chrono::Utc::now().timestamp(),
+        name: "b.txt".to_string(),
+        size: 100,
+    };
+    let root2 = FsDirData {
+        dirents: vec![a_entry.clone(), b_entry.clone()],
+        obj_type: 3,
+        version: 1,
+    };
+    let root2_json = serde_json::to_string(&root2).unwrap();
+    let root2_fs_id = sha1_hex(root2_json.as_bytes());
+    let root2_compressed = pack_fs::compress_fs_data(root2_json.as_bytes()).unwrap();
+
+    let mut pack2 = Vec::new();
+    pack2.extend_from_slice(b_file_fs_id.as_bytes());
+    pack2.extend_from_slice(&(b_file_compressed.len() as u32).to_be_bytes());
+    pack2.extend_from_slice(&b_file_compressed);
+    pack2.extend_from_slice(root2_fs_id.as_bytes());
+    pack2.extend_from_slice(&(root2_compressed.len() as u32).to_be_bytes());
+    pack2.extend_from_slice(&root2_compressed);
+    let resp = client.recv_fs(&sync_token, &repo_id, pack2).await;
+    assert_eq!(resp.status(), 200);
+
+    let commit2_id = random_hex_id();
+    let commit2 = CommitData {
+        commit_id: commit2_id.clone(),
+        repo_id: repo_id.clone(),
+        root_id: root2_fs_id.clone(),
+        creator_name: "test@example.com".to_string(),
+        creator: "0000000000000000000000000000000000000000".to_string(),
+        description: "add b.txt".to_string(),
+        ctime: now + 1,
+        parent_id: Some(commit1_id.clone()),
+        second_parent_id: None,
+        repo_name: None,
+        repo_desc: None,
+        repo_category: None,
+        encrypted: None,
+        enc_version: None,
+        magic: None,
+        key: None,
+        version: 1,
+    };
+    let json2 = serde_json::to_string(&commit2).unwrap();
+    let resp = client
+        .put_commit(&sync_token, &repo_id, &commit2_id, json2.into_bytes())
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // Fully-uploaded blocks must NOT be reported missing on the diff path.
+    let resp = client
+        .update_branch(&sync_token, &repo_id, &commit2_id)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // ── Negative: a commit referencing a block never uploaded must be rejected (446) ──
+    let c_block_id = random_hex_id();
+    let c_file = FsFileData {
+        block_ids: vec![c_block_id],
+        size: 100,
+        obj_type: 1,
+        version: 1,
+    };
+    let c_file_json = serde_json::to_string(&c_file).unwrap();
+    let c_file_fs_id = sha1_hex(c_file_json.as_bytes());
+    let c_file_compressed = pack_fs::compress_fs_data(c_file_json.as_bytes()).unwrap();
+
+    let c_entry = DirEntryData {
+        id: c_file_fs_id.clone(),
+        mode: 33188,
+        modifier: "test@example.com".to_string(),
+        mtime: chrono::Utc::now().timestamp(),
+        name: "c.txt".to_string(),
+        size: 100,
+    };
+    let root3 = FsDirData {
+        dirents: vec![a_entry, b_entry, c_entry],
+        obj_type: 3,
+        version: 1,
+    };
+    let root3_json = serde_json::to_string(&root3).unwrap();
+    let root3_fs_id = sha1_hex(root3_json.as_bytes());
+    let root3_compressed = pack_fs::compress_fs_data(root3_json.as_bytes()).unwrap();
+
+    let mut pack3 = Vec::new();
+    pack3.extend_from_slice(c_file_fs_id.as_bytes());
+    pack3.extend_from_slice(&(c_file_compressed.len() as u32).to_be_bytes());
+    pack3.extend_from_slice(&c_file_compressed);
+    pack3.extend_from_slice(root3_fs_id.as_bytes());
+    pack3.extend_from_slice(&(root3_compressed.len() as u32).to_be_bytes());
+    pack3.extend_from_slice(&root3_compressed);
+    let resp = client.recv_fs(&sync_token, &repo_id, pack3).await;
+    assert_eq!(resp.status(), 200);
+
+    let commit3_id = random_hex_id();
+    let commit3 = CommitData {
+        commit_id: commit3_id.clone(),
+        repo_id: repo_id.clone(),
+        root_id: root3_fs_id,
+        creator_name: "test@example.com".to_string(),
+        creator: "0000000000000000000000000000000000000000".to_string(),
+        description: "add c.txt".to_string(),
+        ctime: now + 2,
+        parent_id: Some(commit2_id),
+        second_parent_id: None,
+        repo_name: None,
+        repo_desc: None,
+        repo_category: None,
+        encrypted: None,
+        enc_version: None,
+        magic: None,
+        key: None,
+        version: 1,
+    };
+    let json3 = serde_json::to_string(&commit3).unwrap();
+    let resp = client
+        .put_commit(&sync_token, &repo_id, &commit3_id, json3.into_bytes())
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // A genuinely missing block is still rejected with 446 (BLOCK_MISSING).
+    let resp = client
+        .update_branch(&sync_token, &repo_id, &commit3_id)
+        .await;
+    assert_eq!(resp.status(), 446);
+}
+
+#[tokio::test]
 async fn test_incremental_download() {
     let (server, api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();

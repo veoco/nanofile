@@ -534,9 +534,11 @@ impl SyncService {
                                     async move { !store.has_block(&id).await }
                                 })
                                 .collect();
-                            let present: Vec<bool> = futures::future::join_all(futures).await;
-                            for (id, ok) in chunk.iter().zip(present) {
-                                if !ok {
+                            // Each future yields `true` when the block is
+                            // missing (`!has_block`), so collect those ids.
+                            let missing_flags: Vec<bool> = futures::future::join_all(futures).await;
+                            for (id, missing) in chunk.iter().zip(missing_flags) {
+                                if missing {
                                     missing_set.insert(id.clone());
                                 }
                             }
