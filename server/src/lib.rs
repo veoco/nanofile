@@ -21,7 +21,6 @@ pub mod repository;
 pub mod routes;
 pub mod scheduler;
 pub mod scheduler_setup;
-pub mod sdoc;
 pub mod service;
 pub mod static_assets;
 pub mod thumbnail_util;
@@ -283,10 +282,6 @@ impl AppState {
 
     pub fn admin_service(&self) -> crate::service::admin::AdminService {
         crate::service::admin::AdminService::new(self.repos.clone())
-    }
-
-    pub fn sdoc_service(&self) -> crate::service::sdoc::SdocService {
-        crate::service::sdoc::SdocService::new(self.repos.clone())
     }
 
     pub fn wiki_service(&self) -> crate::service::wiki::WikiService {

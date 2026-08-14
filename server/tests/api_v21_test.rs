@@ -773,21 +773,6 @@ async fn test_v21_custom_share_permissions() {
     assert_eq!(resp.status(), 200);
 }
 
-/// G.2 — SDoc upload image
-#[tokio::test]
-async fn test_v21_seadoc_upload_image() {
-    let f = TestFixture::new().await;
-    let resp = f
-        .client
-        .post_form(
-            &format!("/api/v2.1/seadoc/upload-image/{}/", f.repo_id),
-            Some(&f.api_token),
-            &[],
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-}
-
 /// Test block download link API endpoint (GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/).
 #[tokio::test]
 async fn test_v21_block_download_link() {

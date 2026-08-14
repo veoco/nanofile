@@ -19,7 +19,6 @@ pub mod repo;
 pub mod repo_member;
 pub mod repo_tag;
 pub mod s2fa_token;
-pub mod sdoc_comment;
 pub mod share_link;
 pub mod sso_login_token;
 pub mod starred_file;

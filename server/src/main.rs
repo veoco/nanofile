@@ -183,7 +183,6 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let sync_routes = server::handler::sync::sync_routes();
-            let sdoc_routes = server::sdoc::sdoc_routes();
             let web_routes = server::handler::web::web_routes();
             let ui_routes = server::ui::ui_routes();
             let notification_routes = server::notification::notification_routes();
@@ -200,7 +199,6 @@ async fn main() -> anyhow::Result<()> {
                 .route("/health", get(health_check))
                 .merge(api_with_cors)
                 .merge(sync_routes)
-                .merge(sdoc_routes)
                 .merge(web_routes)
                 .merge(ui_routes)
                 .merge(notification_routes)

@@ -340,11 +340,6 @@ fn v2_routes() -> Router<Arc<AppState>> {
             "/api/v2.1/repos/{repo_id}/custom-share-permissions/",
             get(crate::handler::metadata::custom_share_permissions),
         )
-        // SDoc upload image
-        .route(
-            "/api/v2.1/seadoc/upload-image/{sdoc_uuid}/",
-            post(crate::handler::metadata::seadoc_upload_image),
-        )
         // Metadata record
         .route(
             "/api/v2.1/repos/{repo_id}/metadata/record/",

@@ -257,10 +257,3 @@ pub async fn custom_share_permissions(
 ) -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(serde_json::json!({"permissions": []})))
 }
-
-pub async fn seadoc_upload_image(
-    _path: RepoPathRead,
-    _state: axum::extract::State<std::sync::Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::json!({"url": ""})))
-}

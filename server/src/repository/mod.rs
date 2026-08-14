@@ -27,7 +27,6 @@ pub mod password_reset_token;
 pub mod repo;
 pub mod repo_tag;
 pub mod s2fa_token;
-pub mod sdoc_comment;
 pub mod share_link;
 pub mod sso_login_token;
 pub mod starred;
@@ -66,7 +65,6 @@ use crate::repository::password_reset_token::*;
 use crate::repository::repo::*;
 use crate::repository::repo_tag::*;
 use crate::repository::s2fa_token::*;
-use crate::repository::sdoc_comment::*;
 use crate::repository::share_link::*;
 use crate::repository::sso_login_token::*;
 use crate::repository::starred::*;
@@ -116,7 +114,6 @@ pub struct Repositories {
     pub password_reset_token: Arc<dyn PasswordResetTokenRepository>,
     pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
     pub file_lock_timestamp: Arc<dyn FileLockTimestampRepository>,
-    pub sdoc_comment: Arc<dyn SdocCommentRepository>,
     pub webdav_key: Arc<dyn WebdavKeyRepository>,
 }
 
@@ -161,7 +158,6 @@ impl Repositories {
             password_reset_token: Arc::new(DbPasswordResetTokenRepository::new(db.clone())),
             user_2fa_backup_code: Arc::new(DbUser2faBackupCodeRepository::new(db.clone())),
             file_lock_timestamp: Arc::new(DbFileLockTimestampRepository::new(db.clone())),
-            sdoc_comment: Arc::new(DbSdocCommentRepository::new(db.clone())),
             webdav_key: Arc::new(DbWebdavKeyRepository::new(db.clone())),
         }
     }
