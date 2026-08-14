@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::repository::Repositories;
+use crate::service::user::primary_avatar_url;
 use base::error::AppError;
 
 #[derive(Serialize)]
@@ -15,8 +16,16 @@ pub struct AccountInfo {
     pub id: i32,
     /// Space used in bytes (sum of owned repo sizes).
     pub usage: i64,
-    /// Storage quota in bytes. 0 means unlimited.
+    /// Storage quota in bytes. -1 means unlimited.
     pub total: i64,
+    /// Absolute URL to the user's avatar (seahub `avatar_url` compatibility).
+    pub avatar_url: String,
+    /// The user's contact email. nanofile has no separate contact-email
+    /// profile, so this mirrors `email`.
+    pub contact_email: String,
+    /// Space usage as a percentage string (e.g. `"6.0382327%"`), matching
+    /// seahub's `space_usage` field.
+    pub space_usage: String,
 }
 
 pub struct AccountService {
@@ -33,6 +42,7 @@ impl AccountService {
         &self,
         user_id: i32,
         max_storage_bytes: u64,
+        site_url_origin: &str,
     ) -> Result<AccountInfo, AppError> {
         let user_record = self
             .repos
@@ -55,14 +65,20 @@ impl AccountService {
         };
 
         let nickname = user_record.nickname();
+        let email = user_record.email.clone();
+        let avatar_url = format!("{}{}", site_url_origin, primary_avatar_url(&email, 80));
+        let space_usage = format_space_usage(usage, total);
 
         Ok(AccountInfo {
-            email: user_record.email.clone(),
+            email: email.clone(),
             name: nickname.clone(),
             nickname: Some(nickname),
             id: user_record.id,
             usage,
             total,
+            avatar_url,
+            contact_email: email,
+            space_usage,
         })
     }
 
@@ -72,6 +88,7 @@ impl AccountService {
         user_id: i32,
         name: String,
         max_storage_bytes: u64,
+        site_url_origin: &str,
     ) -> Result<AccountInfo, AppError> {
         let display_name = if name.is_empty() {
             None
@@ -105,14 +122,20 @@ impl AccountService {
         };
 
         let nickname = user_record.nickname();
+        let email = user_record.email.clone();
+        let avatar_url = format!("{}{}", site_url_origin, primary_avatar_url(&email, 80));
+        let space_usage = format_space_usage(usage, total);
 
         Ok(AccountInfo {
-            email: user_record.email.clone(),
+            email: email.clone(),
             name: nickname.clone(),
             nickname: Some(nickname),
             id: user_record.id,
             usage,
             total,
+            avatar_url,
+            contact_email: email,
+            space_usage,
         })
     }
 
@@ -135,5 +158,15 @@ impl AccountService {
     /// Sum of repo sizes owned by a user.
     async fn compute_usage(&self, user_id: i32) -> Result<i64, AppError> {
         self.repos.compute_user_usage(user_id).await
+    }
+}
+
+/// Format space usage as a percentage string, matching seahub's `space_usage`
+/// (e.g. `"6.0382327%"`, or `"0%"` when no quota is set / unlimited).
+fn format_space_usage(usage: i64, total: i64) -> String {
+    if total > 0 {
+        format!("{}%", usage as f64 / total as f64 * 100.0)
+    } else {
+        "0%".to_string()
     }
 }

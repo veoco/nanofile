@@ -38,7 +38,11 @@ pub async fn get_account_info(
 ) -> Result<Json<AccountInfo>, AppError> {
     let svc = AccountService::new(state.repos.clone());
     let info = svc
-        .get_account_info(auth.user_id, state.config.storage.max_storage_bytes)
+        .get_account_info(
+            auth.user_id,
+            state.config.storage.max_storage_bytes,
+            &state.config.server.site_url_origin(),
+        )
         .await?;
     Ok(Json(info))
 }
@@ -58,6 +62,7 @@ pub async fn update_account_info(
             auth.user_id,
             body.name,
             state.config.storage.max_storage_bytes,
+            &state.config.server.site_url_origin(),
         )
         .await?;
     Ok(Json(info))

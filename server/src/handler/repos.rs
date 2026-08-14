@@ -433,3 +433,51 @@ pub async fn delete_repo_v21(
 
     Ok(Json(serde_json::Value::String("success".to_string())))
 }
+
+/// `GET /api2/default-repo/` — the user's default (primary) library.
+///
+/// Returns `{"exists": true, "repo_id": <id>}` when the user has a library,
+/// otherwise `{"exists": false}` (matching seahub's `DefaultRepoView`).
+pub async fn get_default_repo(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let default_id = service::RepoService::default_repo_id(&state.repos, auth.user_id).await?;
+    match default_id {
+        Some(id) => Ok(Json(serde_json::json!({"exists": true, "repo_id": id}))),
+        None => Ok(Json(serde_json::json!({"exists": false}))),
+    }
+}
+
+/// `POST /api2/default-repo/` — find-or-create the default library.
+///
+/// Returns `{"repo_id": <id>}`. Creates a "My Library" repo when the user has
+/// no owned repo yet (matching seahub's default library name).
+pub async fn create_default_repo(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let default_id = service::RepoService::default_repo_id(&state.repos, auth.user_id).await?;
+    let id = match default_id {
+        Some(id) => id,
+        None => {
+            let (repo_info, _token) = service::RepoService::create_repo(
+                state.db.as_ref(),
+                &state.repos,
+                auth.user_id,
+                &auth.email,
+                "My Library",
+                "My Library",
+                None,
+                0,
+                0,
+                None,
+                None,
+                "repo",
+            )
+            .await?;
+            repo_info.id
+        }
+    };
+    Ok(Json(serde_json::json!({"repo_id": id})))
+}

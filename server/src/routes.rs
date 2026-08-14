@@ -54,6 +54,11 @@ fn v1_routes() -> Router<Arc<AppState>> {
             get(crate::handler::repos::repo_tokens),
         )
         .route(
+            "/api2/default-repo/",
+            get(crate::handler::repos::get_default_repo)
+                .post(crate::handler::repos::create_default_repo),
+        )
+        .route(
             "/api2/repos/{repo_id}/webdav-keys/",
             get(crate::handler::webdav_key::list_webdav_keys)
                 .post(crate::handler::webdav_key::create_webdav_key),
@@ -304,8 +309,16 @@ fn v2_routes() -> Router<Arc<AppState>> {
             "/api/v2.1/repos/{repo_id}/related-users/",
             get(crate::handler::metadata::related_users),
         )
-        // Search file (v2.1)
-        .route("/api/v2.1/search-file", get(crate::handler::search::search))
+        // Search file (v2.1). iOS sends the trailing slash; seadroid's Retrofit
+        // annotation omits it, so both forms are registered.
+        .route(
+            "/api/v2.1/search-file/",
+            get(crate::handler::search::search_file),
+        )
+        .route(
+            "/api/v2.1/search-file",
+            get(crate::handler::search::search_file),
+        )
         // User avatar upload
         .route(
             "/api/v2.1/user-avatar/",

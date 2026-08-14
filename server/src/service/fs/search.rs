@@ -12,8 +12,10 @@ pub struct FileSearchResult {
     pub repo_name: String,
     pub name: String,
     pub oid: String,
-    #[serde(alias = "mtime")]
     pub last_modified: i64,
+    /// iOS reads `mtime` (numeric), the desktop client reads `last_modified`;
+    /// emit both so every client gets a valid timestamp.
+    pub mtime: i64,
     pub fullpath: String,
     pub size: i64,
     pub is_dir: bool,
@@ -281,6 +283,7 @@ impl SearchService {
             name: entry.name.clone(),
             oid: entry.id.clone(),
             last_modified: entry.mtime,
+            mtime: entry.mtime,
             fullpath: fullpath.to_string(),
             size: entry.size,
             is_dir,
@@ -352,6 +355,7 @@ async fn search_fs_tree(
                             name: entry.name.clone(),
                             oid: entry.id.clone(),
                             last_modified: entry.mtime,
+                            mtime: entry.mtime,
                             fullpath: full_path.clone(),
                             size: entry.size,
                             is_dir,

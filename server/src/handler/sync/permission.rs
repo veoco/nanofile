@@ -1,7 +1,8 @@
 use axum::{
-    Router,
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -28,12 +29,16 @@ pub fn permission_routes() -> Router<Arc<AppState>> {
 ///
 /// Checks the user's permission level on the repo. For "upload" ops,
 /// requires write (rw) permission. For "download" ops, requires read (r).
+///
+/// On a 403 the daemon parses the body's `reason` field to distinguish a
+/// read-only share ("no write permission") from full access-denied — without
+/// it a read-only shared repo would be reported as a generic access error.
 pub async fn permission_check(
     State(state): State<Arc<AppState>>,
     _auth: SyncAuth,
     Path(repo_id): Path<String>,
     Query(query): Query<PermissionQuery>,
-) -> Result<StatusCode, AppError> {
+) -> Result<Response, AppError> {
     // Verify repo exists — if not, return 444 (repo deleted) as seaf-daemon expects
     if !state.sync_service().repo_exists(&repo_id).await? {
         return Err(AppError::RepoDeleted);
@@ -43,12 +48,25 @@ pub async fn permission_check(
     // seaf-daemon sends op=upload or op=download.
     match query.op.as_deref() {
         Some("upload") => {
-            crate::domain::permission::check_repo_write_permission(
+            match crate::domain::permission::check_repo_write_permission(
                 state.repos.member.as_ref(),
                 &repo_id,
                 _auth.user_id,
             )
-            .await?;
+            .await
+            {
+                Ok(()) => {}
+                // Read-only members (and any non-write access) are reported to
+                // the daemon as "no write permission" rather than a generic 403.
+                Err(AppError::Forbidden) => {
+                    return Ok((
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({ "reason": "no write permission" })),
+                    )
+                        .into_response());
+                }
+                Err(e) => return Err(e),
+            }
         }
         _ => {
             // Default to read permission check (covers download + unknown ops).
@@ -61,5 +79,5 @@ pub async fn permission_check(
         }
     }
 
-    Ok(StatusCode::OK)
+    Ok(StatusCode::OK.into_response())
 }

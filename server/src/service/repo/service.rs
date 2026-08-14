@@ -19,6 +19,10 @@ pub struct RepoInfo {
     pub desc: String,
     #[serde(rename = "owner")]
     pub owner: String,
+    pub owner_name: String,
+    /// nanofile does not model group-owned repos; always null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groupid: Option<i32>,
     pub encrypted: bool,
     #[serde(rename = "enc_version", skip_serializing_if = "Option::is_none")]
     pub enc_version: Option<i32>,
@@ -88,6 +92,12 @@ pub struct V21RepoInfo {
     pub mtime: i64,
     pub owner_email: String,
     pub owner_name: String,
+    pub owner_contact_email: String,
+    /// nanofile does not model group-owned repos; always null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_name: Option<String>,
 }
 
 // ── Service ─────────────────────────────────────────────────────────────
@@ -107,6 +117,7 @@ fn build_op_url(site_url: &str, op: &str, token: &str) -> String {
 fn build_repo_info_from_model(
     r: &repo::Model,
     owner_email: &str,
+    owner_name: &str,
     permission: &str,
     user_id: i32,
     _extra_fields: bool,
@@ -122,6 +133,8 @@ fn build_repo_info_from_model(
         name: r.name.clone(),
         desc: r.description.clone(),
         owner: owner_email.to_string(),
+        owner_name: owner_name.to_string(),
+        groupid: None,
         encrypted,
         enc_version: if encrypted {
             Some(r.enc_version as i32)
@@ -174,17 +187,36 @@ impl RepoService {
             .map(|r| (r.id.clone(), r))
             .collect();
 
+        // Batch-load the owners of non-owned repos so `owner`/`owner_name` can
+        // be resolved to the real owner instead of the requester.
+        let owner_ids: Vec<i32> = repos_map
+            .values()
+            .filter(|r| r.owner_id != user_id)
+            .map(|r| r.owner_id)
+            .collect();
+        let owners: HashMap<i32, user::Model> = repos
+            .user
+            .find_by_ids(&owner_ids)
+            .await?
+            .into_iter()
+            .map(|u| (u.id, u))
+            .collect();
+
         let mut result = Vec::new();
         for m in memberships {
-            if let Some(r) = repos_map.get(&m.repo_id) {
-                result.push(build_repo_info_from_model(
-                    r,
-                    email,
-                    &m.permission,
-                    user_id,
-                    false,
-                ));
-            }
+            let Some(r) = repos_map.get(&m.repo_id) else {
+                continue;
+            };
+            let is_owner = r.owner_id == user_id;
+            let (owner_email, owner_name) = resolve_owner(r.owner_id, email, is_owner, &owners);
+            result.push(build_repo_info_from_model(
+                r,
+                &owner_email,
+                &owner_name,
+                &m.permission,
+                user_id,
+                false,
+            ));
         }
 
         Ok(result)
@@ -258,6 +290,8 @@ impl RepoService {
             name: name.to_string(),
             desc: desc.to_string(),
             owner: email.to_string(),
+            owner_name: email.split('@').next().unwrap_or("").to_string(),
+            groupid: None,
             encrypted,
             enc_version: if encrypted {
                 Some(enc_version_val)
@@ -336,11 +370,24 @@ impl RepoService {
             None
         };
 
+        let owner_name = if r.owner_id == user_id {
+            email.split('@').next().unwrap_or("").to_string()
+        } else {
+            repos
+                .user
+                .find_by_id(r.owner_id)
+                .await?
+                .map(|u| u.nickname())
+                .unwrap_or_default()
+        };
+
         Ok(RepoInfo {
             id: r.id.clone(),
             name: r.name.clone(),
             desc: r.description.clone(),
             owner: email.to_string(),
+            owner_name,
+            groupid: None,
             encrypted,
             enc_version,
             size: r.size,
@@ -768,8 +815,11 @@ impl RepoService {
                 size: r.size,
                 last_modified: timestamp_rfc3339(r.updated_at),
                 mtime: r.updated_at,
+                owner_contact_email: owner_email.clone(),
                 owner_email,
                 owner_name,
+                group_id: None,
+                group_name: None,
             });
         }
 
@@ -818,9 +868,26 @@ impl RepoService {
             size: r.size,
             last_modified: timestamp_rfc3339(r.updated_at),
             mtime: r.updated_at,
+            owner_contact_email: owner_email.clone(),
             owner_email,
             owner_name,
+            group_id: None,
+            group_name: None,
         })
+    }
+
+    /// The user's default (primary) library.
+    ///
+    /// nanofile does not persist a per-user "default repo" flag (seahub tracks
+    /// this via `UserOptions`), so the earliest owned repo is used as a stable
+    /// proxy for the default library the desktop virtual-drive flow expects.
+    pub async fn default_repo_id(
+        repos: &Repositories,
+        user_id: i32,
+    ) -> Result<Option<String>, AppError> {
+        let mut owned = repos.repo.find_by_owner_id(user_id).await?;
+        owned.sort_by_key(|r| r.created_at);
+        Ok(owned.first().map(|r| r.id.clone()))
     }
 }
 

@@ -192,6 +192,12 @@ pub async fn file_post_handler(
             .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
         match form.get("operation").map(|s| s.as_str()) {
+            Some("create") => {
+                // iOS sends `operation=create` to create an empty text file.
+                svc.create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
+                    .await?;
+                Ok(ok_json())
+            }
             Some("rename") => {
                 let newname = form
                     .get("newname")
