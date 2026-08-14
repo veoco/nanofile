@@ -44,8 +44,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-      - run: node --test "server/frontend/**/*.test.js"
+          node-version: 24
+      - run: node --test --experimental-test-coverage "server/frontend/**/*.test.js"
 
   # ── Tests (linux only, fastest) ─────────────────────────────────────
   test:
