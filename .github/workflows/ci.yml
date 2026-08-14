@@ -47,6 +47,36 @@ jobs:
           node-version: 24
       - run: node --test --experimental-test-coverage "server/frontend/**/*.test.js"
 
+  # ── Playwright e2e (browser) ────────────────────────────────────────
+  e2e:
+    name: Playwright e2e
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install Tailwind CSS
+        run: npm install --silent tailwindcss @tailwindcss/cli esbuild
+      - name: Build nanofile binary
+        run: cargo build --bin nanofile
+      - name: Install e2e deps
+        run: npm install --prefix e2e
+      - name: Install Playwright browsers
+        run: npx --prefix e2e playwright install --with-deps chromium
+      - name: Run e2e tests
+        run: npm run --prefix e2e test
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: e2e-failure-artifacts
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/server.log
+
   # ── Tests (linux only, fastest) ─────────────────────────────────────
   test:
     name: Tests
