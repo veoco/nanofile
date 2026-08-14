@@ -1,3 +1,4 @@
+{% import "includes/icons.html" as icons %}
 {% if is_empty %}
 <div class="px-4 py-12 text-center">
     <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -79,9 +80,7 @@
             <span class="inline-block h-2 w-2 rounded-full" style="background-color: {{ tag.color }};"></span>
             {{ tag.name }}
             {% if current_tag.as_deref() == Some(tag.name.as_str()) %}
-            <svg class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
+            {{ icons::icon_close("h-2.5 w-2.5") }}
             {% endif %}
         </button>
         {% endfor %}
@@ -96,14 +95,10 @@
     </span>
     <div id="js-selection-actions" class="hidden flex items-center gap-0.5">
         <button type="button" class="js-batch-download p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20" title="{{ t.tr("fb.download_selected") }}">
-            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-            </svg>
+            {{ icons::icon_download("h-3.5 w-3.5") }}
         </button>
         <button type="button" class="js-batch-delete p-1.5 rounded-md text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" title="{{ t.tr("fb.delete_selected") }}">
-            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-            </svg>
+            {{ icons::icon_trash("h-3.5 w-3.5") }}
         </button>
         <button type="button" class="js-batch-move p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300" title="{{ t.tr("fb.move_selected") }}">
             <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -151,9 +146,7 @@
         {% if entry.entry_type == "dir" %}
         <!-- Folder icon -->
         <div class="h-9 min-w-9 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
-            <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
-            </svg>
+            {{ icons::icon_folder("h-5 w-5 text-amber-600 dark:text-amber-400") }}
         </div>
         <div class="flex-1 min-w-0">
             <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
@@ -183,9 +176,7 @@
                     class="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors
                     {% if entry.starred %}text-amber-400{% else %}text-gray-300 hover:text-amber-400 dark:text-gray-600{% endif %}"
                     title="{% if entry.starred %}{{ t.tr("fb.unstar") }}{% else %}{{ t.tr("fb.star") }}{% endif %}">
-                <svg class="h-3.5 w-3.5" fill="{% if entry.starred %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
-                </svg>
+                {{ icons::icon_star("h-3.5 w-3.5", filled=entry.starred) }}
             </button>
             <button type="button" class="js-share-btn p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20 dark:hover:text-brand-400 transition-colors"
                     data-repo-id="{{ repo_id }}"
@@ -201,24 +192,18 @@
                     data-path="/{{ entry.relative_path }}"
                     onclick="window.openUploadLinkDialog(this.dataset.repoId, this.dataset.path)"
                     title="{{ t.trf("fb.get_upload_link_for", [("name", &entry.name)]) }}">
-                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-                </svg>
+                {{ icons::icon_upload("h-3.5 w-3.5") }}
             </button>
             <button type="button" class="js-entry-download p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
                     title="{{ t.trf("fb.download_name", [("name", &entry.name)]) }}">
-                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                </svg>
+                {{ icons::icon_download("h-3.5 w-3.5") }}
             </button>
             <button class="js-rename-btn p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
                     data-path="{{ entry.relative_path }}"
                     data-name="{{ entry.name }}"
                     data-type="{{ entry.entry_type }}"
                     title="{{ t.trf("fb.rename_name", [("name", &entry.name)]) }}">
-                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                </svg>
+                {{ icons::icon_pencil("h-3.5 w-3.5") }}
             </button>
             <button class="js-delete-btn p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
                     data-repo-id="{{ repo_id }}"
@@ -226,9 +211,7 @@
                     data-name="{{ entry.name }}"
                     data-type="{{ entry.entry_type }}"
                     title="{{ t.trf("fb.delete_name", [("name", &entry.name)]) }}">
-                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                </svg>
+                {{ icons::icon_trash("h-3.5 w-3.5") }}
             </button>
         </div>
         {% else %}
@@ -282,9 +265,7 @@
                     class="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors
                     {% if entry.starred %}text-amber-400{% else %}text-gray-300 hover:text-amber-400 dark:text-gray-600{% endif %}"
                     title="{% if entry.starred %}{{ t.tr("fb.unstar") }}{% else %}{{ t.tr("fb.star") }}{% endif %}">
-                <svg class="h-3.5 w-3.5" fill="{% if entry.starred %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
-                </svg>
+                {{ icons::icon_star("h-3.5 w-3.5", filled=entry.starred) }}
             </button>
             <button type="button" class="js-share-btn p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20 dark:hover:text-brand-400 transition-colors"
                     data-repo-id="{{ repo_id }}"
@@ -299,17 +280,13 @@
             <a href="/repos/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}?dl=1"
                class="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
                title="{{ t.trf("fb.download_name", [("name", &entry.name)]) }}">
-                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                </svg>
+                {{ icons::icon_download("h-3.5 w-3.5") }}
             </a>
             <button type="button" class="js-history-btn p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20 dark:hover:text-brand-400 transition-colors"
                     data-repo-id="{{ repo_id }}"
                     data-path="/{{ entry.relative_path }}"
                     title="{{ t.trf("fb.view_history_for", [("name", &entry.name)]) }}">
-                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
+                {{ icons::icon_clock("h-3.5 w-3.5") }}
             </button>
             {% endif %}
             <button class="js-rename-btn p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
@@ -317,9 +294,7 @@
                     data-name="{{ entry.name }}"
                     data-type="{{ entry.entry_type }}"
                     title="{{ t.trf("fb.rename_name", [("name", &entry.name)]) }}">
-                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                </svg>
+                {{ icons::icon_pencil("h-3.5 w-3.5") }}
             </button>
             <button class="js-delete-btn p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
                     data-repo-id="{{ repo_id }}"
@@ -327,9 +302,7 @@
                     data-name="{{ entry.name }}"
                     data-type="{{ entry.entry_type }}"
                     title="{{ t.trf("fb.delete_name", [("name", &entry.name)]) }}">
-                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                </svg>
+                {{ icons::icon_trash("h-3.5 w-3.5") }}
             </button>
         </div>
         {% endif %}
@@ -366,9 +339,7 @@
          data-record-id="{{ entry.record_id }}">
         {% if entry.entry_type == "dir" %}
         <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
-            <svg class="h-14 w-14 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
-            </svg>
+            {{ icons::icon_folder("h-14 w-14 text-amber-400") }}
         </div>
         {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
         <div class="aspect-square rounded-md flex items-center justify-center mb-2 overflow-hidden">

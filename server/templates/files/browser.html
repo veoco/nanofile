@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% import "includes/icons.html" as icons %}
+{% import "includes/modal.html" as modal %}
 
 {% block title %}{{ repo_name }} | Nanofile{% endblock %}
 
@@ -32,8 +34,7 @@
     </div>
 
     <!-- Rename dialog overlay -->
-    <div id="rename-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="rename-dialog-title">
-        <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+    {% call modal::modal("rename-overlay", labelledby="rename-dialog-title") %}
             <h3 id="rename-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("common.rename") }}</h3>
             <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("fb.rename_enter_new_name") }}</p>
             <form id="rename-dialog-form" action="/libraries/{{ repo_id }}/files/rename/" method="POST">
@@ -54,8 +55,7 @@
                     </button>
                 </div>
             </form>
-        </div>
-    </div>
+    {% endcall %}
 
     <!-- Directory picker overlay (for batch move/copy) -->
     <div id="dir-picker-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
@@ -203,9 +203,7 @@
             <div class="flex items-center justify-between mb-1">
                 <h3 id="history-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("fb.file_history") }}</h3>
                 <button type="button" class="js-history-close text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" aria-label="{{ t.tr("common.close") }}">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
+                    {{ icons::icon_close("h-5 w-5") }}
                 </button>
             </div>
             <p class="js-history-path text-sm text-gray-500 dark:text-gray-400 mb-3 break-all"></p>
@@ -226,7 +224,7 @@
             <div class="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
                 <h3 id="quick-preview-title" class="js-qp-title text-sm font-semibold text-gray-900 dark:text-gray-100 truncate"></h3>
                 <button type="button" class="js-qp-close p-1.5 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors" aria-label="{{ t.tr("common.close") }}">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                    {{ icons::icon_close("h-5 w-5") }}
                 </button>
             </div>
             <div class="flex-1 overflow-auto flex items-center justify-center p-4 bg-gray-50 dark:bg-surface-900">
@@ -242,9 +240,7 @@
     <!-- Drop zone overlay (shown during drag-over) -->
     <div class="drop-overlay hidden absolute inset-0 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-brand-500 bg-brand-50/90 dark:bg-brand-500/10">
         <div class="text-center">
-            <svg class="mx-auto h-12 w-12 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-            </svg>
+            {{ icons::icon_upload("mx-auto h-12 w-12 text-brand-500") }}
             <p class="mt-3 text-lg font-medium text-gray-700 dark:text-gray-300">{{ t.tr("fb.drop_files_here") }}</p>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("fb.will_upload_current_dir") }}</p>
         </div>

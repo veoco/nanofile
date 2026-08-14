@@ -1,3 +1,5 @@
+{% import "includes/icons.html" as icons %}
+{% import "includes/modal.html" as modal %}
 <script>
 window.uploadContext = {
     maxUploadSizeMb: {{ max_upload_size_mb }},
@@ -17,16 +19,12 @@ window.uploadContext = {
     </button>
     <button onclick="triggerUpload()"
             class="inline-flex items-center rounded-md bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-900 dark:hover:text-gray-100">
-        <svg class="mr-1.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-        </svg>
+        {{ icons::icon_upload("mr-1.5 h-4 w-4 text-gray-500") }}
         {{ t.tr("common.upload") }}
     </button>
     <button onclick="triggerFolderUpload()"
             class="inline-flex items-center rounded-md bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-900 dark:hover:text-gray-100">
-        <svg class="mr-1.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-        </svg>
+        {{ icons::icon_folder_outline("mr-1.5 h-4 w-4 text-gray-500") }}
         {{ t.tr("fb.upload_folder") }}
     </button>
 
@@ -64,8 +62,7 @@ window.uploadContext = {
 </div>
 
 <!-- New Folder dialog overlay -->
-<div id="new-folder-overlay" class="hidden fixed inset-0 z-[1060] flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="new-folder-title" onclick="if(event.target===this)hideNewFolderDialog()">
-    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+{% call modal::modal("new-folder-overlay", z="z-[1060]", labelledby="new-folder-title", backdrop_close="hideNewFolderDialog") %}
         <h3 id="new-folder-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.new_folder") }}</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("fb.new_folder_enter_name") }}</p>
         <form action="/libraries/{{ repo_id }}/files/new-dir/" method="POST" onsubmit="return submitNewFolder(this)">
@@ -87,5 +84,4 @@ window.uploadContext = {
                 </button>
             </div>
         </form>
-    </div>
-</div>
+{% endcall %}

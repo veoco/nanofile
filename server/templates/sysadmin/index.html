@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% import "includes/icons.html" as icons %}
+{% import "includes/modal.html" as modal %}
 
 {% block title %}{{ t.tr("admin.title") }} | Nanofile{% endblock %}
 
@@ -67,16 +69,12 @@
                         <button type="button" class="p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20 transition-colors"
                                 onclick="openEdit({{ u.id }}, '{{ u.email }}', {{ u.is_admin }}, {{ u.is_active }}, '{{ u.storage_quota_display }}')"
                                 title="{{ t.tr("admin.edit_user") }}">
-                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                            </svg>
+                            {{ icons::icon_pencil("h-3.5 w-3.5") }}
                         </button>
                         <button type="button" class="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                                 onclick="openDelete({{ u.id }}, '{{ u.email }}')"
                                 title="{{ t.tr("admin.delete_user") }}">
-                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                            </svg>
+                            {{ icons::icon_trash("h-3.5 w-3.5") }}
                         </button>
                     </div>
                 </td>
@@ -87,8 +85,7 @@
 </div>
 
 <!-- Create overlay -->
-<div id="create-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
-    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+{% call modal::modal("create-overlay") %}
         <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">{{ t.tr("admin.new_user") }}</h3>
         <form action="/sysadmin/users/create/" method="POST" class="space-y-3">
             <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
@@ -126,12 +123,10 @@
                 </button>
             </div>
         </form>
-    </div>
-</div>
+{% endcall %}
 
 <!-- Edit overlay -->
-<div id="edit-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
-    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+{% call modal::modal("edit-overlay") %}
         <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("admin.edit_user") }}</h3>
         <p class="js-edit-email text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
         <form id="edit-form" method="POST" class="space-y-3">
@@ -160,12 +155,10 @@
                 </button>
             </div>
         </form>
-    </div>
-</div>
+{% endcall %}
 
 <!-- Delete overlay -->
-<div id="delete-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
-    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+{% call modal::modal("delete-overlay") %}
         <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">{{ t.tr("admin.delete_user") }}</h3>
         <p class="text-sm text-gray-600 dark:text-gray-400">
             {{ t.tr("admin.delete_confirm_prefix") }} <strong id="delete-email"></strong>{{ t.tr("admin.delete_confirm_suffix") }}
@@ -182,8 +175,7 @@
                 </button>
             </div>
         </form>
-    </div>
-</div>
+{% endcall %}
 
 <script>
 function openCreate() {

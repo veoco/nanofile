@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% import "includes/modal.html" as modal %}
+{% import "includes/icons.html" as icons %}
 
 {% block title %}{{ t.tr("nav.trash") }} | Nanofile{% endblock %}
 
@@ -76,9 +78,7 @@
                 <td class="px-4 py-3 text-sm">
                     <div class="flex items-center gap-1">
                         {% if item.is_dir %}
-                        <svg class="mr-1 h-5 w-5 flex-shrink-0 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
-                        </svg>
+                        {{ icons::icon_folder("mr-1 h-5 w-5 flex-shrink-0 text-amber-400") }}
                         {% else %}
                         <svg class="mr-1 h-5 w-5 flex-shrink-0 text-gray-400 dark:text-gray-500" fill="currentColor" viewBox="0 0 24 24">
                             <path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
@@ -149,8 +149,7 @@
 {% endif %}
 
 <!-- Clean Trash Confirmation Dialog -->
-<div id="clean-dialog" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="clean-dialog-title" onclick="if(event.target===this)hideCleanDialog()">
-    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+{% call modal::modal("clean-dialog", labelledby="clean-dialog-title", backdrop_close="hideCleanDialog") %}
         <h3 id="clean-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("trash.empty_title") }}</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
             {{ t.tr("trash.empty_confirm_desc") }}
@@ -173,8 +172,7 @@
                 {{ t.tr("trash.delete_all") }}
             </button>
         </div>
-    </div>
-</div>
+{% endcall %}
 {% endblock %}
 
 {% block scripts %}

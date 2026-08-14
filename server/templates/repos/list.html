@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% import "includes/icons.html" as icons %}
+{% import "includes/modal.html" as modal %}
 
 {% block title %}{{ t.tr("nav.libraries") }} | Nanofile{% endblock %}
 
@@ -35,9 +37,7 @@
             <div class="flex items-center justify-between px-4 py-4">
                 <a href="/libraries/{{ r.id }}/files/" class="flex items-center min-w-0 flex-1 gap-4">
                     <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-100 dark:bg-brand-500/20 text-brand-600 dark:text-brand-400 flex-shrink-0">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-                        </svg>
+                        {{ icons::icon_folder_outline("h-5 w-5") }}
                     </div>
                     <div class="min-w-0">
                         <p class="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{{ r.name }}</p>
@@ -57,9 +57,7 @@
                             data-history-ttl-days="{{ r.history_ttl_days }}"
                             class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-800 transition-colors"
                             title="{{ t.tr("repo.edit_library") }}">
-                        <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                        </svg>
+                        {{ icons::icon_pencil("mr-1 h-3.5 w-3.5") }}
                         {{ t.tr("common.edit") }}
                     </button>
                     <button onclick="deleteRepo(this)"
@@ -67,9 +65,7 @@
                             data-repo-name="{{ r.name }}"
                             class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-red-200 dark:border-red-900 bg-white dark:bg-surface-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-700 transition-colors"
                             title="{{ t.tr("common.delete") }}">
-                        <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                        </svg>
+                        {{ icons::icon_trash("mr-1 h-3.5 w-3.5") }}
                         {{ t.tr("common.delete") }}
                     </button>
                 </div>
@@ -81,8 +77,7 @@
 {% endif %}
 
 {# ─── Create Library Dialog ─── #}
-<div id="create-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="create-dialog-title" onclick="if(event.target===this)hideCreateDialog()">
-    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+{% call modal::modal("create-overlay", labelledby="create-dialog-title", backdrop_close="hideCreateDialog") %}
         <h3 id="create-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("repo.new_library") }}</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("repo.new_library_desc") }}</p>
         <form action="/libraries/create/" method="POST" onsubmit="return submitCreate(this)">
@@ -102,12 +97,10 @@
                 </button>
             </div>
         </form>
-    </div>
-</div>
+{% endcall %}
 
 {# ─── Edit Library Dialog ─── #}
-<div id="edit-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="edit-dialog-title" onclick="if(event.target===this)hideEditDialog()">
-    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+{% call modal::modal("edit-overlay", labelledby="edit-dialog-title", backdrop_close="hideEditDialog") %}
         <h3 id="edit-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">{{ t.tr("repo.edit_library") }}</h3>
         <form id="edit-form" action="" method="POST" onsubmit="return submitEdit(this)">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -189,8 +182,7 @@
                 </button>
             </div>
         </form>
-    </div>
-</div>
+{% endcall %}
 
 <script>
 var webdavBaseUrl = "{{ webdav_base_url }}";

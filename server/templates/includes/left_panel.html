@@ -1,3 +1,5 @@
+{% import "includes/icons.html" as icons %}
+{% import "includes/modal.html" as modal %}
 <!-- Left Panel — Library Tree & Quick Access (loaded dynamically) -->
 <div class="flex flex-col h-full">
     <!-- Header -->
@@ -25,9 +27,7 @@
         <div class="js-repo-item" data-repo-id="{{ r.id }}">
             <a href="/libraries/{{ r.id }}/files/"
                class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors{% if current_repo_id.as_deref() == Some(r.id) %} bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 font-medium{% endif %}">
-                <svg class="h-4 w-4 flex-shrink-0 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
-                </svg>
+                {{ icons::icon_folder("h-4 w-4 flex-shrink-0 text-amber-400") }}
                 <span class="truncate flex-1">{{ r.name }}</span>
                 <span class="text-xs text-gray-400">{{ r.size_display }}</span>
             </a>
@@ -40,9 +40,7 @@
     <div class="border-t border-gray-200 dark:border-gray-700 pt-2 pb-2 px-3 space-y-0.5">
         <a href="/starred/"
            class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors{% if active_page == "starred" %} bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 font-medium{% else %} text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-surface-700 hover:text-gray-900 dark:hover:text-gray-100{% endif %}">
-            <svg class="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
-            </svg>
+            {{ icons::icon_star("h-4 w-4 flex-shrink-0") }}
             <span>{{ t.tr("nav.starred") }}</span>
         </a>
         <a href="/shares/"
@@ -54,16 +52,12 @@
         </a>
         <a href="/trash/"
            class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors{% if active_page == "trash" %} bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 font-medium{% else %} text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-surface-700 hover:text-gray-900 dark:hover:text-gray-100{% endif %}">
-            <svg class="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-            </svg>
+            {{ icons::icon_trash("h-4 w-4 flex-shrink-0") }}
             <span>{{ t.tr("nav.trash") }}</span>
         </a>
         <a href="/activities/"
            class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors{% if active_page == "activities" %} bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 font-medium{% else %} text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-surface-700 hover:text-gray-900 dark:hover:text-gray-100{% endif %}">
-            <svg class="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
+            {{ icons::icon_clock("h-4 w-4 flex-shrink-0") }}
             <span>{{ t.tr("nav.activity") }}</span>
         </a>
     </div>
@@ -84,8 +78,7 @@
 </div>
 
 <!-- New Library dialog (self-contained) -->
-<div id="quick-create-overlay" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="quick-create-title" onclick="if(event.target===this)hideQuickCreate()">
-    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+{% call modal::modal("quick-create-overlay", z="z-[100]", labelledby="quick-create-title", backdrop_close="hideQuickCreate") %}
         <h3 id="quick-create-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("repo.new_library") }}</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("repo.new_library_desc") }}</p>
         <form id="quick-create-form" onsubmit="return submitQuickCreate(this)">
@@ -103,5 +96,4 @@
                 </button>
             </div>
         </form>
-    </div>
-</div>
+{% endcall %}
