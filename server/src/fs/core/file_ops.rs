@@ -150,19 +150,33 @@ impl FileOps {
 
         let mut dirents = parent_data.dirents;
 
-        // If replacing, remove any existing entry with the same name.
+        // When replacing an existing file, keep the old entry untouched if the
+        // content is identical (same file fs_id and size). That leaves the
+        // directory hash (and thus the root) unchanged, so `create_commit`
+        // dedups and no redundant commit is created. Without this, a
+        // same-content re-upload would overwrite `mtime` and produce a
+        // spurious new commit whenever the two uploads land in different
+        // seconds.
+        let mut identical_replace = false;
         if replace {
-            dirents.retain(|d| d.name != name);
+            identical_replace = dirents
+                .iter()
+                .any(|d| d.name == name && d.id == file_fs_id && d.size == total_size);
+            if !identical_replace {
+                dirents.retain(|d| d.name != name);
+            }
         }
 
-        dirents.push(DirEntryData {
-            id: file_fs_id.clone(),
-            mode: infra::serialization::S_IFREG,
-            modifier: modifier.to_string(),
-            mtime: now,
-            name: name.to_string(),
-            size: total_size,
-        });
+        if !identical_replace {
+            dirents.push(DirEntryData {
+                id: file_fs_id.clone(),
+                mode: infra::serialization::S_IFREG,
+                modifier: modifier.to_string(),
+                mtime: now,
+                name: name.to_string(),
+                size: total_size,
+            });
+        }
 
         let new_dir_data = FsDirData {
             dirents,

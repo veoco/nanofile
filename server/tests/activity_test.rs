@@ -1487,6 +1487,10 @@ async fn test_upload_identical_content_no_500() {
         resp1.text().await
     );
 
+    // Force the second upload to land in a different second. Without this the
+    // test silently passes when both uploads share a second and only fails on
+    // slow CI runners — the dedup must hold regardless of wall-clock timing.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     let resp2 = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "dup.txt", data)
