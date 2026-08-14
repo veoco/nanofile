@@ -1,6 +1,5 @@
 use crate::repository::Repositories;
 use base::error::AppError;
-use infra::common::EMPTY_SHA1;
 use infra::serialization::S_IFDIR;
 
 pub mod reindex;
@@ -16,24 +15,30 @@ pub(crate) async fn collect_file_paths(
     root_fs_id: &str,
 ) -> Result<Vec<String>, AppError> {
     let mut results = Vec::new();
-    let mut stack = vec![(root_fs_id.to_string(), String::new())];
-    while let Some((current_id, prefix)) = stack.pop() {
-        if current_id == EMPTY_SHA1 {
-            continue;
-        }
-        let dir_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &current_id).await?;
-        for entry in &dir_data.dirents {
-            let path = if prefix.is_empty() {
-                entry.name.clone()
-            } else {
-                format!("{}/{}", prefix, entry.name)
+    let mut frontier = vec![(root_fs_id.to_string(), String::new())];
+    while !frontier.is_empty() {
+        let ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
+        let dir_map = crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &ids).await?;
+
+        let mut next = Vec::new();
+        for (current_id, prefix) in frontier {
+            let Some(dir_data) = dir_map.get(&current_id) else {
+                continue; // EMPTY_SHA1 or missing directory
             };
-            if entry.mode & S_IFDIR != 0 {
-                stack.push((entry.id.clone(), path));
-            } else {
-                results.push(path);
+            for entry in &dir_data.dirents {
+                let path = if prefix.is_empty() {
+                    entry.name.clone()
+                } else {
+                    format!("{}/{}", prefix, entry.name)
+                };
+                if entry.mode & S_IFDIR != 0 {
+                    next.push((entry.id.clone(), path));
+                } else {
+                    results.push(path);
+                }
             }
         }
+        frontier = next;
     }
     Ok(results)
 }

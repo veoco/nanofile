@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
+use crate::fs::core::{
+    read_fs_dir_data, read_fs_dir_data_batch, resolve_fs_id, resolve_fs_ids_batch,
+};
 use crate::repository::Repositories;
 use base::error::AppError;
 use chrono::{DateTime, Utc};
@@ -89,18 +91,20 @@ impl StarredService {
         let mut starred_folders = Vec::new();
         let mut starred_files = Vec::new();
 
+        let mtime_map =
+            batch_resolve_mtime_deleted(&self.repos, &entries, &repo_cache, &head_cache).await;
+
         for entry in &entries {
             let repo_opt = repo_cache.get(&entry.repo_id).and_then(|o| o.as_ref());
-            let head_opt = head_cache.get(&entry.repo_id).and_then(|o| o.as_ref());
-            let item = build_item_json(
-                &self.repos,
-                entry,
-                repo_opt,
-                head_opt,
-                email,
-                &user_nickname,
-            )
-            .await;
+            let (mtime, deleted) = if entry.path == "/" {
+                let m = repo_opt.map(|r| r.updated_at).unwrap_or(0);
+                (m, repo_opt.is_none())
+            } else {
+                *mtime_map
+                    .get(&(entry.repo_id.clone(), entry.path.clone()))
+                    .unwrap_or(&(0, true))
+            };
+            let item = build_item_json(entry, repo_opt, email, &user_nickname, mtime, deleted);
 
             if entry.path == "/" {
                 starred_repos.push(item);
@@ -217,15 +221,19 @@ impl StarredService {
             .await?;
 
         if let Some(ref entry) = existing {
+            let (mtime, deleted) = if normalized_path == "/" {
+                (repo_record.updated_at, false)
+            } else {
+                get_entry_mtime_or_deleted(&self.repos, entry, head_for_json.as_ref()).await
+            };
             return Ok(build_item_json(
-                &self.repos,
                 entry,
                 Some(&repo_record),
-                head_for_json.as_ref(),
                 email,
                 &user_nickname,
-            )
-            .await);
+                mtime,
+                deleted,
+            ));
         }
 
         // Insert
@@ -250,15 +258,19 @@ impl StarredService {
                 AppError::Internal("failed to find starred entry after insert".into())
             })?;
 
+        let (mtime, deleted) = if normalized_path == "/" {
+            (repo_record.updated_at, false)
+        } else {
+            get_entry_mtime_or_deleted(&self.repos, &new_entry, head_for_json.as_ref()).await
+        };
         Ok(build_item_json(
-            &self.repos,
             &new_entry,
             Some(&repo_record),
-            head_for_json.as_ref(),
             email,
             &user_nickname,
-        )
-        .await)
+            mtime,
+            deleted,
+        ))
     }
 
     /// Unstar an item.
@@ -293,35 +305,28 @@ fn timestamp_to_iso(ts: i64) -> String {
         .unwrap_or_default()
 }
 
-async fn build_item_json(
-    repos: &Repositories,
+fn build_item_json(
     entry: &infra::entity::starred_file::Model,
     repo_opt: Option<&infra::entity::repo::Model>,
-    head_opt: Option<&infra::entity::commit::Model>,
     auth_email: &str,
     user_nickname: &str,
+    mtime: i64,
+    deleted: bool,
 ) -> serde_json::Value {
     let (repo_name, repo_encrypted) = match repo_opt {
         Some(r) => (r.name.clone(), r.encrypted != 0),
         None => (String::new(), false),
     };
 
-    let (obj_name, mtime, deleted) = if entry.path == "/" {
-        let m = repo_opt.map(|r| r.updated_at).unwrap_or(0);
-        (repo_name.clone(), m, repo_opt.is_none())
+    let obj_name = if entry.path == "/" {
+        repo_name.clone()
     } else {
-        let name = entry
+        entry
             .path
             .trim_end_matches('/')
             .rsplit_once('/')
             .map(|(_, n)| n.to_string())
-            .unwrap_or_default();
-        let (m, d) = if repo_opt.is_some() {
-            get_entry_mtime_or_deleted(repos, entry, head_opt).await
-        } else {
-            (0, true)
-        };
-        (name, m, d)
+            .unwrap_or_default()
     };
 
     serde_json::json!({
@@ -337,6 +342,111 @@ async fn build_item_json(
         "user_name": user_nickname,
         "user_contact_email": auth_email,
     })
+}
+
+/// Batch-resolve `(mtime, deleted)` for all non-"/" starred entries, grouping
+/// by repo and resolving every parent path in a shared level-frontier walk
+/// instead of one `resolve_fs_id` + `read_fs_dir_data` round-trip per entry.
+async fn batch_resolve_mtime_deleted(
+    repos: &Repositories,
+    entries: &[infra::entity::starred_file::Model],
+    repo_cache: &HashMap<String, Option<infra::entity::repo::Model>>,
+    head_cache: &HashMap<String, Option<infra::entity::commit::Model>>,
+) -> HashMap<(String, String), (i64, bool)> {
+    let mut out: HashMap<(String, String), (i64, bool)> = HashMap::new();
+
+    struct Item {
+        key: (String, String),
+        root_id: String,
+        parent_path: String,
+        name: String,
+    }
+    let mut by_repo: HashMap<String, Vec<Item>> = HashMap::new();
+
+    for entry in entries {
+        let key = (entry.repo_id.clone(), entry.path.clone());
+        if entry.path == "/" {
+            continue;
+        }
+        let repo_opt = repo_cache.get(&entry.repo_id).and_then(|o| o.as_ref());
+        let head_opt = head_cache.get(&entry.repo_id).and_then(|o| o.as_ref());
+        let (Some(_repo), Some(head)) = (repo_opt, head_opt) else {
+            out.insert(key, (0, true));
+            continue;
+        };
+        let path = entry.path.trim_end_matches('/');
+        let (parent_path, name) = match path.rsplit_once('/') {
+            Some(("", n)) => ("/", n),
+            Some((p, n)) => (p, n),
+            None => {
+                out.insert(key, (0, true));
+                continue;
+            }
+        };
+        by_repo
+            .entry(entry.repo_id.clone())
+            .or_default()
+            .push(Item {
+                key,
+                root_id: head.root_id.clone(),
+                parent_path: parent_path.to_string(),
+                name: name.to_string(),
+            });
+    }
+
+    for (repo_id, items) in by_repo {
+        let targets: Vec<(String, String)> = items
+            .iter()
+            .map(|it| (it.root_id.clone(), it.parent_path.clone()))
+            .collect();
+        let resolved = match resolve_fs_ids_batch(repos, &repo_id, &targets).await {
+            Ok(r) => r,
+            Err(_) => {
+                for it in &items {
+                    out.insert(it.key.clone(), (0, true));
+                }
+                continue;
+            }
+        };
+
+        let mut to_read: Vec<(String, usize)> = Vec::new();
+        for (i, it) in items.iter().enumerate() {
+            match &resolved[i] {
+                Some(fsid) => to_read.push((fsid.clone(), i)),
+                None => {
+                    out.insert(it.key.clone(), (0, true));
+                }
+            }
+        }
+
+        let fs_ids: Vec<String> = to_read.iter().map(|(id, _)| id.clone()).collect();
+        let dir_map = match read_fs_dir_data_batch(repos, &repo_id, &fs_ids).await {
+            Ok(m) => m,
+            Err(_) => {
+                for (_, i) in &to_read {
+                    out.insert(items[*i].key.clone(), (0, true));
+                }
+                continue;
+            }
+        };
+
+        for (parent_fs_id, i) in to_read {
+            let it = &items[i];
+            match dir_map
+                .get(&parent_fs_id)
+                .and_then(|d| d.dirents.iter().find(|e| e.name == it.name))
+            {
+                Some(dirent) => {
+                    out.insert(it.key.clone(), (dirent.mtime, false));
+                }
+                None => {
+                    out.insert(it.key.clone(), (0, true));
+                }
+            }
+        }
+    }
+
+    out
 }
 
 async fn get_entry_mtime_or_deleted(

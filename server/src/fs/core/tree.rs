@@ -54,7 +54,7 @@ const IN_BATCH: usize = 500;
 
 /// Fetch the given fs_objects in one batched `IN` query per chunk, keyed by
 /// fs_id. Missing ids are simply absent from the map.
-async fn fetch_fs_object_map(
+pub(crate) async fn fetch_fs_object_map(
     repos: &Repositories,
     repo_id: &str,
     fs_ids: &[String],
@@ -160,4 +160,197 @@ pub async fn resolve_fs_id(
     }
 
     Ok(current_fs_id)
+}
+
+/// Batch version of `resolve_fs_id` for many `(root_fs_id, path)` targets.
+///
+/// Resolves all targets in a shared level-frontier walk: at each depth it
+/// deduplicates the "current directory" ids and fetches them in a single
+/// batched query, so M paths of depth D cost O(D) queries instead of O(M·D).
+/// Directories shared between targets are fetched only once.
+///
+/// The result is aligned with `targets`: `Some(fs_id)` for a fully resolved
+/// path, `None` when any segment is missing (mirroring `resolve_fs_id`'s
+/// `NotFound`), including a root or intermediate id that is `EMPTY_SHA1` or
+/// not a directory.
+pub async fn resolve_fs_ids_batch(
+    repos: &Repositories,
+    repo_id: &str,
+    targets: &[(String, String)],
+) -> Result<Vec<Option<String>>, AppError> {
+    // Pre-parse each target's path into segments.
+    let segments: Vec<Vec<String>> = targets
+        .iter()
+        .map(|(_, path)| {
+            path.trim_start_matches('/')
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .collect();
+
+    let mut results: Vec<Option<String>> = vec![None; targets.len()];
+
+    struct Active {
+        idx: usize,
+        current_fs_id: String,
+        next_segment: usize,
+    }
+
+    let mut active: Vec<Active> = Vec::new();
+    for (i, segs) in segments.iter().enumerate() {
+        if segs.is_empty() {
+            results[i] = Some(targets[i].0.clone());
+        } else {
+            active.push(Active {
+                idx: i,
+                current_fs_id: targets[i].0.clone(),
+                next_segment: 0,
+            });
+        }
+    }
+
+    while !active.is_empty() {
+        let mut ids: Vec<String> = active.iter().map(|a| a.current_fs_id.clone()).collect();
+        ids.sort();
+        ids.dedup();
+
+        let dir_map = read_fs_dir_data_batch(repos, repo_id, &ids).await?;
+
+        let mut next: Vec<Active> = Vec::new();
+        for a in active {
+            let Some(dir_data) = dir_map.get(&a.current_fs_id) else {
+                // Missing, EMPTY_SHA1, or not a directory → cannot descend.
+                results[a.idx] = None;
+                continue;
+            };
+            let segment = &segments[a.idx][a.next_segment];
+            match dir_data.dirents.iter().find(|d| &d.name == segment) {
+                Some(entry) => {
+                    let next_segment = a.next_segment + 1;
+                    if next_segment == segments[a.idx].len() {
+                        results[a.idx] = Some(entry.id.clone());
+                    } else {
+                        next.push(Active {
+                            idx: a.idx,
+                            current_fs_id: entry.id.clone(),
+                            next_segment,
+                        });
+                    }
+                }
+                None => {
+                    results[a.idx] = None;
+                }
+            }
+        }
+        active = next;
+    }
+
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+    use std::sync::Arc;
+
+    async fn setup_tree_db() -> sea_orm::DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TABLE fs_objects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id VARCHAR(36) NOT NULL,
+                fs_id VARCHAR(40) NOT NULL,
+                obj_type TINYINT NOT NULL,
+                data TEXT NOT NULL
+            )",
+        ))
+        .await
+        .unwrap();
+        db
+    }
+
+    async fn insert(db: &sea_orm::DatabaseConnection, fs_id: &str, obj_type: i8, data: &str) {
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            format!(
+                "INSERT INTO fs_objects (repo_id, fs_id, obj_type, data) \
+                 VALUES ('r', '{fs_id}', {obj_type}, '{data}')"
+            ),
+        ))
+        .await
+        .unwrap();
+    }
+
+    /// root ── a(dirA) ── f1.txt(file1)
+    ///      │            └── c(dirC)
+    ///      └── b(dirB)
+    async fn seed_tree(db: &sea_orm::DatabaseConnection) {
+        insert(db, "root", 3, r#"{"dirents":[{"id":"dirA","mode":16384,"modifier":"","mtime":0,"name":"a","size":0},{"id":"dirB","mode":16384,"modifier":"","mtime":0,"name":"b","size":0}],"type":3,"version":1}"#).await;
+        insert(db, "dirA", 3, r#"{"dirents":[{"id":"file1","mode":33188,"modifier":"u","mtime":0,"name":"f1.txt","size":10},{"id":"dirC","mode":16384,"modifier":"","mtime":0,"name":"c","size":0}],"type":3,"version":1}"#).await;
+        insert(db, "dirB", 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
+        insert(
+            db,
+            "file1",
+            1,
+            r#"{"block_ids":["x"],"size":10,"type":1,"version":1}"#,
+        )
+        .await;
+        insert(db, "dirC", 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
+    }
+
+    #[tokio::test]
+    async fn test_resolve_fs_ids_batch_resolves_and_shares() {
+        let db = setup_tree_db().await;
+        seed_tree(&db).await;
+        let repos = Repositories::new(Arc::new(db));
+
+        let targets = vec![
+            ("root".to_string(), "/a/f1.txt".to_string()),
+            ("root".to_string(), "/b".to_string()),
+            ("root".to_string(), "/a/c".to_string()),
+            ("root".to_string(), "/".to_string()),
+            ("root".to_string(), "".to_string()),
+        ];
+        let got = resolve_fs_ids_batch(&repos, "r", &targets).await.unwrap();
+
+        assert_eq!(
+            got,
+            vec![
+                Some("file1".to_string()),
+                Some("dirB".to_string()),
+                Some("dirC".to_string()),
+                Some("root".to_string()),
+                Some("root".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_fs_ids_batch_missing_segments_are_none() {
+        let db = setup_tree_db().await;
+        seed_tree(&db).await;
+        let repos = Repositories::new(Arc::new(db));
+
+        let targets = vec![
+            ("root".to_string(), "/nonexistent".to_string()),
+            ("root".to_string(), "/a/nonexistent".to_string()),
+            ("missing-root".to_string(), "/a".to_string()),
+        ];
+        let got = resolve_fs_ids_batch(&repos, "r", &targets).await.unwrap();
+
+        assert_eq!(got, vec![None, None, None]);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_fs_ids_batch_empty_targets() {
+        let db = setup_tree_db().await;
+        let repos = Repositories::new(Arc::new(db));
+
+        let got = resolve_fs_ids_batch(&repos, "r", &[]).await.unwrap();
+        assert!(got.is_empty());
+    }
 }

@@ -179,16 +179,15 @@ pub async fn add_batch_to_trash(
 ) -> Result<(), AppError> {
     let now = chrono::Utc::now().timestamp();
 
-    for item in &items {
-        let parent_dir = match item.path.rsplit_once('/') {
-            Some(("", _)) => "/",
-            Some((parent, _)) => parent,
-            None => "/",
-        };
-
-        repos
-            .file_trash
-            .insert(file_trash::ActiveModel {
+    let models: Vec<file_trash::ActiveModel> = items
+        .iter()
+        .map(|item| {
+            let parent_dir = match item.path.rsplit_once('/') {
+                Some(("", _)) => "/",
+                Some((parent, _)) => parent,
+                None => "/",
+            };
+            file_trash::ActiveModel {
                 id: sea_orm::NotSet,
                 user: Set(user_email.to_owned()),
                 obj_type: Set(item.obj_type.to_owned()),
@@ -199,11 +198,11 @@ pub async fn add_batch_to_trash(
                 commit_id: Set(parent_commit_id.to_owned()),
                 path: Set(parent_dir.to_owned()),
                 size: Set(item.size),
-            })
-            .await?;
-    }
+            }
+        })
+        .collect();
 
-    Ok(())
+    repos.file_trash.insert_many(models).await
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────
@@ -421,63 +420,43 @@ async fn delete_trash_records(repos: &Repositories, ids: &[i32]) -> Result<(), A
 }
 
 /// Check whether a path exists in the current FS tree (i.e. the resolved
-/// fs_id from the repo's head commit actually exists).
+/// fs_id from the repo's head commit actually exists). `head_root_id` is
+/// resolved once by the caller and passed in to avoid re-fetching the repo and
+/// head commit per item.
 async fn path_exists_in_tree(
     repos: &Repositories,
     repo_id: &str,
+    head_root_id: Option<&str>,
     path: &str,
 ) -> Result<bool, AppError> {
     if path == "/" {
         return Ok(true);
     }
-
-    let repo_record = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-    let head_commit_id = match repo_record.head_commit_id {
-        Some(id) => id,
-        None => return Ok(false),
+    let Some(head_root_id) = head_root_id else {
+        return Ok(false);
     };
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
-
-    match crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, path).await {
+    match crate::fs::core::resolve_fs_id(repos, repo_id, head_root_id, path).await {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }
 }
 
 /// Check whether a file/dir name already exists in a parent directory in
-/// the current FS tree.
+/// the current FS tree. `head_root_id` is resolved once by the caller.
 async fn name_exists_in_parent(
     repos: &Repositories,
     repo_id: &str,
+    head_root_id: Option<&str>,
     parent_path: &str,
     name: &str,
 ) -> Result<bool, AppError> {
-    let repo_record = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-    let head_commit_id = match repo_record.head_commit_id {
-        Some(id) => id,
-        None => return Ok(false),
+    let Some(head_root_id) = head_root_id else {
+        return Ok(false);
     };
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
     // Resolve parent directory fs_id
     let parent_fs_id =
-        match crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, parent_path).await {
+        match crate::fs::core::resolve_fs_id(repos, repo_id, head_root_id, parent_path).await {
             Ok(id) => id,
             Err(_) => return Ok(false),
         };
@@ -521,6 +500,28 @@ pub async fn restore_trash_items(
     let mut success = Vec::new();
     let mut failed = Vec::new();
 
+    // Resolve the repo + head commit once (shared by every item) instead of
+    // re-fetching them inside `path_exists_in_tree` / `name_exists_in_parent`
+    // and the main resolve step for each item.
+    let head_root_id: Option<String> = {
+        let repo_record = repos
+            .repo
+            .find_by_id(repo_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+        match repo_record.head_commit_id {
+            Some(cid) => {
+                let head = repos
+                    .commit
+                    .find_by_repo_and_commit_id(repo_id, &cid)
+                    .await?
+                    .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
+                Some(head.root_id)
+            }
+            None => None,
+        }
+    };
+
     for (commit_id, paths) in &restore_map {
         for full_path in paths {
             let full_path = full_path.trim_end_matches('/');
@@ -562,7 +563,9 @@ pub async fn restore_trash_items(
             }
 
             // Verify parent directory exists in current tree
-            if parent_dir != "/" && !path_exists_in_tree(repos, repo_id, parent_dir).await? {
+            if parent_dir != "/"
+                && !path_exists_in_tree(repos, repo_id, head_root_id.as_deref(), parent_dir).await?
+            {
                 failed.push(RevertFailedItem {
                     commit_id: commit_id.clone(),
                     path: full_path.to_string(),
@@ -572,7 +575,15 @@ pub async fn restore_trash_items(
             }
 
             // Check for name collision
-            if name_exists_in_parent(repos, repo_id, parent_dir, obj_name).await? {
+            if name_exists_in_parent(
+                repos,
+                repo_id,
+                head_root_id.as_deref(),
+                parent_dir,
+                obj_name,
+            )
+            .await?
+            {
                 failed.push(RevertFailedItem {
                     commit_id: commit_id.clone(),
                     path: full_path.to_string(),
@@ -581,27 +592,20 @@ pub async fn restore_trash_items(
                 continue;
             }
 
-            // Resolve parent fs_id from current tree
-            let repo_record = repos
-                .repo
-                .find_by_id(repo_id)
-                .await?
-                .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-            let head_commit_id = repo_record
-                .head_commit_id
-                .ok_or_else(|| AppError::NotFound("no commits".into()))?;
-            let head = repos
-                .commit
-                .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-                .await?
-                .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
+            // Resolve parent fs_id from current tree (using the cached head root).
+            let Some(head_root) = head_root_id.as_deref() else {
+                failed.push(RevertFailedItem {
+                    commit_id: commit_id.clone(),
+                    path: full_path.to_string(),
+                    error_msg: "No commits.".into(),
+                });
+                continue;
+            };
 
             let parent_fs_id = if parent_dir == "/" {
-                head.root_id.clone()
+                head_root.to_string()
             } else {
-                match crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, parent_dir)
-                    .await
-                {
+                match crate::fs::core::resolve_fs_id(repos, repo_id, head_root, parent_dir).await {
                     Ok(id) => id,
                     Err(_) => {
                         failed.push(RevertFailedItem {

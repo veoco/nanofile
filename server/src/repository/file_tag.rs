@@ -119,18 +119,25 @@ impl FileTagRepository for DbFileTagRepository {
             .exec(db)
             .await?;
 
+        // Dedupe ids: callers may pass duplicates, which would otherwise create
+        // duplicate rows (file_tags has no unique constraint).
+        let unique: std::collections::HashSet<i32> = tag_ids.iter().copied().collect();
+        if unique.is_empty() {
+            return Ok(());
+        }
+
         let now = chrono::Utc::now().timestamp();
-        for tag_id in tag_ids {
-            file_tag::Entity::insert(file_tag::ActiveModel {
+        let models: Vec<file_tag::ActiveModel> = unique
+            .into_iter()
+            .map(|tag_id| file_tag::ActiveModel {
                 id: sea_orm::NotSet,
                 repo_id: Set(repo_id.to_string()),
                 file_path: Set(file_path.to_string()),
-                repo_tag_id: Set(*tag_id),
+                repo_tag_id: Set(tag_id),
                 created_at: Set(now),
             })
-            .exec(db)
-            .await?;
-        }
+            .collect();
+        file_tag::Entity::insert_many(models).exec(db).await?;
         Ok(())
     }
 
@@ -173,22 +180,26 @@ impl FileTagRepository for DbFileTagRepository {
         if paths.is_empty() {
             return Ok(Vec::new());
         }
-        let rows = file_tag::Entity::find()
-            .filter(file_tag::Column::RepoId.eq(repo_id))
-            .filter(file_tag::Column::FilePath.is_in(paths))
-            .find_also_related(repo_tag::Entity)
-            .all(self.db.as_ref())
-            .await?;
+        // Chunk the IN list to stay under SQLite's ~999 variable limit.
+        const IN_BATCH: usize = 500;
+        let mut out = Vec::new();
+        for chunk in paths.chunks(IN_BATCH) {
+            let rows = file_tag::Entity::find()
+                .filter(file_tag::Column::RepoId.eq(repo_id))
+                .filter(file_tag::Column::FilePath.is_in(chunk))
+                .find_also_related(repo_tag::Entity)
+                .all(self.db.as_ref())
+                .await?;
 
-        let mut out = Vec::with_capacity(rows.len());
-        for (ft, tag) in rows {
-            if let Some(tag) = tag {
-                out.push(TagOnPath {
-                    file_path: ft.file_path,
-                    tag_id: tag.id,
-                    tag_name: tag.name,
-                    tag_color: tag.color,
-                });
+            for (ft, tag) in rows {
+                if let Some(tag) = tag {
+                    out.push(TagOnPath {
+                        file_path: ft.file_path,
+                        tag_id: tag.id,
+                        tag_name: tag.name,
+                        tag_color: tag.color,
+                    });
+                }
             }
         }
         Ok(out)

@@ -364,12 +364,36 @@ impl MetadataService {
             .find_by_repo_and_tag_id(repo_id, tag_id)
             .await?;
 
+        // Resolve the head root once, then batch-resolve every file's info and
+        // tags instead of issuing several queries per link.
+        let head_root_id = get_head_root_id(self.db.as_ref(), repo_id).await?;
+        let paths: Vec<String> = links.iter().map(|l| l.file_path.clone()).collect();
+        let infos = self
+            .resolve_file_infos_batch(repo_id, &head_root_id, &paths)
+            .await?;
+
+        let tag_details = self
+            .repos
+            .file_tag
+            .find_tag_details_by_paths(repo_id, &paths)
+            .await?;
+        let mut tags_by_path: std::collections::HashMap<String, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+        for td in tag_details {
+            tags_by_path
+                .entry(td.file_path)
+                .or_default()
+                .push(serde_json::json!({
+                    "row_id": td.tag_id.to_string(),
+                    "display_value": td.tag_name,
+                }));
+        }
+
         let mut results = Vec::with_capacity(links.len());
-        for link in links {
+        for (link, info) in links.iter().zip(infos.iter()) {
             let path = &link.file_path;
-            let info = self.resolve_file_info(repo_id, path).await?;
             let (parent_dir, name) = split_path(path);
-            let file_tags = self.tags_for_path(repo_id, path).await?;
+            let file_tags = tags_by_path.get(path).cloned().unwrap_or_default();
             results.push(serde_json::json!({
                 "_id": Self::record_id_from_path(path),
                 "_name": name,
@@ -460,6 +484,67 @@ impl MetadataService {
             mtime: entry.mtime,
             modifier: entry.modifier.clone(),
         }))
+    }
+
+    /// Batch version of `resolve_file_info`: resolve `(size, mtime, modifier)`
+    /// for many paths in a shared level-frontier walk. `None` for paths that
+    /// are `/`, empty, directories, or no longer resolve.
+    async fn resolve_file_infos_batch(
+        &self,
+        repo_id: &str,
+        head_root_id: &str,
+        paths: &[String],
+    ) -> Result<Vec<Option<FileInfo>>, AppError> {
+        let mut results: Vec<Option<FileInfo>> = (0..paths.len()).map(|_| None).collect();
+
+        let mut targets: Vec<(String, String)> = Vec::new();
+        let mut target_idx: Vec<usize> = Vec::new();
+        let mut file_names: Vec<String> = Vec::new();
+
+        for (i, path) in paths.iter().enumerate() {
+            if path == "/" || path.is_empty() {
+                continue;
+            }
+            targets.push((head_root_id.to_string(), parent_path_from(path).to_string()));
+            target_idx.push(i);
+            file_names.push(basename(path).to_string());
+        }
+
+        if targets.is_empty() {
+            return Ok(results);
+        }
+
+        let resolved =
+            crate::fs::core::resolve_fs_ids_batch(self.repos.as_ref(), repo_id, &targets).await?;
+
+        let mut parent_ids: Vec<String> = resolved.iter().filter_map(|r| r.clone()).collect();
+        parent_ids.sort();
+        parent_ids.dedup();
+        let dir_map =
+            crate::fs::core::read_fs_dir_data_batch(self.repos.as_ref(), repo_id, &parent_ids)
+                .await?;
+
+        for (j, i) in target_idx.iter().enumerate() {
+            let Some(parent_fs_id) = &resolved[j] else {
+                continue;
+            };
+            let Some(dir_data) = dir_map.get(parent_fs_id) else {
+                continue;
+            };
+            let Some(entry) = dir_data.dirents.iter().find(|e| e.name == file_names[j]) else {
+                continue;
+            };
+            if entry.mode & S_IFDIR != 0 {
+                continue; // directories are not files
+            }
+            results[*i] = Some(FileInfo {
+                size: entry.size,
+                mtime: entry.mtime,
+                modifier: entry.modifier.clone(),
+            });
+        }
+
+        Ok(results)
     }
 
     /// Related users (kept for mobile metadata profiles).

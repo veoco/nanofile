@@ -11,6 +11,7 @@ use infra::entity::file_trash;
 #[async_trait]
 pub trait FileTrashRepository: Send + Sync {
     async fn insert(&self, model: file_trash::ActiveModel) -> Result<(), AppError>;
+    async fn insert_many(&self, models: Vec<file_trash::ActiveModel>) -> Result<(), AppError>;
     async fn count_by_repo(&self, repo_id: &str) -> Result<i64, AppError>;
     async fn find_by_repo_paginated(
         &self,
@@ -50,6 +51,16 @@ impl DbFileTrashRepository {
 impl FileTrashRepository for DbFileTrashRepository {
     async fn insert(&self, model: file_trash::ActiveModel) -> Result<(), AppError> {
         model.insert(self.db.as_ref()).await?;
+        Ok(())
+    }
+
+    async fn insert_many(&self, models: Vec<file_trash::ActiveModel>) -> Result<(), AppError> {
+        if models.is_empty() {
+            return Ok(());
+        }
+        file_trash::Entity::insert_many(models)
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 

@@ -73,12 +73,17 @@ impl GcManager {
             }
         }
 
-        // Delete fs objects of this repo that are no longer reachable.
-        let all_fs = repos.fs_object.find_by_repo_id(&repo_model.id).await?;
+        // Delete fs objects of this repo that are no longer reachable. Only
+        // project (id, fs_id) — the `data` JSON can be large and is irrelevant
+        // for computing orphans.
+        let all_fs = repos
+            .fs_object
+            .find_ids_and_fs_ids_by_repo_id(&repo_model.id)
+            .await?;
         let inactive_ids: Vec<i64> = all_fs
             .iter()
-            .filter(|obj| !active_fs_ids.contains(&obj.fs_id))
-            .map(|obj| obj.id)
+            .filter(|(_, fs_id)| !active_fs_ids.contains(fs_id))
+            .map(|(id, _)| *id)
             .collect();
         let removed = inactive_ids.len();
         if !inactive_ids.is_empty() {
@@ -114,12 +119,12 @@ impl GcManager {
 
         let mut frontier = vec![root_id.to_string()];
         while !frontier.is_empty() {
-            let objs = repos
-                .fs_object
-                .find_by_repo_and_fs_ids(repo_id, &frontier)
-                .await?;
+            // `fetch_fs_object_map` chunks the IN list to stay under SQLite's
+            // variable limit, unlike `find_by_repo_and_fs_ids` which does not.
+            let objs =
+                crate::fs::core::tree::fetch_fs_object_map(repos, repo_id, &frontier).await?;
             let mut next = Vec::new();
-            for obj in &objs {
+            for obj in objs.values() {
                 if obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 {
                     let dir_data: FsDirData = serde_json::from_str(&obj.data)
                         .map_err(|e| AppError::internal(e.to_string()))?;

@@ -101,10 +101,41 @@ impl MetadataRecordRepository for DbMetadataRecordRepository {
         file_path: &str,
         fields: &[(String, Option<String>)],
     ) -> Result<(), AppError> {
-        for (key, value) in fields {
-            self.upsert(repo_id, file_path, key, value.as_deref())
+        if fields.is_empty() {
+            return Ok(());
+        }
+        let db = self.db.as_ref();
+        let now = chrono::Utc::now().timestamp();
+
+        // One batched DELETE for all keys (chunked for SQLite), then one
+        // batched INSERT — instead of a DELETE+INSERT round-trip per field.
+        const IN_BATCH: usize = 500;
+        let keys: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+        for chunk in keys.chunks(IN_BATCH) {
+            metadata_record::Entity::delete_many()
+                .filter(metadata_record::Column::RepoId.eq(repo_id))
+                .filter(metadata_record::Column::FilePath.eq(file_path))
+                .filter(metadata_record::Column::RecordKey.is_in(chunk.to_vec()))
+                .exec(db)
                 .await?;
         }
+
+        let models: Vec<metadata_record::ActiveModel> = fields
+            .iter()
+            .map(|(key, value)| metadata_record::ActiveModel {
+                id: sea_orm::NotSet,
+                repo_id: Set(repo_id.to_string()),
+                file_path: Set(file_path.to_string()),
+                record_key: Set(key.clone()),
+                record_value: Set(value.clone()),
+                created_at: Set(now),
+                updated_at: Set(now),
+            })
+            .collect();
+
+        metadata_record::Entity::insert_many(models)
+            .exec(db)
+            .await?;
         Ok(())
     }
 }

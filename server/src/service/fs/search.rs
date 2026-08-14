@@ -63,53 +63,56 @@ impl SearchService {
             {
                 Ok(ft_results) => {
                     index_ok = true;
-                    // Group hits by repo so the repo record + head commit are
-                    // resolved once per repo instead of once per hit.
-                    let mut repo_cache: std::collections::HashMap<String, (String, String)> =
-                        std::collections::HashMap::new();
+                    // Collect unique hits, then group by repo so the repo record
+                    // + head commit are resolved once per repo and all hit paths
+                    // are resolved in a shared batched walk instead of one
+                    // resolve_fs_id + read_fs_dir_data round-trip per hit.
+                    let mut unique_hits: Vec<(String, String)> = Vec::new();
                     for (found_repo_id, found_fullpath) in &ft_results {
-                        if !seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
-                            continue;
+                        if seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
+                            unique_hits.push((found_repo_id.clone(), found_fullpath.clone()));
                         }
-                        let (repo_name, root_id) = if let Some(t) = repo_cache.get(found_repo_id) {
-                            t.clone()
-                        } else {
-                            let repo_record = match self.repos.repo.find_by_id(found_repo_id).await
-                            {
-                                Ok(Some(r)) => r,
-                                _ => continue,
-                            };
-                            let head_commit_id = match &repo_record.head_commit_id {
-                                Some(id) => id.clone(),
-                                None => continue,
-                            };
-                            let head = match self
-                                .repos
-                                .commit
-                                .find_by_repo_and_commit_id(found_repo_id, &head_commit_id)
-                                .await
-                            {
-                                Ok(Some(h)) => h,
-                                _ => continue,
-                            };
-                            if head.root_id == EMPTY_SHA1 {
-                                continue;
-                            }
-                            let t = (repo_record.name.clone(), head.root_id.clone());
-                            repo_cache.insert(found_repo_id.clone(), t.clone());
-                            t
+                    }
+
+                    let mut by_repo: std::collections::HashMap<String, Vec<usize>> =
+                        std::collections::HashMap::new();
+                    for (idx, (found_repo_id, _)) in unique_hits.iter().enumerate() {
+                        by_repo.entry(found_repo_id.clone()).or_default().push(idx);
+                    }
+
+                    for (found_repo_id, indices) in by_repo {
+                        let repo_record = match self.repos.repo.find_by_id(&found_repo_id).await {
+                            Ok(Some(r)) => r,
+                            _ => continue,
                         };
-                        if let Some(meta) = self
-                            .resolve_file_metadata(
-                                found_repo_id,
-                                &repo_name,
-                                &root_id,
-                                found_fullpath,
-                            )
+                        let head_commit_id = match &repo_record.head_commit_id {
+                            Some(id) => id.clone(),
+                            None => continue,
+                        };
+                        let head = match self
+                            .repos
+                            .commit
+                            .find_by_repo_and_commit_id(&found_repo_id, &head_commit_id)
                             .await
                         {
-                            all_results.push(meta);
+                            Ok(Some(h)) => h,
+                            _ => continue,
+                        };
+                        if head.root_id == EMPTY_SHA1 {
+                            continue;
                         }
+
+                        let fullpaths: Vec<String> =
+                            indices.iter().map(|&i| unique_hits[i].1.clone()).collect();
+                        let metas = self
+                            .resolve_file_metadata_batch(
+                                &found_repo_id,
+                                &repo_record.name,
+                                &head.root_id,
+                                &fullpaths,
+                            )
+                            .await;
+                        all_results.extend(metas.into_iter().flatten());
                     }
                 }
                 Err(e) => {
@@ -220,75 +223,104 @@ impl SearchService {
         Ok(ids)
     }
 
-    /// Resolve file metadata to build a FileSearchResult.
+    /// Resolve file metadata for many fullpaths of a single repo in a shared
+    /// batched walk, returning `None` for paths that no longer resolve.
     ///
     /// `repo_name`/`root_id` are resolved once per repo by the caller (see
-    /// [`SearchService::search`]) so the repo record + head commit are not
-    /// re-fetched for every hit.
-    async fn resolve_file_metadata(
+    /// [`SearchService::search`]).
+    async fn resolve_file_metadata_batch(
         &self,
         repo_id: &str,
         repo_name: &str,
         root_id: &str,
-        fullpath: &str,
-    ) -> Option<FileSearchResult> {
-        if root_id == EMPTY_SHA1 {
-            return None;
+        fullpaths: &[String],
+    ) -> Vec<Option<FileSearchResult>> {
+        if root_id == EMPTY_SHA1 || fullpaths.is_empty() {
+            return vec![None; fullpaths.len()];
         }
 
-        let segments: Vec<&str> = fullpath
-            .trim_start_matches('/')
-            .split('/')
-            .filter(|s| !s.is_empty())
+        // Pre-compute (name, parent_path) for each fullpath.
+        let metas: Vec<(String, String)> = fullpaths
+            .iter()
+            .map(|fullpath| {
+                let segments: Vec<&str> = fullpath
+                    .trim_start_matches('/')
+                    .split('/')
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                let name = segments.last().map(|s| s.to_string()).unwrap_or_default();
+                let parent_path = if segments.len() <= 1 {
+                    String::from("/")
+                } else {
+                    format!("/{}", segments[..segments.len() - 1].join("/"))
+                };
+                (name, parent_path)
+            })
             .collect();
 
-        let name = segments.last()?;
-        // Local String — previously this was Box::leak'd on every hit, leaking
-        // one allocation per search result.
-        let parent_path = if segments.len() <= 1 {
-            String::from("/")
-        } else {
-            let parent_segments = &segments[..segments.len() - 1];
-            format!("/{}", parent_segments.join("/"))
+        // Resolve every parent path in one batched walk (a "/" parent resolves
+        // to root_id itself).
+        let targets: Vec<(String, String)> = metas
+            .iter()
+            .map(|(_, parent_path)| (root_id.to_string(), parent_path.clone()))
+            .collect();
+        let Ok(resolved) =
+            crate::fs::core::resolve_fs_ids_batch(&self.repos, repo_id, &targets).await
+        else {
+            return vec![None; fullpaths.len()];
         };
 
-        let parent_fs_id = if parent_path == "/" {
-            root_id.to_string()
-        } else {
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, root_id, &parent_path)
-                .await
-                .ok()?
+        // Batch-read all distinct parent directories.
+        let mut parent_ids: Vec<String> = resolved.iter().filter_map(|r| r.clone()).collect();
+        parent_ids.sort();
+        parent_ids.dedup();
+        let Ok(dir_map) =
+            crate::fs::core::read_fs_dir_data_batch(&self.repos, repo_id, &parent_ids).await
+        else {
+            return vec![None; fullpaths.len()];
         };
 
-        let dir_data = crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
-            .await
-            .ok()?;
-        let entry = dir_data.dirents.iter().find(|d| d.name == *name)?;
+        let mut results = Vec::with_capacity(fullpaths.len());
+        for (i, fullpath) in fullpaths.iter().enumerate() {
+            let (name, _) = &metas[i];
+            let Some(parent_fs_id) = &resolved[i] else {
+                results.push(None);
+                continue;
+            };
+            let Some(dir_data) = dir_map.get(parent_fs_id) else {
+                results.push(None);
+                continue;
+            };
+            let Some(entry) = dir_data.dirents.iter().find(|d| d.name.as_str() == name) else {
+                results.push(None);
+                continue;
+            };
 
-        let is_dir = entry.mode & S_IFDIR != 0;
+            let is_dir = entry.mode & S_IFDIR != 0;
+            let dir_url = if is_dir {
+                format!("/libraries/{}/files{}", repo_id, fullpath)
+            } else {
+                let parent = fullpath
+                    .rsplit_once('/')
+                    .map(|(parent, _)| parent)
+                    .unwrap_or("/");
+                format!("/libraries/{}/files{}", repo_id, parent)
+            };
 
-        let dir_url = if is_dir {
-            format!("/libraries/{}/files{}", repo_id, fullpath)
-        } else {
-            let parent = fullpath
-                .rsplit_once('/')
-                .map(|(parent, _)| parent)
-                .unwrap_or("/");
-            format!("/libraries/{}/files{}", repo_id, parent)
-        };
-
-        Some(FileSearchResult {
-            repo_id: repo_id.to_string(),
-            repo_name: repo_name.to_string(),
-            name: entry.name.clone(),
-            oid: entry.id.clone(),
-            last_modified: entry.mtime,
-            mtime: entry.mtime,
-            fullpath: fullpath.to_string(),
-            size: entry.size,
-            is_dir,
-            dir_url,
-        })
+            results.push(Some(FileSearchResult {
+                repo_id: repo_id.to_string(),
+                repo_name: repo_name.to_string(),
+                name: entry.name.clone(),
+                oid: entry.id.clone(),
+                last_modified: entry.mtime,
+                mtime: entry.mtime,
+                fullpath: fullpath.clone(),
+                size: entry.size,
+                is_dir,
+                dir_url,
+            }));
+        }
+        results
     }
 }
 

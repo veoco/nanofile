@@ -3,7 +3,10 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
 use crate::fs::core::file_ops::FileOps;
-use crate::fs::core::{read_fs_dir_data_batch, read_fs_file_data, resolve_fs_id};
+use crate::fs::core::{
+    read_fs_dir_data_batch, read_fs_file_data, read_fs_file_data_batch, resolve_fs_id,
+    resolve_fs_ids_batch,
+};
 use crate::repository::Repositories;
 use base::common::{EMPTY_SHA1, FsFileData};
 use base::error::AppError;
@@ -233,23 +236,39 @@ impl HistoryService {
             .unwrap_or(path)
             .to_string();
 
-        let mut result = Vec::new();
+        // Resolve the same path against every commit root in one batched walk
+        // instead of O(depth) queries per commit.
+        let targets: Vec<(String, String)> = commits
+            .iter()
+            .map(|c| (c.root_id.clone(), path.to_string()))
+            .collect();
+        let resolved = resolve_fs_ids_batch(repos, repo_id, &targets).await?;
+
+        // Walk newest→oldest, keeping each revision whose content changed.
+        let mut kept: Vec<(usize, String)> = Vec::new(); // (commit index, fs_id)
         let mut last_fs_id: Option<String> = None;
-        for c in &commits {
-            if result.len() >= limit as usize {
+        for (idx, fs_id_opt) in resolved.into_iter().enumerate() {
+            if kept.len() >= limit as usize {
                 break;
             }
-            let fs_id = match resolve_fs_id(repos, repo_id, &c.root_id, path).await {
-                Ok(id) => id,
-                Err(_) => break, // path doesn't exist in this commit or earlier ones
+            let Some(fs_id) = fs_id_opt else {
+                break; // path doesn't exist in this commit or earlier ones
             };
             if last_fs_id.as_deref() == Some(fs_id.as_str()) {
                 continue; // content unchanged in this commit
             }
-            let size = read_fs_file_data(repos, repo_id, &fs_id)
-                .await
-                .map(|f| f.size)
-                .unwrap_or(0);
+            last_fs_id = Some(fs_id.clone());
+            kept.push((idx, fs_id));
+        }
+
+        // Batch-fetch the sizes of all distinct kept fs_ids.
+        let fs_ids: Vec<String> = kept.iter().map(|(_, fs_id)| fs_id.clone()).collect();
+        let size_map = read_fs_file_data_batch(repos, repo_id, &fs_ids).await?;
+
+        let mut result = Vec::with_capacity(kept.len());
+        for (idx, fs_id) in kept {
+            let c = &commits[idx];
+            let size = size_map.get(&fs_id).map(|f| f.size).unwrap_or(0);
             result.push(FileHistoryItem {
                 commit_id: c.commit_id.clone(),
                 path: path.to_string(),
@@ -264,7 +283,6 @@ impl HistoryService {
                 file_mtime: c.ctime,
                 file_type: "file".to_string(),
             });
-            last_fs_id = Some(fs_id);
         }
         Ok(result)
     }
