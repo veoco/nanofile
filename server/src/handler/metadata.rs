@@ -255,5 +255,28 @@ pub async fn custom_share_permissions(
     _path: RepoPathRead,
     _state: axum::extract::State<std::sync::Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::json!({"permissions": []})))
+    // seahub `CustomSharePermissionsView` uses `permission_list` (not
+    // `permissions`). nanofile does not model custom share permissions, so the
+    // list is always empty.
+    Ok(Json(serde_json::json!({"permission_list": []})))
+}
+
+/// `GET /api/v2.1/repos/{repo_id}/custom-share-permissions/{permission_id}/`
+///
+/// seahub `CustomSharePermissionView` returns `{"permission": <obj|null>}`.
+/// nanofile has no custom-permission model, so return `null`; seadroid treats
+/// a null permission as an empty/invalid entry without erroring.
+pub async fn custom_share_permission(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path((repo_id, _permission_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
+    Ok(Json(serde_json::json!({"permission": null})))
 }

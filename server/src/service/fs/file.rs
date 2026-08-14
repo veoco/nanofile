@@ -1077,7 +1077,7 @@ impl FileService {
         path: &str,
         email: &str,
         user_id: i32,
-    ) -> Result<(), AppError> {
+    ) -> Result<(String, i64), AppError> {
         let db = self.db();
         let file_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or(path);
         let parent_path = match path.rsplit_once('/') {
@@ -1089,6 +1089,8 @@ impl FileService {
         if file_name.is_empty() {
             return Err(AppError::BadRequest("invalid path".into()));
         }
+
+        let mtime = chrono::Utc::now().timestamp();
 
         let file_fs_data = FsFileData {
             block_ids: vec![],
@@ -1136,7 +1138,7 @@ impl FileService {
                         id: file_fs_id.clone(),
                         mode: S_IFREG,
                         modifier: email_clone.clone(),
-                        mtime: chrono::Utc::now().timestamp(),
+                        mtime,
                         name: file_name_clone.clone(),
                         size: 0,
                     });
@@ -1152,7 +1154,7 @@ impl FileService {
         )
         .await;
 
-        Ok(())
+        Ok((file_fs_id, mtime))
     }
 
     /// Check uploaded bytes for resumable upload.

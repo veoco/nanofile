@@ -194,7 +194,8 @@ pub async fn file_post_handler(
         match form.get("operation").map(|s| s.as_str()) {
             Some("create") => {
                 // iOS sends `operation=create` to create an empty text file.
-                svc.create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
+                let _ = svc
+                    .create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
                     .await?;
                 Ok(ok_json())
             }
@@ -494,10 +495,28 @@ pub async fn create_file_v21(
     }
 
     let svc = state.file_service();
-    svc.create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
+    let (fs_id, mtime) = svc
+        .create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
         .await?;
 
-    Ok(ok_json())
+    let (parent_dir, obj_name) = match path.rsplit_once('/') {
+        Some(("", name)) => ("/".to_string(), name.to_string()),
+        Some((parent, name)) => (parent.to_string(), name.to_string()),
+        None => ("/".to_string(), path.clone()),
+    };
+
+    Ok(Json(serde_json::json!({
+        "type": "file",
+        "repo_id": repo_id,
+        "parent_dir": parent_dir,
+        "obj_name": obj_name,
+        "obj_id": fs_id,
+        "size": 0,
+        "mtime": infra::common::util::timestamp_rfc3339(mtime),
+        "is_locked": false,
+        "can_preview": true,
+        "can_edit": true,
+    })))
 }
 
 #[derive(Deserialize)]
