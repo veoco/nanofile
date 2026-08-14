@@ -276,6 +276,15 @@ impl ServerConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
     pub url: String,
+    /// Number of pooled SQLite connections. Under WAL, SQLite allows many
+    /// concurrent readers (but a single writer), so this mainly improves read
+    /// throughput. Env: NANOFILE_DATABASE_MAX_CONNECTIONS
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+}
+
+fn default_max_connections() -> u32 {
+    5
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -418,6 +427,10 @@ impl Config {
             self.server.request_timeout_secs
         );
         env_str!("NANOFILE_DATABASE_URL", self.database.url);
+        env_parse!(
+            "NANOFILE_DATABASE_MAX_CONNECTIONS",
+            self.database.max_connections
+        );
         env_path!("NANOFILE_STORAGE_BLOCK_DIR", self.storage.block_dir);
         env_path!("NANOFILE_STORAGE_TEMP_DIR", self.storage.temp_dir);
         env_str!("NANOFILE_STORAGE_FFMPEG_PATH", self.storage.ffmpeg_path);

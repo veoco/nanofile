@@ -65,7 +65,12 @@ secret_key = ""
 [database]
 # Environment variables:
 #   NANOFILE_DATABASE_URL
+#   NANOFILE_DATABASE_MAX_CONNECTIONS
 url = "sqlite:data/nanofile.db?mode=rwc"
+# Pooled SQLite connections. WAL allows concurrent readers (single writer), so
+# this mainly improves read throughput. Kept modest because `mmap_size` and
+# `cache_size` are per-connection overhead.
+max_connections = 5
 
 [storage]
 # Environment variables:

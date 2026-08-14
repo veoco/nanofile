@@ -174,6 +174,7 @@ impl TestServer {
             },
             database: infra::config::DatabaseConfig {
                 url: "sqlite::memory:".to_string(),
+                max_connections: 5,
             },
             storage: infra::config::StorageConfig {
                 block_dir: std::env::temp_dir()

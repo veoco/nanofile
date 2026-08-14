@@ -32,6 +32,7 @@ migrations!(
     m20260603_000001_extend_schema,
     m20260604_000001_create_activities,
     m20260604_000002_create_wikis,
+    m20260604_000003_create_sdoc_comments,
     m20260604_000004_create_metadata,
     m20260605_000001_create_client_login_tokens,
     m20260606_000001_store_json_in_fs_objects,
@@ -60,6 +61,8 @@ migrations!(
     m20260814_000002_drop_wikis,
     m20260814_000003_create_wiki2_publish,
     m20260814_000004_add_sso_accessed_at,
+    m20260814_000005_add_query_indexes,
+    m20260814_000006_drop_sdoc_comments,
 );
 
 #[cfg(test)]

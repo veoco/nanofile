@@ -1,4 +1,4 @@
-use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
+use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection};
 
 use crate::config::DatabaseConfig;
 
@@ -16,7 +16,24 @@ fn sqlite_file_path(url: &str) -> Option<&str> {
 }
 
 pub async fn establish_connection(config: &DatabaseConfig) -> anyhow::Result<DatabaseConnection> {
-    let db = Database::connect(&config.url).await?;
+    // Build the pool with the per-connection SQLite options attached via
+    // `map_sqlx_sqlite_opts` so the PRAGMAs below apply to EVERY connection the
+    // pool opens (not just the first). `journal_mode`/`synchronous` are
+    // persistent, but `busy_timeout`, `cache_size`, `temp_store` and `mmap_size`
+    // are per-connection and must be re-applied on each new connection.
+    let mut opts = ConnectOptions::new(config.url.as_str());
+    opts.max_connections(config.max_connections)
+        .sqlx_logging(false)
+        .map_sqlx_sqlite_opts(|o| {
+            use sea_orm::sqlx::sqlite::{SqliteJournalMode, SqliteSynchronous};
+            o.journal_mode(SqliteJournalMode::Wal)
+                .synchronous(SqliteSynchronous::Normal)
+                .busy_timeout(std::time::Duration::from_secs(5))
+                .pragma("cache_size", "-8000")
+                .pragma("temp_store", "MEMORY")
+                .pragma("mmap_size", "268435456")
+        });
+    let db = Database::connect(opts).await?;
 
     // Restrict the SQLite database file to the owning user so other local
     // users cannot read it (default umask may leave it world-readable).
@@ -26,26 +43,6 @@ pub async fn establish_connection(config: &DatabaseConfig) -> anyhow::Result<Dat
         if let Some(path) = sqlite_file_path(&config.url) {
             let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
         }
-    }
-
-    // ── SQLite performance PRAGMAs ──────────────────────────────────
-    // These are essential for concurrent read/write throughput.
-    // Without them SQLite defaults to journal_mode=DELETE which
-    // serializes ALL write operations and blocks readers.
-    if db.get_database_backend() == DatabaseBackend::Sqlite {
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "
-            PRAGMA journal_mode = WAL;           -- concurrent readers + writer
-            PRAGMA synchronous   = NORMAL;       -- safe on modern SSD, ~10x faster than FULL
-            PRAGMA cache_size    = -8000;         -- 8 MiB page cache
-            PRAGMA busy_timeout  = 5000;          -- wait 5 s instead of SQLITE_BUSY
-            PRAGMA temp_store    = MEMORY;        -- temp tables / indexes in RAM
-            PRAGMA mmap_size     = 268435456;     -- 256 MiB memory-mapped I/O
-            "
-            .to_owned(),
-        ))
-        .await?;
     }
 
     Ok(db)
