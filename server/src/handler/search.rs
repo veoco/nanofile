@@ -92,7 +92,7 @@ pub async fn search(
     let q = query.q.unwrap_or_default().trim().to_string();
     let per_page = query.per_page.unwrap_or(10).max(1);
     let page = query.page.unwrap_or(1).max(1);
-    let search_filename_only = query.search_filename_only.unwrap_or(true);
+    let search_filename_only = query.search_filename_only.unwrap_or(false);
 
     let svc = state.search_service();
     let (results, total, has_more) = svc

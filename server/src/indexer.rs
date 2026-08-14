@@ -39,6 +39,17 @@ const FIELD_FULLPATH: &str = "fullpath";
 const FIELD_FILENAME: &str = "filename";
 const FIELD_CONTENT: &str = "content";
 
+/// A single full-text hit, optionally carrying a highlighted content snippet.
+#[derive(Debug, Clone)]
+pub struct IndexHit {
+    pub repo_id: String,
+    pub fullpath: String,
+    /// HTML snippet around the first content match (`<mark>` around matches).
+    /// Empty when the hit matched only the filename, or the file has no
+    /// indexed content.
+    pub content_highlight: String,
+}
+
 /// File extensions considered indexable plain text.
 const TEXT_EXTENSIONS: &[&str] = &[
     // Code
@@ -381,7 +392,9 @@ impl TextIndexer {
     /// This is used by the Web UI's filename search to avoid the expensive
     /// FS tree walk when an index is available.
     ///
-    /// Returns a list of `(repo_id, fullpath)` tuples matching the keyword.
+    /// Returns a list of [`IndexHit`]s matching the keyword. Each hit carries
+    /// an optional `content_highlight` snippet (only set when the stored
+    /// content actually contains a query term).
     /// Results are limited by `limit` and offset by `offset`.
     /// If `repo_ids` is non-empty, only results from those repos are returned.
     pub async fn search(
@@ -391,7 +404,7 @@ impl TextIndexer {
         limit: usize,
         offset: usize,
         filename_only: bool,
-    ) -> Result<Vec<(String, String)>, AppError> {
+    ) -> Result<Vec<IndexHit>, AppError> {
         if keyword.trim().is_empty() {
             return Ok(Vec::new());
         }
@@ -538,7 +551,7 @@ impl TextIndexer {
             )
             .map_err(|e| AppError::internal(format!("search: {e}")))?;
 
-        let mut results = Vec::new();
+        let mut results: Vec<IndexHit> = Vec::new();
         for (_score, doc_address) in top_docs.into_iter().skip(offset) {
             let doc = searcher
                 .doc::<TantivyDocument>(doc_address)
@@ -554,8 +567,18 @@ impl TextIndexer {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            let content = doc
+                .get_first(content_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
-            results.push((repo_id, fullpath));
+            let content_highlight = build_content_highlight(content, keyword);
+
+            results.push(IndexHit {
+                repo_id,
+                fullpath,
+                content_highlight,
+            });
 
             // Stop when we've collected enough.
             if results.len() >= limit {
@@ -687,6 +710,102 @@ impl TextIndexer {
     }
 }
 
+/// Build an HTML snippet from `content` highlighting matches of any
+/// whitespace-separated term in `query`.
+///
+/// Returns an empty string when no term matches. The output is HTML-escaped
+/// except for the injected `<mark>` tags, so it is safe to render as raw HTML.
+fn build_content_highlight(content: &str, query: &str) -> String {
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .map(|t| t.to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if terms.is_empty() || content.is_empty() {
+        return String::new();
+    }
+
+    // Locate the earliest match (byte offset). `to_lowercase` is byte-length
+    // preserving for ASCII/CJK (the realistic case), so offsets map directly
+    // back onto `content`.
+    let lower = content.to_lowercase();
+    let Some(start_match) = terms.iter().filter_map(|t| lower.find(t.as_str())).min() else {
+        return String::new();
+    };
+
+    // A ~120-char window roughly centred on the first match.
+    const WINDOW: usize = 120;
+    let radius = WINDOW / 2;
+    let win_start = snap_char_boundary(content, start_match.saturating_sub(radius));
+    let win_end = snap_char_boundary(content, (start_match + radius).min(content.len()));
+
+    let prefix = if win_start > 0 { "…" } else { "" };
+    let suffix = if win_end < content.len() { "…" } else { "" };
+    let window = &content[win_start..win_end];
+
+    // Collect every match range within the window (case-insensitive), merge
+    // overlaps, then escape segments and wrap matches in <mark>.
+    let win_lower = window.to_lowercase();
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for term in &terms {
+        let mut from = 0;
+        while let Some(rel) = win_lower[from..].find(term.as_str()) {
+            let s = from + rel;
+            let e = s + term.len();
+            ranges.push((s, e));
+            from = e;
+        }
+    }
+    ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (s, e) in ranges {
+        if let Some(last) = merged.last_mut()
+            && s <= last.1
+        {
+            last.1 = last.1.max(e);
+            continue;
+        }
+        merged.push((s, e));
+    }
+
+    let mut out = String::with_capacity(window.len() + merged.len() * 13);
+    let mut cursor = 0;
+    for (s, e) in merged {
+        out.push_str(&html_escape(&window[cursor..s]));
+        out.push_str("<mark>");
+        out.push_str(&html_escape(&window[s..e]));
+        out.push_str("</mark>");
+        cursor = e;
+    }
+    out.push_str(&html_escape(&window[cursor..]));
+
+    format!("{prefix}{out}{suffix}")
+}
+
+/// Snap `i` down to the nearest UTF-8 char boundary.
+fn snap_char_boundary(s: &str, mut i: usize) -> usize {
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Escape HTML special characters.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Determine whether a file should be indexed as plain text.
 ///
 /// Uses a two-phase check:
@@ -767,6 +886,42 @@ mod tests {
         assert!(is_indexable_text("notes.txt", b""));
     }
 
+    #[test]
+    fn test_build_content_highlight_basic() {
+        let s = build_content_highlight("Hello World", "hello");
+        assert!(s.contains("<mark>Hello</mark>"), "got {s:?}");
+    }
+
+    #[test]
+    fn test_build_content_highlight_escapes() {
+        let s = build_content_highlight("<b>Hello</b> & world", "hello");
+        assert!(s.contains("&lt;b&gt;"), "should escape tags, got {s:?}");
+        assert!(s.contains("<mark>Hello</mark>"), "got {s:?}");
+    }
+
+    #[test]
+    fn test_build_content_highlight_no_match() {
+        assert_eq!(build_content_highlight("abc def", "zzz"), "");
+    }
+
+    #[test]
+    fn test_build_content_highlight_cjk() {
+        let s = build_content_highlight("这是一个测试文档的内容", "测试文档");
+        assert!(s.contains("<mark>测试文档</mark>"), "got {s:?}");
+    }
+
+    #[test]
+    fn test_build_content_highlight_truncates() {
+        let mut content = String::from("aaa ");
+        content.push_str(&"x".repeat(200));
+        content.push_str(" needle ");
+        content.push_str(&"y".repeat(200));
+        let s = build_content_highlight(&content, "needle");
+        assert!(s.starts_with('…'), "should start with ellipsis, got {s:?}");
+        assert!(s.ends_with('…'), "should end with ellipsis, got {s:?}");
+        assert!(s.contains("<mark>needle</mark>"), "got {s:?}");
+    }
+
     #[tokio::test]
     async fn test_index_and_search() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
@@ -789,12 +944,19 @@ mod tests {
             "should find 'hello' in filename, got {:?}",
             results
         );
-        assert_eq!(results[0], ("repo-1".to_string(), "/hello.txt".to_string()));
+        assert_eq!(results[0].repo_id.as_str(), "repo-1");
+        assert_eq!(results[0].fullpath.as_str(), "/hello.txt");
 
         // Search for content (not filename).
         let results = indexer.search("test file", &[], 10, 0, false).await?;
         assert_eq!(results.len(), 1, "should find 'test file' in content");
-        assert_eq!(results[0], ("repo-1".to_string(), "/hello.txt".to_string()));
+        assert_eq!(results[0].repo_id.as_str(), "repo-1");
+        assert_eq!(results[0].fullpath.as_str(), "/hello.txt");
+        assert!(
+            results[0].content_highlight.contains("<mark>"),
+            "content match should produce a highlighted snippet, got {:?}",
+            results[0].content_highlight
+        );
 
         Ok(())
     }
@@ -814,7 +976,7 @@ mod tests {
             .search("alpha", &["repo-1".to_string()], 10, 0, false)
             .await?;
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0, "repo-1");
+        assert_eq!(results[0].repo_id.as_str(), "repo-1");
 
         // Scoped to wrong repo — no results.
         let results = indexer

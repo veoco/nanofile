@@ -11,16 +11,16 @@
                placeholder="{{ t.tr("search.placeholder") }}"
                class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
         <button type="submit"
-                class="rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
+                class="flex-shrink-0 whitespace-nowrap rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
             {{ t.tr("nav.search") }}
         </button>
     </div>
     <label class="mt-2 flex items-center gap-x-2 text-sm text-gray-600 dark:text-gray-400">
-        <input type="checkbox" name="search_filename_only" value="false"
-               {% if !search_filename_only %}checked{% endif %}
+        <input type="checkbox" name="search_filename_only" value="true"
+               {% if search_filename_only %}checked{% endif %}
                class="rounded border-gray-300 dark:border-gray-600 text-brand-500 focus:ring-brand-500"
                onchange="this.form.submit()">
-        {{ t.tr("search.fulltext") }}
+        {{ t.tr("search.filename_only") }}
     </label>
 </form>
 
@@ -61,9 +61,14 @@
                    class="text-sm font-medium text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300 truncate block">
                     {{ item.name }}
                 </a>
-                <p class="text-xs text-gray-500 dark:text-gray-400 truncate">
+                <p class="text-xs text-green-600 dark:text-green-400 truncate">
                     {{ item.repo_name }} &middot; {{ item.fullpath }}
                 </p>
+                {% if !item.content_highlight.is_empty() %}
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                    {{ item.content_highlight|safe }}
+                </p>
+                {% endif %}
             </div>
 
             <!-- Size and date -->
@@ -156,9 +161,16 @@
         infoDiv.appendChild(link);
 
         var metaP = document.createElement('p');
-        metaP.className = 'text-xs text-gray-500 dark:text-gray-400 truncate';
+        metaP.className = 'text-xs text-green-600 dark:text-green-400 truncate';
         metaP.textContent = item.repo_name + ' \u00b7 ' + item.fullpath;
         infoDiv.appendChild(metaP);
+
+        if (item.content_highlight) {
+            var snippetP = document.createElement('p');
+            snippetP.className = 'mt-1 text-xs text-gray-500 dark:text-gray-400 leading-relaxed';
+            snippetP.innerHTML = item.content_highlight;
+            infoDiv.appendChild(snippetP);
+        }
 
         li.appendChild(infoDiv);
 
@@ -188,7 +200,7 @@
                 try {
                     page++;
                     var params = new URLSearchParams({ q: query, page: page, per_page: perPage });
-                    if (!filenameOnly) params.set('search_filename_only', 'false');
+                    params.set('search_filename_only', filenameOnly ? 'true' : 'false');
 
                     var resp = await fetch('/api2/search/?' + params.toString());
                     var data = await resp.json();

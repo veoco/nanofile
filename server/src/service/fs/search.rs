@@ -21,6 +21,9 @@ pub struct FileSearchResult {
     pub is_dir: bool,
     /// URL pointing to the directory containing this file (or the directory itself).
     pub dir_url: String,
+    /// HTML snippet with `<mark>` highlighting around the content match.
+    /// Empty when the result came from a filename-only match.
+    pub content_highlight: String,
 }
 
 pub struct SearchService {
@@ -54,30 +57,27 @@ impl SearchService {
         let mut seen = std::collections::HashSet::new();
         let mut all_results: Vec<FileSearchResult> = Vec::new();
 
-        // Phase 1: Full-text search via Tantivy
-        let mut index_ok = false;
-        if let Some(indexer) = &self.indexer {
-            match indexer
-                .search(q, &repo_ids, 200, 0, search_filename_only)
-                .await
-            {
+        // Phase 1: Full-text (content) search via Tantivy — only in full-text
+        // mode. Filename-only mode skips it because the FS tree walk below is
+        // the authoritative filename matcher and covers binary files the index
+        // never sees.
+        if !search_filename_only && let Some(indexer) = &self.indexer {
+            match indexer.search(q, &repo_ids, 200, 0, false).await {
                 Ok(ft_results) => {
-                    index_ok = true;
-                    // Collect unique hits, then group by repo so the repo record
-                    // + head commit are resolved once per repo and all hit paths
-                    // are resolved in a shared batched walk instead of one
-                    // resolve_fs_id + read_fs_dir_data round-trip per hit.
-                    let mut unique_hits: Vec<(String, String)> = Vec::new();
-                    for (found_repo_id, found_fullpath) in &ft_results {
-                        if seen.insert((found_repo_id.clone(), found_fullpath.clone())) {
-                            unique_hits.push((found_repo_id.clone(), found_fullpath.clone()));
+                    // Collect unique hits, then group by repo so the repo
+                    // record + head commit are resolved once per repo and all
+                    // hit paths are resolved in a shared batched walk.
+                    let mut unique_hits: Vec<crate::indexer::IndexHit> = Vec::new();
+                    for hit in &ft_results {
+                        if seen.insert((hit.repo_id.clone(), hit.fullpath.clone())) {
+                            unique_hits.push(hit.clone());
                         }
                     }
 
                     let mut by_repo: std::collections::HashMap<String, Vec<usize>> =
                         std::collections::HashMap::new();
-                    for (idx, (found_repo_id, _)) in unique_hits.iter().enumerate() {
-                        by_repo.entry(found_repo_id.clone()).or_default().push(idx);
+                    for (idx, hit) in unique_hits.iter().enumerate() {
+                        by_repo.entry(hit.repo_id.clone()).or_default().push(idx);
                     }
 
                     for (found_repo_id, indices) in by_repo {
@@ -102,14 +102,21 @@ impl SearchService {
                             continue;
                         }
 
-                        let fullpaths: Vec<String> =
-                            indices.iter().map(|&i| unique_hits[i].1.clone()).collect();
+                        let fullpaths: Vec<String> = indices
+                            .iter()
+                            .map(|&i| unique_hits[i].fullpath.clone())
+                            .collect();
+                        let highlights: Vec<String> = indices
+                            .iter()
+                            .map(|&i| unique_hits[i].content_highlight.clone())
+                            .collect();
                         let metas = self
                             .resolve_file_metadata_batch(
                                 &found_repo_id,
                                 &repo_record.name,
                                 &head.root_id,
                                 &fullpaths,
+                                &highlights,
                             )
                             .await;
                         all_results.extend(metas.into_iter().flatten());
@@ -121,48 +128,45 @@ impl SearchService {
             }
         }
 
-        // Phase 2: Filename search. Skip the per-repo full-tree walk when a
-        // full-text index already produced filename results (see indexer.rs) —
-        // the walk issues one DB query per directory in the repo. Fall back to
-        // it when there is no index or the index query failed.
-        if !(search_filename_only && index_ok) {
-            for repo_id in &repo_ids {
-                let repo_record = match self.repos.repo.find_by_id(repo_id).await {
-                    Ok(Some(r)) => r,
-                    _ => continue,
-                };
+        // Phase 2: Filename search via FS tree walk — always run, since it is
+        // the only complete filename matcher (covers binary/non-indexed files
+        // and performs true substring matching).
+        for repo_id in &repo_ids {
+            let repo_record = match self.repos.repo.find_by_id(repo_id).await {
+                Ok(Some(r)) => r,
+                _ => continue,
+            };
 
-                let head_commit_id = match &repo_record.head_commit_id {
-                    Some(id) => id.clone(),
-                    None => continue,
-                };
+            let head_commit_id = match &repo_record.head_commit_id {
+                Some(id) => id.clone(),
+                None => continue,
+            };
 
-                let head = match self
-                    .repos
-                    .commit
-                    .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-                    .await
-                {
-                    Ok(Some(h)) => h,
-                    _ => continue,
-                };
+            let head = match self
+                .repos
+                .commit
+                .find_by_repo_and_commit_id(repo_id, &head_commit_id)
+                .await
+            {
+                Ok(Some(h)) => h,
+                _ => continue,
+            };
 
-                if head.root_id == EMPTY_SHA1 {
-                    continue;
-                }
-
-                search_fs_tree(
-                    &self.repos,
-                    repo_id,
-                    &repo_record.name,
-                    &head.root_id,
-                    "",
-                    q,
-                    &mut all_results,
-                    &mut seen,
-                )
-                .await;
+            if head.root_id == EMPTY_SHA1 {
+                continue;
             }
+
+            search_fs_tree(
+                &self.repos,
+                repo_id,
+                &repo_record.name,
+                &head.root_id,
+                "",
+                q,
+                &mut all_results,
+                &mut seen,
+            )
+            .await;
         }
 
         // Sort: directories first, then by name
@@ -234,6 +238,7 @@ impl SearchService {
         repo_name: &str,
         root_id: &str,
         fullpaths: &[String],
+        highlights: &[String],
     ) -> Vec<Option<FileSearchResult>> {
         if root_id == EMPTY_SHA1 || fullpaths.is_empty() {
             return vec![None; fullpaths.len()];
@@ -318,6 +323,7 @@ impl SearchService {
                 size: entry.size,
                 is_dir,
                 dir_url,
+                content_highlight: highlights.get(i).cloned().unwrap_or_default(),
             }));
         }
         results
@@ -392,6 +398,7 @@ async fn search_fs_tree(
                             size: entry.size,
                             is_dir,
                             dir_url,
+                            content_highlight: String::new(),
                         });
                     }
                 }
