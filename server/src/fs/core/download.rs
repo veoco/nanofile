@@ -294,6 +294,35 @@ pub fn range_stream(
     })
 }
 
+/// RFC 5987 percent-encode a filename for `filename*=utf-8''...`.
+/// Keeps ASCII alphanumerics and `!#$&+-.^_`|~` unencoded, everything else
+/// becomes `%XX` (UTF-8 bytes), matching the official fileserver.
+fn rfc5987_encode(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// Build a `Content-Disposition` value in the official fileserver format
+/// (see fileserver/fileop.go): both the RFC 5987 encoded filename (for
+/// Safari, which cannot parse raw UTF-8) and the raw filename are sent.
+/// `attachment` selects `attachment` vs `inline` disposition.
+pub fn content_disposition(filename: &str, attachment: bool) -> String {
+    let mode = if attachment { "attachment" } else { "inline" };
+    // Quote / backslash in the raw filename must not break the header value.
+    let escaped = filename.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        "{mode};filename*=utf-8''{};filename=\"{escaped}\"",
+        rfc5987_encode(filename)
+    )
+}
+
 /// Parameters for building a file-download HTTP response with Range support.
 pub struct FileDownloadParams {
     pub block_ids: Vec<String>,

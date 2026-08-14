@@ -117,7 +117,9 @@ pub async fn repo_file_download(
     }
 
     let content_disposition = if query.dl.as_deref() == Some("1") {
-        Some(format!("attachment; filename=\"{}\"", file_name))
+        Some(crate::fs::core::download::content_disposition(
+            &file_name, true,
+        ))
     } else {
         None
     };
@@ -175,7 +177,7 @@ pub async fn download_api(
         .await
         .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
 
-    let disposition = format!("attachment; filename=\"{}\"", filename);
+    let disposition = crate::fs::core::download::content_disposition(&filename, true);
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
     Ok(crate::fs::core::download::file_download_response(
         crate::fs::core::download::FileDownloadParams {

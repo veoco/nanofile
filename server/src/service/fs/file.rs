@@ -346,22 +346,14 @@ impl FileService {
         Ok((file_fs_id, url))
     }
 
+    /// URL base for download / block links (see `ServerConfig::download_url_base`).
+    fn build_url_base(&self, host_header: Option<&str>) -> String {
+        self.config.server.download_url_base(host_header)
+    }
+
     /// Build a download API URL.
     fn build_download_url(&self, token: &str, host_header: Option<&str>) -> String {
-        if let Some(h) = host_header {
-            let scheme = self.config.server.site_url_scheme();
-            if let Some((h, p)) = h.split_once(':') {
-                format!("{scheme}://{h}:{p}/download-api/{token}")
-            } else {
-                format!(
-                    "{scheme}://{h}:{}/download-api/{token}",
-                    self.config.server.port
-                )
-            }
-        } else {
-            let base = self.config.server.site_url.trim_end_matches('/');
-            format!("{base}/download-api/{token}")
-        }
+        format!("{}/download-api/{token}", self.build_url_base(host_header))
     }
 
     /// Build a block download URL.
@@ -372,20 +364,10 @@ impl FileService {
         block_id: &str,
         host_header: Option<&str>,
     ) -> String {
-        if let Some(h) = host_header {
-            let scheme = self.config.server.site_url_scheme();
-            if let Some((h, p)) = h.split_once(':') {
-                format!("{scheme}://{h}:{p}/blks/{token}/{file_id}/{block_id}")
-            } else {
-                format!(
-                    "{scheme}://{h}:{}/blks/{token}/{file_id}/{block_id}",
-                    self.config.server.port
-                )
-            }
-        } else {
-            let base = self.config.server.site_url.trim_end_matches('/');
-            format!("{base}/blks/{token}/{file_id}/{block_id}")
-        }
+        format!(
+            "{}/blks/{token}/{file_id}/{block_id}",
+            self.build_url_base(host_header)
+        )
     }
 
     /// Get a block download link.

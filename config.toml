@@ -11,7 +11,11 @@
 addr = "0.0.0.0"
 port = 8082
 # External URL used for download links and CORS defaults.
-# Change to "https://your-domain.com" when behind a TLS proxy.
+# IMPORTANT: download links are built from this address (like seahub's
+# FILE_SERVER_ROOT), so when clients reach this server through a reverse
+# proxy / TLS terminator, set it to the address clients actually use,
+# e.g. "https://your-domain.com". Otherwise the port gets appended to the
+# request Host, and downloads may hang on clients.
 site_url = "http://127.0.0.1:8082"
 max_upload_size_mb = 4096
 request_timeout_secs = 600

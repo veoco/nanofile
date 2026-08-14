@@ -133,6 +133,41 @@ fn default_cors_max_age() -> u64 {
 }
 
 impl ServerConfig {
+    /// Whether `site_url` is still the built-in default (`http://127.0.0.1:8082`),
+    /// i.e. the admin has not configured an external address.
+    ///
+    /// Used by download/block URL construction: an unconfigured site_url is not
+    /// reachable from other machines, so the URL falls back to the request Host
+    /// header instead (mirroring seahub's FILE_SERVER_ROOT semantics, where the
+    /// admin-provided root always wins).
+    pub fn site_url_is_default(&self) -> bool {
+        self.site_url.trim_end_matches('/') == default_site_url()
+    }
+
+    /// URL base (`scheme://host[:port]`) for download / block links.
+    ///
+    /// Mirrors seahub's `FILE_SERVER_ROOT` semantics: a configured `site_url`
+    /// (the admin-provided external address) always wins, because only the
+    /// admin knows the address clients can actually reach — e.g. the public
+    /// hostname behind a reverse proxy. The request Host header is only used
+    /// as a fallback while `site_url` is still the built-in default
+    /// (`http://127.0.0.1:8082`), so LAN clients hitting the server by IP get
+    /// a reachable URL. In that fallback the Host value is used verbatim
+    /// (its port is kept when the client actually used one, omitted when it
+    /// used the default 80/443) — the server's internal listen port is never
+    /// appended, which used to produce unreachable URLs like
+    /// `http://host:8082/...` behind a reverse proxy.
+    pub fn download_url_base(&self, host_header: Option<&str>) -> String {
+        let base = self.site_url.trim_end_matches('/');
+        if !self.site_url_is_default() {
+            return base.to_string();
+        }
+        if let Some(h) = host_header {
+            return format!("{}://{h}", self.site_url_scheme());
+        }
+        base.to_string()
+    }
+
     /// Extract the scheme (http / https) from `site_url`.
     pub fn site_url_scheme(&self) -> &str {
         if self.site_url.starts_with("https://") {
@@ -432,5 +467,102 @@ impl Config {
         if let Ok(v) = std::env::var("NANOFILE_SERVER_TRUSTED_PROXIES") {
             self.server.trusted_proxies = v.split(',').map(|s| s.trim().to_string()).collect();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a ServerConfig from a partial TOML (required fields only).
+    fn cfg(site_url: &str) -> ServerConfig {
+        let toml = format!(
+            r#"
+addr = "0.0.0.0"
+port = 8082
+site_url = "{site_url}"
+max_upload_size_mb = 4096
+request_timeout_secs = 600
+"#
+        );
+        toml::from_str(&toml).expect("valid server config")
+    }
+
+    #[test]
+    fn site_url_is_default_detects_unconfigured() {
+        assert!(cfg("http://127.0.0.1:8082").site_url_is_default());
+        // Trailing slash variant is still the default.
+        assert!(cfg("http://127.0.0.1:8082/").site_url_is_default());
+        // Any explicitly configured address is not the default.
+        assert!(!cfg("https://seafile.example.com").site_url_is_default());
+        assert!(!cfg("http://192.168.1.100:8082").site_url_is_default());
+    }
+
+    #[test]
+    fn configured_site_url_always_wins() {
+        // Reverse-proxy deployment: admin configured the public address.
+        let c = cfg("https://seafile.example.com");
+        assert_eq!(c.download_url_base(None), "https://seafile.example.com");
+        // Host header is ignored entirely — same as seahub's FILE_SERVER_ROOT.
+        assert_eq!(
+            c.download_url_base(Some("seafile.example.com")),
+            "https://seafile.example.com"
+        );
+        assert_eq!(
+            c.download_url_base(Some("192.168.1.100:8082")),
+            "https://seafile.example.com"
+        );
+    }
+
+    #[test]
+    fn default_site_url_falls_back_to_host_with_port() {
+        // Direct LAN access: Host carries the port, keep it verbatim.
+        let c = cfg("http://127.0.0.1:8082");
+        assert_eq!(
+            c.download_url_base(Some("192.168.1.100:8082")),
+            "http://192.168.1.100:8082"
+        );
+        // Domain with explicit port.
+        assert_eq!(
+            c.download_url_base(Some("seafile.example.com:8082")),
+            "http://seafile.example.com:8082"
+        );
+    }
+
+    #[test]
+    fn default_site_url_falls_back_to_host_without_port() {
+        // Reverse proxy without a port in Host (80/443): never append the
+        // internal listen port — the old behavior produced unreachable URLs.
+        let c = cfg("http://127.0.0.1:8082");
+        assert_eq!(
+            c.download_url_base(Some("seafile.example.com")),
+            "http://seafile.example.com"
+        );
+        assert_eq!(
+            c.download_url_base(Some("192.168.1.100")),
+            "http://192.168.1.100"
+        );
+    }
+
+    #[test]
+    fn default_site_url_ipv6_host() {
+        // IPv6 literals (with or without port) pass through verbatim — the
+        // old split_once(':') logic produced malformed URLs for these.
+        let c = cfg("http://127.0.0.1:8082");
+        assert_eq!(
+            c.download_url_base(Some("[2001:db8::1]:8082")),
+            "http://[2001:db8::1]:8082"
+        );
+        assert_eq!(
+            c.download_url_base(Some("[2001:db8::1]")),
+            "http://[2001:db8::1]"
+        );
+    }
+
+    #[test]
+    fn default_site_url_without_host_header() {
+        // No Host header at all: fall back to site_url itself.
+        let c = cfg("http://127.0.0.1:8082");
+        assert_eq!(c.download_url_base(None), "http://127.0.0.1:8082");
     }
 }
