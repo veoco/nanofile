@@ -3,6 +3,7 @@
 // directly, so the module graph stays acyclic.
 import { refreshFileList } from "./list.js";
 import { getSort, getTagFilter, getVisibleView } from "./state.js";
+import { nextSortOrder, nextTagFilter } from "./view-logic.js";
 
 export { getSort, getTagFilter, getVisibleView };
 
@@ -102,7 +103,7 @@ export function initSortUI() {
 
 function setSort(field) {
   var s = getSort();
-  var order = field === s.sort ? (s.sort_order === "asc" ? "desc" : "asc") : "asc";
+  var order = nextSortOrder(field, s.sort, s.sort_order);
   localStorage.setItem("fileSortField", field);
   localStorage.setItem("fileSortOrder", order);
   applySortUI(field, order);
@@ -119,7 +120,7 @@ function applyTagFilter(name) {
   var sb = document.querySelector(".js-sort-bar");
   if (!sb) return;
   var current = sb.dataset.tagFilter || "";
-  sb.dataset.tagFilter = current === name ? "" : name;
+  sb.dataset.tagFilter = nextTagFilter(current, name);
   refreshFileList();
 }
 

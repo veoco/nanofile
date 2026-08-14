@@ -1,13 +1,13 @@
 // selection — row selection state and UI (single / ctrl / shift / touch
 // multi-select), plus the batch selection bar. Depends on right-panel.js to
-// render the selected item(s) detail.
+// render the selected item(s) detail. Selection state lives in the pure
+// reducer in selection-state.js; this module is the thin DOM layer.
 import { __t } from "../core/i18n.js";
+import { createSelectionState, reduceSelection } from "./selection-state.js";
 import { openRightPanel, resetRightPanel, openMultiSelectPanel, openQuickPreview } from "./right-panel.js";
 
 // ─── Selection state ────────────────────────────────────────────────────
-var selectedPaths = new Set();
-var anchorPath = null;       // Anchor for Shift+click range selection
-var touchSelectMode = false; // Touch multi-select mode (long-press activated)
+var selState = createSelectionState();
 var suppressClick = false;   // Suppress synthetic click after long-press
 
 export function getCurrentDir() {
@@ -36,22 +36,41 @@ export function getSelectedItems() {
 }
 
 export function getSelectedCount() {
-  return selectedPaths.size;
+  return selState.selected.size;
 }
 
 export function getSelectedPaths() {
-  return Array.from(selectedPaths);
+  return Array.from(selState.selected);
+}
+
+// Sync the .selected class on every row to match the current selection state.
+function applySelectionToDom() {
+  // Remove .selected from all rows (including hidden views).
+  document.querySelectorAll(".js-entry-row.selected").forEach(function (row) {
+    row.classList.remove("selected");
+  });
+  // Re-apply .selected to rows in the visible views that are selected.
+  var visViews = document.querySelectorAll(
+    ".js-file-list-view:not(.hidden), .js-file-grid-view:not(.hidden), .js-gallery-view:not(.hidden)"
+  );
+  visViews.forEach(function (view) {
+    view.querySelectorAll(".js-entry-row").forEach(function (row) {
+      if (row.dataset.name && selState.selected.has(row.dataset.name)) {
+        row.classList.add("selected");
+      }
+    });
+  });
 }
 
 function updateSelectionBar() {
   // Auto-clear stale selection (e.g. after partial refresh)
-  if (selectedPaths.size > 0) {
+  if (selState.selected.size > 0) {
     var selectedCount = document.querySelectorAll(".js-entry-row.selected").length;
     if (selectedCount === 0 && document.querySelectorAll(".js-entry-row").length > 0) {
-      selectedPaths.clear();
+      selState = { selected: new Set(), anchor: selState.anchor, touchMode: selState.touchMode };
     }
   }
-  var count = selectedPaths.size;
+  var count = selState.selected.size;
   var isSelected = count > 0;
 
   // Toggle selection info and action buttons in the view toggle bar
@@ -69,16 +88,13 @@ function updateSelectionBar() {
   var selBtn = document.getElementById("js-select-all-btn");
   if (selBtn) {
     var totalRows = document.querySelectorAll(".js-entry-row").length;
-    selBtn.textContent = selectedPaths.size === totalRows ? __t('ui.deselect_all') : __t('ui.select_all');
+    selBtn.textContent = selState.selected.size === totalRows ? __t('ui.deselect_all') : __t('ui.select_all');
   }
 }
 
 export function clearSelection() {
-  touchSelectMode = false;
-  selectedPaths.clear();
-  document.querySelectorAll(".js-entry-row.selected").forEach(function (row) {
-    row.classList.remove("selected");
-  });
+  selState = reduceSelection(selState, { type: "clear" });
+  applySelectionToDom();
   updateSelectionBar();
   resetRightPanel();
 }
@@ -97,7 +113,6 @@ document.addEventListener("click", function (e) {
   if (!row) {
     if (e.target.closest("button, a, #js-select-all-btn, .js-sort-bar")) return;
     if (e.target.closest(".file-list-container")) {
-      touchSelectMode = false;
       clearSelection();
     }
     return;
@@ -109,80 +124,27 @@ document.addEventListener("click", function (e) {
   var name = row.dataset.name;
   if (!name) return;
 
-  // ── Shift+click: range select from anchor to clicked item ──
+  // Shift range selection needs the ordered names of the visible view.
+  var orderedNames = [];
   if (e.shiftKey) {
     var view = document.querySelector(
       ".js-file-list-view:not(.hidden), .js-file-grid-view:not(.hidden), .js-gallery-view:not(.hidden)"
     );
-    if (view && anchorPath) {
-      var rows = view.querySelectorAll(".js-entry-row");
-      var anchorIdx = -1, currentIdx = -1;
-      for (var i = 0; i < rows.length; i++) {
-        var dn = rows[i].dataset.name;
-        if (dn === anchorPath) anchorIdx = i;
-        if (dn === name) currentIdx = i;
-      }
-      if (anchorIdx !== -1 && currentIdx !== -1) {
-        // Clear current selection and select range
-        clearSelection();
-        var start = Math.min(anchorIdx, currentIdx);
-        var end = Math.max(anchorIdx, currentIdx);
-        for (var i = start; i <= end; i++) {
-          var n = rows[i].dataset.name;
-          if (n) {
-            selectedPaths.add(n);
-            rows[i].classList.add("selected");
-          }
-        }
-        updateSelectionBar();
-        updateSelectionPanel();
-        return;
-      }
-    }
-    // Fallback: anchor not found or no view — single select
-    clearSelection();
-    selectedPaths.add(name);
-    row.classList.add("selected");
-    anchorPath = name;
-    updateSelectionBar();
-    updateSelectionPanel();
-    return;
-  }
-
-  // ── Ctrl+click: toggle this item ──
-  if (e.ctrlKey || e.metaKey) {
-    if (selectedPaths.has(name)) {
-      selectedPaths.delete(name);
-      row.classList.remove("selected");
-    } else {
-      selectedPaths.add(name);
-      row.classList.add("selected");
-    }
-
-  // ── Touch multi-select: toggle like Ctrl+click ──
-  } else if (touchSelectMode) {
-    if (selectedPaths.has(name)) {
-      selectedPaths.delete(name);
-      row.classList.remove("selected");
-    } else {
-      selectedPaths.add(name);
-      row.classList.add("selected");
-    }
-
-  // ── Normal click: update anchor, single select ──
-  } else {
-    anchorPath = name;
-    if (selectedPaths.size === 1 && selectedPaths.has(name)) {
-      // Clicking the only selected item — deselect it
-      selectedPaths.delete(name);
-      row.classList.remove("selected");
-    } else {
-      clearSelection();
-      selectedPaths.add(name);
-      row.classList.add("selected");
+    if (view) {
+      view.querySelectorAll(".js-entry-row").forEach(function (r) {
+        if (r.dataset.name) orderedNames.push(r.dataset.name);
+      });
     }
   }
 
+  selState = reduceSelection(selState, {
+    type: "click",
+    name: name,
+    shift: e.shiftKey,
+    ctrl: e.ctrlKey || e.metaKey,
+    orderedNames: orderedNames,
+  });
+  applySelectionToDom();
   updateSelectionBar();
   updateSelectionPanel();
 });
@@ -202,9 +164,8 @@ document.addEventListener("dblclick", function (e) {
       row.dataset.isAudio !== "true") return;
   // A dblclick fires two single clicks first; the second one toggles this
   // single-selected row off. Re-select it so it stays selected.
-  clearSelection();
-  selectedPaths.add(name);
-  row.classList.add("selected");
+  selState = reduceSelection(selState, { type: "selectOne", name: name });
+  applySelectionToDom();
   updateSelectionBar();
   updateSelectionPanel();
   openQuickPreview(row);
@@ -212,7 +173,7 @@ document.addEventListener("dblclick", function (e) {
 
 // Update right panel based on current selection state
 function updateSelectionPanel() {
-  var count = selectedPaths.size;
+  var count = selState.selected.size;
   if (count === 0) {
     resetRightPanel();
     return;
@@ -254,19 +215,17 @@ document.addEventListener("click", function (e) {
   if (!btn) return;
 
   var totalRows = document.querySelectorAll(".js-entry-row");
-  if (selectedPaths.size === totalRows.length) {
+  if (selState.selected.size === totalRows.length) {
     // Deselect all
     clearSelection();
   } else {
     // Select all
-    selectedPaths.clear();
+    var names = [];
     totalRows.forEach(function (row) {
-      var name = row.dataset.name;
-      if (name) {
-        selectedPaths.add(name);
-        row.classList.add("selected");
-      }
+      if (row.dataset.name) names.push(row.dataset.name);
     });
+    selState = reduceSelection(selState, { type: "selectAll", names: names });
+    applySelectionToDom();
     updateSelectionBar();
     // Show multi-select panel
     openMultiSelectPanel(getSelectedItems());
@@ -275,7 +234,6 @@ document.addEventListener("click", function (e) {
 
 document.addEventListener("click", function (e) {
   if (e.target.closest(".js-deselect-all")) {
-    touchSelectMode = false;
     clearSelection();
   }
 });
@@ -294,20 +252,22 @@ document.addEventListener("touchstart", function (e) {
 
   touchLongPressTimer = setTimeout(function () {
     // Long press detected — enter multi-select mode
-    touchSelectMode = true;
     touchLongPressTimer = null;
+
+    selState = reduceSelection(selState, { type: "setTouchMode", value: true });
 
     var name = row.dataset.name;
     if (!name) return;
 
     // Toggle this item
-    if (selectedPaths.has(name)) {
-      selectedPaths.delete(name);
-      row.classList.remove("selected");
-    } else {
-      selectedPaths.add(name);
-      row.classList.add("selected");
-    }
+    selState = reduceSelection(selState, {
+      type: "click",
+      name: name,
+      shift: false,
+      ctrl: false,
+      orderedNames: [],
+    });
+    applySelectionToDom();
     updateSelectionBar();
     updateSelectionPanel();
 
@@ -335,30 +295,15 @@ document.addEventListener("touchend", function (e) {
 
 // Escape key exits touch multi-select mode
 document.addEventListener("keydown", function (e) {
-  if (e.key === "Escape" && touchSelectMode) {
-    touchSelectMode = false;
+  if (e.key === "Escape" && selState.touchMode) {
     clearSelection();
   }
 });
 
 // Sync .selected class to the currently visible view (called after view switch)
 function syncSelectionView() {
-  if (selectedPaths.size === 0) return;
-  // Remove .selected from all rows (including hidden views)
-  document.querySelectorAll(".js-entry-row.selected").forEach(function (row) {
-    row.classList.remove("selected");
-  });
-  // Re-apply .selected to rows in the visible view that match selectedPaths
-  var visViews = document.querySelectorAll(
-    ".js-file-list-view:not(.hidden), .js-file-grid-view:not(.hidden), .js-gallery-view:not(.hidden)"
-  );
-  visViews.forEach(function (view) {
-    view.querySelectorAll(".js-entry-row").forEach(function (row) {
-      if (selectedPaths.has(row.dataset.name)) {
-        row.classList.add("selected");
-      }
-    });
-  });
+  if (selState.selected.size === 0) return;
+  applySelectionToDom();
   updateSelectionBar();
 }
 

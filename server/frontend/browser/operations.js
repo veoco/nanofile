@@ -1,11 +1,13 @@
 // operations — file-browser mutations and dialogs: delete, history, share,
 // rename, batch delete/move/copy, directory picker, zip download, reindex.
 import { __t } from "../core/i18n.js";
-import { getCookie, escapeHtml, escapeAttr } from "../core/utils.js";
+import { getCookie, escapeHtml, escapeAttr, parentDirOf } from "../core/utils.js";
 import { apiFetch } from "../core/api.js";
+import { formatHistorySize, formatHistoryTime } from "../core/format.js";
 import { Toast } from "../core/toast.js";
 import { ConfirmDialog } from "../core/confirm.js";
 import { refreshFileList } from "./list.js";
+import { buildEntryApiPath } from "./urls.js";
 import { getCurrentDir, getRepoId, getSelectedItems, getSelectedPaths, getSelectedCount, clearSelection } from "./selection.js";
 
 // ─── Delete file/dir via API ────────────────────────────────────────────
@@ -31,9 +33,7 @@ document.addEventListener("click", async function (e) {
     return;
   }
 
-  var apiPath = entryType === "dir"
-    ? "/api2/repos/" + repoId + "/dir/?p=" + encodeURIComponent(path)
-    : "/api2/repos/" + repoId + "/file/?p=" + encodeURIComponent(path);
+  var apiPath = buildEntryApiPath(repoId, path, entryType);
 
   try {
     var res = await fetch(apiPath, {
@@ -60,18 +60,6 @@ var historyPathEl = historyOverlay
 var historyListEl = historyOverlay
   ? historyOverlay.querySelector(".js-history-list")
   : null;
-
-function formatHistoryTime(ts) {
-  var d = new Date(ts * 1000);
-  return d.toLocaleString();
-}
-
-function formatHistorySize(n) {
-  if (n >= 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
-  if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
-  if (n >= 1024) return (n / 1024).toFixed(1) + " KB";
-  return n + " B";
-}
 
 function closeHistoryDialog() {
   if (historyOverlay) historyOverlay.classList.add("hidden");
@@ -413,10 +401,7 @@ if (renameForm) {
     var renameBtn = document.querySelector('.js-rename-btn[data-path="' + oldPath + '"]');
     var entryType = renameBtn ? renameBtn.dataset.type || "file" : "file";
 
-    var apiPath =
-      entryType === "dir"
-        ? "/api2/repos/" + repoId + "/dir/?p=" + encodeURIComponent(oldPath)
-        : "/api2/repos/" + repoId + "/file/?p=" + encodeURIComponent(oldPath);
+    var apiPath = buildEntryApiPath(repoId, oldPath, entryType);
 
     try {
       var formBody = new URLSearchParams();
@@ -769,7 +754,7 @@ document.addEventListener("click", function (e) {
   if (!repoId || !name) return;
   var parentDir = link.dataset.path;
   if (parentDir.endsWith(name)) {
-    parentDir = parentDir.slice(0, -name.length).replace(/\/+$/, "") || "/";
+    parentDir = parentDirOf(parentDir);
   }
   zipDownload(repoId, parentDir, [name]);
 });

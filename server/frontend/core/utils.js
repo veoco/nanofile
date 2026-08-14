@@ -30,6 +30,14 @@ export function encodeFilePath(path) {
   return String(path).split("/").map(encodeURIComponent).join("/");
 }
 
+// Extract the parent directory from a full file path: "/a/b/c" → "/a/b",
+// "/a" → "/", "a" → "/".
+export function parentDirOf(path) {
+  var s = String(path);
+  var slash = s.lastIndexOf("/");
+  return slash <= 0 ? "/" : s.slice(0, slash);
+}
+
 // Strip surrounding double quotes from a value: "foo" → foo.
 export function unquote(v) {
   return String(v).replace(/^"|"$/g, "");

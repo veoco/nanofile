@@ -2,6 +2,7 @@
 // infinite scroll). Dispatches "nanofile:list-refreshed" after a refresh so
 // view.js can re-apply sort/view state without list.js importing it.
 import { getSort, getTagFilter, getVisibleView, getVisibleViewContainer } from "./state.js";
+import { buildListUrl } from "./urls.js";
 
 // ─── Skeleton loading ────────────────────────────────────────────────────
 var skeleton = document.querySelector(".js-skeleton");
@@ -30,17 +31,13 @@ export async function refreshFileList() {
   // suppresses pagination while a refresh is in flight so the infinite-scroll
   // observer doesn't load page 2 into the soon-to-be-replaced DOM.
   window._viewRefreshing = (window._viewRefreshing || 0) + 1;
-  var url = window.location.pathname;
-  var sep = url.indexOf("?") !== -1 ? "&" : "?";
-  url = url + sep + "partial=1&view=all";
-  var sort = getSort();
-  if (sort) {
-    url += "&sort=" + sort.sort + "&sort_order=" + sort.sort_order;
-  }
-  var tag = getTagFilter();
-  if (tag) {
-    url += "&tag=" + encodeURIComponent(tag);
-  }
+  var url = buildListUrl({
+    pathname: window.location.pathname,
+    view: "all",
+    page: null,
+    sort: getSort(),
+    tag: getTagFilter(),
+  });
   try {
     var resp = await fetch(url);
     if (resp.ok) {
@@ -102,17 +99,13 @@ export async function loadMoreEntries() {
 
   var view = getVisibleView();
   var nextPage = page + 1;
-  var sep = window.location.pathname.indexOf("?") !== -1 ? "&" : "?";
-  var url = window.location.pathname + sep + "partial=1&view=" + view + "&page=" + nextPage;
-  // Gallery loads more always use mtime-desc sort so groups remain reverse-chronological
-  if (view === "gallery") {
-    url += "&sort=mtime&sort_order=desc";
-  } else {
-    var sort = getSort();
-    if (sort) url += "&sort=" + sort.sort + "&sort_order=" + sort.sort_order;
-  }
-  var tag = getTagFilter();
-  if (tag) url += "&tag=" + encodeURIComponent(tag);
+  var url = buildListUrl({
+    pathname: window.location.pathname,
+    view: view,
+    page: nextPage,
+    sort: getSort(),
+    tag: getTagFilter(),
+  });
 
   try {
     var resp = await fetch(url);

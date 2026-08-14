@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatFileSize, formatBitrate } from "./format.js";
+import { formatFileSize, formatBitrate, formatHistorySize, formatHistoryTime } from "./format.js";
 
 test("formatFileSize formats B/KB/MB/GB with 1000-based units", () => {
   assert.equal(formatFileSize(0), "0 B");
@@ -28,4 +28,17 @@ test("formatBitrate returns empty for zero/negative/non-numeric", () => {
   assert.equal(formatBitrate(0), "");
   assert.equal(formatBitrate(-1), "");
   assert.equal(formatBitrate(null), "");
+});
+
+test("formatHistorySize formats B/KB/MB/GB with 1024-based units", () => {
+  assert.equal(formatHistorySize(0), "0 B");
+  assert.equal(formatHistorySize(1023), "1023 B");
+  assert.equal(formatHistorySize(1024), "1.0 KB");
+  assert.equal(formatHistorySize(1024 * 1024), "1.0 MB");
+  assert.equal(formatHistorySize(1024 * 1024 * 1024), "1.0 GB");
+});
+
+test("formatHistoryTime returns a non-empty string", () => {
+  assert.equal(typeof formatHistoryTime(0), "string");
+  assert.ok(formatHistoryTime(1234567890).length > 0);
 });
