@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
 };
 use std::sync::Arc;
 
@@ -104,11 +105,16 @@ impl UserRepository for DbUserRepository {
     }
 
     async fn exists_by_email(&self, email: &str) -> Result<bool, AppError> {
-        Ok(user::Entity::find()
+        // Project only the primary key — avoid pulling `password_hash` and the
+        // rest of the row just to check for existence.
+        let row: Option<(i32,)> = user::Entity::find()
+            .select_only()
+            .column(user::Column::Id)
             .filter(user::Column::Email.eq(email))
+            .into_tuple()
             .one(self.db.as_ref())
-            .await?
-            .is_some())
+            .await?;
+        Ok(row.is_some())
     }
 
     async fn create(&self, email: String, password_hash: String) -> Result<user::Model, AppError> {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::fs::core::{
@@ -63,29 +63,50 @@ impl StarredService {
 
         let entries = self.repos.starred.find_by_user_id(user_id).await?;
 
-        let mut repo_cache: HashMap<String, Option<infra::entity::repo::Model>> = HashMap::new();
-        for entry in &entries {
-            if !repo_cache.contains_key(&entry.repo_id) {
-                let r = self.repos.repo.find_by_id(&entry.repo_id).await?;
-                repo_cache.insert(entry.repo_id.clone(), r);
+        // Batch-load the distinct repos and their head commits in two queries
+        // instead of one repo + one commit lookup per starred repo.
+        let mut distinct_repo_ids: Vec<String> = Vec::new();
+        {
+            let mut seen = HashSet::new();
+            for entry in &entries {
+                if seen.insert(entry.repo_id.clone()) {
+                    distinct_repo_ids.push(entry.repo_id.clone());
+                }
             }
         }
+        let repos_models = self.repos.repo.find_by_ids(&distinct_repo_ids).await?;
+        let repos_by_id: HashMap<String, infra::entity::repo::Model> = repos_models
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
+        let repo_cache: HashMap<String, Option<infra::entity::repo::Model>> = distinct_repo_ids
+            .iter()
+            .map(|id| (id.clone(), repos_by_id.get(id).cloned()))
+            .collect();
 
-        // Cache the head commit per repo so mtime resolution does not re-fetch
-        // the head commit for every starred item in the same repo.
-        let mut head_cache: HashMap<String, Option<infra::entity::commit::Model>> = HashMap::new();
-        for entry in &entries {
-            if !head_cache.contains_key(&entry.repo_id) {
-                let head = match repo_cache.get(&entry.repo_id).and_then(|o| o.as_ref()) {
-                    Some(repo) => match &repo.head_commit_id {
-                        Some(cid) => self.repos.commit.find_by_id(cid).await?,
-                        None => None,
-                    },
-                    None => None,
-                };
-                head_cache.insert(entry.repo_id.clone(), head);
-            }
-        }
+        let head_commit_ids: Vec<String> = repos_by_id
+            .values()
+            .filter_map(|r| r.head_commit_id.clone())
+            .collect();
+        let commits = self
+            .repos
+            .commit
+            .find_by_commit_ids(&head_commit_ids)
+            .await?;
+        let commit_by_id: HashMap<String, infra::entity::commit::Model> = commits
+            .into_iter()
+            .map(|c| (c.commit_id.clone(), c))
+            .collect();
+        let head_cache: HashMap<String, Option<infra::entity::commit::Model>> = repo_cache
+            .iter()
+            .map(|(repo_id, repo_opt)| {
+                let head = repo_opt
+                    .as_ref()
+                    .and_then(|r| r.head_commit_id.clone())
+                    .and_then(|cid| commit_by_id.get(&cid).cloned());
+                (repo_id.clone(), head)
+            })
+            .collect();
 
         let mut starred_repos = Vec::new();
         let mut starred_folders = Vec::new();

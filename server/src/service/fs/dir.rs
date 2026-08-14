@@ -910,41 +910,57 @@ async fn copy_fs_tree(
     dst_repo_id: &str,
     root_fs_id: &str,
 ) -> Result<(), AppError> {
-    let mut stack = vec![root_fs_id.to_string()];
-    while let Some(fs_id) = stack.pop() {
-        if fs_id == EMPTY_SHA1 {
-            continue;
-        }
-        let obj = repos
-            .fs_object
-            .find_by_repo_and_fs_id(src_repo_id, &fs_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("fs_object not found: {fs_id}")))?;
+    // Level-frontier walk: batch-read each level, batch-skip existing
+    // objects, then batch-insert the rest — instead of three round-trips per
+    // object.
+    let mut frontier = vec![root_fs_id.to_string()];
+    while !frontier.is_empty() {
+        // Content-addressed storage lets the same fs_id be referenced from
+        // several directories; dedup so each object is fetched/copied once.
+        let mut seen = HashSet::new();
+        frontier.retain(|id| seen.insert(id.clone()));
 
-        let exists = repos
-            .fs_object
-            .exists_by_repo_and_fs_id(dst_repo_id, &fs_id)
-            .await?;
-        if !exists {
-            repos
-                .fs_object
-                .insert_many(vec![infra::entity::fs_object::ActiveModel {
-                    id: sea_orm::NotSet,
-                    repo_id: sea_orm::Set(dst_repo_id.to_string()),
-                    fs_id: sea_orm::Set(fs_id.clone()),
-                    obj_type: sea_orm::Set(obj.obj_type),
-                    data: sea_orm::Set(obj.data.clone()),
-                }])
-                .await?;
-        }
+        let objs =
+            crate::fs::core::tree::fetch_fs_object_map(repos, src_repo_id, &frontier).await?;
 
-        if obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 {
-            let dir_data: FsDirData = serde_json::from_str(&obj.data)
-                .map_err(|e| AppError::Internal(format!("deserialize failed: {e}")))?;
-            for entry in &dir_data.dirents {
-                stack.push(entry.id.clone());
+        let mut next = Vec::new();
+        let mut to_copy: Vec<infra::entity::fs_object::Model> = Vec::new();
+        for fs_id in &frontier {
+            if *fs_id == EMPTY_SHA1 {
+                continue;
             }
+            let Some(obj) = objs.get(fs_id) else {
+                return Err(AppError::NotFound(format!("fs_object not found: {fs_id}")));
+            };
+            if obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 {
+                let dir_data: FsDirData = serde_json::from_str(&obj.data)
+                    .map_err(|e| AppError::Internal(format!("deserialize failed: {e}")))?;
+                for entry in &dir_data.dirents {
+                    next.push(entry.id.clone());
+                }
+            }
+            to_copy.push(obj.clone());
         }
+
+        let fs_ids: Vec<String> = to_copy.iter().map(|o| o.fs_id.clone()).collect();
+        let existing = repos
+            .fs_object
+            .find_existing_fs_ids(dst_repo_id, &fs_ids)
+            .await?;
+        let models: Vec<infra::entity::fs_object::ActiveModel> = to_copy
+            .into_iter()
+            .filter(|o| !existing.contains(&o.fs_id))
+            .map(|o| infra::entity::fs_object::ActiveModel {
+                id: sea_orm::NotSet,
+                repo_id: sea_orm::Set(dst_repo_id.to_string()),
+                fs_id: sea_orm::Set(o.fs_id),
+                obj_type: sea_orm::Set(o.obj_type),
+                data: sea_orm::Set(o.data),
+            })
+            .collect();
+        repos.fs_object.insert_many(models).await?;
+
+        frontier = next;
     }
     Ok(())
 }

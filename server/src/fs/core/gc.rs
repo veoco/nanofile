@@ -1,5 +1,5 @@
 use crate::repository::Repositories;
-use base::common::{FsDirData, SEAF_METADATA_TYPE_DIR};
+use base::common::{FsDirData, S_IFDIR, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::entity::repo;
 
@@ -129,7 +129,11 @@ impl GcManager {
                     let dir_data: FsDirData = serde_json::from_str(&obj.data)
                         .map_err(|e| AppError::internal(e.to_string()))?;
                     for entry in &dir_data.dirents {
-                        if collected.insert(entry.id.clone()) {
+                        let is_new = collected.insert(entry.id.clone());
+                        // Only directories have children to recurse into; use
+                        // the dirent's `mode` bit so file objects are never
+                        // fetched just to discover they aren't directories.
+                        if is_new && entry.mode & S_IFDIR != 0 {
                             next.push(entry.id.clone());
                         }
                     }

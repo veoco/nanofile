@@ -131,6 +131,9 @@ impl RepoRepository for DbRepoRepository {
             history_ttl_days: Set(0),
             r#type: Set(params.r#type),
         };
+        // NOTE: `ActiveModelTrait::insert` (which uses `RETURNING *`) fails to
+        // map the `type` column back to `r#type` for this entity, so insert and
+        // re-fetch by id instead.
         repo::Entity::insert(model).exec(self.db.as_ref()).await?;
         self.find_by_id(&params.id)
             .await?
@@ -208,6 +211,7 @@ impl RepoRepository for DbRepoRepository {
             sea_orm::Set(id) => id.clone(),
             _ => return Err(AppError::Internal("repo id is required".into())),
         };
+        // See `create_repo` — avoid `RETURNING` for this entity.
         repo::Entity::insert(model).exec(self.db.as_ref()).await?;
         self.find_by_id(&repo_id)
             .await?
@@ -243,17 +247,14 @@ impl RepoRepository for DbRepoRepository {
     }
 
     async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError> {
-        let repo = self
-            .find_by_id(repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Repo not found".into()))?;
-        let new_size = (repo.size + delta).max(0);
+        // Atomic `size = MAX(0, size + delta)` avoids the read-then-write lost
+        // update that a separate `find_by_id` + `update_many` would introduce.
         repo::Entity::update_many()
             .filter(repo::Column::Id.eq(repo_id))
-            .set(repo::ActiveModel {
-                size: Set(new_size),
-                ..Default::default()
-            })
+            .col_expr(
+                repo::Column::Size,
+                Expr::cust_with_values("MAX(0, size + ?)", [delta]),
+            )
             .exec(self.db.as_ref())
             .await?;
         Ok(())

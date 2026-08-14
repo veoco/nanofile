@@ -36,6 +36,30 @@ pub async fn list_groups_v21(
         .map(|u| (u.id, u))
         .collect();
 
+    // Batch-load all members of the user's groups and the admin users they
+    // reference, instead of one member + one user query per group.
+    let all_members = repos.group_member.find_by_group_ids(&group_ids).await?;
+    let mut admin_user_ids_by_group: HashMap<i32, Vec<i32>> = HashMap::new();
+    let mut admin_user_ids: Vec<i32> = Vec::new();
+    for gm in &all_members {
+        let is_admin =
+            gm.role.eq_ignore_ascii_case("owner") || gm.role.eq_ignore_ascii_case("admin");
+        if is_admin {
+            admin_user_ids_by_group
+                .entry(gm.group_id)
+                .or_default()
+                .push(gm.user_id);
+            admin_user_ids.push(gm.user_id);
+        }
+    }
+    let admin_email_by_id: HashMap<i32, String> = repos
+        .user
+        .find_by_ids(&admin_user_ids)
+        .await?
+        .into_iter()
+        .map(|u| (u.id, u.email))
+        .collect();
+
     let mut result = Vec::new();
     for m in &memberships {
         let Some(g) = groups.get(&m.group_id) else {
@@ -48,14 +72,13 @@ pub async fn list_groups_v21(
         // plus the group creator (the owner) even if their role is unset.
         let mut admins: Vec<String> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for gm in repos.group_member.find_by_group_id(g.id).await? {
-            let is_admin =
-                gm.role.eq_ignore_ascii_case("owner") || gm.role.eq_ignore_ascii_case("admin");
-            if is_admin
-                && let Some(u) = repos.user.find_by_id(gm.user_id).await?
-                && seen.insert(u.email.clone())
-            {
-                admins.push(u.email);
+        if let Some(ids) = admin_user_ids_by_group.get(&g.id) {
+            for uid in ids {
+                if let Some(email) = admin_email_by_id.get(uid)
+                    && seen.insert(email.clone())
+                {
+                    admins.push(email.clone());
+                }
             }
         }
         if let Some(email) = &creator_email
@@ -116,10 +139,9 @@ pub async fn list_groups(
 
             let member_count = repos
                 .group_member
-                .find_by_group_id(g.id)
+                .count_by_group_id(g.id)
                 .await
-                .unwrap_or_default()
-                .len() as i64;
+                .unwrap_or(0);
 
             result.push(serde_json::json!({
                 "id": g.id,

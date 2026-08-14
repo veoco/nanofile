@@ -63,12 +63,17 @@ impl FsObjectRepository for DbFsObjectRepository {
     }
 
     async fn exists_by_repo_and_fs_id(&self, repo_id: &str, fs_id: &str) -> Result<bool, AppError> {
-        Ok(fs_object::Entity::find()
+        // Project only the primary key — the `data` column can be a large JSON
+        // blob that is irrelevant when all we need is existence.
+        let row: Option<(i64,)> = fs_object::Entity::find()
+            .select_only()
+            .column(fs_object::Column::Id)
             .filter(fs_object::Column::RepoId.eq(repo_id))
             .filter(fs_object::Column::FsId.eq(fs_id))
+            .into_tuple()
             .one(self.db.as_ref())
-            .await?
-            .is_some())
+            .await?;
+        Ok(row.is_some())
     }
 
     async fn find_by_repo_and_fs_ids(

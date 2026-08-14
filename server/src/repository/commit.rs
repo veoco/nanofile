@@ -33,6 +33,12 @@ pub trait CommitRepository: Send + Sync {
         &self,
         repo_id: &str,
     ) -> Result<Vec<commit::Model>, AppError>;
+    /// Fetch several commits by their Seafile commit-id (SHA1) strings in one
+    /// query, chunked to stay under SQLite's variable limit.
+    async fn find_by_commit_ids(
+        &self,
+        commit_ids: &[String],
+    ) -> Result<Vec<commit::Model>, AppError>;
     async fn insert(&self, model: commit::ActiveModel) -> Result<commit::Model, AppError>;
     async fn find_all_ordered_by_ctime_desc(&self) -> Result<Vec<commit::Model>, AppError>;
     async fn insert_commit(&self, params: CreateCommitParams) -> Result<commit::Model, AppError>;
@@ -90,6 +96,26 @@ impl CommitRepository for DbCommitRepository {
             .order_by_desc(commit::Column::Id)
             .all(self.db.as_ref())
             .await?)
+    }
+
+    async fn find_by_commit_ids(
+        &self,
+        commit_ids: &[String],
+    ) -> Result<Vec<commit::Model>, AppError> {
+        if commit_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        const IN_BATCH: usize = 500;
+        let mut out = Vec::new();
+        for chunk in commit_ids.chunks(IN_BATCH) {
+            out.extend(
+                commit::Entity::find()
+                    .filter(commit::Column::CommitId.is_in(chunk.to_vec()))
+                    .all(self.db.as_ref())
+                    .await?,
+            );
+        }
+        Ok(out)
     }
 
     async fn insert(&self, model: commit::ActiveModel) -> Result<commit::Model, AppError> {
