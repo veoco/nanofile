@@ -87,9 +87,8 @@ asset_data!(
     COMMON_JS_LM,
     ETAG_COMMON_JS,
     FP_COMMON_JS,
-    "js/common.js"
+    "js/common.bundle.js"
 );
-asset_data!(JS_HASH, JS_LM, ETAG_JS, FP_JS, "js/main.js");
 asset_data!(
     FAVICON_HASH,
     FAVICON_LM,
@@ -102,14 +101,7 @@ asset_data!(
     FB_JS_LM,
     ETAG_FB_JS,
     FP_FB_JS,
-    "js/file-browser.js"
-);
-asset_data!(
-    UPLOAD_JS_HASH,
-    UPLOAD_JS_LM,
-    ETAG_UPLOAD_JS,
-    FP_UPLOAD_JS,
-    "js/upload.js"
+    "js/file-browser.bundle.js"
 );
 
 // ─── Template URLs (for Askama templates, fingerprinted filenames) ──────────
@@ -122,9 +114,7 @@ asset_data!(
 pub struct TemplateUrls {
     pub css: &'static str,
     pub common_js: &'static str,
-    pub js: &'static str,
     pub file_browser_js: &'static str,
-    pub upload_js: &'static str,
     pub favicon: &'static str,
     pub version: &'static str,
 }
@@ -134,9 +124,7 @@ pub fn template_urls() -> &'static TemplateUrls {
     static URLS: LazyLock<TemplateUrls> = LazyLock::new(|| TemplateUrls {
         css: Box::leak(format!("/static/{}", *FP_CSS).into_boxed_str()),
         common_js: Box::leak(format!("/static/{}", *FP_COMMON_JS).into_boxed_str()),
-        js: Box::leak(format!("/static/{}", *FP_JS).into_boxed_str()),
         file_browser_js: Box::leak(format!("/static/{}", *FP_FB_JS).into_boxed_str()),
-        upload_js: Box::leak(format!("/static/{}", *FP_UPLOAD_JS).into_boxed_str()),
         favicon: Box::leak(format!("/static/{}", *FP_FAVICON).into_boxed_str()),
         version: env!("CARGO_PKG_VERSION"),
     });
@@ -165,14 +153,10 @@ fn mime_for(path: &str) -> &'static str {
 fn resolve_asset(path: &str) -> Option<(&'static str, &'static str, &'static str)> {
     if path == "css/app.css" || path == *FP_CSS {
         Some(("css/app.css", &*ETAG_CSS, &*CSS_LM))
-    } else if path == "js/common.js" || path == *FP_COMMON_JS {
-        Some(("js/common.js", &*ETAG_COMMON_JS, &*COMMON_JS_LM))
-    } else if path == "js/main.js" || path == *FP_JS {
-        Some(("js/main.js", &*ETAG_JS, &*JS_LM))
-    } else if path == "js/file-browser.js" || path == *FP_FB_JS {
-        Some(("js/file-browser.js", &*ETAG_FB_JS, &*FB_JS_LM))
-    } else if path == "js/upload.js" || path == *FP_UPLOAD_JS {
-        Some(("js/upload.js", &*ETAG_UPLOAD_JS, &*UPLOAD_JS_LM))
+    } else if path == "js/common.bundle.js" || path == *FP_COMMON_JS {
+        Some(("js/common.bundle.js", &*ETAG_COMMON_JS, &*COMMON_JS_LM))
+    } else if path == "js/file-browser.bundle.js" || path == *FP_FB_JS {
+        Some(("js/file-browser.bundle.js", &*ETAG_FB_JS, &*FB_JS_LM))
     } else if path == "img/favicon.svg" || path == *FP_FAVICON {
         Some(("img/favicon.svg", &*ETAG_FAVICON, &*FAVICON_LM))
     } else {

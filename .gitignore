@@ -8,6 +8,7 @@
 .env
 config.local.toml
 server/static/css/app.css
+server/static/js/*.bundle.js
 tailwindcss
 node_modules/
 package-lock.json

@@ -1,11 +1,12 @@
-// Nanofile Web UI — upload.js
-// Chunked/multi-file upload, drag-and-drop, progress dialog, and new-folder
-// creation for the file browser. Extracted from templates/includes/toolbar.html.
-//
+// upload — chunked/multi-file upload, drag-and-drop, progress dialog, and
+// new-folder creation for the file browser.
+import { __t } from "../core/i18n.js";
+import { escapeHtml, escapeAttr, getCookie } from "../core/utils.js";
+import { Toast } from "../core/toast.js";
+import { refreshFileList } from "./list.js";
+
 // Reads runtime context from `window.uploadContext` (set by toolbar.html):
 //   maxUploadSizeMb, currentPath, repoId, repoName.
-// Shared helpers (getCookie, escapeHtml, escapeAttr, __t, apiFetch, Toast) are
-// provided by common.js / main.js (loaded first).
 
 // ─── Upload state ───
 var uploadQueue = [];
@@ -28,9 +29,6 @@ var bitrateTimestamp = null;
 var currentBitrate = 0;
 var bitrateInterval = 500;
 
-// ─── Toast notifications ───
-// window.Toast is provided by main.js (loaded first).
-
 // ─── Warn on page leave during active uploads ───
 window.addEventListener('beforeunload', function (e) {
     if (uploadQueue.some(function (item) { return item.state === 'uploading' || item.state === 'pending'; })) {
@@ -40,10 +38,10 @@ window.addEventListener('beforeunload', function (e) {
 });
 
 // ─── Standard upload (multi-file selection) ───
-function triggerUpload() {
+export function triggerUpload() {
     document.getElementById('file-upload-input').click();
 }
-function onFileSelected(input) {
+export function onFileSelected(input) {
     if (input.files && input.files.length > 0) {
         if (input.hasAttribute('webkitdirectory')) {
             uploadFilesFromFolderInput(input.files);
@@ -59,16 +57,16 @@ function onFileSelected(input) {
 }
 
 // ─── Folder upload ───
-function triggerFolderUpload() {
+export function triggerFolderUpload() {
     document.getElementById('folder-upload-input').click();
 }
-function onFolderSelected(input) {
+export function onFolderSelected(input) {
     if (input.files && input.files.length > 0) {
         uploadFilesFromFolderInput(input.files);
         input.value = '';
     }
 }
-function uploadFilesFromFolderInput(files) {
+export function uploadFilesFromFolderInput(files) {
     var items = [];
     for (var i = 0; i < files.length; i++) {
         var file = files[i];
@@ -83,14 +81,14 @@ function uploadFilesFromFolderInput(files) {
 }
 
 // ─── Drag and drop ───
-function onDragOver(e) { e.preventDefault(); }
-function onDragEnter(e) {
+export function onDragOver(e) { e.preventDefault(); }
+export function onDragEnter(e) {
     e.preventDefault();
     dragCounter++;
     var overlay = document.querySelector('[data-drop-zone] > .drop-overlay');
     if (overlay && dragCounter === 1) overlay.classList.remove('hidden');
 }
-function onDragLeave(e) {
+export function onDragLeave(e) {
     e.preventDefault();
     dragCounter--;
     if (dragCounter <= 0) {
@@ -99,7 +97,7 @@ function onDragLeave(e) {
         if (overlay) overlay.classList.add('hidden');
     }
 }
-function onDrop(e) {
+export function onDrop(e) {
     e.preventDefault();
     dragCounter = 0;
     var overlay = document.querySelector('[data-drop-zone] > .drop-overlay');
@@ -117,7 +115,7 @@ function onDrop(e) {
     }
 }
 
-async function collectAndUploadEntries(entries) {
+export async function collectAndUploadEntries(entries) {
     var items = [];
     for (var i = 0; i < entries.length; i++) {
         var collected = await traverseEntry(entries[i], '');
@@ -126,7 +124,7 @@ async function collectAndUploadEntries(entries) {
     if (items.length > 0) addToQueue(items);
 }
 
-async function traverseEntry(entry, parentPath) {
+export async function traverseEntry(entry, parentPath) {
     var results = [];
     if (!entry) return results;
     if (entry.isFile) {
@@ -151,7 +149,7 @@ async function traverseEntry(entry, parentPath) {
 }
 
 // ─── Queue management ───
-function addToQueue(items) {
+export function addToQueue(items) {
     if (items.length === 0) return;
 
     // Reset bitrate tracking on fresh batch
@@ -192,7 +190,7 @@ function addToQueue(items) {
 
 // Fetch upload link token via Seafile API
 // getCookie is provided by common.js (loaded first).
-async function fetchUploadToken(repoId) {
+export async function fetchUploadToken(repoId) {
     try {
         var csrfToken = getCookie('sfcsrftoken');
         var headers = {};
@@ -211,7 +209,7 @@ async function fetchUploadToken(repoId) {
     }
 }
 
-function processQueue() {
+export function processQueue() {
     // Find the first pending item and upload it
     for (var i = 0; i < uploadQueue.length; i++) {
         var item = uploadQueue[i];
@@ -233,7 +231,7 @@ function processQueue() {
     updateProgressDialog();
 }
 
-function uploadItem(item) {
+export function uploadItem(item) {
     // File size check — reject files exceeding server limit before uploading
     if (maxUploadSizeMb > 0 && item.file.size > maxUploadSizeMb * 1024 * 1024) {
         item.state = 'error';
@@ -255,7 +253,7 @@ function uploadItem(item) {
 }
 
 // ─── Direct (single-request) file upload ───
-function uploadFileDirect(item, url) {
+export function uploadFileDirect(item, url) {
     item.state = 'uploading';
     updateProgressDialog();
 
@@ -318,7 +316,7 @@ function uploadFileDirect(item, url) {
 // ─── Chunked (resumable) file upload ───
 
 /** Query the server for how many bytes have already been uploaded. */
-function getUploadedBytes(parentDir, fileName) {
+export function getUploadedBytes(parentDir, fileName) {
     var repoId = window.uploadContext.repoId;
     var url = '/api/v2.1/repos/' + repoId + '/file-uploaded-bytes/'
         + '?parent_dir=' + encodeURIComponent(parentDir)
@@ -331,7 +329,7 @@ function getUploadedBytes(parentDir, fileName) {
 }
 
 /** Upload a file in 8MB chunks with resume support. */
-function uploadFileInChunks(item, url) {
+export function uploadFileInChunks(item, url) {
     item.state = 'uploading';
     updateProgressDialog();
     uploadFileInChunks.tempUrl = url; // hack to avoid passing url through the chain
@@ -354,7 +352,7 @@ function uploadFileInChunks(item, url) {
 }
 
 /** Send the next pending chunk.  Recurse until done. */
-function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
+export function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
     retryCount = retryCount || 0;
     var file = item.file;
     var start = chunkIndex * CHUNK_SIZE;
@@ -426,7 +424,7 @@ function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
 }
 
 /** Retry logic for a failed chunk. */
-function handleChunkError(item, chunkIndex, totalChunks, retryCount) {
+export function handleChunkError(item, chunkIndex, totalChunks, retryCount) {
     if (retryCount < MAX_CHUNK_RETRIES) {
         var delay = 1000 * (retryCount + 1);
         setTimeout(function () {
@@ -442,7 +440,7 @@ function handleChunkError(item, chunkIndex, totalChunks, retryCount) {
 }
 
 // ─── Bitrate calculation ───
-function updateBitrate(loaded) {
+export function updateBitrate(loaded) {
     var now = new Date().getTime();
     if (bitrateTimestamp) {
         var timeDiff = now - bitrateTimestamp;
@@ -458,14 +456,14 @@ function updateBitrate(loaded) {
     }
 }
 
-function formatBitrate(bytesPerSec) {
+export function formatBitrate(bytesPerSec) {
     if (!bytesPerSec || bytesPerSec <= 0) return '';
     if (bytesPerSec >= 1000 * 1000) return (bytesPerSec / (1000 * 1000)).toFixed(1) + ' MB/s';
     if (bytesPerSec >= 1000) return (bytesPerSec / 1000).toFixed(1) + ' KB/s';
     return Math.round(bytesPerSec) + ' B/s';
 }
 
-function formatFileSize(size) {
+export function formatFileSize(size) {
     if (typeof size !== 'number') return '';
     if (size >= 1000 * 1000 * 1000) return (size / (1000 * 1000 * 1000)).toFixed(1) + ' GB';
     if (size >= 1000 * 1000) return (size / (1000 * 1000)).toFixed(1) + ' MB';
@@ -476,7 +474,7 @@ function formatFileSize(size) {
 // ─── Queue actions (per-file) ───
 
 /** Cancel a file — if uploading, abort XHR; mark as cancelled. */
-function cancelUploadItem(id) {
+export function cancelUploadItem(id) {
     var item = uploadQueue.find(function (item) { return item.id === id; });
     if (!item || item.state === 'completed' || item.state === 'cancelled') return;
     if (item.state === 'uploading' && item.xhr) {
@@ -491,7 +489,7 @@ function cancelUploadItem(id) {
 }
 
 /** Pause an actively uploading file. */
-function pauseUploadItem(id) {
+export function pauseUploadItem(id) {
     var item = uploadQueue.find(function (item) { return item.id === id; });
     if (!item || item.state !== 'uploading') return;
     if (item.xhr) item.xhr.abort();
@@ -503,7 +501,7 @@ function pauseUploadItem(id) {
 }
 
 /** Resume a paused file. */
-function resumeUploadItem(id) {
+export function resumeUploadItem(id) {
     var item = uploadQueue.find(function (item) { return item.id === id; });
     if (!item || item.state !== 'paused') return;
     item.state = 'pending';
@@ -514,7 +512,7 @@ function resumeUploadItem(id) {
 }
 
 /** Retry a failed or cancelled file. */
-function retryUploadItem(id) {
+export function retryUploadItem(id) {
     var item = uploadQueue.find(function (item) { return item.id === id; });
     if (!item || (item.state !== 'error' && item.state !== 'cancelled')) return;
     item.state = 'pending';
@@ -527,7 +525,7 @@ function retryUploadItem(id) {
 
 // ─── Bulk queue actions ───
 
-function pauseAllUploads() {
+export function pauseAllUploads() {
     isUploadPaused = true;
     uploadQueue.forEach(function (item) {
         if (item.state === 'uploading') {
@@ -539,7 +537,7 @@ function pauseAllUploads() {
     updateProgressDialog();
 }
 
-function resumeAllUploads() {
+export function resumeAllUploads() {
     isUploadPaused = false;
     // Resume all paused items
     uploadQueue.forEach(function (item) {
@@ -551,7 +549,7 @@ function resumeAllUploads() {
     processQueue();
 }
 
-function cancelAllPending() {
+export function cancelAllPending() {
     uploadQueue.forEach(function (item) {
         if (item.state === 'uploading') {
             if (item.xhr) item.xhr.abort();
@@ -565,7 +563,7 @@ function cancelAllPending() {
     processQueue();
 }
 
-function retryAllFailed() {
+export function retryAllFailed() {
     uploadQueue.forEach(function (item) {
         if (item.state === 'error' || item.state === 'cancelled') {
             item.state = 'pending';
@@ -580,14 +578,14 @@ function retryAllFailed() {
 
 // ─── Progress Dialog ───
 
-function showProgressDialog() {
+export function showProgressDialog() {
     isUploadDialogOpen = true;
     var dialog = document.getElementById('upload-dialog');
     dialog.classList.remove('hidden');
     updateProgressDialog();
 }
 
-function closeProgressDialog() {
+export function closeProgressDialog() {
     var hasActive = uploadQueue.some(function (item) {
         return item.state === 'uploading' || item.state === 'pending' || item.state === 'paused';
     });
@@ -602,7 +600,7 @@ function closeProgressDialog() {
     uploadIdCounter = 0;
 }
 
-function toggleMinimize() {
+export function toggleMinimize() {
     isDialogMinimized = !isDialogMinimized;
     var dialog = document.getElementById('upload-dialog');
     dialog.classList.toggle('upload-dialog--minimized', isDialogMinimized);
@@ -610,7 +608,7 @@ function toggleMinimize() {
     if (btn) btn.textContent = isDialogMinimized ? '□' : '−';
 }
 
-function updateProgressDialog() {
+export function updateProgressDialog() {
     var dialog = document.getElementById('upload-dialog');
     if (!dialog) return;
 
@@ -782,15 +780,15 @@ function updateProgressDialog() {
 }
 
 // ─── New Folder Dialog ───
-function showNewFolderDialog() {
+export function showNewFolderDialog() {
     document.getElementById('new-folder-overlay').classList.remove('hidden');
     document.getElementById('new-folder-input').focus();
 }
-function hideNewFolderDialog() {
+export function hideNewFolderDialog() {
     document.getElementById('new-folder-overlay').classList.add('hidden');
     document.getElementById('new-folder-input').value = '';
 }
-function submitNewFolder(form) {
+export function submitNewFolder(form) {
     var name = document.getElementById('new-folder-input').value.trim();
     if (!name) return false;
     var currentDir = form.querySelector('[name="current_dir"]').value;
@@ -810,64 +808,15 @@ function submitNewFolder(form) {
         body: JSON.stringify({ p: p }),
     }).then(function (resp) {
         if (resp.ok) {
-            window.Toast.success(__t('fb.folder_created', { name: name }));
-            if (typeof refreshFileList === 'function') refreshFileList();
-            else window.location.reload();
+            Toast.success(__t('fb.folder_created', { name: name }));
+            refreshFileList();
         } else {
-            resp.text().then(function (t) { window.Toast.error(__t('fb.failed_prefix') + t); });
+            resp.text().then(function (t) { Toast.error(__t('fb.failed_prefix') + t); });
         }
     }).catch(function () {
-        window.Toast.error(__t('fb.network_error_folder'));
+        Toast.error(__t('fb.network_error_folder'));
     });
 
     return false;
 }
 
-// ─── Small helpers ───
-// escapeHtml / escapeAttr are provided by common.js (loaded first).
-
-// ─── Partial refresh ───
-async function refreshFileList() {
-    // Render all three views (view=all) so view switching stays a pure
-    // client-side toggle after a mutation. The _viewRefreshing counter
-    // suppresses pagination while a refresh is in flight so the infinite-scroll
-    // observer doesn't load page 2 into the soon-to-be-replaced DOM.
-    window._viewRefreshing = (window._viewRefreshing || 0) + 1;
-    var url = window.location.pathname;
-    var sep = url.indexOf('?') !== -1 ? '&' : '?';
-    url = url + sep + 'partial=1&view=all';
-    var sort = (typeof window.getSort === "function") ? window.getSort() : null;
-    if (sort) {
-        url += '&sort=' + sort.sort + '&sort_order=' + sort.sort_order;
-    }
-    var tag = (typeof window.getTagFilter === "function") ? window.getTagFilter() : "";
-    if (tag) {
-        url += '&tag=' + encodeURIComponent(tag);
-    }
-    try {
-        var resp = await fetch(url);
-        if (resp.ok) {
-            var html = await resp.text();
-            var container = document.querySelector('.file-list-container');
-            if (container) {
-                container.outerHTML = html;
-                if (typeof window.setMode === "function") window.setMode(localStorage.getItem("fileViewMode") || "list");
-                if (typeof window.initSortUI === "function") window.initSortUI();
-                if (typeof window.initInfiniteScroll === "function") window.initInfiniteScroll();
-                // A full refresh replaces the list with page 1 — start at the top so
-                // the user isn't dropped at the bottom of the re-sorted/reloaded list
-                // (which used to trigger an immediate load-more of page 2).
-                var mainEl = document.querySelector("main");
-                if (mainEl) mainEl.scrollTop = 0;
-            } else {
-                window.location.reload();
-            }
-        } else {
-            window.location.reload();
-        }
-    } catch (_) {
-        window.location.reload();
-    } finally {
-        window._viewRefreshing = Math.max(0, (window._viewRefreshing || 1) - 1);
-    }
-}
