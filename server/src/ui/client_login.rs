@@ -144,8 +144,15 @@ pub async fn client_token_login(
 
 /// Resolve the `next` URL to redirect to.
 /// Falls back to /libraries/ for invalid or unsafe URLs.
-fn resolve_next(next: Option<&str>) -> String {
-    const SAFE_PREFIXES: &[&str] = &["/libraries/", "/shares/", "/settings/", "/search/"];
+pub(crate) fn resolve_next(next: Option<&str>) -> String {
+    const SAFE_PREFIXES: &[&str] = &[
+        "/libraries/",
+        "/shares/",
+        "/settings/",
+        "/search/",
+        // SSO confirm page (browser bounce after login).
+        "/client-sso/",
+    ];
 
     match next {
         Some(url) if url.starts_with('/') => {

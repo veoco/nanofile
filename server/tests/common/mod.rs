@@ -59,13 +59,19 @@ impl TestServer {
     /// Start a server with a specific `webdav_enabled` setting (for testing
     /// the WebDAV global switch).
     pub async fn start_with_webdav_enabled(webdav_enabled: bool) -> Self {
-        Self::start_full(false, false, 30, 90, webdav_enabled, false).await
+        Self::start_full(false, false, 30, 90, webdav_enabled, false, true).await
     }
 
     /// Start a server with the email backend enabled (for password-reset
     /// integration tests; the full flow mints a token).
     pub async fn start_with_email_enabled() -> Self {
-        Self::start_full(false, false, 30, 90, true, true).await
+        Self::start_full(false, false, 30, 90, true, true, true).await
+    }
+
+    /// Start a server with a specific `sso_enabled` setting (for testing the
+    /// SSO feature gate and server-info advertisement).
+    pub async fn start_with_sso_enabled(sso_enabled: bool) -> Self {
+        Self::start_full(false, false, 30, 90, true, false, sso_enabled).await
     }
 
     async fn start_with_config(
@@ -81,6 +87,7 @@ impl TestServer {
             client_timeout,
             true,
             false,
+            true,
         )
         .await
     }
@@ -92,6 +99,7 @@ impl TestServer {
         client_timeout: u64,
         webdav_enabled: bool,
         email_enabled: bool,
+        sso_enabled: bool,
     ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -118,6 +126,7 @@ impl TestServer {
                 cors_max_age_secs: 86400,
                 secret_key: String::new(),
                 webdav_enabled,
+                sso_enabled,
                 trusted_proxies: vec![],
             },
             database: infra::config::DatabaseConfig {

@@ -20,25 +20,22 @@ pub struct ServerInfoResponse {
 /// Used by all clients (desktop, mobile) on login to determine capabilities.
 /// Public endpoint — no authentication required (matches original seahub).
 pub async fn server_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut features = vec![
+        "seafile-basic".to_string(),
+        "seafile-pro".to_string(),
+        "file-search".to_string(),
+        "wiki".to_string(),
+    ];
+    // Advertise the local-browser SSO flow only when the server-side feature
+    // is enabled (mirrors seahub's CLIENT_SSO_VIA_LOCAL_BROWSER setting).
+    if state.config.server.sso_enabled {
+        features.push("client-sso-via-local-browser".to_string());
+    }
+
     let response = ServerInfoResponse {
         version: state.config.server.version.clone(),
         encrypted_library_version: 3,
-        // Official feature strings recognized by the clients (see seahub's
-        // ServerInfoView). `file-search` gates the search tab in both clients.
-        //
-        // `client-sso-via-local-browser` is intentionally NOT advertised: the
-        // local-browser SSO flow is not yet wire-compatible with the official
-        // clients (the browser pages `/client-sso/{token}/` and
-        // `/client-sso/{token}/complete/` are missing and the poll response
-        // differs — see handler/sso.rs). Advertising it would make desktop
-        // clients enter a broken SSO flow instead of falling back to normal
-        // login, so it stays off until the flow is actually implemented.
-        features: vec![
-            "seafile-basic".to_string(),
-            "seafile-pro".to_string(),
-            "file-search".to_string(),
-            "wiki".to_string(),
-        ],
+        features,
     };
 
     (StatusCode::OK, Json(response))

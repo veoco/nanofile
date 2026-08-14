@@ -123,6 +123,12 @@ pub struct ServerConfig {
     /// When false, all WebDAV requests return 403.
     #[serde(default = "default_true")]
     pub webdav_enabled: bool,
+    /// Whether the SSO local-browser login flow is enabled.
+    /// When false, the `/client-sso/{token}/` browser pages return an error and
+    /// `client-sso-via-local-browser` is not advertised in `/api2/server-info/`.
+    /// Env: NANOFILE_SERVER_SSO_ENABLED
+    #[serde(default = "default_true")]
+    pub sso_enabled: bool,
     /// IP addresses of trusted reverse proxies. The `X-Forwarded-For` header is
     /// only honored for rate limiting when the TCP peer is one of these. When
     /// empty (default) rate limiting uses the raw TCP peer address, so clients
@@ -439,6 +445,7 @@ impl Config {
         env_path!("NANOFILE_INDEX_INDEX_DIR", self.index.index_dir);
         env_parse!("NANOFILE_CORS_MAX_AGE_SECS", self.server.cors_max_age_secs);
         env_parse!("NANOFILE_SERVER_WEBDAV_ENABLED", self.server.webdav_enabled);
+        env_parse!("NANOFILE_SERVER_SSO_ENABLED", self.server.sso_enabled);
         env_parse!("NANOFILE_EMAIL_ENABLED", self.email.enabled);
         env_str!("NANOFILE_UI_DEFAULT_LANGUAGE", self.ui.default_language);
 

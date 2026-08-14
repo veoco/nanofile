@@ -2,7 +2,7 @@
 use askama::Template;
 use axum::{
     Form,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
 };
@@ -17,6 +17,7 @@ use crate::service::auth::password_reset::PasswordResetService;
 use crate::service::auth::registration::{RegistrationParams, RegistrationService};
 use crate::service::auth::token::generate_api_token;
 use crate::service::auth::totp::TotpManager;
+use crate::ui::client_login::resolve_next;
 use base::error::AppError;
 
 // ─── Templates ───────────────────────────────────────────────────────────────
@@ -33,6 +34,8 @@ pub struct LoginTemplate {
     pub remember_days: u64,
     /// Whether password reset is enabled (show/hide "Forgot password?" link).
     pub enable_password_reset: bool,
+    /// URL to redirect to after login (kept as a hidden form field).
+    pub next: String,
 }
 
 /// Template shared with two_factor.rs for the TOTP entry page.
@@ -42,9 +45,18 @@ pub struct TwoFactorLoginTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub t: &'static I18n,
     pub error: Option<String>,
+    /// URL to redirect to after 2FA verification.
+    pub next: String,
 }
 
 // ─── Request types ───────────────────────────────────────────────────────────
+
+/// `?next=` query parameter carried on the login pages (e.g. the SSO
+/// local-browser bounce, which redirects to `/accounts/login/?next=...`).
+#[derive(Deserialize)]
+pub struct LoginNextQuery {
+    pub next: Option<String>,
+}
 
 #[derive(Deserialize)]
 pub struct LoginForm {
@@ -52,11 +64,15 @@ pub struct LoginForm {
     pub password: String,
     /// "1" if the "Remember me" checkbox was checked.
     pub remember_me: Option<String>,
+    /// Hidden form field echoing the original `?next=` query value.
+    pub next: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct TwoFactorAuthForm {
     pub code: String,
+    /// Hidden form field echoing the original `?next=` query value.
+    pub next: Option<String>,
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -65,6 +81,7 @@ pub struct TwoFactorAuthForm {
 pub async fn login_page(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Query(query): Query<LoginNextQuery>,
 ) -> Result<Html<String>, AppError> {
     let tpl = LoginTemplate {
         urls: crate::static_assets::template_urls(),
@@ -72,6 +89,7 @@ pub async fn login_page(
         error: None,
         remember_days: state.config.auth.api_token_ttl_days,
         enable_password_reset: state.config.auth.enable_password_reset,
+        next: query.next.unwrap_or_default(),
     };
     let html = tpl
         .render()
@@ -123,6 +141,7 @@ async fn render_login_page(
     state: &Arc<AppState>,
     headers: &HeaderMap,
     error: Option<String>,
+    next: &str,
 ) -> Result<Html<String>, AppError> {
     let tpl = LoginTemplate {
         urls: crate::static_assets::template_urls(),
@@ -130,6 +149,7 @@ async fn render_login_page(
         error,
         remember_days: state.config.auth.api_token_ttl_days,
         enable_password_reset: state.config.auth.enable_password_reset,
+        next: next.to_string(),
     };
     let html = tpl
         .render()
@@ -142,8 +162,13 @@ pub async fn login(
     State(state): State<Arc<AppState>>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
+    Query(query): Query<LoginNextQuery>,
     Form(form): Form<LoginForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    // The hidden `next` form field carries the original `?next=` query value.
+    // Fall back to the query itself for clients that post without the field.
+    let next = resolve_next(form.next.as_deref().or(query.next.as_deref()));
+
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
@@ -155,6 +180,7 @@ pub async fn login(
                     .tr("auth.invalid_origin")
                     .to_string(),
             ),
+            &next,
         )
         .await
         .map(|html| (StatusCode::FORBIDDEN, Html(html)).into_response());
@@ -187,6 +213,7 @@ pub async fn login(
                     .tr("auth.too_many_attempts")
                     .to_string(),
             ),
+            &next,
         )
         .await
         .map(|html| (StatusCode::TOO_MANY_REQUESTS, Html(html)).into_response());
@@ -207,6 +234,7 @@ pub async fn login(
                         .tr("auth.incorrect_credentials")
                         .to_string(),
                 ),
+                &next,
             )
             .await
             .map(|html| (StatusCode::OK, Html(html)).into_response());
@@ -227,6 +255,7 @@ pub async fn login(
                     .tr("auth.incorrect_credentials")
                     .to_string(),
             ),
+            &next,
         )
         .await
         .map(|html| (StatusCode::OK, Html(html)).into_response());
@@ -251,6 +280,7 @@ pub async fn login(
                     .tr("auth.incorrect_credentials")
                     .to_string(),
             ),
+            &next,
         )
         .await
         .map(|html| (StatusCode::OK, Html(html)).into_response());
@@ -275,12 +305,16 @@ pub async fn login(
             state.config.server.secure_cookies(),
         );
 
+        // Thread the `next` URL through the 2FA step so the user still lands
+        // on the original destination (e.g. the SSO confirm page) after TOTP.
+        let encoded_next: String =
+            percent_encoding::utf8_percent_encode(&next, percent_encoding::NON_ALPHANUMERIC)
+                .collect();
+        let two_fa_location = format!("/accounts/two-factor-auth/?next={encoded_next}");
+
         let response = (
             StatusCode::FOUND,
-            [
-                ("Location", "/accounts/two-factor-auth/"),
-                ("Set-Cookie", &cookie),
-            ],
+            [("Location", &two_fa_location), ("Set-Cookie", &cookie)],
         )
             .into_response();
 
@@ -352,7 +386,8 @@ pub async fn login(
     let mut resp_headers = axum::http::HeaderMap::new();
     resp_headers.insert(
         axum::http::header::LOCATION,
-        axum::http::HeaderValue::from_static("/libraries/"),
+        axum::http::HeaderValue::from_str(&next)
+            .map_err(|_| AppError::internal("Failed to create location header"))?,
     );
     resp_headers.append(
         axum::http::header::SET_COOKIE,
@@ -376,11 +411,13 @@ pub async fn login(
 pub async fn two_factor_auth_page(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Query(query): Query<LoginNextQuery>,
 ) -> Result<Html<String>, AppError> {
     let tpl = TwoFactorLoginTemplate {
         urls: crate::static_assets::template_urls(),
         t: I18n::from_headers(&headers, &state.config.ui.default_language),
         error: None,
+        next: query.next.unwrap_or_default(),
     };
     let html = tpl
         .render()
@@ -393,8 +430,12 @@ pub async fn two_factor_auth(
     State(state): State<Arc<AppState>>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
+    Query(query): Query<LoginNextQuery>,
     Form(form): Form<TwoFactorAuthForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    // The hidden `next` field carries the value from the pending 2FA redirect.
+    let next = resolve_next(form.next.as_deref().or(query.next.as_deref()));
+
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
@@ -525,6 +566,7 @@ pub async fn two_factor_auth(
                     .tr("auth.invalid_code")
                     .to_string(),
             ),
+            next: next.clone(),
         };
         let html = tpl
             .render()
@@ -582,7 +624,8 @@ pub async fn two_factor_auth(
     let mut resp_headers = ::axum::http::HeaderMap::new();
     resp_headers.insert(
         ::axum::http::header::LOCATION,
-        ::axum::http::HeaderValue::from_static("/libraries/"),
+        ::axum::http::HeaderValue::from_str(&next)
+            .map_err(|_| AppError::internal("Failed to create location header"))?,
     );
     resp_headers.append(
         ::axum::http::header::SET_COOKIE,

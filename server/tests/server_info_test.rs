@@ -41,11 +41,28 @@ async fn test_server_info_features_are_official() {
         features.iter().any(|f| f == "file-search"),
         "search must be advertised as file-search"
     );
-    // The local-browser SSO flow is not wire-compatible yet, so it must NOT be
-    // advertised — otherwise desktop clients enter a broken SSO flow.
+    // The local-browser SSO flow is implemented and enabled by default, so the
+    // feature must be advertised — desktop/mobile clients use it to show the
+    // SSO login entry.
+    assert!(
+        features.iter().any(|f| f == "client-sso-via-local-browser"),
+        "client-sso-via-local-browser should be advertised when sso_enabled"
+    );
+}
+
+#[tokio::test]
+async fn test_server_info_sso_feature_gated_off() {
+    let server = common::TestServer::start_with_sso_enabled(false).await;
+    let client = server.client();
+
+    let resp = client.get("/api2/server-info/", None).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let features = body["features"].as_array().unwrap();
     assert!(
         !features.iter().any(|f| f == "client-sso-via-local-browser"),
-        "client-sso-via-local-browser must not be advertised until the SSO flow is implemented"
+        "client-sso-via-local-browser must not be advertised when sso_enabled=false"
     );
 }
 

@@ -18,6 +18,12 @@ pub struct Model {
     #[sea_orm(not_null)]
     pub created_at: i64,
     pub expires_at: Option<i64>,
+    /// Unix timestamp when the browser first opened `/client-sso/{token}/`.
+    /// The seahub-compatible soft timeout (300s) is measured from here.
+    pub accessed_at: Option<i64>,
+    /// Desktop client version (from `shib_client_version`) for device-bound
+    /// API-token creation on completion.
+    pub client_version: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

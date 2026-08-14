@@ -12,6 +12,7 @@ pub mod repos;
 pub mod search;
 pub mod settings;
 pub mod shares;
+pub mod sso;
 pub mod starred;
 pub mod sysadmin;
 pub mod trash;
@@ -63,6 +64,12 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         )
         // Client-login — auto-login from desktop client
         .route("/client-login/", get(client_login::client_token_login))
+        // SSO local-browser — browser entry + confirm pages
+        .route("/client-sso/{token}/", get(sso::client_sso))
+        .route(
+            "/client-sso/{token}/complete/",
+            get(sso::client_sso_complete_page).post(sso::client_sso_complete),
+        )
         // Libraries — root redirect and listing (GET only)
         .route(
             "/",

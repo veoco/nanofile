@@ -60,6 +60,7 @@ migrations!(
     m20260814_000001_add_repo_type,
     m20260814_000002_drop_wikis,
     m20260814_000003_create_wiki2_publish,
+    m20260814_000004_add_sso_accessed_at,
 );
 
 #[cfg(test)]

@@ -38,6 +38,10 @@
                class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 text-center text-lg tracking-widest text-gray-900 dark:text-gray-100 dark:bg-surface-700  placeholder:text-gray-300 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm">
     </div>
 
+    {% if !next.is_empty() %}
+    <input type="hidden" name="next" value="{{ next }}">
+    {% endif %}
+
     <button type="submit"
             class="flex w-full justify-center rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white  transition hover:bg-brand-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500">
         {{ t.tr("auth.verify") }}

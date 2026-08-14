@@ -263,7 +263,10 @@ impl AppState {
     }
 
     pub fn sso_service(&self) -> crate::service::auth::sso::SsoService {
-        crate::service::auth::sso::SsoService::new(self.repos.clone())
+        crate::service::auth::sso::SsoService::new(
+            self.repos.clone(),
+            self.config.auth.api_token_ttl_days,
+        )
     }
 
     pub fn two_factor_service(&self) -> crate::service::auth::two_factor::TwoFactorService {

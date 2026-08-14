@@ -9,6 +9,7 @@
 #   NANOFILE_CORS_ALLOWED_ORIGINS           (comma-separated)
 #   NANOFILE_CORS_MAX_AGE_SECS
 #   NANOFILE_SERVER_WEBDAV_ENABLED
+#   NANOFILE_SERVER_SSO_ENABLED
 addr = "0.0.0.0"
 # Seafile-compatible version advertised to clients via /api2/server-info/.
 # Clients parse the major/minor/patch numbers to gate feature availability.
@@ -26,6 +27,8 @@ request_timeout_secs = 600
 cors_allowed_origins = []
 cors_max_age_secs = 86400
 webdav_enabled = true
+# SSO local-browser login flow (client-sso-via-local-browser feature).
+sso_enabled = true
 # IPs of trusted reverse proxies (comma-separated). X-Forwarded-For is only
 # honored for rate limiting when the TCP peer is one of these. Keep empty when
 # the server is exposed directly.
