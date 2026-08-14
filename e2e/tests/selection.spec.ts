@@ -60,13 +60,10 @@ test("shift-click selects a range", async ({ page }) => {
   await expect(page.locator(".js-selection-count")).toHaveText("4");
 });
 
-test("select-all selects every row; deselect-all clears", async ({ page }) => {
+test("select-all selects every row and deselects on second click", async ({ page }) => {
   await page.locator("#js-select-all-btn").click();
   await expect(page.locator(".js-selection-count")).toHaveText("5");
-  // NOTE: the select-all button's "deselect on second click" branch is broken
-  // (it counts hidden grid/gallery rows, so the sizes never match). Deselect
-  // via the dedicated .js-deselect-all control instead.
-  await page.locator(".js-deselect-all").click();
+  await page.locator("#js-select-all-btn").click();
   await expect(page.locator(".js-entry-row.selected")).toHaveCount(0);
 });
 

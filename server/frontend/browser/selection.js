@@ -62,6 +62,23 @@ function applySelectionToDom() {
   });
 }
 
+// Return the .js-entry-row elements in the currently visible view(s). Select
+// All must count only these rows — the hidden grid/gallery views render the
+// same entries again, so counting all views breaks the "deselect on second
+// click" branch (the selected set is deduplicated but the row count isn't).
+function getVisibleRows() {
+  var rows = [];
+  var visViews = document.querySelectorAll(
+    ".js-file-list-view:not(.hidden), .js-file-grid-view:not(.hidden), .js-gallery-view:not(.hidden)"
+  );
+  visViews.forEach(function (view) {
+    view.querySelectorAll(".js-entry-row").forEach(function (row) {
+      rows.push(row);
+    });
+  });
+  return rows;
+}
+
 function updateSelectionBar() {
   // Auto-clear stale selection (e.g. after partial refresh)
   if (selState.selected.size > 0) {
@@ -87,8 +104,8 @@ function updateSelectionBar() {
   // Update Select All button text
   var selBtn = document.getElementById("js-select-all-btn");
   if (selBtn) {
-    var totalRows = document.querySelectorAll(".js-entry-row").length;
-    selBtn.textContent = selState.selected.size === totalRows ? __t('ui.deselect_all') : __t('ui.select_all');
+    var visibleRows = getVisibleRows().length;
+    selBtn.textContent = selState.selected.size === visibleRows ? __t('ui.deselect_all') : __t('ui.select_all');
   }
 }
 
@@ -214,14 +231,14 @@ document.addEventListener("click", function (e) {
   var btn = e.target.closest("#js-select-all-btn");
   if (!btn) return;
 
-  var totalRows = document.querySelectorAll(".js-entry-row");
-  if (selState.selected.size === totalRows.length) {
+  var visibleRows = getVisibleRows();
+  if (selState.selected.size === visibleRows.length) {
     // Deselect all
     clearSelection();
   } else {
     // Select all
     var names = [];
-    totalRows.forEach(function (row) {
+    visibleRows.forEach(function (row) {
       if (row.dataset.name) names.push(row.dataset.name);
     });
     selState = reduceSelection(selState, { type: "selectAll", names: names });
