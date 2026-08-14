@@ -150,10 +150,13 @@ impl CommitRepository for DbCommitRepository {
         if ids.is_empty() {
             return Ok(());
         }
-        commit::Entity::delete_many()
-            .filter(commit::Column::Id.is_in(ids))
-            .exec(self.db.as_ref())
-            .await?;
+        const IN_BATCH: usize = 500;
+        for chunk in ids.chunks(IN_BATCH) {
+            commit::Entity::delete_many()
+                .filter(commit::Column::Id.is_in(chunk.to_vec()))
+                .exec(self.db.as_ref())
+                .await?;
+        }
         Ok(())
     }
 }

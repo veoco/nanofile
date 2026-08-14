@@ -64,6 +64,8 @@ migrations!(
     m20260814_000005_add_query_indexes,
     m20260814_000006_drop_sdoc_comments,
     m20260814_000007_add_more_query_indexes,
+    m20260814_000008_add_remaining_indexes,
+    m20260814_000009_drop_dir_entries,
 );
 
 #[cfg(test)]

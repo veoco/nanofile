@@ -154,10 +154,13 @@ impl FsObjectRepository for DbFsObjectRepository {
         if ids.is_empty() {
             return Ok(());
         }
-        fs_object::Entity::delete_many()
-            .filter(fs_object::Column::Id.is_in(ids))
-            .exec(self.db.as_ref())
-            .await?;
+        const IN_BATCH: usize = 500;
+        for chunk in ids.chunks(IN_BATCH) {
+            fs_object::Entity::delete_many()
+                .filter(fs_object::Column::Id.is_in(chunk.to_vec()))
+                .exec(self.db.as_ref())
+                .await?;
+        }
         Ok(())
     }
 }
