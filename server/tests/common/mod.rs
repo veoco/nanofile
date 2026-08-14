@@ -35,6 +35,10 @@ pub struct TestServer {
     pub db: Arc<DatabaseConnection>,
     pub repos: Arc<Repositories>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Directories created under `/tmp` for this server (block storage root and
+    /// the full-text index dir). Removed on `Drop` so repeated test runs don't
+    /// leak inodes in the temp filesystem.
+    temp_dirs: Vec<std::path::PathBuf>,
 }
 
 impl TestServer {
@@ -142,6 +146,11 @@ impl TestServer {
         let port = listener.local_addr().unwrap().port();
         let base_url = format!("http://127.0.0.1:{}", port);
 
+        // Temp directories are derived from the random port so each server gets
+        // a unique path; they are cleaned up in `Drop for TestServer`.
+        let block_root = std::env::temp_dir().join(format!("nf-test-{port}"));
+        let index_dir = std::env::temp_dir().join(format!("nf-test-{port}-index"));
+
         let db = sea_orm::Database::connect("sqlite::memory:")
             .await
             .expect("failed to connect to test db");
@@ -177,12 +186,8 @@ impl TestServer {
                 max_connections: 5,
             },
             storage: infra::config::StorageConfig {
-                block_dir: std::env::temp_dir()
-                    .join(format!("nf-test-{}", port))
-                    .join("blocks"),
-                temp_dir: std::env::temp_dir()
-                    .join(format!("nf-test-{}", port))
-                    .join("tmp"),
+                block_dir: block_root.join("blocks"),
+                temp_dir: block_root.join("tmp"),
                 max_storage_bytes: 10_737_418_240,
                 ffmpeg_path: "ffmpeg".to_string(),
             },
@@ -219,7 +224,7 @@ impl TestServer {
             },
             index: infra::config::IndexConfig {
                 enabled: enable_index,
-                index_dir: std::env::temp_dir().join(format!("nf-test-{}-index", port)),
+                index_dir: index_dir.clone(),
             },
             admin_init: Default::default(),
             email: infra::config::EmailConfig {
@@ -292,6 +297,7 @@ impl TestServer {
             db: state.db.clone(),
             repos: state.repos.clone(),
             shutdown_tx: Some(shutdown_tx),
+            temp_dirs: vec![block_root, index_dir],
         }
     }
 
@@ -309,6 +315,11 @@ impl Drop for TestServer {
     fn drop(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
+        }
+        // Clean up the temp directories this server created so repeated test
+        // runs don't accumulate files in /tmp (and exhaust its inodes).
+        for dir in &self.temp_dirs {
+            let _ = std::fs::remove_dir_all(dir);
         }
     }
 }
