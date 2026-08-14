@@ -21,7 +21,7 @@ async fn test_server_info_public() {
 }
 
 #[tokio::test]
-async fn test_server_info_features_include_lock_and_tag() {
+async fn test_server_info_features_are_official() {
     let server = common::TestServer::start().await;
     let client = server.client();
 
@@ -32,22 +32,14 @@ async fn test_server_info_features_include_lock_and_tag() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let features = body["features"].as_array().unwrap();
 
-    // Mobile clients expect these features
+    // These are the feature strings the official clients actually check.
+    for want in ["seafile-basic", "seafile-pro", "file-search", "wiki"] {
+        assert!(features.iter().any(|f| f == want), "{want} feature missing");
+    }
+    // The mobile search tab keys off "file-search", not "search".
     assert!(
-        features.iter().any(|f| f == "file_lock"),
-        "file_lock feature missing"
-    );
-    assert!(
-        features.iter().any(|f| f == "file_tag"),
-        "file_tag feature missing"
-    );
-    assert!(
-        features.iter().any(|f| f == "thumbnail"),
-        "thumbnail feature missing"
-    );
-    assert!(
-        features.iter().any(|f| f == "search"),
-        "search feature missing"
+        features.iter().any(|f| f == "file-search"),
+        "search must be advertised as file-search"
     );
 }
 

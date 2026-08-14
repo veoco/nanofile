@@ -19,15 +19,15 @@ pub async fn server_info() -> impl IntoResponse {
     let response = ServerInfoResponse {
         version: "8.0.0".to_string(),
         encrypted_library_version: 3,
+        // Official feature strings recognized by the clients (see seahub's
+        // ServerInfoView). `file-search` gates the mobile search tab;
+        // `client-sso-via-local-browser` enables the desktop SSO login button.
         features: vec![
             "seafile-basic".to_string(),
             "seafile-pro".to_string(),
-            "file_lock".to_string(),
-            "file_tag".to_string(),
-            "search".to_string(),
-            "thumbnail".to_string(),
-            "description".to_string(),
+            "file-search".to_string(),
             "wiki".to_string(),
+            "client-sso-via-local-browser".to_string(),
         ],
     };
 
