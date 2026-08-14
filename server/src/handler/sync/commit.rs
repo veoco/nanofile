@@ -104,7 +104,7 @@ pub async fn get_commit(
         repo_id: commit_model.repo_id.clone(),
         root_id: commit_model.root_id.clone(),
         creator_name: commit_model.creator_name.clone(),
-        creator: EMPTY_SHA1.to_string(),
+        creator: commit_model.creator.clone(),
         description: commit_model.description.clone(),
         ctime: commit_model.ctime,
         parent_id: commit_model.parent_id.clone(),

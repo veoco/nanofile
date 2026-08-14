@@ -16,6 +16,8 @@ pub struct Model {
     pub second_parent_id: Option<String>,
     #[sea_orm(not_null)]
     pub creator_name: String,
+    #[sea_orm(not_null, length = 40)]
+    pub creator: String,
     #[sea_orm(not_null, default_value = "")]
     pub description: String,
     #[sea_orm(not_null)]

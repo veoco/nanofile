@@ -128,6 +128,7 @@ async fn test_head_commits_multi_with_updates() {
         parent_id: sea_orm::NotSet,
         second_parent_id: sea_orm::NotSet,
         creator_name: sea_orm::Set("test@example.com".to_string()),
+        creator: sea_orm::Set(base::common::EMPTY_SHA1.to_string()),
         description: sea_orm::Set("test commit".to_string()),
         ctime: sea_orm::Set(now),
         version: sea_orm::Set(1),

@@ -41,6 +41,7 @@ async fn insert_commit(
         parent_id: Set(parent_id),
         second_parent_id: sea_orm::NotSet,
         creator_name: Set("test@example.com".to_string()),
+        creator: Set(base::common::EMPTY_SHA1.to_string()),
         description: Set("test commit".to_string()),
         ctime: Set(ctime),
         version: Set(1),

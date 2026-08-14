@@ -98,21 +98,23 @@ pub async fn fs_id_list(
         .await?
         .ok_or_else(|| AppError::NotFound("server commit not found".into()))?;
 
-    if let Some(ref client_head) = query.client_head {
-        if client_head == EMPTY_SHA1 {
-            let result: Vec<String> = svc
-                .collect_fs_ids(&repo_id, &server_root, dir_only)
-                .await?
-                .into_iter()
-                .collect();
-            return Ok(Json(result));
-        }
+    // Resolve the client root when a real client head was provided.
+    let client_root: Option<String> = match query.client_head.as_deref() {
+        Some(head) if head != EMPTY_SHA1 => svc.get_commit_root(&repo_id, head).await?,
+        _ => None,
+    };
 
-        if let Some(client_root) = svc.get_commit_root(&repo_id, client_head).await?
-            && client_root == server_root
-        {
+    if let Some(ref client_root) = client_root {
+        if client_root == &server_root {
             return Ok(Json(vec![]));
         }
+        // Roots differ: send only the server objects the client is missing.
+        let result: Vec<String> = svc
+            .diff_fs_ids(&repo_id, client_root, &server_root, dir_only)
+            .await?
+            .into_iter()
+            .collect();
+        return Ok(Json(result));
     }
 
     let result: Vec<String> = svc

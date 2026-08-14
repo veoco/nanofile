@@ -183,6 +183,7 @@ mod tests {
                 parent_id VARCHAR(40),
                 second_parent_id VARCHAR(40),
                 creator_name VARCHAR(255) NOT NULL,
+                creator VARCHAR(40) NOT NULL DEFAULT '0000000000000000000000000000000000000000',
                 description TEXT NOT NULL DEFAULT '',
                 ctime BIGINT NOT NULL,
                 version TINYINT NOT NULL DEFAULT 1

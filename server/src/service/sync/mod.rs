@@ -6,7 +6,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::indexer::TextIndexer;
 use crate::repository::Repositories;
-use base::common::{EMPTY_SHA1, SEAF_METADATA_TYPE_DIR};
+use base::common::{EMPTY_SHA1, S_IFDIR, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::serialization::pack_fs;
 use infra::storage::DynBlockStorage;
@@ -229,6 +229,88 @@ impl SyncService {
         Ok(result)
     }
 
+    /// Compute the fs_ids the client needs to download: every server-side
+    /// object the client tree is missing or whose id differs. Used by
+    /// `fs-id-list` when the client head differs from the server head so we
+    /// don't return the whole tree (the client dedups locally anyway, so the
+    /// full tree only wastes bandwidth — but the diff keeps the response small).
+    pub async fn diff_fs_ids(
+        &self,
+        repo_id: &str,
+        client_root: &str,
+        server_root: &str,
+        dir_only: bool,
+    ) -> Result<HashSet<String>, AppError> {
+        use crate::fs::core::tree::read_fs_dir_data_batch;
+
+        // Collect client tree: path → object id.
+        let mut client_ids: HashMap<String, String> = HashMap::new();
+        {
+            let mut frontier: Vec<(String, String)> =
+                vec![(client_root.to_string(), String::new())];
+            while !frontier.is_empty() {
+                let ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
+                let dir_map = read_fs_dir_data_batch(&self.repos, repo_id, &ids).await?;
+                let mut next = Vec::new();
+                for (fs_id, prefix) in &frontier {
+                    let Some(dir) = dir_map.get(fs_id) else {
+                        continue;
+                    };
+                    for entry in &dir.dirents {
+                        let path = if prefix.is_empty() {
+                            format!("/{}", entry.name)
+                        } else {
+                            format!("{}/{}", prefix, entry.name)
+                        };
+                        client_ids.insert(path.clone(), entry.id.clone());
+                        if entry.mode & S_IFDIR != 0 {
+                            next.push((entry.id.clone(), path));
+                        }
+                    }
+                }
+                frontier = next;
+            }
+        }
+
+        // Walk the server tree; emit every object the client lacks.
+        let mut result = HashSet::new();
+        // Roots differ, so the server root object itself is always needed.
+        result.insert(server_root.to_string());
+
+        let mut frontier: Vec<(String, String)> = vec![(server_root.to_string(), String::new())];
+        while !frontier.is_empty() {
+            let ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
+            let dir_map = read_fs_dir_data_batch(&self.repos, repo_id, &ids).await?;
+            let mut next = Vec::new();
+            for (fs_id, prefix) in &frontier {
+                let Some(dir) = dir_map.get(fs_id) else {
+                    continue;
+                };
+                for entry in &dir.dirents {
+                    let path = if prefix.is_empty() {
+                        format!("/{}", entry.name)
+                    } else {
+                        format!("{}/{}", prefix, entry.name)
+                    };
+                    let is_dir = entry.mode & S_IFDIR != 0;
+                    // Identical id → identical subtree, skip it entirely.
+                    if client_ids.get(&path).is_some_and(|cid| cid == &entry.id) {
+                        continue;
+                    }
+                    if !dir_only || is_dir {
+                        result.insert(entry.id.clone());
+                    }
+                    if is_dir {
+                        next.push((entry.id.clone(), path));
+                    }
+                }
+            }
+            frontier = next;
+        }
+
+        Ok(result)
+    }
+
     /// Batch fetch FS objects for given fs_ids.
     pub async fn fetch_fs_objects(
         &self,
@@ -289,6 +371,7 @@ impl SyncService {
                     parent_id: data.parent_id.clone(),
                     second_parent_id: data.second_parent_id.clone(),
                     creator_name: data.creator_name.clone(),
+                    creator: data.creator.clone(),
                     description: data.description.clone(),
                     ctime: data.ctime,
                     version: data.version as i8,
