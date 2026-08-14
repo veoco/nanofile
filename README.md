@@ -49,16 +49,36 @@ Nanofile is a Cargo workspace of four crates:
 
 Dependency direction: `base → infra → server` (compile-time enforced); `migration` is used by `server`.
 
+### Web frontend
+
+The UI is server-rendered (Askama) with Tailwind CSS and a modular JavaScript frontend written as
+ES modules:
+
+```
+server/frontend/
+├── core/       # pure functions (i18n, formatting, file-meta, API helpers) — no DOM, unit-testable
+├── browser/    # DOM layer (list, selection, right-panel, operations, upload, view …)
+├── entries/    # esbuild entry points (common.js, file-browser.js)
+```
+
+`server/build.rs` bundles the `entries/` into `static/js/*.bundle.js` (esbuild) and compiles
+`static/css/input.css` into `app.css` (Tailwind), then `rust-embed` embeds both into the binary.
+esbuild is **required**; Tailwind is optional (see [Development](#development)).
+
 ## Quick Start
 
 ```bash
-# Build the server (binary name is `nanofile`, not `server`)
+# 1. Install frontend build dependencies — esbuild is required; Tailwind is
+#    optional but recommended (without it the UI renders unstyled)
+npm install
+
+# 2. Build the server (binary name is `nanofile`, not `server`)
 cargo build --release -p server
 
-# Configure
+# 3. Configure
 cp config.toml .   # edit to suit — see Configuration below
 
-# Run
+# 4. Run
 ./target/release/nanofile
 ```
 
@@ -82,16 +102,16 @@ comment above each key (e.g. `NANOFILE_DATABASE_URL`, `NANOFILE_SERVER_PORT`).
 
 | Section | Purpose |
 |---------|---------|
-| `[server]` | Bind address/port, `site_url` (external URL used for download/share links and cookies — set to your HTTPS domain behind a TLS proxy), max upload size, request timeout, CORS, WebDAV switch, trusted reverse proxies. |
-| `[database]` | SeaORM/SQLite connection URL (default `sqlite:data/nanofile.db?mode=rwc`). |
-| `[storage]` | Block store and temp directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited). |
+| `[server]` | Bind address/port, `site_url` (external URL used for download/share links and cookies — set to your HTTPS domain behind a TLS proxy), max upload size, request timeout, CORS, WebDAV switch, feature switches (`sso_enabled`, `file_search_enabled`, `wiki_enabled`), desktop-client branding (`desktop_custom_brand` / `desktop_custom_logo`), trusted reverse proxies. |
+| `[database]` | SeaORM/SQLite connection URL (default `sqlite:data/nanofile.db?mode=rwc`) and pool size. |
+| `[storage]` | Block store and temp directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited), ffmpeg path for video thumbnails. |
 | `[auth]` | Password hashing cost, token TTLs, login lockout, invitation registration, password policy, rate limits. |
 | `[ui]` | Default UI language (`en` / `zh`). |
 | `[email]` | Master switch for the email backend. Password-reset links are only delivered to the owner's inbox and are never echoed back by the server, so the reset flow stays disabled until an SMTP backend exists. |
 | `[admin_init]` | Optional first-start admin auto-creation. Prefer `NANOFILE_ADMIN_INIT_PASSWORD_FILE` for the password. |
 | `[logging]` | Log level. |
 | `[gc]` | Enable / schedule garbage collection. |
-| `[index]` | Full-text search index directory. |
+| `[index]` | Full-text search switch (`enabled`) and index directory. |
 | `[notification]` | WebSocket notification settings and JWT private key. |
 
 `secret_key` is the single master key: the notification key and CSRF signing key are derived from it.
@@ -121,28 +141,47 @@ data/
 
 ## Development
 
-```bash
-# Run the full test suite (unit + integration, ~40 test files)
-cargo test --workspace
+The frontend build runs as part of `cargo build` (see [Web frontend](#web-frontend)):
 
-# Format & lint checks enforced by CI
+- **esbuild** bundles `frontend/entries/*.js` into `static/js/*.bundle.js`. It is required — the
+  build panics if esbuild is not on `PATH` or in `node_modules/.bin`. Install with `npm install`.
+- **Tailwind** compiles `static/css/input.css` into `app.css`. It is optional — if the Tailwind CLI
+  is unavailable the build still succeeds and the UI renders unstyled.
+
+`build.rs` tracks `frontend/`, `static/css/`, and `templates/` via `rerun-if-changed`, so editing
+frontend source triggers a re-bundle on the next `cargo build`. There is no hot reload — the assets
+are embedded in the binary, so a rebuild is required to pick up frontend changes.
+
+## Testing
+
+Tests are split across three layers:
+
+| Layer | Command | CI job |
+|-------|---------|--------|
+| Rust unit + integration | `cargo test --workspace` | `test` |
+| Frontend unit | `node --test "server/frontend/**/*.test.js"` (zero-dependency `node:test`) | `frontend-test` |
+| Browser end-to-end | `cd e2e && npm install && npx playwright install --with-deps chromium && npx playwright test` | `e2e` |
+
+The Playwright suite boots a real `nanofile` binary against an isolated temporary database and drives
+the UI in Chromium, covering login, selection, view switching, sorting/filtering, upload, file
+operations, sharing, history, preview, tags, and search. Failed runs capture the backend log at
+`e2e/test-results/server.log`.
+
+Formatting and lint checks are also enforced by CI:
+
+```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-The web UI is server-rendered (Askama) with Tailwind CSS and a small amount of vanilla JS, embedded
-into the binary via `rust-embed`. `server/build.rs` runs the Tailwind CLI when available (standalone
-binary or `npx @tailwindcss/cli`); if it's missing, the build still succeeds but the UI renders
-unstyled. Install a Tailwind CLI for a styled interface:
+## CI & Releases
 
-```bash
-curl -sL https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64 \
-  -o server/tailwindcss && chmod +x server/tailwindcss
-```
-
-CI runs formatting, clippy (`-D warnings`), the full test suite, and a release build. Nightly and
-tag-triggered workflows build multi-arch binaries (linux amd64/arm64/loong64 × gnu/musl, macOS,
-Windows) and publish OCI images to `ghcr.io` (`:edge`, `:sha-<sha>`, and `v<X.Y.Z>` tags for releases).
+- **`ci.yml`** (push / PR to `main`, `master`, `develop`): formatting, clippy (`-D warnings`),
+  frontend unit tests, Playwright e2e, and the Rust test suite.
+- **`nightly.yml`** (daily / manual): multi-arch release builds (Linux amd64/arm64/loong64 ×
+  gnu/musl, macOS arm64, Windows amd64) and publishes OCI images to `ghcr.io` (`:edge`, `:sha-<sha>`).
+- **`release.yml`** (tag `v*.*.*` / manual): the same multi-arch builds plus a GitHub release with an
+  auto-generated changelog and versioned images (`:latest`, `:vX.Y.Z`, `:vX.Y`).
 
 ## License
 
