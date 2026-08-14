@@ -956,6 +956,7 @@ pub async fn restore_deleted_repo(
                 repo_version: Set(1i32),
                 history_limit: Set(0),
                 history_ttl_days: Set(0),
+                r#type: Set("repo".to_string()),
             })
             .await?;
     }

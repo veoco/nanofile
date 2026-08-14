@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t.tr("wiki.edit") }} — {{ page_name }} | Nanofile{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("wiki.edit") }} — {{ page_name }}</h1>
+    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ repo_name }}</p>
+
+    <form method="post" action="/wikis/{{ repo_id }}/page/{{ page_id }}/save/" class="mt-6">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <textarea name="content" rows="24"
+                  class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-surface-800 px-3 py-2 font-mono text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  placeholder="Markdown">{{ content }}</textarea>
+        <div class="mt-4 flex items-center gap-3">
+            <button type="submit"
+                    class="inline-flex items-center rounded-lg bg-brand-500 hover:bg-brand-600 px-4 py-2 text-sm font-medium text-white">
+                {{ t.tr("wiki.save") }}
+            </button>
+            <a href="{{ cancel_url }}" class="text-sm text-gray-500 dark:text-gray-400 hover:underline">
+                {{ t.tr("common.cancel") }}
+            </a>
+        </div>
+    </form>
+</div>
+{% endblock %}

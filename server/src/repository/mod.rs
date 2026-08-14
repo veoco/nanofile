@@ -39,7 +39,7 @@ pub mod user_2fa;
 pub mod user_2fa_backup_code;
 pub mod user_contact;
 pub mod webdav_key;
-pub mod wiki;
+pub mod wiki2_publish;
 
 use std::sync::Arc;
 
@@ -78,7 +78,7 @@ use crate::repository::user_2fa::*;
 use crate::repository::user_2fa_backup_code::*;
 use crate::repository::user_contact::*;
 use crate::repository::webdav_key::*;
-use crate::repository::wiki::*;
+use crate::repository::wiki2_publish::*;
 
 use base::error::AppError;
 
@@ -96,7 +96,7 @@ pub struct Repositories {
     pub group: Arc<dyn GroupRepository>,
     pub group_member: Arc<dyn GroupMemberRepository>,
     pub user_contact: Arc<dyn UserContactRepository>,
-    pub wiki: Arc<dyn WikiRepository>,
+    pub wiki2_publish: Arc<dyn Wiki2PublishRepository>,
     pub thumbnail: Arc<dyn ThumbnailRepository>,
     pub avatar: Arc<dyn AvatarRepository>,
     pub invitation_code: Arc<dyn InvitationCodeRepository>,
@@ -141,7 +141,7 @@ impl Repositories {
             group: Arc::new(DbGroupRepository::new(db.clone())),
             group_member: Arc::new(DbGroupMemberRepository::new(db.clone())),
             user_contact: Arc::new(DbUserContactRepository::new(db.clone())),
-            wiki: Arc::new(DbWikiRepository::new(db.clone())),
+            wiki2_publish: Arc::new(DbWiki2PublishRepository::new(db.clone())),
             thumbnail: Arc::new(DbThumbnailRepository::new(db.clone())),
             avatar: Arc::new(DbAvatarRepository::new(db.clone())),
             invitation_code: Arc::new(DbInvitationCodeRepository::new(db.clone())),

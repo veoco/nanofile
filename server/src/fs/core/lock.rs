@@ -178,7 +178,8 @@ mod tests {
                 created_at BIGINT NOT NULL DEFAULT 0,
                 updated_at BIGINT NOT NULL DEFAULT 0,
                 size BIGINT NOT NULL DEFAULT 0,
-                repo_version INTEGER NOT NULL DEFAULT 1
+                repo_version INTEGER NOT NULL DEFAULT 1,
+                type VARCHAR(20) NOT NULL DEFAULT 'repo'
             );
 
             CREATE TABLE commits (

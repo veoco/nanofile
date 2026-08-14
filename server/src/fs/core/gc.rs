@@ -171,7 +171,8 @@ mod tests {
                 size BIGINT NOT NULL DEFAULT 0,
                 repo_version INTEGER NOT NULL DEFAULT 1,
                 history_limit INTEGER NOT NULL DEFAULT 0,
-                history_ttl_days INTEGER NOT NULL DEFAULT 0
+                history_ttl_days INTEGER NOT NULL DEFAULT 0,
+                type VARCHAR(20) NOT NULL DEFAULT 'repo'
             );
 
             CREATE TABLE commits (

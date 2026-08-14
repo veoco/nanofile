@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}{{ repo_name }} | Nanofile{% endblock %}
+
+{% block content %}
+<div class="flex gap-6">
+    <!-- Navigation sidebar -->
+    <nav class="w-64 flex-shrink-0 border-r border-gray-200 dark:border-gray-700 pr-4" aria-label="Wiki navigation">
+        <h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ repo_name }}</h1>
+        {% if !publish_url.is_empty() %}
+        <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("wiki.published") }}</p>
+        {% endif %}
+        <ul class="mt-4 space-y-1 text-sm">
+            {% for item in nav_items %}
+            <li>
+                <a href="/wikis/{{ repo_id }}/?page_id={{ item.id }}"
+                   class="block rounded-lg px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-surface-700/50 {% if item.active %}bg-brand-50 dark:bg-brand-900/30 text-brand-600 dark:text-brand-400 font-medium{% else %}text-gray-700 dark:text-gray-300{% endif %}"
+                   style="padding-left: {{ item.depth * 16 + 8 }}px;">
+                    {{ item.name }}
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+    </nav>
+
+    <!-- Page content -->
+    <article class="flex-1 min-w-0">
+        <header class="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 pb-3 mb-4">
+            <h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100">{{ page_name }}</h2>
+            {% if can_edit %}
+            <a href="/wikis/{{ repo_id }}/page/{{ page_id }}/edit/"
+               class="inline-flex items-center rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-sm font-medium text-white">
+                {{ t.tr("wiki.edit") }}
+            </a>
+            {% endif %}
+        </header>
+        <div class="prose prose-sm max-w-none dark:prose-invert">
+            {{ content_html|safe }}
+        </div>
+    </article>
+</div>
+{% endblock %}

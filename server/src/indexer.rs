@@ -188,6 +188,11 @@ impl TextIndexer {
         filename: &str,
         content: &str,
     ) -> Result<(), AppError> {
+        // Wiki repos' internal storage (`_Internal`, `/wiki-pages`) is
+        // managed via the wiki UI and never surfaced in global search.
+        if crate::service::wiki::is_hidden_wiki_path(fullpath) {
+            return Ok(());
+        }
         let mut writer = self
             .writer
             .lock()

@@ -335,9 +335,14 @@ impl SyncService {
             .await
     }
 
-    /// Check if a repo is a wiki repo.
+    /// Check if a repo is a wiki repo (Seafile wiki2: `repos.type == "wiki"`).
     pub async fn is_wiki_repo(&self, repo_id: &str) -> Result<bool, AppError> {
-        Ok(self.repos.wiki.find_by_repo_id(repo_id).await?.is_some())
+        Ok(self
+            .repos
+            .repo
+            .find_by_id(repo_id)
+            .await?
+            .is_some_and(|r| r.r#type == "wiki"))
     }
 
     /// Check if a parent commit exists (not the null commit).

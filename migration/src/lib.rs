@@ -57,6 +57,9 @@ migrations!(
     m20260806_000002_add_language_to_users,
     m20260806_000003_add_perf_indexes,
     m20260808_000001_create_repo_tags,
+    m20260814_000001_add_repo_type,
+    m20260814_000002_drop_wikis,
+    m20260814_000003_create_wiki2_publish,
 );
 
 #[cfg(test)]

@@ -197,16 +197,39 @@ fn v2_routes() -> Router<Arc<AppState>> {
             "/api/v2.1/groups/",
             get(crate::handler::groups::list_groups_v21),
         )
-        // Wikis
-        .route("/api/v2.1/wikis/", get(crate::handler::wiki::list_wikis))
-        .route("/api/v2.1/wikis2/", get(crate::handler::wiki::list_wikis))
+        // Wikis (Seafile wiki2 — a wiki is a library with type='wiki')
+        .route("/api/v2.1/wikis/", get(crate::handler::wiki::list_wikis_v1))
         .route(
-            "/api/v2.1/wiki2/{wiki_id}/",
+            "/api/v2.1/wikis2/",
+            get(crate::handler::wiki::list_wikis_v2).post(crate::handler::wiki::create_wiki),
+        )
+        .route(
+            "/api/v2.1/wiki2/{repo_id}/",
             put(crate::handler::wiki::rename_wiki).delete(crate::handler::wiki::delete_wiki),
         )
         .route(
-            "/api/v2.1/wiki2/{wiki_id}/publish/",
-            post(crate::handler::wiki::publish_wiki).delete(crate::handler::wiki::unpublish_wiki),
+            "/api/v2.1/wiki2/{repo_id}/publish/",
+            get(crate::handler::wiki::publish_info)
+                .post(crate::handler::wiki::publish_wiki)
+                .delete(crate::handler::wiki::unpublish_wiki),
+        )
+        .route(
+            "/api/v2.1/wiki2/{repo_id}/config/",
+            get(crate::handler::wiki::get_config).put(crate::handler::wiki::update_config),
+        )
+        .route(
+            "/api/v2.1/wiki2/{repo_id}/pages/",
+            post(crate::handler::wiki::create_page).put(crate::handler::wiki::move_page),
+        )
+        .route(
+            "/api/v2.1/wiki2/{repo_id}/page/{page_id}/",
+            get(crate::handler::wiki::get_page)
+                .put(crate::handler::wiki::set_page_locked)
+                .delete(crate::handler::wiki::delete_page),
+        )
+        .route(
+            "/api/v2.1/wiki2/{repo_id}/page/{page_id}/config/",
+            put(crate::handler::wiki::update_page_config),
         )
         // Batch
         .route(

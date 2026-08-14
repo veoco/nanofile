@@ -52,11 +52,13 @@ pub(crate) async fn list_dir_from_fs_tree(
         .await
         .map_err(|e| AppError::NotFound(format!("not a directory: {e}")))?;
 
+    let is_wiki = repo_record.r#type == "wiki";
     Ok((
         dir_id,
         dir_data
             .dirents
             .into_iter()
+            .filter(|d| !is_hidden_wiki_entry(&d.name, path, is_wiki))
             .map(|d| DirEntry {
                 id: d.id,
                 entry_type: if d.mode & S_IFDIR != 0 {
@@ -75,6 +77,19 @@ pub(crate) async fn list_dir_from_fs_tree(
             })
             .collect(),
     ))
+}
+
+/// Whether a directory entry belongs to a wiki repo's internal storage and
+/// must be hidden from the file browser.
+///
+/// `_Internal` is seahub's reserved prefix (hidden in every repo); `/wiki-pages`
+/// holds the raw wiki page files and is only hidden when the repo is actually a
+/// wiki (`is_wiki`), so ordinary libraries named `wiki-pages` stay visible.
+fn is_hidden_wiki_entry(name: &str, parent_path: &str, is_wiki: bool) -> bool {
+    if name == "_Internal" {
+        return true;
+    }
+    is_wiki && parent_path == "/" && name == "wiki-pages"
 }
 
 /// Recursively list all directory entries from the FS object tree.
@@ -530,6 +545,7 @@ impl DirService {
                 permission: "rw".to_string(),
                 created_at: now,
                 updated_at: now,
+                r#type: "repo".to_string(),
             })
             .await?;
 

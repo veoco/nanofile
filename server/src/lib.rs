@@ -14,6 +14,7 @@ pub mod fs;
 pub mod handler;
 pub mod i18n;
 pub mod indexer;
+pub mod markdown;
 pub mod middleware;
 pub mod notification;
 pub mod repository;
@@ -283,6 +284,15 @@ impl AppState {
 
     pub fn sdoc_service(&self) -> crate::service::sdoc::SdocService {
         crate::service::sdoc::SdocService::new(self.repos.clone())
+    }
+
+    pub fn wiki_service(&self) -> crate::service::wiki::WikiService {
+        crate::service::wiki::WikiService::new(
+            self.repos.clone(),
+            self.db.clone(),
+            self.block_store.clone(),
+            self.file_service(),
+        )
     }
 
     pub fn sync_service(&self) -> crate::service::sync::SyncService {

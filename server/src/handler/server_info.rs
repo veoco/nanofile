@@ -27,6 +27,7 @@ pub async fn server_info() -> impl IntoResponse {
             "search".to_string(),
             "thumbnail".to_string(),
             "description".to_string(),
+            "wiki".to_string(),
         ],
     };
 

@@ -205,6 +205,7 @@ impl RepoService {
         enc_version_val: i32,
         magic: Option<String>,
         random_key: Option<String>,
+        repo_type: &str,
     ) -> Result<(RepoInfo, String), AppError> {
         let name = validate_repo_name(name)?;
         let repo_id = repo_id_opt.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -223,6 +224,7 @@ impl RepoService {
             permission: "rw".to_string(),
             created_at: now,
             updated_at: now,
+            r#type: repo_type.to_string(),
         };
         repos.repo.create_repo(params).await?;
 

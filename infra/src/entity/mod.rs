@@ -31,4 +31,4 @@ pub mod user_2fa;
 pub mod user_2fa_backup_code;
 pub mod user_contact;
 pub mod webdav_key;
-pub mod wiki;
+pub mod wiki2_publish;

@@ -47,6 +47,11 @@ async fn route_request(
     webdav_path: String,
     request: Request,
 ) -> Response {
+    // Keep a wiki repo's internal storage (`_Internal`, `/wiki-pages`) out of
+    // WebDAV.
+    if crate::service::wiki::is_hidden_wiki_path(&webdav_path) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let method = request.method().clone();
     let (parts, body) = request.into_parts();
     let headers = parts.headers;

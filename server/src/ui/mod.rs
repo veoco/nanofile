@@ -16,9 +16,10 @@ pub mod starred;
 pub mod sysadmin;
 pub mod trash;
 pub mod two_factor;
+pub mod wiki;
 
 use axum::Router;
-use axum::routing::get;
+use axum::routing::{get, post};
 use std::sync::Arc;
 
 use crate::AppState;
@@ -77,6 +78,16 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route("/libraries/{id}/files", get(files::file_browser_root))
         .route("/libraries/{id}/files/", get(files::file_browser_root))
         .route("/libraries/{id}/files/{*path}", get(files::file_browser))
+        // Wikis — knowledge-base pages (mobile clients load these in a WebView)
+        .route("/wikis/{repo_id}/", get(wiki::wiki_view))
+        .route(
+            "/wikis/{repo_id}/page/{page_id}/edit/",
+            get(wiki::wiki_page_edit),
+        )
+        .route(
+            "/wikis/{repo_id}/page/{page_id}/save/",
+            post(wiki::wiki_page_save),
+        )
         // Shares — page listing (GET only)
         .route("/shares/", get(shares::list_shares))
         .route("/shares/create/", axum::routing::post(shares::create_share))

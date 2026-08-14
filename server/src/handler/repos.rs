@@ -104,6 +104,7 @@ pub async fn create_repo(
         repo_req.enc_version.unwrap_or(0),
         repo_req.magic.clone(),
         repo_req.random_key.clone(),
+        "repo",
     )
     .await?;
 
