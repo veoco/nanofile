@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use base::error::AppError;
@@ -18,6 +19,13 @@ pub trait FsObjectRepository: Send + Sync {
         repo_id: &str,
         fs_ids: &[String],
     ) -> Result<Vec<fs_object::Model>, AppError>;
+    /// Project only `fs_id` for the given ids of a repo, without loading the
+    /// potentially large `data` JSON column. Returns the set of ids that exist.
+    async fn find_existing_fs_ids(
+        &self,
+        repo_id: &str,
+        fs_ids: &[String],
+    ) -> Result<HashSet<String>, AppError>;
     async fn insert_many(&self, models: Vec<fs_object::ActiveModel>) -> Result<(), AppError>;
     /// Get all fs objects of a single repo (used by garbage collection).
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<fs_object::Model>, AppError>;
@@ -76,6 +84,26 @@ impl FsObjectRepository for DbFsObjectRepository {
             .filter(fs_object::Column::FsId.is_in(fs_ids))
             .all(self.db.as_ref())
             .await?)
+    }
+
+    async fn find_existing_fs_ids(
+        &self,
+        repo_id: &str,
+        fs_ids: &[String],
+    ) -> Result<HashSet<String>, AppError> {
+        let mut out = HashSet::new();
+        for chunk in fs_ids.chunks(500) {
+            let found: Vec<(String,)> = fs_object::Entity::find()
+                .select_only()
+                .column(fs_object::Column::FsId)
+                .filter(fs_object::Column::RepoId.eq(repo_id))
+                .filter(fs_object::Column::FsId.is_in(chunk.to_vec()))
+                .into_tuple()
+                .all(self.db.as_ref())
+                .await?;
+            out.extend(found.into_iter().map(|(id,)| id));
+        }
+        Ok(out)
     }
 
     async fn insert_many(&self, models: Vec<fs_object::ActiveModel>) -> Result<(), AppError> {

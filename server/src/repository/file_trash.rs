@@ -32,6 +32,11 @@ pub trait FileTrashRepository: Send + Sync {
         path: &str,
         obj_name: &str,
     ) -> Result<Option<file_trash::Model>, AppError>;
+    async fn find_by_repo_and_commit_id(
+        &self,
+        repo_id: &str,
+        commit_id: &str,
+    ) -> Result<Vec<file_trash::Model>, AppError>;
     async fn delete_by_ids(&self, ids: &[i32]) -> Result<(), AppError>;
     async fn delete_by_repo(&self, repo_id: &str) -> Result<(), AppError>;
     async fn delete_by_repo_before(&self, repo_id: &str, cutoff: i64) -> Result<(), AppError>;
@@ -116,6 +121,18 @@ impl FileTrashRepository for DbFileTrashRepository {
             .filter(file_trash::Column::Path.eq(path))
             .filter(file_trash::Column::ObjName.eq(obj_name))
             .one(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_repo_and_commit_id(
+        &self,
+        repo_id: &str,
+        commit_id: &str,
+    ) -> Result<Vec<file_trash::Model>, AppError> {
+        Ok(file_trash::Entity::find()
+            .filter(file_trash::Column::RepoId.eq(repo_id))
+            .filter(file_trash::Column::CommitId.eq(commit_id))
+            .all(self.db.as_ref())
             .await?)
     }
 

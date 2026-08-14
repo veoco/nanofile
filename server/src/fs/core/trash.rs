@@ -419,72 +419,6 @@ async fn delete_trash_records(repos: &Repositories, ids: &[i32]) -> Result<(), A
     repos.file_trash.delete_by_ids(ids).await
 }
 
-/// Check whether a path exists in the current FS tree (i.e. the resolved
-/// fs_id from the repo's head commit actually exists). `head_root_id` is
-/// resolved once by the caller and passed in to avoid re-fetching the repo and
-/// head commit per item.
-async fn path_exists_in_tree(
-    repos: &Repositories,
-    repo_id: &str,
-    head_root_id: Option<&str>,
-    path: &str,
-) -> Result<bool, AppError> {
-    if path == "/" {
-        return Ok(true);
-    }
-    let Some(head_root_id) = head_root_id else {
-        return Ok(false);
-    };
-    match crate::fs::core::resolve_fs_id(repos, repo_id, head_root_id, path).await {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
-    }
-}
-
-/// Check whether a file/dir name already exists in a parent directory in
-/// the current FS tree. `head_root_id` is resolved once by the caller.
-async fn name_exists_in_parent(
-    repos: &Repositories,
-    repo_id: &str,
-    head_root_id: Option<&str>,
-    parent_path: &str,
-    name: &str,
-) -> Result<bool, AppError> {
-    let Some(head_root_id) = head_root_id else {
-        return Ok(false);
-    };
-
-    // Resolve parent directory fs_id
-    let parent_fs_id =
-        match crate::fs::core::resolve_fs_id(repos, repo_id, head_root_id, parent_path).await {
-            Ok(id) => id,
-            Err(_) => return Ok(false),
-        };
-
-    // Read parent directory entries
-    let parent_data = match crate::fs::core::read_fs_dir_data(repos, repo_id, &parent_fs_id).await {
-        Ok(data) => data,
-        Err(_) => return Ok(false),
-    };
-
-    Ok(parent_data.dirents.iter().any(|d| d.name == name))
-}
-
-/// Verify that an fs_object exists in the database.
-async fn fs_object_exists(
-    repos: &Repositories,
-    repo_id: &str,
-    fs_id: &str,
-) -> Result<bool, AppError> {
-    if fs_id == infra::common::EMPTY_SHA1 {
-        return Ok(true);
-    }
-    repos
-        .fs_object
-        .exists_by_repo_and_fs_id(repo_id, fs_id)
-        .await
-}
-
 /// Core restore logic. Takes a map of `commit_id -> [paths]` where paths
 /// are the full paths (matching `parent_dir + "/" + obj_name` in trash).
 ///
@@ -522,183 +456,244 @@ pub async fn restore_trash_items(
         }
     };
 
+    // Phase A: flatten `commit_id -> paths` into an ordered item list.
+    struct Item {
+        commit_id: String,
+        full_path: String,
+        parent_dir: String,
+        obj_name: String,
+    }
+    let mut items: Vec<Item> = Vec::new();
     for (commit_id, paths) in &restore_map {
         for full_path in paths {
             let full_path = full_path.trim_end_matches('/');
-
-            // Split full_path into parent_dir and obj_name
             let (parent_dir, obj_name) = match full_path.rsplit_once('/') {
                 Some(("", name)) => ("/", name),
                 Some((parent, name)) => (parent, name),
                 None => ("/", full_path),
             };
+            items.push(Item {
+                commit_id: commit_id.clone(),
+                full_path: full_path.to_string(),
+                parent_dir: parent_dir.to_string(),
+                obj_name: obj_name.to_string(),
+            });
+        }
+    }
 
-            // Find the trash record
-            let Some(model) = repos
-                .file_trash
-                .find_by_compound_key(repo_id, commit_id, parent_dir, obj_name)
-                .await?
-            else {
-                failed.push(RevertFailedItem {
-                    commit_id: commit_id.clone(),
-                    path: full_path.to_string(),
-                    error_msg: format!("Dirent {full_path} not found."),
-                });
-                continue;
-            };
-
-            let trash_id = model.id;
-            let obj_type = model.obj_type.clone();
-            let obj_id = model.obj_id.clone();
-            let is_dir = obj_type == "dir";
-
-            // Verify fs_object exists
-            if !fs_object_exists(repos, repo_id, &obj_id).await? {
-                failed.push(RevertFailedItem {
-                    commit_id: commit_id.clone(),
-                    path: full_path.to_string(),
-                    error_msg: "Object not found.".into(),
-                });
-                continue;
-            }
-
-            // Verify parent directory exists in current tree
-            if parent_dir != "/"
-                && !path_exists_in_tree(repos, repo_id, head_root_id.as_deref(), parent_dir).await?
-            {
-                failed.push(RevertFailedItem {
-                    commit_id: commit_id.clone(),
-                    path: full_path.to_string(),
-                    error_msg: format!("Directory {parent_dir} not found."),
-                });
-                continue;
-            }
-
-            // Check for name collision
-            if name_exists_in_parent(
-                repos,
-                repo_id,
-                head_root_id.as_deref(),
-                parent_dir,
-                obj_name,
-            )
+    // Phase B: batch-load trash records per commit, indexed by
+    // (commit_id, parent_dir, obj_name).
+    let mut commit_ids: Vec<String> = items.iter().map(|i| i.commit_id.clone()).collect();
+    commit_ids.sort();
+    commit_ids.dedup();
+    let mut trash_by_key: HashMap<(String, String, String), file_trash::Model> = HashMap::new();
+    for cid in &commit_ids {
+        for m in repos
+            .file_trash
+            .find_by_repo_and_commit_id(repo_id, cid)
             .await?
-            {
-                failed.push(RevertFailedItem {
-                    commit_id: commit_id.clone(),
-                    path: full_path.to_string(),
-                    error_msg: "A file with the same name already exists.".to_string(),
-                });
-                continue;
-            }
+        {
+            trash_by_key.insert((m.commit_id.clone(), m.path.clone(), m.obj_name.clone()), m);
+        }
+    }
 
-            // Resolve parent fs_id from current tree (using the cached head root).
-            let Some(head_root) = head_root_id.as_deref() else {
-                failed.push(RevertFailedItem {
-                    commit_id: commit_id.clone(),
-                    path: full_path.to_string(),
-                    error_msg: "No commits.".into(),
-                });
-                continue;
-            };
+    // Phase C: batch-check which fs_objects exist (EMPTY_SHA1 is always
+    // treated as existing and skipped from the query).
+    let mut obj_ids: Vec<String> = Vec::new();
+    for item in &items {
+        if let Some(m) = trash_by_key.get(&(
+            item.commit_id.clone(),
+            item.parent_dir.clone(),
+            item.obj_name.clone(),
+        )) && m.obj_id != infra::common::EMPTY_SHA1
+        {
+            obj_ids.push(m.obj_id.clone());
+        }
+    }
+    obj_ids.sort();
+    obj_ids.dedup();
+    let existing_fs_ids = repos
+        .fs_object
+        .find_existing_fs_ids(repo_id, &obj_ids)
+        .await?;
 
-            let parent_fs_id = if parent_dir == "/" {
-                head_root.to_string()
-            } else {
-                match crate::fs::core::resolve_fs_id(repos, repo_id, head_root, parent_dir).await {
-                    Ok(id) => id,
-                    Err(_) => {
-                        failed.push(RevertFailedItem {
-                            commit_id: commit_id.clone(),
-                            path: full_path.to_string(),
-                            error_msg: format!("Directory {parent_dir} not found."),
-                        });
-                        continue;
-                    }
-                }
-            };
+    // Phase D: batch-resolve unique non-"/" parent dirs, then batch-read them
+    // for the name-collision check.
+    let mut parent_dirs: Vec<String> = items
+        .iter()
+        .map(|i| i.parent_dir.clone())
+        .filter(|p| p != "/")
+        .collect();
+    parent_dirs.sort();
+    parent_dirs.dedup();
+    let mut parent_fs_id_map: HashMap<String, Option<String>> = HashMap::new();
+    if let Some(root) = &head_root_id {
+        let targets: Vec<(String, String)> = parent_dirs
+            .iter()
+            .map(|p| (root.clone(), p.clone()))
+            .collect();
+        let resolved = crate::fs::core::resolve_fs_ids_batch(repos, repo_id, &targets).await?;
+        for (p, r) in parent_dirs.iter().zip(resolved) {
+            parent_fs_id_map.insert(p.clone(), r);
+        }
+    }
 
-            if parent_fs_id == infra::common::EMPTY_SHA1 {
-                failed.push(RevertFailedItem {
-                    commit_id: commit_id.clone(),
-                    path: full_path.to_string(),
-                    error_msg: format!("Directory {parent_dir} not found."),
-                });
-                continue;
-            }
+    let mut parent_ids: Vec<String> = parent_fs_id_map
+        .values()
+        .filter_map(|v| v.clone())
+        .filter(|id| id != infra::common::EMPTY_SHA1)
+        .collect();
+    parent_ids.sort();
+    parent_ids.dedup();
+    let dir_map = crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &parent_ids).await?;
 
-            let now = chrono::Utc::now().timestamp();
+    // Phase E: sequential commit loop (stateful — each item creates a new
+    // commit, so this cannot be batched).
+    let mut successful_ids: Vec<i32> = Vec::new();
+    for item in &items {
+        let Some(model) = trash_by_key.get(&(
+            item.commit_id.clone(),
+            item.parent_dir.clone(),
+            item.obj_name.clone(),
+        )) else {
+            failed.push(RevertFailedItem {
+                commit_id: item.commit_id.clone(),
+                path: item.full_path.clone(),
+                error_msg: format!("Dirent {} not found.", item.full_path),
+            });
+            continue;
+        };
 
-            // Get the size from the stored trash record for adjustments later
-            let entry_size = model.size;
-            let _ = entry_size; // future use
+        let trash_id = model.id;
+        let obj_type = model.obj_type.clone();
+        let obj_id = model.obj_id.clone();
+        let is_dir = obj_type == "dir";
 
-            // Insert entry into parent directory and create commit
-            let description = format!("Recovered {obj_name}");
+        if obj_id != infra::common::EMPTY_SHA1 && !existing_fs_ids.contains(&obj_id) {
+            failed.push(RevertFailedItem {
+                commit_id: item.commit_id.clone(),
+                path: item.full_path.clone(),
+                error_msg: "Object not found.".into(),
+            });
+            continue;
+        }
 
-            let result = FileOps::update_dir_tree_and_commit(
-                db,
-                repos,
-                repo_id,
-                parent_dir,
-                &parent_fs_id,
-                modifier,
-                &description,
-                crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
-                |dirents| {
-                    dirents.push(DirEntryData {
-                        id: obj_id.clone(),
-                        mode: if is_dir {
-                            S_IFDIR
-                        } else {
-                            infra::serialization::S_IFREG
-                        },
-                        modifier: modifier.to_string(),
-                        mtime: now,
-                        name: obj_name.to_string(),
-                        size: entry_size,
-                    });
-                    Ok(())
-                },
-            )
-            .await
-            .map_err(|e| AppError::Internal(format!("Restore commit failed: {e}")));
-
-            match result {
-                Ok(_) => {
-                    // Delete the trash record
-                    delete_trash_records(repos, &[trash_id]).await?;
-
-                    // Log activity
-                    activity_log::log_activity(
-                        db,
-                        repo_id,
-                        "recover",
-                        if is_dir { "dir" } else { "file" },
-                        full_path,
-                        user_id,
-                        None,
-                        Some(entry_size),
-                        Some(&obj_id),
-                        None,
-                        None,
-                    )
-                    .await;
-
-                    success.push(RevertSuccessItem {
-                        path: full_path.to_string(),
-                        is_dir,
-                    });
-                }
-                Err(e) => {
+        let parent_fs_id = if item.parent_dir == "/" {
+            match &head_root_id {
+                Some(root) => root.clone(),
+                None => {
                     failed.push(RevertFailedItem {
-                        commit_id: commit_id.clone(),
-                        path: full_path.to_string(),
-                        error_msg: format!("Restore failed: {e}"),
+                        commit_id: item.commit_id.clone(),
+                        path: item.full_path.clone(),
+                        error_msg: "No commits.".into(),
                     });
+                    continue;
                 }
+            }
+        } else {
+            match parent_fs_id_map.get(&item.parent_dir) {
+                Some(Some(id)) => id.clone(),
+                _ => {
+                    failed.push(RevertFailedItem {
+                        commit_id: item.commit_id.clone(),
+                        path: item.full_path.clone(),
+                        error_msg: format!("Directory {} not found.", item.parent_dir),
+                    });
+                    continue;
+                }
+            }
+        };
+
+        if parent_fs_id == infra::common::EMPTY_SHA1 {
+            failed.push(RevertFailedItem {
+                commit_id: item.commit_id.clone(),
+                path: item.full_path.clone(),
+                error_msg: format!("Directory {} not found.", item.parent_dir),
+            });
+            continue;
+        }
+
+        if let Some(dir_data) = dir_map.get(&parent_fs_id)
+            && dir_data.dirents.iter().any(|d| d.name == item.obj_name)
+        {
+            failed.push(RevertFailedItem {
+                commit_id: item.commit_id.clone(),
+                path: item.full_path.clone(),
+                error_msg: "A file with the same name already exists.".into(),
+            });
+            continue;
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        let entry_size = model.size;
+        let description = format!("Recovered {}", item.obj_name);
+
+        let result = FileOps::update_dir_tree_and_commit(
+            db,
+            repos,
+            repo_id,
+            &item.parent_dir,
+            &parent_fs_id,
+            modifier,
+            &description,
+            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
+            |dirents| {
+                dirents.push(DirEntryData {
+                    id: obj_id.clone(),
+                    mode: if is_dir {
+                        S_IFDIR
+                    } else {
+                        infra::serialization::S_IFREG
+                    },
+                    modifier: modifier.to_string(),
+                    mtime: now,
+                    name: item.obj_name.clone(),
+                    size: entry_size,
+                });
+                Ok(())
+            },
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("Restore commit failed: {e}")));
+
+        match result {
+            Ok(_) => {
+                successful_ids.push(trash_id);
+
+                // Log activity
+                activity_log::log_activity(
+                    db,
+                    repo_id,
+                    "recover",
+                    if is_dir { "dir" } else { "file" },
+                    &item.full_path,
+                    user_id,
+                    None,
+                    Some(entry_size),
+                    Some(&obj_id),
+                    None,
+                    None,
+                )
+                .await;
+
+                success.push(RevertSuccessItem {
+                    path: item.full_path.clone(),
+                    is_dir,
+                });
+            }
+            Err(e) => {
+                failed.push(RevertFailedItem {
+                    commit_id: item.commit_id.clone(),
+                    path: item.full_path.clone(),
+                    error_msg: format!("Restore failed: {e}"),
+                });
             }
         }
+    }
+
+    // Phase F: batch-delete the trash records of successfully restored items.
+    if !successful_ids.is_empty() {
+        delete_trash_records(repos, &successful_ids).await?;
     }
 
     Ok(RevertResult { success, failed })
