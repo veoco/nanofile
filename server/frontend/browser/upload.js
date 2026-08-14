@@ -2,6 +2,7 @@
 // new-folder creation for the file browser.
 import { __t } from "../core/i18n.js";
 import { escapeHtml, escapeAttr, getCookie } from "../core/utils.js";
+import { formatFileSize, formatBitrate } from "../core/format.js";
 import { Toast } from "../core/toast.js";
 import { refreshFileList } from "./list.js";
 
@@ -454,21 +455,6 @@ export function updateBitrate(loaded) {
         bitrateTimestamp = now;
         bitrateLoaded = loaded;
     }
-}
-
-export function formatBitrate(bytesPerSec) {
-    if (!bytesPerSec || bytesPerSec <= 0) return '';
-    if (bytesPerSec >= 1000 * 1000) return (bytesPerSec / (1000 * 1000)).toFixed(1) + ' MB/s';
-    if (bytesPerSec >= 1000) return (bytesPerSec / 1000).toFixed(1) + ' KB/s';
-    return Math.round(bytesPerSec) + ' B/s';
-}
-
-export function formatFileSize(size) {
-    if (typeof size !== 'number') return '';
-    if (size >= 1000 * 1000 * 1000) return (size / (1000 * 1000 * 1000)).toFixed(1) + ' GB';
-    if (size >= 1000 * 1000) return (size / (1000 * 1000)).toFixed(1) + ' MB';
-    if (size >= 1000) return (size / 1000).toFixed(1) + ' KB';
-    return size + ' B';
 }
 
 // ─── Queue actions (per-file) ───
