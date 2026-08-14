@@ -2,6 +2,7 @@
 # Environment variables:
 #   NANOFILE_SERVER_ADDR
 #   NANOFILE_SERVER_PORT
+#   NANOFILE_SERVER_VERSION
 #   NANOFILE_SERVER_SITE_URL
 #   NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB
 #   NANOFILE_SERVER_REQUEST_TIMEOUT_SECS
@@ -9,6 +10,9 @@
 #   NANOFILE_CORS_MAX_AGE_SECS
 #   NANOFILE_SERVER_WEBDAV_ENABLED
 addr = "0.0.0.0"
+# Seafile-compatible version advertised to clients via /api2/server-info/.
+# Clients parse the major/minor/patch numbers to gate feature availability.
+version = "8.0.0"
 port = 8082
 # External URL used for download links and CORS defaults.
 # IMPORTANT: download links are built from this address (like seahub's

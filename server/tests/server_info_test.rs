@@ -41,6 +41,12 @@ async fn test_server_info_features_are_official() {
         features.iter().any(|f| f == "file-search"),
         "search must be advertised as file-search"
     );
+    // The local-browser SSO flow is not wire-compatible yet, so it must NOT be
+    // advertised — otherwise desktop clients enter a broken SSO flow.
+    assert!(
+        !features.iter().any(|f| f == "client-sso-via-local-browser"),
+        "client-sso-via-local-browser must not be advertised until the SSO flow is implemented"
+    );
 }
 
 #[tokio::test]
@@ -66,8 +72,9 @@ async fn test_ping_at_api2_auth_ping_still_works() {
     let resp = f.client.get("/api2/auth/ping/", Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
 
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["email"], f.email);
+    // Matches seahub's AuthPing, which answers `Response('pong')`.
+    let body: String = resp.text().await.unwrap();
+    assert_eq!(body, "\"pong\"");
 }
 
 #[tokio::test]

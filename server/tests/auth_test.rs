@@ -219,8 +219,9 @@ async fn test_ping_success() {
     let resp = client.ping(token).await;
     assert_eq!(resp.status(), 200);
 
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["email"].as_str().unwrap(), "test@example.com");
+    // Matches seahub's AuthPing, which answers `Response('pong')`.
+    let body: String = resp.text().await.unwrap();
+    assert_eq!(body, "\"pong\"");
 }
 
 #[tokio::test]

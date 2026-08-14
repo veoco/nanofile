@@ -91,6 +91,13 @@ impl Default for NotificationConfig {
 pub struct ServerConfig {
     pub addr: String,
     pub port: u16,
+    /// Seafile-compatible server version advertised to clients via
+    /// `/api2/server-info/`. Clients parse the major/minor/patch numbers to
+    /// gate feature availability, so keep it at a version whose capabilities
+    /// this server actually implements.
+    /// Env: NANOFILE_SERVER_VERSION
+    #[serde(default = "default_server_version")]
+    pub version: String,
     /// External URL for this server, e.g. "http://127.0.0.1:8082".
     /// Used to construct download/upload/share URLs and as the default CORS origin.
     /// If empty at startup, derived from addr:port as http://{addr}:{port}.
@@ -125,6 +132,9 @@ pub struct ServerConfig {
     pub trusted_proxies: Vec<String>,
 }
 
+fn default_server_version() -> String {
+    "8.0.0".to_string()
+}
 fn default_site_url() -> String {
     "http://127.0.0.1:8082".to_string()
 }
@@ -353,6 +363,7 @@ impl Config {
         }
 
         env_str!("NANOFILE_SERVER_ADDR", self.server.addr);
+        env_str!("NANOFILE_SERVER_VERSION", self.server.version);
         env_parse!("NANOFILE_SERVER_PORT", self.server.port);
         env_parse!(
             "NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB",

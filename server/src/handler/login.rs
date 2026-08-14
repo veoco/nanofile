@@ -30,11 +30,6 @@ pub struct LoginResponse {
     pub token: String,
 }
 
-#[derive(Serialize)]
-pub struct PingResponse {
-    pub email: String,
-}
-
 pub fn auth_routes() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
         .route("/auth-token/", axum::routing::post(login))
@@ -224,10 +219,11 @@ pub async fn public_ping() -> impl IntoResponse {
     (StatusCode::OK, Json("pong"))
 }
 
-/// Authenticated ping — returns the authenticated user's email.
+/// Authenticated ping — requires a valid token but returns "pong" (matching
+/// seahub's AuthPing, which also answers `Response('pong')`).
 /// Serves GET /api2/auth/ping/.
-pub async fn ping(auth: AuthUser) -> Result<Json<PingResponse>, AppError> {
-    Ok(Json(PingResponse { email: auth.email }))
+pub async fn ping(_auth: AuthUser) -> impl IntoResponse {
+    (StatusCode::OK, Json("pong"))
 }
 
 /// `POST /api2/logout-device/`

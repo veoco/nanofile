@@ -110,6 +110,7 @@ impl TestServer {
             server: infra::config::ServerConfig {
                 addr: "127.0.0.1".to_string(),
                 port,
+                version: "8.0.0".to_string(),
                 site_url: format!("http://127.0.0.1:{}", port),
                 max_upload_size_mb: 4096,
                 request_timeout_secs: 36000,
