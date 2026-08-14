@@ -238,6 +238,9 @@ impl MetadataService {
         let Some(arr) = tags_data.as_array() else {
             return Ok(());
         };
+
+        // Parse all items up front.
+        let mut items: Vec<(i32, String, String)> = Vec::new();
         for item in arr {
             let Some(tag_id) = item.get("tag_id").and_then(|v| v.as_str()) else {
                 continue;
@@ -256,24 +259,61 @@ impl MetadataService {
                 .get("_tag_color")
                 .and_then(|v| v.as_str())
                 .unwrap_or("#e6e6e6");
-            let existing = self.repos.repo_tag.find_by_id(id).await?;
-            let Some(existing) = existing else {
+            items.push((id, name.to_string(), color.to_string()));
+        }
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        // Batch-load existing tags by id and by name (two queries) instead of
+        // one find_by_id + one find_by_repo_and_name per item.
+        let ids: Vec<i32> = items.iter().map(|(id, _, _)| *id).collect();
+        let by_id: std::collections::HashMap<i32, repo_tag::Model> = self
+            .repos
+            .repo_tag
+            .find_by_ids(&ids)
+            .await?
+            .into_iter()
+            .map(|t| (t.id, t))
+            .collect();
+        let names: Vec<String> = items.iter().map(|(_, name, _)| name.clone()).collect();
+        let by_name: std::collections::HashMap<String, i32> = self
+            .repos
+            .repo_tag
+            .find_by_names(repo_id, &names)
+            .await?
+            .into_iter()
+            .map(|t| (t.name, t.id))
+            .collect();
+
+        // Validate all renames before writing any: reject a rename that collides
+        // with an existing tag or with another item in this same request.
+        let mut target_name_owner: std::collections::HashMap<String, i32> =
+            std::collections::HashMap::new();
+        for (id, name, _) in &items {
+            let Some(existing) = by_id.get(id) else {
                 continue;
             };
             if existing.repo_id != repo_id {
                 continue;
             }
-            // Reject renaming to a name already used by another tag in this repo.
-            if let Some(dup) = self
-                .repos
-                .repo_tag
-                .find_by_repo_and_name(repo_id, name)
-                .await?
-                && dup.id != id
+            if by_name
+                .get(name.as_str())
+                .is_some_and(|owner| *owner != *id)
+                || target_name_owner
+                    .get(name.as_str())
+                    .is_some_and(|prev| *prev != *id)
             {
                 return Err(AppError::BadRequest("repo tag already exist".into()));
             }
-            self.repos.repo_tag.update(id, name, color).await?;
+            target_name_owner.insert(name.clone(), *id);
+        }
+
+        // Apply the renames.
+        for (id, name, color) in &items {
+            if by_id.get(id).is_some_and(|t| t.repo_id == repo_id) {
+                self.repos.repo_tag.update(*id, name, color).await?;
+            }
         }
         Ok(())
     }
@@ -287,19 +327,26 @@ impl MetadataService {
         let Some(arr) = tag_ids.as_array() else {
             return Ok(());
         };
-        for item in arr {
-            let Some(s) = item.as_str() else {
-                continue;
-            };
-            let Ok(id) = s.parse::<i32>() else {
-                continue;
-            };
-            let Some(tag) = self.repos.repo_tag.find_by_id(id).await? else {
-                continue;
-            };
-            if tag.repo_id == repo_id {
-                self.repos.repo_tag.delete_by_id(id).await?;
-            }
+        let ids: Vec<i32> = arr
+            .iter()
+            .filter_map(|item| item.as_str().and_then(|s| s.parse::<i32>().ok()))
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        // Batch-load tags once and filter by repo ownership in memory.
+        let to_delete: Vec<i32> = self
+            .repos
+            .repo_tag
+            .find_by_ids(&ids)
+            .await?
+            .into_iter()
+            .filter(|t| t.repo_id == repo_id)
+            .map(|t| t.id)
+            .collect();
+        if !to_delete.is_empty() {
+            self.repos.repo_tag.delete_by_ids(&to_delete).await?;
         }
         Ok(())
     }
@@ -318,6 +365,8 @@ impl MetadataService {
         let repo_tags = self.repos.repo_tag.find_by_repo_id(repo_id).await?;
         let valid_ids: std::collections::HashSet<i32> = repo_tags.iter().map(|t| t.id).collect();
 
+        // Parse and validate all items, then apply in one batched write.
+        let mut entries: Vec<(String, Vec<i32>)> = Vec::new();
         for item in arr {
             let Some(record_id) = item.get("record_id").and_then(|v| v.as_str()) else {
                 continue;
@@ -336,11 +385,9 @@ impl MetadataService {
                     tag_ids.push(id);
                 }
             }
-            self.repos
-                .file_tag
-                .set_for_path(repo_id, &file_path, &tag_ids)
-                .await?;
+            entries.push((file_path, tag_ids));
         }
+        self.repos.file_tag.set_for_paths(repo_id, &entries).await?;
         Ok(())
     }
 

@@ -132,16 +132,20 @@ pub async fn list_groups(
         .map(|u| (u.id, u))
         .collect();
 
+    // Batch-load all members of the user's groups and count per group in
+    // memory instead of one COUNT query per group.
+    let all_members = repos.group_member.find_by_group_ids(&group_ids).await?;
+    let mut member_count_by_group: HashMap<i32, i64> = HashMap::new();
+    for gm in &all_members {
+        *member_count_by_group.entry(gm.group_id).or_default() += 1;
+    }
+
     let mut result = Vec::new();
     for m in &memberships {
         if let Some(g) = groups.get(&m.group_id) {
             let creator = creators.get(&g.creator_id);
 
-            let member_count = repos
-                .group_member
-                .count_by_group_id(g.id)
-                .await
-                .unwrap_or(0);
+            let member_count = member_count_by_group.get(&g.id).copied().unwrap_or(0);
 
             result.push(serde_json::json!({
                 "id": g.id,

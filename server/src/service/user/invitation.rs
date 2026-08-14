@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::repository::Repositories;
@@ -31,13 +32,21 @@ impl InvitationService {
             .find_by_creator_id(creator_id)
             .await?;
 
+        // Batch-load the users referenced by used_by in one query instead of
+        // one find_by_id per used invitation.
+        let used_by_ids: Vec<i32> = codes.iter().filter_map(|c| c.used_by).collect();
+        let email_by_id: HashMap<i32, String> = self
+            .repos
+            .user
+            .find_by_ids(&used_by_ids)
+            .await?
+            .into_iter()
+            .map(|u| (u.id, u.email))
+            .collect();
+
         let mut invitations = Vec::with_capacity(codes.len());
         for code in codes {
-            let used_by_email = if let Some(uid) = code.used_by {
-                self.repos.user.find_by_id(uid).await?.map(|u| u.email)
-            } else {
-                None
-            };
+            let used_by_email = code.used_by.and_then(|uid| email_by_id.get(&uid).cloned());
 
             invitations.push(InvitationInfo {
                 id: code.id,

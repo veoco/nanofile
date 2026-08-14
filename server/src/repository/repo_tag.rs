@@ -44,6 +44,8 @@ pub trait RepoTagRepository: Send + Sync {
     async fn update(&self, id: i32, name: &str, color: &str) -> Result<(), AppError>;
     /// Delete a tag (file_tags referencing it are removed via FK cascade).
     async fn delete_by_id(&self, id: i32) -> Result<(), AppError>;
+    /// Delete several tags in one batched query (chunked for SQLite).
+    async fn delete_by_ids(&self, ids: &[i32]) -> Result<(), AppError>;
 }
 
 pub struct DbRepoTagRepository {
@@ -219,6 +221,20 @@ impl RepoTagRepository for DbRepoTagRepository {
             .filter(repo_tag::Column::Id.eq(id))
             .exec(self.db.as_ref())
             .await?;
+        Ok(())
+    }
+
+    async fn delete_by_ids(&self, ids: &[i32]) -> Result<(), AppError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        const IN_BATCH: usize = 500;
+        for chunk in ids.chunks(IN_BATCH) {
+            repo_tag::Entity::delete_many()
+                .filter(repo_tag::Column::Id.is_in(chunk.to_vec()))
+                .exec(self.db.as_ref())
+                .await?;
+        }
         Ok(())
     }
 }

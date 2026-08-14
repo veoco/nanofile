@@ -38,6 +38,12 @@ pub trait FileTagRepository: Send + Sync {
         file_path: &str,
         tag_ids: &[i32],
     ) -> Result<(), AppError>;
+    /// Replace the tags of several file paths in one batched write.
+    async fn set_for_paths(
+        &self,
+        repo_id: &str,
+        entries: &[(String, Vec<i32>)],
+    ) -> Result<(), AppError>;
     /// Remove all tag rows for a path and everything below it (delete cleanup).
     async fn delete_by_path_prefix(&self, repo_id: &str, path: &str) -> Result<(), AppError>;
     /// After a rename/move, update tag rows whose path starts with the old path.
@@ -138,6 +144,51 @@ impl FileTagRepository for DbFileTagRepository {
             })
             .collect();
         file_tag::Entity::insert_many(models).exec(db).await?;
+        Ok(())
+    }
+
+    async fn set_for_paths(
+        &self,
+        repo_id: &str,
+        entries: &[(String, Vec<i32>)],
+    ) -> Result<(), AppError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let db = self.db.as_ref();
+
+        // Delete existing rows for all paths in one batched DELETE (chunked to
+        // stay under SQLite's variable limit).
+        const IN_BATCH: usize = 500;
+        let paths: Vec<&str> = entries.iter().map(|(p, _)| p.as_str()).collect();
+        for chunk in paths.chunks(IN_BATCH) {
+            file_tag::Entity::delete_many()
+                .filter(file_tag::Column::RepoId.eq(repo_id))
+                .filter(file_tag::Column::FilePath.is_in(chunk.to_vec()))
+                .exec(db)
+                .await?;
+        }
+
+        // Expand and dedupe (file_path, tag_id) pairs, then insert once.
+        let mut seen: std::collections::HashSet<(String, i32)> = std::collections::HashSet::new();
+        let now = chrono::Utc::now().timestamp();
+        let mut models: Vec<file_tag::ActiveModel> = Vec::new();
+        for (file_path, tag_ids) in entries {
+            for tag_id in tag_ids {
+                if seen.insert((file_path.clone(), *tag_id)) {
+                    models.push(file_tag::ActiveModel {
+                        id: sea_orm::NotSet,
+                        repo_id: Set(repo_id.to_string()),
+                        file_path: Set(file_path.clone()),
+                        repo_tag_id: Set(*tag_id),
+                        created_at: Set(now),
+                    });
+                }
+            }
+        }
+        if !models.is_empty() {
+            file_tag::Entity::insert_many(models).exec(db).await?;
+        }
         Ok(())
     }
 
