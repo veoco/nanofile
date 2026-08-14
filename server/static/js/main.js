@@ -258,10 +258,7 @@
         });
         if (res.ok) {
           btn.classList.remove("text-yellow-400", "text-amber-400");
-          btn.classList.add("text-gray-300", "hover:text-yellow-400");
-          if (btn.classList.contains("dark\\:text-gray-600")) {
-            btn.classList.add("dark:text-gray-600");
-          }
+          btn.classList.add("text-gray-300", "hover:text-amber-400", "dark:text-gray-600");
           btn.querySelector("svg").setAttribute("fill", "none");
           btn.title = __t('ui.star');
           btn.dataset.starred = "false";
@@ -276,10 +273,7 @@
           body: JSON.stringify({ repo_id: repoId, path: path }),
         });
         if (res.ok) {
-          btn.classList.remove("text-gray-300", "hover:text-yellow-400");
-          if (btn.classList.contains("dark\\:text-gray-600")) {
-            btn.classList.remove("dark:text-gray-600");
-          }
+          btn.classList.remove("text-gray-300", "hover:text-amber-400", "dark:text-gray-600");
           btn.classList.add("text-amber-400");
           btn.querySelector("svg").setAttribute("fill", "currentColor");
           btn.title = __t('ui.unstar');
@@ -293,21 +287,8 @@
     }
   });
 
-  // ─── Cookie helper ───────────────────────────────────────────────────
-  function getCookie(name) {
-    const match = document.cookie.match(
-      "(^|;)\\s*" + name + "\\s*=\\s*([^;]+)"
-    );
-    return match ? match.pop() : "";
-  }
-
-  function escapeHtml(str) {
-    var div = document.createElement("div");
-    div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
-  }
-
   // ─── Authenticated fetch helper ─────────────────────────────────────
+  // getCookie / escapeHtml / escapeAttr are provided by common.js (loaded first).
   window.apiFetch = async function (url, options) {
     options = options || {};
     var headers = options.headers || {};
@@ -537,13 +518,13 @@
         revUrl +
         '" download class="px-2 py-1 rounded-md text-xs font-medium text-brand-600 dark:text-brand-400 border border-brand-200 dark:border-brand-900/50 hover:bg-brand-50 dark:hover:bg-brand-900/20">Download</a>' +
         '<button type="button" class="js-history-restore px-2 py-1 rounded-md text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-700" data-commit-id="' +
-        escapeHtml(commitId) +
+        escapeAttr(commitId) +
         '" data-repo-id="' +
-        escapeHtml(repoId) +
+        escapeAttr(repoId) +
         '" data-path="' +
-        escapeHtml(path) +
+        escapeAttr(path) +
         '" data-name="' +
-        escapeHtml(fileName) +
+        escapeAttr(fileName) +
         '">Restore</button>' +
         "</div></div>";
     });

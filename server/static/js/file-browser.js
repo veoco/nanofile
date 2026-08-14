@@ -187,9 +187,10 @@
   };
 
   // ─── Right panel ─────────────────────────────────────────────────────
-  // Monotonic id used to discard stale right-panel tag responses when the
-  // selection changes faster than the metadata requests resolve.
-  var rpTagsReqId = 0;
+  // Monotonic id used to discard stale right-panel async responses when the
+  // selection changes faster than the detail requests (share/upload links,
+  // index text, EXIF, tags) resolve.
+  var rpReqId = 0;
 
   window.openRightPanel = function (d) {
     // d = { name, type, starred, extension, path, repoId, modifierEmail,
@@ -199,6 +200,9 @@
     var ct = document.querySelector(".js-rp-content");
     var mc = document.querySelector(".js-rp-multi-content");
     if (!ph || !ct) return;
+
+    // Invalidate any in-flight async detail requests from a previous selection.
+    var reqId = ++rpReqId;
 
     // Show content, hide placeholder and multi-select panel
     ph.classList.add("hidden");
@@ -233,7 +237,7 @@
       // Inline playback via the Range-capable streaming endpoint; the frame
       // thumbnail (if any) doubles as the native poster.
       if (videoEl && d.repoId && d.path) {
-        var encPath = d.path.split("/").map(encodeURIComponent).join("/");
+        var encPath = encodeFilePath(d.path);
         videoEl.src = "/repos/" + encodeURIComponent(d.repoId) + "/files/" + encPath;
         videoEl.poster = d.thumbnailUrlLarge || d.thumbnailUrl || "";
         videoEl.classList.remove("hidden");
@@ -243,7 +247,7 @@
       // bar sits just below the preview box.
       if (audioRow && d.repoId && d.path) {
         audioEl.src = "/repos/" + encodeURIComponent(d.repoId) + "/files/" +
-          d.path.split("/").map(encodeURIComponent).join("/");
+          encodeFilePath(d.path);
         audioRow.classList.remove("hidden");
       }
       if (d.thumbnailUrlLarge || d.thumbnailUrl) {
@@ -348,6 +352,7 @@
         fetch("/api/v2.1/share-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
           .then(function (r) { return r.json(); })
           .then(function (data) {
+            if (reqId !== rpReqId) return; // stale response
             var links = data || [];
             shareList.innerHTML = "";
             if (links.length === 0) {
@@ -357,7 +362,7 @@
                 var div = document.createElement("div");
                 div.className = "flex items-center justify-between py-0.5";
                 div.innerHTML =
-                  '<a href="' + escapeHtml(link.link || "") + '" target="_blank" class="text-xs text-brand-500 hover:text-brand-600 truncate block">' +
+                  '<a href="' + escapeAttr(link.link || "") + '" target="_blank" class="text-xs text-brand-500 hover:text-brand-600 truncate block">' +
                     escapeHtml(link.token || "") +
                   '</a>' +
                   '<span class="text-xs text-gray-400 flex-shrink-0 ml-2">' + (link.view_cnt || 0) + ' views</span>';
@@ -384,7 +389,7 @@
       tagsSection.classList.remove("hidden");
       tagsList.innerHTML = "";
       if (tagInput) tagInput.value = "";
-      var tagsReqId = ++rpTagsReqId; // discard stale responses from earlier selections
+      var tagsReqId = reqId; // discard stale responses from earlier selections
 
       var repoId = d.repoId;
       var recordId = d.recordId;
@@ -408,11 +413,12 @@
           if (!tag) return;
           var chip = document.createElement("span");
           chip.className = "js-rp-tag-chip inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-gray-700 dark:text-gray-200";
-          chip.style.backgroundColor = (tag.color || "#e6e6e6") + "33";
+          var tagColor = safeColor(tag.color);
+          chip.style.backgroundColor = tagColor + "33";
           chip.innerHTML =
-            '<span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color:' + escapeHtml(tag.color || "#e6e6e6") + ';"></span>' +
+            '<span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color:' + escapeAttr(tagColor) + ';"></span>' +
             escapeHtml(tag.name) +
-            '<button type="button" class="js-rp-tag-remove hover:text-red-500" data-tag-id="' + encodeURIComponent(tag.id) + '" title="' + escapeHtml(__t('fb.remove_tag')) + '">' +
+            '<button type="button" class="js-rp-tag-remove hover:text-red-500" data-tag-id="' + encodeURIComponent(tag.id) + '" title="' + escapeAttr(__t('fb.remove_tag')) + '">' +
             '  <svg class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>' +
             "</button>";
           tagsList.appendChild(chip);
@@ -443,7 +449,7 @@
         window.apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/tags/?start=0&limit=1000").then(function (r) { return r.json(); }),
         window.apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/record/?parent_dir=" + encodeURIComponent(parentDir) + "&name=" + encodeURIComponent(fileName) + "&file_name=" + encodeURIComponent(fileName)).then(function (r) { return r.json(); }),
       ]).then(function (results) {
-        if (tagsReqId !== rpTagsReqId) return; // stale response
+        if (tagsReqId !== rpReqId) return; // stale response
         var tagData = results[0] || {};
         var recData = results[1] || {};
         allTags = (tagData.results || []).map(function (t) {
@@ -461,7 +467,7 @@
         fileTagIds = (rec._tags || []).map(function (l) { return l.row_id; });
         renderTagChips();
       }).catch(function () {
-        if (tagsReqId !== rpTagsReqId) return; // stale response
+        if (tagsReqId !== rpReqId) return; // stale response
         renderTagChips(); // fileTagIds is empty → shows the "no tags" hint
       });
 
@@ -525,6 +531,7 @@
         fetch("/api/v2.1/upload-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
           .then(function (r) { return r.json(); })
           .then(function (data) {
+            if (reqId !== rpReqId) return; // stale response
             var links = data || [];
             ulList.innerHTML = "";
             if (links.length === 0) {
@@ -535,7 +542,7 @@
                 div.className = "flex items-center justify-between py-0.5";
                 var linkUrl = link.link || "/u/" + link.token + "/";
                 div.innerHTML =
-                  '<a href="' + escapeHtml(linkUrl) + '" target="_blank" class="text-xs text-emerald-500 hover:text-emerald-600 truncate block">' +
+                  '<a href="' + escapeAttr(linkUrl) + '" target="_blank" class="text-xs text-emerald-500 hover:text-emerald-600 truncate block">' +
                     escapeHtml(link.token || "") +
                   '</a>' +
                   '<span class="text-xs text-gray-400 flex-shrink-0 ml-2">' + (link.view_cnt || 0) + ' uploads</span>';
@@ -565,6 +572,7 @@
       fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/index-text/?p=" + encodeURIComponent(d.path))
         .then(function (r) { return r.json(); })
         .then(function (data) {
+          if (reqId !== rpReqId) return; // stale response
           if (data.content) {
             indexContent.textContent = data.content;
             indexContent.classList.remove("hidden");
@@ -588,6 +596,7 @@
       fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/exif/?p=" + encodeURIComponent(d.path))
         .then(function (r) { return r.json(); })
         .then(function (data) {
+          if (reqId !== rpReqId) return; // stale response
           exifContent.innerHTML = "";
           if (data && typeof data === "object" && !Array.isArray(data)) {
             var fields = getExifFields(data);
@@ -769,7 +778,7 @@
     var isPreviewable = row.dataset.isPreviewable === "true";
     if (!repoId || !path) return;
 
-    var encPath = path.split("/").map(encodeURIComponent).join("/");
+    var encPath = encodeFilePath(path);
     var title = overlay.querySelector(".js-qp-title");
     if (title) title.textContent = name;
 
@@ -858,26 +867,26 @@
       "PixelYDimension": __t('exif.height'),
       "Orientation": __t('exif.orientation')
     };
-    // Simple value formatters for certain fields
+    // Simple value formatters for certain fields (unquote is from common.js)
     var formatters = {
-      "ISOSpeed": function (v) { return v.replace(/^"|"$/g, ""); },
-      "ExposureTime": function (v) { return v.replace(/^"|"$/g, ""); },
-      "FNumber": function (v) { return v.replace(/^"|"$/g, "").replace(/^F\//, "f/"); },
-      "FocalLength": function (v) { return v.replace(/^"|"$/g, ""); },
+      "ISOSpeed": function (v) { return unquote(v); },
+      "ExposureTime": function (v) { return unquote(v); },
+      "FNumber": function (v) { return unquote(v).replace(/^F\//, "f/"); },
+      "FocalLength": function (v) { return unquote(v); },
       "Flash": function (v) {
         var val = parseInt(v, 10);
         if (isNaN(val)) return v;
         // Bit 0: flash fired
         return (val & 1) ? __t('common.yes') : __t('common.no');
       },
-      "PixelXDimension": function (v) { return v.replace(/^"|"$/g, "") + " px"; },
-      "PixelYDimension": function (v) { return v.replace(/^"|"$/g, "") + " px"; },
-      "DateTimeOriginal": function (v) { return v.replace(/^"|"$/g, ""); },
-      "Make": function (v) { return v.replace(/^"|"$/g, ""); },
-      "Model": function (v) { return v.replace(/^"|"$/g, ""); },
-      "Software": function (v) { return v.replace(/^"|"$/g, ""); },
-      "GPSLatitude": function (v) { return v.replace(/^"|"$/g, ""); },
-      "GPSLongitude": function (v) { return v.replace(/^"|"$/g, ""); },
+      "PixelXDimension": function (v) { return unquote(v) + " px"; },
+      "PixelYDimension": function (v) { return unquote(v) + " px"; },
+      "DateTimeOriginal": function (v) { return unquote(v); },
+      "Make": function (v) { return unquote(v); },
+      "Model": function (v) { return unquote(v); },
+      "Software": function (v) { return unquote(v); },
+      "GPSLatitude": function (v) { return unquote(v); },
+      "GPSLongitude": function (v) { return unquote(v); },
       "Orientation": function (v) {
         var m = {
           "1": __t('exif.orientation_normal'),
@@ -889,7 +898,7 @@
           "7": __t('exif.orientation_mirrored_90_ccw'),
           "8": __t('exif.orientation_90_ccw')
         };
-        var val = v.replace(/^"|"$/g, "");
+        var val = unquote(v);
         return m[val] || v;
       }
     };
@@ -1044,16 +1053,5 @@
     }
   });
 
-  // ─── Helpers ──────────────────────────────────────────────────────────
-  function escapeHtml(str) {
-    var div = document.createElement("div");
-    div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
-  }
-
-  function getCookie(name) {
-    var match = document.cookie.match("(^|;)\\s*" + name + "\\s*=\\s*([^;]+)");
-    return match ? match.pop() : "";
-  }
-
+  // getCookie / escapeHtml / escapeAttr are provided by common.js (loaded first).
 })();

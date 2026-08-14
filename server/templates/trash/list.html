@@ -179,10 +179,7 @@
 
 {% block scripts %}
 <script>
-function getCookie(name) {
-    var match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-    return match ? match.pop() : '';
-}
+// getCookie is provided by common.js (loaded first).
 function showCleanDialog() {
     document.getElementById('clean-dialog').classList.remove('hidden');
 }
