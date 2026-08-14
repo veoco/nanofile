@@ -67,6 +67,75 @@ async fn test_server_info_sso_feature_gated_off() {
 }
 
 #[tokio::test]
+async fn test_server_info_optional_fields_advertised_when_configured() {
+    let server = common::TestServer::start_with_server_info_config(|cfg| {
+        cfg.desktop_custom_brand = Some("My Brand".to_string());
+        cfg.desktop_custom_logo = Some("custom/logo.png".to_string());
+        cfg.encrypted_library_pwd_hash_algo = Some("PBKDF2".to_string());
+        cfg.encrypted_library_pwd_hash_params = Some("iterations=1000".to_string());
+    })
+    .await;
+    let client = server.client();
+
+    let resp = client.get("/api2/server-info/", None).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["desktop-custom-brand"], "My Brand");
+    assert_eq!(body["desktop-custom-logo"], "custom/logo.png");
+    assert_eq!(body["encrypted_library_pwd_hash_algo"], "PBKDF2");
+    assert_eq!(body["encrypted_library_pwd_hash_params"], "iterations=1000");
+}
+
+#[tokio::test]
+async fn test_server_info_optional_fields_absent_by_default() {
+    let server = common::TestServer::start().await;
+    let client = server.client();
+
+    let resp = client.get("/api2/server-info/", None).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    for key in [
+        "desktop-custom-brand",
+        "desktop-custom-logo",
+        "encrypted_library_pwd_hash_algo",
+        "encrypted_library_pwd_hash_params",
+    ] {
+        assert!(
+            body.get(key).is_none(),
+            "{key} should be absent unless configured"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_server_info_file_search_and_wiki_gated_off() {
+    let server = common::TestServer::start_with_server_info_config(|cfg| {
+        cfg.file_search_enabled = false;
+        cfg.wiki_enabled = false;
+    })
+    .await;
+    let client = server.client();
+
+    let resp = client.get("/api2/server-info/", None).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let features = body["features"].as_array().unwrap();
+    for not_want in ["file-search", "wiki"] {
+        assert!(
+            !features.iter().any(|f| f == not_want),
+            "{not_want} must not be advertised when disabled"
+        );
+    }
+    // The base features must remain even with the switches off.
+    for want in ["seafile-basic", "seafile-pro"] {
+        assert!(features.iter().any(|f| f == want), "{want} feature missing");
+    }
+}
+
+#[tokio::test]
 async fn test_ping_at_api2_ping() {
     // /api2/ping/ should be public and return "pong"
     let server = common::TestServer::start().await;

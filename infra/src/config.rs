@@ -129,6 +129,42 @@ pub struct ServerConfig {
     /// Env: NANOFILE_SERVER_SSO_ENABLED
     #[serde(default = "default_true")]
     pub sso_enabled: bool,
+    /// Custom brand string shown by the desktop client in its title bar
+    /// (`desktop-custom-brand` in `/api2/server-info/`). When set, the value is
+    /// advertised verbatim; `None` keeps the key absent.
+    /// Env: NANOFILE_SERVER_DESKTOP_CUSTOM_BRAND
+    #[serde(default)]
+    pub desktop_custom_brand: Option<String>,
+    /// Path (relative to the server root) of a custom logo the desktop client
+    /// fetches and shows (`desktop-custom-logo` in `/api2/server-info/`). The
+    /// client joins this onto the server URL itself, so a full URL here would
+    /// be mangled. `None` keeps the key absent.
+    /// Env: NANOFILE_SERVER_DESKTOP_CUSTOM_LOGO
+    #[serde(default)]
+    pub desktop_custom_logo: Option<String>,
+    /// Hash algorithm used for encrypted-library passwords, advertised as
+    /// `encrypted_library_pwd_hash_algo` in `/api2/server-info/`. The desktop
+    /// and Android clients use it (with `encrypted_library_pwd_hash_params`)
+    /// when creating encrypted libraries. `None` keeps the key absent.
+    /// Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO
+    #[serde(default)]
+    pub encrypted_library_pwd_hash_algo: Option<String>,
+    /// Hash algorithm parameters (e.g. `iterations=1000`), advertised as
+    /// `encrypted_library_pwd_hash_params` alongside the algo. See
+    /// `encrypted_library_pwd_hash_algo`.
+    /// Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS
+    #[serde(default)]
+    pub encrypted_library_pwd_hash_params: Option<String>,
+    /// Advertise the `file-search` feature (gates the desktop client's search
+    /// tab and mobile search). The backend has a search API either way.
+    /// Env: NANOFILE_SERVER_FILE_SEARCH_ENABLED
+    #[serde(default = "default_true")]
+    pub file_search_enabled: bool,
+    /// Advertise the `wiki` feature (gates the mobile wiki tab; mirrors
+    /// seahub's ENABLE_WIKI).
+    /// Env: NANOFILE_SERVER_WIKI_ENABLED
+    #[serde(default = "default_true")]
+    pub wiki_enabled: bool,
     /// IP addresses of trusted reverse proxies. The `X-Forwarded-For` header is
     /// only honored for rate limiting when the TCP peer is one of these. When
     /// empty (default) rate limiting uses the raw TCP peer address, so clients
@@ -446,6 +482,24 @@ impl Config {
         env_parse!("NANOFILE_CORS_MAX_AGE_SECS", self.server.cors_max_age_secs);
         env_parse!("NANOFILE_SERVER_WEBDAV_ENABLED", self.server.webdav_enabled);
         env_parse!("NANOFILE_SERVER_SSO_ENABLED", self.server.sso_enabled);
+        env_parse!(
+            "NANOFILE_SERVER_FILE_SEARCH_ENABLED",
+            self.server.file_search_enabled
+        );
+        env_parse!("NANOFILE_SERVER_WIKI_ENABLED", self.server.wiki_enabled);
+        // Optional server-info fields: an empty env var keeps the field absent.
+        if let Ok(v) = std::env::var("NANOFILE_SERVER_DESKTOP_CUSTOM_BRAND") {
+            self.server.desktop_custom_brand = Some(v);
+        }
+        if let Ok(v) = std::env::var("NANOFILE_SERVER_DESKTOP_CUSTOM_LOGO") {
+            self.server.desktop_custom_logo = Some(v);
+        }
+        if let Ok(v) = std::env::var("NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO") {
+            self.server.encrypted_library_pwd_hash_algo = Some(v);
+        }
+        if let Ok(v) = std::env::var("NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS") {
+            self.server.encrypted_library_pwd_hash_params = Some(v);
+        }
         env_parse!("NANOFILE_EMAIL_ENABLED", self.email.enabled);
         env_str!("NANOFILE_UI_DEFAULT_LANGUAGE", self.ui.default_language);
 

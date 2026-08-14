@@ -74,6 +74,14 @@ impl TestServer {
         Self::start_full(false, false, 30, 90, true, false, sso_enabled).await
     }
 
+    /// Start a server with arbitrary server-config tweaks (for testing the
+    /// server-info optional fields and feature gates).
+    pub async fn start_with_server_info_config(
+        tweak: impl FnOnce(&mut infra::config::ServerConfig) + Send + 'static,
+    ) -> Self {
+        Self::start_full_tweaked(false, false, 30, 90, true, false, true, tweak).await
+    }
+
     async fn start_with_config(
         enable_notification: bool,
         enable_index: bool,
@@ -101,6 +109,35 @@ impl TestServer {
         email_enabled: bool,
         sso_enabled: bool,
     ) -> Self {
+        Self::start_full_tweaked(
+            enable_notification,
+            enable_index,
+            ping_interval,
+            client_timeout,
+            webdav_enabled,
+            email_enabled,
+            sso_enabled,
+            |_| {},
+        )
+        .await
+    }
+
+    /// Start a server, applying `tweak` to the server config before the app is
+    /// built (for server-info optional-field / feature-gate tests).
+    #[allow(clippy::too_many_arguments)]
+    async fn start_full_tweaked<F>(
+        enable_notification: bool,
+        enable_index: bool,
+        ping_interval: u64,
+        client_timeout: u64,
+        webdav_enabled: bool,
+        email_enabled: bool,
+        sso_enabled: bool,
+        tweak: F,
+    ) -> Self
+    where
+        F: FnOnce(&mut infra::config::ServerConfig),
+    {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base_url = format!("http://127.0.0.1:{}", port);
@@ -114,7 +151,7 @@ impl TestServer {
             .expect("failed to run migrations");
 
         // Build minimal config for AppState — only block_dir matters for tests.
-        let config = infra::config::Config {
+        let mut config = infra::config::Config {
             server: infra::config::ServerConfig {
                 addr: "127.0.0.1".to_string(),
                 port,
@@ -127,6 +164,12 @@ impl TestServer {
                 secret_key: String::new(),
                 webdav_enabled,
                 sso_enabled,
+                desktop_custom_brand: None,
+                desktop_custom_logo: None,
+                encrypted_library_pwd_hash_algo: None,
+                encrypted_library_pwd_hash_params: None,
+                file_search_enabled: true,
+                wiki_enabled: true,
                 trusted_proxies: vec![],
             },
             database: infra::config::DatabaseConfig {
@@ -183,6 +226,7 @@ impl TestServer {
             },
             ui: Default::default(),
         };
+        tweak(&mut config.server);
         // Ensure block directory exists
         std::fs::create_dir_all(&config.storage.block_dir).unwrap();
 
