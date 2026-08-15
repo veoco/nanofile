@@ -105,3 +105,47 @@ export async function loginViaUI(page: Page, email: string, password: string): P
   await page.locator('button[type="submit"]').first().click();
   await page.waitForURL(/\/libraries\//, { timeout: 15_000 });
 }
+
+/** POST /api/v2.1/share-links/ → the created link's token. */
+export async function createShareLink(
+  baseURL: string,
+  token: string,
+  repoId: string,
+  path: string,
+  password?: string,
+): Promise<string> {
+  const body: Record<string, string> = { repo_id: repoId, path };
+  if (password) body.password = password;
+  const res = await fetch(`${baseURL}/api/v2.1/share-links/`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`create share link failed: ${res.status} ${await res.text()}`);
+  return (await res.json()).token;
+}
+
+/** POST /api/v2.1/upload-links/ → the created link's token. */
+export async function createUploadLink(
+  baseURL: string,
+  token: string,
+  repoId: string,
+  path: string,
+  password?: string,
+): Promise<string> {
+  const body: Record<string, string> = { repo_id: repoId, path };
+  if (password) body.password = password;
+  const res = await fetch(`${baseURL}/api/v2.1/upload-links/`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`create upload link failed: ${res.status} ${await res.text()}`);
+  return (await res.json()).token;
+}
