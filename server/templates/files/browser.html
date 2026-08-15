@@ -42,14 +42,14 @@
                 <input type="hidden" name="repo_name" value="{{ repo_name }}">
                 <input type="hidden" id="rename-old-path" name="p" value="">
                 <input id="rename-input" type="text" name="new_name" placeholder="{{ t.tr("fb.rename_new_name_placeholder") }}"
-                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5"
+                       class="input"
                        autofocus>
                 <div class="mt-4 flex justify-end gap-2">
-                    <button type="button" class="js-rename-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
+                    <button type="button" class="js-rename-cancel btn btn-secondary">
                         {{ t.tr("common.cancel") }}
                     </button>
                     <button type="submit"
-                            class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600">
+                            class="btn btn-primary">
                         {{ t.tr("common.save") }}
                     </button>
                 </div>
@@ -67,10 +67,10 @@
                 <div class="text-sm text-gray-400 text-center py-4">{{ t.tr("fb.loading") }}</div>
             </div>
             <div class="flex justify-end gap-2">
-                <button type="button" class="js-picker-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
+                <button type="button" class="js-picker-cancel btn btn-secondary">
                     {{ t.tr("common.cancel") }}
                 </button>
-                <button type="button" class="js-picker-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600">
+                <button type="button" class="js-picker-confirm btn btn-primary">
                     {{ t.tr("fb.move_here") }}
                 </button>
             </div>
@@ -84,12 +84,12 @@
                 <div>
                     <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.password") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
                     <input type="password" id="share-password-input" placeholder="{{ t.tr("fb.leave_empty_no_password") }}"
-                           class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                           class="input">
                 </div>
                 <div>
                     <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.expires_in") }}</label>
                     <select id="share-expiry-select"
-                            class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                            class="select">
                         <option value="">{{ t.tr("fb.never") }}</option>
                         <option value="1">{{ t.tr("fb.days_1") }}</option>
                         <option value="7">{{ t.tr("fb.days_7") }}</option>
@@ -99,7 +99,7 @@
                 <div>
                     <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.description") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
                     <input type="text" id="share-description-input" placeholder="{{ t.tr("fb.what_is_link_for") }}"
-                           class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                           class="input">
                 </div>
             </div>
             <!-- Link URL display (shown after creation) -->
@@ -110,7 +110,7 @@
                         <input type="text" id="share-link-url" readonly
                                class="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50">
                         <button type="button" data-action="copy-share-link"
-                                class="rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white hover:bg-brand-600">
+                                class="btn btn-primary">
                             {{ t.tr("fb.copy") }}
                         </button>
                     </div>
@@ -119,13 +119,13 @@
 
             <div class="js-share-dialog-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
             <div class="mt-4 flex justify-end gap-2">
-                <button type="button" class="js-share-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
+                <button type="button" class="js-share-cancel btn btn-secondary">
                     {{ t.tr("common.cancel") }}
                 </button>
-                <button type="button" id="share-delete-btn" class="hidden rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50">
+                <button type="button" id="share-delete-btn" class="hidden btn btn-danger disabled:opacity-50">
                     {{ t.tr("common.delete") }}
                 </button>
-                <button type="button" class="js-share-confirm rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                <button type="button" class="js-share-confirm btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
                     {{ t.tr("common.create") }}
                 </button>
             </div>
@@ -141,12 +141,12 @@
                 <div>
                     <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.password") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
                     <input type="password" id="ul-password-input" placeholder="{{ t.tr("fb.leave_empty_no_password") }}"
-                           class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                           class="input">
                 </div>
                 <div>
                     <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.expires_in") }}</label>
                     <select id="ul-expiry-select"
-                            class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                            class="select">
                         <option value="">{{ t.tr("fb.never") }}</option>
                         <option value="1">{{ t.tr("fb.days_1") }}</option>
                         <option value="7">{{ t.tr("fb.days_7") }}</option>
@@ -156,7 +156,7 @@
                 <div>
                     <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.description") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
                     <input type="text" id="ul-description-input" placeholder="{{ t.tr("fb.what_is_link_for") }}"
-                           class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+                           class="input">
                 </div>
             </div>
 
@@ -168,7 +168,7 @@
                         <input type="text" id="ul-link-url" readonly
                                class="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50">
                         <button type="button" data-action="copy-upload-link"
-                                class="rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white hover:bg-brand-600">
+                                class="btn btn-primary">
                             {{ t.tr("fb.copy") }}
                         </button>
                     </div>
@@ -178,13 +178,13 @@
             <div class="js-ul-dialog-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
 
             <div class="mt-4 flex justify-end gap-2">
-                <button type="button" class="js-ul-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
+                <button type="button" class="js-ul-cancel btn btn-secondary">
                     {{ t.tr("common.cancel") }}
                 </button>
-                <button type="button" id="ul-delete-btn" class="hidden rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50">
+                <button type="button" id="ul-delete-btn" class="hidden btn btn-danger disabled:opacity-50">
                     {{ t.tr("common.delete") }}
                 </button>
-                <button type="button" id="ul-create-btn" class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                <button type="button" id="ul-create-btn" class="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
                     {{ t.tr("common.create") }}
                 </button>
             </div>
@@ -203,7 +203,7 @@
                 <div class="js-history-loading text-sm text-gray-400 text-center py-4">{{ t.tr("fb.loading") }}</div>
             </div>
             <div class="flex justify-end gap-2">
-                <button type="button" class="js-history-close rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600">
+                <button type="button" class="js-history-close btn btn-secondary">
                     {{ t.tr("common.close") }}
                 </button>
             </div>

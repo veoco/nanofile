@@ -8,8 +8,8 @@
 <!-- Header -->
 <div class="sm:flex sm:items-center sm:justify-between">
     <div>
-        <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("nav.trash") }}</h1>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        <h1 class="page-title">{{ t.tr("nav.trash") }}</h1>
+        <p class="page-subtitle">
             {{ t.tr("trash.desc") }}
             {% if total_count > 0 %}{{ t.trf("trash.count", [("n", &total_count.to_string())]) }}{% endif %}
         </p>
@@ -34,12 +34,12 @@
                placeholder="{{ t.tr("trash.search_placeholder") }}"
                class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-surface-700 text-gray-900 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
         <button type="submit"
-                class="flex-shrink-0 whitespace-nowrap rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors">
+                class="flex-shrink-0 whitespace-nowrap btn btn-primary">
             {{ t.tr("nav.search") }}
         </button>
         {% if !query.is_empty() %}
         <a href="/trash/"
-           class="inline-flex flex-shrink-0 whitespace-nowrap items-center rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
+           class="flex-shrink-0 whitespace-nowrap btn btn-secondary">
             {{ t.tr("common.clear") }}
         </a>
         {% endif %}
@@ -58,22 +58,22 @@
     {% endif %}
 </div>
 {% else %}
-<div class="mt-4 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-    <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-        <thead class="bg-gray-50 dark:bg-surface-700">
+<div class="mt-4 card overflow-hidden">
+    <table class="table">
+        <thead class="thead">
             <tr>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{ t.tr("common.name") }}</th>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{ t.tr("trash.original_path") }}</th>
-                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden md:table-cell">{{ t.tr("common.library") }}</th>
-                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden sm:table-cell">{{ t.tr("common.deleted") }}</th>
-                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{ t.tr("common.size") }}</th>
-                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{ t.tr("common.actions") }}</th>
+                <th scope="col" class="th">{{ t.tr("common.name") }}</th>
+                <th scope="col" class="th">{{ t.tr("trash.original_path") }}</th>
+                <th scope="col" class="th hidden md:table-cell">{{ t.tr("common.library") }}</th>
+                <th scope="col" class="th text-right hidden sm:table-cell">{{ t.tr("common.deleted") }}</th>
+                <th scope="col" class="th text-right">{{ t.tr("common.size") }}</th>
+                <th scope="col" class="th text-right">{{ t.tr("common.actions") }}</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
             {% for item in items %}
-            <tr class="hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors">
-                <td class="px-4 py-3 text-sm">
+            <tr class="table-row">
+                <td class="td">
                     <div class="flex items-center gap-1">
                         {% if item.is_dir %}
                         {{ icons::icon_folder("mr-1 h-5 w-5 flex-shrink-0 text-amber-400") }}
@@ -85,23 +85,23 @@
                         <span class="font-medium text-gray-900 dark:text-gray-100">{{ item.obj_name }}{% if item.is_dir %}/{% endif %}</span>
                     </div>
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 truncate max-w-xs">
+                <td class="td text-gray-500 dark:text-gray-400 truncate max-w-xs">
                     {{ item.parent_dir }}
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 hidden md:table-cell">
+                <td class="td text-gray-500 dark:text-gray-400 hidden md:table-cell">
                     {% if !item.repo_name.is_empty() %}
                     <a href="/libraries/{{ item.repo_id }}/files/" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.repo_name }}</a>
                     {% else %}
                     <span class="text-gray-400 dark:text-gray-500">{{ t.tr("common.deleted_badge") }}</span>
                     {% endif %}
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-right hidden sm:table-cell whitespace-nowrap">
+                <td class="td text-gray-500 dark:text-gray-400 text-right hidden sm:table-cell whitespace-nowrap">
                     {{ item.deleted_time_display }}
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-right whitespace-nowrap">
+                <td class="td text-gray-500 dark:text-gray-400 text-right whitespace-nowrap">
                     {% if !item.is_dir %}{{ item.size_display }}{% else %}&mdash;{% endif %}
                 </td>
-                <td class="px-4 py-3 text-sm text-right whitespace-nowrap">
+                <td class="td text-right whitespace-nowrap">
                     <form action="/trash/restore/" method="POST" class="inline js-restore-form"
                           data-obj-name="{{ item.obj_name }}"
                           data-repo-name="{{ item.repo_name }}">
@@ -110,7 +110,7 @@
                         <input type="hidden" name="commit_id" value="{{ item.commit_id }}">
                         <input type="hidden" name="path" value="{{ item.parent_dir }}/{{ item.obj_name }}">
                         <button type="submit"
-                                class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-800 transition-colors">
+                                class="btn btn-secondary btn-sm">
                             <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                             </svg>
@@ -131,13 +131,13 @@
     <div class="flex gap-2">
         {% if current_page > 1 %}
         <a href="/trash/?page={{ current_page - 1 }}&amp;per_page={{ per_page }}{% if !query.is_empty() %}&amp;q={{ query }}{% endif %}"
-           class="rounded-lg bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
+           class="btn btn-secondary">
             {{ t.tr("common.previous") }}
         </a>
         {% endif %}
         {% if current_page < total_pages %}
         <a href="/trash/?page={{ current_page + 1 }}&amp;per_page={{ per_page }}{% if !query.is_empty() %}&amp;q={{ query }}{% endif %}"
-           class="rounded-lg bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
+           class="btn btn-secondary">
             {{ t.tr("common.next") }}
         </a>
         {% endif %}
@@ -154,7 +154,7 @@
         </p>
         <div class="mb-4">
             <label for="clean-repo" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.library") }}</label>
-            <select id="clean-repo" class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
+            <select id="clean-repo" class="select">
                 {% for item in items %}
                 <option value="{{ item.repo_id }}">{{ item.repo_name }}</option>
                 {% endfor %}
@@ -162,11 +162,11 @@
         </div>
         <div class="flex justify-end gap-2">
             <button type="button" data-action="close-clean"
-                    class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
+                    class="btn btn-secondary">
                 {{ t.tr("common.cancel") }}
             </button>
             <button data-action="clean-trash"
-                    class="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors">
+                    class="btn btn-danger">
                 {{ t.tr("trash.delete_all") }}
             </button>
         </div>

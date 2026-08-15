@@ -26,7 +26,7 @@ test("unlink a device from the devices page", async ({ page }) => {
   if (!res.ok) throw new Error(`create device token failed: ${res.status} ${await res.text()}`);
 
   await page.goto("/settings/devices/");
-  const card = page.locator("main .rounded-lg").filter({ hasText: deviceName });
+  const card = page.locator("main .card").filter({ hasText: deviceName });
   await expect(card).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());
   await card.locator('form button[type="submit"]').click();

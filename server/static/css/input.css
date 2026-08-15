@@ -19,6 +19,7 @@
 
   /* Surface — neutral slate hierarchy */
   --color-surface-50: #f8fafc;
+  --color-surface-600: #475569;
   --color-surface-700: #334155;
   --color-surface-800: #1e293b;
   --color-surface-900: #0f172a;
@@ -146,6 +147,70 @@ html[data-view="gallery"] .js-view-gallery { color: var(--color-brand-500) !impo
   outline: 4px solid var(--color-brand-400);
   outline-offset: -4px;
   background-color: color-mix(in srgb, var(--color-brand-400) 20%, transparent);
+}
+
+/* ─── Reusable component classes ────────────────────────────────────────────
+   Extracted from duplicated Tailwind class strings across templates.
+   Base attributes are shared via grouped selectors (Tailwind v4's @apply
+   cannot reference custom component classes). */
+@layer components {
+  /* Buttons */
+  .btn, .btn-primary, .btn-secondary, .btn-danger, .btn-danger-outline, .btn-ghost, .btn-ghost-brand, .btn-ghost-danger {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium
+           transition-colors
+           focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary         { @apply bg-brand-500 text-white hover:bg-brand-600; }
+  .btn-secondary       { @apply border border-gray-300 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600; }
+  .btn-danger          { @apply bg-red-600 text-white hover:bg-red-700; }
+  .btn-danger-outline  { @apply border border-red-200 dark:border-red-900 bg-white dark:bg-surface-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-700; }
+  .btn-ghost        { @apply text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-surface-700 dark:hover:text-gray-300; }
+  .btn-ghost-brand  { @apply text-gray-400 hover:bg-brand-50 hover:text-brand-500 dark:hover:bg-brand-900/20 dark:hover:text-brand-400; }
+  .btn-ghost-danger { @apply text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 dark:hover:text-red-400; }
+  .btn-sm   { @apply px-2.5 py-1.5 text-xs; }
+  .btn-icon { @apply p-1.5 rounded-md; }
+
+  /* Form controls */
+  .input, .select, .textarea {
+    @apply block w-full rounded-lg border border-gray-300 dark:border-gray-600
+           bg-white dark:bg-surface-700 text-gray-900 dark:text-gray-100 text-sm p-2.5
+           shadow-sm placeholder-gray-400
+           focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500;
+  }
+  .textarea    { @apply resize-none; }
+  .form-label  { @apply block text-sm font-medium text-gray-700 dark:text-gray-300; }
+  .field-label { @apply block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider; }
+
+  /* Cards */
+  .card      { @apply rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800; }
+  .card-body { @apply px-4 py-5 sm:px-6; }
+
+  /* Badges */
+  .badge, .badge-brand, .badge-green, .badge-red, .badge-gray {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset;
+  }
+  .badge-brand { @apply bg-brand-50 text-brand-700 ring-brand-600/20 dark:bg-brand-500/10 dark:text-brand-300 dark:ring-brand-400/20; }
+  .badge-green { @apply bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-500/10 dark:text-green-300 dark:ring-green-400/20; }
+  .badge-red   { @apply bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-400/20; }
+  .badge-gray  { @apply bg-gray-50 text-gray-600 ring-gray-500/20 dark:bg-gray-500/10 dark:text-gray-400 dark:ring-gray-400/20; }
+
+  /* Tables */
+  .table     { @apply min-w-full divide-y divide-gray-200 dark:divide-gray-700; }
+  .thead     { @apply bg-gray-50 dark:bg-surface-700; }
+  .th        { @apply px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase; }
+  .td        { @apply px-4 py-3 text-sm; }
+  .table-row { @apply hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors; }
+
+  /* Page header / empty state */
+  .page-title    { @apply text-2xl font-semibold text-gray-900 dark:text-gray-100; }
+  .page-subtitle { @apply mt-1 text-sm text-gray-500 dark:text-gray-400; }
+  .empty-state   { @apply mt-8 text-center; }
+
+  /* Sidebar nav */
+  .nav-item          { @apply flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors; }
+  .nav-item-active   { @apply bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 font-medium; }
+  .nav-item-inactive { @apply text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-surface-700 hover:text-gray-900 dark:hover:text-gray-100; }
 }
 
 

@@ -16,48 +16,48 @@
 {% block content %}
 <form class="space-y-5" action="/accounts/register/" method="POST">
     <div>
-        <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t.tr("auth.email_address") }}</label>
+        <label for="email" class="form-label">{{ t.tr("auth.email_address") }}</label>
         <input id="email"
                name="email"
                type="email"
                autocomplete="email"
                required
-               class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 text-gray-900 dark:text-gray-100 dark:bg-surface-700  placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm">
+               class="input">
     </div>
 
     <div>
-        <label for="password1" class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t.tr("auth.password") }}</label>
+        <label for="password1" class="form-label">{{ t.tr("auth.password") }}</label>
         <input id="password1"
                name="password1"
                type="password"
                autocomplete="new-password"
                required
-               class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 text-gray-900 dark:text-gray-100 dark:bg-surface-700  placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm">
+               class="input">
         <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("auth.password_min_length") }}</p>
     </div>
 
     <div>
-        <label for="password2" class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t.tr("auth.confirm_password") }}</label>
+        <label for="password2" class="form-label">{{ t.tr("auth.confirm_password") }}</label>
         <input id="password2"
                name="password2"
                type="password"
                autocomplete="new-password"
                required
-               class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 text-gray-900 dark:text-gray-100 dark:bg-surface-700  placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm">
+               class="input">
     </div>
 
     <div>
-        <label for="invitation_code" class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t.tr("auth.invitation_code") }}</label>
+        <label for="invitation_code" class="form-label">{{ t.tr("auth.invitation_code") }}</label>
         <input id="invitation_code"
                name="invitation_code"
                type="text"
                required
                placeholder="{{ t.tr("auth.invitation_code_placeholder") }}"
-               class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 text-gray-900 dark:text-gray-100 dark:bg-surface-700  placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm">
+               class="input">
     </div>
 
     <button type="submit"
-            class="flex w-full justify-center rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white  transition hover:bg-brand-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500">
+            class="btn btn-primary w-full font-semibold">
         {{ t.tr("auth.create_account") }}
     </button>
 </form>

@@ -17,7 +17,7 @@ async function mintInvitationCode(
     await page
       .locator('form[action="/settings/invitations/"] button[type="submit"]')
       .click();
-    const card = page.locator("main .rounded-lg").filter({ hasText: boundEmail });
+    const card = page.locator("main .card").filter({ hasText: boundEmail });
     await expect(card).toBeVisible();
     const code = (await card.locator(".select-all").first().innerText()).trim();
     expect(code.length).toBeGreaterThan(0);

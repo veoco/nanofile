@@ -3,8 +3,8 @@
 {% block title %}{{ t.tr("settings.title") }} | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.title") }}</h1>
-<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("settings.subtitle") }}</p>
+<h1 class="page-title">{{ t.tr("settings.title") }}</h1>
+<p class="page-subtitle">{{ t.tr("settings.subtitle") }}</p>
 
 {% if let Some(error) = error %}
 {% include "includes/alert_error.html" %}
@@ -16,8 +16,8 @@
 
 <div class="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
     <!-- Avatar -->
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card">
+        <div class="card-body">
             <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.avatar") }}</h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("settings.avatar_desc") }}</p>
             <div class="mt-4 flex items-center gap-x-6">
@@ -28,7 +28,7 @@
                     <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif" required
                            class="block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-4 file:rounded-lg file:border-0 file:bg-brand-500 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-brand-600 file:transition-colors">
                     <button type="submit"
-                            class="self-start rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
+                            class="self-start btn btn-primary">
                         {{ t.tr("common.upload") }}
                     </button>
                 </form>
@@ -37,16 +37,16 @@
     </div>
 
     <!-- Account Info -->
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card">
+        <div class="card-body">
             <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.account_info") }}</h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ user_email }}</p>
         </div>
     </div>
 
     <!-- Interface Language -->
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card">
+        <div class="card-body">
             <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.language") }}</h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 {{ t.tr("settings.language_desc") }}
@@ -54,12 +54,12 @@
             <form action="/settings/language/" method="POST" class="mt-4 space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <select name="language"
-                        class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
+                        class="mt-1 select">
                     <option value="en" {% if user_language == "en" %}selected{% endif %}>English</option>
                     <option value="zh" {% if user_language == "zh" %}selected{% endif %}>简体中文</option>
                 </select>
                 <button type="submit"
-                        class="rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
+                        class="btn btn-primary">
                     {{ t.tr("common.save") }}
                 </button>
             </form>
@@ -67,8 +67,8 @@
     </div>
 
     <!-- Display Name -->
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card">
+        <div class="card-body">
             <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.display_name") }}</h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 {{ t.tr("settings.display_name_desc") }}
@@ -76,14 +76,14 @@
             <form action="/settings/display-name/" method="POST" class="mt-4 space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <div>
-                    <label for="display_name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t.tr("settings.display_name") }}</label>
+                    <label for="display_name" class="form-label">{{ t.tr("settings.display_name") }}</label>
                     <input type="text" name="display_name" id="display_name"
                            value="{{ user_display_name }}"
                            maxlength="255"
-                           class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
+                           class="mt-1 input">
                 </div>
                 <button type="submit"
-                        class="rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
+                        class="btn btn-primary">
                     {{ t.tr("common.save") }}
                 </button>
             </form>
@@ -91,8 +91,8 @@
     </div>
 
     <!-- Two-Factor Authentication -->
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card">
+        <div class="card-body">
             <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.two_factor") }}</h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 {{ t.tr("settings.two_factor_desc") }}
@@ -106,21 +106,21 @@
                 {% endif %}
             </p>
             <a href="/settings/two-factor/"
-               class="mt-3 inline-block rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
+               class="mt-3 inline-block btn btn-primary">
                 {{ t.tr("settings.manage_two_factor") }}
             </a>
         </div>
     </div>
 
     <!-- Connected Devices -->
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card">
+        <div class="card-body">
             <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.devices") }}</h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 {{ t.tr("settings.devices_desc") }}
             </p>
             <a href="/settings/devices/"
-               class="mt-3 inline-block rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
+               class="mt-3 inline-block btn btn-primary">
                 {{ t.tr("settings.manage_devices") }}
             </a>
         </div>
@@ -128,14 +128,14 @@
 
     {% if is_admin %}
     <!-- Invitations -->
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card">
+        <div class="card-body">
             <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.invitations") }}</h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 {{ t.tr("settings.invitations_desc") }}
             </p>
             <a href="/settings/invitations/"
-               class="mt-3 inline-block rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
+               class="mt-3 inline-block btn btn-primary">
                 {{ t.tr("settings.manage_invitations") }}
             </a>
         </div>
@@ -143,23 +143,23 @@
     {% endif %}
 
     <!-- Change Password -->
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card">
+        <div class="card-body">
             <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.change_password") }}</h2>
             <form action="/settings/password/" method="POST" class="mt-4 space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <div>
-                    <label for="old_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t.tr("settings.current_password") }}</label>
+                    <label for="old_password" class="form-label">{{ t.tr("settings.current_password") }}</label>
                     <input type="password" name="old_password" id="old_password" required
-                           class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
+                           class="mt-1 input">
                 </div>
                 <div>
-                    <label for="new_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t.tr("settings.new_password") }}</label>
+                    <label for="new_password" class="form-label">{{ t.tr("settings.new_password") }}</label>
                     <input type="password" name="new_password" id="new_password" required
-                           class="mt-1 block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
+                           class="mt-1 input">
                 </div>
                 <button type="submit"
-                        class="rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
+                        class="btn btn-primary">
                     {{ t.tr("settings.change_password") }}
                 </button>
             </form>

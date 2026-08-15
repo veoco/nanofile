@@ -3,8 +3,8 @@
 {% block title %}{{ t.tr("invite.title") }} | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("invite.title") }}</h1>
-<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+<h1 class="page-title">{{ t.tr("invite.title") }}</h1>
+<p class="page-subtitle">
     {{ t.tr("settings.invitations_desc") }}
 </p>
 
@@ -21,17 +21,17 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="flex items-end gap-3">
             <div class="flex-1">
-                <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label for="email" class="form-label mb-1">
                     {{ t.tr("invite.bound_email") }} <span class="text-gray-400 dark:text-gray-500 font-normal">{{ t.tr("invite.optional") }}</span>
                 </label>
                 <input id="email"
                        name="email"
                        type="email"
                        placeholder="{{ t.tr("invite.email_placeholder") }}"
-                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-surface-700 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
+                       class="input">
             </div>
             <button type="submit"
-                    class="rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 whitespace-nowrap transition-colors">
+                    class="btn btn-primary whitespace-nowrap">
                 + {{ t.tr("invite.generate_code") }}
             </button>
         </div>
@@ -41,8 +41,8 @@
     </form>
 
     {% if invitations.is_empty() %}
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card">
+        <div class="card-body">
             <p class="text-sm text-gray-500 dark:text-gray-400">
                 {{ t.tr("invite.no_codes") }}
                 {{ t.tr("invite.no_codes_hint") }}
@@ -52,8 +52,8 @@
     {% endif %}
 
     {% for inv in invitations %}
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 {% if !loop.first %}mt-4{% endif %}">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card {% if !loop.first %}mt-4{% endif %}">
+        <div class="card-body">
             <div class="flex items-center justify-between">
                 <div>
                     <p class="text-sm font-mono font-semibold inline-block {% if inv.used_by_email.is_some() %}text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-gray-100{% endif %}"><span class="select-all">{{ inv.code }}</span></p>
@@ -86,7 +86,7 @@
                 <form action="/settings/invitations/{{ inv.id }}/delete/" method="POST" data-confirm="invite.delete_confirm">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit"
-                            class="rounded-lg bg-red-600 py-1.5 px-3 text-xs font-semibold text-white hover:bg-red-700 transition-colors">
+                            class="btn btn-danger btn-sm">
                         {{ t.tr("common.delete") }}
                     </button>
                 </form>

@@ -8,17 +8,17 @@
 
 <div class="flex flex-wrap items-center gap-2">
     <button data-action="new-folder"
-            class="inline-flex items-center rounded-md bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-900 dark:hover:text-gray-100">
+            class="btn btn-secondary">
         {{ icons::icon_folder_plus("mr-1.5 h-4 w-4 text-gray-500") }}
         {{ t.tr("fb.new_folder") }}
     </button>
     <button data-action="upload"
-            class="inline-flex items-center rounded-md bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-900 dark:hover:text-gray-100">
+            class="btn btn-secondary">
         {{ icons::icon_upload("mr-1.5 h-4 w-4 text-gray-500") }}
         {{ t.tr("common.upload") }}
     </button>
     <button data-action="upload-folder"
-            class="inline-flex items-center rounded-md bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-900 dark:hover:text-gray-100">
+            class="btn btn-secondary">
         {{ icons::icon_folder_outline("mr-1.5 h-4 w-4 text-gray-500") }}
         {{ t.tr("fb.upload_folder") }}
     </button>
@@ -69,15 +69,15 @@
             <input type="hidden" name="current_dir" value="{{ current_path }}">
             <input type="hidden" name="repo_name" value="{{ repo_name }}">
             <input id="new-folder-input" type="text" name="folder_name" placeholder="{{ t.tr("fb.folder_name_placeholder") }}"
-                   class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5"
+                   class="input"
                    autofocus>
             <div class="mt-4 flex justify-end gap-2">
                 <button type="button" data-action="close-new-folder"
-                        class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
+                        class="btn btn-secondary">
                     {{ t.tr("common.cancel") }}
                 </button>
                 <button type="submit"
-                        class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors">
+                        class="btn btn-primary">
                     {{ t.tr("common.create") }}
                 </button>
             </div>

@@ -94,7 +94,7 @@
         <button type="button" class="js-deselect-all hover:underline">{{ t.tr("fb.deselect") }}</button>
     </span>
     <div id="js-selection-actions" class="hidden flex items-center gap-0.5">
-        <button type="button" class="js-batch-download p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20" title="{{ t.tr("fb.download_selected") }}">
+        <button type="button" class="js-batch-download btn btn-ghost-brand btn-icon" title="{{ t.tr("fb.download_selected") }}">
             {{ icons::icon_download("h-3.5 w-3.5") }}
         </button>
         <button type="button" class="js-batch-delete p-1.5 rounded-md text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" title="{{ t.tr("fb.delete_selected") }}">
@@ -178,7 +178,7 @@
                     title="{% if entry.starred %}{{ t.tr("fb.unstar") }}{% else %}{{ t.tr("fb.star") }}{% endif %}">
                 {{ icons::icon_star("h-3.5 w-3.5", filled=entry.starred) }}
             </button>
-            <button type="button" class="js-share-btn p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20 dark:hover:text-brand-400 transition-colors"
+            <button type="button" class="js-share-btn btn btn-ghost-brand btn-icon"
                     data-repo-id="{{ repo_id }}"
                     data-path="/{{ entry.relative_path }}"
                     data-type="{{ entry.entry_type }}"
@@ -194,18 +194,18 @@
                     title="{{ t.trf("fb.get_upload_link_for", [("name", &entry.name)]) }}">
                 {{ icons::icon_upload("h-3.5 w-3.5") }}
             </button>
-            <button type="button" class="js-entry-download p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
+            <button type="button" class="js-entry-download btn btn-ghost btn-icon"
                     title="{{ t.trf("fb.download_name", [("name", &entry.name)]) }}">
                 {{ icons::icon_download("h-3.5 w-3.5") }}
             </button>
-            <button class="js-rename-btn p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
+            <button class="js-rename-btn btn btn-ghost btn-icon"
                     data-path="{{ entry.relative_path }}"
                     data-name="{{ entry.name }}"
                     data-type="{{ entry.entry_type }}"
                     title="{{ t.trf("fb.rename_name", [("name", &entry.name)]) }}">
                 {{ icons::icon_pencil("h-3.5 w-3.5") }}
             </button>
-            <button class="js-delete-btn p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
+            <button class="js-delete-btn btn btn-ghost-danger btn-icon"
                     data-repo-id="{{ repo_id }}"
                     data-path="{{ entry.relative_path }}"
                     data-name="{{ entry.name }}"
@@ -266,7 +266,7 @@
                     title="{% if entry.starred %}{{ t.tr("fb.unstar") }}{% else %}{{ t.tr("fb.star") }}{% endif %}">
                 {{ icons::icon_star("h-3.5 w-3.5", filled=entry.starred) }}
             </button>
-            <button type="button" class="js-share-btn p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20 dark:hover:text-brand-400 transition-colors"
+            <button type="button" class="js-share-btn btn btn-ghost-brand btn-icon"
                     data-repo-id="{{ repo_id }}"
                     data-path="/{{ entry.relative_path }}"
                     data-type="{{ entry.entry_type }}"
@@ -277,25 +277,25 @@
             </button>
             {% if entry.entry_type == "file" %}
             <a href="/repos/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}?dl=1"
-               class="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
+               class="btn btn-ghost btn-icon"
                title="{{ t.trf("fb.download_name", [("name", &entry.name)]) }}">
                 {{ icons::icon_download("h-3.5 w-3.5") }}
             </a>
-            <button type="button" class="js-history-btn p-1.5 rounded-md text-gray-400 hover:text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/20 dark:hover:text-brand-400 transition-colors"
+            <button type="button" class="js-history-btn btn btn-ghost-brand btn-icon"
                     data-repo-id="{{ repo_id }}"
                     data-path="/{{ entry.relative_path }}"
                     title="{{ t.trf("fb.view_history_for", [("name", &entry.name)]) }}">
                 {{ icons::icon_clock("h-3.5 w-3.5") }}
             </button>
             {% endif %}
-            <button class="js-rename-btn p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
+            <button class="js-rename-btn btn btn-ghost btn-icon"
                     data-path="{{ entry.relative_path }}"
                     data-name="{{ entry.name }}"
                     data-type="{{ entry.entry_type }}"
                     title="{{ t.trf("fb.rename_name", [("name", &entry.name)]) }}">
                 {{ icons::icon_pencil("h-3.5 w-3.5") }}
             </button>
-            <button class="js-delete-btn p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
+            <button class="js-delete-btn btn btn-ghost-danger btn-icon"
                     data-repo-id="{{ repo_id }}"
                     data-path="{{ entry.relative_path }}"
                     data-name="{{ entry.name }}"

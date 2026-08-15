@@ -3,8 +3,8 @@
 {% block title %}{{ t.tr("device.title") }} | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("device.title") }}</h1>
-<p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("device.desc") }}</p>
+<h1 class="page-title">{{ t.tr("device.title") }}</h1>
+<p class="page-subtitle">{{ t.tr("device.desc") }}</p>
 
 {% if let Some(error) = error %}
 {% include "includes/alert_error.html" %}
@@ -16,16 +16,16 @@
 
 <div class="mt-6 max-w-2xl">
     {% if devices.is_empty() %}
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card">
+        <div class="card-body">
             <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.tr("device.no_devices") }}</p>
         </div>
     </div>
     {% endif %}
 
     {% for device in devices %}
-    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 {% if !loop.first %}mt-4{% endif %}">
-        <div class="px-4 py-5 sm:px-6">
+    <div class="card {% if !loop.first %}mt-4{% endif %}">
+        <div class="card-body">
             <div class="flex items-center justify-between">
                 <div class="flex items-center space-x-3">
                     <div class="flex-shrink-0">
@@ -64,7 +64,7 @@
                     <input type="hidden" name="platform" value="{{ device.platform }}">
                     <input type="hidden" name="device_id" value="{{ device.device_id }}">
                     <button type="submit"
-                            class="rounded-lg bg-red-600 py-1.5 px-3 text-xs font-semibold text-white hover:bg-red-700 transition-colors">
+                            class="btn btn-danger btn-sm">
                         {{ t.tr("device.unlink") }}
                     </button>
                 </form>

@@ -3,15 +3,15 @@
 {% block title %}{{ t.tr("nav.search") }} | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("nav.search") }}</h1>
+<h1 class="page-title">{{ t.tr("nav.search") }}</h1>
 
 <form action="/search/" method="GET" class="mt-4 max-w-lg">
     <div class="flex gap-x-2">
         <input type="text" name="q" value="{{ query }}"
                placeholder="{{ t.tr("search.placeholder") }}"
-               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 sm:text-sm p-2.5">
+               class="input">
         <button type="submit"
-                class="flex-shrink-0 whitespace-nowrap rounded-lg bg-brand-500 py-2 px-4 text-sm font-semibold text-white hover:bg-brand-600 transition-colors">
+                class="flex-shrink-0 whitespace-nowrap btn btn-primary">
             {{ t.tr("nav.search") }}
         </button>
     </div>
@@ -32,7 +32,7 @@
     <p class="mt-4 text-sm text-gray-400 dark:text-gray-500">{{ t.tr("search.no_results") }}</p>
     {% else %}
     <ul id="search-results"
-        class="mt-4 divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-surface-800"
+        class="mt-4 divide-y divide-gray-200 dark:divide-gray-700 card overflow-hidden"
         data-query="{{ query }}"
         data-search-filename-only="{% if search_filename_only %}true{% else %}false{% endif %}"
         data-per-page="{{ per_page }}"

@@ -27,7 +27,7 @@
 
 <form class="space-y-5" action="/accounts/two-factor-auth/" method="POST">
     <div>
-        <label for="code" class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t.tr("auth.verification_code") }}</label>
+        <label for="code" class="form-label">{{ t.tr("auth.verification_code") }}</label>
         <input id="code"
                name="code"
                type="text"
@@ -43,7 +43,7 @@
     {% endif %}
 
     <button type="submit"
-            class="flex w-full justify-center rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white  transition hover:bg-brand-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500">
+            class="btn btn-primary w-full font-semibold">
         {{ t.tr("auth.verify") }}
     </button>
 </form>
