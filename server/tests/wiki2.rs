@@ -455,3 +455,252 @@ fn extract_form_csrf(html: &str) -> Option<String> {
     let end = html[start..].find('"')? + start;
     Some(html[start..end].to_string())
 }
+
+/// Log into the web UI and return a cookie-backed client. Redirects are not
+/// followed so POST handlers can be asserted as 302.
+async fn login_web_client(base_url: &str) -> reqwest::Client {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let login = client
+        .post(format!("{base_url}/accounts/login/"))
+        .form(&[("email", "test@example.com"), ("password", "password")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 302, "web login should redirect");
+    client
+}
+
+/// The wiki list page (`/wikis/`) renders seeded wikis, and the server-rendered
+/// create / rename / publish / delete forms round-trip through 302 redirects.
+#[tokio::test]
+async fn test_wiki_web_list_and_management() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+
+    // Seed a wiki via the API.
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/wikis2/",
+            Some(&f.api_token),
+            &serde_json::json!({"name": "list-wiki"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+
+    // Log into the web UI and load the list page.
+    let web = login_web_client(base).await;
+    let resp = web.get(format!("{base}/wikis/")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let html = resp.text().await.unwrap();
+    assert!(html.contains("list-wiki"), "seeded wiki should be listed");
+    assert!(html.contains("Mine"), "mine badge should render");
+    let csrf = extract_form_csrf(&html).expect("create form csrf token");
+
+    // Create a wiki via the web form.
+    let create = web
+        .post(format!("{base}/wikis/new/"))
+        .form(&[("csrf_token", csrf.as_str()), ("name", "created-from-web")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create.status(), 302, "create should redirect");
+
+    // Locate the newly created wiki via the API.
+    let resp = f.client.get("/api/v2.1/wikis2/", Some(&f.api_token)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let new_id = body["wikis"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["name"] == "created-from-web")
+        .map(|w| w["id"].as_str().unwrap().to_string())
+        .expect("created wiki should be in the list");
+
+    // The list page now shows it.
+    let resp = web.get(format!("{base}/wikis/")).send().await.unwrap();
+    let html = resp.text().await.unwrap();
+    assert!(html.contains("created-from-web"));
+
+    // Rename.
+    let rename = web
+        .post(format!("{base}/wikis/{new_id}/rename/"))
+        .form(&[("csrf_token", csrf.as_str()), ("name", "renamed-web")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rename.status(), 302);
+
+    // Publish.
+    let publish = web
+        .post(format!("{base}/wikis/{new_id}/publish/"))
+        .form(&[("csrf_token", csrf.as_str()), ("publish_url", "webtest")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(publish.status(), 302);
+
+    // Delete.
+    let delete = web
+        .post(format!("{base}/wikis/{new_id}/delete/"))
+        .form(&[("csrf_token", csrf.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), 302);
+
+    // Gone from the list.
+    let resp = web.get(format!("{base}/wikis/")).send().await.unwrap();
+    let html = resp.text().await.unwrap();
+    assert!(
+        !html.contains("renamed-web"),
+        "deleted wiki must not be listed"
+    );
+    // The originally seeded wiki is untouched.
+    assert!(html.contains("list-wiki"));
+}
+
+/// The wiki view page drives page management forms: create a sub-page, rename
+/// it, lock it, then delete it — each through a 302 server-rendered POST.
+#[tokio::test]
+async fn test_wiki_web_page_management() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+
+    // Create a wiki and read the home page id.
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/wikis2/",
+            Some(&f.api_token),
+            &serde_json::json!({"name": "pages-web-wiki"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let wiki_id = body["id"].as_str().unwrap().to_string();
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/wiki2/{wiki_id}/config/"),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let home_id = body["wiki"]["wiki_config"]["pages"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Log in and open the wiki view to obtain a CSRF token.
+    let web = login_web_client(base).await;
+    let resp = web
+        .get(format!("{base}/wikis/{wiki_id}/"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let html = resp.text().await.unwrap();
+    let csrf = extract_form_csrf(&html).expect("page form csrf token");
+
+    // Create a sub-page under home.
+    let create = web
+        .post(format!("{base}/wikis/{wiki_id}/page/new/"))
+        .form(&[
+            ("csrf_token", csrf.as_str()),
+            ("page_name", "child"),
+            ("current_id", home_id.as_str()),
+            ("insert_position", "inner"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create.status(), 302, "create page should redirect");
+
+    // Read back the child page id.
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/wiki2/{wiki_id}/config/"),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let pages = body["wiki"]["wiki_config"]["pages"].as_array().unwrap();
+    assert_eq!(pages.len(), 2, "child page should be created");
+    let child_id = pages
+        .iter()
+        .find(|p| p["name"] == "child")
+        .map(|p| p["id"].as_str().unwrap().to_string())
+        .expect("child page id");
+
+    // Rename the child page.
+    let rename = web
+        .post(format!("{base}/wikis/{wiki_id}/page/{child_id}/rename/"))
+        .form(&[
+            ("csrf_token", csrf.as_str()),
+            ("page_name", "renamed-child"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rename.status(), 302);
+
+    // Lock the child page.
+    let lock = web
+        .post(format!("{base}/wikis/{wiki_id}/page/{child_id}/lock/"))
+        .form(&[("csrf_token", csrf.as_str()), ("locked", "true")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(lock.status(), 302);
+
+    // The child page is locked.
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/wiki2/{wiki_id}/config/"),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let child = body["wiki"]["wiki_config"]["pages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == child_id)
+        .expect("child page still present");
+    assert_eq!(child["locked"], true, "page should be locked");
+
+    // Delete the child page.
+    let delete = web
+        .post(format!("{base}/wikis/{wiki_id}/page/{child_id}/delete/"))
+        .form(&[("csrf_token", csrf.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), 302);
+
+    // Back to a single page.
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/wiki2/{wiki_id}/config/"),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["wiki"]["wiki_config"]["pages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "deleted child should leave a single page"
+    );
+}

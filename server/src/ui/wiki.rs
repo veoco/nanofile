@@ -6,7 +6,7 @@ use askama::Template;
 use axum::Form;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Redirect};
+use axum::response::IntoResponse;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -439,6 +439,12 @@ pub async fn wiki_page_save(
 
 // ── Wiki list & management (server-rendered forms) ──────────────────────────
 
+/// Build a 302 redirect (matching seahub's `HttpResponseRedirect`, which the
+/// rest of the web UI uses; axum's `Redirect::to` would return 303).
+fn redirect_to(url: impl Into<String>) -> axum::response::Response {
+    (StatusCode::FOUND, [("Location", url.into())]).into_response()
+}
+
 /// Extract one typed list item from the `wikis` array of `list_wikis_v2`.
 fn parse_wiki_item(v: &serde_json::Value) -> WikiListItem {
     let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
@@ -495,7 +501,7 @@ pub async fn wiki_create(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Form(form): Form<WikiNameForm>,
-) -> Result<Redirect, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -505,7 +511,7 @@ pub async fn wiki_create(
         .wiki_service()
         .create_wiki(user.user_id, &user.email, &form.name.unwrap_or_default())
         .await?;
-    Ok(Redirect::to("/wikis/"))
+    Ok(redirect_to("/wikis/"))
 }
 
 /// `POST /wikis/{repo_id}/rename/` — rename a wiki.
@@ -514,7 +520,7 @@ pub async fn wiki_rename(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Form(form): Form<WikiNameForm>,
-) -> Result<Redirect, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -524,7 +530,7 @@ pub async fn wiki_rename(
         .wiki_service()
         .rename_wiki(&repo_id, user.user_id, &form.name.unwrap_or_default())
         .await?;
-    Ok(Redirect::to("/wikis/"))
+    Ok(redirect_to("/wikis/"))
 }
 
 /// `POST /wikis/{repo_id}/delete/` — delete a wiki.
@@ -533,7 +539,7 @@ pub async fn wiki_delete(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Form(form): Form<WikiCsrfForm>,
-) -> Result<Redirect, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -543,7 +549,7 @@ pub async fn wiki_delete(
         .wiki_service()
         .delete_wiki(&repo_id, user.user_id)
         .await?;
-    Ok(Redirect::to("/wikis/"))
+    Ok(redirect_to("/wikis/"))
 }
 
 /// `POST /wikis/{repo_id}/publish/` — publish a wiki under a custom URL.
@@ -552,7 +558,7 @@ pub async fn wiki_publish(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Form(form): Form<WikiPublishForm>,
-) -> Result<Redirect, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -572,7 +578,7 @@ pub async fn wiki_publish(
             enable_server_render,
         )
         .await?;
-    Ok(Redirect::to("/wikis/"))
+    Ok(redirect_to("/wikis/"))
 }
 
 /// `POST /wikis/{repo_id}/unpublish/` — cancel a wiki's public publishing.
@@ -581,7 +587,7 @@ pub async fn wiki_unpublish(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Form(form): Form<WikiCsrfForm>,
-) -> Result<Redirect, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -591,7 +597,7 @@ pub async fn wiki_unpublish(
         .wiki_service()
         .unpublish_wiki(&repo_id, user.user_id)
         .await?;
-    Ok(Redirect::to("/wikis/"))
+    Ok(redirect_to("/wikis/"))
 }
 
 // ── Wiki page management (server-rendered forms) ────────────────────────────
@@ -602,7 +608,7 @@ pub async fn wiki_page_create(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Form(form): Form<WikiPageCreateForm>,
-) -> Result<Redirect, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -629,7 +635,7 @@ pub async fn wiki_page_create(
     } else {
         format!("/wikis/{repo_id}/?page_id={new_page_id}")
     };
-    Ok(Redirect::to(&target))
+    Ok(redirect_to(target))
 }
 
 /// `POST /wikis/{repo_id}/page/{page_id}/delete/` — delete a page.
@@ -638,7 +644,7 @@ pub async fn wiki_page_delete(
     State(state): State<Arc<AppState>>,
     Path((repo_id, page_id)): Path<(String, String)>,
     Form(form): Form<WikiCsrfForm>,
-) -> Result<Redirect, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -648,7 +654,7 @@ pub async fn wiki_page_delete(
         .wiki_service()
         .delete_page(&repo_id, user.user_id, &user.email, &page_id)
         .await?;
-    Ok(Redirect::to(&format!("/wikis/{repo_id}/")))
+    Ok(redirect_to(format!("/wikis/{repo_id}/")))
 }
 
 /// `POST /wikis/{repo_id}/page/{page_id}/rename/` — rename a page.
@@ -657,7 +663,7 @@ pub async fn wiki_page_rename(
     State(state): State<Arc<AppState>>,
     Path((repo_id, page_id)): Path<(String, String)>,
     Form(form): Form<WikiPageRenameForm>,
-) -> Result<Redirect, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -675,9 +681,7 @@ pub async fn wiki_page_rename(
             None,
         )
         .await?;
-    Ok(Redirect::to(&format!(
-        "/wikis/{repo_id}/?page_id={page_id}"
-    )))
+    Ok(redirect_to(format!("/wikis/{repo_id}/?page_id={page_id}")))
 }
 
 /// `POST /wikis/{repo_id}/page/{page_id}/move/` — move a page in the navigation.
@@ -686,7 +690,7 @@ pub async fn wiki_page_move(
     State(state): State<Arc<AppState>>,
     Path((repo_id, page_id)): Path<(String, String)>,
     Form(form): Form<WikiPageMoveForm>,
-) -> Result<Redirect, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -705,9 +709,7 @@ pub async fn wiki_page_move(
             &move_position,
         )
         .await?;
-    Ok(Redirect::to(&format!(
-        "/wikis/{repo_id}/?page_id={page_id}"
-    )))
+    Ok(redirect_to(format!("/wikis/{repo_id}/?page_id={page_id}")))
 }
 
 /// `POST /wikis/{repo_id}/page/{page_id}/lock/` — lock / unlock a page.
@@ -716,7 +718,7 @@ pub async fn wiki_page_lock(
     State(state): State<Arc<AppState>>,
     Path((repo_id, page_id)): Path<(String, String)>,
     Form(form): Form<WikiPageLockForm>,
-) -> Result<Redirect, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -730,7 +732,5 @@ pub async fn wiki_page_lock(
         .wiki_service()
         .set_page_locked(&repo_id, user.user_id, &user.email, &page_id, locked)
         .await?;
-    Ok(Redirect::to(&format!(
-        "/wikis/{repo_id}/?page_id={page_id}"
-    )))
+    Ok(redirect_to(format!("/wikis/{repo_id}/?page_id={page_id}")))
 }
