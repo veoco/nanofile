@@ -213,11 +213,7 @@ impl MetadataService {
                     if name.trim().is_empty() {
                         continue;
                     }
-                    let color = item
-                        .get("_tag_color")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("#e6e6e6")
-                        .to_string();
+                    let color = sanitize_tag_color(item.get("_tag_color").and_then(|v| v.as_str()));
                     inputs.push(TagInput {
                         name: name.to_string(),
                         color,
@@ -255,11 +251,8 @@ impl MetadataService {
                 .get("_tag_name")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            let color = tag
-                .get("_tag_color")
-                .and_then(|v| v.as_str())
-                .unwrap_or("#e6e6e6");
-            items.push((id, name.to_string(), color.to_string()));
+            let color = sanitize_tag_color(tag.get("_tag_color").and_then(|v| v.as_str()));
+            items.push((id, name.to_string(), color));
         }
         if items.is_empty() {
             return Ok(());
@@ -633,6 +626,23 @@ impl MetadataService {
     }
 }
 
+/// Validate a client-supplied tag color, falling back to the default gray on
+/// anything that isn't a plain `#RGB` / `#RRGGBB` hex value. The color is later
+/// inlined into a template `style` attribute, so restricting it to hex digits
+/// closes the CSS-injection vector.
+fn sanitize_tag_color(color: Option<&str>) -> String {
+    let c = color.unwrap_or("#e6e6e6").trim();
+    let ok = (c.len() == 4 || c.len() == 7)
+        && c.starts_with('#')
+        && c.get(1..)
+            .is_some_and(|hex| hex.chars().all(|ch| ch.is_ascii_hexdigit()));
+    if ok {
+        c.to_string()
+    } else {
+        "#e6e6e6".to_string()
+    }
+}
+
 fn hex_val(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -667,4 +677,46 @@ fn split_path(path: &str) -> (String, String) {
         },
         name.to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_tag_color;
+
+    #[test]
+    fn accepts_valid_hex_colors() {
+        assert_eq!(sanitize_tag_color(Some("#e6e6e6")), "#e6e6e6");
+        assert_eq!(sanitize_tag_color(Some("#abc")), "#abc");
+        assert_eq!(sanitize_tag_color(Some("#ABC")), "#ABC");
+        assert_eq!(sanitize_tag_color(Some("#A1b2C3")), "#A1b2C3");
+    }
+
+    #[test]
+    fn falls_back_on_missing_or_invalid() {
+        // Missing color uses the default.
+        assert_eq!(sanitize_tag_color(None), "#e6e6e6");
+        // Empty / whitespace.
+        assert_eq!(sanitize_tag_color(Some("")), "#e6e6e6");
+        assert_eq!(sanitize_tag_color(Some("   ")), "#e6e6e6");
+        // Not a leading '#'.
+        assert_eq!(sanitize_tag_color(Some("e6e6e6")), "#e6e6e6");
+        // Wrong length.
+        assert_eq!(sanitize_tag_color(Some("#ab")), "#e6e6e6");
+        assert_eq!(sanitize_tag_color(Some("#aabbccdd")), "#e6e6e6");
+        // Non-hex characters.
+        assert_eq!(sanitize_tag_color(Some("#e6e6eg")), "#e6e6e6");
+        // CSS-injection attempts.
+        assert_eq!(
+            sanitize_tag_color(Some("red;background-image:url(https://evil/x)")),
+            "#e6e6e6"
+        );
+        assert_eq!(
+            sanitize_tag_color(Some("#e6e6e6;}body{display:none")),
+            "#e6e6e6"
+        );
+        assert_eq!(
+            sanitize_tag_color(Some("url(javascript:alert(1))")),
+            "#e6e6e6"
+        );
+    }
 }
