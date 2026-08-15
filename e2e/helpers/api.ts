@@ -149,3 +149,42 @@ export async function createUploadLink(
   if (!res.ok) throw new Error(`create upload link failed: ${res.status} ${await res.text()}`);
   return (await res.json()).token;
 }
+
+/** POST /api2/accounts/ — admin-only: create a new (non-admin, active) user. */
+export async function createUser(
+  baseURL: string,
+  adminToken: string,
+  email: string,
+  password: string,
+): Promise<void> {
+  const res = await fetch(`${baseURL}/api2/accounts/`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${adminToken}`,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({ email, password }),
+  });
+  if (!res.ok) throw new Error(`create user ${email} failed: ${res.status} ${await res.text()}`);
+}
+
+/** POST /api2/beshared-repos/{repoId}/ — share a repo with another user. */
+export async function beshareRepo(
+  baseURL: string,
+  token: string,
+  repoId: string,
+  userEmail: string,
+  permission: "r" | "rw" = "rw",
+): Promise<void> {
+  const res = await fetch(`${baseURL}/api2/beshared-repos/${repoId}/`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ share_type: "personal", user: userEmail, permission }),
+  });
+  if (!res.ok) {
+    throw new Error(`beshare ${repoId} to ${userEmail} failed: ${res.status} ${await res.text()}`);
+  }
+}
