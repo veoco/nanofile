@@ -42,12 +42,18 @@ test("toggle star from the right panel", async ({ page }) => {
 
 test("starred page lists the starred file", async ({ page }) => {
   await openFreshRepo(page);
+  // The star toggle is fire-and-forget; wait for the POST to land before
+  // navigating away, otherwise the /starred/ page may not list the item.
+  const starResp = page.waitForResponse(
+    (r) => r.url().includes("/api/v2.1/starred-items/") && r.request().method() === "POST",
+  );
   await page
     .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="alpha.txt"] [data-toggle-star]')
     .click();
   await expect(
     page.locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="alpha.txt"] [data-toggle-star]'),
   ).toHaveAttribute("data-starred", "true");
+  await starResp;
   await page.goto("/starred/");
   await expect(
     page.getByRole("link", { name: /alpha\.txt/ }).first(),
@@ -56,13 +62,17 @@ test("starred page lists the starred file", async ({ page }) => {
 
 test("unstar a file from the starred page", async ({ page }) => {
   const repoId = await openFreshRepo(page);
+  const starResp = page.waitForResponse(
+    (r) => r.url().includes("/api/v2.1/starred-items/") && r.request().method() === "POST",
+  );
   await page
     .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="alpha.txt"] [data-toggle-star]')
     .click();
+  await starResp;
   await page.goto("/starred/");
   // Prior tests leave starred alpha.txt entries behind, so scope to this test's repo.
   const row = page
-    .locator("tr")
+    .locator("main table tbody tr")
     .filter({ has: page.locator(`a[href="/libraries/${repoId}/files/alpha.txt"]`) });
   await expect(row).toBeVisible();
   // Accept the native confirm() the unstar button shows.
