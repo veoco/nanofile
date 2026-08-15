@@ -86,7 +86,14 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route("/libraries/{id}/files/", get(files::file_browser_root))
         .route("/libraries/{id}/files/{*path}", get(files::file_browser))
         // Wikis — knowledge-base pages (mobile clients load these in a WebView)
+        .route("/wikis/", get(wiki::wiki_list))
+        .route("/wikis/new/", post(wiki::wiki_create))
         .route("/wikis/{repo_id}/", get(wiki::wiki_view))
+        .route("/wikis/{repo_id}/rename/", post(wiki::wiki_rename))
+        .route("/wikis/{repo_id}/delete/", post(wiki::wiki_delete))
+        .route("/wikis/{repo_id}/publish/", post(wiki::wiki_publish))
+        .route("/wikis/{repo_id}/unpublish/", post(wiki::wiki_unpublish))
+        .route("/wikis/{repo_id}/page/new/", post(wiki::wiki_page_create))
         .route(
             "/wikis/{repo_id}/page/{page_id}/edit/",
             get(wiki::wiki_page_edit),
@@ -94,6 +101,22 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route(
             "/wikis/{repo_id}/page/{page_id}/save/",
             post(wiki::wiki_page_save),
+        )
+        .route(
+            "/wikis/{repo_id}/page/{page_id}/delete/",
+            post(wiki::wiki_page_delete),
+        )
+        .route(
+            "/wikis/{repo_id}/page/{page_id}/rename/",
+            post(wiki::wiki_page_rename),
+        )
+        .route(
+            "/wikis/{repo_id}/page/{page_id}/move/",
+            post(wiki::wiki_page_move),
+        )
+        .route(
+            "/wikis/{repo_id}/page/{page_id}/lock/",
+            post(wiki::wiki_page_lock),
         )
         // Shares — page listing (GET only)
         .route("/shares/", get(shares::list_shares))
