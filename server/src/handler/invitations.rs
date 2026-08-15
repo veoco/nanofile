@@ -1,8 +1,8 @@
 /// Web UI invitation code management handlers — admin only.
 ///
-/// GET  /profile/invitations/ — list invitation codes.
-/// POST /profile/invitations/ — generate a new invitation code.
-/// POST /profile/invitations/{id}/delete — delete an existing invitation code.
+/// GET  /settings/invitations/ — list invitation codes.
+/// POST /settings/invitations/ — generate a new invitation code.
+/// POST /settings/invitations/{id}/delete — delete an existing invitation code.
 use askama::Template;
 use axum::{
     extract::{Form, Path, State},
@@ -95,7 +95,7 @@ pub async fn generate_invitation(
     let svc = InvitationService::new(state.repos.clone());
     svc.generate_invitation(user.user_id, form.email).await?;
 
-    Ok((StatusCode::FOUND, [("Location", "/profile/invitations/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/settings/invitations/")]).into_response())
 }
 
 /// POST /profile/invitations/{id}/delete — remove an invitation code (admin only).
@@ -117,5 +117,5 @@ pub async fn delete_invitation(
     let svc = InvitationService::new(state.repos.clone());
     svc.delete_invitation(user.user_id, id).await?;
 
-    Ok((StatusCode::FOUND, [("Location", "/profile/invitations/")]).into_response())
+    Ok((StatusCode::FOUND, [("Location", "/settings/invitations/")]).into_response())
 }
