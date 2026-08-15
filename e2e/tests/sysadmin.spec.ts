@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
 
 async function createUser(page: import("@playwright/test").Page, suffix: string): Promise<string> {
   const email = `su-${suffix}-${Date.now()}@test.local`;
-  await page.locator('button[onclick="openCreate()"]').click();
+  await page.locator('button[data-action="open-create"]').click();
   await expect(page.locator("#create-overlay")).toBeVisible();
   await page.locator('#create-overlay input[name="email"]').fill(email);
   await page.locator('#create-overlay input[name="password"]').fill("password-123");
@@ -28,7 +28,7 @@ test("create a new user", async ({ page }) => {
 test("edit a user's active status", async ({ page }) => {
   const email = await createUser(page, "edit");
   const row = userRow(page, email);
-  await row.locator('button[onclick^="openEdit"]').click();
+  await row.locator('button[data-action="open-edit"]').click();
   await expect(page.locator("#edit-overlay")).toBeVisible();
   await page.locator("#edit-is-active").uncheck();
   await page.locator('#edit-form button[type="submit"]').click();
@@ -38,7 +38,7 @@ test("edit a user's active status", async ({ page }) => {
 test("delete a user", async ({ page }) => {
   const email = await createUser(page, "delete");
   const row = userRow(page, email);
-  await row.locator('button[onclick^="openDelete"]').click();
+  await row.locator('button[data-action="open-delete"]').click();
   await expect(page.locator("#delete-overlay")).toBeVisible();
   await page.locator('#delete-form button[type="submit"]').click();
   await expect(row).toHaveCount(0);

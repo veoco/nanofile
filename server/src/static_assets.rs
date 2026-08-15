@@ -103,6 +103,13 @@ asset_data!(
     FP_FB_JS,
     "js/file-browser.bundle.js"
 );
+asset_data!(
+    PUBLIC_UPLOAD_JS_HASH,
+    PUBLIC_UPLOAD_JS_LM,
+    ETAG_PUBLIC_UPLOAD_JS,
+    FP_PUBLIC_UPLOAD_JS,
+    "js/public-upload.bundle.js"
+);
 
 // ─── Template URLs (for Askama templates, fingerprinted filenames) ──────────
 
@@ -115,6 +122,7 @@ pub struct TemplateUrls {
     pub css: &'static str,
     pub common_js: &'static str,
     pub file_browser_js: &'static str,
+    pub public_upload_js: &'static str,
     pub favicon: &'static str,
     pub version: &'static str,
 }
@@ -125,6 +133,7 @@ pub fn template_urls() -> &'static TemplateUrls {
         css: Box::leak(format!("/static/{}", *FP_CSS).into_boxed_str()),
         common_js: Box::leak(format!("/static/{}", *FP_COMMON_JS).into_boxed_str()),
         file_browser_js: Box::leak(format!("/static/{}", *FP_FB_JS).into_boxed_str()),
+        public_upload_js: Box::leak(format!("/static/{}", *FP_PUBLIC_UPLOAD_JS).into_boxed_str()),
         favicon: Box::leak(format!("/static/{}", *FP_FAVICON).into_boxed_str()),
         version: env!("CARGO_PKG_VERSION"),
     });
@@ -157,6 +166,12 @@ fn resolve_asset(path: &str) -> Option<(&'static str, &'static str, &'static str
         Some(("js/common.bundle.js", &*ETAG_COMMON_JS, &*COMMON_JS_LM))
     } else if path == "js/file-browser.bundle.js" || path == *FP_FB_JS {
         Some(("js/file-browser.bundle.js", &*ETAG_FB_JS, &*FB_JS_LM))
+    } else if path == "js/public-upload.bundle.js" || path == *FP_PUBLIC_UPLOAD_JS {
+        Some((
+            "js/public-upload.bundle.js",
+            &*ETAG_PUBLIC_UPLOAD_JS,
+            &*PUBLIC_UPLOAD_JS_LM,
+        ))
     } else if path == "img/favicon.svg" || path == *FP_FAVICON {
         Some(("img/favicon.svg", &*ETAG_FAVICON, &*FAVICON_LM))
     } else {

@@ -50,9 +50,7 @@
 {% if items.is_empty() %}
 <div class="mt-6 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-8 text-center">
     {% if query.is_empty() %}
-    <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-    </svg>
+    {{ icons::icon_trash("mx-auto h-12 w-12 text-gray-300 dark:text-gray-600") }}
     <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("trash.empty") }}</p>
     {% else %}
     <p class="text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.trf("search.no_results_for", [("query", &query)]) }}</p>
@@ -163,47 +161,14 @@
             </select>
         </div>
         <div class="flex justify-end gap-2">
-            <button type="button" onclick="hideCleanDialog()"
+            <button type="button" data-action="close-clean"
                     class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
                 {{ t.tr("common.cancel") }}
             </button>
-            <button onclick="cleanTrash()"
+            <button data-action="clean-trash"
                     class="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors">
                 {{ t.tr("trash.delete_all") }}
             </button>
         </div>
 {% endcall %}
-{% endblock %}
-
-{% block scripts %}
-<script>
-// getCookie is provided by common.js (loaded first).
-function showCleanDialog() {
-    document.getElementById('clean-dialog').classList.remove('hidden');
-}
-function hideCleanDialog() {
-    document.getElementById('clean-dialog').classList.add('hidden');
-}
-function cleanTrash() {
-    var select = document.getElementById('clean-repo');
-    var repoId = select ? select.value : '';
-    if (!repoId) { alert(__t('trash.select_library')); return; }
-    if (!confirm(__t('trash.delete_all_confirm'))) return;
-    var csrfToken = getCookie('sfcsrftoken');
-    if (!csrfToken) {
-        window.location.href = '/accounts/login/';
-        return;
-    }
-    fetch('/api/v2.1/repos/' + encodeURIComponent(repoId) + '/trash/', {
-        method: 'DELETE',
-        credentials: 'same-origin',
-        headers: { 'X-CSRFToken': csrfToken },
-    }).then(function (r) {
-        if (r.ok) window.location.reload();
-        else alert(__t('trash.clean_failed'));
-    }).catch(function () {
-        alert(__t('common.network_error'));
-    });
-}
-</script>
 {% endblock %}

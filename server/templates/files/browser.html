@@ -21,8 +21,7 @@
     {% block content %}
     {% include "includes/breadcrumb.html" %}
 
-    <div id="drop-zone" data-drop-zone class="relative rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 overflow-hidden"
-         ondragover="onDragOver(event)" ondragenter="onDragEnter(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+    <div id="drop-zone" data-drop-zone class="relative rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 overflow-hidden">
     <div class="border-b border-gray-200 dark:border-gray-700 px-4 py-3">
         <div class="flex flex-wrap items-center justify-between gap-y-2">
             <h2 class="text-lg font-medium text-gray-900 dark:text-gray-100">{{ repo_name }}</h2>
@@ -110,7 +109,7 @@
                     <div class="flex gap-2">
                         <input type="text" id="share-link-url" readonly
                                class="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50">
-                        <button type="button" onclick="copyShareLinkUrl()"
+                        <button type="button" data-action="copy-share-link"
                                 class="rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white hover:bg-brand-600">
                             {{ t.tr("fb.copy") }}
                         </button>
@@ -168,7 +167,7 @@
                     <div class="flex gap-2">
                         <input type="text" id="ul-link-url" readonly
                                class="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50">
-                        <button type="button" onclick="copyUploadLinkUrl()"
+                        <button type="button" data-action="copy-upload-link"
                                 class="rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white hover:bg-brand-600">
                             {{ t.tr("fb.copy") }}
                         </button>
@@ -215,7 +214,7 @@
          full-height flex dialog (rounded-xl, no padding, header + body)
          that the macro's fixed card layout can't express. -->
     <div id="quick-preview-overlay" class="hidden fixed inset-0 z-dialog flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="quick-preview-title">
-        <div class="relative bg-white dark:bg-surface-800 rounded-xl shadow-xl max-w-4xl w-[min(92vw,900px)] max-h-[90vh] flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+        <div class="relative bg-white dark:bg-surface-800 rounded-xl shadow-xl max-w-4xl w-[min(92vw,900px)] max-h-[90vh] flex flex-col overflow-hidden">
             <div class="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
                 <h3 id="quick-preview-title" class="js-qp-title text-sm font-semibold text-gray-900 dark:text-gray-100 truncate"></h3>
                 <button type="button" class="js-qp-close p-1.5 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors" aria-label="{{ t.tr("common.close") }}">

@@ -113,6 +113,7 @@ fn run_esbuild_with(cmd: &str, extra_args: &[&str]) -> bool {
     let mut args: Vec<&str> = extra_args.to_vec();
     args.push("frontend/entries/common.js");
     args.push("frontend/entries/file-browser.js");
+    args.push("frontend/entries/public-upload.js");
     args.push("--bundle");
     args.push("--minify");
     args.push("--format=iife");

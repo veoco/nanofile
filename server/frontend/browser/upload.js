@@ -5,8 +5,9 @@ import { escapeHtml, escapeAttr, getCookie } from "../core/utils.js";
 import { formatFileSize, formatBitrate } from "../core/format.js";
 import { Toast } from "../core/toast.js";
 import { refreshFileList } from "./list.js";
+import { registerModalClose } from "../core/modal.js";
 
-// Reads runtime context from `window.uploadContext` (set by toolbar.html):
+// Reads runtime context from the `#upload-context` element (set by toolbar.html):
 //   maxUploadSizeMb, currentPath, repoId, repoName.
 
 // ─── Upload state ───
@@ -17,7 +18,9 @@ var isUploadDialogOpen = false;
 var dragCounter = 0;
 var isDialogMinimized = false;
 var uploadTokenUrl = '';
-var maxUploadSizeMb = window.uploadContext.maxUploadSizeMb;
+var uploadCtxEl = document.getElementById('upload-context');
+var uploadCtx = uploadCtxEl ? uploadCtxEl.dataset : {};
+var maxUploadSizeMb = parseInt(uploadCtx.maxUploadSizeMb || '0', 10);
 
 // ─── Chunked upload constants ───
 var CHUNK_SIZE = 8 * 1024 * 1024; // 8MB per chunk
@@ -158,8 +161,8 @@ export function addToQueue(items) {
     bitrateTimestamp = null;
     currentBitrate = 0;
 
-    var currentDir = window.uploadContext.currentPath;
-    var repoId = window.uploadContext.repoId;
+    var currentDir = uploadCtx.currentPath;
+    var repoId = uploadCtx.repoId;
 
     items.forEach(function (item) {
         var parentDir;
@@ -263,8 +266,8 @@ export function uploadFileDirect(item, url) {
 
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
-    formData.append('repo_name', window.uploadContext.repoName);
-    if (!uploadTokenUrl) formData.append('repo_id', window.uploadContext.repoId);
+    formData.append('repo_name', uploadCtx.repoName);
+    if (!uploadTokenUrl) formData.append('repo_id', uploadCtx.repoId);
     formData.append('file', item.file, item.name);
     formData.append('xhr', '1');
 
@@ -318,7 +321,7 @@ export function uploadFileDirect(item, url) {
 
 /** Query the server for how many bytes have already been uploaded. */
 export function getUploadedBytes(parentDir, fileName) {
-    var repoId = window.uploadContext.repoId;
+    var repoId = uploadCtx.repoId;
     var url = '/api/v2.1/repos/' + repoId + '/file-uploaded-bytes/'
         + '?parent_dir=' + encodeURIComponent(parentDir)
         + '&file_name=' + encodeURIComponent(fileName);
@@ -363,8 +366,8 @@ export function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
 
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
-    formData.append('repo_name', window.uploadContext.repoName);
-    if (!uploadTokenUrl) formData.append('repo_id', window.uploadContext.repoId);
+    formData.append('repo_name', uploadCtx.repoName);
+    if (!uploadTokenUrl) formData.append('repo_id', uploadCtx.repoId);
     formData.append('file', chunk, item.name);
     formData.append('xhr', '1');
 
@@ -656,7 +659,7 @@ export function updateProgressDialog() {
     }
 
     // ── Close button visibility ──
-    var closeBtn = dialog.querySelector('.upload-dialog-header-right button[onclick*="closeProgressDialog"]');
+    var closeBtn = dialog.querySelector('.js-close-progress');
     if (closeBtn) {
         closeBtn.classList.toggle('hidden', isActive);
     }
@@ -668,16 +671,16 @@ export function updateProgressDialog() {
     var actionsEl = dialog.querySelector('.upload-content-actions');
     if (isActive) {
         var pauseBtnHtml = isUploadPaused
-            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="resumeAllUploads()">' + __t('fb.resume_all') + '</button>'
-            : '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="pauseAllUploads()">' + __t('fb.pause_all') + '</button>';
+            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" data-action="resume-all">' + __t('fb.resume_all') + '</button>'
+            : '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" data-action="pause-all">' + __t('fb.pause_all') + '</button>';
         var retryAllBtn = hasFailed
-            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="retryAllFailed()">' + __t('fb.retry_all') + '</button>'
+            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" data-action="retry-all">' + __t('fb.retry_all') + '</button>'
             : '';
-        var cancelAllBtn = '<button class="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-red-100 hover:border-red-300" onclick="cancelAllPending()">' + __t('fb.cancel_all') + '</button>';
+        var cancelAllBtn = '<button class="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-red-100 hover:border-red-300" data-action="cancel-all">' + __t('fb.cancel_all') + '</button>';
         actionsEl.innerHTML = pauseBtnHtml + retryAllBtn + cancelAllBtn;
     } else {
         var retryAllBtn = hasFailed
-            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" onclick="retryAllFailed()">' + __t('fb.retry_all') + '</button>'
+            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" data-action="retry-all">' + __t('fb.retry_all') + '</button>'
             : '';
         actionsEl.innerHTML = retryAllBtn;
     }
@@ -711,25 +714,25 @@ export function updateProgressDialog() {
             }
             actionHtml = item.finalizing
                 ? ''  // No pause/cancel during server-side processing
-                : '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-200 active:scale-90 transition-all" onclick="pauseUploadItem(' + item.id + ')" title="' + __t('fb.pause') + '">' +
+                : '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-200 active:scale-90 transition-all" data-action="pause" data-id="' + item.id + '" title="' + __t('fb.pause') + '">' +
                   '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>' +
                 '</button>' +
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="' + __t('common.cancel') + '">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
                   '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
                 '</button>';
         } else if (item.state === 'pending') {
             statusHtml = '<span class="text-xs text-gray-400 italic">' + __t('fb.waiting') + '</span>';
             actionHtml =
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="' + __t('common.cancel') + '">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
                   '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
                 '</button>';
         } else if (item.state === 'paused') {
             statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-amber-600 font-medium"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.paused') + '</span>';
             actionHtml =
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 active:scale-90 transition-all" onclick="resumeUploadItem(' + item.id + ')" title="' + __t('fb.resume') + '">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 active:scale-90 transition-all" data-action="resume" data-id="' + item.id + '" title="' + __t('fb.resume') + '">' +
                   '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>' +
                 '</button>' +
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" onclick="cancelUploadItem(' + item.id + ')" title="' + __t('common.cancel') + '">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
                   '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
                 '</button>';
         } else if (item.state === 'completed') {
@@ -738,13 +741,13 @@ export function updateProgressDialog() {
         } else if (item.state === 'error') {
             statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-red-600 font-medium"><svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate max-w-[7rem]">' + escapeHtml(item.error || __t('fb.error')) + '</span></span>';
             actionHtml =
-                '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" onclick="retryUploadItem(' + item.id + ')">' +
+                '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" data-action="retry" data-id="' + item.id + '">' +
                   '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
                   __t('fb.retry') + '</button>';
         } else { // cancelled
             statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-gray-400"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' + __t('fb.cancelled') + '</span>';
             actionHtml =
-                '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" onclick="retryUploadItem(' + item.id + ')">' +
+                '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" data-action="retry" data-id="' + item.id + '">' +
                   '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
                   __t('fb.retry') + '</button>';
         }
@@ -782,7 +785,7 @@ export function submitNewFolder(form) {
     hideNewFolderDialog();
 
     // Use fetch to call Seafile API
-    var repoId = window.uploadContext.repoId;
+    var repoId = uploadCtx.repoId;
     var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
     fetch('/api/v2.1/repos/' + repoId + '/dir/', {
         method: 'POST',
@@ -805,4 +808,70 @@ export function submitNewFolder(form) {
 
     return false;
 }
+
+// ─── Event delegation (replaces inline onclick/onchange/ondrag handlers) ──
+
+document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    var action = btn.dataset.action;
+    var id = btn.dataset.id;
+
+    switch (action) {
+        case "new-folder": showNewFolderDialog(); break;
+        case "upload": triggerUpload(); break;
+        case "upload-folder": triggerFolderUpload(); break;
+        case "toggle-minimize": toggleMinimize(); break;
+        case "close-progress": closeProgressDialog(); break;
+        case "close-new-folder": hideNewFolderDialog(); break;
+        case "pause": pauseUploadItem(Number(id)); break;
+        case "cancel": cancelUploadItem(Number(id)); break;
+        case "resume": resumeUploadItem(Number(id)); break;
+        case "retry": retryUploadItem(Number(id)); break;
+        case "pause-all": pauseAllUploads(); break;
+        case "resume-all": resumeAllUploads(); break;
+        case "cancel-all": cancelAllPending(); break;
+        case "retry-all": retryAllFailed(); break;
+    }
+});
+
+document.addEventListener("change", function (e) {
+    var el = e.target.closest("[data-action]");
+    if (!el) return;
+    if (el.dataset.action === "file-select") onFileSelected(el);
+    else if (el.dataset.action === "folder-select") onFolderSelected(el);
+});
+
+document.addEventListener("submit", function (e) {
+    var form = e.target.closest('[data-form="new-folder"]');
+    if (!form) return;
+    e.preventDefault();
+    submitNewFolder(form);
+});
+
+document.addEventListener("keydown", function (e) {
+    if (!e.target.closest("#new-folder-input")) return;
+    if (e.key === "Escape") {
+        e.preventDefault();
+        hideNewFolderDialog();
+    } else if (e.key === "Enter") {
+        e.preventDefault();
+        var submitBtn = e.target.form ? e.target.form.querySelector('button[type="submit"]') : null;
+        if (submitBtn) submitBtn.click();
+    }
+});
+
+// Drag-and-drop — delegated so it keeps working after the file list is
+// partially refreshed (the [data-drop-zone] container is re-rendered).
+["dragover", "dragenter", "dragleave", "drop"].forEach(function (type) {
+    document.addEventListener(type, function (e) {
+        if (!e.target.closest("[data-drop-zone]")) return;
+        if (type === "dragover") onDragOver(e);
+        else if (type === "dragenter") onDragEnter(e);
+        else if (type === "dragleave") onDragLeave(e);
+        else onDrop(e);
+    });
+});
+
+registerModalClose("hideNewFolderDialog", hideNewFolderDialog);
 

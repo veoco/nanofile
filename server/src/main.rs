@@ -1,5 +1,6 @@
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
+use axum::http::header::HeaderValue;
 use axum::http::{Method, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -47,6 +48,39 @@ enum Command {
 
 async fn health_check() -> impl IntoResponse {
     StatusCode::OK
+}
+
+/// Add baseline security headers to every response. This deliberately leaves
+/// out `default-src`/`script-src` for now — `default-src 'self'` would fall
+/// back to `script-src` and block the remaining inline scripts in `base.html`
+/// (dark-mode guard + `window.__T` injection), which still need
+/// `'unsafe-inline'`. A strict `script-src` with nonces is a follow-up.
+async fn security_headers(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        header::HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+        ),
+    );
+    response
 }
 
 #[tokio::main]
@@ -224,6 +258,7 @@ async fn main() -> anyhow::Result<()> {
                     StatusCode::REQUEST_TIMEOUT,
                     std::time::Duration::from_secs(config.server.request_timeout_secs),
                 ))
+                .layer(axum::middleware::from_fn(security_headers))
                 .with_state(state.clone());
 
             let addr = format!("{}:{}", config.server.addr, config.server.port);

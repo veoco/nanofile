@@ -10,9 +10,7 @@
     <!-- Repo filter -->
     <div class="px-3 pt-2">
         <div class="relative">
-            <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-            </svg>
+            {{ icons::icon_search("absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400") }}
             <input type="text" class="js-repo-filter w-full rounded-md border-0 bg-gray-100 dark:bg-surface-700 pl-8 pr-2 py-1.5 text-xs text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-brand-500"
                    placeholder="{{ t.tr("nav.filter_repos") }}">
         </div>
@@ -45,9 +43,7 @@
         </a>
         <a href="/shares/"
            class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors{% if active_page == "shares" %} bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 font-medium{% else %} text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-surface-700 hover:text-gray-900 dark:hover:text-gray-100{% endif %}">
-            <svg class="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/>
-            </svg>
+            {{ icons::icon_share("h-4 w-4 flex-shrink-0") }}
             <span>{{ t.tr("nav.shares") }}</span>
         </a>
         <a href="/trash/"
@@ -81,12 +77,12 @@
 {% call modal::modal("quick-create-overlay", z="z-above-dialog", labelledby="quick-create-title", backdrop_close="hideQuickCreate") %}
         <h3 id="quick-create-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("repo.new_library") }}</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("repo.new_library_desc") }}</p>
-        <form id="quick-create-form" onsubmit="return submitQuickCreate(this)">
+        <form id="quick-create-form" data-form="quick-create">
             <input id="quick-create-input" type="text" name="name" placeholder="{{ t.tr("repo.name") }}"
                    class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 shadow-sm focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5"
                    autofocus>
             <div class="mt-4 flex justify-end gap-2">
-                <button type="button" onclick="hideQuickCreate()"
+                <button type="button" data-action="close-quick-create"
                         class="rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
                     {{ t.tr("common.cancel") }}
                 </button>

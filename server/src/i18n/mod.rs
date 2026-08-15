@@ -44,11 +44,26 @@ static EN: LazyLock<HashMap<String, String>> =
 static ZH: LazyLock<HashMap<String, String>> =
     LazyLock::new(|| parse_translations(include_str!("../../locales/zh.toml")));
 
+/// Escape a pre-serialized JSON string so it is safe to embed inside an inline
+/// `<script>` block: `<`, `>`, `&` and the U+2028/U+2029 line separators are
+/// escaped so a value cannot break out of the surrounding script element.
+fn escape_inline_script(json: &str) -> String {
+    json.replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
 /// Pre-serialized JSON for `window.__T`, computed once per language.
-static EN_JSON: LazyLock<String> =
-    LazyLock::new(|| serde_json::to_string(&*EN).unwrap_or_else(|_| "{}".to_string()));
-static ZH_JSON: LazyLock<String> =
-    LazyLock::new(|| serde_json::to_string(&*ZH).unwrap_or_else(|_| "{}".to_string()));
+static EN_JSON: LazyLock<String> = LazyLock::new(|| {
+    let json = serde_json::to_string(&*EN).unwrap_or_else(|_| "{}".to_string());
+    escape_inline_script(&json)
+});
+static ZH_JSON: LazyLock<String> = LazyLock::new(|| {
+    let json = serde_json::to_string(&*ZH).unwrap_or_else(|_| "{}".to_string());
+    escape_inline_script(&json)
+});
 
 static I18N_EN: I18n = I18n {
     lang: "en",
@@ -219,5 +234,17 @@ mod tests {
         let zh = I18n::get(Some("zh"));
         let parsed: HashMap<String, String> = serde_json::from_str(zh.js_dict()).unwrap();
         assert!(parsed.contains_key("app.name"));
+        assert!(parsed.contains_key("ui.create"), "ui.create missing");
+        assert_eq!(parsed.get("ui.create").unwrap(), "创建");
+    }
+
+    #[test]
+    fn escape_inline_script_prevents_script_breakout() {
+        let out = escape_inline_script(r#"{"k":"</script><script>alert(1)</script>"}"#);
+        assert!(
+            !out.contains("</script>"),
+            "script breakout possible: {out}"
+        );
+        assert!(out.contains("\\u003c/script"));
     }
 }

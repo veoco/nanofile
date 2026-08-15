@@ -1,14 +1,12 @@
+{% import "includes/icons.html" as icons %}
 <div class="file-list-container"
-     data-drop-zone
-     ondragover="onDragOver(event)" ondragenter="onDragEnter(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+     data-drop-zone>
     {% include "includes/file_list.html" %}
 
     <!-- Drop zone overlay (shown during drag-over) -->
     <div class="drop-overlay hidden absolute inset-0 z-drop flex items-center justify-center rounded-lg border-2 border-dashed border-brand-500 bg-brand-50/90 dark:bg-brand-500/10">
         <div class="text-center">
-            <svg class="mx-auto h-12 w-12 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-            </svg>
+            {{ icons::icon_upload("mx-auto h-12 w-12 text-brand-500") }}
             <p class="mt-3 text-lg font-medium text-gray-700 dark:text-gray-300">{{ t.tr("fb.drop_files_here") }}</p>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("fb.will_upload_current_dir") }}</p>
         </div>

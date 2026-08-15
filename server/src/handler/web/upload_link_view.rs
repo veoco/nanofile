@@ -18,6 +18,7 @@ use base::error::AppError;
 #[template(path = "web/upload_link_view.html")]
 struct UploadLinkViewTemplate {
     pub t: &'static I18n,
+    pub urls: &'static crate::static_assets::TemplateUrls,
     pub token: String,
     pub repo_id: String,
     pub path: String,
@@ -154,6 +155,7 @@ pub async fn upload_link_view(
 
     let tpl = UploadLinkViewTemplate {
         t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        urls: crate::static_assets::template_urls(),
         token: link.token.clone(),
         repo_id: link.repo_id.clone(),
         path: link.path.clone(),

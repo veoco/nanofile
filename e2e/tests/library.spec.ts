@@ -21,7 +21,7 @@ async function createRepoByName(page: import("@playwright/test").Page, name: str
 
 test("create a new library", async ({ page }) => {
   await openLibraries(page);
-  await page.locator('button[onclick="showCreateDialog()"]').click();
+  await page.locator('button[data-action="show-create"]').click();
   await expect(page.locator("#create-overlay")).toBeVisible();
   await page.locator("#create-input").fill(`create-lib-${Date.now()}`);
   await page.locator('#create-overlay button[type="submit"]').click();
@@ -33,7 +33,7 @@ test("edit a library name, description and history settings", async ({ page }) =
   await openLibraries(page);
   await createRepoByName(page, name);
   const li = page.locator("li").filter({ hasText: name });
-  await li.locator('button[onclick^="showEditDialog"]').click();
+  await li.locator('button[data-action="show-edit"]').click();
   await expect(page.locator("#edit-overlay")).toBeVisible();
   await page.locator("#edit-name").fill("edited-lib");
   await page.locator("#edit-description").fill("edited description");
@@ -49,10 +49,10 @@ test("manage webdav keys from the edit dialog", async ({ page }) => {
   await openLibraries(page);
   await createRepoByName(page, name);
   const li = page.locator("li").filter({ hasText: name });
-  await li.locator('button[onclick^="showEditDialog"]').click();
+  await li.locator('button[data-action="show-edit"]').click();
   await expect(page.locator("#edit-overlay")).toBeVisible();
   await page.locator("#webdav-key-name").fill("e2e-device");
-  await page.locator('button[onclick="createWebdavKey()"]').click();
+  await page.locator('button[data-action="create-webdav-key"]').click();
   await expect(page.locator("#new-key-box")).toBeVisible();
   await expect(page.locator("#new-key-value")).not.toHaveValue("");
   await expect(page.locator("#webdav-key-list")).toContainText("e2e-device");
@@ -69,6 +69,6 @@ test("delete a library", async ({ page }) => {
   const li = page.locator("li").filter({ hasText: name });
   await expect(li).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());
-  await li.locator('button[onclick^="deleteRepo"]').click();
+  await li.locator('button[data-action="delete-repo"]').click();
   await expect(li).toHaveCount(0, { timeout: 15_000 });
 });

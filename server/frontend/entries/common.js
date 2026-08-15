@@ -1,30 +1,15 @@
-// common entry — loaded on every page. Bundles the core layer and re-exposes
-// the small surface that inline template <script> blocks still rely on.
-import { __t } from "../core/i18n.js";
-import { escapeHtml, escapeAttr, getCookie, encodeFilePath, unquote, safeColor } from "../core/utils.js";
-import { apiFetch } from "../core/api.js";
-import { Toast, showToast, showLoading, hideLoading } from "../core/toast.js";
-import { ConfirmDialog } from "../core/confirm.js";
+// common entry — loaded on every page. Bundles the core layer and all
+// page-scoped modules; each module registers its own delegated event handlers
+// (no window globals).
 import "../core/nav.js";
-import { showQuickCreate, hideQuickCreate, submitQuickCreate } from "../core/pages.js";
-
-// Exposed for inline <script> blocks in templates.
-window.__t = __t;
-window.escapeHtml = escapeHtml;
-window.escapeAttr = escapeAttr;
-window.getCookie = getCookie;
-window.encodeFilePath = encodeFilePath;
-window.unquote = unquote;
-window.safeColor = safeColor;
-window.apiFetch = apiFetch;
-window.Toast = Toast;
-window.showToast = showToast;
-window.showLoading = showLoading;
-window.hideLoading = hideLoading;
-window.ConfirmDialog = ConfirmDialog;
-window.showQuickCreate = showQuickCreate;
-window.hideQuickCreate = hideQuickCreate;
-window.submitQuickCreate = submitQuickCreate;
+import "../core/pages.js";
+import "../core/modal.js";
+import "../core/search.js";
+import "../pages/repos.js";
+import "../pages/sysadmin.js";
+import "../pages/starred.js";
+import "../pages/trash.js";
+import "../pages/shares.js";
 
 // ─── Response time display ──────────────────────────────────────────────
 var respTimeEl = document.getElementById("resp-time");

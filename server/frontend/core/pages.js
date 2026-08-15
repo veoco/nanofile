@@ -5,6 +5,7 @@ import { __t } from "./i18n.js";
 import { getCookie } from "./utils.js";
 import { Toast } from "./toast.js";
 import { ConfirmDialog } from "./confirm.js";
+import { registerModalClose } from "./modal.js";
 
 // ─── Trash restore (via API) ────────────────────────────────────────────
 document.addEventListener("submit", async function (e) {
@@ -105,3 +106,55 @@ export function submitQuickCreate() {
   hideQuickCreate();
   return false;
 }
+
+// ─── Quick create (delegated, driven by data-* attributes) ─────────────
+document.addEventListener("submit", function (e) {
+  if (!e.target.closest('[data-form="quick-create"]')) return;
+  e.preventDefault();
+  submitQuickCreate();
+});
+
+document.addEventListener("click", function (e) {
+  var btn = e.target.closest('[data-action="close-quick-create"]');
+  if (!btn) return;
+  hideQuickCreate();
+});
+
+registerModalClose("hideQuickCreate", hideQuickCreate);
+
+// ─── Generic confirm-before-submit ─────────────────────────────────────
+// data-confirm="<i18n key>" plus optional data-confirm-args (JSON) for
+// {placeholder} substitution, e.g. data-confirm-args='{"name":"x"}'.
+document.addEventListener("submit", function (e) {
+    var form = e.target.closest("[data-confirm]");
+    if (!form) return;
+    var msg;
+    if (form.dataset.confirmArgs) {
+        msg = __t(form.dataset.confirm, JSON.parse(form.dataset.confirmArgs));
+    } else {
+        msg = __t(form.dataset.confirm);
+    }
+    if (!confirm(msg)) {
+        e.preventDefault();
+    }
+});
+
+// ─── Preview image fallback (data-preview-image) ───────────────────────
+// `error` events don't bubble, so capture at the document level. Builds the
+// fallback with DOM APIs (not innerHTML) to keep the download URL inert.
+document.addEventListener("error", function (e) {
+    var img = e.target;
+    if (!img || img.tagName !== "IMG" || !img.hasAttribute("data-preview-image")) return;
+    var parent = img.parentElement;
+    if (!parent) return;
+    parent.innerHTML = '';
+    var div = document.createElement('div');
+    div.className = 'text-gray-500 dark:text-gray-400 text-sm py-8';
+    div.appendChild(document.createTextNode(__t('fb.image_failed_to_load') + ' '));
+    var a = document.createElement('a');
+    a.href = img.dataset.downloadUrl || '#';
+    a.className = 'text-brand-500 hover:underline';
+    a.textContent = __t('fb.download_instead');
+    div.appendChild(a);
+    parent.appendChild(div);
+}, true);

@@ -188,9 +188,9 @@
                 </svg>
             </button>
             <button type="button" class="p-1.5 rounded-md text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-400 transition-colors"
+                    data-action="open-upload-link"
                     data-repo-id="{{ repo_id }}"
                     data-path="/{{ entry.relative_path }}"
-                    onclick="window.openUploadLinkDialog(this.dataset.repoId, this.dataset.path)"
                     title="{{ t.trf("fb.get_upload_link_for", [("name", &entry.name)]) }}">
                 {{ icons::icon_upload("h-3.5 w-3.5") }}
             </button>
@@ -218,8 +218,7 @@
         <!-- File icon: extension badge or image thumbnail -->
         {% if let Some(thumb_url) = entry.image_thumbnail_url %}
         <div class="h-9 w-9 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden">
-            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy"
-                 onerror="window.thumbFailed&&window.thumbFailed(this)">
+            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy" data-thumb>
             <span class="js-thb-fallback hidden text-[10px] leading-none font-semibold {{ entry.icon_color }}" title="{{ entry.extension.as_deref().unwrap_or("?") }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(3) }}</span>
         </div>
         {% else %}
@@ -343,8 +342,7 @@
         </div>
         {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
         <div class="aspect-square rounded-md flex items-center justify-center mb-2 overflow-hidden">
-            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy"
-                 onerror="window.thumbFailed&&window.thumbFailed(this)">
+            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy" data-thumb>
             <span class="js-thb-fallback hidden text-xl font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
         </div>
         {% else %}
@@ -397,8 +395,7 @@
                  data-record-id="{{ entry.record_id }}">
                 {% if entry.is_video %}
                 {% if let Some(thumb_url) = entry.image_thumbnail_url_large %}
-                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy"
-                     onerror="window.thumbFailed&&window.thumbFailed(this)">
+                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy" data-thumb>
                 <span class="js-thb-fallback hidden absolute inset-0 items-center justify-center text-gray-400 pointer-events-none">
                     <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
                 </span>
@@ -419,8 +416,7 @@
                 </div>
                 {% endif %}
                 {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
-                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy"
-                     onerror="window.thumbFailed&&window.thumbFailed(this)">
+                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy" data-thumb>
                 <span class="js-thb-fallback hidden absolute inset-0 items-center justify-center text-gray-400 pointer-events-none">
                     <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
                 </span>

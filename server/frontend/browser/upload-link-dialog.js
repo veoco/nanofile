@@ -5,6 +5,10 @@ import { apiFetch } from "../core/api.js";
 import { Toast } from "../core/toast.js";
 
 // ─── Upload Link Dialog ─────────────────────────────────────────────────
+// Module-scoped reference, assigned by the IIFE below so delegated handlers
+// (data-action="open-upload-link") can open the dialog without a global.
+var openUploadLinkDialog;
+
 (function () {
   var overlay = document.getElementById('upload-link-dialog-overlay');
   var pathDisplay = document.querySelector('.js-ul-dialog-path');
@@ -125,7 +129,7 @@ import { Toast } from "../core/toast.js";
   cancelBtn.addEventListener('click', function () { overlay.classList.add('hidden'); });
   overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.classList.add('hidden'); });
 
-  window.openUploadLinkDialog = open;
+  openUploadLinkDialog = open;
 })();
 
 export function copyUploadLinkUrl() {
@@ -158,5 +162,20 @@ document.addEventListener('click', function (e) {
     Toast.error(__t('fb.upload_links_dir_only'));
     return;
   }
-  window.openUploadLinkDialog(repoId, path);
+  openUploadLinkDialog(repoId, path);
+});
+
+// Delegated handlers for the file-list upload-link button and the
+// share/upload link URL copy buttons in browser.html.
+document.addEventListener("click", function (e) {
+  var el = e.target.closest("[data-action]");
+  if (!el) return;
+  var action = el.dataset.action;
+  if (action === "open-upload-link") {
+    openUploadLinkDialog(el.dataset.repoId, el.dataset.path);
+  } else if (action === "copy-share-link") {
+    copyShareLinkUrl();
+  } else if (action === "copy-upload-link") {
+    copyUploadLinkUrl();
+  }
 });

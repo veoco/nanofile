@@ -83,11 +83,10 @@
                     {% endif %}
                 </div>
                 {% if inv.used_by_email.is_none() %}
-                <form action="/settings/invitations/{{ inv.id }}/delete/" method="POST">
+                <form action="/settings/invitations/{{ inv.id }}/delete/" method="POST" data-confirm="invite.delete_confirm">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit"
-                            class="rounded-lg bg-red-600 py-1.5 px-3 text-xs font-semibold text-white hover:bg-red-700 transition-colors"
-                            onclick="return confirm(__t('invite.delete_confirm'))">
+                            class="rounded-lg bg-red-600 py-1.5 px-3 text-xs font-semibold text-white hover:bg-red-700 transition-colors">
                         {{ t.tr("common.delete") }}
                     </button>
                 </form>

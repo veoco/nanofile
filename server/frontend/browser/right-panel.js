@@ -724,3 +724,12 @@ setTimeout(function () {
   var type = selected ? selected.getAttribute("data-type") : "";
   btn.style.display = type === "dir" ? "" : "none";
 }, 100);
+
+// Thumbnail error fallback — `error` events don't bubble, so capture at the
+// document level. Matches the `<img data-thumb>` markers emitted by file_list
+// and right_panel templates.
+document.addEventListener("error", function (e) {
+  var img = e.target;
+  if (!img || img.tagName !== "IMG" || !img.hasAttribute("data-thumb")) return;
+  thumbFailed(img);
+}, true);

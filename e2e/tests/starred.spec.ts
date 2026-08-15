@@ -77,6 +77,6 @@ test("unstar a file from the starred page", async ({ page }) => {
   await expect(row).toBeVisible();
   // Accept the native confirm() the unstar button shows.
   page.once("dialog", (dialog) => dialog.accept());
-  await row.locator('button[onclick^="unstarItem"]').click();
+  await row.locator('button[data-action="unstar"]').click();
   await expect(row).toHaveCount(0);
 });

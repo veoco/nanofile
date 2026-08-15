@@ -26,7 +26,7 @@ test("upload a file via the hidden file input", async ({ page }) => {
 });
 
 test("create a new folder", async ({ page }) => {
-  await page.locator('button[onclick="showNewFolderDialog()"]').click();
+  await page.locator('button[data-action="new-folder"]').click();
   await page.locator("#new-folder-input").fill("newfolder");
   await page.locator('#new-folder-overlay button[type="submit"]').click();
   await expect(
