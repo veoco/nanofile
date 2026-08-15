@@ -282,7 +282,7 @@ pub async fn shared_dir_view(
             t: I18n::from_headers(&headers, &state.config.ui.default_language),
             token: token.clone(),
             error,
-            form_action: format!("/f/{}/", token),
+            form_action: format!("/d/{}/", token),
         };
         let html = tpl
             .render()

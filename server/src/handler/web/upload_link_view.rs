@@ -111,9 +111,22 @@ pub async fn upload_link_view(
 
     // Password check
     let pw_ok = check_password(&link, &params, state.config.auth.password_hash_iterations).await;
+    // The password form POST sets `visited_ufs_{token}`; accept that cookie as
+    // an unlock too, so the redirect back to /u/{token}/ isn't bounced to the
+    // form again.
+    let cookie_ok = link.password.is_some()
+        && headers
+            .get("cookie")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|c| {
+                c.split(';')
+                    .map(|s| s.trim())
+                    .any(|s| s == format!("visited_ufs_{token}=1"))
+            });
+    let unlocked = pw_ok || cookie_ok;
 
-    // If password is required but not provided, show password form
-    if link.password.is_some() && !pw_ok {
+    // If password is required but not satisfied, show password form
+    if !unlocked {
         let error = if params.contains_key("password") {
             Some("Incorrect password".to_string())
         } else {
