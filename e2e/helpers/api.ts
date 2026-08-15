@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { Page } from "@playwright/test";
 
 export interface E2EState {
   baseURL: string;
@@ -94,4 +95,13 @@ export async function seedRepo(
   await createDir(baseURL, token, repoId, "/subdir");
   await uploadFile(baseURL, token, repoId, "/subdir", "nested.txt", "nested file content\n");
   return repoId;
+}
+
+/** Sign in via the UI login form (for fresh, non-storageState contexts). */
+export async function loginViaUI(page: Page, email: string, password: string): Promise<void> {
+  await page.goto("/accounts/login/");
+  await page.fill('input[name="email"]', email);
+  await page.fill('input[name="password"]', password);
+  await page.locator('button[type="submit"]').first().click();
+  await page.waitForURL(/\/libraries\//, { timeout: 15_000 });
 }
