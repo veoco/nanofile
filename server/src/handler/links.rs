@@ -220,6 +220,7 @@ pub async fn create_share_link_v21(
         "obj_name": info.path.trim_end_matches('/').rsplit_once('/')
             .map(|(_, n)| n)
             .unwrap_or(&info.path),
+        "s_type": info.s_type,
         "is_dir": info.s_type == "d",
         "username": null,
         "view_cnt": 0,
@@ -309,6 +310,7 @@ pub async fn create_multi_share_link_v21(
         "obj_name": info.path.trim_end_matches('/').rsplit_once('/')
             .map(|(_, n)| n)
             .unwrap_or(&info.path),
+        "s_type": info.s_type,
         "is_dir": info.s_type == "d",
         "username": null,
         "view_cnt": 0,

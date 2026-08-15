@@ -776,3 +776,40 @@ async fn test_share_link_create_form_encoded_desktop() {
     let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(dl.status(), 200, "shared download should succeed");
 }
+
+/// H.1c — POST /api/v2.1/share-links/ for a directory returns `s_type: "d"`
+/// and a `/d/` link, so the Web UI builds the right URL.
+/// Regression test: the create response previously omitted `s_type`, making the
+/// frontend fall back to the row's `data-type` ("dir") and build a `/f/` link.
+#[tokio::test]
+async fn test_share_link_create_directory_returns_d_type() {
+    let f = TestFixture::new().await;
+
+    let mkdir = f
+        .client
+        .create_dir(&f.api_token, &f.repo_id, "/shared-dir")
+        .await;
+    assert!(mkdir.status().is_success(), "mkdir failed");
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/shared-dir" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "create share link failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap();
+
+    assert_eq!(
+        body["s_type"], "d",
+        "directory share link must expose s_type=\"d\""
+    );
+    let link = body["link"].as_str().unwrap_or("");
+    assert!(
+        link.contains(&format!("/d/{}/", token)),
+        "directory share link URL should be /d/..., got: {link}"
+    );
+}

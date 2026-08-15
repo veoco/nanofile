@@ -35,10 +35,7 @@ test("create a share link with password, expiry and description", async ({ page 
   await expect(page.locator("#share-delete-btn")).toBeVisible();
 });
 
-// Known issue: POST /api/v2.1/share-links/ omits the `s_type` field the
-// frontend relies on, so directory share links are built as /f/ URLs instead
-// of /d/. Un-skip once the response includes `s_type`.
-test.fixme("folder share link uses the /d/ path", async ({ page }) => {
+test("folder share link uses the /d/ path", async ({ page }) => {
   await page
     .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="subdir"] .js-share-btn')
     .click();
