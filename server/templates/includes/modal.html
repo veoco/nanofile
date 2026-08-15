@@ -1,5 +1,5 @@
 {# Centered modal overlay shell. Caller body renders title/body/footer. #}
-{% macro modal(id, z="z-50", max_w="max-w-sm", labelledby="", backdrop_close="") %}
+{% macro modal(id, z="z-dialog", max_w="max-w-sm", labelledby="", backdrop_close="") %}
 <div id="{{ id }}" class="hidden fixed inset-0 {{ z }} flex items-center justify-center bg-black/30" role="dialog" aria-modal="true"{% if labelledby != "" %} aria-labelledby="{{ labelledby }}"{% endif %}{% if backdrop_close != "" %} onclick="if(event.target===this){{ backdrop_close }}()"{% endif %}>
     <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full {{ max_w }} mx-4" onclick="event.stopPropagation()">
         {{ caller() }}

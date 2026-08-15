@@ -24,7 +24,7 @@
     <div id="drop-zone" data-drop-zone class="relative rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 overflow-hidden"
          ondragover="onDragOver(event)" ondragenter="onDragEnter(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
     <div class="border-b border-gray-200 dark:border-gray-700 px-4 py-3">
-        <div class="flex items-center justify-between">
+        <div class="flex flex-wrap items-center justify-between gap-y-2">
             <h2 class="text-lg font-medium text-gray-900 dark:text-gray-100">{{ repo_name }}</h2>
             {% include "includes/toolbar.html" %}
         </div>
@@ -58,8 +58,7 @@
     {% endcall %}
 
     <!-- Directory picker overlay (for batch move/copy) -->
-    <div id="dir-picker-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
-        <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-md mx-4" onclick="event.stopPropagation()">
+    {% call modal::modal("dir-picker-overlay", max_w="max-w-md", labelledby="dir-picker-title") %}
             <h3 id="dir-picker-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.move_items_title") }}</h3>
             <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">{{ t.tr("fb.move_select_destination") }}</p>
             <!-- Breadcrumb -->
@@ -76,12 +75,10 @@
                     {{ t.tr("fb.move_here") }}
                 </button>
             </div>
-        </div>
-    </div>
+    {% endcall %}
 
     <!-- Share dialog overlay -->
-    <div id="share-dialog-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
-        <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
+    {% call modal::modal("share-dialog-overlay", max_w="max-w-sm", labelledby="share-dialog-title") %}
             <h3 id="share-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.create_share_link") }}</h3>
             <p class="js-share-dialog-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
             <div class="space-y-3">
@@ -133,13 +130,11 @@
                     {{ t.tr("common.create") }}
                 </button>
             </div>
-        </div>
-    </div>
+    {% endcall %}
 
     <!-- Upload link dialog overlay -->
-    <div id="upload-link-dialog-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
-        <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-sm mx-4" onclick="event.stopPropagation()">
-            <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.upload_link") }}</h3>
+    {% call modal::modal("upload-link-dialog-overlay", max_w="max-w-sm", labelledby="ul-dialog-title") %}
+            <h3 id="ul-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.upload_link") }}</h3>
             <p class="js-ul-dialog-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
 
             <!-- Create form -->
@@ -194,12 +189,10 @@
                     {{ t.tr("common.create") }}
                 </button>
             </div>
-        </div>
-    </div>
+    {% endcall %}
 
     <!-- History dialog overlay (file version history) -->
-    <div id="history-dialog-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="history-dialog-title">
-        <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full max-w-lg mx-4" onclick="event.stopPropagation()">
+    {% call modal::modal("history-dialog-overlay", max_w="max-w-lg", labelledby="history-dialog-title") %}
             <div class="flex items-center justify-between mb-1">
                 <h3 id="history-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("fb.file_history") }}</h3>
                 <button type="button" class="js-history-close text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" aria-label="{{ t.tr("common.close") }}">
@@ -215,11 +208,13 @@
                     {{ t.tr("common.close") }}
                 </button>
             </div>
-        </div>
-    </div>
+    {% endcall %}
 
     <!-- Quick preview dialog overlay (dblclick on a file row) -->
-    <div id="quick-preview-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="quick-preview-title">
+    <!-- Kept hand-written (not the modal macro): its card is a large
+         full-height flex dialog (rounded-xl, no padding, header + body)
+         that the macro's fixed card layout can't express. -->
+    <div id="quick-preview-overlay" class="hidden fixed inset-0 z-dialog flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="quick-preview-title">
         <div class="relative bg-white dark:bg-surface-800 rounded-xl shadow-xl max-w-4xl w-[min(92vw,900px)] max-h-[90vh] flex flex-col overflow-hidden" onclick="event.stopPropagation()">
             <div class="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
                 <h3 id="quick-preview-title" class="js-qp-title text-sm font-semibold text-gray-900 dark:text-gray-100 truncate"></h3>
@@ -238,7 +233,7 @@
     </div>
 
     <!-- Drop zone overlay (shown during drag-over) -->
-    <div class="drop-overlay hidden absolute inset-0 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-brand-500 bg-brand-50/90 dark:bg-brand-500/10">
+    <div class="drop-overlay hidden absolute inset-0 z-drop flex items-center justify-center rounded-lg border-2 border-dashed border-brand-500 bg-brand-50/90 dark:bg-brand-500/10">
         <div class="text-center">
             {{ icons::icon_upload("mx-auto h-12 w-12 text-brand-500") }}
             <p class="mt-3 text-lg font-medium text-gray-700 dark:text-gray-300">{{ t.tr("fb.drop_files_here") }}</p>

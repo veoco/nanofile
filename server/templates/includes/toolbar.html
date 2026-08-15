@@ -9,7 +9,7 @@ window.uploadContext = {
 };
 </script>
 
-<div class="flex items-center gap-2">
+<div class="flex flex-wrap items-center gap-2">
     <button onclick="showNewFolderDialog()"
             class="inline-flex items-center rounded-md bg-white dark:bg-surface-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 hover:text-gray-900 dark:hover:text-gray-100">
         <svg class="mr-1.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -36,7 +36,7 @@ window.uploadContext = {
 </div>
 
 <!-- Upload Progress Dialog -->
-<div id="upload-dialog" class="upload-dialog fixed right-4 bottom-4 w-[35rem] max-w-[calc(100vw-2rem)] max-h-96 rounded-lg shadow-lg bg-white z-[1050] border border-gray-200 transition-[max-height] duration-200 hidden">
+<div id="upload-dialog" class="upload-dialog fixed right-4 bottom-4 w-[35rem] max-w-[calc(100vw-2rem)] max-h-96 rounded-lg shadow-lg bg-white z-upload border border-gray-200 transition-[max-height] duration-200 hidden">
     <div class="shrink-0 flex flex-col bg-gray-50 border-b border-gray-200 cursor-pointer select-none rounded-t-lg" onclick="toggleMinimize()">
         <div class="flex items-center justify-between px-3.5 pt-2.5 pb-1.5">
             <div class="flex items-center gap-2.5 min-w-0">
@@ -44,12 +44,16 @@ window.uploadContext = {
                 <span class="upload-bitrate text-xs text-gray-400 whitespace-nowrap"></span>
             </div>
             <div class="flex items-center gap-0.5 shrink-0" onclick="event.stopPropagation()">
-                <button id="minimize-btn" class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 hover:border-gray-300 hover:text-gray-600 active:bg-gray-300 active:scale-[0.88]" onclick="toggleMinimize()" title="{{ t.tr("fb.minimize") }}">−</button>
-                <button class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 hover:border-gray-300 hover:text-gray-600 active:bg-gray-300 active:scale-[0.88]" onclick="closeProgressDialog()" title="{{ t.tr("common.close") }}">✕</button>
+                <button id="minimize-btn" class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 dark:text-gray-500 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 dark:hover:bg-surface-700 hover:border-gray-300 dark:hover:border-gray-600 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-300 dark:active:bg-surface-600 active:scale-[0.88]" onclick="toggleMinimize()" title="{{ t.tr("fb.minimize") }}" aria-label="{{ t.tr("fb.minimize") }}">
+                    {{ icons::icon_minus("h-4 w-4") }}
+                </button>
+                <button class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 dark:text-gray-500 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 dark:hover:bg-surface-700 hover:border-gray-300 dark:hover:border-gray-600 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-300 dark:active:bg-surface-600 active:scale-[0.88]" onclick="closeProgressDialog()" title="{{ t.tr("common.close") }}" aria-label="{{ t.tr("common.close") }}">
+                    {{ icons::icon_close("h-4 w-4") }}
+                </button>
             </div>
         </div>
         <div class="upload-progress-bar-container h-1 bg-gray-200 mx-3.5 mb-2.5">
-            <div class="upload-progress-bar h-full bg-blue-500 rounded" style="width:0%"></div>
+            <div class="upload-progress-bar h-full bg-brand-500 rounded" style="width:0%"></div>
         </div>
     </div>
     <div class="flex-1 flex flex-col min-h-0">
@@ -62,7 +66,7 @@ window.uploadContext = {
 </div>
 
 <!-- New Folder dialog overlay -->
-{% call modal::modal("new-folder-overlay", z="z-[1060]", labelledby="new-folder-title", backdrop_close="hideNewFolderDialog") %}
+{% call modal::modal("new-folder-overlay", z="z-above-upload", labelledby="new-folder-title", backdrop_close="hideNewFolderDialog") %}
         <h3 id="new-folder-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.new_folder") }}</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("fb.new_folder_enter_name") }}</p>
         <form action="/libraries/{{ repo_id }}/files/new-dir/" method="POST" onsubmit="return submitNewFolder(this)">

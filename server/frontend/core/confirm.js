@@ -7,7 +7,7 @@ var confirmResolve = null;
 function initConfirmDialog() {
   confirmOverlay = document.createElement("div");
   confirmOverlay.className =
-    "hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/30";
+    "hidden fixed inset-0 z-above-dialog flex items-center justify-center bg-black/30";
   confirmOverlay.setAttribute("role", "alertdialog");
   confirmOverlay.setAttribute("aria-modal", "true");
   confirmOverlay.innerHTML =

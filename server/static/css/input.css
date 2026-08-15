@@ -24,6 +24,37 @@
   --color-surface-900: #0f172a;
 }
 
+/* ─── Z-index scale ─────────────────────────────────────────────────────
+   Semantic names, single source of truth. Values preserve the original
+   hand-written stacking order. Defined via @utility (not @theme --z-*)
+   because Tailwind v4's `z-*` utility does not consume a `--z-*` theme
+   namespace — custom z utilities must be registered with @utility so that
+   variants (e.g. `hover:z-sticky`) also work. */
+@utility z-sticky {
+  z-index: 10; /* gallery 吸顶月份头、网格 hover 层 */
+}
+@utility z-header {
+  z-index: 40; /* 顶部栏 sticky */
+}
+@utility z-drop {
+  z-index: 40; /* 拖拽 drop 遮罩(drop-zone 内部) */
+}
+@utility z-dialog {
+  z-index: 50; /* 常规弹窗、移动端底栏、用户菜单下拉 */
+}
+@utility z-above-dialog {
+  z-index: 100; /* 通用确认框、左侧快捷新建库(盖过常规弹窗) */
+}
+@utility z-upload {
+  z-index: 1050; /* 上传进度面板 */
+}
+@utility z-above-upload {
+  z-index: 1060; /* 新文件夹弹窗(盖过上传面板) */
+}
+@utility z-top {
+  z-index: 9999; /* 全局加载条、toast */
+}
+
 /* ─── Base layer overrides ─────────────────────────────────────────────────── */
 @layer base {
   * {

@@ -5,7 +5,7 @@ var toastContainer = null;
 function initToast() {
   toastContainer = document.createElement("div");
   toastContainer.className =
-    "fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none";
+    "fixed top-4 right-4 z-top flex flex-col gap-2 pointer-events-none";
   toastContainer.setAttribute("aria-live", "polite");
   toastContainer.setAttribute("aria-relevant", "additions removals");
   document.body.appendChild(toastContainer);

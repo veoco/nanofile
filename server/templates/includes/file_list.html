@@ -372,12 +372,12 @@
     {% if render_view != "list" && render_view != "grid" %}
     {% for group in gallery_groups %}
     <div class="gallery-month-group bg-white dark:bg-surface-900">
-        <div class="sticky top-0 z-10 bg-white/90 dark:bg-surface-900/90 backdrop-blur-sm px-4 py-3">
+        <div class="sticky top-0 z-sticky bg-white/90 dark:bg-surface-900/90 backdrop-blur-sm px-4 py-3">
             <h2 class="text-base font-bold text-gray-800 dark:text-gray-200">{{ group.label }}</h2>
         </div>
         <div class="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-0.5 px-4 pb-6">
         {% for entry in group.entries %}
-            <div class="js-entry-row group relative block aspect-square overflow-hidden bg-gray-100 dark:bg-surface-700 transition-transform duration-200 hover:scale-[1.04] hover:z-10 cursor-pointer"
+            <div class="js-entry-row group relative block aspect-square overflow-hidden bg-gray-100 dark:bg-surface-700 transition-transform duration-200 hover:scale-[1.04] hover:z-sticky cursor-pointer"
                  data-name="{{ entry.name }}"
                  data-type="{{ entry.entry_type }}"
                  data-size="{{ entry.size }}"

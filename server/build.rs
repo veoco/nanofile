@@ -17,9 +17,13 @@ fn main() {
     println!("cargo:rustc-env=NANOFILE_BUILD_TS={}", ts);
 
     // Only regenerate the CSS/JS when one of their inputs changes.
+    // src/ is included because Tailwind v4 scans Rust string literals for
+    // class names (e.g. file_icon_color) — without it a class change there
+    // would leave app.css stale until an unrelated rebuild.
     println!("cargo:rerun-if-changed=static/css/input.css");
     println!("cargo:rerun-if-changed=templates/");
     println!("cargo:rerun-if-changed=frontend/");
+    println!("cargo:rerun-if-changed=src/");
 
     build_css();
     build_js();

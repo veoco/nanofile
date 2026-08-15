@@ -14,7 +14,7 @@
 </head>
 <body class="h-full">
     <!-- Global loading bar (hidden by default) -->
-    <div id="loading-bar" class="hidden fixed top-0 left-0 z-[9999] h-0.5 w-full">
+    <div id="loading-bar" class="hidden fixed top-0 left-0 z-top h-0.5 w-full">
         <div class="h-full bg-brand-500 animate-loading-bar"></div>
     </div>
 
@@ -39,7 +39,7 @@
     </div>
 
     <!-- Mobile bottom navigation -->
-    <nav class="fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-surface-900 border-t border-gray-200 dark:border-gray-700 lg:hidden"
+    <nav class="fixed bottom-0 left-0 right-0 z-dialog bg-white dark:bg-surface-900 border-t border-gray-200 dark:border-gray-700 lg:hidden"
          role="navigation" aria-label="{{ t.tr("a11y.mobile_nav") }}">
         <div class="flex items-center justify-around h-16">
             <a href="/libraries/"

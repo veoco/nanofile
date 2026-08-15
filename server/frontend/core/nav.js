@@ -38,7 +38,7 @@ if (userMenu && userButton) {
     if (dropdown) { dropdown.remove(); return; }
     dropdown = document.createElement("div");
     dropdown.className =
-      "js-user-menu-dropdown absolute right-0 z-50 mt-2 w-44 origin-top-right rounded-xl bg-white dark:bg-surface-800 py-1 shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-none";
+      "js-user-menu-dropdown absolute right-0 z-dialog mt-2 w-44 origin-top-right rounded-xl bg-white dark:bg-surface-800 py-1 shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-none";
 
     // Admin-only: User Management link
     var isAdmin = userMenu.getAttribute("data-is-admin") === "true";

@@ -78,7 +78,7 @@
 </div>
 
 <!-- New Library dialog (self-contained) -->
-{% call modal::modal("quick-create-overlay", z="z-[100]", labelledby="quick-create-title", backdrop_close="hideQuickCreate") %}
+{% call modal::modal("quick-create-overlay", z="z-above-dialog", labelledby="quick-create-title", backdrop_close="hideQuickCreate") %}
         <h3 id="quick-create-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("repo.new_library") }}</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("repo.new_library_desc") }}</p>
         <form id="quick-create-form" onsubmit="return submitQuickCreate(this)">
