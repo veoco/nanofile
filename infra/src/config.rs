@@ -1,6 +1,8 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+use crate::config_migration::{migrate_config, persist_with_backup};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -375,8 +377,52 @@ impl Default for IndexConfig {
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
         let _ = dotenvy::dotenv();
-        let config_str = std::fs::read_to_string("config.toml")?;
-        let mut config: Config = toml::from_str(&config_str)?;
+        Self::load_from("config.toml")
+    }
+
+    /// Load, migrate (in place, preserving comments) and validate a config
+    /// file. When migrations changed the document, the upgraded file is
+    /// written back atomically behind a `.bak` backup; a write failure (e.g.
+    /// a read-only mount) only degrades to a warning — the in-memory config
+    /// is already migrated and this run proceeds normally.
+    fn load_from(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+        let original = std::fs::read_to_string(path)?;
+        // Parse with toml_edit to keep every comment intact.
+        let mut doc: toml_edit::DocumentMut = original.parse()?;
+        let report = migrate_config(&mut doc)?;
+        let mut config = if report.changed {
+            // Validate the migrated document against the current schema BEFORE
+            // touching the disk, so a failed migration can never corrupt the file.
+            let migrated = doc.to_string();
+            let config: Config = toml::from_str(&migrated)?;
+            match persist_with_backup(path, &migrated) {
+                Ok(()) => tracing::info!(
+                    "config.toml migrated {} -> {}: {:?}",
+                    report.from,
+                    report.to,
+                    report.applied
+                ),
+                Err(e) => {
+                    tracing::warn!(
+                        "config.toml migration succeeded but write-back failed; \
+                         using in-memory config: {e}"
+                    );
+                    // tracing_subscriber is not initialized yet at load time
+                    // (it needs config.logging.level), so also echo to stderr.
+                    eprintln!(
+                        "[nanofile] WARN: config migration applied in memory but \
+                         could not write back: {e}"
+                    );
+                }
+            }
+            config
+        } else {
+            // No migration ran: toml_edit round-trips losslessly, so the
+            // original string is already the parsed document — reuse it to
+            // avoid a redundant re-serialization.
+            toml::from_str(&original)?
+        };
         config.apply_env_overrides();
         Ok(config)
     }
@@ -643,5 +689,61 @@ request_timeout_secs = 600
         // No Host header at all: fall back to site_url itself.
         let c = cfg("http://127.0.0.1:8082");
         assert_eq!(c.download_url_base(None), "http://127.0.0.1:8082");
+    }
+
+    /// A minimal but complete current-schema config (all required sections).
+    const FULL_CONFIG: &str = r#"# a comment
+[server]
+addr = "0.0.0.0"
+port = 8082
+max_upload_size_mb = 4096
+request_timeout_secs = 600
+
+[database]
+url = "sqlite:data/test.db?mode=rwc"
+
+[storage]
+block_dir = "data/blocks"
+temp_dir = "data/temp"
+max_storage_bytes = 0
+
+[auth]
+password_hash_iterations = 600000
+api_token_ttl_days = 180
+sync_token_ttl_days = 365
+max_login_attempts = 5
+lockout_duration_secs = 900
+
+[logging]
+level = "info"
+
+[gc]
+enabled = false
+interval_hours = 24
+"#;
+
+    #[test]
+    fn load_current_config_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, FULL_CONFIG).unwrap();
+
+        let config = Config::load_from(&path).expect("load current config");
+        assert_eq!(config.server.port, 8082);
+        assert_eq!(config.database.url, "sqlite:data/test.db?mode=rwc");
+
+        // Only a no-op placeholder migration exists, so a current config must
+        // load with zero disk side effects: file untouched, no backup, no
+        // config_version stamped.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), FULL_CONFIG);
+        assert!(!std::path::Path::new(&format!("{}.bak", path.display())).exists());
+        assert!(!FULL_CONFIG.contains("config_version"));
+    }
+
+    #[test]
+    fn load_missing_file_still_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nope.toml");
+        assert!(Config::load_from(&path).is_err());
     }
 }

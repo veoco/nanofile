@@ -18,6 +18,8 @@ tracing = "0.1"
 anyhow = "1"
 thiserror = "2"
 toml = "1.1"
+toml_edit = "0.25"
+semver = "1"
 dotenvy = "0.15"
 
 sea-orm = { version = "1.1.20", features = [
@@ -41,4 +43,7 @@ hex = "0.4"
 flate2 = "1.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
 

@@ -2416,15 +2416,18 @@ dependencies = [
  "pbkdf2 0.13.0",
  "rand 0.10.2",
  "sea-orm",
+ "semver",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
  "toml",
+ "toml_edit",
  "tracing",
  "uuid",
 ]
@@ -5631,6 +5634,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

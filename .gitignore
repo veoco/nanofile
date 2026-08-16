@@ -1,5 +1,7 @@
 /target
 /data
+config.toml.bak
+config.toml.*.tmp
 *.db
 *.db-journal
 *.db-wal

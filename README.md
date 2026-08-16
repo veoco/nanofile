@@ -98,7 +98,12 @@ Pass `--regular` to create a non-admin account.
 
 Settings are read from `config.toml` in the working directory. Every key can also be overridden with
 a `NANOFILE_*` environment variable — the shipped `config.toml` lists the exact variable name in a
-comment above each key (e.g. `NANOFILE_DATABASE_URL`, `NANOFILE_SERVER_PORT`).
+comment above each key (e.g. `NANOFILE_DATABASE_URL`, `NANOFILE_SERVER_PORT`). Environment variables
+always win at runtime and are never written into the file.
+
+On upgrade to a newer release, `config.toml` is automatically migrated in place (comments preserved)
+when the config format changed, backed up as `config.toml.bak` first; on a read-only mount the
+migration is applied in memory only.
 
 | Section | Purpose |
 |---------|---------|

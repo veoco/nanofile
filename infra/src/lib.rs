@@ -6,6 +6,7 @@
 pub mod activity_log;
 pub mod common;
 pub mod config;
+pub(crate) mod config_migration;
 pub mod crypto;
 pub mod db;
 pub mod entity;
