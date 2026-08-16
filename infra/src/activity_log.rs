@@ -71,7 +71,14 @@ pub async fn log_activity(
 
     // Best-effort: look up repo name and head commit ID.
     let (commit_id, repo_name) = match repo::Entity::find_by_id(repo_id).one(db).await {
-        Ok(Some(r)) => (r.head_commit_id.unwrap_or_default(), r.name.clone()),
+        Ok(Some(r)) => {
+            // Wiki repos are a separate product surface (知识库); their internal
+            // file operations must not surface as ordinary library activities.
+            if r.r#type == "wiki" {
+                return;
+            }
+            (r.head_commit_id.unwrap_or_default(), r.name.clone())
+        }
         _ => (String::new(), String::new()),
     };
 
@@ -315,6 +322,14 @@ pub async fn log_activity_batch(
     items: Vec<ActivityItem>,
 ) {
     let now = chrono::Utc::now().timestamp();
+
+    // Wiki repos are a separate product surface (知识库); skip their internal
+    // file operations so they don't surface as ordinary library activities.
+    if let Ok(Some(r)) = repo::Entity::find_by_id(repo_id).one(db).await
+        && r.r#type == "wiki"
+    {
+        return;
+    }
 
     // Non-aggregating ops (rename/move/recover) insert in one statement; edit
     // ops are deduplicated per path within a 30-minute window.

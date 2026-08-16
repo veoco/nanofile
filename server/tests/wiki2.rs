@@ -829,3 +829,45 @@ async fn test_mobile_login_wiki() {
         .unwrap();
     assert_eq!(resp.status(), 200, "wiki should load after mobile-login");
 }
+
+/// A wiki repo must not appear in the ordinary library lists (mirrors seahub's
+/// `is_wiki_repo` filter).
+#[tokio::test]
+async fn test_wiki_hidden_from_repo_list() {
+    let f = TestFixture::new().await;
+
+    // Create a wiki.
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/wikis2/",
+            Some(&f.api_token),
+            &serde_json::json!({"name": "hidden-list-wiki"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let wiki_id = resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // v1 library list (`/api2/repos/`) must not contain the wiki.
+    let resp = f.client.get("/api2/repos/", Some(&f.api_token)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let repos = body.as_array().unwrap();
+    assert!(
+        !repos.iter().any(|r| r["id"] == wiki_id),
+        "wiki must not appear in /api2/repos/"
+    );
+
+    // v2.1 library list (`/api/v2.1/repos/`) must not contain the wiki.
+    let resp = f.client.get("/api/v2.1/repos/", Some(&f.api_token)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let repos = body["repos"].as_array().unwrap();
+    assert!(
+        !repos.iter().any(|r| r["repo_id"] == wiki_id),
+        "wiki must not appear in /api/v2.1/repos/"
+    );
+}
