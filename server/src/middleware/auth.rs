@@ -55,6 +55,17 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             let user_id = record.user_id;
             let repo_id = record.repo_id.clone();
 
+            // A deactivated account must not keep syncing (AuthUser applies the
+            // same is_active check on the web/API surfaces).
+            if !repos
+                .user
+                .find_by_id(user_id)
+                .await?
+                .is_some_and(|u| u.is_active)
+            {
+                return Err(base::error::AppError::Forbidden);
+            }
+
             // Capture client_id, client_name, client_ver from URL query params
             // and update the sync_token's peer info. This mirrors seafile-server's
             // RepoTokenPeerInfo table for device linking.
@@ -275,6 +286,8 @@ impl SyncAuth {
                 return Err(StatusCode::UNAUTHORIZED);
             }
 
+            ensure_active_user(repos, record.user_id).await?;
+
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: record.repo_id,
@@ -301,6 +314,8 @@ impl SyncAuth {
                 .map_err(|_| StatusCode::UNAUTHORIZED)?;
             }
 
+            ensure_active_user(repos, record.user_id).await?;
+
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: url_repo_id.unwrap_or("").to_string(),
@@ -315,6 +330,24 @@ impl SyncAuth {
 /// and is in the past.
 fn is_token_expired(expires_at: Option<i64>) -> bool {
     matches!(expires_at, Some(exp) if chrono::Utc::now().timestamp() > exp)
+}
+
+/// Ensure the user behind a sync/API token still exists and is active.
+///
+/// Mirrors the `is_active` check that [`AuthUser`] applies on the web/API
+/// surfaces, so a deactivated account cannot keep syncing through a token
+/// that was issued before deactivation.
+async fn ensure_active_user(repos: &Repositories, user_id: i32) -> Result<(), StatusCode> {
+    let user = repos
+        .user
+        .find_by_id(user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !user.is_active {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(())
 }
 
 /// Extract a sync/API token from HTTP headers. Used by /seafhttp/ endpoints.

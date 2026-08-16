@@ -8,6 +8,12 @@ use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
 use infra::rate_limit::LoginRateLimiter;
 
+/// A syntactically-valid PBKDF2 hash (16-byte salt + 32-byte hash, hex) used to
+/// equalize login latency when the user does not exist. Without this, a
+/// "user not found" response returns instantly while a wrong-password response
+/// runs PBKDF2 for hundreds of ms, leaking which emails are registered via timing.
+const DUMMY_PASSWORD_HASH: &str = "00000000000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000";
+
 /// Represents all possible outcomes of a login attempt.
 pub enum LoginResult {
     /// Login succeeded. Includes the API token and an optional S2FA device trust token.
@@ -98,6 +104,15 @@ impl LoginService {
             Some(u) => u,
             None => {
                 record_failure();
+                // Run PBKDF2 against a dummy hash so a "user not found" response
+                // takes as long as a wrong-password response, avoiding username
+                // enumeration via response-time side channel.
+                let _ = verify_password_async(
+                    password.to_string(),
+                    DUMMY_PASSWORD_HASH.to_string(),
+                    self.password_hash_iterations,
+                )
+                .await;
                 return Ok(LoginResult::BadCredentials);
             }
         };

@@ -331,10 +331,12 @@ impl RepoService {
             .await?
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-        let membership = repos.member.find_by_repo_and_user(repo_id, user_id).await?;
-        let permission = membership
-            .map(|m| m.permission)
-            .unwrap_or_else(|| "rw".to_string());
+        let membership = repos
+            .member
+            .find_by_repo_and_user(repo_id, user_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+        let permission = membership.permission;
 
         let root = if let Some(ref cmmt_id) = r.head_commit_id {
             repos
