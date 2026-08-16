@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { readState, createWiki } from "../helpers/api";
+import { readState, createWiki, createRepo } from "../helpers/api";
 
 let state: ReturnType<typeof readState>;
 
@@ -73,4 +73,28 @@ test("view a wiki and add a sub-page", async ({ page }) => {
 
   // Redirected to the new page; its name appears in the header.
   await expect(page.locator("h2", { hasText: childName })).toBeVisible({ timeout: 15_000 });
+});
+
+test("a wiki does not appear in the libraries page", async ({ page }) => {
+  const libName = `lib-${Date.now()}`;
+  const wikiName = `wiki-${Date.now()}`;
+  await createRepo(state.baseURL, state.adminToken, libName);
+  await createWiki(state.baseURL, state.adminToken, wikiName);
+
+  await page.goto("/libraries/");
+  await page.waitForSelector('ul[role="list"] li');
+  // The ordinary library shows; the wiki appears in neither the main list
+  // nor the left-panel tree.
+  await expect(page.locator('ul[role="list"] li').filter({ hasText: libName })).toBeVisible();
+  await expect(page.locator('ul[role="list"] li').filter({ hasText: wikiName })).toHaveCount(0);
+  await expect(page.locator(".js-repo-tree .js-repo-item").filter({ hasText: wikiName })).toHaveCount(0);
+});
+
+test("creating a wiki does not record a library activity", async ({ page }) => {
+  const name = `quiet-wiki-${Date.now()}`;
+  await createWiki(state.baseURL, state.adminToken, name);
+
+  await page.goto("/activities/");
+  // The wiki's creation must not surface as a library/file activity.
+  await expect(page.locator("main table tbody tr").filter({ hasText: name })).toHaveCount(0);
 });
