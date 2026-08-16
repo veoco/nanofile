@@ -2359,7 +2359,6 @@ dependencies = [
  "pbkdf2 0.13.0",
  "rand 0.10.2",
  "sea-orm",
- "semver",
  "serde",
  "serde_json",
  "serde_urlencoded",

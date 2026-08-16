@@ -1,15 +1,15 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-
-use crate::config_migration::{migrate_config, persist_with_backup};
+use anyhow::Context;
+use serde::{Deserialize, Serialize};
 
 /// Environment variable overriding the config file path.
 pub const CONFIG_PATH_ENV: &str = "NANOFILE_CONFIG";
 /// Default config path when neither `--config` nor `NANOFILE_CONFIG` is set.
 pub const DEFAULT_CONFIG_PATH: &str = "config.toml";
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
@@ -36,7 +36,7 @@ pub struct Config {
 }
 
 /// Web UI localization settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UiConfig {
     /// Fallback UI language when the user hasn't set a preference and the
     /// browser's Accept-Language doesn't match a supported language.
@@ -62,7 +62,7 @@ fn default_ui_language() -> String {
 /// Without a configured email backend the reset feature is disabled: the server
 /// must never echo the reset link back in the HTTP response, since that would
 /// let anyone take over any account.
-#[derive(Debug, Default, Deserialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct EmailConfig {
     /// Master switch. When `false` (default) the password-reset flow is
     /// disabled and requests render a generic page without minting a token.
@@ -70,7 +70,7 @@ pub struct EmailConfig {
     pub enabled: bool,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct NotificationConfig {
     pub enabled: bool,
     pub private_key: String,
@@ -100,7 +100,7 @@ impl Default for NotificationConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ServerConfig {
     #[serde(default = "default_addr")]
     pub addr: String,
@@ -321,7 +321,7 @@ impl ServerConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DatabaseConfig {
     #[serde(default = "default_db_url")]
     pub url: String,
@@ -348,7 +348,7 @@ impl Default for DatabaseConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct StorageConfig {
     #[serde(default = "default_block_dir")]
     pub block_dir: PathBuf,
@@ -384,7 +384,7 @@ impl Default for StorageConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AuthConfig {
     #[serde(default = "default_password_hash_iterations")]
     pub password_hash_iterations: u32,
@@ -440,7 +440,7 @@ impl Default for AuthConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct AdminInitConfig {
     pub email: Option<String>,
     pub password: Option<String>,
@@ -468,7 +468,7 @@ fn default_password_min_length() -> u32 {
     8
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LoggingConfig {
     #[serde(default = "default_log_level")]
     pub level: String,
@@ -486,7 +486,7 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct GcConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -507,7 +507,7 @@ fn default_gc_interval_hours() -> u64 {
     24
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct IndexConfig {
     pub enabled: bool,
     pub index_dir: PathBuf,
@@ -530,15 +530,15 @@ impl Config {
         Self::load_from(&path)
     }
 
-    /// Load, migrate (in place, preserving comments) and validate a config
-    /// file. When migrations changed the document, the upgraded file is
-    /// written back atomically behind a `.bak` backup; a write failure (e.g.
-    /// a read-only mount) only degrades to a warning — the in-memory config
-    /// is already migrated and this run proceeds normally.
+    /// Load a config file. Missing fields are filled with built-in defaults and
+    /// written back in place (comments preserved), so an upgrade leaves a
+    /// visible trace of newly added options. A write failure (e.g. a read-only
+    /// mount) only degrades to a warning — the in-memory config is already
+    /// complete.
     ///
     /// When the file does not exist, falls back to built-in defaults (plus env
     /// overrides) so the server can start with zero config; other I/O errors
-    /// (and unparseable/ corrupt files) still fail.
+    /// (and unparseable/corrupt files) still fail.
     pub fn load_from(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
         let original = match std::fs::read_to_string(path) {
@@ -556,41 +556,32 @@ impl Config {
                 return Err(anyhow::anyhow!("failed to read {}: {e}", path.display()));
             }
         };
-        // Parse with toml_edit to keep every comment intact.
+
+        // Deserialize first (missing fields get serde defaults in memory), then
+        // fill the same defaults into the document and write it back if anything
+        // was missing. NANOFILE_* overrides are applied last and never written.
+        let mut config: Config = toml::from_str(&original)?;
         let mut doc: toml_edit::DocumentMut = original.parse()?;
-        let report = migrate_config(&mut doc)?;
-        let mut config = if report.changed {
-            // Validate the migrated document against the current schema BEFORE
-            // touching the disk, so a failed migration can never corrupt the file.
-            let migrated = doc.to_string();
-            let config: Config = toml::from_str(&migrated)?;
-            match persist_with_backup(path, &migrated) {
-                Ok(()) => tracing::info!(
-                    "config.toml migrated {} -> {}: {:?}",
-                    report.from,
-                    report.to,
-                    report.applied
-                ),
+        let defaults = toml::to_string_pretty(&Config::default())?;
+        let defaults_doc: toml_edit::DocumentMut = defaults.parse()?;
+        if fill_missing(doc.as_table_mut(), defaults_doc.as_table()) {
+            let filled = doc.to_string();
+            match persist_with_backup(path, &filled) {
+                Ok(()) => tracing::info!("config.toml filled with missing defaults"),
                 Err(e) => {
                     tracing::warn!(
-                        "config.toml migration succeeded but write-back failed; \
+                        "config.toml fill succeeded but write-back failed; \
                          using in-memory config: {e}"
                     );
                     // tracing_subscriber is not initialized yet at load time
                     // (it needs config.logging.level), so also echo to stderr.
                     eprintln!(
-                        "[nanofile] WARN: config migration applied in memory but \
+                        "[nanofile] WARN: config fill applied in memory but \
                          could not write back: {e}"
                     );
                 }
             }
-            config
-        } else {
-            // No migration ran: toml_edit round-trips losslessly, so the
-            // original string is already the parsed document — reuse it to
-            // avoid a redundant re-serialization.
-            toml::from_str(&original)?
-        };
+        }
         config.apply_env_overrides();
         Ok(config)
     }
@@ -763,6 +754,85 @@ impl Config {
     }
 }
 
+/// Recursively insert keys from `src` that are missing in `dst`, leaving
+/// existing keys (and their values/comments) untouched. Returns whether any key
+/// was inserted.
+fn fill_missing(dst: &mut toml_edit::Table, src: &toml_edit::Table) -> bool {
+    let mut changed = false;
+    for (key, value) in src.iter() {
+        match dst.get_mut(key) {
+            None => {
+                dst.insert(key, value.clone());
+                changed = true;
+            }
+            Some(toml_edit::Item::Table(d)) => {
+                if let toml_edit::Item::Table(s) = value {
+                    changed |= fill_missing(d, s);
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    changed
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".bak");
+    PathBuf::from(s)
+}
+
+fn tmp_path(path: &Path) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(format!(".{}.tmp", std::process::id()));
+    PathBuf::from(s)
+}
+
+/// Atomically replace `path` with `filled`, keeping the previous content as
+/// `path.bak`. Fails without touching `path` when the backup or the write
+/// fails. The backup is taken with `fs::copy` so file permissions carry over.
+fn persist_with_backup(path: &Path, filled: &str) -> anyhow::Result<()> {
+    std::fs::copy(path, backup_path(path)).with_context(|| {
+        format!(
+            "failed to back up {} to {}",
+            path.display(),
+            backup_path(path).display()
+        )
+    })?;
+    atomic_write(path, filled)
+}
+
+/// Write `content` to `path` via a same-directory temp file + rename. Keeps
+/// the original file's permissions and fsyncs before renaming so the replaced
+/// file is never observed half-written. The temp file is cleaned up on failure.
+fn atomic_write(path: &Path, content: &str) -> anyhow::Result<()> {
+    let tmp = tmp_path(path);
+    let result = (|| -> anyhow::Result<()> {
+        let perms = std::fs::metadata(path)?.permissions();
+        {
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(content.as_bytes())?;
+            f.sync_all()?;
+            f.set_permissions(perms)?;
+        }
+        #[cfg(windows)]
+        {
+            // `rename` does not overwrite an existing target on Windows.
+            let _ = std::fs::remove_file(path);
+        }
+        std::fs::rename(&tmp, path)?;
+        #[cfg(unix)]
+        if let Ok(dir) = std::fs::File::open(path.parent().unwrap_or_else(|| Path::new("."))) {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -859,53 +929,118 @@ request_timeout_secs = 600
         assert_eq!(c.download_url_base(None), "http://127.0.0.1:8082");
     }
 
-    /// A minimal but complete current-schema config (all required sections).
-    const FULL_CONFIG: &str = r#"# a comment
-[server]
-addr = "0.0.0.0"
-port = 8082
-max_upload_size_mb = 4096
-request_timeout_secs = 600
+    #[test]
+    fn fill_missing_inserts_missing_sections_and_fields() {
+        let mut dst: toml_edit::DocumentMut = "[server]\naddr = \"1.2.3.4\"\n".parse().unwrap();
+        let src: toml_edit::DocumentMut = toml::to_string_pretty(&Config::default())
+            .unwrap()
+            .parse()
+            .unwrap();
 
-[database]
-url = "sqlite:data/test.db?mode=rwc"
+        let changed = fill_missing(dst.as_table_mut(), src.as_table());
+        assert!(changed);
 
-[storage]
-block_dir = "data/blocks"
-temp_dir = "data/temp"
-max_storage_bytes = 0
-
-[auth]
-password_hash_iterations = 600000
-api_token_ttl_days = 180
-sync_token_ttl_days = 365
-max_login_attempts = 5
-lockout_duration_secs = 900
-
-[logging]
-level = "info"
-
-[gc]
-enabled = false
-interval_hours = 24
-"#;
+        let out = dst.to_string();
+        assert!(out.contains("addr = \"1.2.3.4\"")); // 原字段保持
+        assert!(out.contains("port = 8082")); // 缺失字段补默认
+        assert!(out.contains("[database]")); // 缺失 section 补默认
+    }
 
     #[test]
-    fn load_current_config_untouched() {
+    fn fill_missing_keeps_existing_values() {
+        let mut dst: toml_edit::DocumentMut = "[server]\nport = 1234\n".parse().unwrap();
+        let src: toml_edit::DocumentMut = toml::to_string_pretty(&Config::default())
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        let changed = fill_missing(dst.as_table_mut(), src.as_table());
+        assert!(changed);
+
+        let out = dst.to_string();
+        assert!(out.contains("port = 1234")); // 已有字段不被默认值覆盖
+    }
+
+    #[test]
+    fn load_complete_config_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, FULL_CONFIG).unwrap();
+        let complete = toml::to_string_pretty(&Config::default()).unwrap();
+        std::fs::write(&path, &complete).unwrap();
 
-        let config = Config::load_from(&path).expect("load current config");
+        let config = Config::load_from(&path).expect("load complete config");
         assert_eq!(config.server.port, 8082);
-        assert_eq!(config.database.url, "sqlite:data/test.db?mode=rwc");
 
-        // Only a no-op placeholder migration exists, so a current config must
-        // load with zero disk side effects: file untouched, no backup, no
-        // config_version stamped.
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), FULL_CONFIG);
+        // 完整配置无缺失字段:文件不变、无备份。
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), complete);
         assert!(!std::path::Path::new(&format!("{}.bak", path.display())).exists());
-        assert!(!FULL_CONFIG.contains("config_version"));
+    }
+
+    #[test]
+    fn load_incomplete_config_gets_filled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server]\naddr = \"1.2.3.4\"\n").unwrap();
+
+        let config = Config::load_from(&path).expect("load incomplete config");
+        assert_eq!(config.server.addr, "1.2.3.4");
+        assert_eq!(config.server.port, 8082); // 默认补齐
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("port = 8082")); // 缺失字段写回
+        assert!(written.contains("[database]")); // 缺失 section 写回
+        assert!(std::path::Path::new(&format!("{}.bak", path.display())).exists());
+    }
+
+    #[cfg(unix)]
+    mod persist {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+
+        #[test]
+        fn writes_backup_and_replaces() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            std::fs::write(&path, "old").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+            persist_with_backup(&path, "new").unwrap();
+
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+            assert_eq!(std::fs::read_to_string(backup_path(&path)).unwrap(), "old");
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "permissions must survive the atomic write");
+        }
+
+        #[test]
+        fn fails_on_readonly_dir() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            std::fs::write(&path, "old").unwrap();
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+
+            // Root bypasses directory permissions — skip the assertion there.
+            let is_root = libc_geteuid() == 0;
+            let result = persist_with_backup(&path, "new");
+            if is_root {
+                let _ = result;
+            } else {
+                assert!(result.is_err(), "write into read-only dir must fail");
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+                assert!(!tmp_path(&path).exists());
+            }
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    fn libc_geteuid() -> u32 {
+        // Minimal euid check without pulling in a libc dev-dependency.
+        let s = std::process::Command::new("id").arg("-u").output().unwrap();
+        String::from_utf8_lossy(&s.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(1000)
     }
 
     #[test]
