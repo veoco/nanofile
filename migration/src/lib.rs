@@ -66,6 +66,8 @@ migrations!(
     m20260814_000007_add_more_query_indexes,
     m20260814_000008_add_remaining_indexes,
     m20260814_000009_drop_dir_entries,
+    m20260816_000001_hash_tokens,
+    m20260816_000002_add_api_token_pending,
 );
 
 #[cfg(test)]

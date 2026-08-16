@@ -237,6 +237,7 @@ impl RepoService {
         enc_version_val: i32,
         magic: Option<String>,
         random_key: Option<String>,
+        sync_token_ttl_days: u64,
     ) -> Result<(RepoInfo, String), AppError> {
         let name = validate_repo_name(name)?;
         let repo_id = repo_id_opt.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -271,9 +272,18 @@ impl RepoService {
 
         // Generate a sync token
         let token_value = generate_sync_token();
+        let expires_at =
+            (sync_token_ttl_days > 0).then(|| now + sync_token_ttl_days as i64 * 86400);
         repos
             .sync_token
-            .create(&repo_id, user_id, token_value.clone(), None, now)
+            .create(
+                &repo_id,
+                user_id,
+                token_value.clone(),
+                None,
+                now,
+                expires_at,
+            )
             .await?;
 
         let encrypted = encrypted_val == 1;
@@ -587,6 +597,7 @@ impl RepoService {
         repos: &Repositories,
         repo_id: &str,
         user_id: i32,
+        sync_token_ttl_days: u64,
     ) -> Result<DownloadInfoResponse, AppError> {
         let r = repos
             .repo
@@ -600,7 +611,7 @@ impl RepoService {
             .await?
             .ok_or_else(|| AppError::NotFound("user not found".into()))?;
 
-        let token_value = ensure_sync_token(repos, repo_id, user_id).await?;
+        let token_value = ensure_sync_token(repos, repo_id, user_id, sync_token_ttl_days).await?;
 
         Ok(DownloadInfoResponse {
             repo_id: repo_id.to_string(),
@@ -715,6 +726,7 @@ impl RepoService {
         repos: &Repositories,
         repo_ids: &[&str],
         user_id: i32,
+        sync_token_ttl_days: u64,
     ) -> Result<HashMap<String, String>, AppError> {
         let ids: Vec<String> = repo_ids.iter().map(|s| s.to_string()).collect();
 
@@ -750,13 +762,24 @@ impl RepoService {
                 continue;
             }
             let token = match token_map.get(*repo_id) {
-                Some(t) => t.token.clone(),
-                None => {
+                Some(t)
+                    if !t
+                        .expires_at
+                        .is_some_and(|exp| chrono::Utc::now().timestamp() > exp) =>
+                {
+                    t.token.clone()
+                }
+                _ => {
+                    if let Some(t) = token_map.get(*repo_id) {
+                        let _ = repos.sync_token.delete_by_token(&t.token).await;
+                    }
                     let value = generate_sync_token();
                     let now = chrono::Utc::now().timestamp();
+                    let expires_at =
+                        (sync_token_ttl_days > 0).then(|| now + sync_token_ttl_days as i64 * 86400);
                     repos
                         .sync_token
-                        .create(repo_id, user_id, value.clone(), None, now)
+                        .create(repo_id, user_id, value.clone(), None, now, expires_at)
                         .await?;
                     value
                 }

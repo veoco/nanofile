@@ -52,7 +52,7 @@ impl S2faTokenRepository for DbS2faTokenRepository {
         user_id: i32,
     ) -> Result<Option<s2fa_token::Model>, AppError> {
         Ok(s2fa_token::Entity::find()
-            .filter(s2fa_token::Column::Token.eq(token))
+            .filter(s2fa_token::Column::Token.eq(crate::service::auth::token::hash_token(token)))
             .filter(s2fa_token::Column::UserId.eq(user_id))
             .one(self.db.as_ref())
             .await?)
@@ -94,7 +94,7 @@ impl S2faTokenRepository for DbS2faTokenRepository {
         let model = s2fa_token::ActiveModel {
             id: sea_orm::NotSet,
             user_id: Set(params.user_id),
-            token: Set(params.token),
+            token: Set(crate::service::auth::token::hash_token(&params.token)),
             device_id: Set(params.device_id),
             device_name: Set(params.device_name),
             created_at: Set(params.created_at),

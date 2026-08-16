@@ -8,7 +8,7 @@ pub struct Model {
     pub id: i32,
     #[sea_orm(not_null)]
     pub user_id: i32,
-    #[sea_orm(unique, not_null, length = 40)]
+    #[sea_orm(unique, not_null, length = 64)]
     pub token: String,
     pub device_id: Option<String>,
     pub device_name: Option<String>,

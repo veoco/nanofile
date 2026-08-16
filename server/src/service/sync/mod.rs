@@ -54,7 +54,11 @@ impl SyncService {
     ///
     /// Batch-loads repos, owners and sync tokens so the total work is a
     /// handful of queries instead of ~4-5 per member repo.
-    pub async fn accessible_repos(&self, user_id: i32) -> Result<Vec<AccessibleRepo>, AppError> {
+    pub async fn accessible_repos(
+        &self,
+        user_id: i32,
+        sync_token_ttl_days: u64,
+    ) -> Result<Vec<AccessibleRepo>, AppError> {
         let memberships = self.repos.member.find_by_user_id(user_id).await?;
 
         // Distinct repo ids across memberships.
@@ -97,16 +101,27 @@ impl SyncService {
                 continue; // repo deleted → skip, matching the previous behavior
             };
             let token = match token_by_repo.get(r.id.as_str()) {
-                Some(t) => t.token.clone(),
-                None => {
+                Some(t)
+                    if !t
+                        .expires_at
+                        .is_some_and(|exp| chrono::Utc::now().timestamp() > exp) =>
+                {
+                    t.token.clone()
+                }
+                _ => {
                     // Membership already grants access, so the permission
                     // re-check inside ensure_sync_token is redundant here.
-                    // Create the token directly.
+                    // Create (or replace an expired) token directly.
+                    if let Some(t) = token_by_repo.get(r.id.as_str()) {
+                        let _ = self.repos.sync_token.delete_by_token(&t.token).await;
+                    }
                     let value = crate::service::auth::token::generate_sync_token();
                     let now = chrono::Utc::now().timestamp();
+                    let expires_at =
+                        (sync_token_ttl_days > 0).then(|| now + sync_token_ttl_days as i64 * 86400);
                     self.repos
                         .sync_token
-                        .create(&r.id, user_id, value.clone(), None, now)
+                        .create(&r.id, user_id, value.clone(), None, now, expires_at)
                         .await?;
                     value
                 }

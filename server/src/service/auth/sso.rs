@@ -206,6 +206,7 @@ impl SsoService {
                 platform: record.platform.clone(),
                 device_name: record.device_name.clone(),
                 client_version: record.client_version.clone(),
+                is_pending: false,
             })
             .await?;
 

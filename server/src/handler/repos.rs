@@ -104,6 +104,7 @@ pub async fn create_repo(
         repo_req.enc_version.unwrap_or(0),
         repo_req.magic.clone(),
         repo_req.random_key.clone(),
+        state.config.auth.sync_token_ttl_days,
     )
     .await?;
 
@@ -318,7 +319,13 @@ pub async fn download_info(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<DownloadInfoResponse>, AppError> {
-    let info = service::RepoService::download_info(&state.repos, &repo_id, auth.user_id).await?;
+    let info = service::RepoService::download_info(
+        &state.repos,
+        &repo_id,
+        auth.user_id,
+        state.config.auth.sync_token_ttl_days,
+    )
+    .await?;
     Ok(Json(info))
 }
 
@@ -395,7 +402,13 @@ pub async fn repo_tokens(
         .filter(|s| !s.is_empty())
         .collect();
 
-    let result = service::RepoService::repo_tokens(&state.repos, &repo_ids, auth.user_id).await?;
+    let result = service::RepoService::repo_tokens(
+        &state.repos,
+        &repo_ids,
+        auth.user_id,
+        state.config.auth.sync_token_ttl_days,
+    )
+    .await?;
 
     Ok(Json(result))
 }
@@ -472,6 +485,7 @@ pub async fn create_default_repo(
                 0,
                 None,
                 None,
+                state.config.auth.sync_token_ttl_days,
             )
             .await?;
             repo_info.id

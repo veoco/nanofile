@@ -175,6 +175,10 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             if is_token_expired(token_record.expires_at) {
                 return Err(StatusCode::UNAUTHORIZED);
             }
+            // A 2FA pending token must not be usable as a full session.
+            if token_record.is_pending {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
             token_record.user_id
         } else if let Some(sync_rec) = sync_record {
             if is_token_expired(sync_rec.expires_at) {
@@ -297,6 +301,10 @@ impl SyncAuth {
         // Fall back to API token — check expiration like AuthUser does.
         if let Ok(Some(record)) = api_result {
             if is_token_expired(record.expires_at) {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            // A 2FA pending token must not be usable as a full session.
+            if record.is_pending {
                 return Err(StatusCode::UNAUTHORIZED);
             }
 

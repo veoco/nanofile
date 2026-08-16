@@ -32,8 +32,10 @@ pub trait SyncTokenRepository: Send + Sync {
         token: String,
         client_peername: Option<String>,
         now: i64,
+        expires_at: Option<i64>,
     ) -> Result<(), AppError>;
     async fn delete_by_repo(&self, repo_id: &str) -> Result<(), AppError>;
+    async fn delete_by_token(&self, token: &str) -> Result<(), AppError>;
     async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError>;
     async fn delete_by_user_and_peer(&self, user_id: i32, peer_id: &str) -> Result<u64, AppError>;
     async fn update_peer_info(
@@ -119,6 +121,7 @@ impl SyncTokenRepository for DbSyncTokenRepository {
         token: String,
         peer_name: Option<String>,
         now: i64,
+        expires_at: Option<i64>,
     ) -> Result<(), AppError> {
         sync_token::ActiveModel {
             id: sea_orm::NotSet,
@@ -127,7 +130,7 @@ impl SyncTokenRepository for DbSyncTokenRepository {
             token: Set(token),
             peer_name: Set(peer_name),
             created_at: Set(now),
-            expires_at: Set(None),
+            expires_at: Set(expires_at),
             peer_id: Set(None),
             peer_ip: Set(None),
             client_version: Set(None),
@@ -141,6 +144,14 @@ impl SyncTokenRepository for DbSyncTokenRepository {
     async fn delete_by_repo(&self, repo_id: &str) -> Result<(), AppError> {
         sync_token::Entity::delete_many()
             .filter(sync_token::Column::RepoId.eq(repo_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_by_token(&self, token: &str) -> Result<(), AppError> {
+        sync_token::Entity::delete_many()
+            .filter(sync_token::Column::Token.eq(token))
             .exec(self.db.as_ref())
             .await?;
         Ok(())

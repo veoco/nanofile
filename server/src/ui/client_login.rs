@@ -93,6 +93,7 @@ pub async fn client_token_login(
             platform: None,
             device_name: None,
             client_version: None,
+            is_pending: false,
         })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;

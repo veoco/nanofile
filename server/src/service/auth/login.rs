@@ -224,6 +224,7 @@ impl LoginService {
                 platform,
                 device_name,
                 client_version,
+                is_pending: false,
             })
             .await?;
 

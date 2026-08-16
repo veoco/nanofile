@@ -130,6 +130,7 @@ async fn create_pending_token(
             platform: None,
             device_name: None,
             client_version: None,
+            is_pending: true,
         })
         .await
         .map_err(|e| AppError::internal(format!("failed to create pending token: {e}")))?;
@@ -349,6 +350,7 @@ pub async fn login(
             platform: None,
             device_name: None,
             client_version: None,
+            is_pending: false,
         })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
@@ -596,6 +598,7 @@ pub async fn two_factor_auth(
             platform: None,
             device_name: None,
             client_version: None,
+            is_pending: false,
         })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
@@ -803,6 +806,7 @@ pub async fn register(
             platform: None,
             device_name: None,
             client_version: None,
+            is_pending: false,
         })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;

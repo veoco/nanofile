@@ -50,6 +50,11 @@ impl WebUser {
             }
         }
 
+        // A 2FA pending token must not be usable as a full session.
+        if token_record.is_pending {
+            return Err(());
+        }
+
         // Look up user
         let user_record = repos
             .user
@@ -115,6 +120,11 @@ impl FromRequestParts<Arc<AppState>> for WebUser {
             if now > expires_at {
                 return Err(WebUserRejection::RedirectLogin);
             }
+        }
+
+        // A 2FA pending token must not be usable as a full session.
+        if token_record.is_pending {
+            return Err(WebUserRejection::RedirectLogin);
         }
 
         // Look up user

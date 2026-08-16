@@ -17,6 +17,8 @@ pub struct CreateSessionTokenParams {
     pub platform: Option<String>,
     pub device_name: Option<String>,
     pub client_version: Option<String>,
+    /// Marks a 2FA pending token (must not be usable as a full session).
+    pub is_pending: bool,
 }
 
 #[async_trait]
@@ -64,7 +66,7 @@ impl DbApiTokenRepository {
 impl ApiTokenRepository for DbApiTokenRepository {
     async fn find_by_token(&self, token: &str) -> Result<Option<api_token::Model>, AppError> {
         Ok(api_token::Entity::find()
-            .filter(api_token::Column::Token.eq(token))
+            .filter(api_token::Column::Token.eq(crate::service::auth::token::hash_token(token)))
             .one(self.db.as_ref())
             .await?)
     }
@@ -91,7 +93,7 @@ impl ApiTokenRepository for DbApiTokenRepository {
 
     async fn delete_by_token(&self, token: &str) -> Result<(), AppError> {
         api_token::Entity::delete_many()
-            .filter(api_token::Column::Token.eq(token))
+            .filter(api_token::Column::Token.eq(crate::service::auth::token::hash_token(token)))
             .exec(self.db.as_ref())
             .await?;
         Ok(())
@@ -147,13 +149,14 @@ impl ApiTokenRepository for DbApiTokenRepository {
         let model = api_token::ActiveModel {
             id: sea_orm::NotSet,
             user_id: Set(params.user_id),
-            token: Set(params.token),
+            token: Set(crate::service::auth::token::hash_token(&params.token)),
             created_at: Set(params.created_at),
             expires_at: Set(params.expires_at),
             device_id: Set(params.device_id),
             platform: Set(params.platform),
             device_name: Set(params.device_name),
             client_version: Set(params.client_version),
+            is_pending: Set(params.is_pending),
         };
         Ok(model.insert(self.db.as_ref()).await?)
     }

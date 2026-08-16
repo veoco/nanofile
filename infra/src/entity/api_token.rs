@@ -8,7 +8,7 @@ pub struct Model {
     pub id: i32,
     #[sea_orm(not_null)]
     pub user_id: i32,
-    #[sea_orm(unique, not_null, length = 40)]
+    #[sea_orm(unique, not_null, length = 64)]
     pub token: String,
     #[sea_orm(not_null)]
     pub created_at: i64,
@@ -17,6 +17,8 @@ pub struct Model {
     pub platform: Option<String>,
     pub device_name: Option<String>,
     pub client_version: Option<String>,
+    #[sea_orm(not_null, default_value = false)]
+    pub is_pending: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
