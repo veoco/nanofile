@@ -96,7 +96,10 @@ Pass `--regular` to create a non-admin account.
 
 ## Configuration
 
-Settings are read from `config.toml` in the working directory. Every key can also be overridden with
+Settings are read from `config.toml` in the working directory. Override the path with
+`--config <path>` (highest priority) or the `NANOFILE_CONFIG` environment variable. If the file is
+missing, the server falls back to built-in defaults, so it can start with zero config — supply
+whatever you need via `NANOFILE_*` environment variables. Every key can also be overridden with
 a `NANOFILE_*` environment variable — the shipped `config.toml` lists the exact variable name in a
 comment above each key (e.g. `NANOFILE_DATABASE_URL`, `NANOFILE_SERVER_PORT`). Environment variables
 always win at runtime and are never written into the file.
@@ -124,11 +127,46 @@ Generate a unique one for production with `openssl rand -hex 32` and set it via
 `NANOFILE_SERVER_SECRET_KEY` (an empty value auto-generates a random key on startup, which invalidates
 sessions on restart).
 
+## Docker
+
+The release image is a `scratch` container holding only the `nanofile` binary — no config file or
+data directory. Mount a config file and a persistent data volume, and point the data paths at the
+volume:
+
+```bash
+mkdir -p data
+docker run -d --name nanofile \
+  -p 8082:8082 \
+  -v "$PWD/data:/data" \
+  -v "$PWD/config.toml:/etc/nanofile/config.toml:ro" \
+  -e NANOFILE_CONFIG=/etc/nanofile/config.toml \
+  -e NANOFILE_DATABASE_URL='sqlite:/data/nanofile.db?mode=rwc' \
+  -e NANOFILE_STORAGE_BLOCK_DIR=/data/blocks \
+  -e NANOFILE_STORAGE_TEMP_DIR=/data/temp \
+  -e NANOFILE_INDEX_INDEX_DIR=/data/index \
+  -e NANOFILE_SERVER_SECRET_KEY="$(openssl rand -hex 32)" \
+  ghcr.io/<owner>/nanofile:latest
+```
+
+Or with no config file at all — built-in defaults fill the rest, everything else comes from
+environment variables:
+
+```bash
+docker run -d --name nanofile \
+  -p 8082:8082 \
+  -v "$PWD/data:/data" \
+  -e NANOFILE_DATABASE_URL='sqlite:/data/nanofile.db?mode=rwc' \
+  -e NANOFILE_STORAGE_BLOCK_DIR=/data/blocks \
+  -e NANOFILE_STORAGE_TEMP_DIR=/data/temp \
+  -e NANOFILE_SERVER_SECRET_KEY="$(openssl rand -hex 32)" \
+  ghcr.io/<owner>/nanofile:latest
+```
+
 ## CLI
 
 ```
-nanofile          Start the server (default)
-nanofile adduser  Create a user (admin by default; --regular for a normal user)
+nanofile [--config <path>]           Start the server (default)
+nanofile [--config <path>] adduser   Create a user (admin by default; --regular for a normal user)
 ```
 
 ## Data Layout

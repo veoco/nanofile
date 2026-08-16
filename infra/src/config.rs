@@ -4,13 +4,24 @@ use serde::Deserialize;
 
 use crate::config_migration::{migrate_config, persist_with_backup};
 
-#[derive(Debug, Deserialize, Clone)]
+/// Environment variable overriding the config file path.
+pub const CONFIG_PATH_ENV: &str = "NANOFILE_CONFIG";
+/// Default config path when neither `--config` nor `NANOFILE_CONFIG` is set.
+pub const DEFAULT_CONFIG_PATH: &str = "config.toml";
+
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct Config {
+    #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
     pub database: DatabaseConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
     pub gc: GcConfig,
     #[serde(default)]
     pub index: IndexConfig,
@@ -91,7 +102,9 @@ impl Default for NotificationConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ServerConfig {
+    #[serde(default = "default_addr")]
     pub addr: String,
+    #[serde(default = "default_port")]
     pub port: u16,
     /// Seafile-compatible server version advertised to clients via
     /// `/api2/server-info/`. Clients parse the major/minor/patch numbers to
@@ -105,7 +118,9 @@ pub struct ServerConfig {
     /// If empty at startup, derived from addr:port as http://{addr}:{port}.
     #[serde(default = "default_site_url")]
     pub site_url: String,
+    #[serde(default = "default_max_upload_size_mb")]
     pub max_upload_size_mb: u64,
+    #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
     /// Allowed CORS origins. When empty, defaults to the origin of `site_url`.
     /// Set to a comma-separated list for multiple origins (e.g. for API clients).
@@ -171,6 +186,18 @@ pub struct ServerConfig {
     pub trusted_proxies: Vec<String>,
 }
 
+fn default_addr() -> String {
+    "0.0.0.0".to_string()
+}
+fn default_port() -> u16 {
+    8082
+}
+fn default_max_upload_size_mb() -> u64 {
+    4096
+}
+fn default_request_timeout_secs() -> u64 {
+    600
+}
 fn default_server_version() -> String {
     "8.0.0".to_string()
 }
@@ -179,6 +206,30 @@ fn default_site_url() -> String {
 }
 fn default_cors_max_age() -> u64 {
     86400
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            addr: default_addr(),
+            port: default_port(),
+            version: default_server_version(),
+            site_url: default_site_url(),
+            max_upload_size_mb: default_max_upload_size_mb(),
+            request_timeout_secs: default_request_timeout_secs(),
+            cors_allowed_origins: Vec::new(),
+            secret_key: String::new(),
+            cors_max_age_secs: default_cors_max_age(),
+            webdav_enabled: default_true(),
+            sso_enabled: default_true(),
+            desktop_custom_brand: None,
+            desktop_custom_logo: None,
+            encrypted_library_pwd_hash_algo: None,
+            encrypted_library_pwd_hash_params: None,
+            file_search_enabled: default_true(),
+            trusted_proxies: Vec::new(),
+        }
+    }
 }
 
 impl ServerConfig {
@@ -272,6 +323,7 @@ impl ServerConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
+    #[serde(default = "default_db_url")]
     pub url: String,
     /// Number of pooled SQLite connections. Under WAL, SQLite allows many
     /// concurrent readers (but a single writer), so this mainly improves read
@@ -280,14 +332,29 @@ pub struct DatabaseConfig {
     pub max_connections: u32,
 }
 
+fn default_db_url() -> String {
+    "sqlite:data/nanofile.db?mode=rwc".to_string()
+}
 fn default_max_connections() -> u32 {
     5
 }
 
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: default_db_url(),
+            max_connections: default_max_connections(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct StorageConfig {
+    #[serde(default = "default_block_dir")]
     pub block_dir: PathBuf,
+    #[serde(default = "default_temp_dir")]
     pub temp_dir: PathBuf,
+    #[serde(default)]
     pub max_storage_bytes: u64,
     /// Path to the `ffmpeg` binary used to generate video thumbnails. When the
     /// binary isn't found, video files fall back to a play-icon placeholder.
@@ -296,16 +363,38 @@ pub struct StorageConfig {
     pub ffmpeg_path: String,
 }
 
+fn default_block_dir() -> PathBuf {
+    PathBuf::from("data/blocks")
+}
+fn default_temp_dir() -> PathBuf {
+    PathBuf::from("data/temp")
+}
 fn default_ffmpeg_path() -> String {
     "ffmpeg".to_string()
 }
 
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            block_dir: default_block_dir(),
+            temp_dir: default_temp_dir(),
+            max_storage_bytes: 0,
+            ffmpeg_path: default_ffmpeg_path(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct AuthConfig {
+    #[serde(default = "default_password_hash_iterations")]
     pub password_hash_iterations: u32,
+    #[serde(default = "default_api_token_ttl_days")]
     pub api_token_ttl_days: u64,
+    #[serde(default = "default_sync_token_ttl_days")]
     pub sync_token_ttl_days: u64,
+    #[serde(default = "default_five")]
     pub max_login_attempts: u32,
+    #[serde(default = "default_lockout_duration_secs")]
     pub lockout_duration_secs: u64,
     /// Whether to show the "Create Account" link on the login page and
     /// allow invitation-code-based registration.
@@ -332,12 +421,43 @@ pub struct AuthConfig {
     pub totp_max_attempts: u32,
 }
 
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            password_hash_iterations: default_password_hash_iterations(),
+            api_token_ttl_days: default_api_token_ttl_days(),
+            sync_token_ttl_days: default_sync_token_ttl_days(),
+            max_login_attempts: default_five(),
+            lockout_duration_secs: default_lockout_duration_secs(),
+            enable_invitations: default_true(),
+            enable_password_reset: default_true(),
+            password_min_length: default_password_min_length(),
+            require_strong_password: false,
+            password_reset_max_per_hour: default_five(),
+            registration_max_per_hour: default_five(),
+            totp_max_attempts: default_five(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct AdminInitConfig {
     pub email: Option<String>,
     pub password: Option<String>,
 }
 
+fn default_password_hash_iterations() -> u32 {
+    600000
+}
+fn default_api_token_ttl_days() -> u64 {
+    180
+}
+fn default_sync_token_ttl_days() -> u64 {
+    365
+}
+fn default_lockout_duration_secs() -> u64 {
+    900
+}
 fn default_true() -> bool {
     true
 }
@@ -350,13 +470,41 @@ fn default_password_min_length() -> u32 {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct LoggingConfig {
+    #[serde(default = "default_log_level")]
     pub level: String,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: default_log_level(),
+        }
+    }
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct GcConfig {
+    #[serde(default)]
     pub enabled: bool,
+    #[serde(default = "default_gc_interval_hours")]
     pub interval_hours: u64,
+}
+
+impl Default for GcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_hours: default_gc_interval_hours(),
+        }
+    }
+}
+
+fn default_gc_interval_hours() -> u64 {
+    24
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -377,7 +525,9 @@ impl Default for IndexConfig {
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
         let _ = dotenvy::dotenv();
-        Self::load_from("config.toml")
+        let path =
+            std::env::var(CONFIG_PATH_ENV).unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
+        Self::load_from(&path)
     }
 
     /// Load, migrate (in place, preserving comments) and validate a config
@@ -385,9 +535,27 @@ impl Config {
     /// written back atomically behind a `.bak` backup; a write failure (e.g.
     /// a read-only mount) only degrades to a warning — the in-memory config
     /// is already migrated and this run proceeds normally.
-    fn load_from(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+    ///
+    /// When the file does not exist, falls back to built-in defaults (plus env
+    /// overrides) so the server can start with zero config; other I/O errors
+    /// (and unparseable/ corrupt files) still fail.
+    pub fn load_from(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
-        let original = std::fs::read_to_string(path)?;
+        let original = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!(
+                    "[nanofile] config file {} not found; using built-in defaults",
+                    path.display()
+                );
+                let mut config = Config::default();
+                config.apply_env_overrides();
+                return Ok(config);
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("failed to read {}: {e}", path.display()));
+            }
+        };
         // Parse with toml_edit to keep every comment intact.
         let mut doc: toml_edit::DocumentMut = original.parse()?;
         let report = migrate_config(&mut doc)?;
@@ -741,9 +909,14 @@ interval_hours = 24
     }
 
     #[test]
-    fn load_missing_file_still_errors() {
+    fn load_missing_file_falls_back_to_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nope.toml");
-        assert!(Config::load_from(&path).is_err());
+        let config = Config::load_from(&path).expect("missing file falls back to defaults");
+        assert_eq!(config.server.port, 8082);
+        assert_eq!(config.server.addr, "0.0.0.0");
+        assert_eq!(config.database.url, "sqlite:data/nanofile.db?mode=rwc");
+        assert_eq!(config.storage.block_dir, PathBuf::from("data/blocks"));
+        assert_eq!(config.auth.password_hash_iterations, 600000);
     }
 }

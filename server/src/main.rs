@@ -9,6 +9,7 @@ use rand::Rng;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
 use sea_orm_migration::MigratorTrait;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -24,6 +25,9 @@ use server::AppState;
 #[derive(Parser)]
 #[command(name = "nanofile", version, about)]
 struct Cli {
+    /// Path to config.toml (overrides NANOFILE_CONFIG and the default).
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -87,7 +91,10 @@ async fn security_headers(
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let mut config = Config::load()?;
+    let mut config = match &cli.config {
+        Some(path) => Config::load_from(path)?,
+        None => Config::load()?,
+    };
 
     tracing_subscriber::fmt()
         .with_env_filter(

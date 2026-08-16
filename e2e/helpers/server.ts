@@ -47,11 +47,10 @@ export async function startServer(binaryPath: string): Promise<ServerHandle> {
     NANOFILE_LOG_LEVEL: process.env.E2E_LOG_LEVEL || "info",
   };
 
-  // Run from the repo root so Config::load() can find config.toml (the binary
-  // derives most settings from NANOFILE_* env vars, but still reads config.toml
-  // as a base). binaryPath is {repoRoot}/target/debug/nanofile.
+  // Pass the config path explicitly via --config so the server does not depend
+  // on the working directory. binaryPath is {repoRoot}/target/debug/nanofile.
   const repoRoot = path.resolve(path.dirname(binaryPath), "..", "..");
-  const child = spawn(binaryPath, [], {
+  const child = spawn(binaryPath, ["--config", path.join(repoRoot, "config.toml")], {
     cwd: repoRoot,
     env,
     stdio: ["ignore", "pipe", "pipe"],
