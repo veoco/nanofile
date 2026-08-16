@@ -63,3 +63,55 @@ async fn test_related_users_returns_user_list_objects() {
         );
     }
 }
+
+/// `GET .../metadata/record/` must return a non-empty `metadata` column list.
+/// The Android file-profile dialog/editor iterate `metadata` to decide which
+/// fields to render; an empty list (the previous behavior) renders nothing.
+#[tokio::test]
+async fn test_metadata_record_returns_system_columns() {
+    let f = TestFixture::new().await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "photo.jpg", b"jpeg-data")
+        .await;
+
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api/v2.1/repos/{}/metadata/record/?parent_dir=/&name=photo.jpg&file_name=photo.jpg",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let columns = body["metadata"]
+        .as_array()
+        .expect("response should contain a metadata column array");
+
+    let expected: &[(&str, &str)] = &[
+        ("_size", "number"),
+        ("_file_modifier", "text"),
+        ("_file_mtime", "date"),
+        ("_tags", "link"),
+        ("_description", "long-text"),
+    ];
+
+    for (key, ty) in expected {
+        let col = columns
+            .iter()
+            .find(|c| c["key"].as_str() == Some(*key))
+            .unwrap_or_else(|| panic!("missing column {key}: {body}"));
+        assert_eq!(col["name"].as_str(), Some(*key), "name mismatch for {key}");
+        assert_eq!(col["type"].as_str(), Some(*ty), "type mismatch for {key}");
+    }
+
+    // The record itself must carry values for the rendered fields.
+    let rec = &body["results"][0];
+    assert!(rec["_size"].is_number(), "_size missing: {body}");
+    assert!(rec["_file_modifier"].is_string(), "_file_modifier missing");
+    assert!(rec["_file_mtime"].is_string(), "_file_mtime missing");
+    assert!(rec["_tags"].is_array(), "_tags missing: {body}");
+}

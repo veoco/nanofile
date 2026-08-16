@@ -157,7 +157,7 @@ impl MetadataService {
 
         Ok(serde_json::json!({
             "results": [record],
-            "metadata": [],
+            "metadata": system_columns(),
         }))
     }
 
@@ -673,6 +673,21 @@ fn hex_val(b: u8) -> Option<u8> {
         b'a'..=b'f' => Some(b - b'a' + 10),
         _ => None,
     }
+}
+
+/// System columns for a file record, mirroring seahub's
+/// `METADATA_TABLE_SYS_COLUMNS` subset that the mobile clients render in the
+/// file-profile dialog/editor. `type` values must match seadroid's `ColumnType`
+/// constants (`_file_modifier` uses `text`; the client rewrites it to
+/// `collaborator` internally).
+fn system_columns() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({"key": "_size", "name": "_size", "type": "number"}),
+        serde_json::json!({"key": "_file_modifier", "name": "_file_modifier", "type": "text"}),
+        serde_json::json!({"key": "_file_mtime", "name": "_file_mtime", "type": "date"}),
+        serde_json::json!({"key": "_tags", "name": "_tags", "type": "link"}),
+        serde_json::json!({"key": "_description", "name": "_description", "type": "long-text"}),
+    ]
 }
 
 fn tag_to_json(tag: &repo_tag::Model) -> serde_json::Value {
