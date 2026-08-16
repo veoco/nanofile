@@ -210,6 +210,19 @@ impl NotificationManager {
         }
     }
 
+    /// Send a message directly to a single connected client.
+    ///
+    /// Used for client-specific control messages such as `jwt-expired`.
+    /// Non-blocking: if the client's bounded channel is full the message is
+    /// dropped, mirroring [`notify_repo`](Self::notify_repo).
+    pub async fn notify_client(&self, client_id: u64, message: &NotificationMessage) {
+        let bytes: Arc<[u8]> = Arc::from(serde_json::to_vec(message).unwrap_or_default());
+        let clients = self.read_clients();
+        if let Some(client) = clients.get(&client_id) {
+            let _ = client.sender.try_send(bytes);
+        }
+    }
+
     /// Notify all subscribers of a repo about an event.
     /// Convenience method that accepts a serializable event.
     pub async fn notify(&self, event: impl Into<NotificationMessage>) {

@@ -1,5 +1,6 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{Json, extract::State, response::IntoResponse};
+use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde_json::Value;
 use std::sync::Arc;
@@ -7,7 +8,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
-use super::events::{NotificationMessage, SubscribeRequest, UnsubscribeRequest};
+use super::events::{JwtExpiredEvent, NotificationMessage, SubscribeRequest, UnsubscribeRequest};
 use super::manager::validate_notification_jwt;
 use crate::AppState;
 use base::error::AppError;
@@ -38,51 +39,66 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
     // Shared timestamp (nanos since UNIX epoch) of the last received Pong.
     let last_pong = Arc::new(AtomicI64::new(now_nanos()));
 
-    // We need to split the websocket into read/write halves.
-    // Since axum's WebSocket doesn't implement futures::Stream/Sink directly,
-    // we use two tasks connected by a bounded mpsc channel for outgoing
-    // messages. Messages are pre-serialized bytes; the channel bounds how much
-    // a slow client can buffer before notifications start being dropped.
+    // Split the socket into independent read/write halves. This is critical:
+    // the read half blocks waiting for the next client frame, and must not
+    // contend with (and starve) the write half that delivers notifications.
+    let (mut sink, mut stream) = socket.split();
+
+    // Messages are pre-serialized bytes; the bounded channel caps how much a
+    // slow client can buffer before notifications start being dropped.
     let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(64);
     let (client_id, _client_state) = notif_mgr.register_client(tx);
 
-    // Use a mutex to serialize writes to the WebSocket
-    // (not safe to call send from multiple tasks concurrently).
-    let ws = Arc::new(tokio::sync::Mutex::new(socket));
-    let ws_write = ws.clone();
-
     // Task: read messages from the WebSocket.
-    // When keepalive is enabled, recv() is called with a timeout equal to
-    // ping_interval — on each tick we check the pong deadline and, if the
-    // client is still alive, send a Ping frame.  This avoids a separate
-    // keepalive task contending for the WebSocket mutex.
     let read_mgr = notif_mgr.clone();
     let read_id = client_id;
     let read_key = private_key.clone();
     let read_pong = last_pong.clone();
 
     let read_task = tokio::spawn(async move {
+        while let Some(msg) = stream.next().await {
+            let msg = match msg {
+                Ok(m) => m,
+                Err(_) => break,
+            };
+            if handle_read_msg(&read_mgr, read_id, &read_key, &read_pong, msg).await {
+                break;
+            }
+        }
+
+        read_mgr.unregister_client(read_id).await;
+    });
+
+    // Task: forward events from the notification manager channel to the
+    // WebSocket. When keepalive is enabled this task also drives the
+    // server→client ping/pong watchdog.
+    let write_mgr = notif_mgr.clone();
+    let write_id = client_id;
+    let write_pong = last_pong.clone();
+
+    let write_task = tokio::spawn(async move {
         if keepalive_enabled {
             let interval = std::time::Duration::from_secs(ping_interval);
-            let timeout = std::time::Duration::from_secs(client_timeout);
-            let timeout_ns = timeout.as_nanos() as i64;
+            let timeout_ns = std::time::Duration::from_secs(client_timeout).as_nanos() as i64;
+            let mut ticker =
+                tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
 
             loop {
-                let mut ws_lock = ws.lock().await;
-                let timed_out = tokio::time::timeout(interval, ws_lock.recv()).await;
-                drop(ws_lock);
-
-                match timed_out {
-                    Ok(Some(Ok(msg))) => {
-                        if handle_read_msg(&read_mgr, read_id, &read_key, &read_pong, msg).await {
-                            break;
+                tokio::select! {
+                    bytes = rx.recv() => {
+                        match bytes {
+                            Some(bytes) => {
+                                let text =
+                                    String::from_utf8((*bytes).to_vec()).unwrap_or_default();
+                                if sink.send(Message::Text(text.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => break,
                         }
                     }
-                    Ok(Some(Err(_))) => break,
-                    Ok(None) => break,
-                    Err(_elapsed) => {
-                        // No message received within ping_interval: keepalive tick.
-                        let last = read_pong.load(Ordering::Acquire);
+                    _ = ticker.tick() => {
+                        let last = write_pong.load(Ordering::Acquire);
                         let elapsed = now_nanos() - last;
                         if elapsed > timeout_ns {
                             tracing::debug!(
@@ -91,53 +107,18 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
                             );
                             break;
                         }
-
-                        let mut ws_lock = ws.lock().await;
-                        if ws_lock
-                            .send(Message::Ping(axum::body::Bytes::new()))
-                            .await
-                            .is_err()
-                        {
+                        if sink.send(Message::Ping(axum::body::Bytes::new())).await.is_err() {
                             break;
                         }
                     }
                 }
             }
         } else {
-            // Keepalive disabled — simple blocking read loop.
-            loop {
-                let mut ws_lock = ws.lock().await;
-                let msg = ws_lock.recv().await;
-                drop(ws_lock);
-
-                match msg {
-                    Some(Ok(msg)) => {
-                        if handle_read_msg(&read_mgr, read_id, &read_key, &read_pong, msg).await {
-                            break;
-                        }
-                    }
-                    Some(Err(_)) => break,
-                    None => break,
+            while let Some(bytes) = rx.recv().await {
+                let text = String::from_utf8((*bytes).to_vec()).unwrap_or_default();
+                if sink.send(Message::Text(text.into())).await.is_err() {
+                    break;
                 }
-            }
-        }
-
-        read_mgr.unregister_client(read_id).await;
-    });
-
-    // Task: forward events from the notification manager channel to the WebSocket.
-    let write_mgr = notif_mgr.clone();
-    let write_id = client_id;
-
-    let write_task = tokio::spawn(async move {
-        while let Some(bytes) = rx.recv().await {
-            // Bytes are already serialized (shared Arc from the manager);
-            // only the UTF-8 check is done here. The content is JSON we
-            // produced, so lossy/empty fallbacks never trigger in practice.
-            let text = String::from_utf8((*bytes).to_vec()).unwrap_or_default();
-            let mut ws_lock = ws_write.lock().await;
-            if ws_lock.send(Message::Text(text.into())).await.is_err() {
-                break;
             }
         }
 
@@ -217,6 +198,13 @@ async fn process_client_message(
                         username = claims.username;
                     }
                     valid_subs.push((repo.id.clone(), claims.exp));
+                } else {
+                    // Invalid/expired token: tell the client to re-fetch a new
+                    // token and resubscribe (matches seafile's behavior).
+                    let event = JwtExpiredEvent {
+                        repo_id: repo.id.clone(),
+                    };
+                    mgr.notify_client(client_id, &event.into()).await;
                 }
             }
 
@@ -291,10 +279,12 @@ pub async fn post_event(
 }
 
 /// Validate a JWT token for the POST /events endpoint.
+///
+/// Matches seafile-server/notification-server: the event JWT carries only an
+/// `exp` claim (no `sub`), so we validate signature + expiry and nothing else.
 fn validate_event_jwt(token: &str, private_key: &str) -> bool {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
-    validation.sub = Some("nanofile-events".to_string());
 
     let key = DecodingKey::from_secret(private_key.as_bytes());
     jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation).is_ok()

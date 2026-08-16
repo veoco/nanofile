@@ -1,7 +1,7 @@
 mod common;
 
 use common::{TestFixture, TestServer};
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
 /// Test that the notification endpoints respond correctly.
@@ -50,6 +50,81 @@ async fn test_notification_post_event_unauthorized() {
         .post_json("/notification/events", Some("invalid-token"), &event)
         .await;
     assert_eq!(resp.status(), 401);
+}
+
+/// End-to-end: connect, subscribe, trigger a repo update, and assert the
+/// event is delivered promptly.
+///
+/// This regresses the read/write lock-starvation bug where the read half held
+/// a shared WebSocket mutex while blocking on `recv`, starving the write half
+/// and delaying (or fully blocking) notification delivery.
+#[tokio::test]
+async fn test_subscribe_receives_repo_update() {
+    let f = TestFixture::new_with_notification().await;
+
+    // Fetch a valid subscription JWT from the notification token endpoint.
+    let resp = f
+        .client
+        .get_sync(
+            &format!("/seafhttp/repo/{}/jwt-token", f.repo_id),
+            &f.sync_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let jwt = body["jwt_token"].as_str().unwrap().to_string();
+
+    // Connect to the WebSocket notification endpoint.
+    let ws_url = f.server.base_url.replace("http", "ws") + "/notification";
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+
+    // Subscribe to the repo.
+    let sub = serde_json::json!({
+        "type": "subscribe",
+        "content": {
+            "repos": [{ "id": f.repo_id, "jwt_token": jwt }]
+        }
+    });
+    ws.send(Message::Text(sub.to_string().into()))
+        .await
+        .unwrap();
+
+    // Let the server register the subscription before triggering an event.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Trigger a repo update by uploading a file (fires a repo-update event).
+    let upload = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "notif-ws.txt", b"data")
+        .await;
+    assert!(upload.status().is_success());
+
+    // The repo-update notification must arrive promptly — well under the 30s
+    // keepalive interval that previously starved the write half.
+    let deadline = tokio::time::sleep(std::time::Duration::from_secs(5));
+    tokio::pin!(deadline);
+
+    loop {
+        tokio::select! {
+            msg = ws.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+                        if v["type"] == "repo-update" && v["content"]["repo_id"] == f.repo_id.as_str() {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Ping(_))) => {}
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => panic!("WebSocket error before repo-update: {e}"),
+                    None => panic!("WebSocket closed before repo-update"),
+                }
+            }
+            _ = &mut deadline => {
+                panic!("Timed out waiting for repo-update notification");
+            }
+        }
+    }
 }
 
 /// Test that the WebSocket upgrade endpoint is reachable.
