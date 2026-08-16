@@ -188,17 +188,3 @@ export async function beshareRepo(
     throw new Error(`beshare ${repoId} to ${userEmail} failed: ${res.status} ${await res.text()}`);
   }
 }
-
-/** POST /api/v2.1/wikis2/ → wiki id (string). */
-export async function createWiki(baseURL: string, token: string, name: string): Promise<string> {
-  const res = await fetch(`${baseURL}/api/v2.1/wikis2/`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) throw new Error(`create wiki ${name} failed: ${res.status} ${await res.text()}`);
-  return (await res.json()).id;
-}

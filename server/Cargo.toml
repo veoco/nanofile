@@ -39,11 +39,6 @@ serde_json = "1"
 toml = "1.1"
 quick-xml = { version = "0.38", features = ["serialize"] }
 
-# Markdown rendering (wiki pages). pulldown-cmark parses CommonMark + GFM
-# tables; ammonia sanitises the emitted HTML to prevent stored XSS.
-pulldown-cmark = "0.13"
-ammonia = "4"
-
 rand = "0.10"
 sha1 = "0.11"
 sha2 = "0.11"
