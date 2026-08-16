@@ -20,7 +20,7 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   settings (profile, devices, 2FA, invitations), and a **sysadmin panel** (users, shares,
   background tasks). Localized in English and Chinese.
 - **Sharing**: share links (optional password / expiry / view counting), anonymous upload links,
-  user shares with rw/r permissions, custom share permissions, wikis, doc comments.
+  user shares with rw/r permissions, custom share permissions.
 - **Security**: TOTP two-factor auth with backup codes and trusted devices, SSO / "view on website"
   login, invitation-code registration, login rate limiting with lockout, password reset (email-gated),
   hashed session cookies with CSRF protection, path-traversal-safe filename handling.
@@ -107,7 +107,7 @@ migration is applied in memory only.
 
 | Section | Purpose |
 |---------|---------|
-| `[server]` | Bind address/port, `site_url` (external URL used for download/share links and cookies — set to your HTTPS domain behind a TLS proxy), max upload size, request timeout, CORS, WebDAV switch, feature switches (`sso_enabled`, `file_search_enabled`, `wiki_enabled`), desktop-client branding (`desktop_custom_brand` / `desktop_custom_logo`), trusted reverse proxies. |
+| `[server]` | Bind address/port, `site_url` (external URL used for download/share links and cookies — set to your HTTPS domain behind a TLS proxy), max upload size, request timeout, CORS, WebDAV switch, feature switches (`sso_enabled`, `file_search_enabled`), desktop-client branding (`desktop_custom_brand` / `desktop_custom_logo`), trusted reverse proxies. |
 | `[database]` | SeaORM/SQLite connection URL (default `sqlite:data/nanofile.db?mode=rwc`) and pool size. |
 | `[storage]` | Block store and temp directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited), ffmpeg path for video thumbnails. |
 | `[auth]` | Password hashing cost, token TTLs, login lockout, invitation registration, password policy, rate limits. |
