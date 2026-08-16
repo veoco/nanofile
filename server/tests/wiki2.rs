@@ -704,3 +704,201 @@ async fn test_wiki_web_page_management() {
         "deleted child should leave a single page"
     );
 }
+
+/// Creating a top-level page (no current_id) must accept an empty
+/// `insert_position` — the web UI submits empty strings for both fields.
+#[tokio::test]
+async fn test_wiki_create_top_level_page() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/wikis2/",
+            Some(&f.api_token),
+            &serde_json::json!({"name": "top-level-wiki"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let wiki_id = resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Top-level page: the web UI sends current_id="" and insert_position="".
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api/v2.1/wiki2/{wiki_id}/pages/"),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "page_name": "top-page",
+                "current_id": "",
+                "insert_position": "",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "empty insert_position must be accepted");
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/wiki2/{wiki_id}/config/"),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let nav = body["wiki"]["wiki_config"]["navigation"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        nav.len(),
+        2,
+        "top-level page should be appended to navigation"
+    );
+}
+
+/// Locking a page must persist a real file lock (not just the config flag).
+#[tokio::test]
+async fn test_wiki_page_lock_is_real() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/wikis2/",
+            Some(&f.api_token),
+            &serde_json::json!({"name": "lock-wiki"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let wiki_id = resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Read the home page id + path.
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/wiki2/{wiki_id}/config/"),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let home = &body["wiki"]["wiki_config"]["pages"][0];
+    let home_id = home["id"].as_str().unwrap().to_string();
+    let home_path = home["path"].as_str().unwrap().to_string();
+
+    // Lock.
+    let resp = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/wiki2/{wiki_id}/page/{home_id}/"),
+            Some(&f.api_token),
+            &serde_json::json!({"is_lock_page": true}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let lock = f
+        .server
+        .repos
+        .locked_file
+        .find_by_repo_and_path(&wiki_id, &home_path)
+        .await
+        .unwrap();
+    assert!(
+        lock.is_some(),
+        "locking a page must create a locked_file row"
+    );
+
+    // Unlock.
+    let resp = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/wiki2/{wiki_id}/page/{home_id}/"),
+            Some(&f.api_token),
+            &serde_json::json!({"is_lock_page": false}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let lock = f
+        .server
+        .repos
+        .locked_file
+        .find_by_repo_and_path(&wiki_id, &home_path)
+        .await
+        .unwrap();
+    assert!(
+        lock.is_none(),
+        "unlocking a page must remove the locked_file row"
+    );
+}
+
+/// The mobile clients open wikis via `/mobile-login/?next=<full-url>` with an
+/// `Authorization: Token` header; it must establish a session and redirect.
+#[tokio::test]
+async fn test_mobile_login_wiki() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/wikis2/",
+            Some(&f.api_token),
+            &serde_json::json!({"name": "mobile-wiki"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+    let wiki_id = resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .cookie_store(true)
+        .build()
+        .unwrap();
+
+    let next = format!("{base}/wikis/{wiki_id}");
+    let next_encoded = next.replace(':', "%3A").replace('/', "%2F");
+    let resp = client
+        .get(format!("{base}/mobile-login/?next={next_encoded}"))
+        .header("Authorization", format!("Token {}", f.api_token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "mobile-login should redirect");
+    let set_cookie = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        set_cookie.contains("seahub-session="),
+        "mobile-login should set a session cookie: {set_cookie}"
+    );
+
+    // The redirect target is the same-origin wiki path (no trailing slash).
+    let location = resp
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert_eq!(location, format!("/wikis/{wiki_id}"));
+
+    // The session cookie now authenticates the WebView's wiki request.
+    let resp = client
+        .get(format!("{base}{location}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "wiki should load after mobile-login");
+}

@@ -386,6 +386,11 @@ impl WikiService {
         self.require_wiki(repo_id).await?;
         check_repo_write_permission(self.repos.member.as_ref(), repo_id, user_id).await?;
 
+        // Web forms submit empty strings when the user creates a top-level page;
+        // seahub treats falsy current_id/insert_position as absent.
+        let current_id = current_id.filter(|s| !s.is_empty());
+        let insert_position = insert_position.filter(|s| !s.is_empty());
+
         let page_name = page_name.trim().to_string();
         if page_name.is_empty() || page_name.contains(['/', '\\']) {
             return Err(AppError::BadRequest("page_name invalid".into()));
@@ -539,6 +544,13 @@ impl WikiService {
         check_repo_write_permission(self.repos.member.as_ref(), repo_id, user_id).await?;
 
         let mut config = self.read_wiki_config(repo_id).await?;
+        // Check the page's file lock before removing it (seahub's delete guard).
+        let page_path = find_page(&config, page_id)
+            .and_then(|p| p.get("path").and_then(|v| v.as_str()))
+            .map(|s| s.to_string());
+        if let Some(path) = page_path {
+            self.check_page_lock(repo_id, &path, user_id).await?;
+        }
         let navigation = config
             .as_object_mut()
             .and_then(|c| c.get_mut("navigation"))
@@ -571,9 +583,39 @@ impl WikiService {
         let mut config = self.read_wiki_config(repo_id).await?;
         let page = find_page_mut(&mut config, page_id)
             .ok_or_else(|| AppError::NotFound("page not found".into()))?;
+        let path = page
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| AppError::NotFound("page path missing".into()))?
+            .to_string();
+        // A real file lock (seahub's lock_file/unlock_file), not just the config flag.
+        let operation = if locked { "lock" } else { "unlock" };
+        self.file_service
+            .lock_file(repo_id, &path, operation, email)
+            .await?;
         page["locked"] = serde_json::Value::Bool(locked);
         self.save_wiki_config(user_id, email, repo_id, &config)
             .await
+    }
+
+    /// Reject the operation if the page file is locked by a different user
+    /// (mirrors seahub's `check_file_lock`). The lock owner may still proceed.
+    async fn check_page_lock(
+        &self,
+        repo_id: &str,
+        path: &str,
+        user_id: i32,
+    ) -> Result<(), AppError> {
+        if let Some(lock) = self
+            .repos
+            .locked_file
+            .find_by_repo_and_path(repo_id, path)
+            .await?
+            && lock.user_id != user_id
+        {
+            return Err(AppError::Locked(path.to_string()));
+        }
+        Ok(())
     }
 
     /// `PUT /api/v2.1/wiki2/{repo_id}/page/{page_id}/config/` — page name/icon/cover.
@@ -667,6 +709,7 @@ impl WikiService {
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| AppError::NotFound("page path missing".into()))?;
+        self.check_page_lock(repo_id, path, user_id).await?;
         let dir = infra::common::util::parent_path_from(path).to_string();
         let name = infra::common::util::basename(path).to_string();
         self.upload_markdown(user_id, email, repo_id, &dir, &name, content)
