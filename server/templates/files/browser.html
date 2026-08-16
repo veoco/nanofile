@@ -9,15 +9,12 @@
 {% endblock %}
 
 {% block main_layout %}
-<!-- Right Panel — file details (rendered first to reserve space in progressive rendering) -->
-<aside class="js-right-panel lg:flex lg:flex-col flex-shrink-0 bg-white dark:bg-surface-800 border-l border-gray-200 dark:border-gray-700 overflow-y-auto max-lg:hidden sticky top-0 order-10"
-       style="width: 300px;">
-    {% include "includes/right_panel.html" %}
-</aside>
-
+<!-- File browser: main + right panel in a Grid so the 300px detail column is
+     reserved up front, avoiding layout shift during progressive loading. -->
+<div class="grid flex-1 overflow-hidden grid-rows-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_300px]">
 <!-- Main content — file browser -->
 <main role="main" aria-label="{{ t.tr("a11y.main_content") }}"
-      class="flex-1 overflow-y-auto p-4 sm:p-6 pb-20 lg:pb-6">
+      class="overflow-y-auto p-4 sm:p-6 pb-20 lg:pb-6">
     {% block content %}
     {% include "includes/breadcrumb.html" %}
 
@@ -242,6 +239,11 @@
 </div>
     {% endblock %}
 </main>
+
+<aside class="js-right-panel lg:flex lg:flex-col bg-white dark:bg-surface-800 border-l border-gray-200 dark:border-gray-700 overflow-y-auto max-lg:hidden">
+    {% include "includes/right_panel.html" %}
+</aside>
+</div>
 {% endblock %}
 
 {% block scripts %}
