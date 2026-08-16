@@ -1,10 +1,11 @@
 use askama::Template;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
 };
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -190,6 +191,7 @@ pub async fn upload_link_view(
 pub async fn upload_link_view_post(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
@@ -198,6 +200,18 @@ pub async fn upload_link_view_post(
     let password = form
         .get("password")
         .ok_or_else(|| AppError::BadRequest("password required".into()))?;
+
+    // Rate limit password attempts per client IP.
+    let client_ip = crate::middleware::effective_client_ip(
+        &addr,
+        &headers,
+        &state.config.server.trusted_proxies,
+    );
+    let rl_key = format!("link_password:{client_ip}");
+    if state.auth_limiters.link_password.is_limited(&rl_key) {
+        return Err(AppError::TooManyRequests);
+    }
+    state.auth_limiters.link_password.record_attempt(&rl_key);
 
     let valid = crate::service::auth::password::verify_password_async(
         password.clone(),

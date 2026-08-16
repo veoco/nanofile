@@ -203,6 +203,7 @@ impl TestServer {
                 password_reset_max_per_hour: 10,
                 registration_max_per_hour: 10,
                 totp_max_attempts: 10,
+                link_password_max_per_hour: 10,
             },
             logging: infra::config::LoggingConfig {
                 level: "debug".to_string(),

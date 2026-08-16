@@ -167,6 +167,66 @@ async fn test_share_link_with_password() {
     assert_eq!(ok2.status(), 200, "should succeed with header password");
 }
 
+/// Security: password attempts on a share link are rate limited per IP.
+#[tokio::test]
+async fn test_share_link_password_rate_limited() {
+    let f = TestFixture::new().await;
+
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "secret.txt", b"secret data")
+        .await;
+    assert!(up.status().is_success(), "upload failed");
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/secret.txt",
+                "password": "mypassword",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let token = resp
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // link_password_max_per_hour = 10 in the test config; the 11th attempt
+    // should be rejected with 429.
+    for _ in 0..10 {
+        let resp = f
+            .client
+            .post_form(
+                &format!("/f/{}/", token),
+                None,
+                &[("password", "wrongpass")],
+            )
+            .await;
+        assert_ne!(resp.status(), 429, "should not be rate limited yet");
+    }
+    let resp = f
+        .client
+        .post_form(
+            &format!("/f/{}/", token),
+            None,
+            &[("password", "wrongpass")],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        429,
+        "should be rate limited after exceeding the threshold"
+    );
+}
+
 /// H.3 — Share link with expiry (past timestamp)
 #[tokio::test]
 async fn test_share_link_expired() {

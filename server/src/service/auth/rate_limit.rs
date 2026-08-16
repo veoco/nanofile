@@ -14,6 +14,7 @@ pub struct AuthRateLimiters {
     pub registration: Arc<GenericRateLimiter>,
     pub totp: Arc<GenericRateLimiter>,
     pub disable_2fa: Arc<GenericRateLimiter>,
+    pub link_password: Arc<GenericRateLimiter>,
 }
 
 impl AuthRateLimiters {
@@ -33,6 +34,10 @@ impl AuthRateLimiters {
             )),
             totp: Arc::new(GenericRateLimiter::new(cfg.totp_max_attempts.max(1), 300)),
             disable_2fa: Arc::new(GenericRateLimiter::new(cfg.totp_max_attempts.max(1), 300)),
+            link_password: Arc::new(GenericRateLimiter::new(
+                cfg.link_password_max_per_hour.max(1),
+                3600,
+            )),
         })
     }
 }

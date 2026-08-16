@@ -107,6 +107,8 @@ password_reset_max_per_hour = 5
 registration_max_per_hour = 5
 # Max TOTP verification attempts per user per 5 minutes (0 = unlimited)
 totp_max_attempts = 5
+# Max password attempts for password-protected share/upload links per IP per hour (0 = unlimited)
+link_password_max_per_hour = 5
 
 [ui]
 # Environment variables:

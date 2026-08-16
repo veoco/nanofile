@@ -419,6 +419,10 @@ pub struct AuthConfig {
     /// Max TOTP verification attempts per user per 5 minutes (0 = unlimited).
     #[serde(default = "default_five")]
     pub totp_max_attempts: u32,
+    /// Max password attempts for password-protected share/upload links per IP
+    /// per hour (0 = unlimited).
+    #[serde(default = "default_five")]
+    pub link_password_max_per_hour: u32,
 }
 
 impl Default for AuthConfig {
@@ -436,6 +440,7 @@ impl Default for AuthConfig {
             password_reset_max_per_hour: default_five(),
             registration_max_per_hour: default_five(),
             totp_max_attempts: default_five(),
+            link_password_max_per_hour: default_five(),
         }
     }
 }
