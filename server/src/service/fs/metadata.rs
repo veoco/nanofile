@@ -20,6 +20,7 @@ use infra::serialization::S_IFDIR;
 pub struct MetadataService {
     db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
+    config: Arc<infra::config::Config>,
 }
 
 /// Resolved filesystem information for a single path.
@@ -30,8 +31,12 @@ struct FileInfo {
 }
 
 impl MetadataService {
-    pub fn new(db: Arc<DatabaseConnection>, repos: Arc<Repositories>) -> Self {
-        Self { db, repos }
+    pub fn new(
+        db: Arc<DatabaseConnection>,
+        repos: Arc<Repositories>,
+        config: Arc<infra::config::Config>,
+    ) -> Self {
+        Self { db, repos, config }
     }
 
     // ── record_id helpers ─────────────────────────────────────────────────
@@ -587,10 +592,29 @@ impl MetadataService {
         Ok(results)
     }
 
-    /// Related users (kept for mobile metadata profiles).
-    pub async fn related_users(&self, repo_id: &str) -> Result<Vec<String>, AppError> {
+    /// Related users for a repo, as `{email, name, contact_email, avatar_url}`
+    /// objects (matching seahub's `get_user_common_info` shape consumed by the
+    /// mobile clients' file-profile dialog).
+    pub async fn related_users(&self, repo_id: &str) -> Result<Vec<serde_json::Value>, AppError> {
         let members = self.repos.member.find_by_repo_id(repo_id).await?;
-        Ok(members.into_iter().map(|m| m.user_id.to_string()).collect())
+        let user_ids: Vec<i32> = members.into_iter().map(|m| m.user_id).collect();
+        let users = self.repos.user.find_by_ids(&user_ids).await?;
+        let origin = self.config.server.site_url_origin();
+        Ok(users
+            .into_iter()
+            .map(|u| {
+                serde_json::json!({
+                    "email": u.email,
+                    "name": u.nickname(),
+                    "contact_email": u.email,
+                    "avatar_url": format!(
+                        "{}{}",
+                        origin,
+                        crate::service::user::primary_avatar_url(&u.email, 72)
+                    ),
+                })
+            })
+            .collect())
     }
 
     /// Get metadata records (existing minimal endpoint, kept as-is).

@@ -248,7 +248,7 @@ pub async fn related_users(
     let repo_id = path.repo_id;
     let svc = state.metadata_service();
     let users = svc.related_users(&repo_id).await?;
-    Ok(Json(serde_json::json!({"users": users})))
+    Ok(Json(serde_json::json!({"user_list": users})))
 }
 
 pub async fn custom_share_permissions(
