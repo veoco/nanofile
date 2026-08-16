@@ -8,6 +8,7 @@ pub mod client_login;
 pub mod ctx;
 pub mod files;
 pub mod invitations;
+pub mod mobile_login;
 pub mod repos;
 pub mod search;
 pub mod settings;
@@ -64,6 +65,8 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         )
         // Client-login — auto-login from desktop client
         .route("/client-login/", get(client_login::client_token_login))
+        // Mobile-login — auto-login from the mobile clients' WebView
+        .route("/mobile-login/", get(mobile_login::mobile_login))
         // SSO local-browser — browser entry + confirm pages
         .route("/client-sso/{token}/", get(sso::client_sso))
         .route(
@@ -88,6 +91,9 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         // Wikis — knowledge-base pages (mobile clients load these in a WebView)
         .route("/wikis/", get(wiki::wiki_list))
         .route("/wikis/new/", post(wiki::wiki_create))
+        // Both trailing-slash variants: the Android client opens
+        // `{server}/wikis/{id}` (no trailing slash) after mobile-login.
+        .route("/wikis/{repo_id}", get(wiki::wiki_view))
         .route("/wikis/{repo_id}/", get(wiki::wiki_view))
         .route("/wikis/{repo_id}/rename/", post(wiki::wiki_rename))
         .route("/wikis/{repo_id}/delete/", post(wiki::wiki_delete))

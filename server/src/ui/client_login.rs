@@ -150,18 +150,34 @@ pub(crate) fn resolve_next(next: Option<&str>) -> String {
         "/shares/",
         "/settings/",
         "/search/",
+        "/wikis/",
         // SSO confirm page (browser bounce after login).
         "/client-sso/",
     ];
 
-    match next {
-        Some(url) if url.starts_with('/') => {
-            if SAFE_PREFIXES.iter().any(|p| url.starts_with(p)) {
-                url.to_string()
+    let path = match next {
+        Some(url) => {
+            // The mobile WebView sends an absolute URL (e.g.
+            // `https://server/wikis/{id}`); reduce it to its path so we only
+            // ever redirect to a same-origin relative path.
+            if let Some(rest) = url
+                .strip_prefix("http://")
+                .or_else(|| url.strip_prefix("https://"))
+            {
+                match rest.find('/') {
+                    Some(idx) => &rest[idx..],
+                    None => "/",
+                }
             } else {
-                "/libraries/".to_string()
+                url
             }
         }
-        _ => "/libraries/".to_string(),
+        None => "/",
+    };
+
+    if path.starts_with('/') && SAFE_PREFIXES.iter().any(|p| path.starts_with(p)) {
+        path.to_string()
+    } else {
+        "/libraries/".to_string()
     }
 }
