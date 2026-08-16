@@ -57,10 +57,6 @@ pub async fn list_repos(
     let mut repos = Vec::new();
     for membership in memberships {
         if let Some(r) = state.repos.repo.find_by_id(&membership.repo_id).await? {
-            // Wiki repos (知识库) are a separate surface, never listed as libraries.
-            if r.r#type == "wiki" {
-                continue;
-            }
             repos.push(RepoInfo {
                 id: r.id,
                 name: r.name,

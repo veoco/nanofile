@@ -12,4 +12,3 @@ pub mod repo;
 pub mod sharing;
 pub mod sync;
 pub mod user;
-pub mod wiki;

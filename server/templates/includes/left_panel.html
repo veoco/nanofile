@@ -36,11 +36,6 @@
 
     <!-- Quick access links -->
     <div class="border-t border-gray-200 dark:border-gray-700 pt-2 pb-2 px-3 space-y-0.5">
-        <a href="/wikis/"
-           class="nav-item{% if active_page == "wiki" %} nav-item-active{% else %} nav-item-inactive{% endif %}">
-            {{ icons::icon_book("h-4 w-4 flex-shrink-0") }}
-            <span>{{ t.tr("nav.wiki") }}</span>
-        </a>
         <a href="/starred/"
            class="nav-item{% if active_page == "starred" %} nav-item-active{% else %} nav-item-inactive{% endif %}">
             {{ icons::icon_star("h-4 w-4 flex-shrink-0") }}

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{TestFixture, create_test_user};
+use common::TestFixture;
 
 /// D.1 — v2.1 Repos
 #[tokio::test]
@@ -290,14 +290,6 @@ async fn test_v21_activities_not_empty() {
         !body["events"].as_array().unwrap().is_empty(),
         "should have at least the repo creation event"
     );
-}
-
-/// D.7 — Wikis
-#[tokio::test]
-async fn test_v21_wikis_empty() {
-    let f = TestFixture::new().await;
-    let resp = f.client.get("/api/v2.1/wikis/", Some(&f.api_token)).await;
-    assert_eq!(resp.status(), 200);
 }
 
 /// D.8 — Batch operations
@@ -744,19 +736,10 @@ async fn test_v21_unauthorized() {
         "/api/v2.1/share-links/",
         "/api/v2.1/upload-links/",
         "/api/v2.1/activities/",
-        "/api/v2.1/wikis/",
     ] {
         let resp = client.get(path, None).await;
         assert_eq!(resp.status(), 401, "{} should be 401", path);
     }
-}
-
-/// D.7.2 — GET /api/v2.1/wikis2/
-#[tokio::test]
-async fn test_v21_wikis2_empty() {
-    let f = TestFixture::new().await;
-    let resp = f.client.get("/api/v2.1/wikis2/", Some(&f.api_token)).await;
-    assert_eq!(resp.status(), 200);
 }
 
 /// D.9 — Custom share permissions
@@ -976,57 +959,4 @@ async fn test_v21_dir_recursive_invalid_params() {
         )
         .await;
     assert_eq!(resp.status(), 400);
-}
-
-/// Security: wiki rename/delete must require ownership.
-#[tokio::test]
-async fn test_wiki_owner_required() {
-    let f = TestFixture::new().await;
-
-    // Create a wiki owned by the fixture user via the API.
-    let resp = f
-        .client
-        .post_json(
-            "/api/v2.1/wikis2/",
-            Some(&f.api_token),
-            &serde_json::json!({"name": "my-wiki"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 201, "create wiki should succeed");
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let wiki_id = body["id"].as_str().unwrap().to_string();
-
-    // Second (non-owner) user.
-    create_test_user(f.server.db.as_ref(), "other@example.com", "password").await;
-    let resp = f.client.login("other@example.com", "password").await;
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let b_token = body["token"].as_str().unwrap().to_string();
-
-    // Non-owner must not rename / delete.
-    let resp = f
-        .client
-        .put_json(
-            &format!("/api/v2.1/wiki2/{wiki_id}/"),
-            Some(&b_token),
-            &serde_json::json!({"wiki_name": "hacked"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 403, "non-owner must not rename a wiki");
-
-    let resp = f
-        .client
-        .delete(&format!("/api/v2.1/wiki2/{wiki_id}/"), Some(&b_token))
-        .await;
-    assert_eq!(resp.status(), 403, "non-owner must not delete a wiki");
-
-    // Owner still can.
-    let resp = f
-        .client
-        .put_json(
-            &format!("/api/v2.1/wiki2/{wiki_id}/"),
-            Some(&f.api_token),
-            &serde_json::json!({"wiki_name": "renamed"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 200, "owner can rename");
 }

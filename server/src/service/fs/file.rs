@@ -326,9 +326,6 @@ impl FileService {
         email: &str,
         host_header: Option<&str>,
     ) -> Result<(String, String), AppError> {
-        if crate::service::wiki::is_hidden_wiki_path(path) {
-            return Err(AppError::NotFound("file not found".into()));
-        }
         let db = self.db();
         let head_root_id = get_head_root_id(db, repo_id).await?;
         let file_fs_id = crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, path)

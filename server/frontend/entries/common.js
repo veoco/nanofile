@@ -10,7 +10,6 @@ import "../pages/sysadmin.js";
 import "../pages/starred.js";
 import "../pages/trash.js";
 import "../pages/shares.js";
-import "../pages/wiki.js";
 
 // ─── Response time display ──────────────────────────────────────────────
 var respTimeEl = document.getElementById("resp-time");

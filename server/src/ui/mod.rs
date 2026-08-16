@@ -8,7 +8,6 @@ pub mod client_login;
 pub mod ctx;
 pub mod files;
 pub mod invitations;
-pub mod mobile_login;
 pub mod repos;
 pub mod search;
 pub mod settings;
@@ -18,10 +17,9 @@ pub mod starred;
 pub mod sysadmin;
 pub mod trash;
 pub mod two_factor;
-pub mod wiki;
 
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::get;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -65,8 +63,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         )
         // Client-login — auto-login from desktop client
         .route("/client-login/", get(client_login::client_token_login))
-        // Mobile-login — auto-login from the mobile clients' WebView
-        .route("/mobile-login/", get(mobile_login::mobile_login))
         // SSO local-browser — browser entry + confirm pages
         .route("/client-sso/{token}/", get(sso::client_sso))
         .route(
@@ -88,40 +84,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route("/libraries/{id}/files", get(files::file_browser_root))
         .route("/libraries/{id}/files/", get(files::file_browser_root))
         .route("/libraries/{id}/files/{*path}", get(files::file_browser))
-        // Wikis — knowledge-base pages (mobile clients load these in a WebView)
-        .route("/wikis/", get(wiki::wiki_list))
-        .route("/wikis/new/", post(wiki::wiki_create))
-        // Both trailing-slash variants: the Android client opens
-        // `{server}/wikis/{id}` (no trailing slash) after mobile-login.
-        .route("/wikis/{repo_id}", get(wiki::wiki_view))
-        .route("/wikis/{repo_id}/", get(wiki::wiki_view))
-        .route("/wikis/{repo_id}/rename/", post(wiki::wiki_rename))
-        .route("/wikis/{repo_id}/delete/", post(wiki::wiki_delete))
-        .route("/wikis/{repo_id}/page/new/", post(wiki::wiki_page_create))
-        .route(
-            "/wikis/{repo_id}/page/{page_id}/edit/",
-            get(wiki::wiki_page_edit),
-        )
-        .route(
-            "/wikis/{repo_id}/page/{page_id}/save/",
-            post(wiki::wiki_page_save),
-        )
-        .route(
-            "/wikis/{repo_id}/page/{page_id}/delete/",
-            post(wiki::wiki_page_delete),
-        )
-        .route(
-            "/wikis/{repo_id}/page/{page_id}/rename/",
-            post(wiki::wiki_page_rename),
-        )
-        .route(
-            "/wikis/{repo_id}/page/{page_id}/move/",
-            post(wiki::wiki_page_move),
-        )
-        .route(
-            "/wikis/{repo_id}/page/{page_id}/lock/",
-            post(wiki::wiki_page_lock),
-        )
         // Shares — page listing (GET only)
         .route("/shares/", get(shares::list_shares))
         .route("/shares/create/", axum::routing::post(shares::create_share))

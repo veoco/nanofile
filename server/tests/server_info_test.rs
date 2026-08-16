@@ -33,7 +33,7 @@ async fn test_server_info_features_are_official() {
     let features = body["features"].as_array().unwrap();
 
     // These are the feature strings the official clients actually check.
-    for want in ["seafile-basic", "seafile-pro", "file-search", "wiki"] {
+    for want in ["seafile-basic", "seafile-pro", "file-search"] {
         assert!(features.iter().any(|f| f == want), "{want} feature missing");
     }
     // The mobile search tab keys off "file-search", not "search".
@@ -110,10 +110,9 @@ async fn test_server_info_optional_fields_absent_by_default() {
 }
 
 #[tokio::test]
-async fn test_server_info_file_search_and_wiki_gated_off() {
+async fn test_server_info_file_search_gated_off() {
     let server = common::TestServer::start_with_server_info_config(|cfg| {
         cfg.file_search_enabled = false;
-        cfg.wiki_enabled = false;
     })
     .await;
     let client = server.client();
@@ -123,12 +122,10 @@ async fn test_server_info_file_search_and_wiki_gated_off() {
 
     let body: serde_json::Value = resp.json().await.unwrap();
     let features = body["features"].as_array().unwrap();
-    for not_want in ["file-search", "wiki"] {
-        assert!(
-            !features.iter().any(|f| f == not_want),
-            "{not_want} must not be advertised when disabled"
-        );
-    }
+    assert!(
+        !features.iter().any(|f| f == "file-search"),
+        "file-search must not be advertised when disabled"
+    );
     // The base features must remain even with the switches off.
     for want in ["seafile-basic", "seafile-pro"] {
         assert!(features.iter().any(|f| f == want), "{want} feature missing");

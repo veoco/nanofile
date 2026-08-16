@@ -37,7 +37,7 @@ pub struct CreateRepoParams {
     pub permission: String,
     pub created_at: i64,
     pub updated_at: i64,
-    /// `"repo"` for a normal library, `"wiki"` for a wiki (Seafile wiki2).
+    /// Repository type (`"repo"` for a normal library).
     pub r#type: String,
 }
 
@@ -88,14 +88,6 @@ pub trait RepoRepository: Send + Sync {
         history_ttl_days: Option<i32>,
         updated_at: i64,
     ) -> Result<(), AppError>;
-    /// Set the repo type (e.g. `"wiki"`). Mirrors seahub's
-    /// `set_repo_type(repo_id, 'wiki')`.
-    async fn set_repo_type(&self, repo_id: &str, r#type: &str) -> Result<(), AppError>;
-    /// List repos owned by `user_id` whose type is `wiki` (used by wiki2).
-    async fn find_wiki_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError>;
-    /// List all wiki repos (for the wiki2 "shared" bucket, joined with
-    /// membership in the service layer).
-    async fn find_all_wiki(&self) -> Result<Vec<repo::Model>, AppError>;
 }
 
 pub struct DbRepoRepository {
@@ -330,32 +322,5 @@ impl RepoRepository for DbRepoRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(())
-    }
-
-    async fn set_repo_type(&self, repo_id: &str, r#type: &str) -> Result<(), AppError> {
-        repo::Entity::update_many()
-            .filter(repo::Column::Id.eq(repo_id))
-            .set(repo::ActiveModel {
-                r#type: Set(r#type.to_string()),
-                ..Default::default()
-            })
-            .exec(self.db.as_ref())
-            .await?;
-        Ok(())
-    }
-
-    async fn find_wiki_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError> {
-        Ok(repo::Entity::find()
-            .filter(repo::Column::OwnerId.eq(user_id))
-            .filter(repo::Column::Type.eq("wiki"))
-            .all(self.db.as_ref())
-            .await?)
-    }
-
-    async fn find_all_wiki(&self) -> Result<Vec<repo::Model>, AppError> {
-        Ok(repo::Entity::find()
-            .filter(repo::Column::Type.eq("wiki"))
-            .all(self.db.as_ref())
-            .await?)
     }
 }

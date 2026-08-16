@@ -160,11 +160,6 @@ pub struct ServerConfig {
     /// Env: NANOFILE_SERVER_FILE_SEARCH_ENABLED
     #[serde(default = "default_true")]
     pub file_search_enabled: bool,
-    /// Advertise the `wiki` feature (gates the mobile wiki tab; mirrors
-    /// seahub's ENABLE_WIKI).
-    /// Env: NANOFILE_SERVER_WIKI_ENABLED
-    #[serde(default = "default_true")]
-    pub wiki_enabled: bool,
     /// IP addresses of trusted reverse proxies. The `X-Forwarded-For` header is
     /// only honored for rate limiting when the TCP peer is one of these. When
     /// empty (default) rate limiting uses the raw TCP peer address, so clients
@@ -499,7 +494,6 @@ impl Config {
             "NANOFILE_SERVER_FILE_SEARCH_ENABLED",
             self.server.file_search_enabled
         );
-        env_parse!("NANOFILE_SERVER_WIKI_ENABLED", self.server.wiki_enabled);
         // Optional server-info fields: an empty env var keeps the field absent.
         if let Ok(v) = std::env::var("NANOFILE_SERVER_DESKTOP_CUSTOM_BRAND") {
             self.server.desktop_custom_brand = Some(v);

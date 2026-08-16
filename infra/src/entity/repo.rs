@@ -37,8 +37,8 @@ pub struct Model {
     /// Keep file history for at most this many days. 0 = unlimited.
     #[sea_orm(not_null, default_value = 0)]
     pub history_ttl_days: i32,
-    /// Repository type: `"repo"` (normal) or `"wiki"` (Seafile wiki2). "type"
-    /// is a reserved word, hence the `r#` escape and explicit column name.
+    /// Repository type: `"repo"` (normal). "type" is a reserved word, hence
+    /// the `r#` escape and explicit column name.
     #[sea_orm(column_name = "type", not_null, default_value = "repo", length = 20)]
     pub r#type: String,
 }

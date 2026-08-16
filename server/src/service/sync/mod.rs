@@ -418,16 +418,6 @@ impl SyncService {
             .await
     }
 
-    /// Check if a repo is a wiki repo (Seafile wiki2: `repos.type == "wiki"`).
-    pub async fn is_wiki_repo(&self, repo_id: &str) -> Result<bool, AppError> {
-        Ok(self
-            .repos
-            .repo
-            .find_by_id(repo_id)
-            .await?
-            .is_some_and(|r| r.r#type == "wiki"))
-    }
-
     /// Check if a parent commit exists (not the null commit).
     pub async fn parent_commit_exists(
         &self,
@@ -838,8 +828,6 @@ impl SyncService {
 
             crate::fs::core::adjust_repo_size(&self.repos, repo_id, size_delta).await?;
 
-            let is_wiki = self.is_wiki_repo(repo_id).await?;
-
             let old_root = if let Some(ref parent_id) = new_commit.parent_id
                 && parent_id != EMPTY_SHA1
             {
@@ -859,50 +847,48 @@ impl SyncService {
             .await
             .unwrap_or_default();
 
-            if !is_wiki {
-                let is_reverted =
-                    commit_desc.starts_with("Reverted") || commit_desc.starts_with("Recovered");
+            let is_reverted =
+                commit_desc.starts_with("Reverted") || commit_desc.starts_with("Recovered");
 
-                // Collect activity items up-front so the batch write below
-                // runs one repo lookup (already done above) plus one query per
-                // (op_type, obj_type) group, instead of ~3 per change.
-                let items: Vec<infra::activity_log::ActivityItem> = changes
-                    .iter()
-                    .filter_map(|c| {
-                        let mut op = c.op_type;
-                        if is_reverted && (op == "create" || op == "edit") {
-                            op = "recover";
-                        }
+            // Collect activity items up-front so the batch write below
+            // runs one repo lookup (already done above) plus one query per
+            // (op_type, obj_type) group, instead of ~3 per change.
+            let items: Vec<infra::activity_log::ActivityItem> = changes
+                .iter()
+                .filter_map(|c| {
+                    let mut op = c.op_type;
+                    if is_reverted && (op == "create" || op == "edit") {
+                        op = "recover";
+                    }
 
-                        if EXCLUDED_ACTIVITY_PREFIXES
-                            .iter()
-                            .any(|p| c.path.starts_with(p))
-                        {
-                            return None;
-                        }
+                    if EXCLUDED_ACTIVITY_PREFIXES
+                        .iter()
+                        .any(|p| c.path.starts_with(p))
+                    {
+                        return None;
+                    }
 
-                        Some(infra::activity_log::ActivityItem {
-                            op_type: op,
-                            obj_type: c.obj_type,
-                            path: c.path.clone(),
-                            old_path: c.old_path.clone(),
-                            size: Some(c.size),
-                            obj_id: Some(c.obj_id.clone()),
-                        })
+                    Some(infra::activity_log::ActivityItem {
+                        op_type: op,
+                        obj_type: c.obj_type,
+                        path: c.path.clone(),
+                        old_path: c.old_path.clone(),
+                        size: Some(c.size),
+                        obj_id: Some(c.obj_id.clone()),
                     })
-                    .collect();
+                })
+                .collect();
 
-                if !items.is_empty() {
-                    infra::activity_log::log_activity_batch(
-                        self.db.as_ref(),
-                        repo_id,
-                        &new_commit.commit_id,
-                        &repo_name,
-                        user_id,
-                        items,
-                    )
-                    .await;
-                }
+            if !items.is_empty() {
+                infra::activity_log::log_activity_batch(
+                    self.db.as_ref(),
+                    repo_id,
+                    &new_commit.commit_id,
+                    &repo_name,
+                    user_id,
+                    items,
+                )
+                .await;
             }
 
             if let Some(indexer) = self.indexer.clone() {

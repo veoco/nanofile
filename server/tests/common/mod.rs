@@ -178,7 +178,6 @@ impl TestServer {
                 encrypted_library_pwd_hash_algo: None,
                 encrypted_library_pwd_hash_params: None,
                 file_search_enabled: true,
-                wiki_enabled: true,
                 trusted_proxies: vec![],
             },
             database: infra::config::DatabaseConfig {

@@ -208,18 +208,6 @@ impl SearchService {
         ids.sort();
         ids.dedup();
 
-        // Wiki repos are managed through the wiki UI, not global search.
-        let wiki_ids: std::collections::HashSet<String> = self
-            .repos
-            .repo
-            .find_by_ids(&ids)
-            .await?
-            .into_iter()
-            .filter(|r| r.r#type == "wiki")
-            .map(|r| r.id)
-            .collect();
-        ids.retain(|id| !wiki_ids.contains(id));
-
         if let Some(filter) = repo_id_filter {
             ids.retain(|id| id == filter);
         }

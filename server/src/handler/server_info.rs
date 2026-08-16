@@ -18,8 +18,6 @@ use crate::AppState;
 ///   dropping it would hide features that actually work.
 /// - `file-search`: gates the desktop Search tab and mobile search. Backend
 ///   search exists; gated by `file_search_enabled`.
-/// - `wiki`: the desktop client ignores it, but seadroid/iOS gate the wiki tab
-///   on it. Backend wiki exists; gated by `wiki_enabled`.
 /// - `client-sso-via-local-browser`: implemented; gated by `sso_enabled`.
 /// - Deliberately NOT advertised: `office-preview` and
 ///   `disable-sync-with-any-folder` (no backend / off by default in seahub).
@@ -61,10 +59,6 @@ pub async fn server_info(State(state): State<Arc<AppState>>) -> impl IntoRespons
     // The desktop client's search tab and mobile search key off "file-search".
     if state.config.server.file_search_enabled {
         features.push("file-search".to_string());
-    }
-    // seadroid/iOS gate the wiki tab on this feature.
-    if state.config.server.wiki_enabled {
-        features.push("wiki".to_string());
     }
     // Advertise the local-browser SSO flow only when the server-side feature
     // is enabled (mirrors seahub's CLIENT_SSO_VIA_LOCAL_BROWSER setting).

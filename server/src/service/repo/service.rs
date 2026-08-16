@@ -207,11 +207,6 @@ impl RepoService {
             let Some(r) = repos_map.get(&m.repo_id) else {
                 continue;
             };
-            // Wiki repos (知识库) are a separate surface and never appear in
-            // the library list (mirrors seahub's is_wiki_repo filter).
-            if r.r#type == "wiki" {
-                continue;
-            }
             let is_owner = r.owner_id == user_id;
             let (owner_email, owner_name) = resolve_owner(r.owner_id, email, is_owner, &owners);
             result.push(build_repo_info_from_model(
@@ -242,7 +237,6 @@ impl RepoService {
         enc_version_val: i32,
         magic: Option<String>,
         random_key: Option<String>,
-        repo_type: &str,
     ) -> Result<(RepoInfo, String), AppError> {
         let name = validate_repo_name(name)?;
         let repo_id = repo_id_opt.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -261,7 +255,7 @@ impl RepoService {
             permission: "rw".to_string(),
             created_at: now,
             updated_at: now,
-            r#type: repo_type.to_string(),
+            r#type: "repo".to_string(),
         };
         repos.repo.create_repo(params).await?;
 
@@ -806,10 +800,6 @@ impl RepoService {
             let Some(r) = repos_map.get(&m.repo_id) else {
                 continue;
             };
-            // Wiki repos (知识库) never appear in the library list.
-            if r.r#type == "wiki" {
-                continue;
-            }
             let is_owner = r.owner_id == user_id;
             let repo_type = if is_owner { "mine" } else { "shared" };
             let (owner_email, owner_name) = resolve_owner(r.owner_id, email, is_owner, &owners);
@@ -896,11 +886,7 @@ impl RepoService {
     ) -> Result<Option<String>, AppError> {
         let mut owned = repos.repo.find_by_owner_id(user_id).await?;
         owned.sort_by_key(|r| r.created_at);
-        // Wiki repos (知识库) are never a "default library".
-        Ok(owned
-            .into_iter()
-            .find(|r| r.r#type != "wiki")
-            .map(|r| r.id.clone()))
+        Ok(owned.first().map(|r| r.id.clone()))
     }
 }
 
@@ -932,10 +918,6 @@ pub async fn load_left_panel_repos(
     let mut repo_list = Vec::with_capacity(members.len());
     for m in members {
         if let Some(r) = repos_map.get(&m.repo_id) {
-            // Wiki repos (知识库) never appear in the library sidebar.
-            if r.r#type == "wiki" {
-                continue;
-            }
             repo_list.push(LeftPanelRepo {
                 id: r.id.clone(),
                 name: r.name.clone(),

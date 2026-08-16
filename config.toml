@@ -38,9 +38,6 @@ sso_enabled = true
 # Advertise the `file-search` feature (gates the desktop client's search tab
 # and mobile search). The backend has a search API either way.
 file_search_enabled = true
-# Advertise the `wiki` feature (gates the mobile wiki tab; mirrors seahub's
-# ENABLE_WIKI).
-wiki_enabled = true
 # Optional desktop-client customization — only advertised in /api2/server-info/
 # when set:
 # desktop_custom_brand = "My Company"
