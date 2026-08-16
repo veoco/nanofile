@@ -33,6 +33,38 @@ fn compute_target_dir(parent_dir: &str, relative_path: &str) -> Result<String, A
     })
 }
 
+/// Compute the target directory for a token-authenticated upload, scoping
+/// upload-link tokens to the directory the link was created for. Upload links
+/// must not be able to write outside their directory via a client-supplied
+/// `parent_dir` or `relative_path`.
+fn compute_scoped_target_dir(
+    info: &crate::service::auth::access_token::AccessToken,
+    client_parent_dir: &str,
+    relative_path: &str,
+) -> Result<String, AppError> {
+    if info.upload_link_id.is_some() {
+        // Upload links are scoped to their directory: ignore the client's
+        // `parent_dir` and resolve relative to the link's own path, then ensure
+        // the result stays inside it. (`safe_join_path` only clamps traversal to
+        // the repo root, not to the link's directory.)
+        let target = base::sanitize::safe_join_path(&info.parent_dir, relative_path)
+            .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+        let root = base::sanitize::safe_normalize_path(&info.parent_dir)
+            .unwrap_or_else(|_| "/".to_string());
+        if root != "/"
+            && target != root
+            && !target.starts_with(&format!("{}/", root.trim_end_matches('/')))
+        {
+            return Err(AppError::BadRequest(
+                "path outside upload link directory".into(),
+            ));
+        }
+        Ok(target)
+    } else {
+        compute_target_dir(client_parent_dir, relative_path)
+    }
+}
+
 // ─── Content-Range / chunked upload helpers ───────────────────────────────
 
 /// Parse a `Content-Range` header of the form `bytes start-end/file_size`.
@@ -617,6 +649,15 @@ pub async fn upload_aj_token(
         return Err(AppError::BadRequest("token not valid for upload".into()));
     }
 
+    // Re-check write permission: the token was issued against the caller's
+    // membership, but that may have been revoked since (matches download).
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &info.repo_id,
+        info.user_id,
+    )
+    .await?;
+
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut file_data: Vec<u8> = Vec::new();
     let mut filename = String::new();
@@ -653,7 +694,7 @@ pub async fn upload_aj_token(
         .get("relative_path")
         .map(|s| s.as_str())
         .unwrap_or("");
-    let target_dir = compute_target_dir(parent_dir, relative_path)?;
+    let target_dir = compute_scoped_target_dir(&info, parent_dir, relative_path)?;
 
     if !file_data.is_empty() {
         // Try chunked upload path first
@@ -730,6 +771,15 @@ pub async fn upload_api(
         return Err(AppError::BadRequest("token not valid for upload".into()));
     }
 
+    // Re-check write permission: the token was issued against the caller's
+    // membership, but that may have been revoked since (matches download).
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &info.repo_id,
+        info.user_id,
+    )
+    .await?;
+
     // Read the full body (bounded to the configured upload limit as a
     // belt-and-suspenders cap alongside the global body limit layer).
     let max_bytes = state.config.server.max_upload_size_mb * 1024 * 1024;
@@ -754,13 +804,13 @@ pub async fn upload_api(
         .fields
         .get("parent_dir")
         .cloned()
-        .unwrap_or(info.parent_dir);
+        .unwrap_or_else(|| info.parent_dir.clone());
     let relative_path = parsed
         .fields
         .get("relative_path")
         .cloned()
         .unwrap_or_default();
-    let target_dir = compute_target_dir(&parent_dir, &relative_path)?;
+    let target_dir = compute_scoped_target_dir(&info, &parent_dir, &relative_path)?;
     let filename = parsed.file_name.unwrap_or_default();
 
     if let Some(data) = parsed.file_data
@@ -813,6 +863,15 @@ pub async fn update_api_handler(
     if info.op != "update" {
         return Err(AppError::BadRequest("token not valid for update".into()));
     }
+
+    // Re-check write permission: the token was issued against the caller's
+    // membership, but that may have been revoked since (matches download).
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &info.repo_id,
+        info.user_id,
+    )
+    .await?;
 
     let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
         .await
@@ -922,6 +981,15 @@ pub async fn update_aj_token(
         return Err(AppError::BadRequest("token not valid for update".into()));
     }
 
+    // Re-check write permission: the token was issued against the caller's
+    // membership, but that may have been revoked since (matches download).
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &info.repo_id,
+        info.user_id,
+    )
+    .await?;
+
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut file_data: Vec<u8> = Vec::new();
 
@@ -1023,6 +1091,15 @@ pub async fn upload_blks_api(
             "token not valid for block upload".into(),
         ));
     }
+
+    // Re-check write permission: the token was issued against the caller's
+    // membership, but that may have been revoked since (matches download).
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &info.repo_id,
+        info.user_id,
+    )
+    .await?;
 
     let uid = Some(info.user_id);
     let mut fields: HashMap<String, String> = HashMap::new();

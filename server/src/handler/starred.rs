@@ -91,6 +91,14 @@ pub async fn unstar_item(
     State(state): State<Arc<AppState>>,
     Query(query): Query<UnstarQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Permission check (matches star_item)
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &query.repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let svc = state.starred_service();
     svc.unstar_item(auth.user_id, &query.repo_id, &query.path)
         .await?;

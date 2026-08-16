@@ -455,12 +455,17 @@ pub async fn clean_invalid_upload_links_v21(
 
 /// GET /api/v2.1/upload-links/{token}/
 pub async fn get_upload_link_v21(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let info =
-        link::get_upload_link_v21(&state.repos, &state.config.server.site_url, &token).await?;
+    let info = link::get_upload_link_v21(
+        &state.repos,
+        &state.config.server.site_url,
+        &token,
+        auth.user_id,
+    )
+    .await?;
     Ok(Json(info))
 }
 
@@ -533,14 +538,11 @@ pub async fn get_upload_link_upload_url_v21(
     // set by the web password form (matches seahub). This prevents bypassing
     // the password to obtain an upload token.
     if link.password.is_some()
-        && !headers
-            .get("cookie")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|c| {
-                c.split(';')
-                    .map(|s| s.trim())
-                    .any(|s| s == format!("visited_ufs_{token}=1"))
-            })
+        && !crate::service::auth::csrf::has_valid_upload_link_cookie(
+            headers.get("cookie").and_then(|v| v.to_str().ok()),
+            &token,
+            &state.csrf_secret,
+        )
     {
         return Err(AppError::Forbidden);
     }

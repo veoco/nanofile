@@ -96,6 +96,34 @@ pub fn validate_csrf_header(headers: &HeaderMap, secret: &[u8], session_token: &
     validate_csrf_token(secret, session_token, header_val)
 }
 
+/// Check whether a Cookie header contains a valid `visited_ufs_{token}` upload-link
+/// unlock cookie.
+///
+/// The cookie value is an HMAC signature over the upload-link token (see
+/// [`generate_csrf_token`]), proving the password was previously verified by the
+/// web form. A plaintext `visited_ufs_{token}=1` value is rejected — this is what
+/// prevents an attacker from forging the cookie to bypass a password-protected
+/// upload link.
+pub fn has_valid_upload_link_cookie(
+    cookie_header: Option<&str>,
+    token: &str,
+    secret: &[u8],
+) -> bool {
+    let prefix = format!("visited_ufs_{token}=");
+    let Some(cookie) = cookie_header else {
+        return false;
+    };
+    let Some(value) = cookie
+        .split(';')
+        .map(|s| s.trim())
+        .find(|s| s.starts_with(&prefix))
+        .and_then(|s| s.strip_prefix(&prefix))
+    else {
+        return false;
+    };
+    validate_csrf_token(secret, token, value)
+}
+
 /// Validate Origin/Referer header against the configured site URL origin.
 ///
 /// Used for unauthenticated endpoints (login, register, password reset)

@@ -240,12 +240,16 @@ pub async fn get_upload_link_v21(
     repos: &Repositories,
     base_url: &str,
     token: &str,
+    user_id: i32,
 ) -> Result<serde_json::Value, AppError> {
     let link = repos
         .upload_link
         .find_by_token(token)
         .await?
         .ok_or_else(|| AppError::NotFound("Upload link not found".into()))?;
+    if link.creator_id != user_id {
+        return Err(AppError::NotFound("Upload link not found".into()));
+    }
 
     // Check if repo still exists
     let repo_model = repos

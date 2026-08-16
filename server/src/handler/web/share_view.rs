@@ -353,6 +353,18 @@ pub async fn shared_dir_view(
     let current_path = base::sanitize::safe_join_path(&link.path, sub_path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
+    // `safe_join_path` only clamps traversal to the repo root, so `?p=../../`
+    // could climb above the shared directory. Keep the resolved path inside the
+    // shared subtree (unless the whole repo is shared).
+    let share_root =
+        base::sanitize::safe_normalize_path(&link.path).unwrap_or_else(|_| "/".to_string());
+    if share_root != "/"
+        && current_path != share_root
+        && !current_path.starts_with(&format!("{}/", share_root.trim_end_matches('/')))
+    {
+        return Err(AppError::BadRequest("Invalid path".into()));
+    }
+
     let dir_id = resolve_fs_id(
         &state.repos,
         &link.repo_id,

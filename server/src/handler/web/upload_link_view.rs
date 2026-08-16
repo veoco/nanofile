@@ -41,9 +41,12 @@ struct ShareAccessValidationTemplate {
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 /// Cookie value marking that this browser session has supplied the correct
-/// upload-link password. Mirrors seahub's `visited_ufs_{token}` session flag.
-fn upload_link_cookie(token: &str) -> String {
-    format!("visited_ufs_{token}=1; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax")
+/// upload-link password. Mirrors seahub's `visited_ufs_{token}` session flag,
+/// but the value is an HMAC signature over the token (not a plaintext `1`) so
+/// it cannot be forged by a client that never entered the password.
+fn upload_link_cookie(secret: &[u8], token: &str) -> String {
+    let sig = crate::service::auth::csrf::generate_csrf_token(secret, token);
+    format!("visited_ufs_{token}={sig}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax")
 }
 
 /// Validate the upload link: check it exists, not expired, repo exists.
@@ -116,14 +119,11 @@ pub async fn upload_link_view(
     // an unlock too, so the redirect back to /u/{token}/ isn't bounced to the
     // form again.
     let cookie_ok = link.password.is_some()
-        && headers
-            .get("cookie")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|c| {
-                c.split(';')
-                    .map(|s| s.trim())
-                    .any(|s| s == format!("visited_ufs_{token}=1"))
-            });
+        && crate::service::auth::csrf::has_valid_upload_link_cookie(
+            headers.get("cookie").and_then(|v| v.to_str().ok()),
+            &token,
+            &state.csrf_secret,
+        );
     let unlocked = pw_ok || cookie_ok;
 
     // If password is required but not satisfied, show password form
@@ -174,7 +174,8 @@ pub async fn upload_link_view(
     let mut resp = Html(html).into_response();
     if link.password.is_some()
         && pw_ok
-        && let Ok(value) = axum::http::HeaderValue::from_str(&upload_link_cookie(&token))
+        && let Ok(value) =
+            axum::http::HeaderValue::from_str(&upload_link_cookie(&state.csrf_secret, &token))
     {
         resp.headers_mut()
             .append(axum::http::header::SET_COOKIE, value);
@@ -219,7 +220,9 @@ pub async fn upload_link_view_post(
     }
 
     let mut resp = (StatusCode::FOUND, [("Location", format!("/u/{}/", token))]).into_response();
-    if let Ok(value) = axum::http::HeaderValue::from_str(&upload_link_cookie(&token)) {
+    if let Ok(value) =
+        axum::http::HeaderValue::from_str(&upload_link_cookie(&state.csrf_secret, &token))
+    {
         resp.headers_mut()
             .append(axum::http::header::SET_COOKIE, value);
     }
