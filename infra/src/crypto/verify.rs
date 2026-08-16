@@ -1,4 +1,5 @@
 use sha2::Digest;
+use subtle::ConstantTimeEq;
 
 use crate::crypto::key_derivation::{self};
 
@@ -32,9 +33,12 @@ pub fn verify_repo_password(
     let computed_hash = sha2::Sha256::digest(computed_magic.as_bytes());
     let stored_hash = sha2::Sha256::digest(stored_magic.as_bytes());
 
-    // Compare the hashes — this is constant-time because SHA-256 output
-    // is fixed-size and we compare ALL bytes regardless of match.
-    computed_hash == stored_hash
+    // Constant-time comparison via `subtle::ct_eq` — Rust's `==` on byte
+    // slices short-circuits at the first mismatch, leaking timing info.
+    computed_hash
+        .as_slice()
+        .ct_eq(stored_hash.as_slice())
+        .into()
 }
 
 /// Verify a pre-computed magic string against the stored magic.
@@ -47,7 +51,10 @@ pub fn verify_repo_password(
 pub fn verify_magic(stored_magic: &str, provided_magic: &str) -> bool {
     let stored_hash = sha2::Sha256::digest(stored_magic.as_bytes());
     let provided_hash = sha2::Sha256::digest(provided_magic.as_bytes());
-    stored_hash == provided_hash
+    stored_hash
+        .as_slice()
+        .ct_eq(provided_hash.as_slice())
+        .into()
 }
 
 /// Determine the effective salt for password operations.

@@ -397,7 +397,7 @@ enum MediaKind {
 fn max_ffmpeg_source(kind: MediaKind) -> i64 {
     match kind {
         MediaKind::Image => 256 * 1024 * 1024,
-        MediaKind::Video | MediaKind::Audio => 2 * 1024 * 1024 * 1024,
+        MediaKind::Video | MediaKind::Audio => 512 * 1024 * 1024,
     }
 }
 
@@ -457,11 +457,39 @@ fn extract_media_frame(
             .arg(dst)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        if cmd.status().map(|s| s.success()).unwrap_or(false) {
+        if run_with_timeout(&mut cmd, FFMPEG_TIMEOUT) {
             return true;
         }
     }
     false
+}
+
+/// Timeout for a single ffmpeg thumbnail-extraction attempt. A maliciously
+/// crafted media file could otherwise make ffmpeg run indefinitely and tie up
+/// CPU; kill the process once this deadline is reached.
+const FFMPEG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Run a child process, waiting up to `timeout` for it to exit. Returns true on
+/// a successful exit; kills the child (and returns false) on timeout or error.
+fn run_with_timeout(cmd: &mut Command, timeout: std::time::Duration) -> bool {
+    let Ok(mut child) = cmd.spawn() else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => return false,
+        }
+    }
 }
 
 /// Build a deterministic, collision-free filename prefix for a thumbnail.

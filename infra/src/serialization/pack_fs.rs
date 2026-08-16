@@ -1,6 +1,11 @@
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
-use std::io::Write;
+use std::io::{Read, Write};
+
+/// Maximum decompressed size for a single fs object. An fs object is a small
+/// JSON document describing a directory's entries; anything larger is a
+/// decompression-bomb attempt (far above real objects, far below OOM territory).
+const MAX_FS_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
 
 pub fn compress_fs_data(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -9,9 +14,18 @@ pub fn compress_fs_data(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
 }
 
 pub fn decompress_fs_data(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
-    let mut decoder = flate2::read::ZlibDecoder::new(data);
+    let decoder = flate2::read::ZlibDecoder::new(data);
+    // Cap the decompressed output so a highly-compressible payload can't blow up
+    // memory. Read one byte past the limit to detect (and reject) overflow.
+    let mut limited = decoder.take(MAX_FS_OBJECT_BYTES + 1);
     let mut decompressed = Vec::new();
-    std::io::Read::read_to_end(&mut decoder, &mut decompressed)?;
+    limited.read_to_end(&mut decompressed)?;
+    if decompressed.len() as u64 > MAX_FS_OBJECT_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "fs object too large after decompression",
+        ));
+    }
     Ok(decompressed)
 }
 
