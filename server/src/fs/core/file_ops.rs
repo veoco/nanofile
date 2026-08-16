@@ -83,8 +83,10 @@ impl FileOps {
                     let chunk_data = &data[offset..offset + size];
                     let store = block_store.clone();
                     async move {
-                        // Seafile encrypts each block individually with a
-                        // per-block random IV. The plaintext branch passes the
+                        // Seafile encrypts each block with a deterministic IV
+                        // derived from the key chain (enc_iv), NOT a per-block
+                        // random IV — matches seafile-server seafile-crypt.c
+                        // seafile_derive_key. The plaintext branch passes the
                         // original slice through, avoiding a whole-block copy.
                         let block_id = match enc_key {
                             Some((key, iv)) => {

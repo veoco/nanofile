@@ -73,6 +73,12 @@ fn decode_salt(repo_salt: &str) -> Result<Vec<u8>, CryptoError> {
 /// For enc_version 4: uses per-repo salt, PBKDF2-SHA256 (1000 key + 10 IV)
 /// For enc_version 1: (unsupported) would use EVP_BytesToKey with 524288 iterations
 ///
+/// Security: the 1000-iteration PBKDF2 key and 10-iteration IV are fixed by
+/// the Seafile wire protocol (seafile-server seafile-crypt.c KEYGEN_ITERATION2),
+/// and cannot be raised unilaterally without breaking client interop. The
+/// derived magic is a password-equivalent value and is weak against offline
+/// brute-force.
+///
 /// Returns (key, iv).
 pub fn derive_key(
     password: &str,

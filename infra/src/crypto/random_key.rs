@@ -11,6 +11,11 @@ type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 ///
 /// Block ID = SHA-1(ciphertext), matching seafile's seafile_encrypt().
 ///
+/// Security: deterministic encryption — identical plaintext blocks yield
+/// identical ciphertext, and the content-addressed block id already leaks
+/// block equality. There is no authentication (AES-CBC only); tampering is
+/// detected solely via the block id mismatch, not via a MAC.
+///
 /// Encrypt a file block with AES-256-CBC (Seafile protocol).
 ///
 /// # Panics
