@@ -55,21 +55,6 @@ test("rename and delete a wiki from the UI", async ({ page }) => {
   await expect(wikiCard(page, renamed)).toHaveCount(0, { timeout: 15_000 });
 });
 
-test("publish a wiki from the UI", async ({ page }) => {
-  const name = `publish-wiki-${Date.now()}`;
-  const publishUrl = `pub${Date.now()}`;
-  await createWiki(state.baseURL, state.adminToken, name);
-
-  await page.goto("/wikis/");
-  await wikiCard(page, name).locator('[data-action="show-wiki-publish"]').click();
-  await expect(page.locator("#wiki-publish-overlay")).toBeVisible();
-  await page.locator("#wiki-publish-url").fill(publishUrl);
-  await page.locator('#wiki-publish-overlay button[type="submit"]').click();
-
-  // After reload the card shows the "Published" badge.
-  await expect(wikiCard(page, name).locator("text=Published")).toBeVisible({ timeout: 15_000 });
-});
-
 test("view a wiki and add a sub-page", async ({ page }) => {
   const name = `view-wiki-${Date.now()}`;
   const childName = `child-${Date.now()}`;

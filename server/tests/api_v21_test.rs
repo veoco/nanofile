@@ -978,7 +978,7 @@ async fn test_v21_dir_recursive_invalid_params() {
     assert_eq!(resp.status(), 400);
 }
 
-/// Security: wiki rename/publish/unpublish/delete must require ownership.
+/// Security: wiki rename/delete must require ownership.
 #[tokio::test]
 async fn test_wiki_owner_required() {
     let f = TestFixture::new().await;
@@ -1002,7 +1002,7 @@ async fn test_wiki_owner_required() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let b_token = body["token"].as_str().unwrap().to_string();
 
-    // Non-owner must not rename / delete / publish.
+    // Non-owner must not rename / delete.
     let resp = f
         .client
         .put_json(
@@ -1018,16 +1018,6 @@ async fn test_wiki_owner_required() {
         .delete(&format!("/api/v2.1/wiki2/{wiki_id}/"), Some(&b_token))
         .await;
     assert_eq!(resp.status(), 403, "non-owner must not delete a wiki");
-
-    let resp = f
-        .client
-        .post_json(
-            &format!("/api/v2.1/wiki2/{wiki_id}/publish/"),
-            Some(&b_token),
-            &serde_json::json!({"publish_url": "hacked"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 403, "non-owner must not publish a wiki");
 
     // Owner still can.
     let resp = f

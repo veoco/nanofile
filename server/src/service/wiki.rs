@@ -111,81 +111,23 @@ impl WikiService {
         )
         .await?;
 
-        Ok(wiki2_json(&repo_id, &name, email, "rw", "mine", false))
+        Ok(wiki2_json(&repo_id, &name, email, "rw", "mine"))
     }
 
-    /// List all wikis accessible to the user (Seafile wiki2 response shape:
-    /// `{"wikis": [...], "group_wikis": [...]}`). Group wikis are not
-    /// supported yet, so `group_wikis` is always empty.
+    /// List the user's own wikis (Seafile wiki2 response shape:
+    /// `{"wikis": [...], "group_wikis": [...]}`). Sharing and group wikis are
+    /// not supported, so `group_wikis` is always empty.
     pub async fn list_wikis_v2(
         &self,
         user_id: i32,
         email: &str,
     ) -> Result<serde_json::Value, AppError> {
         let owned = self.repos.repo.find_wiki_by_owner_id(user_id).await?;
-        let all_wiki = self.repos.repo.find_all_wiki().await?;
-
-        // Owner rows first (type=mine), then shared wiki repos the user is a
-        // member of (type=shared).
-        let owned_ids: std::collections::HashSet<String> =
-            owned.iter().map(|r| r.id.clone()).collect();
-        let memberships = self.repos.member.find_by_user_id(user_id).await?;
-        let member_perms: std::collections::HashMap<String, String> = memberships
-            .into_iter()
-            .map(|m| (m.repo_id.clone(), m.permission.clone()))
-            .collect();
-
-        let mut items: Vec<(&infra::entity::repo::Model, &str, &str)> =
-            owned.iter().map(|r| (r, "mine", "rw")).collect();
-        for r in &all_wiki {
-            if !owned_ids.contains(&r.id)
-                && let Some(perm) = member_perms.get(&r.id)
-            {
-                items.push((r, "shared", perm));
-            }
-        }
-
-        // Batch-load publishes and non-owner users so the list is O(1) queries
-        // instead of one per wiki.
-        let item_repo_ids: Vec<String> = items.iter().map(|(r, _, _)| r.id.clone()).collect();
-        let publishes = self
-            .repos
-            .wiki2_publish
-            .find_by_repo_ids(&item_repo_ids)
-            .await?;
-        let publish_map: std::collections::HashMap<String, &infra::entity::wiki2_publish::Model> =
-            publishes.iter().map(|p| (p.repo_id.clone(), p)).collect();
-        let owner_ids: Vec<i32> = items
+        let nickname = requester_email_nickname(email);
+        let wikis: Vec<serde_json::Value> = owned
             .iter()
-            .filter(|(r, _, _)| r.owner_id != user_id)
-            .map(|(r, _, _)| r.owner_id)
+            .map(|r| build_wiki_item(r, email, &nickname, "mine", "rw"))
             .collect();
-        let owners = self.repos.user.find_by_ids(&owner_ids).await?;
-        let owner_map: std::collections::HashMap<i32, &infra::entity::user::Model> =
-            owners.iter().map(|u| (u.id, u)).collect();
-
-        let wikis: Vec<serde_json::Value> = items
-            .into_iter()
-            .map(|(r, type_, perm)| {
-                let (owner_email, owner_nickname) = if r.owner_id == user_id {
-                    (email.to_string(), requester_email_nickname(email))
-                } else {
-                    owner_map
-                        .get(&r.owner_id)
-                        .map(|u| (u.email.clone(), u.nickname()))
-                        .unwrap_or_default()
-                };
-                build_wiki_item(
-                    r,
-                    &owner_email,
-                    &owner_nickname,
-                    type_,
-                    perm,
-                    publish_map.get(&r.id).copied(),
-                )
-            })
-            .collect();
-
         Ok(serde_json::json!({ "wikis": wikis, "group_wikis": [] }))
     }
 
@@ -211,10 +153,9 @@ impl WikiService {
         Ok(())
     }
 
-    /// Delete a wiki: delete the underlying library and any publish config.
+    /// Delete a wiki: delete the underlying library.
     pub async fn delete_wiki(&self, repo_id: &str, user_id: i32) -> Result<(), AppError> {
         self.ensure_wiki_owned(repo_id, user_id).await?;
-        self.repos.wiki2_publish.delete_by_repo_id(repo_id).await?;
         crate::service::repo::service::RepoService::delete_repo(
             self.db(),
             &self.repos,
@@ -222,66 +163,6 @@ impl WikiService {
             user_id,
         )
         .await
-    }
-
-    /// Publish a wiki under a custom URL. `publish_url` must be 5-30 chars of
-    /// `[0-9a-zA-Z-]` and globally unique. Mirrors seahub's validation.
-    pub async fn publish_wiki(
-        &self,
-        repo_id: &str,
-        user_id: i32,
-        username: &str,
-        publish_url: &str,
-        enable_server_render: bool,
-    ) -> Result<serde_json::Value, AppError> {
-        self.ensure_wiki_owned(repo_id, user_id).await?;
-        let publish_url = validate_publish_url(publish_url)?;
-
-        if self
-            .repos
-            .wiki2_publish
-            .find_by_publish_url(&publish_url)
-            .await?
-            .is_some_and(|o| o.repo_id != repo_id)
-        {
-            return Err(AppError::BadRequest(
-                "This custom domain is already in use and cannot be used for your wiki".into(),
-            ));
-        }
-
-        self.repos
-            .wiki2_publish
-            .upsert(repo_id, &publish_url, username, enable_server_render)
-            .await?;
-
-        Ok(serde_json::json!({
-            "publish_url": publish_url,
-            "enable_server_render": enable_server_render,
-        }))
-    }
-
-    /// Cancel a wiki's public publishing.
-    pub async fn unpublish_wiki(&self, repo_id: &str, user_id: i32) -> Result<(), AppError> {
-        self.ensure_wiki_owned(repo_id, user_id).await?;
-        self.repos.wiki2_publish.delete_by_repo_id(repo_id).await
-    }
-
-    /// Fetch the publish info for a wiki (used by `GET .../publish/`).
-    /// Owner-only, like the other admin endpoints.
-    pub async fn publish_info(
-        &self,
-        repo_id: &str,
-        user_id: i32,
-    ) -> Result<serde_json::Value, AppError> {
-        self.ensure_wiki_owned(repo_id, user_id).await?;
-        let p = self.repos.wiki2_publish.find_by_repo_id(repo_id).await?;
-        Ok(serde_json::json!({
-            "publish_url": p.as_ref().map(|x| x.publish_url.clone()).unwrap_or_default(),
-            "creator": p.as_ref().map(|x| x.username.clone()).unwrap_or_default(),
-            "created_at": p.as_ref().map(|x| x.created_at).unwrap_or(0),
-            "visit_count": p.as_ref().map(|x| x.visit_count).unwrap_or(0),
-            "enable_server_render": p.as_ref().map(|x| x.enable_server_render).unwrap_or(false),
-        }))
     }
 
     /// Read the wiki config (`_Internal/Wiki/index.json`), defaulting to an
@@ -805,7 +686,6 @@ fn wiki2_json(
     owner: &str,
     permission: &str,
     type_: &str,
-    is_published: bool,
 ) -> serde_json::Value {
     serde_json::json!({
         "id": repo_id,
@@ -815,52 +695,24 @@ fn wiki2_json(
         "repo_id": repo_id,
         "type": type_,
         "permission": permission,
-        "is_published": is_published,
         "color": "",
         "icon": "",
     })
 }
 
-/// Build one wiki2 list item from a repo model, using preloaded publish config
-/// and owner info (avoids a per-wiki DB round-trip when listing).
+/// Build one wiki2 list item from a repo model.
 fn build_wiki_item(
     repo: &infra::entity::repo::Model,
     owner_email: &str,
     owner_nickname: &str,
     type_: &str,
     permission: &str,
-    publish: Option<&infra::entity::wiki2_publish::Model>,
 ) -> serde_json::Value {
-    let is_published = publish.is_some();
-    let public_url_suffix = publish.map(|p| p.publish_url.clone()).unwrap_or_default();
-    let public_url = if is_published {
-        format!("/wiki/publish/{public_url_suffix}")
-    } else {
-        String::new()
-    };
-    let enable_server_render = publish.map(|p| p.enable_server_render).unwrap_or(false);
-
-    let mut v = wiki2_json(
-        &repo.id,
-        &repo.name,
-        owner_email,
-        permission,
-        type_,
-        is_published,
-    );
+    let mut v = wiki2_json(&repo.id, &repo.name, owner_email, permission, type_);
     let obj = v.as_object_mut().expect("wiki2_json is an object");
     obj.insert(
         "owner_nickname".into(),
         serde_json::Value::String(owner_nickname.to_string()),
-    );
-    obj.insert(
-        "public_url_suffix".into(),
-        serde_json::Value::String(public_url_suffix),
-    );
-    obj.insert("public_url".into(), serde_json::Value::String(public_url));
-    obj.insert(
-        "enable_server_render".into(),
-        serde_json::Value::Bool(enable_server_render),
     );
     v
 }
@@ -871,20 +723,6 @@ fn validate_wiki_name(name: &str) -> Result<String, AppError> {
         return Err(AppError::BadRequest("invalid wiki name".into()));
     }
     Ok(trimmed.to_string())
-}
-
-/// seahub publishes require 5-30 chars of `[0-9a-zA-Z-]`.
-fn validate_publish_url(url: &str) -> Result<String, AppError> {
-    let url = url.trim();
-    if url.len() < 5 || url.len() > 30 {
-        return Err(AppError::BadRequest(
-            "The custom part of URL should have 5-30 characters.".into(),
-        ));
-    }
-    if !url.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-        return Err(AppError::BadRequest("URL is invalid".into()));
-    }
-    Ok(url.to_string())
 }
 
 /// Whether a repo-relative path points into a wiki repo's hidden internal

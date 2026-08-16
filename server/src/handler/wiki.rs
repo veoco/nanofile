@@ -24,13 +24,6 @@ pub struct UpdateWikiRequest {
     pub wiki_name: Option<String>,
 }
 
-#[derive(Deserialize)]
-pub struct PublishWikiRequest {
-    pub publish_url: Option<String>,
-    #[serde(default)]
-    pub enable_server_render: Option<String>,
-}
-
 /// `GET /api/v2.1/wikis/` — legacy wiki1 list (empty; the new model has none).
 pub async fn list_wikis_v1(
     _auth: AuthUser,
@@ -95,61 +88,6 @@ pub async fn delete_wiki(
     state
         .wiki_service()
         .delete_wiki(&repo_id, auth.user_id)
-        .await?;
-    Ok(ok_json())
-}
-
-/// `GET /api/v2.1/wiki2/{repo_id}/publish/` — publish info.
-pub async fn publish_info(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(
-        state
-            .wiki_service()
-            .publish_info(&repo_id, auth.user_id)
-            .await?,
-    ))
-}
-
-/// `POST /api/v2.1/wiki2/{repo_id}/publish/` — publish a wiki.
-pub async fn publish_wiki(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
-    Json(req): Json<PublishWikiRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let publish_url = req
-        .publish_url
-        .ok_or_else(|| AppError::BadRequest("publish_url is required".into()))?;
-    let enable_server_render = req
-        .enable_server_render
-        .as_deref()
-        .map(|v| v == "true")
-        .unwrap_or(false);
-    let result = state
-        .wiki_service()
-        .publish_wiki(
-            &repo_id,
-            auth.user_id,
-            &auth.email,
-            &publish_url,
-            enable_server_render,
-        )
-        .await?;
-    Ok(Json(result))
-}
-
-/// `DELETE /api/v2.1/wiki2/{repo_id}/publish/` — cancel publishing.
-pub async fn unpublish_wiki(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    state
-        .wiki_service()
-        .unpublish_wiki(&repo_id, auth.user_id)
         .await?;
     Ok(ok_json())
 }

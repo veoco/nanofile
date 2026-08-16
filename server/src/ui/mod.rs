@@ -97,8 +97,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route("/wikis/{repo_id}/", get(wiki::wiki_view))
         .route("/wikis/{repo_id}/rename/", post(wiki::wiki_rename))
         .route("/wikis/{repo_id}/delete/", post(wiki::wiki_delete))
-        .route("/wikis/{repo_id}/publish/", post(wiki::wiki_publish))
-        .route("/wikis/{repo_id}/unpublish/", post(wiki::wiki_unpublish))
         .route("/wikis/{repo_id}/page/new/", post(wiki::wiki_page_create))
         .route(
             "/wikis/{repo_id}/page/{page_id}/edit/",

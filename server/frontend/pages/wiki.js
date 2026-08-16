@@ -45,16 +45,6 @@ function showRename(btn) {
   focus("wiki-rename-input", true);
 }
 
-function showPublish(btn) {
-  var form = document.getElementById("wiki-publish-form");
-  var input = document.getElementById("wiki-publish-url");
-  if (!form || !input) return;
-  form.action = "/wikis/" + btn.dataset.id + "/publish/";
-  input.value = "";
-  show("wiki-publish-overlay");
-  focus("wiki-publish-url");
-}
-
 // ─── Wiki view page ──────────────────────────────────────────────────────
 
 function showPageCreate(btn) {
@@ -85,10 +75,8 @@ document.addEventListener("click", function (e) {
   switch (el.dataset.action) {
     case "show-wiki-create": showCreate(); break;
     case "show-wiki-rename": showRename(el); break;
-    case "show-wiki-publish": showPublish(el); break;
     case "close-wiki-create": hide("wiki-create-overlay"); break;
     case "close-wiki-rename": hide("wiki-rename-overlay"); break;
-    case "close-wiki-publish": hide("wiki-publish-overlay"); break;
     case "show-page-create": showPageCreate(el); break;
     case "show-page-rename": showPageRename(el); break;
     case "show-page-move": showPageMove(); break;
@@ -111,7 +99,6 @@ document.addEventListener("submit", function (e) {
 
 registerModalClose("hideWikiCreate", function () { hide("wiki-create-overlay"); });
 registerModalClose("hideWikiRename", function () { hide("wiki-rename-overlay"); });
-registerModalClose("hideWikiPublish", function () { hide("wiki-publish-overlay"); });
 registerModalClose("hidePageCreate", function () { hide("page-create-overlay"); });
 registerModalClose("hidePageRename", function () { hide("page-rename-overlay"); });
 registerModalClose("hidePageMove", function () { hide("page-move-overlay"); });

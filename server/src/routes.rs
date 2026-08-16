@@ -213,12 +213,6 @@ fn v2_routes() -> Router<Arc<AppState>> {
             put(crate::handler::wiki::rename_wiki).delete(crate::handler::wiki::delete_wiki),
         )
         .route(
-            "/api/v2.1/wiki2/{repo_id}/publish/",
-            get(crate::handler::wiki::publish_info)
-                .post(crate::handler::wiki::publish_wiki)
-                .delete(crate::handler::wiki::unpublish_wiki),
-        )
-        .route(
             "/api/v2.1/wiki2/{repo_id}/config/",
             get(crate::handler::wiki::get_config).put(crate::handler::wiki::update_config),
         )

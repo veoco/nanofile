@@ -34,33 +34,12 @@
             </div>
             <div class="min-w-0">
                 <p class="truncate text-sm font-medium text-gray-900 dark:text-gray-100 group-hover:text-brand-600 dark:group-hover:text-brand-400">{{ w.name }}</p>
-                <p class="truncate text-xs text-gray-400 dark:text-gray-500">{{ w.owner_nickname }}</p>
             </div>
         </a>
-
-        <div class="mt-3 flex items-center gap-2 flex-wrap">
-            {% if w.kind == "mine" %}
-            <span class="badge badge-gray">{{ t.tr("wiki.mine") }}</span>
-            {% else %}
-            <span class="badge badge-green">{{ t.tr("wiki.shared") }}</span>
-            {% endif %}
-            {% if w.is_published %}
-            <span class="badge badge-brand">{{ t.tr("wiki.published") }}</span>
-            {% endif %}
-        </div>
 
         <div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 flex items-center gap-1 flex-wrap">
             <button type="button" data-action="show-wiki-rename" data-id="{{ w.id }}" data-name="{{ w.name }}"
                     class="btn btn-secondary btn-sm">{{ t.tr("wiki.rename") }}</button>
-            {% if w.is_published %}
-            <form method="post" action="/wikis/{{ w.id }}/unpublish/">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="btn btn-secondary btn-sm">{{ t.tr("wiki.unpublish") }}</button>
-            </form>
-            {% else %}
-            <button type="button" data-action="show-wiki-publish" data-id="{{ w.id }}" data-name="{{ w.name }}"
-                    class="btn btn-secondary btn-sm">{{ t.tr("wiki.publish") }}</button>
-            {% endif %}
             <form method="post" action="/wikis/{{ w.id }}/delete/" data-confirm-name="{{ w.name }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit" class="btn btn-danger-outline btn-sm">{{ t.tr("wiki.delete") }}</button>
@@ -96,27 +75,6 @@
             <div class="mt-4 flex justify-end gap-2">
                 <button type="button" data-action="close-wiki-rename" class="btn btn-secondary">{{ t.tr("common.cancel") }}</button>
                 <button type="submit" class="btn btn-primary">{{ t.tr("common.save") }}</button>
-            </div>
-        </form>
-{% endcall %}
-
-{# ─── Publish Wiki Dialog ─── #}
-{% call modal::modal("wiki-publish-overlay", labelledby="wiki-publish-title", backdrop_close="hideWikiPublish") %}
-        <h3 id="wiki-publish-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">{{ t.tr("wiki.publish_title") }}</h3>
-        <form method="post" action="" id="wiki-publish-form">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <div>
-                <label for="wiki-publish-url" class="field-label mb-1">{{ t.tr("wiki.publish_url") }}</label>
-                <input id="wiki-publish-url" type="text" name="publish_url" placeholder="{{ t.tr("wiki.publish_url_placeholder") }}"
-                       class="input" autofocus>
-            </div>
-            <label class="mt-4 flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                <input type="checkbox" name="enable_server_render" value="true" class="rounded border-gray-300 dark:border-gray-600">
-                {{ t.tr("wiki.enable_server_render") }}
-            </label>
-            <div class="mt-4 flex justify-end gap-2">
-                <button type="button" data-action="close-wiki-publish" class="btn btn-secondary">{{ t.tr("common.cancel") }}</button>
-                <button type="submit" class="btn btn-primary">{{ t.tr("wiki.publish") }}</button>
             </div>
         </form>
 {% endcall %}

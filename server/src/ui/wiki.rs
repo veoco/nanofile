@@ -47,7 +47,6 @@ pub struct WikiPageTemplate {
     pub page_locked: bool,
     pub content_html: String,
     pub can_edit: bool,
-    pub publish_url: String,
 }
 
 #[derive(Template)]
@@ -74,14 +73,6 @@ pub struct WikiEditTemplate {
 pub struct WikiListItem {
     pub id: String,
     pub name: String,
-    pub owner_nickname: String,
-    /// `mine` or `shared`.
-    pub kind: String,
-    pub permission: String,
-    pub is_published: bool,
-    pub public_url: String,
-    /// `YYYY-MM-DD` date part of the RFC3339 `updated_at`.
-    pub updated_at: String,
 }
 
 #[derive(Template)]
@@ -116,17 +107,10 @@ pub struct WikiNameForm {
     pub name: Option<String>,
 }
 
-/// CSRF-only form for delete / unpublish actions.
+/// CSRF-only form for delete actions.
 #[derive(Deserialize)]
 pub struct WikiCsrfForm {
     pub csrf_token: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct WikiPublishForm {
-    pub csrf_token: Option<String>,
-    pub publish_url: Option<String>,
-    pub enable_server_render: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -162,7 +146,6 @@ struct WikiPageContext {
     repo_name: String,
     config: serde_json::Value,
     can_edit: bool,
-    publish_url: String,
 }
 
 async fn load_wiki_context(
@@ -195,20 +178,12 @@ async fn load_wiki_context(
     )
     .await
     .is_ok();
-    let publish_url = state
-        .repos
-        .wiki2_publish
-        .find_by_repo_id(repo_id)
-        .await?
-        .map(|p| p.publish_url)
-        .unwrap_or_default();
 
     Ok(WikiPageContext {
         repo_id: repo_id.to_string(),
         repo_name: repo.name.clone(),
         config,
         can_edit,
-        publish_url,
     })
 }
 
@@ -354,7 +329,6 @@ pub async fn wiki_view(
         page_locked,
         content_html,
         can_edit: ctx.can_edit,
-        publish_url: ctx.publish_url,
     };
     let html = tpl
         .render()
@@ -451,19 +425,10 @@ fn parse_wiki_item(v: &serde_json::Value) -> WikiListItem {
     WikiListItem {
         id: s("id"),
         name: s("name"),
-        owner_nickname: s("owner_nickname"),
-        kind: s("type"),
-        permission: s("permission"),
-        is_published: v
-            .get("is_published")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(false),
-        public_url: s("public_url"),
-        updated_at: s("updated_at").chars().take(10).collect(),
     }
 }
 
-/// `GET /wikis/` — list all wikis (mine + shared).
+/// `GET /wikis/` — list the user's wikis.
 pub async fn wiki_list(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -548,54 +513,6 @@ pub async fn wiki_delete(
     state
         .wiki_service()
         .delete_wiki(&repo_id, user.user_id)
-        .await?;
-    Ok(redirect_to("/wikis/"))
-}
-
-/// `POST /wikis/{repo_id}/publish/` — publish a wiki under a custom URL.
-pub async fn wiki_publish(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
-    Form(form): Form<WikiPublishForm>,
-) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
-        &state,
-        &user.session_token,
-        form.csrf_token.as_deref(),
-    )?;
-    let enable_server_render = form
-        .enable_server_render
-        .as_deref()
-        .is_some_and(|v| v == "true" || v == "on");
-    state
-        .wiki_service()
-        .publish_wiki(
-            &repo_id,
-            user.user_id,
-            &user.email,
-            &form.publish_url.unwrap_or_default(),
-            enable_server_render,
-        )
-        .await?;
-    Ok(redirect_to("/wikis/"))
-}
-
-/// `POST /wikis/{repo_id}/unpublish/` — cancel a wiki's public publishing.
-pub async fn wiki_unpublish(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    Path(repo_id): Path<String>,
-    Form(form): Form<WikiCsrfForm>,
-) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
-        &state,
-        &user.session_token,
-        form.csrf_token.as_deref(),
-    )?;
-    state
-        .wiki_service()
-        .unpublish_wiki(&repo_id, user.user_id)
         .await?;
     Ok(redirect_to("/wikis/"))
 }

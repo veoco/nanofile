@@ -75,69 +75,6 @@ async fn test_wiki_crud_flow() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["success"], true);
 
-    // Publish.
-    let resp = f
-        .client
-        .post_json(
-            &format!("/api/v2.1/wiki2/{wiki_id}/publish/"),
-            Some(&f.api_token),
-            &serde_json::json!({"publish_url": "engwiki"}),
-        )
-        .await;
-    if resp.status() != 200 {
-        let status = resp.status();
-        let txt = resp.text().await.unwrap_or_default();
-        eprintln!("PUBLISH RESPONSE: status={status} body={txt}");
-        panic!("publish failed");
-    }
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["publish_url"], "engwiki");
-
-    // List again — the wiki should now be published.
-    let resp = f.client.get("/api/v2.1/wikis2/", Some(&f.api_token)).await;
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let wiki = body["wikis"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|w| w["id"] == wiki_id)
-        .expect("wiki in list");
-    assert_eq!(wiki["is_published"], true);
-    assert_eq!(wiki["public_url_suffix"], "engwiki");
-
-    // Publish info.
-    let resp = f
-        .client
-        .get(
-            &format!("/api/v2.1/wiki2/{wiki_id}/publish/"),
-            Some(&f.api_token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["publish_url"], "engwiki");
-
-    // Unpublish.
-    let resp = f
-        .client
-        .delete(
-            &format!("/api/v2.1/wiki2/{wiki_id}/publish/"),
-            Some(&f.api_token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-
-    // Invalid publish url is rejected (too short / bad chars).
-    let resp = f
-        .client
-        .post_json(
-            &format!("/api/v2.1/wiki2/{wiki_id}/publish/"),
-            Some(&f.api_token),
-            &serde_json::json!({"publish_url": "ab"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 400, "short publish url must be rejected");
-
     // Delete.
     let resp = f
         .client
@@ -498,7 +435,6 @@ async fn test_wiki_web_list_and_management() {
     assert_eq!(resp.status(), 200);
     let html = resp.text().await.unwrap();
     assert!(html.contains("list-wiki"), "seeded wiki should be listed");
-    assert!(html.contains("Mine"), "mine badge should render");
     let csrf = extract_form_csrf(&html).expect("create form csrf token");
 
     // Create a wiki via the web form.
@@ -534,15 +470,6 @@ async fn test_wiki_web_list_and_management() {
         .await
         .unwrap();
     assert_eq!(rename.status(), 302);
-
-    // Publish.
-    let publish = web
-        .post(format!("{base}/wikis/{new_id}/publish/"))
-        .form(&[("csrf_token", csrf.as_str()), ("publish_url", "webtest")])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(publish.status(), 302);
 
     // Delete.
     let delete = web
