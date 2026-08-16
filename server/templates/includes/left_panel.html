@@ -1,7 +1,7 @@
 {% import "includes/icons.html" as icons %}
 {% import "includes/modal.html" as modal %}
 <!-- Left Panel — Library Tree & Quick Access (loaded dynamically) -->
-<div class="flex flex-col h-full">
+<div class="grid h-full" style="grid-template-rows: auto auto minmax(0,1fr) 151px 35px">
     <!-- Header -->
     <div class="flex items-center justify-between px-3 py-3 border-b border-gray-200 dark:border-gray-700">
         <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("nav.libraries") }}</h2>
@@ -17,7 +17,7 @@
     </div>
 
     <!-- Repository tree list (server-rendered) -->
-    <div class="flex-1 overflow-y-auto px-3 py-2 space-y-0.5 js-repo-tree">
+    <div class="overflow-y-auto px-3 py-2 space-y-0.5 js-repo-tree">
         {% if left_panel_repos.is_empty() %}
         <p class="text-xs text-gray-400 dark:text-gray-500 text-center py-4">{{ t.tr("nav.no_libraries") }}</p>
         {% else %}
