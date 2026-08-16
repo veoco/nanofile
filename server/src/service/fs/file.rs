@@ -27,8 +27,9 @@ pub struct UploadedFile {
 
 /// Rename a file or directory entry in place.
 ///
-/// `is_dir` controls the commit description, activity type and error wording;
-/// filenames are validated for files only (preserving legacy behavior).
+/// `is_dir` controls the commit description, activity type and error wording.
+/// Both files and directories have their new name validated so a directory
+/// cannot be renamed to a value containing `/` or `..`.
 pub(crate) async fn rename_entry(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -39,10 +40,8 @@ pub(crate) async fn rename_entry(
     user_id: i32,
     is_dir: bool,
 ) -> Result<(), AppError> {
-    if !is_dir {
-        base::sanitize::validate_filename(new_name)
-            .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
-    }
+    base::sanitize::validate_filename(new_name)
+        .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
     let parent_path = parent_path_from(path);
     let old_name = basename(path);

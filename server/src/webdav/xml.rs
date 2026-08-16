@@ -109,6 +109,7 @@ pub fn build_multistatus(responses: &[PropResponse], propname_only: bool) -> Vec
 
 /// Build a no-op LOCK response body containing a fresh lock token.
 pub fn build_lock_body(token: &str) -> String {
+    let token = quick_xml::escape::escape(token);
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?><D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock><D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope><D:depth>infinity</D:depth><D:owner/><D:timeout>Infinite</D:timeout><D:locktoken><D:href>{token}</D:href></D:locktoken></D:activelock></D:lockdiscovery></D:prop>"#
     )

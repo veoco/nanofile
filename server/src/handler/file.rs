@@ -274,12 +274,14 @@ pub async fn move_file(
 
     let path = safe_normalize_path(&req.p)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+    let new_parent_dir = safe_normalize_path(&req.new_parent_dir)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     let svc = state.file_service();
     svc.move_file(
         &req.repo_id,
         &path,
-        &req.new_parent_dir,
+        &new_parent_dir,
         &auth.email,
         auth.user_id,
     )

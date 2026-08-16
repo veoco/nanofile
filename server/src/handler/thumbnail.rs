@@ -27,6 +27,8 @@ pub async fn get_thumbnail(
         .p
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("path required".into()))?;
+    let path = base::sanitize::safe_normalize_path(path)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
     let size = query.size.unwrap_or(48);
     if size > crate::thumbnail_util::MAX_THUMBNAIL_SIZE {
         return Err(AppError::BadRequest(format!(
@@ -36,7 +38,7 @@ pub async fn get_thumbnail(
     }
 
     let svc = state.thumbnail_service();
-    let data = svc.get_thumbnail(&repo_id, path, size).await?;
+    let data = svc.get_thumbnail(&repo_id, &path, size).await?;
 
     Ok((
         StatusCode::OK,

@@ -210,10 +210,13 @@ pub async fn move_dir(
     )
     .await?;
 
+    let path = safe_normalize_path(&req.p)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+
     let svc = state.dir_service();
     svc.move_dir(
         &req.repo_id,
-        &req.p,
+        &path,
         &req.new_parent_dir,
         &auth.email,
         auth.user_id,

@@ -116,8 +116,10 @@ pub async fn get_file_revision_v21(
     );
     headers.insert(
         header::CONTENT_DISPOSITION,
-        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
-            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+        HeaderValue::from_str(&crate::fs::core::download::content_disposition(
+            filename, true,
+        ))
+        .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
     );
 
     Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())

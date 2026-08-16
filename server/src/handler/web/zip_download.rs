@@ -234,8 +234,11 @@ pub async fn zip_download_handler(
     );
     headers.insert(
         header::CONTENT_DISPOSITION,
-        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", zip_filename))
-            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+        HeaderValue::from_str(&crate::fs::core::download::content_disposition(
+            &zip_filename,
+            true,
+        ))
+        .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
     );
 
     Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())

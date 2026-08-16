@@ -94,6 +94,21 @@
         startUpload();
     }
 
+    function escapeHtml(str) {
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(str == null ? '' : String(str)));
+        return div.innerHTML;
+    }
+
+    function escapeAttr(str) {
+        return String(str == null ? '' : str)
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
     function renderFileList() {
         var container = document.getElementById('file-list');
         var html = '';
@@ -111,7 +126,7 @@
                 statusHtml = '<span class="status">Queued</span>';
             }
             html += '<div class="file-item">' +
-                '<span class="name" title="' + f.name + '">' + f.name + '</span>' +
+                '<span class="name" title="' + escapeAttr(f.name) + '">' + escapeHtml(f.name) + '</span>' +
                 '<span class="size">' + sizeStr + '</span>' +
                 '<div class="status">' + statusHtml + '</div>' +
                 '</div>';
