@@ -15,7 +15,7 @@ use base::error::AppError;
 /// string. Returns the full browser link the client opens.
 pub async fn client_sso_link(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let svc = state.sso_service();
@@ -28,9 +28,15 @@ pub async fn client_sso_link(
         )
         .await?;
 
-    let host = headers.get("host").and_then(|v| v.to_str().ok());
-    let base = state.config.server.download_url_base(host);
-    let link = format!("{}/client-sso/{token}/", base.trim_end_matches('/'));
+    // Never trust the Host header for the SSO link — a forged Host redirects
+    // the browser to an attacker-controlled domain and leaks the SSO token.
+    // Use the configured site_url directly (no Host fallback, unlike download
+    // links). When site_url is still the default, the link points at loopback,
+    // which is unreachable for remote clients but never attacker-controlled.
+    let link = format!(
+        "{}/client-sso/{token}/",
+        state.config.server.site_url.trim_end_matches('/')
+    );
 
     Ok(Json(serde_json::json!({ "link": link })))
 }

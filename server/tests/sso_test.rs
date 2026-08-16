@@ -65,6 +65,32 @@ async fn test_client_sso_link_with_shib_params() {
     assert!(body["link"].as_str().unwrap().contains("/client-sso/"));
 }
 
+/// Security: a forged Host header must not leak into the SSO link (which the
+/// client browser opens — a forged host would steal the SSO token).
+#[tokio::test]
+async fn test_client_sso_link_ignores_host_header() {
+    let server = common::TestServer::start().await;
+    let raw = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    let resp = raw
+        .post(format!("{}/api2/client-sso-link/", server.base_url))
+        .header("Host", "evil.com")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let link = body["link"].as_str().unwrap();
+    assert!(
+        !link.contains("evil.com"),
+        "link must not use the forged Host header: {link}"
+    );
+    assert!(
+        link.starts_with(&server.base_url),
+        "link should derive from the configured site_url: {link}"
+    );
+}
+
 /// B.7.3 — GET /api2/client-sso-link/{token}/ (anonymous poll).
 #[tokio::test]
 async fn test_client_sso_link_poll_waiting() {
