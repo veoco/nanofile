@@ -191,10 +191,7 @@ async fn test_share_link_password_rate_limited() {
         )
         .await;
     assert_eq!(resp.status(), 200);
-    let token = resp
-        .json::<serde_json::Value>()
-        .await
-        .unwrap()["token"]
+    let token = resp.json::<serde_json::Value>().await.unwrap()["token"]
         .as_str()
         .unwrap()
         .to_string();
