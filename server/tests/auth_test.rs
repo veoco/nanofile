@@ -333,7 +333,7 @@ async fn test_s2fa_expired_token() {
     let expired_model = infra::entity::s2fa_token::ActiveModel {
         id: sea_orm::NotSet,
         user_id: sea_orm::Set(1),
-        token: sea_orm::Set(expired_token.to_string()),
+        token: sea_orm::Set(server::service::auth::token::hash_token(expired_token)),
         device_id: sea_orm::NotSet,
         device_name: sea_orm::NotSet,
         created_at: sea_orm::Set(now - 100000),
@@ -353,7 +353,10 @@ async fn test_s2fa_expired_token() {
 
     // Verify the expired token was cleaned up
     let count = infra::entity::s2fa_token::Entity::find()
-        .filter(infra::entity::s2fa_token::Column::Token.eq(expired_token))
+        .filter(
+            infra::entity::s2fa_token::Column::Token
+                .eq(server::service::auth::token::hash_token(expired_token)),
+        )
         .count(server.db.as_ref())
         .await
         .unwrap();
@@ -419,4 +422,87 @@ async fn test_login_multipart() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap();
     assert_eq!(token.len(), 40);
+}
+
+#[tokio::test]
+async fn test_session_token_stored_hashed() {
+    let server = TestServer::start().await;
+    let client = server.client();
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    let resp = client.login("test@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    let stored = infra::entity::api_token::Entity::find()
+        .one(server.db.as_ref())
+        .await
+        .unwrap()
+        .expect("one session token should exist");
+    assert_eq!(
+        stored.token,
+        server::service::auth::token::hash_token(&token),
+        "session token must be stored as a SHA-256 hash"
+    );
+    assert_ne!(stored.token, token);
+}
+
+#[tokio::test]
+async fn test_sync_token_has_ttl() {
+    let server = TestServer::start().await;
+    let client = server.client();
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    let resp = client.login("test@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    let repo_id = common::create_test_repo(&client, &token, "TTL Test").await;
+    let sync = infra::entity::sync_token::Entity::find()
+        .filter(infra::entity::sync_token::Column::RepoId.eq(&repo_id))
+        .one(server.db.as_ref())
+        .await
+        .unwrap()
+        .expect("sync token should exist");
+    let expires_at = sync.expires_at.expect("sync token should have an expiry");
+    let now = chrono::Utc::now().timestamp();
+    // Test config uses sync_token_ttl_days = 180.
+    assert!(
+        expires_at > now + 179 * 86400,
+        "expiry too soon: {expires_at}"
+    );
+    assert!(
+        expires_at <= now + 181 * 86400,
+        "expiry too far: {expires_at}"
+    );
+}
+
+#[tokio::test]
+async fn test_pending_token_rejected_as_session() {
+    let server = TestServer::start().await;
+    let client = server.client();
+    let user_id = create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    let pending = server::service::auth::token::generate_api_token();
+    let now = chrono::Utc::now().timestamp();
+    let model = infra::entity::api_token::ActiveModel {
+        id: sea_orm::NotSet,
+        user_id: sea_orm::Set(user_id),
+        token: sea_orm::Set(server::service::auth::token::hash_token(&pending)),
+        created_at: sea_orm::Set(now),
+        expires_at: sea_orm::Set(Some(now + 300)),
+        device_id: sea_orm::Set(None),
+        platform: sea_orm::Set(None),
+        device_name: sea_orm::Set(None),
+        client_version: sea_orm::Set(None),
+        is_pending: sea_orm::Set(true),
+    };
+    model.insert(server.db.as_ref()).await.unwrap();
+
+    let resp = client.ping(&pending).await;
+    assert_eq!(
+        resp.status(),
+        401,
+        "pending token must not authenticate as a full session"
+    );
 }

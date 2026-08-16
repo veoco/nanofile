@@ -97,7 +97,9 @@ async fn test_list_devices_with_data() {
     let s2fa = infra::entity::s2fa_token::ActiveModel {
         id: sea_orm::NotSet,
         user_id: sea_orm::Set(1),
-        token: sea_orm::Set("cccccccccccccccccccccccccccccccccccccccc".to_string()),
+        token: sea_orm::Set(server::service::auth::token::hash_token(
+            "cccccccccccccccccccccccccccccccccccccccc",
+        )),
         device_id: sea_orm::Set(Some("phone-001".to_string())),
         device_name: sea_orm::Set(Some("my-phone".to_string())),
         created_at: sea_orm::Set(now),
