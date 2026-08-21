@@ -873,7 +873,8 @@ pub async fn update_api_handler(
     )
     .await?;
 
-    let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
+    let max_bytes = state.config.server.max_upload_size_mb * 1024 * 1024;
+    let bytes = axum::body::to_bytes(req.into_body(), max_bytes as usize)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
