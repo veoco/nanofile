@@ -532,6 +532,93 @@ impl FileService {
         Ok(fs_id)
     }
 
+    /// Commit a file whose blocks have already been written to the block store
+    /// (e.g. by a streaming uploader) into a repo — the block-sequence twin of
+    /// [`FileService::upload_file_committed`]. Handles old-size detection,
+    /// storage-quota checks, directory creation, repo-size adjustment and
+    /// activity logging in one place; the actual block I/O was already done by
+    /// the caller, so the whole file never had to be buffered in memory.
+    pub async fn upload_file_committed_stream(
+        &self,
+        repo_id: &str,
+        target_dir: &str,
+        filename: &str,
+        block_ids: Vec<String>,
+        total_size: i64,
+        modifier: &str,
+        user_id: Option<i32>,
+        ensure_dir: bool,
+        replace: Option<bool>,
+    ) -> Result<String, AppError> {
+        base::sanitize::validate_filename(filename)
+            .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
+
+        let fp = base::sanitize::safe_join_path(target_dir, filename)
+            .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
+
+        // Detect the existing entry to decide old-size / replace / op_type.
+        let size_result = crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await;
+        let file_exists = size_result.is_ok();
+        let old_size = size_result.ok().unwrap_or(0);
+        let replace_eff = replace.unwrap_or(file_exists);
+        let old_size_eff = if replace_eff { old_size } else { 0 };
+
+        // Check storage quota against the (now known) file size.
+        if let Some(uid) = user_id {
+            crate::service::fs::quota::check_upload_quota(
+                &self.repos,
+                uid,
+                total_size,
+                self.config.storage.max_storage_bytes,
+            )
+            .await?;
+        }
+
+        // Ensure the target directory exists (folder uploads with missing subdirs).
+        if ensure_dir && let Some(uid) = user_id {
+            self.ensure_dir_recursive(repo_id, target_dir, modifier, uid)
+                .await?;
+        }
+
+        let fs_id = FileOps::create_file_from_blocks(
+            self.db(),
+            &self.repos,
+            repo_id,
+            target_dir,
+            filename,
+            block_ids,
+            total_size,
+            modifier,
+            replace_eff,
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
+
+        // Adjust repo size (delta = new_size - old_size).
+        crate::fs::core::adjust_repo_size(&self.repos, repo_id, total_size - old_size_eff).await?;
+
+        // Log activity.
+        if let Some(uid) = user_id {
+            let op_type = if replace_eff { "edit" } else { "create" };
+            activity_log::log_activity(
+                self.db(),
+                repo_id,
+                op_type,
+                "file",
+                &fp,
+                uid,
+                None,
+                Some(total_size),
+                Some(&fs_id),
+                None,
+                None,
+            )
+            .await;
+        }
+
+        Ok(fs_id)
+    }
+
     /// Recursively create any missing directory components below `path`.
     ///
     /// Resolves the root once and walks down one level at a time, reading only

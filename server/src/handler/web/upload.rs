@@ -363,13 +363,26 @@ pub async fn upload_aj(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    mut multipart: Multipart,
+    body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let boundary = extract_multipart_boundary(&headers)?;
+    // Multer's Multipart consumes the raw body stream, letting the file part
+    // be read incrementally via `field.chunk()` (axum's `Multipart` extractor
+    // only offers whole-field `bytes()`).
+    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
+
     let mut fields: HashMap<String, String> = HashMap::new();
-    let mut file_data = Vec::new();
     let mut filename = String::new();
 
-    while let Some(field) = multipart
+    // Resumable (Content-Range) uploads send the whole part at once — the
+    // resumable path needs the bytes in hand, so it keeps the buffered read.
+    let is_chunked = headers.get("content-range").is_some();
+    let mut chunked_file_data: Option<Vec<u8>> = None;
+    // Streaming (non-chunked) upload: CDC the file straight into blocks.
+    let mut block_ids: Vec<String> = Vec::new();
+    let mut total_size: i64 = 0;
+
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
@@ -377,11 +390,44 @@ pub async fn upload_aj(
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
             filename = field.file_name().unwrap_or("unknown").to_string();
-            file_data = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-                .to_vec();
+            if is_chunked {
+                chunked_file_data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+                        .to_vec(),
+                );
+            } else {
+                // Stream: feed underlying bytes straight into the CDC chunker
+                // and write each chunk to the block store, so the file never
+                // needs to be fully buffered in memory.
+                let mut chunker = infra::storage::cdc::Chunker::new(0);
+                let store = state.block_store.clone();
+                while let Some(c) = field
+                    .chunk()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+                {
+                    for block in chunker.feed(&c) {
+                        total_size += block.len() as i64;
+                        let bid = store
+                            .write_block(&block)
+                            .await
+                            .map_err(|e| AppError::Internal(format!("block write failed: {e}")))?;
+                        block_ids.push(bid);
+                    }
+                }
+                let last = chunker.finish();
+                if !last.is_empty() {
+                    total_size += last.len() as i64;
+                    let bid = store
+                        .write_block(&last)
+                        .await
+                        .map_err(|e| AppError::Internal(format!("block write failed: {e}")))?;
+                    block_ids.push(bid);
+                }
+            }
         } else {
             fields.insert(
                 name,
@@ -412,41 +458,62 @@ pub async fn upload_aj(
     )
     .await?;
 
-    if !file_data.is_empty() {
-        // Try chunked upload path first (returns Some if Content-Range was present)
-        let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-        if let Some(resp) = try_handle_chunked(
-            &state.temp_file_manager,
-            &state,
-            repo_id,
-            &target_dir,
-            &filename,
-            &file_data,
-            content_range,
-            &user.email,
-            Some(user.user_id),
-        )
-        .await?
-        {
-            return Ok(resp);
+    if is_chunked {
+        let file_data = chunked_file_data.unwrap_or_default();
+        if !file_data.is_empty() {
+            let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+            if let Some(resp) = try_handle_chunked(
+                &state.temp_file_manager,
+                &state,
+                repo_id,
+                &target_dir,
+                &filename,
+                &file_data,
+                content_range,
+                &user.email,
+                Some(user.user_id),
+            )
+            .await?
+            {
+                return Ok(resp);
+            }
         }
+        return Ok(Json(json!([{"name": filename, "uploaded": true}])));
+    }
 
-        // Non-chunked upload: standard path
-        let resp = upload_and_build_response(
-            &state,
-            repo_id,
-            &target_dir,
-            &filename,
-            &file_data,
-            &user.email,
-            Some(user.user_id),
-            None,
-        )
-        .await?;
-        return Ok(Json(resp));
+    if !block_ids.is_empty() {
+        let fs_id = state
+            .file_service()
+            .upload_file_committed_stream(
+                repo_id,
+                &target_dir,
+                &filename,
+                block_ids,
+                total_size,
+                &user.email,
+                Some(user.user_id),
+                true,
+                None,
+            )
+            .await?;
+        return Ok(Json(
+            json!([{"id": fs_id, "name": filename, "size": total_size}]),
+        ));
     }
 
     Ok(Json(json!([{"name": filename, "uploaded": true}])))
+}
+
+/// Extract the multipart `boundary` from the Content-Type header.
+fn extract_multipart_boundary(headers: &HeaderMap) -> Result<String, AppError> {
+    let ct = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AppError::BadRequest("missing content-type".into()))?;
+    ct.split("boundary=")
+        .nth(1)
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .ok_or_else(|| AppError::BadRequest("missing multipart boundary".into()))
 }
 
 /// POST /update-api/ — Update existing file (web UI, no token).
