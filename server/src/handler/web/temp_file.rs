@@ -13,7 +13,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use futures::stream::StreamExt;
 use tokio::fs;
+use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -156,6 +158,35 @@ impl TempFileManager {
             guard.get(&key).map(|e| e.tmp_path.clone())?
         };
         fs::read(&tmp_path).await.ok()
+    }
+
+    /// Stream the assembled temp file from disk in bounded chunks, so the
+    /// final chunk-assembly path never has to read the whole file into memory.
+    /// Returns `None` when no active temp file exists for this upload.
+    pub async fn read_stream(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Option<futures::stream::BoxStream<'static, std::io::Result<bytes::Bytes>>> {
+        let key = (repo_id.to_string(), file_path.to_string());
+        let tmp_path = {
+            let guard = self.inner.active.read().await;
+            guard.get(&key).map(|e| e.tmp_path.clone())?
+        };
+        let file = tokio::fs::File::open(&tmp_path).await.ok()?;
+        Some(
+            futures::stream::try_unfold(file, |f| async move {
+                let mut f = f;
+                let mut buf = vec![0u8; 64 * 1024];
+                let n = f.read(&mut buf).await?;
+                if n == 0 {
+                    return Ok(None);
+                }
+                buf.truncate(n);
+                Ok(Some((bytes::Bytes::from(buf), f)))
+            })
+            .boxed(),
+        )
     }
 
     /// Mark an upload as finished: remove the in-memory record and delete
@@ -308,6 +339,28 @@ mod tests {
 
         mgr.get_or_create(repo, path, 999).await.unwrap();
         assert_eq!(mgr.get_file_size(repo, path).await, Some(999));
+
+        mgr.finish(repo, path).await;
+    }
+
+    #[tokio::test]
+    async fn test_read_stream_matches_complete() {
+        let mgr = manager().await;
+        let repo = "test-repo-stream";
+        let path = "/stream.bin";
+
+        mgr.get_or_create(repo, path, 11).await.unwrap();
+        mgr.write_chunk(repo, path, 0, b"hello world")
+            .await
+            .unwrap();
+
+        let mut stream = mgr.read_stream(repo, path).await.unwrap();
+        use futures::stream::StreamExt;
+        let mut all = Vec::new();
+        while let Some(r) = stream.next().await {
+            all.extend_from_slice(r.unwrap().as_ref());
+        }
+        assert_eq!(all, b"hello world");
 
         mgr.finish(repo, path).await;
     }
