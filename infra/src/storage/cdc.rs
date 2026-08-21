@@ -250,9 +250,209 @@ pub fn file_chunk_cdc(data: &[u8]) -> Vec<(usize, usize)> {
     chunks
 }
 
+// ─── Streaming CDC chunker ──────────────────────────────────────────────────
+
+/// Content-defined chunker that consumes bytes incrementally and emits
+/// chunks, so the caller never has to buffer the whole file in memory.
+///
+/// The chunk boundaries are **identical** to [`file_chunk_cdc`]: it keeps the
+/// same windowing / break-point / max-size state machine, but instead of
+/// indexing the whole `&[u8]` it accumulates each chunk's bytes in a buffer
+/// and rolls the Rabin fingerprint forward one byte at a time. The most
+/// recent `WINDOW_SIZE` bytes of the current chunk are always available for
+/// the fingerprint initialisation at the `min`-th byte, matching
+/// `file_chunk_cdc`'s `state.init(&data[scan_start - (WINDOW_SIZE-1)..])`.
+///
+/// Memory use is O(max chunk size) regardless of file size.
+pub struct Chunker {
+    file_size: usize,
+    min: usize,
+    max: usize,
+    mask: u32,
+    target: u32,
+    /// Bytes accumulated for the current chunk (always `data[chunk_start..=pos]`).
+    chunk_buf: Vec<u8>,
+    /// Global offset of the current chunk's first byte.
+    chunk_start: usize,
+    /// Rabin fingerprint state once the current chunk has reached `min` bytes.
+    /// `None` before that point or after a chunk has been emitted.
+    state: Option<RabinState>,
+}
+
+impl Chunker {
+    pub fn new(file_size: usize) -> Self {
+        let (avg, min, max) = calculate_chunk_sizes(file_size);
+        let mask = (avg as u32).wrapping_sub(1);
+        Self {
+            file_size,
+            min,
+            max,
+            mask,
+            target: BREAK_VALUE & mask,
+            chunk_buf: Vec::new(),
+            chunk_start: 0,
+            state: None,
+        }
+    }
+
+    /// Feed a slice of bytes, returning any chunks that become complete.
+    /// May be called repeatedly with arbitrary boundaries; chunk boundaries
+    /// are derived solely from the content, not the feed call sizes.
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        for &b in bytes {
+            self.push_byte(b, &mut out);
+        }
+        out
+    }
+
+    /// Finish the stream and return the final (possibly empty) chunk.
+    pub fn finish(self) -> Vec<u8> {
+        self.chunk_buf
+    }
+
+    fn push_byte(&mut self, b: u8, out: &mut Vec<Vec<u8>>) {
+        if self.state.is_none() {
+            self.chunk_buf.push(b);
+            if self.chunk_buf.len() == self.min {
+                self.init_chunk(out);
+            }
+            return;
+        }
+
+        // Rolling: the fingerprint corresponds to `pos = chunk_start+len-1`
+        // (the last byte already in `chunk_buf`); `b` is `data[pos+1]`.
+        let pos = self.chunk_start + self.chunk_buf.len() - 1;
+        let fp = self.state.as_ref().unwrap().get_fingerprint();
+        let next_pos = pos + 1;
+
+        // Break point at `pos` — emit this chunk (without `b`).
+        if (fp & self.mask) == self.target {
+            out.push(std::mem::take(&mut self.chunk_buf));
+            self.state = None;
+            self.chunk_start = next_pos;
+            self.chunk_buf.push(b);
+            if self.chunk_buf.len() == self.min {
+                self.init_chunk(out);
+            }
+            return;
+        }
+
+        // Max size / end of file — emit this chunk (without `b`).
+        if next_pos >= self.chunk_start + self.max || next_pos >= self.file_size {
+            out.push(std::mem::take(&mut self.chunk_buf));
+            self.state = None;
+            self.chunk_start = next_pos;
+            self.chunk_buf.push(b);
+            if self.chunk_buf.len() == self.min {
+                self.init_chunk(out);
+            }
+            return;
+        }
+
+        // Roll `b` into the window.
+        self.state.as_mut().unwrap().update(b);
+        self.chunk_buf.push(b);
+    }
+
+    /// Initialise the Rabin fingerprint once the current chunk reaches `min`
+    /// bytes (matching `file_chunk_cdc`'s `scan_start = chunk_start+min-1`).
+    fn init_chunk(&mut self, out: &mut Vec<Vec<u8>>) {
+        debug_assert!(
+            self.chunk_buf.len() >= WINDOW_SIZE,
+            "chunk must exceed the window before fingerprint init"
+        );
+        let mut st = RabinState::new();
+        st.init(&self.chunk_buf[self.chunk_buf.len() - WINDOW_SIZE..]);
+        let fp = st.get_fingerprint();
+        let pos = self.chunk_start + self.chunk_buf.len() - 1;
+        let next_pos = pos + 1;
+
+        // Break point at `pos` — chunk is `min` bytes.
+        if (fp & self.mask) == self.target {
+            out.push(std::mem::take(&mut self.chunk_buf));
+            self.chunk_start = next_pos;
+            self.state = None;
+            return;
+        }
+
+        // Max size / end of file — chunk is `min` bytes (or the whole tail).
+        if next_pos >= self.chunk_start + self.max || next_pos >= self.file_size {
+            out.push(std::mem::take(&mut self.chunk_buf));
+            self.chunk_start = next_pos;
+            self.state = None;
+            return;
+        }
+
+        self.state = Some(st);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Feed `data` through `Chunker` in slices of `feed_len` bytes and return
+    /// the emitted chunks (concatenating them must recover `data`).
+    fn stream_blocks(data: &[u8], feed_len: usize) -> Vec<Vec<u8>> {
+        if data.is_empty() {
+            return Vec::new();
+        }
+        let mut ch = Chunker::new(data.len());
+        let mut blocks = Vec::new();
+        for chunk in data.chunks(feed_len) {
+            blocks.extend(ch.feed(chunk));
+        }
+        let last = ch.finish();
+        if !last.is_empty() {
+            blocks.push(last);
+        }
+        blocks
+    }
+
+    /// The streaming chunker must produce chunk boundaries *identical* to the
+    /// whole-buffer `file_chunk_cdc` for the same content — seafile clients
+    /// depend on this. Verified under many feed slice sizes to exercise the
+    /// feed-boundary (off-by-one) cases.
+    fn assert_chunkers_agree(data: &[u8]) {
+        let expected: Vec<usize> = file_chunk_cdc(data).iter().map(|(_, s)| *s).collect();
+        for feed_len in [1usize, 7, 64, 999, 4096] {
+            let blocks = stream_blocks(data, feed_len);
+            let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
+            assert_eq!(sizes, expected, "feed_len={feed_len} len={}", data.len());
+            assert_eq!(
+                blocks.concat(),
+                data,
+                "feed_len={feed_len} len={}",
+                data.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_chunker_matches_file_chunk_cdc() {
+        // Empty file.
+        assert_chunkers_agree(&[]);
+        // Sub-min-size files.
+        assert_chunkers_agree(&[0u8; 1]);
+        assert_chunkers_agree(&[0u8; 1000]);
+        assert_chunkers_agree(&[0xFFu8; 500]);
+        // Exactly min boundary and just above.
+        assert_chunkers_agree(&(0..256 * 1024).map(|i| i as u8).collect::<Vec<_>>());
+        assert_chunkers_agree(&[0u8; 256 * 1024 + 100]);
+        // Alternating / all-ones pattern.
+        assert_chunkers_agree(
+            &(0..300_000)
+                .map(|i| if i % 2 == 0 { 0xAA } else { 0x55 })
+                .collect::<Vec<_>>(),
+        );
+        assert_chunkers_agree(&[0xFFu8; 1_000_000]);
+        // Larger pseudo-random content spanning multiple chunks.
+        let data: Vec<u8> = (0..3_000_000)
+            .map(|i: usize| (i.wrapping_mul(31) ^ (i >> 2) ^ (i.wrapping_mul(7))) as u8)
+            .collect();
+        assert_chunkers_agree(&data);
+    }
 
     #[test]
     fn test_chunk_sizes() {
