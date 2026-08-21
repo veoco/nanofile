@@ -29,54 +29,6 @@ pub struct WebUser {
     pub language: Option<String>,
 }
 
-impl WebUser {
-    /// Authenticate from a raw token string (used by test helpers).
-    pub async fn from_token(
-        repos: &crate::repository::Repositories,
-        token_str: &str,
-    ) -> Result<Self, ()> {
-        let token_record = repos
-            .api_token
-            .find_by_token(token_str)
-            .await
-            .map_err(|_| ())?
-            .ok_or(())?;
-
-        // Check expiration
-        if let Some(expires_at) = token_record.expires_at {
-            let now = chrono::Utc::now().timestamp();
-            if now > expires_at {
-                return Err(());
-            }
-        }
-
-        // A 2FA pending token must not be usable as a full session.
-        if token_record.is_pending {
-            return Err(());
-        }
-
-        // Look up user
-        let user_record = repos
-            .user
-            .find_by_id(token_record.user_id)
-            .await
-            .map_err(|_| ())?
-            .ok_or(())?;
-
-        if !user_record.is_active {
-            return Err(());
-        }
-
-        Ok(WebUser {
-            user_id: user_record.id,
-            email: user_record.email,
-            session_token: token_str.to_string(),
-            is_admin: user_record.is_admin,
-            language: user_record.language.clone(),
-        })
-    }
-}
-
 /// Rejection type for WebUser — redirects to the login page.
 pub enum WebUserRejection {
     RedirectLogin,
