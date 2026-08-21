@@ -84,11 +84,20 @@ impl FsObjectRepository for DbFsObjectRepository {
         if fs_ids.is_empty() {
             return Ok(Vec::new());
         }
-        Ok(fs_object::Entity::find()
-            .filter(fs_object::Column::RepoId.eq(repo_id))
-            .filter(fs_object::Column::FsId.is_in(fs_ids))
-            .all(self.db.as_ref())
-            .await?)
+        let mut out = Vec::new();
+        // Chunk the IN list to stay under SQLite's ~999 variable limit — a wide
+        // directory can have thousands of direct children, and a single
+        // unchunked IN query would error.
+        for chunk in fs_ids.chunks(500) {
+            out.extend(
+                fs_object::Entity::find()
+                    .filter(fs_object::Column::RepoId.eq(repo_id))
+                    .filter(fs_object::Column::FsId.is_in(chunk))
+                    .all(self.db.as_ref())
+                    .await?,
+            );
+        }
+        Ok(out)
     }
 
     async fn find_existing_fs_ids(

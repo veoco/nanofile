@@ -179,17 +179,17 @@ pub async fn check_fs(
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let fs_ids = parse_fs_ids_from_bytes(&body_data)?;
 
+    // Only fs_ids are needed, so use the column-projected, chunked query
+    // instead of fetching each object's (potentially large) `data` JSON.
     let existing = state
-        .sync_service()
-        .fetch_fs_objects(&repo_id, &fs_ids)
+        .repos
+        .fs_object
+        .find_existing_fs_ids(&repo_id, &fs_ids)
         .await?;
-
-    let existing_set: std::collections::HashSet<&str> =
-        existing.iter().map(|obj| obj.fs_id.as_str()).collect();
 
     let missing: Vec<String> = fs_ids
         .iter()
-        .filter(|fs_id| !existing_set.contains(fs_id.as_str()))
+        .filter(|fs_id| !existing.contains(fs_id.as_str()))
         .cloned()
         .collect();
 
