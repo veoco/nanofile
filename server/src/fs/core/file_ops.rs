@@ -270,6 +270,188 @@ impl FileOps {
         Ok(file_fs_id)
     }
 
+    /// Commit a file whose blocks have already been written to the block
+    /// store into the repo: create the fs_object, then perform the read-modify-
+    /// write of the FS tree and the commit.
+    ///
+    /// This is the tree-submission half of [`FileOps::create_file`], split out
+    /// so a streaming uploader can write blocks direct from the wire and then
+    /// commit the resulting `block_ids` without ever holding the whole file in
+    /// memory.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_file_from_blocks(
+        db: &DatabaseConnection,
+        repos: &Repositories,
+        repo_id: &str,
+        parent_path: &str,
+        name: &str,
+        block_ids: Vec<String>,
+        total_size: i64,
+        modifier: &str,
+        replace: bool,
+    ) -> Result<String, AppError> {
+        let now = chrono::Utc::now().timestamp();
+
+        let file_fs_data = FsFileData {
+            block_ids,
+            size: total_size,
+            obj_type: 1,
+            version: 1,
+        };
+        let file_fs_id = crate::fs::core::store_fs_file_object(db, repo_id, &file_fs_data).await?;
+
+        // Serialize the FS tree mutation (read-modify-write + commit).
+        let _lock = acquire_repo_lock(repo_id).await;
+
+        // Resolve the parent directory and build an ancestor chain for
+        // walk_up_ancestors to avoid O(d²) re-resolution.
+        let (parent_fs_id, ancestor_chain) = if parent_path == "/" {
+            // Find root via repo head commit, or create empty root fs_object for empty repo
+            let repo_model = repos.repo.find_by_id(repo_id).await?;
+            if let Some(commit_id) = repo_model.as_ref().and_then(|r| r.head_commit_id.clone()) {
+                let commit_ent = repos
+                    .commit
+                    .find_by_repo_and_commit_id(repo_id, &commit_id)
+                    .await?
+                    .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
+                (commit_ent.root_id, Vec::new())
+            } else {
+                let empty_dir = FsDirData {
+                    dirents: vec![],
+                    obj_type: SEAF_METADATA_TYPE_DIR,
+                    version: 1,
+                };
+                (
+                    crate::fs::core::store_fs_dir_object(db, repo_id, &empty_dir).await?,
+                    Vec::new(),
+                )
+            }
+        } else {
+            Self::resolve_fs_id_chain(repos, repo_id, parent_path).await?
+        };
+
+        let parent_data = Self::read_dir_fs_object(repos, repo_id, &parent_fs_id).await?;
+
+        let mut dirents = parent_data.dirents;
+
+        // When replacing an existing file, keep the old entry untouched if the
+        // content is identical (same file fs_id and size). That leaves the
+        // directory hash (and thus the root) unchanged, so `create_commit`
+        // dedups and no redundant commit is created. Without this, a
+        // same-content re-upload would overwrite `mtime` and produce a
+        // spurious new commit whenever the two uploads land in different
+        // seconds.
+        let mut identical_replace = false;
+        if replace {
+            identical_replace = dirents
+                .iter()
+                .any(|d| d.name == name && d.id == file_fs_id && d.size == total_size);
+            if !identical_replace {
+                dirents.retain(|d| d.name != name);
+            }
+        }
+
+        if !identical_replace {
+            dirents.push(DirEntryData {
+                id: file_fs_id.clone(),
+                mode: infra::serialization::S_IFREG,
+                modifier: modifier.to_string(),
+                mtime: now,
+                name: name.to_string(),
+                size: total_size,
+            });
+        }
+
+        let new_dir_data = FsDirData {
+            dirents,
+            obj_type: SEAF_METADATA_TYPE_DIR,
+            version: 1,
+        };
+        let new_dir_fs_id =
+            crate::fs::core::store_fs_dir_object(db, repo_id, &new_dir_data).await?;
+
+        // Walk up to root, updating all ancestor directories
+        let root_fs_id = if parent_path == "/" {
+            new_dir_fs_id.clone()
+        } else {
+            Self::walk_up_ancestors(
+                repos,
+                db,
+                repo_id,
+                parent_path,
+                &new_dir_fs_id,
+                &ancestor_chain,
+            )
+            .await?
+        };
+
+        let repo_model = repos.repo.find_by_id(repo_id).await?;
+        let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
+
+        // Identical re-upload leaves the FS tree unchanged: the head commit
+        // already reflects this state. Skip creating a redundant commit
+        // (matches official seafile and avoids a commit_id collision when a
+        // duplicate write lands in the same second).
+        if let Some(head_id) = parent_commit_id.as_deref() {
+            let head_commit = repos
+                .commit
+                .find_by_repo_and_commit_id(repo_id, head_id)
+                .await?;
+            if head_commit.is_some_and(|c| c.root_id == root_fs_id) {
+                return Ok(file_fs_id);
+            }
+        }
+
+        let commit_data = base::common::CommitData {
+            commit_id: String::new(),
+            repo_id: repo_id.to_string(),
+            root_id: root_fs_id.clone(),
+            creator_name: modifier.to_string(),
+            creator: EMPTY_SHA1.to_string(),
+            description: format!("Added {}", name),
+            ctime: now,
+            parent_id: parent_commit_id.clone(),
+            second_parent_id: None,
+            repo_name: None,
+            repo_desc: None,
+            repo_category: None,
+            encrypted: None,
+            enc_version: None,
+            magic: None,
+            key: None,
+            version: 1,
+        };
+        let commit_id = domain::commit::compute_commit_id(&commit_data);
+
+        let commit_model = commit::ActiveModel {
+            id: sea_orm::NotSet,
+            repo_id: sea_orm::Set(repo_id.to_string()),
+            commit_id: sea_orm::Set(commit_id.clone()),
+            root_id: sea_orm::Set(root_fs_id),
+            parent_id: sea_orm::Set(parent_commit_id),
+            second_parent_id: sea_orm::NotSet,
+            creator_name: sea_orm::Set(modifier.to_string()),
+            creator: sea_orm::Set(EMPTY_SHA1.to_string()),
+            description: sea_orm::Set(format!("Added {}", name)),
+            ctime: sea_orm::Set(now),
+            version: sea_orm::Set(1i8),
+        };
+        repos.commit.insert(commit_model).await?;
+
+        let repo = repo_model.ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+        let mut repo_active: repo::ActiveModel = repo.into();
+        repo_active.head_commit_id = sea_orm::Set(Some(commit_id.clone()));
+        repo_active.updated_at = sea_orm::Set(now);
+        repos.repo.update(repo_active).await?;
+
+        // Fire repo-update notification through the global broadcast channel.
+        // Without this, the Seafile client won't know about the new file until
+        // its next poll cycle, causing a noticeable sync delay.
+        events::publish_repo_update(repo_id, commit_id);
+
+        Ok(file_fs_id)
+    }
+
     /// Walk up the directory tree from immediate_parent_path to root,
     /// updating each ancestor's FsDirData to reference the new child fs_id.
     /// Returns the new root fs_id.
