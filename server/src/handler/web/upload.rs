@@ -252,6 +252,7 @@ async fn upload_and_build_response(
 ///
 /// Avoids axum's `Multipart` extractor which mysteriously fails with 400
 /// on the desktop client's uploads (possibly a content-type encoding issue).
+#[cfg(test)]
 fn parse_multipart(data: &[u8], boundary: &str) -> MultipartResult {
     let boundary_str = format!("--{}", boundary);
     let btag = boundary_str.as_bytes();
@@ -344,6 +345,7 @@ fn parse_multipart(data: &[u8], boundary: &str) -> MultipartResult {
     result
 }
 
+#[cfg(test)]
 struct MultipartResult {
     fields: std::collections::HashMap<String, String>,
     file_name: Option<String>,
@@ -516,6 +518,43 @@ fn extract_multipart_boundary(headers: &HeaderMap) -> Result<String, AppError> {
         .ok_or_else(|| AppError::BadRequest("missing multipart boundary".into()))
 }
 
+/// Stream a multipart file field straight into content-defined blocks in the
+/// block store, returning the block ids and total size, so the file is never
+/// fully buffered in memory. `Chunker::new(0)` uses the default (sub-2GB)
+/// chunk sizing; pass a known size for larger files.
+async fn stream_file_into_blocks(
+    store: infra::storage::DynBlockStorage,
+    field: &mut multer::Field<'_>,
+) -> Result<(Vec<String>, i64), AppError> {
+    let mut chunker = infra::storage::cdc::Chunker::new(0);
+    let mut block_ids = Vec::new();
+    let mut total_size = 0i64;
+    while let Some(c) = field
+        .chunk()
+        .await
+        .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+    {
+        for block in chunker.feed(&c) {
+            total_size += block.len() as i64;
+            let bid = store
+                .write_block(&block)
+                .await
+                .map_err(|e| AppError::Internal(format!("block write failed: {e}")))?;
+            block_ids.push(bid);
+        }
+    }
+    let last = chunker.finish();
+    if !last.is_empty() {
+        total_size += last.len() as i64;
+        let bid = store
+            .write_block(&last)
+            .await
+            .map_err(|e| AppError::Internal(format!("block write failed: {e}")))?;
+        block_ids.push(bid);
+    }
+    Ok((block_ids, total_size))
+}
+
 /// POST /update-api/ — Update existing file (web UI, no token).
 ///
 /// Expects multipart fields:
@@ -525,24 +564,28 @@ fn extract_multipart_boundary(headers: &HeaderMap) -> Result<String, AppError> {
 pub async fn update_api(
     user: WebUser,
     State(state): State<Arc<AppState>>,
-    mut multipart: Multipart,
+    headers: HeaderMap,
+    body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let boundary = extract_multipart_boundary(&headers)?;
+    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
+
     let mut repo_id = String::new();
     let mut file_path = String::new();
-    let mut file_data: Vec<u8> = Vec::new();
+    let mut block_ids: Vec<String> = Vec::new();
+    let mut total_size: i64 = 0;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            file_data = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-                .to_vec();
+            let (bids, size) =
+                stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
+            block_ids = bids;
+            total_size = size;
         } else {
             let val = field
                 .text()
@@ -557,7 +600,7 @@ pub async fn update_api(
         }
     }
 
-    if !file_data.is_empty() && !file_path.is_empty() {
+    if !block_ids.is_empty() && !file_path.is_empty() {
         // Authorization: repo_id is client-supplied, so require write access.
         crate::domain::permission::check_repo_write_permission(
             state.repos.member.as_ref(),
@@ -575,18 +618,23 @@ pub async fn update_api(
             .map(|(_, n)| n)
             .unwrap_or(&file_path);
 
-        let resp = upload_and_build_response(
-            &state,
-            &repo_id,
-            parent,
-            name,
-            &file_data,
-            &user.email,
-            Some(user.user_id),
-            None,
-        )
-        .await?;
-        return Ok(Json(resp));
+        let fs_id = state
+            .file_service()
+            .upload_file_committed_stream(
+                &repo_id,
+                parent,
+                name,
+                block_ids,
+                total_size,
+                &user.email,
+                Some(user.user_id),
+                true,
+                None,
+            )
+            .await?;
+        return Ok(Json(
+            json!([{"id": fs_id, "name": name, "size": total_size}]),
+        ));
     }
 
     Ok(ok_json())
@@ -602,23 +650,38 @@ pub async fn update_aj(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    mut multipart: Multipart,
+    body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let mut fields: HashMap<String, String> = HashMap::new();
-    let mut file_data: Vec<u8> = Vec::new();
+    let boundary = extract_multipart_boundary(&headers)?;
+    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
-    while let Some(field) = multipart
+    let mut fields: HashMap<String, String> = HashMap::new();
+    let is_chunked = headers.get("content-range").is_some();
+    let mut chunked_file_data: Option<Vec<u8>> = None;
+    let mut block_ids: Vec<String> = Vec::new();
+    let mut total_size: i64 = 0;
+
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            file_data = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-                .to_vec();
+            if is_chunked {
+                chunked_file_data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+                        .to_vec(),
+                );
+            } else {
+                let (bids, size) =
+                    stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
+                block_ids = bids;
+                total_size = size;
+            }
         } else {
             fields.insert(
                 name,
@@ -645,46 +708,56 @@ pub async fn update_aj(
     )
     .await?;
 
-    if !file_data.is_empty() {
-        let parent = target_file
-            .rsplit_once('/')
-            .map(|(p, _)| if p.is_empty() { "/" } else { p })
-            .unwrap_or("/");
-        let name = target_file
-            .rsplit_once('/')
-            .map(|(_, n)| n)
-            .unwrap_or(target_file);
+    let parent = target_file
+        .rsplit_once('/')
+        .map(|(p, _)| if p.is_empty() { "/" } else { p })
+        .unwrap_or("/");
+    let name = target_file
+        .rsplit_once('/')
+        .map(|(_, n)| n)
+        .unwrap_or(target_file);
 
-        // Try chunked upload path first
-        let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-        if let Some(resp) = try_handle_chunked(
-            &state.temp_file_manager,
-            &state,
-            repo_id,
-            parent,
-            name,
-            &file_data,
-            content_range,
-            &user.email,
-            Some(user.user_id),
-        )
-        .await?
-        {
-            return Ok(resp);
+    if is_chunked {
+        let file_data = chunked_file_data.unwrap_or_default();
+        if !file_data.is_empty() {
+            let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+            if let Some(resp) = try_handle_chunked(
+                &state.temp_file_manager,
+                &state,
+                repo_id,
+                parent,
+                name,
+                &file_data,
+                content_range,
+                &user.email,
+                Some(user.user_id),
+            )
+            .await?
+            {
+                return Ok(resp);
+            }
         }
+        return Ok(ok_json());
+    }
 
-        let resp = upload_and_build_response(
-            &state,
-            repo_id,
-            parent,
-            name,
-            &file_data,
-            &user.email,
-            Some(user.user_id),
-            None,
-        )
-        .await?;
-        return Ok(Json(resp));
+    if !block_ids.is_empty() {
+        let fs_id = state
+            .file_service()
+            .upload_file_committed_stream(
+                repo_id,
+                parent,
+                name,
+                block_ids,
+                total_size,
+                &user.email,
+                Some(user.user_id),
+                true,
+                None,
+            )
+            .await?;
+        return Ok(Json(
+            json!([{"id": fs_id, "name": name, "size": total_size}]),
+        ));
     }
 
     Ok(ok_json())
@@ -705,7 +778,7 @@ pub async fn upload_aj_token(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
     headers: HeaderMap,
-    mut multipart: Multipart,
+    body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let info = state
         .token_manager
@@ -725,11 +798,17 @@ pub async fn upload_aj_token(
     )
     .await?;
 
-    let mut fields: HashMap<String, String> = HashMap::new();
-    let mut file_data: Vec<u8> = Vec::new();
-    let mut filename = String::new();
+    let boundary = extract_multipart_boundary(&headers)?;
+    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
-    while let Some(field) = multipart
+    let mut fields: HashMap<String, String> = HashMap::new();
+    let mut filename = String::new();
+    let is_chunked = headers.get("content-range").is_some();
+    let mut chunked_file_data: Option<Vec<u8>> = None;
+    let mut block_ids: Vec<String> = Vec::new();
+    let mut total_size: i64 = 0;
+
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
@@ -737,11 +816,20 @@ pub async fn upload_aj_token(
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
             filename = field.file_name().unwrap_or("unknown").to_string();
-            file_data = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-                .to_vec();
+            if is_chunked {
+                chunked_file_data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+                        .to_vec(),
+                );
+            } else {
+                let (bids, size) =
+                    stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
+                block_ids = bids;
+                total_size = size;
+            }
         } else {
             fields.insert(
                 name,
@@ -763,44 +851,54 @@ pub async fn upload_aj_token(
         .unwrap_or("");
     let target_dir = compute_scoped_target_dir(&info, parent_dir, relative_path)?;
 
-    if !file_data.is_empty() {
-        // Try chunked upload path first
-        let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-        if let Some(resp) = try_handle_chunked(
-            &state.temp_file_manager,
-            &state,
-            &info.repo_id,
-            &target_dir,
-            &filename,
-            &file_data,
-            content_range,
-            &info.username,
-            None,
-        )
-        .await?
-        {
-            return Ok(resp);
+    if is_chunked {
+        let file_data = chunked_file_data.unwrap_or_default();
+        if !file_data.is_empty() {
+            let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+            if let Some(resp) = try_handle_chunked(
+                &state.temp_file_manager,
+                &state,
+                &info.repo_id,
+                &target_dir,
+                &filename,
+                &file_data,
+                content_range,
+                &info.username,
+                None,
+            )
+            .await?
+            {
+                return Ok(resp);
+            }
         }
+        return Ok(Json(json!([{"name": filename, "uploaded": true}])));
+    }
 
+    if !block_ids.is_empty() {
         let uid = Some(info.user_id);
-        let resp = upload_and_build_response(
-            &state,
-            &info.repo_id,
-            &target_dir,
-            &filename,
-            &file_data,
-            &info.username,
-            uid,
-            None,
-        )
-        .await?;
+        let fs_id = state
+            .file_service()
+            .upload_file_committed_stream(
+                &info.repo_id,
+                &target_dir,
+                &filename,
+                block_ids,
+                total_size,
+                &info.username,
+                uid,
+                true,
+                None,
+            )
+            .await?;
 
         // Increment upload count if this was triggered by an upload link
         if let Some(link_id) = info.upload_link_id {
             upload_link_service::increment_upload_view_cnt(state.repos.clone(), link_id);
         }
 
-        return Ok(Json(resp));
+        return Ok(Json(
+            json!([{"id": fs_id, "name": filename, "size": total_size}]),
+        ));
     }
 
     Ok(Json(json!([{"name": filename, "uploaded": true}])))
@@ -847,55 +945,71 @@ pub async fn upload_api(
     )
     .await?;
 
-    // Read the full body (bounded to the configured upload limit as a
-    // belt-and-suspenders cap alongside the global body limit layer).
-    let max_bytes = state.config.server.max_upload_size_mb * 1024 * 1024;
-    let bytes = axum::body::to_bytes(req.into_body(), max_bytes as usize)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    // Extract boundary from Content-Type
-    // NOTE: Qt's QHttpMultiPart sends a quoted boundary
-    // (`boundary="_.Seafile._UUID"`) while the body uses the unquoted form
-    // (`--_.Seafile._UUID`). Strip surrounding quotes to handle both.
+    // Extract boundary from Content-Type. NOTE: Qt's QHttpMultiPart sends a
+    // quoted boundary (`boundary="_.Seafile._UUID"`) while the body uses the
+    // unquoted form (`--_.Seafile._UUID`) — strip surrounding quotes to handle
+    // both. The body is consumed as a stream so the file is never buffered.
     let boundary = ct
         .split("boundary=")
         .nth(1)
         .map(|s| s.trim().trim_matches('"').to_string())
         .ok_or_else(|| AppError::BadRequest("missing boundary".into()))?;
+    let mut multipart = multer::Multipart::new(req.into_body().into_data_stream(), boundary);
 
-    // Parse multipart using shared helper (avoids axum Multipart extractor
-    // which mysteriously fails with 400 on the desktop client's uploads).
-    let parsed = parse_multipart(&bytes, &boundary);
-    let parent_dir = parsed
-        .fields
+    let mut fields: HashMap<String, String> = HashMap::new();
+    let mut filename = String::new();
+    let mut block_ids: Vec<String> = Vec::new();
+    let mut total_size: i64 = 0;
+
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            filename = field.file_name().unwrap_or("unknown").to_string();
+            let (bids, size) =
+                stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
+            block_ids = bids;
+            total_size = size;
+        } else {
+            fields.insert(
+                name,
+                field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
+            );
+        }
+    }
+
+    let parent_dir = fields
         .get("parent_dir")
         .cloned()
         .unwrap_or_else(|| info.parent_dir.clone());
-    let relative_path = parsed
-        .fields
-        .get("relative_path")
-        .cloned()
-        .unwrap_or_default();
+    let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
     let target_dir = compute_scoped_target_dir(&info, &parent_dir, &relative_path)?;
-    let filename = parsed.file_name.unwrap_or_default();
 
-    if let Some(data) = parsed.file_data
-        && !data.is_empty()
-    {
+    if !block_ids.is_empty() {
         let uid = Some(info.user_id);
-        let resp = upload_and_build_response(
-            &state,
-            &info.repo_id,
-            &target_dir,
-            &filename,
-            &data,
-            &info.username,
-            uid,
-            None,
-        )
-        .await?;
-        return Ok(Json(resp));
+        let fs_id = state
+            .file_service()
+            .upload_file_committed_stream(
+                &info.repo_id,
+                &target_dir,
+                &filename,
+                block_ids,
+                total_size,
+                &info.username,
+                uid,
+                true,
+                None,
+            )
+            .await?;
+        return Ok(Json(
+            json!([{"id": fs_id, "name": filename, "size": total_size}]),
+        ));
     }
 
     Ok(Json(json!([{"name": filename, "uploaded": true}])))
@@ -940,34 +1054,45 @@ pub async fn update_api_handler(
     )
     .await?;
 
-    let max_bytes = state.config.server.max_upload_size_mb * 1024 * 1024;
-    let bytes = axum::body::to_bytes(req.into_body(), max_bytes as usize)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    let parsed = ct
+    let boundary = ct
         .split("boundary=")
         .nth(1)
-        .map(|s| parse_multipart(&bytes, s.trim().trim_matches('"')))
-        .unwrap_or(MultipartResult {
-            fields: std::collections::HashMap::new(),
-            file_name: None,
-            file_data: None,
-        });
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .ok_or_else(|| AppError::BadRequest("missing boundary".into()))?;
+    let mut multipart = multer::Multipart::new(req.into_body().into_data_stream(), boundary);
 
-    let data = parsed.file_data.unwrap_or_default();
-    let target_file = parsed
-        .fields
-        .get("target_file")
-        .cloned()
-        .unwrap_or_default();
-    let relative_path = parsed
-        .fields
-        .get("relative_path")
-        .cloned()
-        .unwrap_or_default();
+    let mut fields: HashMap<String, String> = HashMap::new();
+    let mut filename = String::new();
+    let mut block_ids: Vec<String> = Vec::new();
+    let mut total_size: i64 = 0;
 
-    if !data.is_empty() {
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            filename = field.file_name().unwrap_or("unknown").to_string();
+            let (bids, size) =
+                stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
+            block_ids = bids;
+            total_size = size;
+        } else {
+            fields.insert(
+                name,
+                field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
+            );
+        }
+    }
+
+    let target_file = fields.get("target_file").cloned().unwrap_or_default();
+    let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
+
+    if !block_ids.is_empty() {
         let uid = Some(info.user_id);
         if !target_file.is_empty() {
             // Derive target from target_file + optional relative_path
@@ -983,46 +1108,46 @@ pub async fn update_api_handler(
 
             let fs_id = state
                 .file_service()
-                .upload_file_committed(
+                .upload_file_committed_stream(
                     &info.repo_id,
                     &target_dir,
                     &name,
-                    &data,
+                    block_ids,
+                    total_size,
                     &info.username,
                     uid,
-                    None,
                     false,
                     None,
                 )
                 .await?;
 
             return Ok(Json(
-                json!([{"id": fs_id, "name": name, "size": data.len()}]),
+                json!([{"id": fs_id, "name": name, "size": total_size}]),
             ));
         }
 
         // Fallback: parent_dir + relative_path + filename
-        let filename = parsed.file_name.unwrap_or_default();
-        let parent_dir = parsed
-            .fields
-            .get("parent_dir")
-            .cloned()
-            .unwrap_or(info.parent_dir);
+        let parent_dir = fields.get("parent_dir").cloned().unwrap_or(info.parent_dir);
         let target_dir = compute_target_dir(&parent_dir, &relative_path)?;
 
         if !filename.is_empty() {
-            let resp = upload_and_build_response(
-                &state,
-                &info.repo_id,
-                &target_dir,
-                &filename,
-                &data,
-                &info.username,
-                uid,
-                None,
-            )
-            .await?;
-            return Ok(Json(resp));
+            let fs_id = state
+                .file_service()
+                .upload_file_committed_stream(
+                    &info.repo_id,
+                    &target_dir,
+                    &filename,
+                    block_ids,
+                    total_size,
+                    &info.username,
+                    uid,
+                    true,
+                    None,
+                )
+                .await?;
+            return Ok(Json(
+                json!([{"id": fs_id, "name": filename, "size": total_size}]),
+            ));
         }
     }
 
@@ -1038,7 +1163,8 @@ pub async fn update_api_handler(
 pub async fn update_aj_token(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
-    mut multipart: Multipart,
+    headers: HeaderMap,
+    body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let info = state
         .token_manager
@@ -1058,21 +1184,24 @@ pub async fn update_aj_token(
     )
     .await?;
 
-    let mut fields: HashMap<String, String> = HashMap::new();
-    let mut file_data: Vec<u8> = Vec::new();
+    let boundary = extract_multipart_boundary(&headers)?;
+    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
-    while let Some(field) = multipart
+    let mut fields: HashMap<String, String> = HashMap::new();
+    let mut block_ids: Vec<String> = Vec::new();
+    let mut total_size: i64 = 0;
+
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            file_data = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-                .to_vec();
+            let (bids, size) =
+                stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
+            block_ids = bids;
+            total_size = size;
         } else {
             fields.insert(
                 name,
@@ -1084,7 +1213,7 @@ pub async fn update_aj_token(
         }
     }
 
-    if file_data.is_empty() {
+    if block_ids.is_empty() {
         return Ok(ok_json());
     }
 
@@ -1104,21 +1233,21 @@ pub async fn update_aj_token(
 
         let fs_id = state
             .file_service()
-            .upload_file_committed(
+            .upload_file_committed_stream(
                 &info.repo_id,
                 &target_dir,
                 &name,
-                &file_data,
+                block_ids,
+                total_size,
                 &info.username,
                 uid,
-                None,
                 false,
                 None,
             )
             .await?;
 
         return Ok(Json(
-            json!([{"id": fs_id, "name": name, "size": file_data.len()}]),
+            json!([{"id": fs_id, "name": name, "size": total_size}]),
         ));
     }
 
