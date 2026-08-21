@@ -36,9 +36,11 @@ impl GcManager {
             return Ok(0);
         }
 
+        // GC needs every commit (history_limit + TTL + reachable-set collection),
+        // so it passes `None` to fetch all rows.
         let commits = repos
             .commit
-            .find_by_repo_id_ordered_by_ctime_desc(&repo_model.id)
+            .find_by_repo_id_ordered_by_ctime_desc(&repo_model.id, None)
             .await?;
         if commits.is_empty() {
             return Ok(0);

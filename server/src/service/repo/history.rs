@@ -225,9 +225,12 @@ impl HistoryService {
         path: &str,
         limit: u64,
     ) -> Result<Vec<FileHistoryItem>, AppError> {
+        // Fetch a conservative multiple of `limit` commits: the walk below may
+        // skip commits where this path's content didn't change, so exactly
+        // `limit` commits might not yield `limit` revisions.
         let commits = repos
             .commit
-            .find_by_repo_id_ordered_by_ctime_desc(repo_id)
+            .find_by_repo_id_ordered_by_ctime_desc(repo_id, Some(limit.saturating_mul(2)))
             .await?;
 
         let file_name = path

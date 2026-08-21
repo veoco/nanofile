@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TransactionTrait};
 use std::sync::Arc;
 
 use base::error::AppError;
@@ -73,25 +73,43 @@ impl MetadataRecordRepository for DbMetadataRecordRepository {
     ) -> Result<(), AppError> {
         let db = self.db.as_ref();
         let now = chrono::Utc::now().timestamp();
+        let repo_id = repo_id.to_string();
+        let file_path = file_path.to_string();
+        let key = key.to_string();
+        let value = value.map(|v| v.to_string());
 
-        metadata_record::Entity::delete_many()
-            .filter(metadata_record::Column::RepoId.eq(repo_id))
-            .filter(metadata_record::Column::FilePath.eq(file_path))
-            .filter(metadata_record::Column::RecordKey.eq(key))
-            .exec(db)
-            .await?;
+        // DELETE + INSERT in one transaction so a mid-way failure can't leave a
+        // partial (missing) record behind.
+        db.transaction(|txn| {
+            Box::pin(async move {
+                metadata_record::Entity::delete_many()
+                    .filter(metadata_record::Column::RepoId.eq(repo_id.as_str()))
+                    .filter(metadata_record::Column::FilePath.eq(file_path.as_str()))
+                    .filter(metadata_record::Column::RecordKey.eq(key.as_str()))
+                    .exec(txn)
+                    .await?;
 
-        metadata_record::Entity::insert(metadata_record::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: Set(repo_id.to_string()),
-            file_path: Set(file_path.to_string()),
-            record_key: Set(key.to_string()),
-            record_value: Set(value.map(|v| v.to_string())),
-            created_at: Set(now),
-            updated_at: Set(now),
+                metadata_record::Entity::insert(metadata_record::ActiveModel {
+                    id: sea_orm::NotSet,
+                    repo_id: Set(repo_id),
+                    file_path: Set(file_path),
+                    record_key: Set(key),
+                    record_value: Set(value),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                })
+                .exec(txn)
+                .await?;
+                Ok::<(), sea_orm::DbErr>(())
+            })
         })
-        .exec(db)
-        .await?;
+        .await
+        .map_err(|e| match e {
+            sea_orm::TransactionError::Connection(e) => {
+                AppError::internal(format!("metadata upsert transaction: {e}"))
+            }
+            sea_orm::TransactionError::Transaction(e) => AppError::from(e),
+        })?;
         Ok(())
     }
 

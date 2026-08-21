@@ -194,7 +194,7 @@ async fn test_gc_prunes_by_history_limit() {
         .server
         .repos
         .commit
-        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id)
+        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id, None)
         .await
         .unwrap();
     assert_eq!(commits.len(), 2, "oldest commit row should be pruned");
@@ -270,7 +270,7 @@ async fn test_gc_prunes_by_ttl() {
         .server
         .repos
         .commit
-        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id)
+        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id, None)
         .await
         .unwrap();
     assert_eq!(commits.len(), 1);
@@ -332,7 +332,7 @@ async fn test_gc_noop_when_unlimited() {
         .server
         .repos
         .commit
-        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id)
+        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id, None)
         .await
         .unwrap();
     assert_eq!(commits.len(), 2);
@@ -450,7 +450,7 @@ async fn test_gc_collects_nested_fs_ids() {
         .server
         .repos
         .commit
-        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id)
+        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id, None)
         .await
         .unwrap();
     assert_eq!(commits.len(), 1);

@@ -131,27 +131,44 @@ impl SearchService {
         // Phase 2: Filename search via FS tree walk — always run, since it is
         // the only complete filename matcher (covers binary/non-indexed files
         // and performs true substring matching).
+        //
+        // Batch-load all repo records and head commits up front (2 queries
+        // total) instead of one `find_by_id` + `find_by_repo_and_commit_id`
+        // pair per repo (2N round-trips).
+        let repos_map: std::collections::HashMap<String, _> = self
+            .repos
+            .repo
+            .find_by_ids(&repo_ids)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
+
+        let head_commit_ids: Vec<String> = repos_map
+            .values()
+            .filter_map(|r| r.head_commit_id.clone())
+            .collect();
+        let commits_map: std::collections::HashMap<String, _> = self
+            .repos
+            .commit
+            .find_by_commit_ids(&head_commit_ids)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| (c.commit_id.clone(), c))
+            .collect();
+
         for repo_id in &repo_ids {
-            let repo_record = match self.repos.repo.find_by_id(repo_id).await {
-                Ok(Some(r)) => r,
-                _ => continue,
+            let Some(repo_record) = repos_map.get(repo_id) else {
+                continue;
             };
-
-            let head_commit_id = match &repo_record.head_commit_id {
-                Some(id) => id.clone(),
-                None => continue,
+            let Some(head_commit_id) = &repo_record.head_commit_id else {
+                continue;
             };
-
-            let head = match self
-                .repos
-                .commit
-                .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-                .await
-            {
-                Ok(Some(h)) => h,
-                _ => continue,
+            let Some(head) = commits_map.get(head_commit_id) else {
+                continue;
             };
-
             if head.root_id == EMPTY_SHA1 {
                 continue;
             }

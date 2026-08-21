@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
 };
 use std::sync::Arc;
 
@@ -32,6 +33,7 @@ pub trait CommitRepository: Send + Sync {
     async fn find_by_repo_id_ordered_by_ctime_desc(
         &self,
         repo_id: &str,
+        limit: Option<u64>,
     ) -> Result<Vec<commit::Model>, AppError>;
     /// Fetch several commits by their Seafile commit-id (SHA1) strings in one
     /// query, chunked to stay under SQLite's variable limit.
@@ -87,15 +89,18 @@ impl CommitRepository for DbCommitRepository {
     async fn find_by_repo_id_ordered_by_ctime_desc(
         &self,
         repo_id: &str,
+        limit: Option<u64>,
     ) -> Result<Vec<commit::Model>, AppError> {
-        Ok(commit::Entity::find()
+        let mut query = commit::Entity::find()
             .filter(commit::Column::RepoId.eq(repo_id))
             // Secondary sort by auto-increment id so commits created within the
             // same second (identical ctime) come back in a stable order.
             .order_by_desc(commit::Column::Ctime)
-            .order_by_desc(commit::Column::Id)
-            .all(self.db.as_ref())
-            .await?)
+            .order_by_desc(commit::Column::Id);
+        if let Some(l) = limit {
+            query = query.limit(l);
+        }
+        Ok(query.all(self.db.as_ref()).await?)
     }
 
     async fn find_by_commit_ids(
