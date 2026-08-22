@@ -94,11 +94,17 @@ pub async fn repo_file_download(
         .to_string();
 
     // Strong ETag: the block IDs are content-addressed, so identical content
-    // always yields the same validator and any edit changes it.
-    let etag = format!(
-        "\"{}\"",
-        infra::crypto::fs_id::sha1_hex(block_ids.join("|").as_bytes())
-    );
+    // always yields the same validator and any edit changes it. Hash the ids
+    // incrementally instead of joining them into one large intermediate string
+    // (a file with tens of thousands of blocks would otherwise allocate a
+    // multi-hundred-KB buffer just to build the validator).
+    use sha1::Digest;
+    let mut hasher = sha1::Sha1::new();
+    for id in &block_ids {
+        hasher.update(id.as_bytes());
+        hasher.update(b"|");
+    }
+    let etag = format!("\"{}\"", hex::encode(hasher.finalize()));
 
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
 

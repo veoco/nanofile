@@ -229,7 +229,10 @@ pub fn range_stream(
             // includes PKCS7 padding and cannot be used as a logical offset.
             if key.is_none() && pos < start {
                 loop {
-                    let next_id = match iter.clone().next() {
+                    // Peek the next block id without cloning the whole remaining
+                    // iterator (cloning `IntoIter` copies every remaining entry,
+                    // which is O(N²) for a large prefix skip).
+                    let next_id = match iter.as_slice().first().cloned() {
                         Some(id) => id,
                         None => return Some((Ok(bytes::Bytes::new()), (iter, pos, true))),
                     };
