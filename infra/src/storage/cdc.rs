@@ -190,7 +190,10 @@ pub fn file_chunk_cdc(data: &[u8]) -> Vec<(usize, usize)> {
     if file_size == 0 {
         return vec![];
     }
-    let (avg, min, max) = calculate_chunk_sizes(file_size);
+    // Chunk sizing is fixed and independent of file size so the streaming
+    // `Chunker` and this whole-buffer path always agree for every file size;
+    // the seafile break-point / max-size state machine is unchanged.
+    let (avg, min, max) = calculate_chunk_sizes(0);
     let mask = (avg as u32).wrapping_sub(1);
     let target = BREAK_VALUE & mask;
 
@@ -280,8 +283,12 @@ pub struct Chunker {
 }
 
 impl Chunker {
+    /// `file_size` drives only the "end of file" test (`next_pos >= file_size`);
+    /// `min`/`max` are fixed defaults so this streaming chunker and the
+    /// whole-buffer [`file_chunk_cdc`] agree for any file size. For an unknown
+    /// size pass `0` and the trailing chunk is produced by [`Chunker::finish`].
     pub fn new(file_size: usize) -> Self {
-        let (avg, min, max) = calculate_chunk_sizes(file_size);
+        let (avg, min, max) = calculate_chunk_sizes(0);
         let mask = (avg as u32).wrapping_sub(1);
         Self {
             file_size,
@@ -525,6 +532,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// With the fixed-default sizing, the streaming chunker's min/max must be
+    /// independent of `file_size` so the known-size (A1 resumable), unknown-size
+    /// (`Chunker::new(0)`, A2 multipart) and whole-buffer `file_chunk_cdc` paths
+    /// all emit identical boundaries.
+    #[test]
+    fn test_chunker_size_independent() {
+        let a = Chunker::new(0);
+        let b = Chunker::new(2 * 1024 * 1024); // 2 MiB
+        let c = Chunker::new(3 * 1024 * 1024 * 1024); // 3 GiB
+        assert_eq!(a.min, b.min, "min must not depend on file_size");
+        assert_eq!(a.max, b.max, "max must not depend on file_size");
+        assert_eq!(a.min, c.min, "min must not depend on file_size");
+        assert_eq!(a.max, c.max, "max must not depend on file_size");
+        let (_, min, max) = calculate_chunk_sizes(0);
+        assert_eq!(a.min, min);
+        assert_eq!(a.max, max);
     }
 
     #[test]
