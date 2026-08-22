@@ -1288,7 +1288,6 @@ pub async fn upload_blks_api(
 
     let uid = Some(info.user_id);
     let mut fields: HashMap<String, String> = HashMap::new();
-    let mut blocks: Vec<(String, Vec<u8>)> = Vec::new();
 
     while let Some(field) = multipart
         .next_field()
@@ -1304,7 +1303,21 @@ pub async fn upload_blks_api(
                 .map_err(|e| AppError::Internal(format!("block read error: {e}")))?
                 .to_vec();
             if !block_id.is_empty() && !data.is_empty() {
-                blocks.push((block_id, data));
+                // Stream each block: verify its SHA-1 and write it immediately,
+                // so one request can't buffer every block in memory at once.
+                let computed = infra::crypto::fs_id::sha1_hex(&data);
+                if computed != block_id {
+                    return Err(AppError::BadRequest(format!(
+                        "block ID mismatch: expected {block_id}, computed {computed}"
+                    )));
+                }
+                state
+                    .block_store
+                    .write_block_with_id(&block_id, &data)
+                    .await
+                    .map_err(|e| {
+                        AppError::Internal(format!("failed to write block {block_id}: {e}"))
+                    })?;
             }
         } else {
             fields.insert(
@@ -1500,29 +1513,6 @@ pub async fn upload_blks_api(
             .await?;
 
         return Ok(Json(json!({"id": file_fs_id})));
-    }
-
-    // Block upload mode: verify SHA1 and store each block
-    for (block_id, data) in &blocks {
-        // Compute SHA1 of the data and verify it matches the block_id
-        let computed_id = {
-            use sha1::{Digest, Sha1};
-            let mut hasher = Sha1::new();
-            hasher.update(data);
-            hex::encode(hasher.finalize())
-        };
-
-        if computed_id != *block_id {
-            return Err(AppError::BadRequest(format!(
-                "block ID mismatch: expected {block_id}, computed {computed_id}"
-            )));
-        }
-
-        state
-            .block_store
-            .write_block_with_id(block_id, data)
-            .await
-            .map_err(|e| AppError::Internal(format!("failed to write block {block_id}: {e}")))?;
     }
 
     Ok(ok_json())
