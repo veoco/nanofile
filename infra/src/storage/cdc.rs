@@ -338,8 +338,13 @@ impl Chunker {
             return;
         }
 
-        // Max size / end of file — emit this chunk (without `b`).
-        if next_pos >= self.chunk_start + self.max || next_pos >= self.file_size {
+        // Max size / end of file — emit this chunk (without `b`). When
+        // `file_size == 0` the total size is unknown (A2's multipart path has no
+        // field size), so the "end of file" test is suppressed and the trailing
+        // chunk is produced by `finish()`; only break/max drive chunk emission.
+        if next_pos >= self.chunk_start + self.max
+            || (self.file_size > 0 && next_pos >= self.file_size)
+        {
             out.push(std::mem::take(&mut self.chunk_buf));
             self.state = None;
             self.chunk_start = next_pos;
@@ -377,7 +382,11 @@ impl Chunker {
         }
 
         // Max size / end of file — chunk is `min` bytes (or the whole tail).
-        if next_pos >= self.chunk_start + self.max || next_pos >= self.file_size {
+        // `file_size == 0` means "unknown" (A2 multipart path), so the end test
+        // is suppressed; the trailing chunk comes from `finish()`.
+        if next_pos >= self.chunk_start + self.max
+            || (self.file_size > 0 && next_pos >= self.file_size)
+        {
             out.push(std::mem::take(&mut self.chunk_buf));
             self.chunk_start = next_pos;
             self.state = None;
@@ -452,6 +461,70 @@ mod tests {
             .map(|i: usize| (i.wrapping_mul(31) ^ (i >> 2) ^ (i.wrapping_mul(7))) as u8)
             .collect();
         assert_chunkers_agree(&data);
+    }
+
+    /// `stream_file_into_blocks` (the A2 multipart upload path) uses
+    /// `Chunker::new(0)` because the field size isn't known up front. For files
+    /// below 2 GiB `calculate_chunk_sizes(0)` returns the same (avg/min/max) as
+    /// `calculate_chunk_sizes(len)`, so the boundaries must still match
+    /// `file_chunk_cdc(data.len())` exactly — this locks the A2 production path
+    /// to the original whole-buffer CDC.
+    #[test]
+    fn test_chunker_new_zero_matches_file_chunk_cdc() {
+        fn feed_zero(data: &[u8], feed_len: usize) -> Vec<Vec<u8>> {
+            if data.is_empty() {
+                return Vec::new();
+            }
+            let mut ch = Chunker::new(0);
+            let mut blocks = Vec::new();
+            for chunk in data.chunks(feed_len) {
+                blocks.extend(ch.feed(chunk));
+            }
+            let last = ch.finish();
+            if !last.is_empty() {
+                blocks.push(last);
+            }
+            blocks
+        }
+
+        // Deterministic pseudo-random bytes (no rand dependency).
+        let lcg = |n: usize, seed: u64| -> Vec<u8> {
+            let mut x = seed;
+            (0..n)
+                .map(|_| {
+                    x = x
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    (x >> 33) as u8
+                })
+                .collect()
+        };
+
+        let cases: Vec<(&str, Vec<u8>)> = vec![
+            ("empty", Vec::new()),
+            ("sub-min", vec![0u8; 1000]),
+            ("exact-min", vec![0xABu8; 256 * 1024]),
+            ("min-plus-1", vec![0xCDu8; 256 * 1024 + 1]),
+            ("few-MB", lcg(3 * 1024 * 1024 + 123, 99)),
+            ("random-800k", lcg(800_000, 12345)),
+        ];
+
+        for (label, data) in &cases {
+            let expected: Vec<usize> = file_chunk_cdc(data).iter().map(|(_, s)| *s).collect();
+            for feed_len in [1usize, 3, 17, 64, 4096] {
+                let blocks = feed_zero(data, feed_len);
+                let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
+                assert_eq!(
+                    sizes, expected,
+                    "Chunker::new(0) mismatch: case={label} feed_len={feed_len} len={}",
+                    data.len()
+                );
+                assert!(
+                    blocks.concat() == data.as_slice(),
+                    "Chunker::new(0) concat mismatch: case={label} feed_len={feed_len}"
+                );
+            }
+        }
     }
 
     #[test]
