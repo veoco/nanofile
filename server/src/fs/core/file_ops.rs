@@ -42,6 +42,62 @@ pub(crate) const EMPTY_ANCESTOR_CHAIN: &[(String, String)] = &[];
 pub struct FileOps;
 
 impl FileOps {
+    /// Stream bytes from `stream` through the CDC chunker and write each
+    /// resulting block to the content-addressed block store, returning the
+    /// `block_ids` (in chunk order) and the aggregate `total_size` — the
+    /// block-sequence twin of `create_file`'s in-memory chunking, so a
+    /// resumable upload never has to hold the whole file in memory.
+    ///
+    /// When `enc_key` is `Some((key, iv))`, each block is encrypted with a
+    /// deterministic IV before writing (matching `create_file`), yielding
+    /// `block_id == sha1(encrypted_block)` so Seafile sync clients can still
+    /// re-derive the content-addressed ids for encrypted repos.
+    pub async fn write_stream_blocks<S>(
+        store: &DynBlockStorage,
+        file_size: usize,
+        stream: S,
+        enc_key: Option<(&[u8], &[u8])>,
+    ) -> Result<(Vec<String>, i64), AppError>
+    where
+        S: futures::Stream<Item = std::io::Result<bytes::Bytes>> + Unpin,
+    {
+        let mut chunker = infra::storage::cdc::Chunker::new(file_size);
+        let mut block_ids = Vec::new();
+        let mut total_size: i64 = 0;
+
+        let mut stream = stream;
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|e| AppError::Internal(format!("stream read failed: {e}")))?;
+            for blk in chunker.feed(chunk.as_ref()) {
+                let block_id = match enc_key {
+                    Some((key, iv)) => {
+                        let encrypted = encrypt_block(&blk, key, iv);
+                        store.write_block(&encrypted).await?
+                    }
+                    None => store.write_block(&blk).await?,
+                };
+                total_size += blk.len() as i64;
+                block_ids.push(block_id);
+            }
+        }
+
+        let tail = chunker.finish();
+        if !tail.is_empty() {
+            let block_id = match enc_key {
+                Some((key, iv)) => {
+                    let encrypted = encrypt_block(&tail, key, iv);
+                    store.write_block(&encrypted).await?
+                }
+                None => store.write_block(&tail).await?,
+            };
+            total_size += tail.len() as i64;
+            block_ids.push(block_id);
+        }
+
+        Ok((block_ids, total_size))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create_file(
         db: &DatabaseConnection,

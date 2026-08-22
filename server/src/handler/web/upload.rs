@@ -189,60 +189,48 @@ async fn try_handle_chunked(
         return Ok(Some(ok_json()));
     }
 
-    // ── Final chunk: assemble the complete file and commit ─────────
-    let full_data = temp_mgr
-        .read_complete(repo_id, &file_path)
-        .await
-        .ok_or_else(|| AppError::Internal("failed to read assembled temp file".into()))?;
+    // ── Final chunk: stream the assembled file into blocks and commit ──
+    // Stream the temp file through the CDC chunker so the whole file never
+    // has to be buffered in memory; `write_stream_blocks` writes blocks to
+    // the content-addressed store and `upload_file_committed_stream` commits
+    // the resulting block_ids into the repo.
+    let Some(stream) = temp_mgr.read_stream(repo_id, &file_path).await else {
+        temp_mgr.abort(repo_id, &file_path).await;
+        return Err(AppError::Internal(
+            "failed to open assembled temp file".into(),
+        ));
+    };
 
-    // Verify we got the expected number of bytes
-    if full_data.len() as u64 != file_size {
+    let (block_ids, total_size) = crate::fs::core::FileOps::write_stream_blocks(
+        &state.block_store,
+        file_size as usize,
+        stream,
+        None,
+    )
+    .await?;
+
+    // Verify we got the expected number of bytes (the streamed total must
+    // match the declared file size).
+    if total_size as u64 != file_size {
         temp_mgr.abort(repo_id, &file_path).await;
         return Err(AppError::Internal(format!(
-            "assembled file size {} does not match expected {file_size}",
-            full_data.len()
+            "assembled file size {total_size} does not match expected {file_size}"
         )));
     }
 
-    let result = upload_and_build_response(
-        state, repo_id, target_dir, file_name, &full_data, modifier, user_id, None,
-    )
-    .await;
+    let fs_id = state
+        .file_service()
+        .upload_file_committed_stream(
+            repo_id, target_dir, file_name, block_ids, total_size, modifier, user_id, true, None,
+        )
+        .await?;
 
     // Clean up the temp file regardless of success/failure
     temp_mgr.finish(repo_id, &file_path).await;
 
-    result.map(|json| Some(Json(json)))
-}
-
-/// Create a file via `FileOps::create_file` and return the standard JSON
-/// array response expected by the Seafile frontend:
-/// `[{"id": "<fs_id>", "name": "<filename>", "size": <bytes>}]`
-///
-/// Dynamically determines whether the file already exists and sets the
-/// `replace` flag (for `FileOps::create_file`) and `op_type` (for activity
-/// logging) accordingly — upload handlers should NOT hardcode `replace`.
-#[allow(clippy::too_many_arguments)]
-async fn upload_and_build_response(
-    state: &AppState,
-    repo_id: &str,
-    target_dir: &str,
-    filename: &str,
-    data: &[u8],
-    modifier: &str,
-    user_id: Option<i32>,
-    enc_key: Option<(&[u8], &[u8])>,
-) -> Result<serde_json::Value, AppError> {
-    // Delegate the full write sequence (quota, ensure-dir, create, size, activity)
-    // to the shared service path; `None` auto-detects replace from existence.
-    let fs_id = state
-        .file_service()
-        .upload_file_committed(
-            repo_id, target_dir, filename, data, modifier, user_id, enc_key, true, None,
-        )
-        .await?;
-
-    Ok(json!([{"id": fs_id, "name": filename, "size": data.len()}]))
+    Ok(Some(Json(json!([
+        { "id": fs_id, "name": file_name, "size": total_size }
+    ]))))
 }
 
 // ─── Multipart parser (for desktop-client compatibility) ──────────────────────
