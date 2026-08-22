@@ -522,7 +522,8 @@ mod tests {
                 let blocks = feed_zero(data, feed_len);
                 let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
                 assert_eq!(
-                    sizes, expected,
+                    sizes,
+                    expected,
                     "Chunker::new(0) mismatch: case={label} feed_len={feed_len} len={}",
                     data.len()
                 );
