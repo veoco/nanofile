@@ -74,10 +74,17 @@ impl UserRepository for DbUserRepository {
         if user_ids.is_empty() {
             return Ok(Vec::new());
         }
-        Ok(user::Entity::find()
-            .filter(user::Column::Id.is_in(user_ids.to_vec()))
-            .all(self.db.as_ref())
-            .await?)
+        // SQLite has a ~999 bound on bound parameters; chunk the IN list.
+        const IN_BATCH: usize = 500;
+        let mut out = Vec::new();
+        for chunk in user_ids.chunks(IN_BATCH) {
+            let rows = user::Entity::find()
+                .filter(user::Column::Id.is_in(chunk.iter().cloned()))
+                .all(self.db.as_ref())
+                .await?;
+            out.extend(rows);
+        }
+        Ok(out)
     }
 
     async fn find_by_email(&self, email: &str) -> Result<Option<user::Model>, AppError> {
@@ -91,10 +98,17 @@ impl UserRepository for DbUserRepository {
         if emails.is_empty() {
             return Ok(Vec::new());
         }
-        Ok(user::Entity::find()
-            .filter(user::Column::Email.is_in(emails.to_vec()))
-            .all(self.db.as_ref())
-            .await?)
+        // SQLite has a ~999 bound on bound parameters; chunk the IN list.
+        const IN_BATCH: usize = 500;
+        let mut out = Vec::new();
+        for chunk in emails.chunks(IN_BATCH) {
+            let rows = user::Entity::find()
+                .filter(user::Column::Email.is_in(chunk.iter().cloned()))
+                .all(self.db.as_ref())
+                .await?;
+            out.extend(rows);
+        }
+        Ok(out)
     }
 
     async fn find_by_email_like(&self, pattern: &str) -> Result<Vec<user::Model>, AppError> {

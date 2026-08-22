@@ -105,10 +105,13 @@ pub async fn list_shares(
             repo_ids.push(u.repo_id.clone());
         }
     }
+    // Resolve all repo names in one batched query instead of one `find_by_id`
+    // per distinct repo (N+1).
     let mut repo_names: HashMap<String, String> = HashMap::new();
-    for rid in &repo_ids {
-        let r = state.repos.repo.find_by_id(rid).await?;
-        repo_names.insert(rid.clone(), r.map(|r| r.name).unwrap_or_default());
+    if !repo_ids.is_empty() {
+        for r in state.repos.repo.find_by_ids(&repo_ids).await? {
+            repo_names.insert(r.id, r.name);
+        }
     }
 
     let share_links: Vec<ShareLinkInfo> = links
