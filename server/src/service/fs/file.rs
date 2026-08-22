@@ -616,6 +616,23 @@ impl FileService {
             .await;
         }
 
+        // Index the written file in the background so the search index stays
+        // fresh without blocking the upload response. `reindex_file` reads the
+        // content back from block storage (bounded — the same read path rename
+        // and reindex already use) and handles both text → index and binary-or-
+        // replace → drop the old index entry.
+        if let Some(indexer) = &self.indexer {
+            let idx = indexer.clone();
+            let repo_id = repo_id.to_string();
+            let full_path = fp;
+            let block_store = self.block_store.clone();
+            tokio::spawn(async move {
+                if let Err(e) = idx.reindex_file(&repo_id, &full_path, &block_store).await {
+                    tracing::warn!("background content index failed for {full_path}: {e}");
+                }
+            });
+        }
+
         Ok(fs_id)
     }
 

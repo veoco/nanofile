@@ -510,7 +510,7 @@ fn extract_multipart_boundary(headers: &HeaderMap) -> Result<String, AppError> {
 /// block store, returning the block ids and total size, so the file is never
 /// fully buffered in memory. `Chunker::new(0)` uses the default (sub-2GB)
 /// chunk sizing; pass a known size for larger files.
-async fn stream_file_into_blocks(
+pub(crate) async fn stream_file_into_blocks(
     store: infra::storage::DynBlockStorage,
     field: &mut multer::Field<'_>,
 ) -> Result<(Vec<String>, i64), AppError> {

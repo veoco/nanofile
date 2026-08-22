@@ -93,10 +93,6 @@ pub async fn file_post_handler(
     let repo_id = &access.repo_id;
 
     let (parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
     let content_type = parts
         .headers
         .get("content-type")
@@ -107,11 +103,54 @@ pub async fn file_post_handler(
     let svc = state.file_service();
 
     if content_type.starts_with("multipart/form-data") {
-        // Check for rename operation in multipart body
-        if let Some(op) = extract_multipart_field(&bytes, "operation")
-            && op == "rename"
+        // Stream the multipart body so the file field never has to be buffered
+        // in memory: multer yields fields in boundary order, we write the
+        // `file` field's chunks into blocks on the fly and collect the small
+        // fields (operation/newname/parent_dir/replace) as text.
+        let boundary = multer::parse_boundary(&content_type)
+            .map_err(|e| AppError::Internal(format!("invalid multipart boundary: {e}")))?;
+        let mut mp = multer::Multipart::new(body.into_data_stream(), boundary);
+
+        let mut fields: HashMap<String, String> = HashMap::new();
+        let mut file_name = String::new();
+        let mut file_block_ids: Vec<String> = Vec::new();
+        let mut file_total_size: i64 = 0;
+        let mut has_file = false;
+
+        while let Some(mut field) = mp
+            .next_field()
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
         {
-            let newname = extract_multipart_field(&bytes, "newname")
+            let field_name = field.name().unwrap_or_default().to_string();
+            match field_name.as_str() {
+                "file" => {
+                    file_name = field.file_name().unwrap_or_default().to_string();
+                    let (block_ids, total_size) =
+                        crate::handler::web::upload::stream_file_into_blocks(
+                            state.block_store.clone(),
+                            &mut field,
+                        )
+                        .await?;
+                    file_block_ids = block_ids;
+                    file_total_size = total_size;
+                    has_file = true;
+                }
+                name => {
+                    let text = field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::Internal(e.to_string()))?;
+                    fields.insert(name.to_string(), text);
+                }
+            }
+        }
+
+        // A multipart body with `operation=rename` renames an existing entry.
+        if fields.get("operation").map(String::as_str) == Some("rename") {
+            let newname = fields
+                .get("newname")
+                .cloned()
                 .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
             let path = safe_normalize_path(&query.p.unwrap_or_default())
                 .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
@@ -126,66 +165,40 @@ pub async fn file_post_handler(
                 false,
             )
             .await?;
-            Ok(Json(serde_json::Value::String("success".to_string())))
-        } else {
-            // Parse multipart fields into UploadedFile
-            let mut upload = crate::service::fs::file::UploadedFile {
-                file_name: String::new(),
-                file_data: Vec::new(),
-                parent_dir: "/".to_string(),
-                replace: false,
-            };
-
-            use futures::stream;
-            use multer::Multipart as MulterMultipart;
-            let ct = parts
-                .headers
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            let boundary = multer::parse_boundary(ct)
-                .map_err(|e| AppError::Internal(format!("invalid multipart boundary: {e}")))?;
-            let stream = stream::once(async { Ok::<_, std::convert::Infallible>(bytes.clone()) });
-            let mut mp = MulterMultipart::new(stream, boundary);
-            while let Some(field) = mp
-                .next_field()
-                .await
-                .map_err(|e| AppError::Internal(e.to_string()))?
-            {
-                let field_name = field.name().unwrap_or_default().to_string();
-                match field_name.as_str() {
-                    "file" => {
-                        upload.file_name = field.file_name().unwrap_or_default().to_string();
-                        upload.file_data = field
-                            .bytes()
-                            .await
-                            .map_err(|e| AppError::Internal(e.to_string()))?
-                            .to_vec();
-                    }
-                    "parent_dir" => {
-                        let data = field
-                            .bytes()
-                            .await
-                            .map_err(|e| AppError::Internal(e.to_string()))?;
-                        upload.parent_dir = String::from_utf8(data.to_vec()).unwrap_or_default();
-                    }
-                    "replace" => {
-                        let data = field
-                            .bytes()
-                            .await
-                            .map_err(|e| AppError::Internal(e.to_string()))?;
-                        let val = String::from_utf8(data.to_vec()).unwrap_or_default();
-                        upload.replace = val.trim() == "1" || val.trim() == "true";
-                    }
-                    _ => {}
-                }
-            }
-
-            svc.upload_file(repo_id, upload, &access.user.email, access.user.user_id)
-                .await?;
-            Ok(ok_json())
+            return Ok(Json(serde_json::Value::String("success".to_string())));
         }
+
+        if !has_file {
+            return Err(AppError::BadRequest("missing file field".into()));
+        }
+
+        let parent_dir = fields
+            .get("parent_dir")
+            .cloned()
+            .unwrap_or_else(|| "/".to_string());
+        let replace = matches!(
+            fields.get("replace").map(String::as_str),
+            Some("1") | Some("true")
+        );
+
+        svc.upload_file_committed_stream(
+            repo_id,
+            &parent_dir,
+            &file_name,
+            file_block_ids,
+            file_total_size,
+            &access.user.email,
+            Some(access.user.user_id),
+            false,
+            Some(replace),
+        )
+        .await?;
+        Ok(ok_json())
     } else {
+        let bytes = axum::body::to_bytes(body, usize::MAX)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
         let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)
             .map_err(|_| AppError::BadRequest("invalid form data".into()))?;
         let path = safe_normalize_path(&query.p.unwrap_or_default())
