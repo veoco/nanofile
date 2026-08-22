@@ -1,75 +1,173 @@
+use crate::fs::core::tree::read_fs_file_data_batch;
 use crate::repository::Repositories;
 use base::common::{FsDirData, S_IFDIR, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
-use infra::entity::repo;
+use infra::entity::{commit, repo};
+use infra::storage::DynBlockStorage;
 
 const SECS_PER_DAY: i64 = 86_400;
 
 pub struct GcManager;
 
 impl GcManager {
-    /// Garbage-collect every repo that has history retention limits set.
+    /// Garbage-collect every repo that has history retention limits set, and
+    /// delete block files no longer referenced by any retained commit anywhere.
     ///
-    /// For each repo with `history_limit > 0` and/or `history_ttl_days > 0`,
-    /// keeps the newest `history_limit` commits plus any commit within the
-    /// last `history_ttl_days` days, then deletes unreachable fs objects and
-    /// the pruned commit rows. Repos with both settings at 0 are unlimited and
-    /// are left untouched.
-    pub async fn garbage_collect(repos: &Repositories) -> Result<u64, AppError> {
+    /// Blocks are content-addressed and shared across files/repos, so a block is
+    /// deletable only when it is unreachable from every retained commit's FS
+    /// tree (current head + `history_limit` / `history_ttl_days` retained
+    /// history, across all repos). Orphan blocks are `list_blocks` minus that
+    /// global live set.
+    pub async fn garbage_collect(
+        repos: &Repositories,
+        block_store: &DynBlockStorage,
+    ) -> Result<u64, AppError> {
         let now = chrono::Utc::now().timestamp();
         let all_repos = repos.repo.find_all().await?;
 
+        let mut alive_blocks: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut removed = 0u64;
+
         for repo_model in &all_repos {
-            removed += Self::prune_repo(repos, repo_model, now).await?;
+            // GC needs every commit (history_limit + TTL + reachable-set
+            // collection), so it passes `None` to fetch all rows.
+            let commits = repos
+                .commit
+                .find_by_repo_id_ordered_by_ctime_desc(&repo_model.id, None)
+                .await?;
+            if commits.is_empty() {
+                continue;
+            }
+
+            let keep = Self::compute_keep_commits(
+                &commits,
+                repo_model.history_limit,
+                repo_model.history_ttl_days,
+                now,
+            );
+            Self::collect_repo_alive_blocks(
+                repos,
+                &repo_model.id,
+                &commits,
+                &keep,
+                &mut alive_blocks,
+            )
+            .await?;
+
+            // Prune only repos that have retention limits; unlimited repos are
+            // left untouched (all of their history is live).
+            if repo_model.history_limit != 0 || repo_model.history_ttl_days != 0 {
+                removed += Self::prune_repo(repos, repo_model, &commits, &keep).await?;
+            }
         }
+
+        // Delete blocks no longer referenced by any retained commit anywhere.
+        let disk_blocks = block_store.list_blocks().await?;
+        let orphan_blocks: Vec<String> = disk_blocks
+            .iter()
+            .filter(|id| !alive_blocks.contains(*id))
+            .cloned()
+            .collect();
+        if !orphan_blocks.is_empty() {
+            // Drop cached presence so later checks re-stat disk instead of
+            // trusting the just-deleted entries.
+            block_store.invalidate_exists_cache();
+            for id in &orphan_blocks {
+                block_store.remove_block(id).await?;
+            }
+            removed += orphan_blocks.len() as u64;
+        }
+
         Ok(removed)
     }
 
-    /// Prune one repo's history according to its retention settings.
-    async fn prune_repo(
-        repos: &Repositories,
-        repo_model: &repo::Model,
+    /// Compute the set of commit ids (by DB primary key) to retain, newest-first.
+    ///
+    /// `history_limit > 0` keeps the newest N commits; `history_ttl_days > 0`
+    /// keeps any commit newer than the cutoff. With both at 0 the repo is
+    /// unlimited, so **every** commit (and every block reachable from it) is
+    /// retained — otherwise its blocks would be mis-identified as orphans.
+    fn compute_keep_commits(
+        commits: &[commit::Model],
+        history_limit: i32,
+        history_ttl_days: i32,
         now: i64,
-    ) -> Result<u64, AppError> {
-        if repo_model.history_limit == 0 && repo_model.history_ttl_days == 0 {
-            return Ok(0);
-        }
-
-        // GC needs every commit (history_limit + TTL + reachable-set collection),
-        // so it passes `None` to fetch all rows.
-        let commits = repos
-            .commit
-            .find_by_repo_id_ordered_by_ctime_desc(&repo_model.id, None)
-            .await?;
-        if commits.is_empty() {
-            return Ok(0);
-        }
-
-        // Compute the set of commits to keep. The list is newest-first, so the
-        // head commit is index 0 and is always retained.
-        let mut keep: std::collections::HashSet<i64> = std::collections::HashSet::new();
-        if repo_model.history_limit > 0 {
-            for c in commits.iter().take(repo_model.history_limit as usize) {
+    ) -> std::collections::HashSet<i64> {
+        let mut keep = std::collections::HashSet::new();
+        if history_limit > 0 {
+            for c in commits.iter().take(history_limit as usize) {
                 keep.insert(c.id);
             }
         }
-        if repo_model.history_ttl_days > 0 {
-            let cutoff = now - i64::from(repo_model.history_ttl_days) * SECS_PER_DAY;
-            for c in &commits {
+        if history_ttl_days > 0 {
+            let cutoff = now - i64::from(history_ttl_days) * SECS_PER_DAY;
+            for c in commits {
                 if c.ctime >= cutoff {
                     keep.insert(c.id);
                 }
             }
         }
+        if history_limit == 0 && history_ttl_days == 0 {
+            for c in commits {
+                keep.insert(c.id);
+            }
+        }
+        keep
+    }
 
+    /// Collect the block ids referenced by any file reachable from the retained
+    /// commits of a single repo into `alive_blocks`. Run for every repo (even
+    /// unlimited ones) so cross-repo shared blocks are never deleted.
+    async fn collect_repo_alive_blocks(
+        repos: &Repositories,
+        repo_id: &str,
+        commits: &[commit::Model],
+        keep: &std::collections::HashSet<i64>,
+        alive_blocks: &mut std::collections::HashSet<String>,
+    ) -> Result<(), AppError> {
+        if commits.is_empty() {
+            return Ok(());
+        }
+
+        // Every fs_id reachable from the retained commits' roots.
+        let mut reachable = std::collections::HashSet::new();
+        for c in commits {
+            if keep.contains(&c.id) {
+                Self::collect_fs_ids(repos, repo_id, &c.root_id, &mut reachable).await?;
+            }
+        }
+        if reachable.is_empty() {
+            return Ok(());
+        }
+
+        // Batch-fetch the reachable *file* objects and record their block ids.
+        let ids: Vec<String> = reachable.into_iter().collect();
+        let files = read_fs_file_data_batch(repos, repo_id, &ids).await?;
+        for file in files.values() {
+            for block_id in &file.block_ids {
+                alive_blocks.insert(block_id.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// Prune one repo's history according to its retention settings, deleting
+    /// fs_object and commit rows that are no longer reachable from any retained
+    /// commit. Runs only for repos with retention limits; the caller supplies
+    /// the full commit list and the already-computed kept-set.
+    async fn prune_repo(
+        repos: &Repositories,
+        repo_model: &repo::Model,
+        commits: &[commit::Model],
+        keep: &std::collections::HashSet<i64>,
+    ) -> Result<u64, AppError> {
         if keep.len() == commits.len() {
             return Ok(0);
         }
 
         // Collect fs ids reachable from the kept commits' roots.
         let mut active_fs_ids = std::collections::HashSet::new();
-        for c in &commits {
+        for c in commits {
             if keep.contains(&c.id) {
                 Self::collect_fs_ids(repos, &repo_model.id, &c.root_id, &mut active_fs_ids).await?;
             }
@@ -153,6 +251,14 @@ mod tests {
     use super::*;
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
     use std::sync::Arc;
+
+    /// A throwaway filesystem-backed block store. Returns the `TempDir` so it
+    /// stays alive for the whole test.
+    fn temp_block_store() -> (tempfile::TempDir, DynBlockStorage) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = infra::storage::new_block_store(dir.path());
+        (dir, store)
+    }
 
     /// In-memory SQLite with the minimal schema + a seeded repo/commits/
     /// fs_objects for GC.
@@ -282,6 +388,7 @@ mod tests {
     async fn test_gc_prunes_old_history_and_orphaned_fs_objects() {
         let db = setup_gc_test_db(1, 0).await;
         let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
 
         // Three commits, newest first by ctime:
         //   c1 (root-c1 → fileA), c2 (root-c2), c3 (root-c3 → fileB)
@@ -295,7 +402,7 @@ mod tests {
             &db,
             "fileA",
             1,
-            r#"{"block_ids":["aaaa"],"size":10,"obj_type":1,"version":1}"#,
+            r#"{"block_ids":["aaaa"],"size":10,"type":1,"version":1}"#,
         )
         .await;
         insert_fs_object(&db, "root-c3", 3, r#"{"dirents":[{"id":"fileB","mode":33188,"modifier":"u1","mtime":1000,"name":"b.txt","size":20}],"type":3,"version":1}"#).await;
@@ -303,11 +410,11 @@ mod tests {
             &db,
             "fileB",
             1,
-            r#"{"block_ids":["bbbb"],"size":20,"obj_type":1,"version":1}"#,
+            r#"{"block_ids":["bbbb"],"size":20,"type":1,"version":1}"#,
         )
         .await;
 
-        let removed = GcManager::garbage_collect(&repos)
+        let removed = GcManager::garbage_collect(&repos, &store)
             .await
             .expect("gc succeeds");
         // Only the two fs objects reachable solely from c3 are orphaned.
@@ -325,12 +432,13 @@ mod tests {
     async fn test_gc_skips_unlimited_repos() {
         let db = setup_gc_test_db(0, 0).await;
         let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
 
         insert_commit(&db, "c1", "root-c1", 3000).await;
         insert_commit(&db, "c2", "root-c2", 1000).await;
         insert_fs_object(&db, "root-c1", 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
 
-        let removed = GcManager::garbage_collect(&repos)
+        let removed = GcManager::garbage_collect(&repos, &store)
             .await
             .expect("gc succeeds");
         assert_eq!(removed, 0);
@@ -344,6 +452,7 @@ mod tests {
     async fn test_gc_prunes_by_ttl() {
         let db = setup_gc_test_db(0, 1).await; // 1-day TTL
         let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
 
         // now (today) is used by GC; old commit is > 1 day old, new one is recent.
         insert_commit(&db, "c-new", "root-new", chrono::Utc::now().timestamp()).await;
@@ -359,17 +468,105 @@ mod tests {
             &db,
             "fileA",
             1,
-            r#"{"block_ids":["aaaa"],"size":10,"obj_type":1,"version":1}"#,
+            r#"{"block_ids":["aaaa"],"size":10,"type":1,"version":1}"#,
         )
         .await;
         insert_fs_object(&db, "root-old", 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
 
-        let removed = GcManager::garbage_collect(&repos)
+        let removed = GcManager::garbage_collect(&repos, &store)
             .await
             .expect("gc succeeds");
         // root-old is orphaned (only reachable from the pruned commit).
         assert_eq!(removed, 1);
         assert_eq!(count_rows(&db, "commits").await, 1);
         assert_eq!(count_rows(&db, "fs_objects").await, 2);
+    }
+
+    /// An orphan block (not referenced by any surviving file) is deleted, while
+    /// a block referenced by a live file object survives.
+    #[tokio::test]
+    async fn test_gc_deletes_orphan_block_keeps_referenced_block() {
+        let db = setup_gc_test_db(0, 0).await; // unlimited → nothing pruned
+        let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+
+        let kept_id = store.write_block(b"kept content").await.unwrap();
+        let orphan_id = store.write_block(b"orphan content").await.unwrap();
+
+        insert_commit(&db, "c1", "root-c1", 3000).await;
+        insert_fs_object(
+            &db,
+            "root-c1",
+            3,
+            r#"{"dirents":[{"id":"fileA","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#,
+        )
+        .await;
+        let kept_json = format!(r#"{{"block_ids":["{kept_id}"],"size":10,"type":1,"version":1}}"#);
+        insert_fs_object(&db, "fileA", 1, &kept_json).await;
+
+        let removed = GcManager::garbage_collect(&repos, &store)
+            .await
+            .expect("gc succeeds");
+        assert_eq!(removed, 1, "only the orphan block should be removed");
+        assert!(
+            store.has_block(&kept_id).await,
+            "referenced block must survive"
+        );
+        assert!(
+            !store.has_block(&orphan_id).await,
+            "orphan block must be deleted"
+        );
+    }
+
+    /// A block referenced by a retained commit's file is not deleted even when
+    /// another (older) commit that also referenced it is pruned — i.e. shared
+    /// blocks survive as long as any final reachable reference remains.
+    #[tokio::test]
+    async fn test_gc_keeps_block_referenced_by_retained_commit() {
+        let db = setup_gc_test_db(1, 0).await; // history_limit = 1
+        let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+
+        let shared_id = store.write_block(b"shared content").await.unwrap();
+        let orphan_id = store.write_block(b"orphan content").await.unwrap();
+        let shared_json =
+            format!(r#"{{"block_ids":["{shared_id}"],"size":10,"type":1,"version":1}}"#);
+
+        // Older commit (pruned by history_limit=1) references the block via fileA.
+        insert_commit(&db, "c1", "root-c1", 1000).await;
+        insert_fs_object(
+            &db,
+            "root-c1",
+            3,
+            r#"{"dirents":[{"id":"fileA","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#,
+        )
+        .await;
+        insert_fs_object(&db, "fileA", 1, &shared_json).await;
+
+        // Retained head commit still references the block via fileB.
+        insert_commit(&db, "c2", "root-c2", 3000).await;
+        insert_fs_object(
+            &db,
+            "root-c2",
+            3,
+            r#"{"dirents":[{"id":"fileB","mode":33188,"modifier":"u1","mtime":1000,"name":"b.txt","size":10}],"type":3,"version":1}"#,
+        )
+        .await;
+        insert_fs_object(&db, "fileB", 1, &shared_json).await;
+
+        let removed = GcManager::garbage_collect(&repos, &store)
+            .await
+            .expect("gc succeeds");
+        // 2 orphaned fs rows (root-c1, fileA) + 1 orphan block.
+        assert_eq!(removed, 3);
+        // Shared block is still referenced by c2's fileB → must survive.
+        assert!(
+            store.has_block(&shared_id).await,
+            "shared block must survive"
+        );
+        assert!(
+            !store.has_block(&orphan_id).await,
+            "orphan block must be deleted"
+        );
     }
 }

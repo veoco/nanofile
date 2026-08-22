@@ -170,6 +170,7 @@ impl AppState {
             notification_manager.as_ref(),
             &password_manager,
             &config.gc,
+            &block_store,
             indexer.as_ref(),
             &temp_file_manager,
         );

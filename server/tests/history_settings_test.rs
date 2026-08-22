@@ -6,6 +6,14 @@ use common::TestFixture;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use server::fs::core::GcManager;
 
+/// A throwaway filesystem-backed block store for GC calls. These pruned-history
+/// tests never write blocks, so an empty store suffices.
+fn temp_block_store() -> (tempfile::TempDir, infra::storage::DynBlockStorage) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = infra::storage::new_block_store(dir.path());
+    (dir, store)
+}
+
 /// Insert a single fs object row directly into the DB.
 async fn insert_fs_obj(
     db: &sea_orm::DatabaseConnection,
@@ -155,6 +163,7 @@ async fn test_update_repo_history_settings_rejects_negative() {
 #[tokio::test]
 async fn test_gc_prunes_by_history_limit() {
     let f = TestFixture::new().await;
+    let (_dir, block_store) = temp_block_store();
     let db = &*f.server.db;
     let now = chrono::Utc::now().timestamp();
 
@@ -184,7 +193,9 @@ async fn test_gc_prunes_by_history_limit() {
 
     set_history(db, &f.repo_id, 2, 0).await;
 
-    let removed = GcManager::garbage_collect(&f.server.repos).await.unwrap();
+    let removed = GcManager::garbage_collect(&f.server.repos, &block_store)
+        .await
+        .unwrap();
     assert_eq!(
         removed, 1,
         "only the oldest root fs object should be removed"
@@ -233,6 +244,7 @@ async fn test_gc_prunes_by_history_limit() {
 #[tokio::test]
 async fn test_gc_prunes_by_ttl() {
     let f = TestFixture::new().await;
+    let (_dir, block_store) = temp_block_store();
     let db = &*f.server.db;
     let now = chrono::Utc::now().timestamp();
 
@@ -260,7 +272,9 @@ async fn test_gc_prunes_by_ttl() {
 
     set_history(db, &f.repo_id, 0, 5).await;
 
-    let removed = GcManager::garbage_collect(&f.server.repos).await.unwrap();
+    let removed = GcManager::garbage_collect(&f.server.repos, &block_store)
+        .await
+        .unwrap();
     assert_eq!(
         removed, 1,
         "only the stale root fs object should be removed"
@@ -298,6 +312,7 @@ async fn test_gc_prunes_by_ttl() {
 #[tokio::test]
 async fn test_gc_noop_when_unlimited() {
     let f = TestFixture::new().await;
+    let (_dir, block_store) = temp_block_store();
     let db = &*f.server.db;
     let now = chrono::Utc::now().timestamp();
 
@@ -325,7 +340,9 @@ async fn test_gc_noop_when_unlimited() {
     // history_limit = 0, history_ttl_days = 0 → unlimited.
     set_history(db, &f.repo_id, 0, 0).await;
 
-    let removed = GcManager::garbage_collect(&f.server.repos).await.unwrap();
+    let removed = GcManager::garbage_collect(&f.server.repos, &block_store)
+        .await
+        .unwrap();
     assert_eq!(removed, 0);
 
     let commits = f
@@ -350,6 +367,7 @@ async fn test_gc_noop_when_unlimited() {
 /// GC's reachability walk descends through nested directories (BFS batching).
 #[tokio::test]
 async fn test_gc_collects_nested_fs_ids() {
+    let (_dir, block_store) = temp_block_store();
     use infra::serialization::S_IFDIR;
     use infra::serialization::S_IFREG;
 
@@ -443,7 +461,9 @@ async fn test_gc_collects_nested_fs_ids() {
 
     set_history(db, &f.repo_id, 1, 0).await;
 
-    let removed = GcManager::garbage_collect(&f.server.repos).await.unwrap();
+    let removed = GcManager::garbage_collect(&f.server.repos, &block_store)
+        .await
+        .unwrap();
     assert_eq!(removed, 2, "old root and old file should be removed");
 
     let commits = f

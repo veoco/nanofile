@@ -14,6 +14,7 @@ use crate::repository::Repositories;
 use crate::scheduler::{Scheduler, TaskOutput};
 use infra::config::GcConfig;
 use infra::crypto::password_manager::PasswordManager;
+use infra::storage::DynBlockStorage;
 
 /// Register the standard startup background tasks on the shared scheduler.
 ///
@@ -26,6 +27,7 @@ pub fn register_default_tasks(
     notification_manager: Option<&NotificationManager>,
     password_manager: &Arc<PasswordManager>,
     gc_config: &GcConfig,
+    block_store: &DynBlockStorage,
     indexer: Option<&TextIndexer>,
     temp_file_manager: &TempFileManager,
 ) {
@@ -113,12 +115,14 @@ pub fn register_default_tasks(
     // Periodic: garbage collection (configurable interval).
     if gc_config.enabled {
         let repos = repos.clone();
+        let block_store = block_store.clone();
         scheduler.spawn_periodic("gc", gc_config.interval_hours * 3600, move || {
             let repos = repos.clone();
+            let block_store = block_store.clone();
             async move {
-                match GcManager::garbage_collect(&repos).await {
+                match GcManager::garbage_collect(&repos, &block_store).await {
                     Ok(count) if count > 0 => TaskOutput::success(
-                        format!("GC removed {count} unreferenced FS objects"),
+                        format!("GC removed {count} unreferenced objects/blocks"),
                         Some(count),
                     ),
                     Ok(_) => TaskOutput::success("GC completed: nothing to remove", None),
