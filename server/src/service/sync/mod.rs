@@ -144,18 +144,21 @@ impl SyncService {
         repo_id: &str,
         token: &str,
     ) -> Result<FolderPermResult, AppError> {
-        let token_valid = self
+        let token_record = self
             .repos
             .sync_token
             .find_by_token_and_repo(token, repo_id)
-            .await?
-            .is_some();
+            .await?;
 
-        if token_valid {
-            let memberships = self.repos.member.find_by_repo_id(repo_id).await?;
-            let permission = memberships
-                .first()
-                .map(|m| m.permission.clone())
+        if let Some(record) = token_record {
+            // Look up the token holder's own permission with a targeted query
+            // instead of loading every repo member and taking the first.
+            let permission = self
+                .repos
+                .member
+                .find_by_repo_and_user(repo_id, record.user_id)
+                .await?
+                .map(|m| m.permission)
                 .unwrap_or_else(|| "rw".to_string());
             Ok(FolderPermResult {
                 valid: true,

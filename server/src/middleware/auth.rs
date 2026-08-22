@@ -2,6 +2,9 @@ use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
 };
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::AppState;
 use crate::repository::Repositories;
@@ -73,6 +76,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
                 && let Ok(params) =
                     serde_urlencoded::from_str::<std::collections::HashMap<String, String>>(query)
                 && let Some(client_id) = params.get("client_id")
+                && should_write_peer_info(record.id)
             {
                 let now = chrono::Utc::now().timestamp();
                 let peer_ip = parts
@@ -379,4 +383,36 @@ pub fn extract_sync_token(
     }
 
     Err(AppError::Unauthorized)
+}
+
+/// How often a sync token's peer info may be persisted to the DB at most.
+/// A seafile client that carries `client_id` on every `/seafhttp/` request
+/// would otherwise turn each request into a write; SQLite writes serialize,
+/// so this bounds the cost while keeping `last_sync_time` within ~1 minute of
+/// accuracy.
+const PEER_INFO_WRITE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Last persisted timestamp per sync-token id, so the write throttle above has
+/// shared state across requests. Entries older than the interval are pruned on
+/// insert, so the map stays bounded to tokens seen in the last minute.
+static PEER_INFO_LAST_WRITE: LazyLock<Mutex<HashMap<i32, Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Whether peer info for `token_id` may be written now (throttled to at most
+/// once per [`PEER_INFO_WRITE_INTERVAL`]).
+fn should_write_peer_info(token_id: i32) -> bool {
+    let mut last_writes = PEER_INFO_LAST_WRITE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    if last_writes
+        .get(&token_id)
+        .is_some_and(|&last| now.duration_since(last) < PEER_INFO_WRITE_INTERVAL)
+    {
+        return false;
+    }
+    // Prune entries that have aged out of the interval.
+    last_writes.retain(|_, last| now.duration_since(*last) < PEER_INFO_WRITE_INTERVAL);
+    last_writes.insert(token_id, now);
+    true
 }

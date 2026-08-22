@@ -8,6 +8,7 @@
 
 pub mod activity;
 pub mod api_token;
+pub mod auth_cache;
 pub mod avatar;
 pub mod client_login_token;
 pub mod commit;
@@ -139,8 +140,12 @@ impl Repositories {
             avatar: Arc::new(DbAvatarRepository::new(db.clone())),
             invitation_code: Arc::new(DbInvitationCodeRepository::new(db.clone())),
             locked_file: Arc::new(DbLockedFileRepository::new(db.clone())),
-            sync_token: Arc::new(DbSyncTokenRepository::new(db.clone())),
-            api_token: Arc::new(DbApiTokenRepository::new(db.clone())),
+            sync_token: Arc::new(auth_cache::CachingSyncTokenRepository::new(Arc::new(
+                DbSyncTokenRepository::new(db.clone()),
+            ))),
+            api_token: Arc::new(auth_cache::CachingApiTokenRepository::new(Arc::new(
+                DbApiTokenRepository::new(db.clone()),
+            ))),
             s2fa_token: Arc::new(DbS2faTokenRepository::new(db.clone())),
             user_2fa: Arc::new(DbUser2faRepository::new(db.clone())),
             sso_login_token: Arc::new(DbSsoLoginTokenRepository::new(db.clone())),
