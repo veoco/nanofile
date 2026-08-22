@@ -88,7 +88,7 @@ pub async fn check_blocks(
                 }
             }
         })
-        .buffered(8)
+        .buffered(16)
         .filter_map(|x| async move { x })
         .collect()
         .await;
@@ -174,15 +174,9 @@ pub async fn get_block_map(
     let block_sizes: Vec<i64> = stream::iter(block_id_strs)
         .map(move |bid| {
             let store = block_store.clone();
-            async move {
-                if store.has_block(&bid).await {
-                    store.block_size(&bid).await.unwrap_or(0)
-                } else {
-                    0
-                }
-            }
+            async move { store.block_size(&bid).await.unwrap_or(0) }
         })
-        .buffered(8)
+        .buffered(16)
         .collect()
         .await;
 

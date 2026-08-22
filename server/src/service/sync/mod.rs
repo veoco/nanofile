@@ -729,7 +729,7 @@ impl SyncService {
     }
 
     async fn check_blocks_concurrent(&self, block_ids: &[String]) -> bool {
-        const BATCH_SIZE: usize = 8;
+        const BATCH_SIZE: usize = 16;
         for chunk in block_ids.chunks(BATCH_SIZE) {
             let futures: Vec<_> = chunk
                 .iter()
