@@ -413,7 +413,9 @@ impl FileService {
             )
             .await?;
 
-        // Full-text index the uploaded file (web uploads index lazily on read).
+        // Full-text index the uploaded file in the background (web uploads
+        // index lazily on read), so a large text file doesn't stall the upload
+        // response while it waits on the tokenize + index write.
         if let Some(indexer) = &self.indexer {
             let full_path = if parent_dir.ends_with('/') {
                 format!("{parent_dir}{file_name}")
@@ -422,17 +424,24 @@ impl FileService {
             } else {
                 format!("{parent_dir}/{file_name}")
             };
-            if crate::indexer::is_indexable_text(&file_name, &file_data) {
-                let content = String::from_utf8_lossy(&file_data);
-                if let Err(e) = indexer
-                    .index_file_async(repo_id, &full_path, &file_name, &content)
-                    .await
+            let idx = indexer.clone();
+            let repo_id = repo_id.to_string();
+            let file_name = file_name.to_string();
+            let is_text = crate::indexer::is_indexable_text(&file_name, &file_data);
+            let content = String::from_utf8_lossy(&file_data).into_owned();
+            tokio::spawn(async move {
+                if is_text {
+                    if let Err(e) = idx
+                        .index_file_async(&repo_id, &full_path, &file_name, &content)
+                        .await
+                    {
+                        tracing::warn!("Failed to index file {file_name}: {e}");
+                    }
+                } else if replace && let Err(e) = idx.delete_file_async(&repo_id, &full_path).await
                 {
-                    tracing::warn!("Failed to index file {file_name}: {e}");
+                    tracing::warn!("Failed to delete index for {file_name}: {e}");
                 }
-            } else if replace && let Err(e) = indexer.delete_file_async(repo_id, &full_path).await {
-                tracing::warn!("Failed to delete index for {file_name}: {e}");
-            }
+            });
         }
 
         Ok(())
@@ -1273,7 +1282,7 @@ impl FileService {
                 let store = self.block_store.clone();
                 async move { store.has_block(&bid).await }
             })
-            .buffered(8)
+            .buffered(16)
             .collect()
             .await;
         present.into_iter().filter(|&ok| ok).count() as i64
