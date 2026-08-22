@@ -1,9 +1,22 @@
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::crypto::fs_id::sha1_hex;
 use crate::crypto::random_key::{decrypt_block, encrypt_block};
 use crate::storage::BlockStorageBackend;
+
+/// Upper bound on the number of block ids held in the existence cache. Blocks
+/// are content-addressed and (except under GC) immutable, so a large common
+/// block id set is very common; this cap bounds memory when it grows unbounded.
+const EXISTS_CACHE_CAPACITY: usize = 100_000;
+
+/// Time-to-live for a cached "block exists" entry. Only blocks removed by GC or
+/// `remove_block` stop existing, and GC runs far less often (24h by default),
+/// so a short TTL is enough to bound any false-positive window.
+const EXISTS_CACHE_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 pub struct BlockStorage {
@@ -12,6 +25,12 @@ pub struct BlockStorage {
     /// static after the first write, so we create them once instead of stat-ing
     /// them on every block write.
     dirs_ready: tokio::sync::OnceCell<()>,
+    /// Cache of recently-confirmed-existing block ids → confirmation time.
+    /// Content addressing makes blocks immutable, so a presence result never
+    /// goes stale except under `remove_block`/GC; the TTL + capacity bound the
+    /// worst case. Kept behind a short-lived `Mutex` lock (never held across an
+    /// `.await`), so it cannot block the runtime.
+    exists_cache: Mutex<HashMap<String, Instant>>,
 }
 
 impl BlockStorage {
@@ -19,7 +38,35 @@ impl BlockStorage {
         Self {
             base_dir,
             dirs_ready: tokio::sync::OnceCell::new(),
+            exists_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Drop entries older than [`EXISTS_CACHE_TTL`]. Called under the cache lock;
+    /// `elapsed()` (not `duration_since`) so a never-set entry cannot panic.
+    fn evict_expired(cache: &mut HashMap<String, Instant>) {
+        cache.retain(|_, t| t.elapsed() < EXISTS_CACHE_TTL);
+    }
+
+    fn exists_cache_contains(&self, block_id: &str) -> bool {
+        let mut cache = self.exists_cache.lock().unwrap();
+        Self::evict_expired(&mut cache);
+        cache.contains_key(block_id)
+    }
+
+    fn exists_cache_insert(&self, block_id: &str) {
+        let mut cache = self.exists_cache.lock().unwrap();
+        Self::evict_expired(&mut cache);
+        if cache.len() >= EXISTS_CACHE_CAPACITY {
+            // Capacity reached with all entries still fresh: drop the whole
+            // cache. Cheaper than an LRU and only costs a few extra stats.
+            cache.clear();
+        }
+        cache.insert(block_id.to_string(), Instant::now());
+    }
+
+    fn exists_cache_remove(&self, block_id: &str) {
+        self.exists_cache.lock().unwrap().remove(block_id);
     }
 
     /// Block IDs are content-addressed SHA-1 hashes: exactly 40 lowercase hex.
@@ -85,8 +132,15 @@ impl BlockStorageBackend for BlockStorage {
         if !Self::is_valid_block_id(block_id) {
             return false;
         }
+        if self.exists_cache_contains(block_id) {
+            return true;
+        }
         let path = self.block_path(block_id);
-        tokio::fs::try_exists(&path).await.unwrap_or(false)
+        let exists = tokio::fs::try_exists(&path).await.unwrap_or(false);
+        if exists {
+            self.exists_cache_insert(block_id);
+        }
+        exists
     }
 
     async fn read_block(&self, block_id: &str) -> Result<Vec<u8>, std::io::Error> {
@@ -101,12 +155,16 @@ impl BlockStorageBackend for BlockStorage {
 
     async fn write_block(&self, data: &[u8]) -> Result<String, std::io::Error> {
         let block_id = sha1_hex(data);
+        if self.exists_cache_contains(&block_id) {
+            return Ok(block_id);
+        }
         let path = self.block_path(&block_id);
 
         // Content-addressed storage: identical content yields the same SHA-1,
         // so skip the write when the block already exists. Re-uploads and sync
         // retries hit this path constantly.
         if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            self.exists_cache_insert(&block_id);
             return Ok(block_id);
         }
 
@@ -115,6 +173,7 @@ impl BlockStorageBackend for BlockStorage {
         self.ensure_dirs().await?;
 
         tokio::fs::write(&path, data).await?;
+        self.exists_cache_insert(&block_id);
         Ok(block_id)
     }
 
@@ -128,13 +187,18 @@ impl BlockStorageBackend for BlockStorage {
         let path = self.block_path(block_id);
 
         // Same dedup semantics as `write_block`.
+        if self.exists_cache_contains(block_id) {
+            return Ok(block_id.to_string());
+        }
         if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            self.exists_cache_insert(block_id);
             return Ok(block_id.to_string());
         }
 
         self.ensure_dirs().await?;
 
         tokio::fs::write(&path, data).await?;
+        self.exists_cache_insert(block_id);
         Ok(block_id.to_string())
     }
 
@@ -146,7 +210,14 @@ impl BlockStorageBackend for BlockStorage {
         if path.exists() {
             tokio::fs::remove_file(&path).await?;
         }
+        // Invalidate the cached presence regardless: even if the file was
+        // already gone, a stale "exists" entry must not survive a remove.
+        self.exists_cache_remove(block_id);
         Ok(())
+    }
+
+    fn invalidate_exists_cache(&self) {
+        self.exists_cache.lock().unwrap().clear();
     }
 
     async fn block_size(&self, block_id: &str) -> Result<i64, std::io::Error> {
@@ -157,7 +228,9 @@ impl BlockStorageBackend for BlockStorage {
             ));
         }
         let path = self.block_path(block_id);
-        tokio::fs::metadata(&path).await.map(|m| m.len() as i64)
+        let size = tokio::fs::metadata(&path).await.map(|m| m.len() as i64)?;
+        self.exists_cache_insert(block_id);
+        Ok(size)
     }
 
     async fn list_blocks(&self) -> Result<Vec<String>, std::io::Error> {
@@ -289,5 +362,31 @@ mod tests {
         let store = BlockStorage::new(PathBuf::from("/tmp"));
         let p = store.block_path("abcdef");
         assert_eq!(p, Path::new("/tmp/ab/abcdef"));
+    }
+
+    /// `remove_block` must invalidate the cached presence entry, not just delete
+    /// the file — otherwise a subsequent `has_block` returns a stale "exists".
+    #[tokio::test]
+    async fn exists_cache_clear_on_remove() {
+        let (_root, store) = temp_storage();
+        let id = store.write_block(b"cache-me").await.unwrap();
+        assert!(store.has_block(&id).await); // populates the existence cache
+        store.remove_block(&id).await.unwrap();
+        assert!(
+            !store.has_block(&id).await,
+            "cached presence must be dropped"
+        );
+    }
+
+    /// `invalidate_exists_cache` drops every cached presence so the next check
+    /// re-stats disk instead of trusting a stale entry.
+    #[tokio::test]
+    async fn invalidate_exists_cache_forces_recheck() {
+        let (_root, store) = temp_storage();
+        let id = store.write_block(b"cache-me").await.unwrap();
+        assert!(store.has_block(&id).await); // populates the existence cache
+        store.invalidate_exists_cache();
+        store.remove_block(&id).await.unwrap();
+        assert!(!store.has_block(&id).await, "recheck after invalidation");
     }
 }

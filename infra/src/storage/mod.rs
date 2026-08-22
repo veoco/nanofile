@@ -37,6 +37,12 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
 
     /// List all block IDs stored on disk.
     async fn list_blocks(&self) -> Result<Vec<String>, std::io::Error>;
+
+    /// Drop any cached "block exists" results. Called before a batch of blocks
+    /// is deleted (e.g. by GC) so a later [`Self::has_block`] re-stats disk
+    /// instead of trusting a stale presence entry. No-op for backends that keep
+    /// no presence cache.
+    fn invalidate_exists_cache(&self) {}
 }
 
 /// Convenience alias for an Arc-wrapped block storage backend.
