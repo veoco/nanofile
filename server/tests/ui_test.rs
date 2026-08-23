@@ -1312,3 +1312,67 @@ async fn test_password_reset_full_flow() {
         "reused token must render the error page"
     );
 }
+
+// ============================================================================
+// Left-panel repo list cache
+// ============================================================================
+
+/// The left panel is served from a per-user TTL cache. A repo created or
+/// deleted via the API must show up on the next page render (the write handler
+/// clears the cache), rather than being masked by a stale cached list.
+#[tokio::test]
+async fn test_left_panel_reflects_repo_changes() {
+    let fixture = TestFixture::new().await;
+    let client = login_client(&fixture).await;
+    let base = fixture.server.base_url.clone();
+
+    // Warm the cache: /settings/ renders the left panel with the fixture repo.
+    let resp = client
+        .get(format!("{}/settings/", base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains(&format!("data-repo-id=\"{}\"", fixture.repo_id)),
+        "left panel should list the fixture repo"
+    );
+
+    // Create a second repo via API → the create handler clears the cache.
+    let create = fixture
+        .client
+        .create_repo(&fixture.api_token, "second-repo")
+        .await;
+    assert_eq!(create.status(), 201, "create_repo should return 201");
+    let repo_info: serde_json::Value = create.json().await.unwrap();
+    let second_id = repo_info["id"].as_str().unwrap().to_string();
+
+    let resp = client
+        .get(format!("{}/settings/", base))
+        .send()
+        .await
+        .unwrap();
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains(&format!("data-repo-id=\"{}\"", second_id)),
+        "created repo must appear in the left panel"
+    );
+
+    // Delete it via API → cache cleared → gone from the next render.
+    let del = fixture
+        .client
+        .delete_repo(&fixture.api_token, &second_id)
+        .await;
+    assert_eq!(del.status(), 200, "delete_repo should succeed");
+    let resp = client
+        .get(format!("{}/settings/", base))
+        .send()
+        .await
+        .unwrap();
+    let body = resp.text().await.unwrap();
+    assert!(
+        !body.contains(&format!("data-repo-id=\"{}\"", second_id)),
+        "deleted repo must disappear from the left panel"
+    );
+}

@@ -8,6 +8,7 @@ pub mod client_login;
 pub mod ctx;
 pub mod files;
 pub mod invitations;
+pub mod left_panel_cache;
 pub mod repos;
 pub mod search;
 pub mod settings;

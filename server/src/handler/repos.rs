@@ -108,6 +108,8 @@ pub async fn create_repo(
     )
     .await?;
 
+    state.left_panel_cache.clear_all();
+
     Ok((StatusCode::CREATED, Json(repo_info)))
 }
 
@@ -155,6 +157,8 @@ pub async fn rename_repo(
     )
     .await?;
 
+    state.left_panel_cache.clear_all();
+
     Ok(Json(serde_json::Value::String("success".to_string())))
 }
 
@@ -194,6 +198,8 @@ pub async fn update_repo(
         update.history_ttl_days,
     )
     .await?;
+
+    state.left_panel_cache.clear_all();
 
     Ok(Json(serde_json::Value::String("success".to_string())))
 }
@@ -310,6 +316,8 @@ pub async fn delete_repo(
 ) -> Result<Json<serde_json::Value>, AppError> {
     service::RepoService::delete_repo(state.db.as_ref(), &state.repos, &repo_id, auth.user_id)
         .await?;
+
+    state.left_panel_cache.clear_all();
 
     Ok(Json(serde_json::Value::String("success".to_string())))
 }
@@ -443,6 +451,8 @@ pub async fn delete_repo_v21(
     service::RepoService::delete_repo(state.db.as_ref(), &state.repos, &repo_id, auth.user_id)
         .await?;
 
+    state.left_panel_cache.clear_all();
+
     Ok(Json(serde_json::Value::String("success".to_string())))
 }
 
@@ -491,5 +501,6 @@ pub async fn create_default_repo(
             repo_info.id
         }
     };
+    state.left_panel_cache.clear_all();
     Ok(Json(serde_json::json!({"repo_id": id})))
 }

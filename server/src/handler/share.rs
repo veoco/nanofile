@@ -98,6 +98,8 @@ pub async fn beshare_repo(
     )
     .await?;
 
+    state.left_panel_cache.clear_all();
+
     if result.already_shared {
         Ok(Json(
             serde_json::json!({"success": true, "already_shared": true}),
@@ -156,6 +158,8 @@ pub async fn delete_share(
         &req.user,
     )
     .await?;
+
+    state.left_panel_cache.clear_all();
 
     Ok(ok_json())
 }

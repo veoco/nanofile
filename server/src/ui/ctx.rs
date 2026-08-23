@@ -19,8 +19,10 @@ pub struct PageCtx {
 /// Build the common page context (I18n, template urls, CSRF token and the
 /// left-panel repo list) for an authenticated web UI handler.
 pub async fn build_page_ctx(state: &AppState, user: &WebUser) -> Result<PageCtx, AppError> {
-    let left_panel_repos =
-        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let left_panel_repos = state
+        .left_panel_cache
+        .get_for_user(&state.repos, user.user_id)
+        .await?;
     let csrf_token =
         crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     Ok(PageCtx {

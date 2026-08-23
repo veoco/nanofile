@@ -277,8 +277,10 @@ pub async fn devices_page(
         &state.csrf_secret,
         &user.session_token,
     ));
-    let left_panel_repos =
-        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let left_panel_repos = state
+        .left_panel_cache
+        .get_for_user(&state.repos, user.user_id)
+        .await?;
 
     let tpl = DevicesTemplate {
         urls: crate::static_assets::template_urls(),
@@ -422,8 +424,10 @@ async fn render_settings_error(
         &state.csrf_secret,
         &user.session_token,
     ));
-    let left_panel_repos =
-        crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id).await?;
+    let left_panel_repos = state
+        .left_panel_cache
+        .get_for_user(&state.repos, user.user_id)
+        .await?;
     let tpl = SettingsTemplate {
         urls: crate::static_assets::template_urls(),
         t: I18n::get(user.language.as_deref()),

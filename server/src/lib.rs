@@ -83,6 +83,8 @@ pub struct AppState {
     /// task_id. Stored on AppState because `admin_service()` builds a new
     /// `AdminService` per request.
     pub reindex_tasks: Arc<std::sync::Mutex<HashMap<String, ReindexProgress>>>,
+    /// Per-user TTL cache of the left-panel repo list (web UI).
+    pub left_panel_cache: Arc<crate::ui::left_panel_cache::LeftPanelRepoCache>,
 }
 
 /// Progress of a background reindex task (`POST /api2/reindex/`).
@@ -192,6 +194,7 @@ impl AppState {
             password_manager,
             scheduler,
             reindex_tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            left_panel_cache: Arc::new(crate::ui::left_panel_cache::LeftPanelRepoCache::default()),
         }
     }
 

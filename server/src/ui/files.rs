@@ -1027,9 +1027,10 @@ async fn serve_file(
             .name;
         let raw_parent = parent_path_from(&path);
         let parent_path = raw_parent.trim_start_matches('/').to_string();
-        let left_panel_repos =
-            crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id)
-                .await?;
+        let left_panel_repos = state
+            .left_panel_cache
+            .get_for_user(&state.repos, user.user_id)
+            .await?;
         let tpl = PreviewMediaTemplate {
             urls: crate::static_assets::template_urls(),
             t: I18n::get(user.language.as_deref()),
@@ -1075,9 +1076,10 @@ async fn serve_file(
         let raw_parent = parent_path_from(&path);
         let parent_path = raw_parent.trim_start_matches('/').to_string();
 
-        let left_panel_repos =
-            crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id)
-                .await?;
+        let left_panel_repos = state
+            .left_panel_cache
+            .get_for_user(&state.repos, user.user_id)
+            .await?;
         let tpl = PreviewImageTemplate {
             urls: crate::static_assets::template_urls(),
             t: I18n::get(user.language.as_deref()),
@@ -1129,9 +1131,10 @@ async fn serve_file(
             .map(format_size)
             .unwrap_or_else(|_| "?".to_string());
 
-        let left_panel_repos =
-            crate::service::repo::service::load_left_panel_repos(&state.repos, user.user_id)
-                .await?;
+        let left_panel_repos = state
+            .left_panel_cache
+            .get_for_user(&state.repos, user.user_id)
+            .await?;
         let tpl = PreviewTextTemplate {
             urls: crate::static_assets::template_urls(),
             t: I18n::get(user.language.as_deref()),

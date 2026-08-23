@@ -297,6 +297,8 @@ pub async fn create_sub_repo(
         .create_sub_repo(repo_id, &path, &access.user.email, access.user.user_id)
         .await?;
 
+    state.left_panel_cache.clear_all();
+
     Ok(Json(result))
 }
 
