@@ -145,6 +145,15 @@ async fn try_handle_chunked(
         )));
     }
 
+    // Cap a single chunk so one request can't buffer arbitrarily many bytes
+    // (a client could otherwise send the whole file as one Content-Range).
+    let max_chunk_bytes = state.config.server.max_chunk_size_mb * 1024 * 1024;
+    if max_chunk_bytes > 0 && expected_len as u64 > max_chunk_bytes {
+        return Err(AppError::BadRequest(format!(
+            "chunk size {expected_len} exceeds per-chunk limit {max_chunk_bytes}"
+        )));
+    }
+
     // Check total file size against server limit
     let max_bytes = state.config.server.max_upload_size_mb * 1024 * 1024;
     if max_bytes > 0 && file_size > max_bytes {
@@ -184,16 +193,44 @@ async fn try_handle_chunked(
         .await
         .map_err(|e| AppError::Internal(format!("chunk write failed: {e}")))?;
 
+    // In-transit streaming: feed in-order chunks through the upload's CDC
+    // chunker so a fully in-order upload commits on the final chunk without
+    // re-reading the temp file. Out-of-order chunks disable streaming and the
+    // final chunk falls back to the temp-file assembly below. The result is
+    // ignored — `Broken` is recorded internally and short-circuits later feeds.
+    let _ = temp_mgr
+        .feed_stream(&state.block_store, repo_id, &file_path, start, file_data)
+        .await;
+
     // Intermediate chunk — tell the client to keep sending
     if end != file_size - 1 {
         return Ok(Some(ok_json()));
     }
 
-    // ── Final chunk: stream the assembled file into blocks and commit ──
-    // Stream the temp file through the CDC chunker so the whole file never
-    // has to be buffered in memory; `write_stream_blocks` writes blocks to
-    // the content-addressed store and `upload_file_committed_stream` commits
-    // the resulting block_ids into the repo.
+    // ── Final chunk: commit ──
+    // Fast path: if the whole file streamed in order, the block ids are
+    // already persisted — commit directly and skip the temp-file re-read.
+    if let Some((block_ids, total_size)) = temp_mgr
+        .take_streamed_blocks(&state.block_store, repo_id, &file_path, file_size)
+        .await
+    {
+        let fs_id = state
+            .file_service()
+            .upload_file_committed_stream(
+                repo_id, target_dir, file_name, block_ids, total_size, modifier, user_id, true,
+                None,
+            )
+            .await?;
+        temp_mgr.finish(repo_id, &file_path).await;
+        return Ok(Some(Json(json!([
+            { "id": fs_id, "name": file_name, "size": total_size }
+        ]))));
+    }
+
+    // Fallback path: stream the temp file through the CDC chunker so the whole
+    // file never has to be buffered in memory; `write_stream_blocks` writes
+    // blocks to the content-addressed store and `upload_file_committed_stream`
+    // commits the resulting block_ids into the repo.
     let Some(stream) = temp_mgr.read_stream(repo_id, &file_path).await else {
         temp_mgr.abort(repo_id, &file_path).await;
         return Err(AppError::Internal(

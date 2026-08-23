@@ -167,6 +167,7 @@ impl TestServer {
                 version: "8.0.0".to_string(),
                 site_url: format!("http://127.0.0.1:{}", port),
                 max_upload_size_mb: 4096,
+                max_chunk_size_mb: 256,
                 request_timeout_secs: 36000,
                 cors_allowed_origins: vec![],
                 cors_max_age_secs: 86400,

@@ -120,6 +120,12 @@ pub struct ServerConfig {
     pub site_url: String,
     #[serde(default = "default_max_upload_size_mb")]
     pub max_upload_size_mb: u64,
+    /// Per-chunk size cap for resumable (Content-Range) uploads. A single
+    /// request's multipart body is buffered before being written to the temp
+    /// file, so this bounds how much one chunk can consume in memory. 0
+    /// disables the cap. Env: NANOFILE_SERVER_MAX_CHUNK_SIZE_MB
+    #[serde(default = "default_max_chunk_size_mb")]
+    pub max_chunk_size_mb: u64,
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
     /// Allowed CORS origins. When empty, defaults to the origin of `site_url`.
@@ -195,6 +201,9 @@ fn default_port() -> u16 {
 fn default_max_upload_size_mb() -> u64 {
     4096
 }
+fn default_max_chunk_size_mb() -> u64 {
+    256
+}
 fn default_request_timeout_secs() -> u64 {
     600
 }
@@ -216,6 +225,7 @@ impl Default for ServerConfig {
             version: default_server_version(),
             site_url: default_site_url(),
             max_upload_size_mb: default_max_upload_size_mb(),
+            max_chunk_size_mb: default_max_chunk_size_mb(),
             request_timeout_secs: default_request_timeout_secs(),
             cors_allowed_origins: Vec::new(),
             secret_key: String::new(),
@@ -624,6 +634,10 @@ impl Config {
         env_parse!(
             "NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB",
             self.server.max_upload_size_mb
+        );
+        env_parse!(
+            "NANOFILE_SERVER_MAX_CHUNK_SIZE_MB",
+            self.server.max_chunk_size_mb
         );
         env_str!("NANOFILE_SERVER_SITE_URL", self.server.site_url);
         env_str!("NANOFILE_SERVER_SECRET_KEY", self.server.secret_key);

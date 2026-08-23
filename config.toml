@@ -5,6 +5,7 @@
 #   NANOFILE_SERVER_VERSION
 #   NANOFILE_SERVER_SITE_URL
 #   NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB
+#   NANOFILE_SERVER_MAX_CHUNK_SIZE_MB
 #   NANOFILE_SERVER_REQUEST_TIMEOUT_SECS
 #   NANOFILE_CORS_ALLOWED_ORIGINS           (comma-separated)
 #   NANOFILE_CORS_MAX_AGE_SECS
@@ -28,6 +29,9 @@ port = 8082
 # request Host, and downloads may hang on clients.
 site_url = "http://127.0.0.1:8082"
 max_upload_size_mb = 4096
+# Per-chunk cap for resumable (Content-Range) uploads. Bounds how much memory a
+# single chunk request can buffer (0 disables the cap).
+max_chunk_size_mb = 256
 request_timeout_secs = 600
 cors_allowed_origins = []
 cors_max_age_secs = 86400

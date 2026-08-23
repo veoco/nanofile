@@ -356,3 +356,151 @@ async fn test_upload_blks_commit_rejects_size_lie() {
     let resp = f.client.post_multipart_url(&url, form).await;
     assert_eq!(resp.status(), 400, "size lie must be rejected");
 }
+
+// ======================================================================
+// In-transit streaming (in-order chunks CDC'd into blocks) tests
+// ======================================================================
+
+/// Deterministic pseudo-random bytes (same generator as the `file_ops` unit
+/// tests) so a fixture spanning several CDC blocks is reproducible.
+fn pseudo_data(len: usize) -> Vec<u8> {
+    let mut x: u64 = 0x9E3779B97F4A7C15;
+    (0..len)
+        .map(|_| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (x >> 33) as u8
+        })
+        .collect()
+}
+
+/// Recursively count the block files under `dir` (the store lays them out as
+/// `{xx}/{sha1}` under the block root).
+fn count_files(dir: &std::path::Path) -> usize {
+    fn walk(d: &std::path::Path, n: &mut usize) {
+        if let Ok(entries) = std::fs::read_dir(d) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, n);
+                } else {
+                    *n += 1;
+                }
+            }
+        }
+    }
+    let mut n = 0;
+    walk(dir, &mut n);
+    n
+}
+
+/// In-order chunks are CDC'd into the block store as they arrive (in-transit
+/// streaming), so the final chunk commits without re-reading the temp file.
+/// The committed file's block ids must equal whole-file CDC chunking.
+#[tokio::test]
+async fn test_chunked_upload_streams_in_order_to_blocks() {
+    let f = TestFixture::new().await;
+    let base = f.server.base_url.clone();
+    let repo_id = f.repo_id.clone();
+
+    let token = get_upload_token(&f).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    // ~6 MiB deterministic pseudo-random content spanning several CDC blocks
+    // (the same generator/size as the `file_ops` fixture that provably spans
+    // multiple blocks).
+    let content = pseudo_data(6 * 1024 * 1024 + 123);
+
+    // Reference: whole-file CDC chunking → expected block ids (block id is the
+    // SHA-1 of the block content, matching `write_block`).
+    let mut chunker = infra::storage::cdc::Chunker::new(content.len());
+    let mut expected_ids = Vec::new();
+    for blk in chunker.feed(&content) {
+        expected_ids.push(infra::crypto::fs_id::sha1_hex(&blk));
+    }
+    let tail = chunker.finish();
+    if !tail.is_empty() {
+        expected_ids.push(infra::crypto::fs_id::sha1_hex(&tail));
+    }
+    assert!(expected_ids.len() > 1, "fixture must span multiple blocks");
+
+    // Upload all but the final 8192-byte chunk, in order.
+    let chunk_size = 8192usize;
+    let n_chunks = content.len().div_ceil(chunk_size);
+    for i in 0..n_chunks - 1 {
+        let start = i * chunk_size;
+        let end = ((i + 1) * chunk_size - 1).min(content.len() - 1);
+        let resp = client
+            .post(format!("{}/upload-aj/{}", base, token))
+            .header(
+                "content-range",
+                format!("bytes {}-{}/{}", start, end, content.len()),
+            )
+            .multipart(chunked_upload_form(&repo_id, content[start..=end].to_vec()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "chunk {i} failed");
+    }
+
+    // Blocks must already be persisted mid-upload: the in-transit streaming
+    // path writes them as they complete, whereas the temp-file fallback would
+    // write nothing until the final chunk.
+    let port: u16 = f
+        .server
+        .base_url
+        .rsplit(':')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let blocks_dir = std::env::temp_dir().join(format!("nf-test-{port}/blocks"));
+    let block_files = count_files(&blocks_dir);
+    assert!(
+        block_files > 0,
+        "expected in-transit blocks before the final chunk, found none"
+    );
+
+    // Final chunk commits the file.
+    let i = n_chunks - 1;
+    let start = i * chunk_size;
+    let end = content.len() - 1;
+    let resp = client
+        .post(format!("{}/upload-aj/{}", base, token))
+        .header(
+            "content-range",
+            format!("bytes {}-{}/{}", start, end, content.len()),
+        )
+        .multipart(chunked_upload_form(&repo_id, content[start..=end].to_vec()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_array(), "final chunk should return the file list");
+    assert_eq!(body[0]["size"], content.len() as i64);
+
+    // The committed file must round-trip the exact bytes.
+    let resp = f
+        .client
+        .download_file(&f.api_token, &repo_id, "/big.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let downloaded = resp.bytes().await.unwrap();
+    assert_eq!(downloaded.as_ref(), content.as_slice());
+
+    // Re-chunking the downloaded bytes must reproduce the reference ids,
+    // proving the in-transit streaming produced exactly the blocks that
+    // whole-file chunking (the previous final-assembly path) would.
+    let mut chunker = infra::storage::cdc::Chunker::new(downloaded.len());
+    let mut roundtrip_ids = Vec::new();
+    for blk in chunker.feed(downloaded.as_ref()) {
+        roundtrip_ids.push(infra::crypto::fs_id::sha1_hex(&blk));
+    }
+    let tail = chunker.finish();
+    if !tail.is_empty() {
+        roundtrip_ids.push(infra::crypto::fs_id::sha1_hex(&tail));
+    }
+    assert_eq!(roundtrip_ids, expected_ids);
+}

@@ -14,9 +14,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures::stream::StreamExt;
+use infra::storage::DynBlockStorage;
+use infra::storage::cdc::Chunker;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 /// Manages per-upload temporary files on disk with an in-memory index.
@@ -37,6 +39,38 @@ struct TempFileEntry {
     /// Total file size as declared in the first Content-Range header
     file_size: u64,
     created_at: Instant,
+    /// Per-upload CDC streaming state. An in-order resumable upload streams
+    /// each chunk straight into blocks as it arrives (see `feed_stream`), so
+    /// the final chunk commits without re-reading the whole temp file.
+    stream: Arc<Mutex<Option<UploadStream>>>,
+}
+
+/// Incremental CDC state for one resumable upload.
+///
+/// `feed_stream` feeds in-order chunks through a [`Chunker`] and writes the
+/// completed blocks to the block store, accumulating their ids. Any chunk that
+/// arrives out of order (or with a write failure) flips `broken`, after which
+/// the upload falls back to the plain temp-file assembly path.
+struct UploadStream {
+    /// Active chunker; created on the first in-order feed.
+    chunker: Option<Chunker>,
+    /// Bytes successfully fed into `chunker` so far (the in-order prefix).
+    next_offset: u64,
+    /// Block ids for the completed blocks produced so far, in order.
+    block_ids: Vec<String>,
+    /// Total declared file size, copied from the entry so the stream is
+    /// self-contained once the map lock is released.
+    file_size: u64,
+    /// Set on the first out-of-order chunk or block-write failure.
+    broken: bool,
+}
+
+/// Outcome of feeding one chunk to an upload's streaming CDC state.
+pub enum FeedOutcome {
+    /// The chunk was in order and its completed blocks were persisted.
+    Streamed { block_ids: Vec<String> },
+    /// The chunk was out of order or a write failed; streaming is disabled.
+    Broken,
 }
 
 impl TempFileManager {
@@ -91,6 +125,13 @@ impl TempFileManager {
                 tmp_path: tmp_path.clone(),
                 file_size,
                 created_at: Instant::now(),
+                stream: Arc::new(Mutex::new(Some(UploadStream {
+                    chunker: None,
+                    next_offset: 0,
+                    block_ids: Vec::new(),
+                    file_size,
+                    broken: false,
+                }))),
             },
         );
 
@@ -132,6 +173,103 @@ impl TempFileManager {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Interrupted, e))??;
 
         Ok(())
+    }
+
+    /// Stream an in-order chunk through the upload's CDC chunker and persist
+    /// any completed blocks, so a fully in-order resumable upload can commit
+    /// on the final chunk without re-reading the assembled temp file.
+    ///
+    /// The chunk is only consumed when it is strictly contiguous with the
+    /// previously streamed prefix (`offset == next_offset`). Any other chunk —
+    /// out of order, overlapping, or re-sent — disables streaming for the
+    /// upload; correctness is preserved by the always-written temp file, which
+    /// the caller falls back to on the final chunk.
+    pub async fn feed_stream(
+        &self,
+        store: &DynBlockStorage,
+        repo_id: &str,
+        file_path: &str,
+        offset: u64,
+        data: &[u8],
+    ) -> FeedOutcome {
+        // Read the stream handle under the map lock, then release it before
+        // the long-running stream lock + block writes (no lock nesting).
+        let stream_handle = {
+            let guard = self.inner.active.read().await;
+            match guard.get(&(repo_id.to_string(), file_path.to_string())) {
+                Some(e) => e.stream.clone(),
+                None => return FeedOutcome::Broken,
+            }
+        };
+        let mut stream = stream_handle.lock().await;
+        let Some(state) = stream.as_mut() else {
+            return FeedOutcome::Broken;
+        };
+        if state.broken || offset != state.next_offset {
+            state.broken = true;
+            return FeedOutcome::Broken;
+        }
+
+        let chunker = state
+            .chunker
+            .get_or_insert_with(|| Chunker::new(state.file_size as usize));
+        let mut ids = Vec::new();
+        for blk in chunker.feed(data) {
+            match store.write_block(&blk).await {
+                Ok(id) => ids.push(id),
+                Err(_) => {
+                    // The chunker has advanced but the block is lost; disable
+                    // streaming and rely on the temp file for assembly.
+                    state.broken = true;
+                    return FeedOutcome::Broken;
+                }
+            }
+        }
+        state.block_ids.extend(ids.iter().cloned());
+        state.next_offset += data.len() as u64;
+        FeedOutcome::Streamed { block_ids: ids }
+    }
+
+    /// Consume the fully-streamed block ids for an upload, if it streamed the
+    /// whole file in order.
+    ///
+    /// Returns `Some((block_ids, total_size))` only when the stream is intact
+    /// and covered the entire declared file (`next_offset == file_size ==
+    /// expected_size`). `expected_size` is a defensive cross-check against a
+    /// client changing `file_size` mid-upload. Otherwise returns `None` and the
+    /// caller falls back to reading the temp file.
+    pub async fn take_streamed_blocks(
+        &self,
+        store: &DynBlockStorage,
+        repo_id: &str,
+        file_path: &str,
+        expected_size: u64,
+    ) -> Option<(Vec<String>, i64)> {
+        let stream_handle = {
+            let guard = self.inner.active.read().await;
+            guard
+                .get(&(repo_id.to_string(), file_path.to_string()))
+                .map(|e| e.stream.clone())?
+        };
+        let mut stream = stream_handle.lock().await;
+        let state = stream.as_mut()?;
+        if state.broken || state.next_offset != state.file_size || state.file_size != expected_size
+        {
+            return None;
+        }
+
+        // Take the chunker and disable further feeds so a concurrent chunk
+        // cannot interleave with the trailing `finish()`.
+        let chunker = state.chunker.take()?;
+        state.broken = true;
+        let tail = chunker.finish();
+        if !tail.is_empty() {
+            match store.write_block(&tail).await {
+                Ok(id) => state.block_ids.push(id),
+                Err(_) => return None,
+            }
+        }
+        Some((std::mem::take(&mut state.block_ids), state.file_size as i64))
     }
 
     /// How many bytes have been written to the temp file so far?
@@ -361,6 +499,195 @@ mod tests {
             all.extend_from_slice(r.unwrap().as_ref());
         }
         assert_eq!(all, b"hello world");
+
+        mgr.finish(repo, path).await;
+    }
+
+    // ── Streaming (in-transit CDC) tests ─────────────────────────────────
+
+    /// Deterministic pseudo-random bytes (same generator as the `file_ops`
+    /// tests) so a fixture spanning multiple CDC blocks is reproducible.
+    fn pseudo_data(len: usize) -> Vec<u8> {
+        let mut x: u64 = 0x9E3779B97F4A7C15;
+        (0..len)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (x >> 33) as u8
+            })
+            .collect()
+    }
+
+    /// A throwaway block store backed by a temp dir.
+    fn temp_store() -> (tempfile::TempDir, DynBlockStorage) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = infra::storage::new_block_store(dir.path());
+        (dir, store)
+    }
+
+    /// Chunk `data` with a fresh `Chunker` and write each block to `store`,
+    /// mirroring `FileOps::write_stream_blocks`. Returns the reference ids that
+    /// an in-order streaming upload must reproduce exactly.
+    async fn reference_block_ids(store: &DynBlockStorage, data: &[u8]) -> Vec<String> {
+        let mut chunker = Chunker::new(data.len());
+        let mut ids = Vec::new();
+        for blk in chunker.feed(data) {
+            ids.push(store.write_block(&blk).await.unwrap());
+        }
+        let tail = chunker.finish();
+        if !tail.is_empty() {
+            ids.push(store.write_block(&tail).await.unwrap());
+        }
+        ids
+    }
+
+    /// In-order chunks stream straight into blocks: the produced block ids
+    /// match whole-file chunking exactly, so the final chunk can commit without
+    /// re-reading the temp file.
+    #[tokio::test]
+    async fn test_feed_stream_in_order_matches_whole_file_chunking() {
+        let mgr = manager().await;
+        let (_store_dir, store) = temp_store();
+        let repo = "stream-repo-inorder";
+        let path = "/big.bin";
+
+        // ~6 MiB so the CDC chunker (min 256 KiB / max 4 MiB, avg ~1 MiB)
+        // reliably spans multiple blocks for this pseudo-random data.
+        let data = pseudo_data(6 * 1024 * 1024 + 123);
+        let expected = reference_block_ids(&store, &data).await;
+        assert!(expected.len() > 1, "fixture must span multiple blocks");
+
+        mgr.get_or_create(repo, path, data.len() as u64)
+            .await
+            .unwrap();
+
+        // Feed the data as 8192-byte in-order slices (like web chunk uploads).
+        let mut fed = 0usize;
+        while fed < data.len() {
+            let end = (fed + 8192).min(data.len());
+            let outcome = mgr
+                .feed_stream(&store, repo, path, fed as u64, &data[fed..end])
+                .await;
+            assert!(matches!(outcome, FeedOutcome::Streamed { .. }));
+            fed = end;
+        }
+
+        let (block_ids, total) = mgr
+            .take_streamed_blocks(&store, repo, path, data.len() as u64)
+            .await
+            .expect("fully in-order upload should stream");
+        assert_eq!(
+            block_ids, expected,
+            "streamed ids must match whole-file chunking"
+        );
+        assert_eq!(total, data.len() as i64);
+
+        mgr.finish(repo, path).await;
+    }
+
+    /// A chunk that skips the prefix (offset > next_offset) disables streaming;
+    /// the final assembly falls back to the temp file.
+    #[tokio::test]
+    async fn test_feed_stream_out_of_order_marks_broken() {
+        let mgr = manager().await;
+        let (_dir, store) = temp_store();
+        let repo = "stream-repo-oorder";
+        let path = "/f.bin";
+
+        mgr.get_or_create(repo, path, 100).await.unwrap();
+
+        let outcome = mgr.feed_stream(&store, repo, path, 50, b"0123456789").await;
+        assert!(matches!(outcome, FeedOutcome::Broken));
+        assert!(
+            mgr.take_streamed_blocks(&store, repo, path, 100)
+                .await
+                .is_none(),
+            "out-of-order upload must fall back to the temp file"
+        );
+
+        mgr.finish(repo, path).await;
+    }
+
+    /// Re-sending an already-fed offset (a retry) is not contiguous either and
+    /// must disable streaming.
+    #[tokio::test]
+    async fn test_feed_stream_duplicate_chunk_marks_broken() {
+        let mgr = manager().await;
+        let (_dir, store) = temp_store();
+        let repo = "stream-repo-dup";
+        let path = "/f.bin";
+
+        mgr.get_or_create(repo, path, 20).await.unwrap();
+
+        let first = mgr.feed_stream(&store, repo, path, 0, b"0123456789").await;
+        assert!(matches!(first, FeedOutcome::Streamed { .. }));
+
+        let second = mgr.feed_stream(&store, repo, path, 0, b"0123456789").await;
+        assert!(matches!(second, FeedOutcome::Broken));
+        assert!(
+            mgr.take_streamed_blocks(&store, repo, path, 20)
+                .await
+                .is_none()
+        );
+
+        mgr.finish(repo, path).await;
+    }
+
+    /// Once broken, further feeds keep returning `Broken` without panicking.
+    #[tokio::test]
+    async fn test_feed_stream_after_broken_is_stable() {
+        let mgr = manager().await;
+        let (_dir, store) = temp_store();
+        let repo = "stream-repo-broken";
+        let path = "/f.bin";
+
+        mgr.get_or_create(repo, path, 100).await.unwrap();
+        assert!(matches!(
+            mgr.feed_stream(&store, repo, path, 42, b"x").await,
+            FeedOutcome::Broken
+        ));
+
+        for offset in [0u64, 42, 99] {
+            assert!(matches!(
+                mgr.feed_stream(&store, repo, path, offset, b"y").await,
+                FeedOutcome::Broken
+            ));
+        }
+        mgr.finish(repo, path).await;
+    }
+
+    /// A block-store write failure must disable streaming (the temp file stays
+    /// the source of truth), not panic.
+    #[tokio::test]
+    async fn test_feed_stream_block_write_failure_marks_broken() {
+        let mgr = manager().await;
+        // A store whose base path is a regular file: the first write's
+        // `ensure_dirs` fails, so `write_block` errors.
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("not-a-dir");
+        std::fs::write(&file_path, b"x").unwrap();
+        let store = infra::storage::new_block_store(&file_path);
+
+        let repo = "stream-repo-wfail";
+        let path = "/f.bin";
+        // Larger than one max-size CDC block (4 MiB) so at least one block is
+        // emitted by the first feed, forcing a block write to be attempted.
+        let data = pseudo_data(4 * 1024 * 1024 + 1);
+
+        mgr.get_or_create(repo, path, data.len() as u64)
+            .await
+            .unwrap();
+        let outcome = mgr.feed_stream(&store, repo, path, 0, &data).await;
+        assert!(
+            matches!(outcome, FeedOutcome::Broken),
+            "block write failure must disable streaming"
+        );
+        assert!(
+            mgr.take_streamed_blocks(&store, repo, path, data.len() as u64)
+                .await
+                .is_none()
+        );
 
         mgr.finish(repo, path).await;
     }
