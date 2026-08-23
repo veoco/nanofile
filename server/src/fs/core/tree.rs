@@ -162,6 +162,48 @@ pub async fn resolve_fs_id(
     Ok(current_fs_id)
 }
 
+/// Resolve a file path to its `fs_id` and current `mtime` in a single walk.
+///
+/// The mtime is read from the final hop's parent dirent, so callers that need
+/// both (e.g. thumbnail staleness checks) don't have to re-walk the tree or
+/// re-read the parent directory. Error semantics match [`resolve_fs_id`]:
+/// a missing segment yields `NotFound`; the empty path returns the root.
+pub async fn resolve_file_entry(
+    repos: &Repositories,
+    repo_id: &str,
+    root_fs_id: &str,
+    path: &str,
+) -> Result<(String, i64), AppError> {
+    let segments: Vec<&str> = path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if segments.is_empty() {
+        return Ok((root_fs_id.to_string(), 0));
+    }
+
+    let mut current_fs_id = root_fs_id.to_string();
+    for segment in &segments[..segments.len() - 1] {
+        let dir_data = read_fs_dir_data(repos, repo_id, &current_fs_id).await?;
+        let entry = dir_data
+            .dirents
+            .iter()
+            .find(|d| d.name == *segment)
+            .ok_or_else(|| AppError::NotFound(format!("path segment not found: {segment}")))?;
+        current_fs_id = entry.id.clone();
+    }
+
+    let last = segments.last().unwrap();
+    let dir_data = read_fs_dir_data(repos, repo_id, &current_fs_id).await?;
+    let entry = dir_data
+        .dirents
+        .iter()
+        .find(|d| d.name == *last)
+        .ok_or_else(|| AppError::NotFound(format!("path segment not found: {last}")))?;
+    Ok((entry.id.clone(), entry.mtime))
+}
+
 /// Batch version of `resolve_fs_id` for many `(root_fs_id, path)` targets.
 ///
 /// Resolves all targets in a shared level-frontier walk: at each depth it
@@ -352,5 +394,45 @@ mod tests {
 
         let got = resolve_fs_ids_batch(&repos, "r", &[]).await.unwrap();
         assert!(got.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_file_entry_returns_fs_id_and_mtime() {
+        let db = setup_tree_db().await;
+        // root ── photos ── pic.jpg (mtime 1700000000, non-zero to prove the
+        // parent-dirent mtime is actually read through).
+        insert(&db, "root", 3, r#"{"dirents":[{"id":"photos","mode":16384,"modifier":"","mtime":0,"name":"photos","size":0}],"type":3,"version":1}"#).await;
+        insert(&db, "photos", 3, r#"{"dirents":[{"id":"pic","mode":33188,"modifier":"u","mtime":1700000000,"name":"pic.jpg","size":99}],"type":3,"version":1}"#).await;
+        insert(
+            &db,
+            "pic",
+            1,
+            r#"{"block_ids":["x"],"size":99,"type":1,"version":1}"#,
+        )
+        .await;
+        let repos = Repositories::new(Arc::new(db));
+
+        let (fs_id, mtime) = resolve_file_entry(&repos, "r", "root", "/photos/pic.jpg")
+            .await
+            .unwrap();
+        assert_eq!(fs_id, "pic");
+        assert_eq!(mtime, 1700000000);
+
+        // A directory entry resolves to its own fs_id + mtime from the parent.
+        let (fs_id, mtime) = resolve_file_entry(&repos, "r", "root", "/photos")
+            .await
+            .unwrap();
+        assert_eq!(fs_id, "photos");
+        assert_eq!(mtime, 0);
+
+        // Empty path returns the root.
+        let (fs_id, _) = resolve_file_entry(&repos, "r", "root", "/").await.unwrap();
+        assert_eq!(fs_id, "root");
+
+        // Missing segment -> NotFound.
+        let err = resolve_file_entry(&repos, "r", "root", "/photos/nope.jpg")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("path segment not found"));
     }
 }

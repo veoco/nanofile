@@ -81,6 +81,42 @@ impl Downloader {
         Ok(out)
     }
 
+    /// Read at most `max_bytes` of a file's content given its block IDs
+    /// directly — the caller already resolved the file, so no tree walk or
+    /// fs_object lookup is needed here. Returns fewer bytes when the file is
+    /// smaller. Used by thumbnails after a single `resolve_file_entry`.
+    pub async fn read_file_limited_from_blocks(
+        block_store: &DynBlockStorage,
+        block_ids: &[String],
+        size: i64,
+        dec_key: Option<(&[u8], &[u8])>,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, AppError> {
+        let mut out = Vec::with_capacity(size.min(max_bytes as i64) as usize);
+        for block_id in block_ids {
+            if out.len() >= max_bytes {
+                break;
+            }
+            let block_data = block_store
+                .read_block(block_id)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let block_data = if let Some((key, iv)) = dec_key {
+                decrypt_block(&block_data, key, iv)
+                    .map_err(|e| AppError::internal(e.to_string()))?
+            } else {
+                block_data
+            };
+            let remaining = max_bytes - out.len();
+            let take = remaining.min(block_data.len());
+            out.extend_from_slice(&block_data[..take]);
+            if take < block_data.len() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     /// Resolve a file's block IDs without reading their content.
     ///
     /// Returns `(FsFileData, Vec<block_id>)` so the caller can stream

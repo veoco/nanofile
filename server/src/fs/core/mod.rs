@@ -22,6 +22,6 @@ pub use size::{adjust_repo_size, compute_repo_size, compute_tree_size, get_entry
 pub use store::{store_fs_dir_object, store_fs_file_object};
 pub use tree::{
     read_fs_dir_data, read_fs_dir_data_batch, read_fs_file_data, read_fs_file_data_batch,
-    resolve_fs_id, resolve_fs_ids_batch,
+    resolve_file_entry, resolve_fs_id, resolve_fs_ids_batch,
 };
 pub use tree_diff::diff_trees;

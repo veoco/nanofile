@@ -7,9 +7,9 @@ use std::sync::OnceLock;
 use tokio::io::AsyncWriteExt;
 
 use crate::fs::core::download::Downloader;
-use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
+use crate::fs::core::tree::resolve_file_entry;
 use crate::repository::Repositories;
-use base::common::{EMPTY_SHA1, SEAF_METADATA_TYPE_DIR};
+use base::common::{EMPTY_SHA1, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 
 pub struct ThumbnailService {
@@ -91,8 +91,10 @@ impl ThumbnailService {
             .await?
             .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-        let file_fs_id =
-            resolve_fs_id(&self.repos, repo_id, &head_commit.root_id, &normalized_path)
+        // Resolve the file's fs_id and current mtime in one tree walk (the
+        // mtime comes from the final hop's parent dirent).
+        let (file_fs_id, current_mtime) =
+            resolve_file_entry(&self.repos, repo_id, &head_commit.root_id, &normalized_path)
                 .await
                 .map_err(|_| AppError::NotFound("file not found".into()))?;
 
@@ -117,10 +119,10 @@ impl ThumbnailService {
             .unwrap_or("file")
             .to_string();
 
-        // ── Get the file's current modification time from the parent dir ──
-        let current_mtime = self
-            .resolve_file_mtime(repo_id, &head_commit.root_id, &normalized_path)
-            .await?;
+        // Parse the file object's block list once so both thumbnail sources
+        // (image bytes / ffmpeg stream) avoid re-resolving the path.
+        let file_data: FsFileData = serde_json::from_str(&file_obj.data)
+            .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
 
         // ── Check if a valid cached thumbnail exists ──
         let thumbnail_path = self.thumbnail_file_path(repo_id, &normalized_path, size);
@@ -160,19 +162,14 @@ impl ThumbnailService {
             // Skip huge images and cap the in-memory read; decoding a truncated
             // multi-hundred-MB image would waste CPU and memory for no benefit.
             const MAX_THUMBNAIL_SOURCE: i64 = 32 * 1024 * 1024;
-            let (file_data, _block_ids) =
-                Downloader::resolve_blocks(&self.repos, repo_id, &normalized_path)
-                    .await
-                    .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
             if file_data.size > MAX_THUMBNAIL_SOURCE {
                 return Err(AppError::NotFound("thumbnail not available".into()));
             }
 
-            let content = Downloader::download_file_limited(
-                &self.repos,
-                repo_id,
-                &normalized_path,
+            let content = Downloader::read_file_limited_from_blocks(
                 &self.block_store,
+                &file_data.block_ids,
+                file_data.size,
                 None,
                 MAX_THUMBNAIL_SOURCE as usize,
             )
@@ -193,7 +190,7 @@ impl ThumbnailService {
             } else {
                 MediaKind::Audio
             };
-            self.generate_media_thumbnail(repo_id, &normalized_path, size, kind)
+            self.generate_media_thumbnail(repo_id, &normalized_path, size, kind, &file_data)
                 .await?
         };
 
@@ -251,15 +248,12 @@ impl ThumbnailService {
         normalized_path: &str,
         size: u32,
         kind: MediaKind,
+        file_data: &FsFileData,
     ) -> Result<Vec<u8>, AppError> {
         if !ffmpeg_available(&self.ffmpeg_path) {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
-        let (file_data, block_ids) =
-            Downloader::resolve_blocks(&self.repos, repo_id, normalized_path)
-                .await
-                .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
         if file_data.size > max_ffmpeg_source(kind) {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
@@ -278,8 +272,11 @@ impl ThumbnailService {
 
         let write_result: Result<(), std::io::Error> = async {
             let mut out = tokio::fs::File::create(&scratch_media).await?;
-            let mut stream =
-                crate::fs::core::download::stream_blocks(block_ids, self.block_store.clone(), None);
+            let mut stream = crate::fs::core::download::stream_blocks(
+                file_data.block_ids.clone(),
+                self.block_store.clone(),
+                None,
+            );
             while let Some(chunk) = stream.next().await {
                 out.write_all(&chunk?).await?;
             }
@@ -346,35 +343,6 @@ impl ThumbnailService {
                 }
             }
         }
-    }
-
-    /// Resolve the current `mtime` for a file by reading its parent directory
-    /// entry.
-    async fn resolve_file_mtime(
-        &self,
-        repo_id: &str,
-        root_fs_id: &str,
-        path: &str,
-    ) -> Result<i64, AppError> {
-        let (parent_path, file_name) = path
-            .rsplit_once('/')
-            .map(|(p, n)| (if p.is_empty() { "/" } else { p }, n))
-            .unwrap_or(("/", ""));
-
-        let parent_fs_id = resolve_fs_id(&self.repos, repo_id, root_fs_id, parent_path)
-            .await
-            .map_err(|_| AppError::NotFound("parent path not found".into()))?;
-
-        let dir_data = read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
-            .await
-            .map_err(|e| AppError::Internal(format!("failed to read parent dir: {e}")))?;
-
-        dir_data
-            .dirents
-            .iter()
-            .find(|d| d.name == file_name)
-            .map(|d| d.mtime)
-            .ok_or_else(|| AppError::NotFound("file entry not found in parent dir".into()))
     }
 }
 
