@@ -167,6 +167,7 @@
             {{ t.tr("admin.delete_confirm_prefix") }} <strong id="delete-email"></strong>{{ t.tr("admin.delete_confirm_suffix") }}
         </p>
         <form id="delete-form" method="POST" class="mt-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
             <div class="flex justify-end gap-2">
                 <button type="button" class="js-delete-cancel btn btn-secondary"
                         data-action="close-delete">

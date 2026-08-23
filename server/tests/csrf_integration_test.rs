@@ -493,3 +493,143 @@ async fn test_invitations_page_includes_csrf_tokens() {
         "invitations page should have csrf_token in generate form"
     );
 }
+
+// ==================== Security: sysadmin user-management CSRF ====================
+
+/// Extract the csrf_token from the sysadmin users page HTML.
+async fn sysadmin_csrf_token(client: &reqwest::Client, base_url: &str) -> String {
+    let html = client
+        .get(format!("{}/sysadmin/users/", base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    html.split(r#"name="csrf_token" value=""#)
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .expect("sysadmin page should embed a csrf_token")
+        .to_string()
+}
+
+/// Creating a user via the sysadmin form without a csrf_token must be rejected
+/// (the token is mandatory, not optional).
+#[tokio::test]
+async fn test_sysadmin_create_user_requires_csrf() {
+    let server = TestServer::start().await;
+    create_test_admin(server.db.as_ref(), "test@example.com", "password").await;
+    let client = ui_login(&server).await;
+
+    // No token → 400.
+    let resp = client
+        .post(format!("{}/sysadmin/users/create/", server.base_url))
+        .form(&[("email", "victim@test.com"), ("password", "password123")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "missing csrf_token must be rejected");
+
+    // Wrong token → 400.
+    let resp = client
+        .post(format!("{}/sysadmin/users/create/", server.base_url))
+        .form(&[
+            ("email", "victim@test.com"),
+            ("password", "password123"),
+            ("csrf_token", "wrong-token"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "invalid csrf_token must be rejected");
+
+    // Valid token → 302 (success).
+    let token = sysadmin_csrf_token(&client, &server.base_url).await;
+    let resp = client
+        .post(format!("{}/sysadmin/users/create/", server.base_url))
+        .form(&[
+            ("email", "victim@test.com"),
+            ("password", "password123"),
+            ("csrf_token", &token),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "valid csrf_token should succeed");
+}
+
+/// Updating a user via the sysadmin form requires a csrf_token.
+#[tokio::test]
+async fn test_sysadmin_update_user_requires_csrf() {
+    let server = TestServer::start().await;
+    create_test_admin(server.db.as_ref(), "test@example.com", "password").await;
+    let target_id = create_test_user(server.db.as_ref(), "target@test.com", "password").await;
+    let client = ui_login(&server).await;
+
+    // No token → 400.
+    let resp = client
+        .post(format!(
+            "{}/sysadmin/users/{}/update/",
+            server.base_url, target_id
+        ))
+        .form(&[("is_active", "on")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "missing csrf_token must be rejected");
+
+    // Valid token → 302.
+    let token = sysadmin_csrf_token(&client, &server.base_url).await;
+    let resp = client
+        .post(format!(
+            "{}/sysadmin/users/{}/update/",
+            server.base_url, target_id
+        ))
+        .form(&[("is_active", "on"), ("csrf_token", &token)])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "valid csrf_token should succeed");
+}
+
+/// Deleting a user via the sysadmin form requires a csrf_token.
+#[tokio::test]
+async fn test_sysadmin_delete_user_requires_csrf() {
+    let server = TestServer::start().await;
+    create_test_admin(server.db.as_ref(), "test@example.com", "password").await;
+    let doomed_id = create_test_user(server.db.as_ref(), "doomed@test.com", "password").await;
+    let client = ui_login(&server).await;
+
+    // No token → 400.
+    let resp = client
+        .post(format!(
+            "{}/sysadmin/users/{}/delete/",
+            server.base_url, doomed_id
+        ))
+        .form(&[("ignore", "1")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "missing csrf_token must be rejected");
+
+    // Valid token → 302, and the user is actually deleted.
+    let token = sysadmin_csrf_token(&client, &server.base_url).await;
+    let resp = client
+        .post(format!(
+            "{}/sysadmin/users/{}/delete/",
+            server.base_url, doomed_id
+        ))
+        .form(&[("csrf_token", &token)])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "valid csrf_token should succeed");
+
+    use infra::entity::user;
+    use sea_orm::EntityTrait;
+    let gone = user::Entity::find_by_id(doomed_id)
+        .one(server.db.as_ref())
+        .await
+        .unwrap();
+    assert!(gone.is_none(), "deleted user should no longer exist");
+}

@@ -137,20 +137,11 @@ pub async fn create_user(
         return Err(AppError::Forbidden);
     }
 
-    // CSRF check
-    if let Some(ref token) = form.csrf_token {
-        let expected = crate::service::auth::csrf::generate_csrf_token(
-            &state.csrf_secret,
-            &user.session_token,
-        );
-        if *token != expected {
-            return Err(AppError::BadRequest(
-                I18n::get(user.language.as_deref())
-                    .tr("common.invalid_csrf")
-                    .to_string(),
-            ));
-        }
-    }
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.csrf_token.as_deref(),
+    )?;
 
     let svc = AdminUserService::new(state.repos.clone());
 
@@ -196,20 +187,11 @@ pub async fn update_user(
         return Err(AppError::Forbidden);
     }
 
-    // CSRF check
-    if let Some(ref token) = form.csrf_token {
-        let expected = crate::service::auth::csrf::generate_csrf_token(
-            &state.csrf_secret,
-            &user.session_token,
-        );
-        if *token != expected {
-            return Err(AppError::BadRequest(
-                I18n::get(user.language.as_deref())
-                    .tr("common.invalid_csrf")
-                    .to_string(),
-            ));
-        }
-    }
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.csrf_token.as_deref(),
+    )?;
 
     let svc = AdminUserService::new(state.repos.clone());
 
@@ -227,15 +209,27 @@ pub async fn update_user(
     Ok((StatusCode::FOUND, [("Location", "/sysadmin/users/")]).into_response())
 }
 
+#[derive(Deserialize)]
+pub struct DeleteUserForm {
+    pub csrf_token: Option<String>,
+}
+
 /// POST /sysadmin/users/{user_id}/delete/ — delete a user.
 pub async fn delete_user(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Path(user_id): Path<i32>,
+    Form(form): Form<DeleteUserForm>,
 ) -> Result<impl IntoResponse, AppError> {
     if !user.is_admin {
         return Err(AppError::Forbidden);
     }
+
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.csrf_token.as_deref(),
+    )?;
 
     let svc = AdminUserService::new(state.repos.clone());
 
