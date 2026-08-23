@@ -18,7 +18,8 @@
 
 use std::path::Path;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use std::sync::Arc;
 use tantivy::Index;
@@ -89,9 +90,12 @@ pub struct TextIndexer {
     reader: tantivy::IndexReader,
     repos: Option<Arc<Repositories>>,
     /// Number of uncommitted index operations since the last `commit()`.
-    /// Lets `search()` skip a needless commit+fsync when nothing changed.
-    /// `Arc` so the `Clone` derive shares the counter across clones.
+    /// Lets the background committer skip a needless commit+fsync when nothing
+    /// changed. `Arc` so the `Clone` derive shares the counter across clones.
     pending: Arc<AtomicUsize>,
+    /// Whether a debounced commit task is already scheduled, so concurrent
+    /// writes coalesce into a single commit.
+    commit_scheduled: Arc<AtomicBool>,
 }
 
 impl TextIndexer {
@@ -174,6 +178,7 @@ impl TextIndexer {
             reader,
             repos,
             pending: Arc::new(AtomicUsize::new(0)),
+            commit_scheduled: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -294,7 +299,10 @@ impl TextIndexer {
             idx.index_file(&repo_id, &fullpath, &filename, &content)
         })
         .await
-        .map_err(|e| AppError::internal(format!("indexer index task failed: {e}")))?
+        .map_err(|e| AppError::internal(format!("indexer index task failed: {e}")))??;
+
+        self.schedule_debounced_commit();
+        Ok(())
     }
 
     /// Run `delete_file` on a blocking thread.
@@ -304,12 +312,46 @@ impl TextIndexer {
         let fullpath = fullpath.to_string();
         tokio::task::spawn_blocking(move || idx.delete_file(&repo_id, &fullpath))
             .await
-            .map_err(|e| AppError::internal(format!("indexer delete task failed: {e}")))?
+            .map_err(|e| AppError::internal(format!("indexer delete task failed: {e}")))??;
+
+        self.schedule_debounced_commit();
+        Ok(())
     }
 
     /// Whether there are uncommitted index operations since the last commit.
-    fn has_pending(&self) -> bool {
+    pub(crate) fn has_pending(&self) -> bool {
         self.pending.load(Ordering::Relaxed) > 0
+    }
+
+    /// Coalesce writes into a single commit shortly after the last one: when
+    /// the first write of a batch arrives, spawn a task that commits after a
+    /// short delay, then re-schedules if more writes landed during the commit.
+    /// This keeps freshly indexed documents searchable without putting the
+    /// fsync on the read path.
+    fn schedule_debounced_commit(&self) {
+        if self.commit_scheduled.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let idx = self.clone();
+        // Debounce on an async task: the sleep coalesces a batch of writes,
+        // then the commit runs synchronously on the executor. The fsync does
+        // briefly occupy a worker, but never the read path (search reads a
+        // committed snapshot); a spawn_blocking handle is avoided because
+        // awaiting it deadlocks under a current-thread runtime.
+        tokio::runtime::Handle::current().spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let result = idx.commit();
+            // Store `false` before the re-check: a write that lands after this
+            // store but before the `has_pending` load is seen by the load and
+            // re-schedules. A write that lands before the store is either
+            // included in this commit or seen by the load.
+            idx.commit_scheduled.store(false, Ordering::Release);
+            if let Err(e) = result {
+                tracing::warn!("index debounce commit failed: {e}");
+            } else if idx.has_pending() {
+                idx.schedule_debounced_commit();
+            }
+        });
     }
 
     /// Explicitly reload the reader to pick up newly committed documents.
@@ -404,15 +446,9 @@ impl TextIndexer {
             return Ok(Vec::new());
         }
 
-        // If there are uncommitted index operations, commit them (on a blocking
-        // thread) so the reader can pick up the latest content. When nothing
-        // changed since the last commit (the common read-only case) we skip
-        // the writer lock + fsync.
-        if self.has_pending()
-            && let Err(e) = self.commit_async().await
-        {
-            tracing::warn!("search: commit before search failed: {e}");
-        }
+        // Reload so the reader sees documents committed by the write-side
+        // debounce or the background committer. Search reads a recent committed
+        // snapshot; the fsync is never on this read path.
         // Always reload: cheap, and needed to see docs committed by the
         // background committer or by an explicit commit() since the last search.
         if let Err(e) = self.reader.reload() {
@@ -637,14 +673,8 @@ impl TextIndexer {
         repo_id: &str,
         fullpath: &str,
     ) -> Result<Option<String>, AppError> {
-        // Commit any pending documents first (on a blocking thread) so we can
-        // see freshly-indexed files. Unlike before, a read with nothing
-        // pending no longer triggers an fsync.
-        if self.has_pending()
-            && let Err(e) = self.commit_async().await
-        {
-            tracing::warn!("get_indexed_content: commit failed: {e}");
-        }
+        // Reload so the reader sees documents committed by the write-side
+        // debounce or the background committer. Reads never fsync.
         if let Err(e) = self.reader.reload() {
             tracing::warn!("get_indexed_content: reload failed: {e}");
         }
@@ -1046,6 +1076,24 @@ mod tests {
         // Last page: limit=3, offset=9
         let results = indexer.search("content", &[], 3, 9, false).await?;
         assert_eq!(results.len(), 1, "last page should have 1");
+
+        Ok(())
+    }
+
+    /// The write-side debounce must make a freshly indexed file searchable
+    /// shortly after indexing, without any explicit commit or read-path commit.
+    #[tokio::test]
+    async fn test_debounce_commit_makes_docs_searchable() -> Result<(), AppError> {
+        let dir = tempfile::tempdir().unwrap();
+        let indexer = TextIndexer::new(dir.path(), None)?;
+
+        indexer
+            .index_file_async("repo-1", "/hello.txt", "hello.txt", "Hello World")
+            .await?;
+        // No explicit commit: rely on the write-side debounce.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let results = indexer.search("hello", &[], 10, 0, false).await?;
+        assert_eq!(results.len(), 1, "debounce must commit before search");
 
         Ok(())
     }

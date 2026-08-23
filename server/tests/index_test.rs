@@ -28,7 +28,7 @@ async fn test_upload_and_search_content() {
     assert_eq!(resp.status(), 200, "upload should succeed");
 
     // Give the indexer time to commit
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Search for content (not filename) — should find the file
     let resp = f
@@ -65,7 +65,7 @@ async fn test_search_content_not_filename() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Full-text search should find it (content matches)
     let resp = f
@@ -118,7 +118,7 @@ async fn test_binary_file_skipped() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Search for content in binary file — should not find it
     let resp = f
@@ -153,7 +153,7 @@ async fn test_delete_cleans_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Verify it's in the index
     let resp = f
@@ -180,7 +180,7 @@ async fn test_delete_cleans_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Search again — should not find it
     let resp = f
@@ -215,7 +215,7 @@ async fn test_rename_updates_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Rename via form POST
     let resp = f
@@ -262,7 +262,7 @@ async fn test_move_updates_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Move via form POST
     let resp = f
@@ -313,7 +313,7 @@ async fn test_batch_delete_cleans_index() {
         assert_eq!(resp.status(), 200);
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Verify files are in index
     let resp = f
@@ -392,7 +392,7 @@ async fn test_content_search_multi_repo() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Search from first user — should find both repos
     let resp = f
@@ -431,7 +431,7 @@ async fn test_reindex_endpoint() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Verify it's indexed
     let resp = f
@@ -500,7 +500,7 @@ async fn test_index_file_text_for_binary() {
     assert_eq!(resp.status(), 200);
 
     // Verify it's NOT found via content search (binary file skipped).
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let resp = f
         .client
@@ -534,7 +534,7 @@ async fn test_index_file_text_for_binary() {
     assert_eq!(body["status"], "ok");
 
     // Now search for the extracted text — should find the image.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let resp = f
         .client
@@ -570,7 +570,7 @@ async fn test_index_file_text_for_binary() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Old text should no longer match (replaced).
     let resp = f
@@ -621,7 +621,7 @@ async fn test_prefix_matching_in_content() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Exact match should still work
     let resp = f
