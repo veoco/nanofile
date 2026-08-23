@@ -815,60 +815,19 @@ impl DirService {
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-        crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_commit.root_id, path)
-            .await
-            .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
-
         let dir_name = path
             .trim_end_matches('/')
             .rsplit_once('/')
             .map(|(_, n)| n)
             .unwrap_or("");
 
-        let parent_path = match path.trim_end_matches('/').rsplit_once('/') {
-            Some(("", _)) => "/",
-            Some((parent, _)) => parent,
-            None => "/",
-        };
-
-        let mtime = if parent_path == "/" {
-            let root_data =
-                crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &head_commit.root_id)
-                    .await
-                    .unwrap_or_else(|_| FsDirData {
-                        dirents: vec![],
-                        obj_type: SEAF_METADATA_TYPE_DIR,
-                        version: 1,
-                    });
-            root_data
-                .dirents
-                .iter()
-                .find(|d| d.name == dir_name)
-                .map(|d| d.mtime)
-                .unwrap_or(0)
-        } else {
-            let parent_fs_id = match crate::fs::core::resolve_fs_id(
-                &self.repos,
-                repo_id,
-                &head_commit.root_id,
-                parent_path,
-            )
-            .await
-            {
-                Ok(id) => id,
-                Err(_) => return Err(AppError::NotFound("Folder not found.".into())),
-            };
-            let parent_data =
-                crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
-                    .await
-                    .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
-            parent_data
-                .dirents
-                .iter()
-                .find(|d| d.name == dir_name)
-                .map(|d| d.mtime)
-                .unwrap_or(0)
-        };
+        // Resolve the directory in a single tree walk to the parent's dirent
+        // for the mtime. The previous code resolved the full path only to
+        // discard the result, then re-resolved the parent path.
+        let (_, mtime) =
+            crate::fs::core::resolve_file_entry(&self.repos, repo_id, &head_commit.root_id, path)
+                .await
+                .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
 
         let permission = self
             .repos

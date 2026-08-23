@@ -506,23 +506,6 @@ impl SyncService {
             .await
     }
 
-    /// Check if a parent commit exists (not the null commit).
-    pub async fn parent_commit_exists(
-        &self,
-        repo_id: &str,
-        parent_id: &str,
-    ) -> Result<bool, AppError> {
-        if parent_id == EMPTY_SHA1 {
-            return Ok(true);
-        }
-        Ok(self
-            .repos
-            .commit
-            .find_by_repo_and_commit_id(repo_id, parent_id)
-            .await?
-            .is_some())
-    }
-
     // ── Branch update (sync protocol) ──────────────────────────────────
 
     /// Check file blocks exist for a commit and compute size delta.
@@ -873,8 +856,12 @@ impl SyncService {
         )
         .await?;
 
-        if let Some(ref parent_id) = new_commit.parent_id
-            && !self.parent_commit_exists(repo_id, parent_id).await?
+        // Parent existence is already known from the single `find_commit`
+        // above (a real parent yields a `base_root_id`; the null commit
+        // yields `None` by the `!= EMPTY_SHA1` guard).
+        if let Some(parent_id) = new_commit.parent_id.as_deref()
+            && parent_id != EMPTY_SHA1
+            && base_root_id.is_none()
         {
             return Err(AppError::BadRequest("parent commit not found".into()));
         }
@@ -916,20 +903,12 @@ impl SyncService {
 
             crate::fs::core::adjust_repo_size(&self.repos, repo_id, size_delta).await?;
 
-            let old_root = if let Some(ref parent_id) = new_commit.parent_id
-                && parent_id != EMPTY_SHA1
-            {
-                self.find_commit(repo_id, parent_id)
-                    .await?
-                    .map(|c| c.root_id)
-            } else {
-                None
-            };
-
+            // The parent commit (and thus its root) was already fetched
+            // once above; reuse it instead of re-querying per CAS attempt.
             let changes = tree_diff::diff_trees(
                 &self.repos,
                 repo_id,
-                old_root.as_deref(),
+                base_root_id.as_deref(),
                 &new_commit.root_id,
             )
             .await
