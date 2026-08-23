@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::Semaphore;
 
 use rand::RngExt;
 use sea_orm::DatabaseConnection;
@@ -11,6 +12,19 @@ use base::error::AppError;
 use infra::serialization::pack_fs;
 use infra::storage::DynBlockStorage;
 
+/// Cap on concurrent background reindex tasks spawned from sync commits and
+/// REST batch file ops. Each task reads up to 8MB from block storage and
+/// tokenizes on a blocking thread, so an unbounded batch (e.g. an initial sync
+/// of a large repo, or a batch copy of many files) could saturate CPU and disk.
+/// Callers queue on the semaphore; the permit is released when the task ends.
+const MAX_CONCURRENT_REINDEX: usize = 4;
+
+static REINDEX_CONCURRENCY: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn reindex_semaphore() -> &'static Arc<Semaphore> {
+    REINDEX_CONCURRENCY.get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_REINDEX)))
+}
+
 /// Reindex a file in the background so the full-file read + index write
 /// doesn't block the sync commit response. The 30s background committer
 /// persists the writer afterwards, so the index converges within that window.
@@ -20,7 +34,13 @@ pub(crate) fn spawn_reindex(
     repo_id: String,
     path: String,
 ) {
+    let permit = reindex_semaphore().clone();
     tokio::spawn(async move {
+        // Wait for a slot so a large batch can't run an unbounded number of
+        // concurrent 8MB reads + tokenization passes.
+        let Ok(_permit) = permit.acquire_owned().await else {
+            return;
+        };
         if let Err(e) = indexer.reindex_file(&repo_id, &path, &block_store).await {
             tracing::warn!("sync index file {}: {e}", path);
         }
@@ -983,9 +1003,9 @@ impl SyncService {
                             }
                         }
                         "rename" | "move" => {
-                            if let Some(ref old_path) = change.old_path {
-                                let _ = indexer.delete_file_async(repo_id, old_path).await;
-                            }
+                            // The old path is removed by its own `delete`
+                            // change in this batch (diff_trees never un-emits
+                            // deletes), so only reindex the new path here.
                             spawn_reindex(
                                 indexer.clone(),
                                 block_store.clone(),
