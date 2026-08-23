@@ -1281,25 +1281,22 @@ impl TestClient {
             .unwrap()
     }
 
-    /// POST /api2/repos/ with server-side password (enc_version 2).
+    /// POST /api2/repos/ creating an encrypted repo (enc_version 2) whose magic
+    /// and random_key are derived server-side-test from the password.
     pub async fn create_encrypted_repo_with_password(
         &self,
         token: &str,
         name: &str,
         password: &str,
     ) -> reqwest::Response {
-        self.client
-            .post(format!("{}/api2/repos/", self.base_url))
-            .bearer_auth(token)
-            .form(&serde_json::json!({
-                "name": name,
-                "encrypted": 1,
-                "enc_version": 2,
-                "password": password,
-            }))
-            .send()
+        let repo_id = uuid::Uuid::new_v4().to_string();
+        let magic = infra::crypto::key_derivation::generate_magic(&repo_id, password, 2, "")
+            .expect("v2 magic derivation cannot fail");
+        let random_key =
+            infra::crypto::key_derivation::generate_random_key_for_repo(password, 2, "")
+                .expect("v2 random_key derivation cannot fail");
+        self.create_encrypted_repo(token, name, &repo_id, &magic, &random_key, 2)
             .await
-            .unwrap()
     }
 
     /// POST /api/v2.1/repos/{repo_id}/set-password/ with JSON body.

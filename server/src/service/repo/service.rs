@@ -243,6 +243,28 @@ impl RepoService {
         let repo_id = repo_id_opt.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let now = chrono::Utc::now().timestamp();
 
+        if encrypted_val == 1 {
+            // The server can only operate encrypted repos of version 2/4 (v1/v3
+            // are rejected by derive_key), and magic/random_key come from the
+            // client — reject a repo whose version/keys the server could never use.
+            if !matches!(enc_version_val, 2 | 4) {
+                return Err(AppError::BadRequest(
+                    "unsupported enc_version (only 2 and 4 are supported)".into(),
+                ));
+            }
+            let magic_ok = magic
+                .as_deref()
+                .is_some_and(|m| m.len() == 64 && m.chars().all(|c| c.is_ascii_hexdigit()));
+            let random_key_ok = random_key
+                .as_deref()
+                .is_some_and(|k| k.len() == 96 && k.chars().all(|c| c.is_ascii_hexdigit()));
+            if !magic_ok || !random_key_ok {
+                return Err(AppError::BadRequest(
+                    "magic must be 64 hex chars and random_key must be 96 hex chars".into(),
+                ));
+            }
+        }
+
         let params = crate::repository::repo::CreateRepoParams {
             id: repo_id.clone(),
             name: name.clone(),

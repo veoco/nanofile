@@ -305,3 +305,105 @@ async fn test_change_password_readonly_member_forbidden() {
         "read-only member must not change the encrypted repo password"
     );
 }
+
+// ==================== Security: encrypted-repo creation validation ====================
+
+/// An encrypted repo with an unsupported enc_version (the server can only
+/// operate 2/4) must be rejected.
+#[tokio::test]
+async fn test_create_encrypted_repo_rejects_unsupported_version() {
+    let f = TestFixture::new().await;
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let (magic, random_key) = make_encrypted_params(&repo_id, "pw");
+
+    let resp = f
+        .client
+        .create_encrypted_repo(&f.api_token, "bad-ver", &repo_id, &magic, &random_key, 1)
+        .await;
+    assert_eq!(resp.status(), 400, "enc_version 1 must be rejected");
+}
+
+/// A magic that isn't 64 hex chars must be rejected.
+#[tokio::test]
+async fn test_create_encrypted_repo_rejects_bad_magic() {
+    let f = TestFixture::new().await;
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let (_, random_key) = make_encrypted_params(&repo_id, "pw");
+
+    let resp = f
+        .client
+        .create_encrypted_repo(
+            &f.api_token,
+            "bad-magic",
+            &repo_id,
+            &"g".repeat(64),
+            &random_key,
+            2,
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "non-hex magic must be rejected");
+}
+
+/// A malformed random_key must be rejected.
+#[tokio::test]
+async fn test_create_encrypted_repo_rejects_bad_random_key() {
+    let f = TestFixture::new().await;
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let (magic, _) = make_encrypted_params(&repo_id, "pw");
+
+    let resp = f
+        .client
+        .create_encrypted_repo(
+            &f.api_token,
+            "bad-rk",
+            &repo_id,
+            &magic,
+            "not-a-random-key",
+            2,
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "malformed random_key must be rejected");
+}
+
+/// An encrypted repo without a magic must be rejected.
+#[tokio::test]
+async fn test_create_encrypted_repo_requires_magic() {
+    let f = TestFixture::new().await;
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let (_, random_key) = make_encrypted_params(&repo_id, "pw");
+
+    let resp = f
+        .client
+        .post_form(
+            "/api2/repos/",
+            Some(&f.api_token),
+            &[
+                ("name", "no-magic"),
+                ("encrypted", "1"),
+                ("enc_version", "2"),
+                ("random_key", &random_key),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "missing magic must be rejected");
+}
+
+/// A valid enc_version 4 repo (per-repo salt) is still accepted.
+#[tokio::test]
+async fn test_create_encrypted_repo_accepts_v4() {
+    let f = TestFixture::new().await;
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let salt = key_derivation::generate_repo_salt();
+    let magic = key_derivation::generate_magic(&repo_id, "pw", 4, &salt).unwrap();
+    let random_key = key_derivation::generate_random_key_for_repo("pw", 4, &salt).unwrap();
+
+    let resp = f
+        .client
+        .create_encrypted_repo(&f.api_token, "v4-lib", &repo_id, &magic, &random_key, 4)
+        .await;
+    assert_eq!(
+        resp.status(),
+        201,
+        "enc_version 4 with valid keys should succeed"
+    );
+}

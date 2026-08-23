@@ -26,6 +26,14 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   hashed session cookies with CSRF protection, path-traversal-safe filename handling.
 - **Encrypted libraries**: AES-256-CBC blocks with Seafile-compatible `magic` / `random_key`,
   in-memory password cache with TTL.
+  - **Security note**: the stored `magic` is derived with PBKDF2-SHA256 at **1000 iterations**,
+    which the Seafile wire protocol fixes and cannot be raised without breaking client interop.
+    `magic` is a password-equivalent value, so a leaked database lets weak passwords be brute-forced
+    offline. Use a long, random library password, and prefer **enc_version 4** (per-library random
+    salt) over v2 (a fixed global salt). The server only accepts enc_version 2/4 and validates the
+    magic/random_key format on creation. Known limitation: the `/api2/repos/` create API has no
+    `salt` field, so a library created through it derives as if v2 — real per-library v4 salts are
+    created through the sync protocol.
 - **Storage & versioning**: per-user quotas, content-addressed block store, full history with
   revision browse / restore, per-repo history limits and TTL, garbage collection (history pruning +
   unreachable FS-object cleanup), trash with revert, deleted-library restore.
