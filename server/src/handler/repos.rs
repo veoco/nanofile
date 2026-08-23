@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::ok_json;
+use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
 use crate::middleware::auth::AuthUser;
 use crate::service::repo::password::PasswordService;
 use crate::service::repo::service;
@@ -142,9 +142,7 @@ pub async fn rename_repo(
 
     // Parse repo_name from body, trying JSON, form-urlencoded, then multipart
     let (_parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
     let repo_name = parse_body_field(&bytes, "repo_name", "repo_name required")?;
 
@@ -180,9 +178,7 @@ pub async fn update_repo(
     req: axum::http::Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let (_parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
     let update: UpdateRepoRequest = serde_json::from_slice(&bytes)
         .map_err(|e| AppError::BadRequest(format!("invalid JSON: {e}")))?;
@@ -235,9 +231,7 @@ pub async fn set_repo_password_v2(
     req: axum::http::Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let (_parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
     let password = parse_body_field(&bytes, "password", "password required")?;
 
@@ -271,9 +265,7 @@ pub async fn check_repo_password_v2(
     .await?;
 
     let (_parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
     let magic = parse_body_field(&bytes, "magic", "magic required")?;
 

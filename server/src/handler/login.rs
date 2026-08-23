@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::ok_json;
+use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
 use crate::middleware::auth::AuthUser;
 use crate::service::auth::login::LoginResult;
 use base::error::AppError;
@@ -109,9 +109,15 @@ pub async fn login(
 ) -> Result<Response, AppError> {
     // ── Parse body: accept both JSON and URL-encoded form data ──────────
     let (parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::BadRequest(format!("Failed to read request body: {e}")))?;
+    let bytes = match read_body_limited(body, MAX_SMALL_BODY_BYTES).await {
+        Ok(b) => b,
+        Err(AppError::ContentTooLarge) => return Err(AppError::ContentTooLarge),
+        Err(e) => {
+            return Err(AppError::BadRequest(format!(
+                "Failed to read request body: {e}"
+            )));
+        }
+    };
 
     let content_type = parts
         .headers

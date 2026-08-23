@@ -68,6 +68,29 @@ async fn test_login_success() {
     assert_eq!(token.len(), 40);
 }
 
+/// Security: the anonymous login endpoint must cap request-body size so an
+/// attacker cannot force a huge in-memory buffer (the global upload limit is
+/// 4 GiB). The 1 MiB small-body cap must yield 413.
+#[tokio::test]
+async fn test_login_body_size_limited() {
+    let server = TestServer::start().await;
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    let raw = reqwest::Client::builder().no_proxy().build().unwrap();
+    let url = format!("{}/api2/auth-token/", server.base_url);
+
+    // 2 MiB of form data: over the 1 MiB cap, far under the 4 GiB global limit.
+    let mut body = String::from("username=test@example.com&password=password123&");
+    body.push_str(&"x".repeat(2 * 1024 * 1024));
+
+    let resp = raw.post(&url).body(body).send().await.unwrap();
+    assert_eq!(
+        resp.status(),
+        413,
+        "oversized login body must be rejected with 413"
+    );
+}
+
 #[tokio::test]
 async fn test_login_wrong_password() {
     let server = TestServer::start().await;

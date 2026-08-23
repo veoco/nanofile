@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::handler::exif::get_exif;
-use crate::handler::ok_json;
+use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
 use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use crate::service::fs::file as file_svc;
@@ -195,9 +195,7 @@ pub async fn file_post_handler(
         .await?;
         Ok(ok_json())
     } else {
-        let bytes = axum::body::to_bytes(body, usize::MAX)
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
         let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)
             .map_err(|_| AppError::BadRequest("invalid form data".into()))?;
@@ -431,9 +429,7 @@ pub async fn lock_file_via_api_handler(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let repo_id = &access.repo_id;
     let (_parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
     let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)
         .map_err(|_| AppError::BadRequest("invalid form data".into()))?;
@@ -466,9 +462,7 @@ pub async fn create_file_v21(
     let repo_id = &access.repo_id;
 
     let (parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
     let content_type = parts
         .headers
         .get("content-type")

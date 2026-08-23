@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::fs::core::trash;
-use crate::handler::ok_json;
+use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
 use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use base::error::AppError;
@@ -132,9 +132,7 @@ pub async fn revert_dirents(
     let repo_id = &access.repo_id;
 
     let (_, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
     let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)
         .map_err(|_| AppError::BadRequest("invalid form data".into()))?;
 
@@ -176,7 +174,7 @@ pub async fn clean_trash(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let repo_id = &access.repo_id;
 
-    let keep_days = parse_clean_trash_body(req).await;
+    let keep_days = parse_clean_trash_body(req).await?;
 
     trash::clean_trash(&state.repos, repo_id, keep_days).await?;
 
@@ -198,12 +196,12 @@ pub async fn clean_trash(
     Ok(ok_json())
 }
 
-async fn parse_clean_trash_body(req: Request<Body>) -> Option<i64> {
+async fn parse_clean_trash_body(req: Request<Body>) -> Result<Option<i64>, AppError> {
     let (_, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX).await.ok()?;
-    serde_json::from_slice::<CleanTrashBody>(&bytes)
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
+    Ok(serde_json::from_slice::<CleanTrashBody>(&bytes)
         .ok()
-        .and_then(|b| b.keep_days)
+        .and_then(|b| b.keep_days))
 }
 
 pub async fn list_trash(

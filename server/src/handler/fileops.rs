@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::{MAX_SMALL_BODY_BYTES, read_body_limited};
 use crate::middleware::repo_extractor::RepoPathWrite;
 use crate::repository::Repositories;
 use crate::service::fs::fileops::{self as fops_svc};
@@ -126,9 +127,7 @@ async fn parse_form_body(
     req: Request<axum::body::Body>,
 ) -> Result<HashMap<String, String>, AppError> {
     let (_, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
     serde_urlencoded::from_bytes(&bytes)
         .map_err(|_| AppError::BadRequest("invalid form data".into()))
 }

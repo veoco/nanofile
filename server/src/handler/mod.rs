@@ -5,10 +5,31 @@
 //! each have their own subdirectories due to their distinct auth patterns.
 
 use axum::Json;
+use base::error::AppError;
 
 /// Standard success response body: `{"success": true}`.
 pub fn ok_json() -> Json<serde_json::Value> {
     Json(serde_json::json!({"success": true}))
+}
+
+/// Upper bound for pure-metadata request bodies (login, file/dir/repo/trash
+/// ops). These never carry file bytes; the global upload limit is far larger.
+pub const MAX_SMALL_BODY_BYTES: usize = 1024 * 1024;
+
+/// Read a request body with a hard size cap; oversized bodies map to 413.
+pub async fn read_body_limited(
+    body: axum::body::Body,
+    limit: usize,
+) -> Result<bytes::Bytes, AppError> {
+    axum::body::to_bytes(body, limit).await.map_err(|e| {
+        let too_large = std::error::Error::source(&e)
+            .is_some_and(|src| src.is::<http_body_util::LengthLimitError>());
+        if too_large {
+            AppError::ContentTooLarge
+        } else {
+            AppError::Internal(e.to_string())
+        }
+    })
 }
 
 pub mod account;

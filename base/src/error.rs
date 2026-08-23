@@ -20,6 +20,9 @@ pub enum AppError {
     #[error("too many requests")]
     TooManyRequests,
 
+    #[error("request body too large")]
+    ContentTooLarge,
+
     #[error("repo password required")]
     RepoPasswdRequired,
 
@@ -120,6 +123,10 @@ mod into_response_impl {
                 AppError::TooManyRequests => (
                     StatusCode::TOO_MANY_REQUESTS,
                     json!({ "error_msg": "Too many requests" }),
+                ),
+                AppError::ContentTooLarge => (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    json!({ "error_msg": "Request body too large" }),
                 ),
                 AppError::RepoPasswdRequired => (
                     StatusCode::from_u16(440).unwrap(),

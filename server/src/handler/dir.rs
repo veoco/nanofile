@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::ok_json;
+use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
 use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use base::error::AppError;
@@ -113,9 +113,7 @@ pub async fn dir_post_handler(
     let repo_id = &access.repo_id;
 
     let (_parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
     let (op, p, newname): (Option<String>, Option<String>, Option<String>) =
         if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
