@@ -403,6 +403,44 @@ async fn test_upload_blks_commit_rejects_size_lie() {
     assert_eq!(resp.status(), 400, "size lie must be rejected");
 }
 
+/// Security: upload-blks `file` parts must respect the 8 MiB per-block cap so
+/// a token holder can't force a multi-GB in-memory buffer per part.
+#[tokio::test]
+async fn test_upload_blks_block_size_limited() {
+    let f = TestFixture::new().await;
+
+    let resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let url: String = resp.json().await.unwrap();
+
+    // A 9 MiB block part: over the 8 MiB cap, far under the 4 GiB global limit.
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(vec![0u8; 9 * 1024 * 1024]).file_name("a"),
+    );
+    let resp = f.client.post_multipart_url(&url, form).await;
+    assert_eq!(
+        resp.status(),
+        413,
+        "oversized block part must be rejected with 413"
+    );
+
+    // A normal small block still succeeds.
+    let data = b"hello";
+    let block_id = {
+        use sha1::{Digest, Sha1};
+        let mut h = Sha1::new();
+        h.update(data);
+        hex::encode(h.finalize())
+    };
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(data.to_vec()).file_name(block_id.clone()),
+    );
+    let resp = f.client.post_multipart_url(&url, form).await;
+    assert_eq!(resp.status(), 200, "small block upload should succeed");
+}
+
 // ======================================================================
 // In-transit streaming (in-order chunks CDC'd into blocks) tests
 // ======================================================================

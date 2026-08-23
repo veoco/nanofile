@@ -16,6 +16,11 @@ pub fn ok_json() -> Json<serde_json::Value> {
 /// ops). These never carry file bytes; the global upload limit is far larger.
 pub const MAX_SMALL_BODY_BYTES: usize = 1024 * 1024;
 
+/// Upper bound for a single content-addressed block. The CDC max block is
+/// 4 MiB; 2x leaves room for encrypted (AES-padded) block data. Shared by the
+/// sync put_block and the mobile upload-blks-api paths.
+pub const MAX_BLOCK_UPLOAD_BYTES: usize = 8 * 1024 * 1024;
+
 /// Read a request body with a hard size cap; oversized bodies map to 413.
 pub async fn read_body_limited(
     body: axum::body::Body,

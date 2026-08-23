@@ -7,6 +7,7 @@ use futures::stream::{self, StreamExt};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::MAX_BLOCK_UPLOAD_BYTES;
 use crate::middleware::auth::SyncAuth;
 use base::error::AppError;
 use infra::crypto::fs_id::sha1_hex;
@@ -26,11 +27,6 @@ pub fn block_routes() -> Router<Arc<AppState>> {
             axum::routing::get(get_block_map),
         )
 }
-
-/// A block is at most the CDC max block (4 MiB); 2x leaves room for encrypted
-/// (AES-padded) block data. Cap the request so a sync client can't force a
-/// multi-GB buffered allocation per request.
-const MAX_BLOCK_UPLOAD_BYTES: usize = 8 * 1024 * 1024;
 
 /// Validate that a block_id is exactly 40 lowercase hex characters.
 /// Matches seafile-server's is_object_id_valid() behavior.

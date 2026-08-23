@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::ok_json;
+use crate::handler::{MAX_BLOCK_UPLOAD_BYTES, MAX_SMALL_BODY_BYTES, ok_json};
 use crate::service::sharing::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
 use base::error::AppError;
@@ -149,6 +149,36 @@ async fn read_chunked_field(
             return Err(AppError::BadRequest(format!(
                 "chunk exceeds per-chunk limit {max_chunk_bytes}"
             )));
+        }
+        out.extend_from_slice(&c);
+    }
+    Ok(out)
+}
+
+/// Stream a multipart field into memory under `limit`. Rejects an oversized
+/// part from its Content-Length header before buffering, and independently
+/// caps the bytes actually read so a lying header can't force a large buffer.
+async fn read_multipart_field_limited(
+    field: &mut axum::extract::multipart::Field<'_>,
+    limit: usize,
+) -> Result<Vec<u8>, AppError> {
+    if let Some(len) = field
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+        && len > limit
+    {
+        return Err(AppError::ContentTooLarge);
+    }
+    let mut out = Vec::with_capacity(limit.min(1 << 20));
+    while let Some(c) = field
+        .chunk()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart field read error: {e}")))?
+    {
+        if out.len() + c.len() > limit {
+            return Err(AppError::ContentTooLarge);
         }
         out.extend_from_slice(&c);
     }
@@ -1363,7 +1393,7 @@ pub async fn upload_blks_api(
     let uid = Some(info.user_id);
     let mut fields: HashMap<String, String> = HashMap::new();
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
@@ -1371,11 +1401,7 @@ pub async fn upload_blks_api(
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
             let block_id = field.file_name().unwrap_or("").to_string();
-            let data = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::Internal(format!("block read error: {e}")))?
-                .to_vec();
+            let data = read_multipart_field_limited(&mut field, MAX_BLOCK_UPLOAD_BYTES).await?;
             if !block_id.is_empty() && !data.is_empty() {
                 // Stream each block: verify its SHA-1 and write it immediately,
                 // so one request can't buffer every block in memory at once.
@@ -1394,13 +1420,10 @@ pub async fn upload_blks_api(
                     })?;
             }
         } else {
-            fields.insert(
-                name,
-                field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
-            );
+            let raw = read_multipart_field_limited(&mut field, MAX_SMALL_BODY_BYTES).await?;
+            let text = String::from_utf8(raw)
+                .map_err(|_| AppError::BadRequest("invalid utf-8 field value".into()))?;
+            fields.insert(name, text);
         }
     }
 
