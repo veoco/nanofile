@@ -120,6 +120,8 @@ registration_max_per_hour = 5
 totp_max_attempts = 5
 # Max password attempts for password-protected share/upload links per IP per hour (0 = unlimited)
 link_password_max_per_hour = 5
+# Max anonymous share-link downloads per IP per minute (0 = unlimited)
+share_download_max_per_minute = 30
 
 [ui]
 # Environment variables:

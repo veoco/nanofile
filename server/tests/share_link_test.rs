@@ -1,7 +1,6 @@
 mod common;
 
-use common::TestFixture;
-use common::create_test_user;
+use common::{AuthLimits, TestFixture, create_test_user};
 
 /// H.1 — POST /api/v2.1/share-links/ → GET /f/{token}/ download
 #[tokio::test]
@@ -1152,4 +1151,44 @@ async fn test_rw_member_sees_only_own_links() {
         .await;
     let links = list.json::<serde_json::Value>().await.unwrap();
     assert_eq!(links.as_array().unwrap().len(), 1);
+}
+
+/// Anonymous share-link downloads are rate-limited per client IP: requests
+/// beyond `share_download_max_per_minute` within the window get 429.
+#[tokio::test]
+async fn test_share_download_rate_limited() {
+    let f = TestFixture::new_with_auth_limits(AuthLimits {
+        share_download_max_per_minute: 3,
+    })
+    .await;
+
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "rate.txt", b"data")
+        .await;
+    assert!(up.status().is_success(), "upload failed");
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/rate.txt" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "create share link failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    // 3 downloads within the per-minute window pass, the 4th is rejected.
+    for i in 0..3 {
+        let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
+        assert_eq!(dl.status(), 200, "download {i} should succeed");
+    }
+    let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
+    assert_eq!(
+        dl.status(),
+        429,
+        "download beyond the per-minute cap should be rate limited"
+    );
 }

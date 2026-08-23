@@ -524,6 +524,9 @@ pub struct AuthConfig {
     /// per hour (0 = unlimited).
     #[serde(default = "default_five")]
     pub link_password_max_per_hour: u32,
+    /// Max anonymous share-link downloads per IP per minute (0 = unlimited).
+    #[serde(default = "default_share_download_max_per_minute")]
+    pub share_download_max_per_minute: u32,
 }
 
 impl Default for AuthConfig {
@@ -542,6 +545,7 @@ impl Default for AuthConfig {
             registration_max_per_hour: default_five(),
             totp_max_attempts: default_five(),
             link_password_max_per_hour: default_five(),
+            share_download_max_per_minute: default_share_download_max_per_minute(),
         }
     }
 }
@@ -569,6 +573,9 @@ fn default_true() -> bool {
 }
 fn default_five() -> u32 {
     5
+}
+fn default_share_download_max_per_minute() -> u32 {
+    30
 }
 fn default_password_min_length() -> u32 {
     8

@@ -47,6 +47,23 @@ struct ShareAccessValidationTemplate {
 
 // ── Handler helpers ───────────────────────────────────────────────────────
 
+/// Rate-limit anonymous share-link downloads per client IP (these endpoints
+/// are reachable with just the share token and no login).
+fn check_share_download_rate(
+    state: &Arc<AppState>,
+    addr: &SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), AppError> {
+    let client_ip =
+        crate::middleware::effective_client_ip(addr, headers, &state.config.server.trusted_proxies);
+    let key = format!("share_download:{client_ip}");
+    if state.auth_limiters.share_download.is_limited(&key) {
+        return Err(AppError::TooManyRequests);
+    }
+    state.auth_limiters.share_download.record_attempt(&key);
+    Ok(())
+}
+
 /// Resolve file metadata from the repo.
 async fn resolve_file_meta(
     repos: &crate::repository::Repositories,
@@ -63,6 +80,7 @@ async fn resolve_file_meta(
 /// GET /f/{token}/ — show HTML preview or download file.
 pub async fn shared_file_view(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(token): Path<String>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
@@ -103,6 +121,7 @@ pub async fn shared_file_view(
 
     // Handle ?dl=1 — download the file directly
     if params.get("dl").map(|s| s.as_str()) == Some("1") {
+        check_share_download_rate(&state, &addr, &headers)?;
         let (file_data, block_ids) =
             resolve_file_meta(&state.repos, &link.repo_id, &link.path).await?;
 
@@ -267,6 +286,7 @@ struct DirEntryInfo {
 /// GET /d/{token}/ — show directory file listing, or ?dl=1 to download ZIP.
 pub async fn shared_dir_view(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(token): Path<String>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
@@ -327,6 +347,7 @@ pub async fn shared_dir_view(
 
     // Handle ?dl=1 — download entire directory as ZIP
     if params.get("dl").map(|s| s.as_str()) == Some("1") {
+        check_share_download_rate(&state, &addr, &headers)?;
         let dir_name = link
             .path
             .rsplit_once('/')
@@ -536,6 +557,7 @@ pub async fn shared_dir_view(
 /// GET /d/{token}/files/{*path} — download a file from a shared directory.
 pub async fn shared_dir_file_view(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path((token, file_path)): Path<(String, String)>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
@@ -564,6 +586,8 @@ pub async fn shared_dir_file_view(
             Err(AppError::BadRequest("password required".into()))
         };
     }
+
+    check_share_download_rate(&state, &addr, &headers)?;
 
     // Combine share path with requested file path
     let full_path = if file_path.starts_with('/') {

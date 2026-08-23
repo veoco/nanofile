@@ -107,6 +107,20 @@ impl Default for ZipLimits {
     }
 }
 
+/// Auth rate-limit overrides for tests.
+#[derive(Clone, Copy)]
+pub struct AuthLimits {
+    pub share_download_max_per_minute: u32,
+}
+
+impl Default for AuthLimits {
+    fn default() -> Self {
+        Self {
+            share_download_max_per_minute: 30,
+        }
+    }
+}
+
 impl TestServer {
     pub async fn start() -> Self {
         Self::start_with_config(false, false, 30, 90).await
@@ -141,6 +155,7 @@ impl TestServer {
             None,
             None,
             None,
+            None,
             |_| {},
         )
         .await
@@ -159,6 +174,7 @@ impl TestServer {
             true,
             None,
             Some(limits),
+            None,
             None,
             None,
             |_| {},
@@ -181,6 +197,7 @@ impl TestServer {
             None,
             Some(limits),
             None,
+            None,
             |_| {},
         )
         .await
@@ -197,6 +214,27 @@ impl TestServer {
             true,
             false,
             true,
+            None,
+            None,
+            None,
+            Some(limits),
+            None,
+            |_| {},
+        )
+        .await
+    }
+
+    /// Start a server with custom auth rate limits (anonymous share-download).
+    pub async fn start_with_auth_limits(limits: AuthLimits) -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
             None,
             None,
             None,
@@ -230,7 +268,7 @@ impl TestServer {
         tweak: impl FnOnce(&mut infra::config::ServerConfig) + Send + 'static,
     ) -> Self {
         Self::start_full_tweaked(
-            false, false, 30, 90, true, false, true, None, None, None, None, tweak,
+            false, false, 30, 90, true, false, true, None, None, None, None, None, tweak,
         )
         .await
     }
@@ -274,6 +312,7 @@ impl TestServer {
             None,
             None,
             None,
+            None,
             |_| {},
         )
         .await
@@ -294,6 +333,7 @@ impl TestServer {
         task_limits: Option<TaskLimits>,
         temp_limits: Option<TempLimits>,
         zip_limits: Option<ZipLimits>,
+        auth_limits: Option<AuthLimits>,
         tweak: F,
     ) -> Self
     where
@@ -367,6 +407,9 @@ impl TestServer {
                 registration_max_per_hour: 10,
                 totp_max_attempts: 10,
                 link_password_max_per_hour: 10,
+                share_download_max_per_minute: auth_limits
+                    .unwrap_or_default()
+                    .share_download_max_per_minute,
             },
             logging: infra::config::LoggingConfig {
                 level: "debug".to_string(),
@@ -645,6 +688,34 @@ impl TestFixture {
             ..Default::default()
         })
         .await;
+        let client = server.client();
+        let db = &*server.db;
+
+        let user_id = create_test_user(db, "test@example.com", "password").await;
+
+        let resp = client.login("test@example.com", "password").await;
+        assert_eq!(resp.status(), 200, "login failed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let api_token = body["token"].as_str().unwrap().to_string();
+
+        let repo_id = create_test_repo(&client, &api_token, "test-repo").await;
+        let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
+
+        Self {
+            server,
+            client,
+            email: "test@example.com".to_string(),
+            password: "password".to_string(),
+            api_token,
+            repo_id,
+            sync_token,
+            user_id,
+        }
+    }
+
+    /// Create a test environment with custom auth rate limits.
+    pub async fn new_with_auth_limits(limits: AuthLimits) -> Self {
+        let server = TestServer::start_with_auth_limits(limits).await;
         let client = server.client();
         let db = &*server.db;
 
