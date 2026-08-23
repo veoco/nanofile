@@ -253,6 +253,20 @@
             {% endfor %}
         {% endif %}
 
+        {% if has_more || page > 1 %}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-top:0.75rem;">
+            {% if page > 1 %}
+            <a href="/d/{{ token }}/?{% if dir_path != "/" %}p={{ dir_path }}&{% endif %}page={{ page - 1 }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry" style="display:inline-flex;width:auto;">{{ t.tr("common.previous") }}</a>
+            {% else %}
+            <span></span>
+            {% endif %}
+            <span style="font-size:0.75rem;color:#9ca3af;">{{ t.trf("common.page_of", [("page", &page.to_string()), ("total", &total_pages.to_string())]) }}</span>
+            {% if has_more %}
+            <a href="/d/{{ token }}/?{% if dir_path != "/" %}p={{ dir_path }}&{% endif %}page={{ page + 1 }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry" style="display:inline-flex;width:auto;">{{ t.tr("common.next") }}</a>
+            {% endif %}
+        </div>
+        {% endif %}
+
         <div class="footer">{{ t.tr("pub.powered_by") }}</div>
     </div>
 </body>

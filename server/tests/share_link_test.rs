@@ -870,3 +870,75 @@ async fn test_share_link_create_directory_returns_d_type() {
         "directory share link URL should be /d/..., got: {link}"
     );
 }
+
+/// H.1d — GET /d/{token}/ paginates a large directory (200 entries per page)
+/// instead of rendering the whole folder in one response.
+#[tokio::test]
+async fn test_share_dir_view_paginates_large_folder() {
+    let f = TestFixture::new().await;
+
+    let mkdir = f
+        .client
+        .create_dir(&f.api_token, &f.repo_id, "/shared-dir")
+        .await;
+    assert!(mkdir.status().is_success(), "mkdir failed");
+
+    for i in 0..250 {
+        let up = f
+            .client
+            .upload_file(
+                &f.api_token,
+                &f.repo_id,
+                "/shared-dir",
+                &format!("file-{i:03}.txt"),
+                b"content",
+            )
+            .await;
+        assert!(up.status().is_success(), "upload {i} failed");
+    }
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/shared-dir" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "create share link failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap();
+
+    // Page 1 shows at most 200 entries and a "next" link.
+    let page1 = f
+        .client
+        .get(&format!("/d/{}/", token), None)
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(
+        page1.matches("class=\"entry-name\"").count(),
+        200,
+        "page 1 should render exactly 200 entries"
+    );
+    assert!(page1.contains("page=2"), "page 1 should link to page 2");
+
+    // Page 2 shows the remaining entries and a "previous" link back to page 1.
+    let page2 = f
+        .client
+        .get(&format!("/d/{}/?page=2", token), None)
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(
+        page2.matches("class=\"entry-name\"").count(),
+        50,
+        "page 2 should render the remaining 50 entries"
+    );
+    assert!(
+        page2.contains("page=1"),
+        "page 2 should link back to page 1"
+    );
+}

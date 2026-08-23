@@ -4,6 +4,8 @@
 
 use futures::StreamExt;
 use futures::io::AsyncWriteExt;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
 
 use async_zip::tokio::write::ZipFileWriter;
@@ -24,6 +26,18 @@ pub struct ZipFileEntry {
     pub block_ids: Vec<String>,
     /// Uncompressed size in bytes.
     pub size: i64,
+}
+
+/// Cap on how many ZIP archives are generated concurrently across the server.
+/// Each stream runs a deflate-heavy writer task plus block reads, so a flood of
+/// large downloads could otherwise saturate CPU and disk. Callers queue on the
+/// semaphore; the permit is released when the stream's writer task finishes.
+const MAX_CONCURRENT_ZIPS: usize = 2;
+
+static ZIP_CONCURRENCY: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn zip_semaphore() -> &'static Arc<Semaphore> {
+    ZIP_CONCURRENCY.get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_ZIPS)))
 }
 
 /// Recursively collect all files under `dir_path`.
@@ -190,6 +204,14 @@ pub fn stream_zip(
     let (duplex_writer, duplex_reader) = tokio::io::duplex(64 * 1024);
 
     tokio::spawn(async move {
+        // Gate concurrent archive generation so a burst of large downloads
+        // can't saturate the runtime. The permit drops when the writer task
+        // finishes (including error paths), freeing a slot for the next zip.
+        let _permit = zip_semaphore()
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| std::io::Error::other(format!("zip concurrency gate failed: {e}")))?;
         let mut zip = ZipFileWriter::with_tokio(duplex_writer);
 
         for entry in &files {

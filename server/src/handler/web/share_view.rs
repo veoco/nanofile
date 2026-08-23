@@ -250,8 +250,12 @@ struct SharedDirViewTemplate {
     pub download_url: String,
     pub password_query: String,
     pub description: Option<String>,
+    pub page: u32,
+    pub total_pages: usize,
+    pub has_more: bool,
 }
 
+#[derive(Clone)]
 struct DirEntryInfo {
     pub name: String,
     pub ext: String,
@@ -430,6 +434,26 @@ pub async fn shared_dir_view(
         }
     });
 
+    // Paginate on the sorted list so a huge folder doesn't render one
+    // multi-MB page. `total` still drives the summary count; only the current
+    // page slice is sent to the template.
+    let total = entries.len();
+    const PER_PAGE: usize = 200;
+    let page = params
+        .get("page")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(1)
+        .max(1);
+    let start = ((page as usize - 1) * PER_PAGE).min(total);
+    let end = (start + PER_PAGE).min(total);
+    let has_more = end < total;
+    let total_pages = total.div_ceil(PER_PAGE);
+    let entries = if start < total {
+        entries[start..end].to_vec()
+    } else {
+        Vec::new()
+    };
+
     let dir_name = current_path
         .rsplit_once('/')
         .map(|(_, n)| n.to_string())
@@ -457,7 +481,7 @@ pub async fn shared_dir_view(
         None
     };
 
-    let item_count = entries.len();
+    let item_count = total;
 
     let expires_display = match link.expires_at {
         Some(ts) => format_ts(ts),
@@ -494,6 +518,9 @@ pub async fn shared_dir_view(
         download_url,
         password_query: pw_query,
         description: link.description.clone(),
+        page,
+        total_pages,
+        has_more,
     };
 
     let html = tpl
