@@ -80,6 +80,19 @@ pub struct NotificationConfig {
     /// Seconds without a Pong after which the connection is dropped.
     #[serde(default = "default_client_timeout")]
     pub client_timeout: u64,
+    /// Max concurrent WebSocket connections (0 = unlimited). Prevents
+    /// connection-exhaustion DoS by capping the total number of open
+    /// notification connections.
+    #[serde(default = "default_notif_max_connections")]
+    pub max_connections: u64,
+    /// Max concurrent WebSocket connections per client IP (0 = unlimited).
+    #[serde(default = "default_notif_max_connections_per_ip")]
+    pub max_connections_per_ip: u64,
+    /// Seconds a connection may stay unauthenticated (no valid `subscribe`
+    /// message) before the server drops it (0 = disabled). Prevents anonymous
+    /// connections from being held open indefinitely.
+    #[serde(default = "default_subscribe_timeout_secs")]
+    pub subscribe_timeout_secs: u64,
 }
 
 fn default_ping_interval() -> u64 {
@@ -87,6 +100,15 @@ fn default_ping_interval() -> u64 {
 }
 fn default_client_timeout() -> u64 {
     90
+}
+fn default_notif_max_connections() -> u64 {
+    1024
+}
+fn default_notif_max_connections_per_ip() -> u64 {
+    64
+}
+fn default_subscribe_timeout_secs() -> u64 {
+    60
 }
 
 impl Default for NotificationConfig {
@@ -96,6 +118,9 @@ impl Default for NotificationConfig {
             private_key: String::new(),
             ping_interval: default_ping_interval(),
             client_timeout: default_client_timeout(),
+            max_connections: default_notif_max_connections(),
+            max_connections_per_ip: default_notif_max_connections_per_ip(),
+            subscribe_timeout_secs: default_subscribe_timeout_secs(),
         }
     }
 }
@@ -709,6 +734,18 @@ impl Config {
         env_parse!(
             "NANOFILE_NOTIFICATION_CLIENT_TIMEOUT",
             self.notification.client_timeout
+        );
+        env_parse!(
+            "NANOFILE_NOTIFICATION_MAX_CONNECTIONS",
+            self.notification.max_connections
+        );
+        env_parse!(
+            "NANOFILE_NOTIFICATION_MAX_CONNECTIONS_PER_IP",
+            self.notification.max_connections_per_ip
+        );
+        env_parse!(
+            "NANOFILE_NOTIFICATION_SUBSCRIBE_TIMEOUT_SECS",
+            self.notification.subscribe_timeout_secs
         );
         env_parse!("NANOFILE_INDEX_ENABLED", self.index.enabled);
         env_path!("NANOFILE_INDEX_INDEX_DIR", self.index.index_dir);

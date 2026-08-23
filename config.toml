@@ -169,3 +169,6 @@ private_key = ""
 #   (e.g., when notification events are posted by external services).
 ping_interval = 30
 client_timeout = 90
+max_connections = 1024
+max_connections_per_ip = 64
+subscribe_timeout_secs = 60

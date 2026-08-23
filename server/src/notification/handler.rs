@@ -1,5 +1,8 @@
+use axum::extract::ConnectInfo;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::{Json, extract::State};
 use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde_json::Value;
@@ -17,15 +20,48 @@ use base::error::AppError;
 ///
 /// The client connects via WebSocket and then sends subscribe/unsubscribe
 /// messages to register for repo notifications.
+///
+/// The upgrade handshake itself carries no credentials — matching the official
+/// Seafile notification-server protocol, where auth happens per-repo via the
+/// JWT in the `subscribe` message. Instead, connection-level DoS defenses are
+/// applied here: global and per-IP connection caps are checked before the
+/// upgrade is committed (a 503 is returned when a cap is reached), and an
+/// unauthenticated connection is dropped after `subscribe_timeout_secs`.
 pub async fn ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws_socket(socket, state))
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    // The effective client IP honors X-Forwarded-For only when the TCP peer is
+    // a trusted proxy, so per-IP caps cannot be bypassed by spoofing the header.
+    let peer_ip = crate::middleware::effective_client_ip(
+        &addr,
+        &headers,
+        &state.config.server.trusted_proxies,
+    );
+
+    // Enforce connection caps before the upgrade is committed. `on_upgrade` is
+    // never called on this path, so the `OnUpgrade` future is dropped and no
+    // WebSocket is established — the client receives a plain 503.
+    if let Some(mgr) = &state.notification_manager {
+        let over_global =
+            mgr.max_connections() > 0 && mgr.connection_count() as u64 >= mgr.max_connections();
+        let over_ip = mgr.max_connections_per_ip() > 0
+            && mgr.connection_count_by_ip(&peer_ip) as u64 >= mgr.max_connections_per_ip();
+        if over_global || over_ip {
+            tracing::warn!(
+                "Rejecting WebSocket connection from {peer_ip}: connection limit reached"
+            );
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    }
+
+    ws.on_upgrade(move |socket| handle_ws_socket(socket, peer_ip, state))
 }
 
 /// Handle an upgraded WebSocket connection.
-async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
+async fn handle_ws_socket(socket: WebSocket, peer_ip: String, state: Arc<AppState>) {
     let notif_mgr = match &state.notification_manager {
         Some(mgr) => mgr.clone(),
         None => return,
@@ -34,7 +70,9 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
     let private_key = state.config.notification.private_key.clone();
     let ping_interval = state.config.notification.ping_interval;
     let client_timeout = state.config.notification.client_timeout;
+    let subscribe_timeout_secs = state.config.notification.subscribe_timeout_secs;
     let keepalive_enabled = ping_interval > 0 && client_timeout > 0;
+    let subscribe_timeout = std::time::Duration::from_secs(subscribe_timeout_secs);
 
     // Shared timestamp (nanos since UNIX epoch) of the last received Pong.
     let last_pong = Arc::new(AtomicI64::new(now_nanos()));
@@ -47,19 +85,49 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
     // Messages are pre-serialized bytes; the bounded channel caps how much a
     // slow client can buffer before notifications start being dropped.
     let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(64);
-    let (client_id, _client_state) = notif_mgr.register_client(tx);
+
+    // Register the client. If the connection caps were hit in the race window
+    // between the pre-upgrade check and this call, close the connection.
+    let (client_id, client_state) = match notif_mgr.register_client(tx, peer_ip) {
+        Some(pair) => pair,
+        None => {
+            tracing::debug!("WebSocket connection rejected during client registration");
+            return;
+        }
+    };
 
     // Task: read messages from the WebSocket.
     let read_mgr = notif_mgr.clone();
     let read_id = client_id;
     let read_key = private_key.clone();
     let read_pong = last_pong.clone();
+    let read_state = client_state.clone();
 
     let read_task = tokio::spawn(async move {
-        while let Some(msg) = stream.next().await {
-            let msg = match msg {
-                Ok(m) => m,
-                Err(_) => break,
+        let deadline = tokio::time::Instant::now() + subscribe_timeout;
+        loop {
+            // An unauthenticated connection must present a valid `subscribe`
+            // (proving repo access via JWT) before the deadline. The deadline
+            // is absolute, so a client sending garbage frames every few seconds
+            // cannot reset the timer and hold the connection open forever.
+            let next = if subscribe_timeout_secs > 0 && !read_state.is_authenticated() {
+                match tokio::time::timeout_at(deadline, stream.next()).await {
+                    Ok(inner) => inner,
+                    Err(_) => {
+                        tracing::debug!(
+                            "WebSocket closed: no valid subscribe within {}s",
+                            subscribe_timeout_secs
+                        );
+                        break;
+                    }
+                }
+            } else {
+                stream.next().await
+            };
+
+            let msg = match next {
+                Some(Ok(m)) => m,
+                _ => break,
             };
             if handle_read_msg(&read_mgr, read_id, &read_key, &read_pong, msg).await {
                 break;

@@ -24,11 +24,24 @@ pub struct ClientState {
     /// JWT token expiration timestamps per repo (repo_id → unix timestamp).
     /// Used by the periodic expiry checker to evict expired subscriptions.
     pub token_expirations: RwLock<HashMap<String, i64>>,
+    /// The client's effective IP (TCP peer, or X-Forwarded-For when behind a
+    /// trusted proxy). Used for the per-IP connection cap and audit logging.
+    pub peer_ip: String,
 }
 
 impl ClientState {
+    fn read_user(&self) -> RwLockReadGuard<'_, String> {
+        self.user.read().unwrap_or_else(PoisonError::into_inner)
+    }
     fn write_user(&self) -> RwLockWriteGuard<'_, String> {
         self.user.write().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether the client has successfully subscribed at least once (i.e. has
+    /// presented a valid repo JWT). The username is only ever set — never
+    /// cleared — so this transition is one-way.
+    pub fn is_authenticated(&self) -> bool {
+        !self.read_user().is_empty()
     }
     fn write_subscribed_repos(&self) -> RwLockWriteGuard<'_, HashSet<String>> {
         self.subscribed_repos
@@ -59,6 +72,10 @@ pub struct NotificationManager {
     subscriptions: Arc<RwLock<HashMap<String, HashSet<u64>>>>,
     /// Monotonically increasing client ID counter.
     next_id: Arc<AtomicU64>,
+    /// Global cap on concurrent connections (0 = unlimited).
+    max_connections: u64,
+    /// Cap on concurrent connections per client IP (0 = unlimited).
+    max_connections_per_ip: u64,
 }
 
 impl NotificationManager {
@@ -79,30 +96,77 @@ impl NotificationManager {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub fn new() -> Self {
+    pub fn new(max_connections: u64, max_connections_per_ip: u64) -> Self {
         Self {
             clients: Arc::new(RwLock::new(HashMap::new())),
             subscriptions: Arc::new(RwLock::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
+            max_connections,
+            max_connections_per_ip,
         }
     }
 
-    /// Register a new client and return its assigned ID and sender channel.
-    pub fn register_client(&self, sender: mpsc::Sender<Arc<[u8]>>) -> (u64, Arc<ClientState>) {
+    /// Global cap on concurrent connections (0 = unlimited).
+    pub fn max_connections(&self) -> u64 {
+        self.max_connections
+    }
+
+    /// Cap on concurrent connections per client IP (0 = unlimited).
+    pub fn max_connections_per_ip(&self) -> u64 {
+        self.max_connections_per_ip
+    }
+
+    /// Number of currently connected clients.
+    pub fn connection_count(&self) -> usize {
+        self.read_clients().len()
+    }
+
+    /// Number of currently connected clients from `peer_ip`.
+    pub fn connection_count_by_ip(&self, peer_ip: &str) -> usize {
+        self.read_clients()
+            .values()
+            .filter(|c| c.peer_ip == peer_ip)
+            .count()
+    }
+
+    /// Register a new client and return its assigned ID and client state.
+    ///
+    /// Enforces the global and per-IP connection caps atomically under the
+    /// client-map write lock. Returns `None` when either cap is reached.
+    pub fn register_client(
+        &self,
+        sender: mpsc::Sender<Arc<[u8]>>,
+        peer_ip: String,
+    ) -> Option<(u64, Arc<ClientState>)> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let client = Arc::new(ClientState {
             user: RwLock::new(String::new()),
             subscribed_repos: RwLock::new(HashSet::new()),
             sender,
             token_expirations: RwLock::new(HashMap::new()),
+            peer_ip,
         });
 
         {
             let mut clients = self.write_clients();
+            // Per-IP limit is checked by scanning the (bounded) client map
+            // under the same write lock, so no separate counter to keep in
+            // sync. Registration is infrequent so the scan is negligible.
+            let same_ip = clients
+                .values()
+                .filter(|c| c.peer_ip == client.peer_ip)
+                .count();
+            let over_ip =
+                self.max_connections_per_ip > 0 && same_ip as u64 >= self.max_connections_per_ip;
+            let over_global =
+                self.max_connections > 0 && clients.len() as u64 >= self.max_connections;
+            if over_global || over_ip {
+                return None;
+            }
             clients.insert(id, client.clone());
         }
 
-        (id, client)
+        Some((id, client))
     }
 
     /// Remove a client and all its subscriptions.
@@ -128,7 +192,10 @@ impl NotificationManager {
             }
         }
 
-        // Remove client from the global client map.
+        // Remove client from the global client map. `remove` returns the
+        // client only if it was still present, so this is idempotent — the
+        // read/write loops and the socket teardown all call it for the same
+        // client_id.
         {
             let mut clients = self.write_clients();
             clients.remove(&client_id);
@@ -341,7 +408,7 @@ impl NotificationManager {
 
 impl Default for NotificationManager {
     fn default() -> Self {
-        Self::new()
+        Self::new(1024, 64)
     }
 }
 

@@ -41,6 +41,24 @@ pub struct TestServer {
     temp_dirs: Vec<std::path::PathBuf>,
 }
 
+/// Notification WebSocket connection-limit overrides for tests.
+#[derive(Clone, Copy)]
+pub struct NotifLimits {
+    pub max_connections: u64,
+    pub max_connections_per_ip: u64,
+    pub subscribe_timeout_secs: u64,
+}
+
+impl Default for NotifLimits {
+    fn default() -> Self {
+        Self {
+            max_connections: 1024,
+            max_connections_per_ip: 64,
+            subscribe_timeout_secs: 60,
+        }
+    }
+}
+
 impl TestServer {
     pub async fn start() -> Self {
         Self::start_with_config(false, false, 30, 90).await
@@ -58,6 +76,12 @@ impl TestServer {
     /// Useful for testing keepalive/ping-pong behavior with short timeouts.
     pub async fn start_with_custom_keepalive(ping_interval: u64, client_timeout: u64) -> Self {
         Self::start_with_config(true, false, ping_interval, client_timeout).await
+    }
+
+    /// Start a server with notification and custom connection limits /
+    /// subscribe timeout. Useful for testing the WebSocket DoS defenses.
+    pub async fn start_with_notification_limits(limits: NotifLimits) -> Self {
+        Self::start_full_tweaked(true, false, 30, 90, true, false, true, Some(limits), |_| {}).await
     }
 
     /// Start a server with a specific `webdav_enabled` setting (for testing
@@ -83,7 +107,7 @@ impl TestServer {
     pub async fn start_with_server_info_config(
         tweak: impl FnOnce(&mut infra::config::ServerConfig) + Send + 'static,
     ) -> Self {
-        Self::start_full_tweaked(false, false, 30, 90, true, false, true, tweak).await
+        Self::start_full_tweaked(false, false, 30, 90, true, false, true, None, tweak).await
     }
 
     async fn start_with_config(
@@ -121,6 +145,7 @@ impl TestServer {
             webdav_enabled,
             email_enabled,
             sso_enabled,
+            None,
             |_| {},
         )
         .await
@@ -137,6 +162,7 @@ impl TestServer {
         webdav_enabled: bool,
         email_enabled: bool,
         sso_enabled: bool,
+        notif_limits: Option<NotifLimits>,
         tweak: F,
     ) -> Self
     where
@@ -222,6 +248,9 @@ impl TestServer {
                 },
                 ping_interval,
                 client_timeout,
+                max_connections: notif_limits.unwrap_or_default().max_connections,
+                max_connections_per_ip: notif_limits.unwrap_or_default().max_connections_per_ip,
+                subscribe_timeout_secs: notif_limits.unwrap_or_default().subscribe_timeout_secs,
             },
             index: infra::config::IndexConfig {
                 enabled: enable_index,

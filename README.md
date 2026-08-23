@@ -139,7 +139,7 @@ migration is applied in memory only.
 | `[logging]` | Log level. |
 | `[gc]` | Enable / schedule garbage collection. |
 | `[index]` | Full-text search switch (`enabled`) and index directory. |
-| `[notification]` | WebSocket notification settings and JWT private key. |
+| `[notification]` | WebSocket notification settings and JWT private key, plus connection caps (`max_connections`, `max_connections_per_ip`) and the unauthenticated-connection subscribe timeout (`subscribe_timeout_secs`). |
 
 `secret_key` is the single master key: the notification key and CSRF signing key are derived from it.
 Generate a unique one for production with `openssl rand -hex 32` and set it via

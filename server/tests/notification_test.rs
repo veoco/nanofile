@@ -1,6 +1,6 @@
 mod common;
 
-use common::{TestFixture, TestServer};
+use common::{NotifLimits, TestFixture, TestServer};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -256,6 +256,97 @@ async fn test_keepalive_keeps_connection_alive() {
             _ = &mut deadline => {
                 // ✅ Test passed — connection stayed alive for 5s
                 break;
+            }
+        }
+    }
+}
+
+// ── WebSocket connection-limit and subscribe-timeout tests ────────────────
+
+/// Test that the global WebSocket connection cap is enforced: once the limit
+/// is reached, further upgrade requests are rejected with a plain 503 (no
+/// WebSocket is established).
+#[tokio::test]
+async fn test_websocket_global_limit_rejected() {
+    let _server = TestServer::start_with_notification_limits(NotifLimits {
+        max_connections: 1,
+        max_connections_per_ip: 100,
+        subscribe_timeout_secs: 60,
+    })
+    .await;
+    let ws_url = _server.base_url.replace("http", "ws") + "/notification";
+
+    // First connection succeeds and stays open.
+    let (_ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+    // Let the server register the connection before trying the second one.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Second connection hits the global cap → 503, not a WebSocket upgrade.
+    let result = tokio_tungstenite::connect_async(&ws_url).await;
+    match result {
+        Err(tokio_tungstenite::tungstenite::Error::Http(ref r)) => {
+            assert_eq!(r.status(), 503, "expected 503, got {}", r.status());
+        }
+        Err(e) => panic!("expected 503 HTTP rejection, got: {e}"),
+        Ok(_) => panic!("expected the second connection to be rejected"),
+    }
+}
+
+/// Test that the per-IP WebSocket connection cap is enforced: two concurrent
+/// connections from the same client IP are rejected once the cap is reached.
+#[tokio::test]
+async fn test_websocket_per_ip_limit_rejected() {
+    let _server = TestServer::start_with_notification_limits(NotifLimits {
+        max_connections: 100,
+        max_connections_per_ip: 1,
+        subscribe_timeout_secs: 60,
+    })
+    .await;
+    let ws_url = _server.base_url.replace("http", "ws") + "/notification";
+
+    let (_ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let result = tokio_tungstenite::connect_async(&ws_url).await;
+    match result {
+        Err(tokio_tungstenite::tungstenite::Error::Http(ref r)) => {
+            assert_eq!(r.status(), 503, "expected 503, got {}", r.status());
+        }
+        Err(e) => panic!("expected 503 HTTP rejection, got: {e}"),
+        Ok(_) => panic!("expected the second connection from the same IP to be rejected"),
+    }
+}
+
+/// Test that an unauthenticated connection (no valid `subscribe` within the
+/// configured window) is dropped by the server.
+#[tokio::test]
+async fn test_websocket_subscribe_timeout_closes_connection() {
+    let _server = TestServer::start_with_notification_limits(NotifLimits {
+        max_connections: 100,
+        max_connections_per_ip: 100,
+        subscribe_timeout_secs: 1,
+    })
+    .await;
+    let ws_url = _server.base_url.replace("http", "ws") + "/notification";
+
+    let (mut ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+
+    // The server drops the socket without a Close handshake after ~1s, so the
+    // client observes either an error frame or the stream ending — both count
+    // as the connection being closed.
+    let deadline = tokio::time::sleep(std::time::Duration::from_secs(5));
+    tokio::pin!(deadline);
+
+    loop {
+        tokio::select! {
+            msg = ws_stream.next() => {
+                match msg {
+                    None | Some(Err(_)) => break, // connection closed
+                    Some(Ok(_)) => {}             // other frame — keep waiting
+                }
+            }
+            _ = &mut deadline => {
+                panic!("server did not close the unauthenticated connection within 5s");
             }
         }
     }

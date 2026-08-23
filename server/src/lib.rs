@@ -124,7 +124,10 @@ impl AppState {
 
         let notification_manager =
             if config.notification.enabled && !config.notification.private_key.is_empty() {
-                Some(NotificationManager::new())
+                Some(NotificationManager::new(
+                    config.notification.max_connections,
+                    config.notification.max_connections_per_ip,
+                ))
             } else {
                 None
             };
