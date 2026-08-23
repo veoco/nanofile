@@ -308,20 +308,11 @@ pub async fn unlink_device(
     State(state): State<Arc<AppState>>,
     Form(form): Form<UnlinkDeviceForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    // CSRF check — only validate when form includes a token (gradual rollout).
-    if let Some(ref token) = form.csrf_token {
-        let expected = crate::service::auth::csrf::generate_csrf_token(
-            &state.csrf_secret,
-            &user.session_token,
-        );
-        if *token != expected {
-            return Err(AppError::BadRequest(
-                I18n::get(user.language.as_deref())
-                    .tr("common.invalid_csrf")
-                    .to_string(),
-            ));
-        }
-    }
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.csrf_token.as_deref(),
+    )?;
 
     // 1. Delete API tokens for this device (identified by platform + device_id).
     state

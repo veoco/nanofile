@@ -633,3 +633,98 @@ async fn test_sysadmin_delete_user_requires_csrf() {
         .unwrap();
     assert!(gone.is_none(), "deleted user should no longer exist");
 }
+
+// ==================== Security: settings device-unlink CSRF ====================
+
+/// Extract the csrf_token from the settings page HTML (same HMAC value as any
+/// other page for the same session).
+async fn settings_csrf_token(client: &reqwest::Client, base_url: &str) -> String {
+    let html = client
+        .get(format!("{}/settings/", base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    html.split(r#"name="csrf_token" value=""#)
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .expect("settings page should embed a csrf_token")
+        .to_string()
+}
+
+/// Unlinking a device without a csrf_token must be rejected (the token is
+/// mandatory, not optional).
+#[tokio::test]
+async fn test_settings_unlink_device_requires_csrf() {
+    let server = TestServer::start().await;
+    create_test_user(server.db.as_ref(), "test@example.com", "password").await;
+    let client = ui_login(&server).await;
+
+    // No token → 400.
+    let resp = client
+        .post(format!("{}/settings/devices/", server.base_url))
+        .form(&[("platform", "linux"), ("device_id", "some-client-id")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "missing csrf_token must be rejected");
+
+    // Valid token → 302 (no matching device, deletes are no-ops).
+    let token = settings_csrf_token(&client, &server.base_url).await;
+    let resp = client
+        .post(format!("{}/settings/devices/", server.base_url))
+        .form(&[
+            ("platform", "linux"),
+            ("device_id", "some-client-id"),
+            ("csrf_token", &token),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "valid csrf_token should succeed");
+}
+
+// ==================== Security: 2FA disable CSRF ====================
+
+/// Disabling 2FA without a csrf_token must be rejected.
+#[tokio::test]
+async fn test_two_factor_disable_requires_csrf() {
+    let server = TestServer::start().await;
+    create_test_user(server.db.as_ref(), "test@example.com", "password").await;
+    let client = ui_login(&server).await;
+
+    // No token → 400.
+    let resp = client
+        .post(format!("{}/settings/two-factor/disable/", server.base_url))
+        .form(&[("password", "password")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "missing csrf_token must be rejected");
+
+    // Wrong token → 400.
+    let resp = client
+        .post(format!("{}/settings/two-factor/disable/", server.base_url))
+        .form(&[("password", "password"), ("csrf_token", "wrong-token")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "invalid csrf_token must be rejected");
+
+    // Valid token + wrong password → 200 (page re-rendered with error, not a
+    // CSRF rejection — proving the CSRF check passed).
+    let token = settings_csrf_token(&client, &server.base_url).await;
+    let resp = client
+        .post(format!("{}/settings/two-factor/disable/", server.base_url))
+        .form(&[("password", "wrong-password"), ("csrf_token", &token)])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "valid csrf_token should pass the CSRF check (wrong password renders the page)"
+    );
+}
