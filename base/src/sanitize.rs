@@ -48,32 +48,6 @@ pub fn validate_filename(name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Validate a name that may contain `/` for nested paths (used internally
-/// by `FileOps::create_file` for batch directory copy).
-///
-/// Rejects the same dangerous characters as `validate_filename`, but allows
-/// `/` since it represents nested virtual FS entries, not filesystem paths.
-pub fn validate_name(name: &str) -> Result<(), &'static str> {
-    if name.is_empty() || name == "." || name == ".." {
-        return Err("invalid name");
-    }
-    if name.len() > MAX_FILENAME_LEN {
-        return Err("name too long");
-    }
-    if name.contains('\0') {
-        return Err("name contains null byte");
-    }
-    // Only reject XSS-dangerous characters, allow '/' for nested entries.
-    for segment in name.split('/') {
-        for ch in INVALID_FILENAME_CHARS {
-            if *ch != '\0' && segment.contains(*ch) {
-                return Err("name contains invalid characters");
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Validate a Seafile-relative path (e.g. "/dir/file.txt").
 ///
 /// Must start with `/`, contain no null bytes, and have no
