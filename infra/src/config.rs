@@ -438,6 +438,16 @@ pub struct StorageConfig {
     /// Env: NANOFILE_STORAGE_TEMP_UPLOAD_TTL_HOURS
     #[serde(default = "default_temp_upload_ttl_hours")]
     pub temp_upload_ttl_hours: u64,
+    /// Max files in a single zip archive (0 = unlimited). Prevents one zip
+    /// request from packaging an unbounded number of files, bounding the CPU,
+    /// disk and bandwidth a single download can consume.
+    /// Env: NANOFILE_STORAGE_MAX_ZIP_ENTRIES
+    #[serde(default = "default_max_zip_entries")]
+    pub max_zip_entries: u64,
+    /// Max total uncompressed bytes in a single zip archive (0 = unlimited).
+    /// Env: NANOFILE_STORAGE_MAX_ZIP_BYTES
+    #[serde(default)]
+    pub max_zip_bytes: u64,
 }
 
 fn default_block_dir() -> PathBuf {
@@ -455,6 +465,9 @@ fn default_max_temp_uploads() -> u64 {
 fn default_temp_upload_ttl_hours() -> u64 {
     24
 }
+fn default_max_zip_entries() -> u64 {
+    10000
+}
 
 impl Default for StorageConfig {
     fn default() -> Self {
@@ -466,6 +479,8 @@ impl Default for StorageConfig {
             max_temp_uploads: default_max_temp_uploads(),
             max_temp_upload_bytes: 0,
             temp_upload_ttl_hours: default_temp_upload_ttl_hours(),
+            max_zip_entries: default_max_zip_entries(),
+            max_zip_bytes: 0,
         }
     }
 }
@@ -745,6 +760,11 @@ impl Config {
             "NANOFILE_STORAGE_TEMP_UPLOAD_TTL_HOURS",
             self.storage.temp_upload_ttl_hours
         );
+        env_parse!(
+            "NANOFILE_STORAGE_MAX_ZIP_ENTRIES",
+            self.storage.max_zip_entries
+        );
+        env_parse!("NANOFILE_STORAGE_MAX_ZIP_BYTES", self.storage.max_zip_bytes);
         env_parse!(
             "NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS",
             self.auth.password_hash_iterations

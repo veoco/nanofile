@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
-use crate::fs::zip::{ZipFileEntry, collect_selected_entries, stream_zip};
+use crate::fs::zip::{ZipFileEntry, ZipLimits, collect_selected_entries, stream_zip};
 use crate::middleware::auth::AuthUser;
 use base::error::AppError;
 
@@ -134,13 +134,18 @@ pub async fn zip_task_handler(
     // Resolve head commit root
     let root_fs_id = infra::common::util::get_head_root_id(&state.db, &repo_id).await?;
 
-    // Collect files (recursively for directories)
+    // Collect files (recursively for directories), bounded by the configured
+    // per-archive entry/byte caps (429 when exceeded).
     let files = collect_selected_entries(
         &state.repos,
         &repo_id,
         &root_fs_id,
         &payload.parent_dir,
         &payload.dirents,
+        ZipLimits {
+            max_entries: state.config.storage.max_zip_entries,
+            max_bytes: state.config.storage.max_zip_bytes,
+        },
     )
     .await?;
 

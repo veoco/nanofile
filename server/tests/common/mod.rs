@@ -91,6 +91,22 @@ impl Default for TempLimits {
     }
 }
 
+/// Zip-archive (entry/byte) limit overrides for tests.
+#[derive(Clone, Copy)]
+pub struct ZipLimits {
+    pub max_entries: u64,
+    pub max_bytes: u64,
+}
+
+impl Default for ZipLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: 10000,
+            max_bytes: 0,
+        }
+    }
+}
+
 impl TestServer {
     pub async fn start() -> Self {
         Self::start_with_config(false, false, 30, 90).await
@@ -124,6 +140,7 @@ impl TestServer {
             Some(limits),
             None,
             None,
+            None,
             |_| {},
         )
         .await
@@ -143,6 +160,7 @@ impl TestServer {
             None,
             Some(limits),
             None,
+            None,
             |_| {},
         )
         .await
@@ -159,6 +177,27 @@ impl TestServer {
             true,
             false,
             true,
+            None,
+            None,
+            Some(limits),
+            None,
+            |_| {},
+        )
+        .await
+    }
+
+    /// Start a server with custom zip-archive entry/byte limits. Useful for
+    /// testing the zip download DoS defenses.
+    pub async fn start_with_zip_limits(limits: ZipLimits) -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
             None,
             None,
             Some(limits),
@@ -191,7 +230,7 @@ impl TestServer {
         tweak: impl FnOnce(&mut infra::config::ServerConfig) + Send + 'static,
     ) -> Self {
         Self::start_full_tweaked(
-            false, false, 30, 90, true, false, true, None, None, None, tweak,
+            false, false, 30, 90, true, false, true, None, None, None, None, tweak,
         )
         .await
     }
@@ -234,6 +273,7 @@ impl TestServer {
             None,
             None,
             None,
+            None,
             |_| {},
         )
         .await
@@ -253,6 +293,7 @@ impl TestServer {
         notif_limits: Option<NotifLimits>,
         task_limits: Option<TaskLimits>,
         temp_limits: Option<TempLimits>,
+        zip_limits: Option<ZipLimits>,
         tweak: F,
     ) -> Self
     where
@@ -309,6 +350,8 @@ impl TestServer {
                 max_temp_uploads: temp_limits.unwrap_or_default().max_uploads,
                 max_temp_upload_bytes: temp_limits.unwrap_or_default().max_bytes,
                 temp_upload_ttl_hours: temp_limits.unwrap_or_default().ttl_hours,
+                max_zip_entries: zip_limits.unwrap_or_default().max_entries,
+                max_zip_bytes: zip_limits.unwrap_or_default().max_bytes,
             },
             auth: infra::config::AuthConfig {
                 password_hash_iterations: 1000,
@@ -602,6 +645,34 @@ impl TestFixture {
             ..Default::default()
         })
         .await;
+        let client = server.client();
+        let db = &*server.db;
+
+        let user_id = create_test_user(db, "test@example.com", "password").await;
+
+        let resp = client.login("test@example.com", "password").await;
+        assert_eq!(resp.status(), 200, "login failed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let api_token = body["token"].as_str().unwrap().to_string();
+
+        let repo_id = create_test_repo(&client, &api_token, "test-repo").await;
+        let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
+
+        Self {
+            server,
+            client,
+            email: "test@example.com".to_string(),
+            password: "password".to_string(),
+            api_token,
+            repo_id,
+            sync_token,
+            user_id,
+        }
+    }
+
+    /// Create a test environment with custom zip-archive entry/byte limits.
+    pub async fn new_with_zip_limits(limits: ZipLimits) -> Self {
+        let server = TestServer::start_with_zip_limits(limits).await;
         let client = server.client();
         let db = &*server.db;
 

@@ -89,6 +89,8 @@ ffmpeg_path = "ffmpeg"
 max_temp_uploads = 1000
 max_temp_upload_bytes = 0
 temp_upload_ttl_hours = 24
+max_zip_entries = 10000
+max_zip_bytes = 0
 
 [auth]
 # Environment variables:

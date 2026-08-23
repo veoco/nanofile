@@ -28,6 +28,26 @@ pub struct ZipFileEntry {
     pub size: i64,
 }
 
+/// Limits applied while collecting the file list for a zip archive.
+#[derive(Clone, Copy)]
+pub struct ZipLimits {
+    /// Max files to include in one archive (0 = unlimited).
+    pub max_entries: u64,
+    /// Max total uncompressed bytes in one archive (0 = unlimited).
+    pub max_bytes: u64,
+}
+
+/// Reject an archive that exceeds the configured entry-count or byte limits.
+fn check_zip_limits(entries: usize, total_bytes: u64, limits: ZipLimits) -> Result<(), AppError> {
+    if limits.max_entries > 0 && entries as u64 >= limits.max_entries {
+        return Err(AppError::TooManyRequests);
+    }
+    if limits.max_bytes > 0 && total_bytes > limits.max_bytes {
+        return Err(AppError::TooManyRequests);
+    }
+    Ok(())
+}
+
 /// Cap on how many ZIP archives are generated concurrently across the server.
 /// Each stream runs a deflate-heavy writer task plus block reads, so a flood of
 /// large downloads could otherwise saturate CPU and disk. Callers queue on the
@@ -51,6 +71,7 @@ pub async fn collect_dir_entries(
     root_fs_id: &str,
     dir_path: &str,
     zip_prefix: &str,
+    limits: ZipLimits,
 ) -> Result<Vec<ZipFileEntry>, AppError> {
     let dir_id = if dir_path == "/" {
         root_fs_id.to_string()
@@ -61,12 +82,19 @@ pub async fn collect_dir_entries(
     };
 
     let mut entries = Vec::new();
+    let mut total_bytes: u64 = 0;
     // Level frontier for directories; file ids are collected per level and
     // fetched in one batched query (O(#dirs)+O(#files) → O(depth)+1).
     let mut frontier: Vec<(String, String)> = vec![(dir_id, zip_prefix.to_string())];
     let mut pending_files: Vec<(String, String)> = Vec::new();
 
     while !frontier.is_empty() {
+        // Bail out before the next batched query once the entry cap is clearly
+        // exceeded, bounding both the DB traversal and the pending-file memory.
+        if limits.max_entries > 0 && pending_files.len() as u64 >= limits.max_entries {
+            return Err(AppError::TooManyRequests);
+        }
+
         let ids: Vec<String> = frontier
             .iter()
             .map(|(fs_id, _)| fs_id.clone())
@@ -112,10 +140,12 @@ pub async fn collect_dir_entries(
                     block_ids: file_data.block_ids.clone(),
                     size: file_data.size,
                 });
+                total_bytes = total_bytes.saturating_add(file_data.size.max(0) as u64);
             }
         }
     }
 
+    check_zip_limits(entries.len(), total_bytes, limits)?;
     Ok(entries)
 }
 
@@ -128,6 +158,7 @@ pub async fn collect_selected_entries(
     root_fs_id: &str,
     parent_dir: &str,
     dirents: &[String],
+    limits: ZipLimits,
 ) -> Result<Vec<ZipFileEntry>, AppError> {
     // Resolve parent_dir to get the listing of items within it
     let parent_dir_id = resolve_fs_id(repos, repo_id, root_fs_id, parent_dir)
@@ -139,6 +170,7 @@ pub async fn collect_selected_entries(
         .map_err(|e| AppError::NotFound(format!("Not a directory: {e}")))?;
 
     let mut all_files = Vec::new();
+    let mut total_bytes: u64 = 0;
     let mut pending_files: Vec<(String, String)> = Vec::new();
 
     for name in dirents {
@@ -152,14 +184,18 @@ pub async fn collect_selected_entries(
         let is_dir = entry.mode & S_IFDIR != 0;
 
         if is_dir {
-            // Full subdirectory: walk from this dir
+            // Full subdirectory: walk from this dir (limits apply per subtree
+            // and to the aggregate below).
             let dir_path = if parent_dir == "/" {
                 format!("/{name}")
             } else {
                 format!("{parent_dir}/{name}")
             };
             let sub_files =
-                collect_dir_entries(repos, repo_id, root_fs_id, &dir_path, name).await?;
+                collect_dir_entries(repos, repo_id, root_fs_id, &dir_path, name, limits).await?;
+            for f in &sub_files {
+                total_bytes = total_bytes.saturating_add(f.size.max(0) as u64);
+            }
             all_files.extend(sub_files);
         } else {
             pending_files.push((entry.id.clone(), name.clone()));
@@ -179,9 +215,11 @@ pub async fn collect_selected_entries(
                 block_ids: file_data.block_ids.clone(),
                 size: file_data.size,
             });
+            total_bytes = total_bytes.saturating_add(file_data.size.max(0) as u64);
         }
     }
 
+    check_zip_limits(all_files.len(), total_bytes, limits)?;
     Ok(all_files)
 }
 

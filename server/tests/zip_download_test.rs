@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{TestFixture, create_test_user};
+use common::{TestFixture, ZipLimits, create_test_user};
 use std::io::Read;
 
 /// Helper: upload a file to a repo.
@@ -261,4 +261,56 @@ async fn test_unauthorized_access_returns_403() {
         .zip_task(intruder_token, &f.repo_id, "/", &["some-file"])
         .await;
     assert_eq!(resp.status(), 403);
+}
+
+/// The configured per-archive entry cap is enforced: selecting more files than
+/// `max_zip_entries` rejects the zip-task request with 429.
+#[tokio::test]
+async fn test_zip_task_rejects_when_entry_limit_reached() {
+    let f = TestFixture::new_with_zip_limits(ZipLimits {
+        max_entries: 2,
+        max_bytes: 0,
+    })
+    .await;
+    upload(&f, "/", "z1.txt", b"a").await;
+    upload(&f, "/", "z2.txt", b"b").await;
+    upload(&f, "/", "z3.txt", b"c").await;
+
+    let resp = f
+        .client
+        .zip_task(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            &["z1.txt", "z2.txt", "z3.txt"],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        429,
+        "zip-task should be rejected over the entry cap"
+    );
+}
+
+/// The configured per-archive byte cap is enforced: selecting files whose total
+/// size exceeds `max_zip_bytes` rejects the zip-task request with 429.
+#[tokio::test]
+async fn test_zip_task_rejects_when_byte_limit_reached() {
+    let f = TestFixture::new_with_zip_limits(ZipLimits {
+        max_entries: 0,
+        max_bytes: 5,
+    })
+    .await;
+    upload(&f, "/", "b1.txt", b"12345").await;
+    upload(&f, "/", "b2.txt", b"x").await;
+
+    let resp = f
+        .client
+        .zip_task(&f.api_token, &f.repo_id, "/", &["b1.txt", "b2.txt"])
+        .await;
+    assert_eq!(
+        resp.status(),
+        429,
+        "zip-task should be rejected over the byte cap"
+    );
 }

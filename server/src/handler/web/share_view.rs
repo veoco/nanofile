@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
-use crate::fs::zip::{collect_dir_entries, stream_zip};
+use crate::fs::zip::{ZipLimits, collect_dir_entries, stream_zip};
 use crate::i18n::I18n;
 use crate::ui::{format_size, format_ts};
 use base::common::FsFileData;
@@ -344,6 +344,10 @@ pub async fn shared_dir_view(
             &head_commit.root_id,
             &link.path,
             &dir_name,
+            ZipLimits {
+                max_entries: state.config.storage.max_zip_entries,
+                max_bytes: state.config.storage.max_zip_bytes,
+            },
         )
         .await?;
 
