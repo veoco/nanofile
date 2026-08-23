@@ -390,6 +390,32 @@ fn build_file_entry(
     }
 }
 
+/// Group tag details into a per-path chip map plus the distinct tags used in
+/// the folder (for the sort-bar filter).
+fn build_tags_map(
+    details: Vec<crate::repository::file_tag::TagOnPath>,
+) -> (HashMap<String, Vec<TagChip>>, Vec<TagChip>) {
+    let mut tags_by_path: HashMap<String, Vec<TagChip>> = HashMap::new();
+    let mut folder_tags: Vec<TagChip> = Vec::new();
+    for d in details {
+        let chip = TagChip {
+            name: d.tag_name.clone(),
+            color: d.tag_color.clone(),
+        };
+        tags_by_path
+            .entry(d.file_path.clone())
+            .or_default()
+            .push(chip);
+        if !folder_tags.iter().any(|t| t.name == d.tag_name) {
+            folder_tags.push(TagChip {
+                name: d.tag_name,
+                color: d.tag_color,
+            });
+        }
+    }
+    (tags_by_path, folder_tags)
+}
+
 /// Returns true if the file extension is one that the thumbnail service supports
 /// for generating image thumbnails (in-process image formats, plus HEIC/HEIF/AVIF
 /// decoded via ffmpeg).
@@ -696,69 +722,8 @@ async fn file_browser_inner(
         }
     };
 
-    // Query starred entries for this user+repo to stamp the `starred` field.
-    let starred_set: HashSet<String> = repos
-        .starred
-        .find_by_user_and_repo(user.user_id, &repo_id)
-        .await?
-        .into_iter()
-        .map(|s| s.path.trim_end_matches('/').to_string())
-        .collect();
-
-    // Batch-load tags for the current folder's entries so each row can render
-    // its tag chips and the sort-bar filter knows which tags exist here.
-    let folder_paths: Vec<String> = entries_data
-        .1
-        .iter()
-        .map(|e| {
-            if path == "/" {
-                format!("/{}", e.name)
-            } else {
-                format!("{}/{}", path.trim_end_matches('/'), e.name)
-            }
-        })
-        .collect();
-    let tag_details = state
-        .repos
-        .file_tag
-        .find_tag_details_by_paths(&repo_id, &folder_paths)
-        .await?;
-    let mut tags_by_path: HashMap<String, Vec<TagChip>> = HashMap::new();
-    let mut folder_tags: Vec<TagChip> = Vec::new();
-    for d in tag_details {
-        let chip = TagChip {
-            name: d.tag_name.clone(),
-            color: d.tag_color.clone(),
-        };
-        tags_by_path
-            .entry(d.file_path.clone())
-            .or_default()
-            .push(chip);
-        if !folder_tags.iter().any(|t| t.name == d.tag_name) {
-            folder_tags.push(TagChip {
-                name: d.tag_name,
-                color: d.tag_color,
-            });
-        }
-    }
-
-    // Sort/filter/paginate on the lightweight dirent level first, then build
-    // `FileEntry` only for the current page slice. This keeps the cost
-    // proportional to the page size instead of the whole folder.
-    let mut dirents = entries_data.1;
-
-    // Apply the tag filter (current folder only, non-recursive).
-    if let Some(tag) = query.tag.as_deref().filter(|t| !t.is_empty()) {
-        dirents.retain(|e| {
-            let full_path = entry_full_path(&path, &e.name);
-            tags_by_path
-                .get(&full_path)
-                .map(|chips| chips.iter().any(|c| c.name == tag))
-                .unwrap_or(false)
-        });
-    }
-
-    let total = dirents.len() as i64;
+    // Pagination / view state must be known before deciding how wide the tag
+    // and star lookups need to be.
     let per_page = query.per_page.unwrap_or(200).min(500) as usize;
     let page = query.page.unwrap_or(1).max(1) as usize;
 
@@ -781,52 +746,128 @@ async fn file_browser_inner(
     let sort_field = query.sort.as_deref().unwrap_or("name");
     let sort_order = query.sort_order.as_deref().unwrap_or("asc");
 
-    // list/grid view: sort dirents, paginate, then build FileEntry per page row.
-    let entries: Vec<FileEntry>;
-    let has_more: bool;
-    if render_view == "list" || render_view == "grid" || render_view == "all" {
+    let has_tag_filter = query.tag.as_deref().map(|t| !t.is_empty()).unwrap_or(false);
+
+    // Tag lookups must cover the whole folder whenever the sort-bar needs the
+    // folder's full tag set (full-page `view=all`) or a tag filter has to scan
+    // the whole folder before paginating. Single-view partial loads (pagination
+    // via load-more) render only the current page, and the client discards the
+    // sort-bar from those responses, so the lookup can be narrowed to the page.
+    let needs_full_tags = has_tag_filter || render_view == "all";
+
+    // Sort/filter/paginate on the lightweight dirent level first, then build
+    // `FileEntry` only for the current page slice. This keeps the cost
+    // proportional to the page size instead of the whole folder.
+    let mut dirents = entries_data.1;
+
+    // Batch-load tags so each row can render its tag chips and the sort-bar
+    // filter knows which tags exist in the folder.
+    let mut tags_by_path: HashMap<String, Vec<TagChip>> = HashMap::new();
+    let mut folder_tags: Vec<TagChip> = Vec::new();
+    if needs_full_tags {
+        let folder_paths: Vec<String> = dirents
+            .iter()
+            .map(|e| entry_full_path(&path, &e.name))
+            .collect();
+        let tag_details = state
+            .repos
+            .file_tag
+            .find_tag_details_by_paths(&repo_id, &folder_paths)
+            .await?;
+        (tags_by_path, folder_tags) = build_tags_map(tag_details);
+    }
+
+    // Apply the tag filter (current folder only, non-recursive).
+    if let Some(tag) = query.tag.as_deref().filter(|t| !t.is_empty()) {
+        dirents.retain(|e| {
+            let full_path = entry_full_path(&path, &e.name);
+            tags_by_path
+                .get(&full_path)
+                .map(|chips| chips.iter().any(|c| c.name == tag))
+                .unwrap_or(false)
+        });
+    }
+
+    let total = dirents.len() as i64;
+
+    // list/grid view: sort dirents, then keep only the current page slice.
+    let mut list_slice: Vec<&DirEntry> = Vec::new();
+    let has_more: bool = if render_view == "list" || render_view == "grid" || render_view == "all" {
         sort_dirents(&mut dirents, sort_field, sort_order);
         let offset = (page - 1) * per_page;
         if offset < dirents.len() {
             let end = (offset + per_page).min(dirents.len());
-            has_more = end < dirents.len();
-            entries = dirents[offset..end]
-                .iter()
-                .map(|d| build_file_entry(t, &repo_id, &path, d, &starred_set, &tags_by_path))
-                .collect();
+            let has_more = end < dirents.len();
+            list_slice = dirents[offset..end].iter().collect();
+            has_more
         } else {
-            has_more = false;
-            entries = Vec::new();
+            false
         }
     } else {
-        has_more = false;
-        entries = Vec::new();
-    }
+        false
+    };
 
-    // Gallery view: media dirents sorted by mtime desc, independently paginated,
-    // then FileEntry built only for the page. Gallery keeps reverse-chronological
-    // order regardless of the configured sort used by list/grid views.
-    let gallery_groups: Vec<GalleryMonthGroup>;
-    let gallery_total: i64;
-    if render_view == "gallery" || render_view == "all" {
+    // Gallery view: media dirents sorted by mtime desc, independently
+    // paginated. Gallery keeps reverse-chronological order regardless of the
+    // configured sort used by list/grid views.
+    let mut gallery_slice: Vec<&DirEntry> = Vec::new();
+    let gallery_total: i64 = if render_view == "gallery" || render_view == "all" {
         let mut media: Vec<&DirEntry> = dirents.iter().filter(|d| is_media_dirent(d)).collect();
         media.sort_by_key(|d| std::cmp::Reverse(d.mtime)); // mtime descending
-        gallery_total = media.len() as i64;
         let offset = (page - 1) * per_page;
-        let paginated: Vec<FileEntry> = if offset < media.len() {
+        if offset < media.len() {
             let end = (offset + per_page).min(media.len());
-            media[offset..end]
-                .iter()
-                .map(|d| build_file_entry(t, &repo_id, &path, d, &starred_set, &tags_by_path))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        gallery_groups = group_entries_by_month(t, paginated);
+            gallery_slice = media[offset..end].to_vec();
+        }
+        media.len() as i64
     } else {
-        gallery_groups = Vec::new();
-        gallery_total = 0;
+        0
+    };
+
+    // The star lookup always covers only the page; the tag lookup is narrowed
+    // to the page too unless the sort-bar / tag filter needs the whole folder.
+    let mut page_paths: Vec<String> = Vec::with_capacity(list_slice.len() + gallery_slice.len());
+    for d in &list_slice {
+        page_paths.push(entry_full_path(&path, &d.name));
     }
+    for d in &gallery_slice {
+        let full_path = entry_full_path(&path, &d.name);
+        if !page_paths.contains(&full_path) {
+            page_paths.push(full_path);
+        }
+    }
+
+    if !needs_full_tags {
+        let tag_details = state
+            .repos
+            .file_tag
+            .find_tag_details_by_paths(&repo_id, &page_paths)
+            .await?;
+        (tags_by_path, folder_tags) = build_tags_map(tag_details);
+    }
+
+    // Query starred entries for the current page slice to stamp the `starred` field.
+    let starred_set: HashSet<String> = repos
+        .starred
+        .find_by_user_repo_and_paths(user.user_id, &repo_id, &page_paths)
+        .await?
+        .into_iter()
+        .map(|s| s.path.trim_end_matches('/').to_string())
+        .collect();
+
+    // Build FileEntry only for the current page (list/grid rows, then the
+    // gallery media slice); both views share the same tag/star maps.
+    let entries: Vec<FileEntry> = list_slice
+        .iter()
+        .map(|d| build_file_entry(t, &repo_id, &path, d, &starred_set, &tags_by_path))
+        .collect();
+    let gallery_groups: Vec<GalleryMonthGroup> = group_entries_by_month(
+        t,
+        gallery_slice
+            .iter()
+            .map(|d| build_file_entry(t, &repo_id, &path, d, &starred_set, &tags_by_path))
+            .collect(),
+    );
 
     // Gallery paginates the media subset independently (mtime-desc); expose
     // both the all-file counts (list/grid) and the media counts (gallery) to

@@ -31,6 +31,15 @@ pub trait StarredRepository: Send + Sync {
         repo_id: &str,
         path: &str,
     ) -> Result<Option<starred_file::Model>, AppError>;
+    /// Batch lookup of starred entries for the given paths (used to stamp the
+    /// `starred` flag for the current page of a file listing instead of loading
+    /// every star the user has in the repo).
+    async fn find_by_user_repo_and_paths(
+        &self,
+        user_id: i32,
+        repo_id: &str,
+        paths: &[String],
+    ) -> Result<Vec<starred_file::Model>, AppError>;
     async fn delete_by_user_repo_and_path(
         &self,
         user_id: i32,
@@ -106,6 +115,30 @@ impl StarredRepository for DbStarredRepository {
             .filter(starred_file::Column::Path.eq(path))
             .one(self.db.as_ref())
             .await?)
+    }
+
+    async fn find_by_user_repo_and_paths(
+        &self,
+        user_id: i32,
+        repo_id: &str,
+        paths: &[String],
+    ) -> Result<Vec<starred_file::Model>, AppError> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Chunk the IN list to stay under SQLite's ~999 variable limit.
+        const IN_BATCH: usize = 500;
+        let mut out = Vec::new();
+        for chunk in paths.chunks(IN_BATCH) {
+            let rows = starred_file::Entity::find()
+                .filter(starred_file::Column::UserId.eq(user_id))
+                .filter(starred_file::Column::RepoId.eq(repo_id))
+                .filter(starred_file::Column::Path.is_in(chunk.to_vec()))
+                .all(self.db.as_ref())
+                .await?;
+            out.extend(rows);
+        }
+        Ok(out)
     }
 
     async fn delete_by_user_repo_and_path(
