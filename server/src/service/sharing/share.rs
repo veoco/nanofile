@@ -386,13 +386,8 @@ pub async fn beshare_repo(
         return Err(AppError::BadRequest("user email is required".into()));
     }
 
-    // Verify caller has write permission on the repo
-    crate::domain::permission::check_repo_write_permission(
-        repos.member.as_ref(),
-        repo_id,
-        caller_user_id,
-    )
-    .await?;
+    crate::domain::permission::check_repo_owner(repos.member.as_ref(), repo_id, caller_user_id)
+        .await?;
 
     // Find the target user
     let target_user = repos
@@ -494,13 +489,8 @@ pub async fn modify_share_permission(
         ));
     }
 
-    // Only the repo owner can modify permissions.
-    crate::domain::permission::check_repo_write_permission(
-        repos.member.as_ref(),
-        repo_id,
-        caller_user_id,
-    )
-    .await?;
+    crate::domain::permission::check_repo_owner(repos.member.as_ref(), repo_id, caller_user_id)
+        .await?;
 
     let target_user = repos
         .user
@@ -549,13 +539,8 @@ pub async fn delete_share(
         return Err(AppError::BadRequest("user email is required".into()));
     }
 
-    // Only the repo owner can delete shares.
-    crate::domain::permission::check_repo_write_permission(
-        repos.member.as_ref(),
-        repo_id,
-        caller_user_id,
-    )
-    .await?;
+    crate::domain::permission::check_repo_owner(repos.member.as_ref(), repo_id, caller_user_id)
+        .await?;
 
     let target_user = repos
         .user

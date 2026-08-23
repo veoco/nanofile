@@ -153,6 +153,20 @@ impl TestClient {
         req.form(fields).send().await.unwrap()
     }
 
+    /// DELETE with JSON body and optional Bearer token.
+    pub async fn delete_json(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        body: &serde_json::Value,
+    ) -> reqwest::Response {
+        let mut req = self.client.delete(self.url(path));
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
+        req.json(body).send().await.unwrap()
+    }
+
     /// GET request authenticated via Seafile-Repo-Token header (sync protocol).
     pub async fn get_sync(&self, path: &str, token: &str) -> reqwest::Response {
         self.client

@@ -29,6 +29,27 @@ pub async fn check_repo_write_permission(
     }
 }
 
+/// Check if `user_id` is the owner of the repo.
+///
+/// Member management (sharing / modifying / removing members) is owner-only:
+/// an rw member must not be able to impersonate the owner. Non-owners are
+/// rejected with `AppError::Forbidden`.
+pub async fn check_repo_owner(
+    member_repo: &dyn MemberRepository,
+    repo_id: &str,
+    user_id: i32,
+) -> Result<(), AppError> {
+    let row = member_repo
+        .find_repo_owner_and_permission(repo_id, user_id)
+        .await?;
+
+    match row {
+        None => Err(AppError::NotFound("repo not found".into())),
+        Some((owner_id, _)) if owner_id == user_id => Ok(()),
+        _ => Err(AppError::Forbidden),
+    }
+}
+
 /// Check if `user_id` has read permission on the repo.
 ///
 /// The repo owner always has access. Any member (r or rw) has access.

@@ -114,6 +114,218 @@ async fn test_beshare_repo_readonly_member_cannot_share() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// M-1: Member management is owner-only — an rw member (a shared
+// collaborator) must not be able to add / modify / remove members,
+// which would let them impersonate the owner.
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_beshare_repo_rw_member_cannot_share() {
+    let f = TestFixture::new().await;
+
+    // Owner shares the repo with a collaborator as rw.
+    let _uid2 = create_test_user(&f.server.db, "collab@test.com", "password").await;
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "collab@test.com",
+                "permission": "rw"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // The rw collaborator tries to share the repo with a third user.
+    let resp = f.client.login("collab@test.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let collab_token = body["token"].as_str().unwrap();
+
+    let _uid3 = create_test_user(&f.server.db, "victim@test.com", "password").await;
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(collab_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "victim@test.com",
+                "permission": "rw"
+            }),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "rw member must be forbidden from sharing the repo"
+    );
+
+    // Verify the victim was NOT added to the repo members.
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let members: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let emails: Vec<&str> = members.iter().filter_map(|m| m["email"].as_str()).collect();
+    assert_eq!(
+        emails,
+        vec!["test@example.com", "collab@test.com"],
+        "only owner and rw collaborator should be members"
+    );
+}
+
+#[tokio::test]
+async fn test_modify_share_permission_rw_member_forbidden() {
+    let f = TestFixture::new().await;
+
+    // Owner shares with a rw collaborator and a read-only member.
+    let _uid2 = create_test_user(&f.server.db, "collab@test.com", "password").await;
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "collab@test.com",
+                "permission": "rw"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let _uid3 = create_test_user(&f.server.db, "reader@test.com", "password").await;
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "reader@test.com",
+                "permission": "r"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // The rw collaborator tries to escalate the read-only member to rw.
+    let resp = f.client.login("collab@test.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let collab_token = body["token"].as_str().unwrap();
+
+    let resp = f
+        .client
+        .put_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(collab_token),
+            &serde_json::json!({
+                "user": "reader@test.com",
+                "permission": "rw"
+            }),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "rw member must be forbidden from modifying permissions"
+    );
+
+    // Verify the reader's permission was not escalated.
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let members: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let reader_member = members
+        .iter()
+        .find(|m| m["email"] == "reader@test.com")
+        .unwrap();
+    assert_eq!(reader_member["permission"], "r");
+}
+
+#[tokio::test]
+async fn test_delete_share_rw_member_forbidden() {
+    let f = TestFixture::new().await;
+
+    // Owner shares with a rw collaborator and a read-only member.
+    let _uid2 = create_test_user(&f.server.db, "collab@test.com", "password").await;
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "collab@test.com",
+                "permission": "rw"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let _uid3 = create_test_user(&f.server.db, "reader@test.com", "password").await;
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "reader@test.com",
+                "permission": "r"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // The rw collaborator tries to remove the read-only member.
+    let resp = f.client.login("collab@test.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let collab_token = body["token"].as_str().unwrap();
+
+    let resp = f
+        .client
+        .delete_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(collab_token),
+            &serde_json::json!({"user": "reader@test.com"}),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "rw member must be forbidden from removing members"
+    );
+
+    // Verify the reader is still a member.
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let members: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(
+        members.iter().any(|m| m["email"] == "reader@test.com"),
+        "reader should still be a member after forbidden delete"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // V-2: Upload-link / update-link — verify that a user without write
 // permission cannot obtain an upload or update URL.
 // ─────────────────────────────────────────────────────────────────────
