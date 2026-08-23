@@ -66,3 +66,49 @@ async fn test_avatar_nonexistent_user() {
     assert!(body["is_default"].as_bool().unwrap_or(false));
     assert!(body["url"].as_str().unwrap_or("").contains("avatars"));
 }
+
+/// Security: avatar uploads must cap the multipart part at 1 MiB before
+/// buffering, so an authenticated user can't force a multi-GB allocation.
+#[tokio::test]
+async fn test_avatar_upload_size_limited() {
+    let f = TestFixture::new().await;
+
+    // Oversized part (2 MiB) → 413, far under the 4 GiB global upload limit.
+    let form = reqwest::multipart::Form::new().part(
+        "avatar",
+        reqwest::multipart::Part::bytes(vec![0u8; 2 * 1024 * 1024]).file_name("a.png"),
+    );
+    let resp = f
+        .client
+        .post_multipart("/api/v2.1/user-avatar/", Some(&f.api_token), form)
+        .await;
+    assert_eq!(
+        resp.status(),
+        413,
+        "oversized avatar must be rejected with 413"
+    );
+
+    // A real small PNG still uploads fine.
+    let png = {
+        let mut img = image::RgbImage::new(1, 1);
+        img.put_pixel(0, 0, image::Rgb([10, 20, 30]));
+        let mut bytes = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        bytes
+    };
+    let form = reqwest::multipart::Form::new().part(
+        "avatar",
+        reqwest::multipart::Part::bytes(png).file_name("a.png"),
+    );
+    let resp = f
+        .client
+        .post_multipart("/api/v2.1/user-avatar/", Some(&f.api_token), form)
+        .await;
+    assert_eq!(resp.status(), 200, "small PNG avatar should upload");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["avatar_url"].as_str().is_some(), "avatar_url missing");
+}

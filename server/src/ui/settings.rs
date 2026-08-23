@@ -10,8 +10,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::read_multipart_field_limited;
 use crate::i18n::I18n;
 use crate::service::auth::password::{hash_password_async, verify_password_async};
+use crate::service::user::avatar::MAX_AVATAR_SIZE;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -350,7 +352,7 @@ pub async fn upload_avatar(
     let mut avatar_field: Option<(String, Vec<u8>)> = None;
     let mut csrf_token: Option<String> = None;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?
@@ -362,7 +364,21 @@ pub async fn upload_avatar(
             }
             "avatar" => {
                 let file_name = field.file_name().unwrap_or("avatar.png").to_string();
-                let data = field.bytes().await.unwrap_or_default().to_vec();
+                let data = match read_multipart_field_limited(&mut field, MAX_AVATAR_SIZE).await {
+                    Ok(d) => d,
+                    Err(_) => {
+                        return render_settings_error(
+                            &state,
+                            &user,
+                            Some(
+                                I18n::get(user.language.as_deref())
+                                    .tr("settings.upload_avatar_failed")
+                                    .to_string(),
+                            ),
+                        )
+                        .await;
+                    }
+                };
                 avatar_field = Some((file_name, data));
             }
             _ => {}

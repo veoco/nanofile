@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::{MAX_BLOCK_UPLOAD_BYTES, MAX_SMALL_BODY_BYTES, ok_json};
+use crate::handler::{
+    MAX_BLOCK_UPLOAD_BYTES, MAX_SMALL_BODY_BYTES, ok_json, read_multipart_field_limited,
+};
 use crate::service::sharing::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
 use base::error::AppError;
@@ -149,36 +151,6 @@ async fn read_chunked_field(
             return Err(AppError::BadRequest(format!(
                 "chunk exceeds per-chunk limit {max_chunk_bytes}"
             )));
-        }
-        out.extend_from_slice(&c);
-    }
-    Ok(out)
-}
-
-/// Stream a multipart field into memory under `limit`. Rejects an oversized
-/// part from its Content-Length header before buffering, and independently
-/// caps the bytes actually read so a lying header can't force a large buffer.
-async fn read_multipart_field_limited(
-    field: &mut axum::extract::multipart::Field<'_>,
-    limit: usize,
-) -> Result<Vec<u8>, AppError> {
-    if let Some(len) = field
-        .headers()
-        .get(axum::http::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<usize>().ok())
-        && len > limit
-    {
-        return Err(AppError::ContentTooLarge);
-    }
-    let mut out = Vec::with_capacity(limit.min(1 << 20));
-    while let Some(c) = field
-        .chunk()
-        .await
-        .map_err(|e| AppError::Internal(format!("multipart field read error: {e}")))?
-    {
-        if out.len() + c.len() > limit {
-            return Err(AppError::ContentTooLarge);
         }
         out.extend_from_slice(&c);
     }

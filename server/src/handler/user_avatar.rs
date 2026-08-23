@@ -5,8 +5,10 @@ use axum::{
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::read_multipart_field_limited;
 use crate::middleware::auth::AuthUser;
 use crate::service::user::AvatarService;
+use crate::service::user::avatar::MAX_AVATAR_SIZE;
 use base::error::AppError;
 
 // ─── Upload handler ──────────────────────────────────────────────────────────
@@ -30,7 +32,7 @@ pub async fn upload_avatar(
     // Parse the multipart stream and find the "avatar" file field.
     let mut avatar_field: Option<(String, Vec<u8>, String)> = None;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::BadRequest(format!("multipart error: {e}")))?
@@ -42,11 +44,11 @@ pub async fn upload_avatar(
                 .content_type()
                 .map(|m| m.to_string())
                 .unwrap_or_else(|| "image/png".to_string());
-            let data = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::BadRequest(format!("read error: {e}")))?
-                .to_vec();
+            let data = match read_multipart_field_limited(&mut field, MAX_AVATAR_SIZE).await {
+                Ok(d) => d,
+                Err(AppError::ContentTooLarge) => return Err(AppError::ContentTooLarge),
+                Err(e) => return Err(AppError::BadRequest(format!("read error: {e}"))),
+            };
 
             avatar_field = Some((file_name, data, content_type));
             break; // Only process the first avatar field

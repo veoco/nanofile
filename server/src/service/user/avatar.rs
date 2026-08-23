@@ -11,7 +11,7 @@ use base::error::AppError;
 /// Path relative to this file: ../../../static/img/default-avatar.svg
 static DEFAULT_AVATAR: &[u8] = include_bytes!("../../../static/img/default-avatar.svg");
 
-const MAX_AVATAR_SIZE: usize = 1024 * 1024; // 1 MB
+pub const MAX_AVATAR_SIZE: usize = 1024 * 1024; // 1 MB
 const ALLOWED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif"];
 
 // ─── Public utility functions ────────────────────────────────────────────────
