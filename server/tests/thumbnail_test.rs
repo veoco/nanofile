@@ -110,3 +110,95 @@ async fn test_tiff_thumbnail_generated() {
         .and_then(|v| v.to_str().ok());
     assert_eq!(ct, Some("image/png"));
 }
+
+/// Thumbnails carry a strong ETag (SHA-1 of the PNG bytes); a matching
+/// `If-None-Match` returns 304, and editing the file changes the validator.
+#[tokio::test]
+async fn test_thumbnail_etag_conditional_request() {
+    let f = TestFixture::new().await;
+
+    fn make_tiff(pixel: [u8; 3]) -> Vec<u8> {
+        let mut img = image::RgbaImage::new(32, 32);
+        for p in img.pixels_mut() {
+            *p = image::Rgba([pixel[0], pixel[1], pixel[2], 255]);
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut buf, image::ImageFormat::Tiff)
+            .expect("TIFF encode failed");
+        buf.into_inner()
+    }
+
+    let resp = f
+        .client
+        .upload_file(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            "photo.tiff",
+            &make_tiff([1, 2, 3]),
+        )
+        .await;
+    assert!(resp.status().is_success());
+
+    let url = format!(
+        "{}/api2/repos/{}/thumbnail/?p=/photo.tiff&size=48",
+        f.server.base_url, f.repo_id
+    );
+    let client = reqwest::Client::new();
+
+    // 200 + ETag + body.
+    let resp = client
+        .get(&url)
+        .bearer_auth(&f.api_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .to_string();
+    assert!(!resp.bytes().await.unwrap().is_empty());
+
+    // Matching validator → 304 without a body.
+    let resp = client
+        .get(&url)
+        .bearer_auth(&f.api_token)
+        .header("if-none-match", &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 304);
+
+    // Editing the file (replace upload) changes the thumbnail → new ETag. The
+    // 1.1s pause ensures a new source mtime so the staleness check regenerates
+    // (mtime is second-resolution).
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let resp = f
+        .client
+        .upload_file(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            "photo.tiff",
+            &make_tiff([9, 9, 9]),
+        )
+        .await;
+    assert!(resp.status().is_success());
+    let resp = client
+        .get(&url)
+        .bearer_auth(&f.api_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let new_etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .to_string();
+    assert_ne!(etag, new_etag, "edited file must change the thumbnail ETag");
+}

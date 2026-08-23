@@ -1,7 +1,7 @@
 use axum::{
     Router,
     extract::{Query, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -21,6 +21,7 @@ pub async fn get_thumbnail(
     path: RepoPathRead,
     State(state): State<Arc<AppState>>,
     Query(query): Query<ThumbnailQuery>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let repo_id = path.repo_id;
     let path = query
@@ -38,7 +39,31 @@ pub async fn get_thumbnail(
     }
 
     let svc = state.thumbnail_service();
-    let data = svc.get_thumbnail(&repo_id, &path, size).await?;
+    let (data, etag) = svc.get_thumbnail(&repo_id, &path, size).await?;
+
+    // Conditional request: a matching validator short-circuits to 304 without
+    // re-sending the thumbnail body (mirrors the download endpoint).
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok());
+    let matches = match if_none_match {
+        Some("*") => true,
+        Some(v) => v.split(',').any(|t| t.trim() == etag),
+        None => false,
+    };
+    if matches {
+        // 304 carries the same cache headers as the 200 so the client can
+        // keep revalidating without a full refetch.
+        return Ok((
+            StatusCode::NOT_MODIFIED,
+            [
+                // Matching seahub's THUMBNAIL_CACHE_DAYS=7 → 604800 seconds
+                (header::CACHE_CONTROL, "private, max-age=604800"),
+                (header::ETAG, &etag),
+            ],
+        )
+            .into_response());
+    }
 
     Ok((
         StatusCode::OK,
@@ -46,6 +71,7 @@ pub async fn get_thumbnail(
             (header::CONTENT_TYPE, "image/png"),
             // Matching seahub's THUMBNAIL_CACHE_DAYS=7 → 604800 seconds
             (header::CACHE_CONTROL, "private, max-age=604800"),
+            (header::ETAG, &etag),
         ],
         data,
     )

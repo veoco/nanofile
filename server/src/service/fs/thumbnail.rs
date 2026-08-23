@@ -59,13 +59,14 @@ impl ThumbnailService {
 
     /// Get or generate a thumbnail for a file.
     ///
-    /// Returns the PNG thumbnail data.
+    /// Returns the PNG thumbnail data plus a strong ETag (SHA-1 of the bytes)
+    /// so the handler can serve `If-None-Match` conditional requests.
     pub async fn get_thumbnail(
         &self,
         repo_id: &str,
         path: &str,
         size: u32,
-    ) -> Result<Vec<u8>, AppError> {
+    ) -> Result<(Vec<u8>, String), AppError> {
         let normalized_path = if path.is_empty() || path == "/" {
             "/".to_string()
         } else if path.starts_with('/') {
@@ -135,9 +136,11 @@ impl ThumbnailService {
         if let Some(record) = existing {
             // Staleness check: if source file was modified after the thumbnail was created, regenerate
             if record.file_modified_at >= current_mtime && thumbnail_path.exists() {
-                return tokio::fs::read(&thumbnail_path)
+                let data = tokio::fs::read(&thumbnail_path)
                     .await
-                    .map_err(|e| AppError::Internal(e.to_string()));
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+                let etag = etag_for(&data);
+                return Ok((data, etag));
             }
             // Stale — fall through to regenerate
         }
@@ -231,7 +234,8 @@ impl ThumbnailService {
                 .await?;
         }
 
-        Ok(thumbnail_data)
+        let etag = etag_for(&thumbnail_data);
+        Ok((thumbnail_data, etag))
     }
 
     /// Generate a thumbnail for an audio/video file via ffmpeg.
@@ -458,6 +462,13 @@ fn run_with_timeout(cmd: &mut Command, timeout: std::time::Duration) -> bool {
             Err(_) => return false,
         }
     }
+}
+
+/// Strong ETag for a thumbnail: SHA-1 of the PNG bytes, so the validator
+/// always reflects exactly what was served (even when the staleness check
+/// mistakenly returns a cached image).
+fn etag_for(data: &[u8]) -> String {
+    format!("\"{}\"", infra::crypto::fs_id::sha1_hex(data))
 }
 
 /// Build a deterministic, collision-free filename prefix for a thumbnail.
