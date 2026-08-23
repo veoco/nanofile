@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 use std::sync::Arc;
 
 use base::error::AppError;
@@ -14,6 +16,14 @@ pub struct TagInput {
 #[async_trait]
 pub trait RepoTagRepository: Send + Sync {
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<repo_tag::Model>, AppError>;
+    /// Paginated variant of `find_by_repo_id` with the same stable ordering
+    /// (created_at, id), pushing limit/offset down to SQL.
+    async fn find_by_repo_id_paginated(
+        &self,
+        repo_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<repo_tag::Model>, AppError>;
     async fn find_by_id(&self, id: i32) -> Result<Option<repo_tag::Model>, AppError>;
     /// Fetch multiple tags by id in one query (chunked for SQLite).
     async fn find_by_ids(&self, ids: &[i32]) -> Result<Vec<repo_tag::Model>, AppError>;
@@ -65,6 +75,22 @@ impl RepoTagRepository for DbRepoTagRepository {
             .filter(repo_tag::Column::RepoId.eq(repo_id))
             .order_by_asc(repo_tag::Column::CreatedAt)
             .order_by_asc(repo_tag::Column::Id)
+            .all(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_repo_id_paginated(
+        &self,
+        repo_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<repo_tag::Model>, AppError> {
+        Ok(repo_tag::Entity::find()
+            .filter(repo_tag::Column::RepoId.eq(repo_id))
+            .order_by_asc(repo_tag::Column::CreatedAt)
+            .order_by_asc(repo_tag::Column::Id)
+            .limit(limit as u64)
+            .offset(offset as u64)
             .all(self.db.as_ref())
             .await?)
     }

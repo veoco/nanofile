@@ -198,9 +198,14 @@ impl MetadataService {
         start: usize,
         limit: usize,
     ) -> Result<serde_json::Value, AppError> {
-        let all = self.repos.repo_tag.find_by_repo_id(repo_id).await?;
-        let slice = all.iter().skip(start).take(limit);
-        let results: Vec<serde_json::Value> = slice.map(tag_to_json).collect();
+        // Paginate in SQL (stable created_at, id order) instead of loading all
+        // tags into memory and slicing.
+        let all = self
+            .repos
+            .repo_tag
+            .find_by_repo_id_paginated(repo_id, limit, start)
+            .await?;
+        let results: Vec<serde_json::Value> = all.iter().map(tag_to_json).collect();
         Ok(serde_json::json!({ "results": results, "metadata": [] }))
     }
 
@@ -390,10 +395,15 @@ impl MetadataService {
     }
 
     /// GET /metadata/tag-files/{tag_id}/ — files carrying a tag.
+    ///
+    /// `start`/`limit` paginate the tagged-file list in SQL; `None` (no query
+    /// params) keeps the original behavior of returning every file.
     pub async fn get_tag_files(
         &self,
         repo_id: &str,
         tag_id: i32,
+        start: Option<usize>,
+        limit: Option<usize>,
     ) -> Result<serde_json::Value, AppError> {
         if let Some(tag) = self.repos.repo_tag.find_by_id(tag_id).await? {
             if tag.repo_id != repo_id {
@@ -406,7 +416,7 @@ impl MetadataService {
         let links = self
             .repos
             .file_tag
-            .find_by_repo_and_tag_id(repo_id, tag_id)
+            .find_by_repo_and_tag_id(repo_id, tag_id, start, limit)
             .await?;
 
         // Resolve the head root once, then batch-resolve every file's info and

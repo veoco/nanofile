@@ -115,3 +115,98 @@ async fn test_metadata_record_returns_system_columns() {
     assert!(rec["_file_mtime"].is_string(), "_file_mtime missing");
     assert!(rec["_tags"].is_array(), "_tags missing: {body}");
 }
+
+/// `GET .../metadata/tag-files/{tag_id}/` paginates via `start`/`limit` and
+/// stays backwards compatible (returns everything) when the params are omitted.
+#[tokio::test]
+async fn test_tag_files_paginates() {
+    let f = TestFixture::new().await;
+
+    // Create a tag.
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api/v2.1/repos/{}/metadata/tags/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "tags_data": [{ "_tag_name": "重要", "_tag_color": "#FF0000" }]
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "create tag failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let tag_id = body["tags"][0]["_id"]
+        .as_str()
+        .and_then(|s| s.parse::<i64>().ok())
+        .expect("tag id missing");
+
+    // Upload 5 files and tag them all.
+    let mut file_tags_data = Vec::new();
+    for i in 0..5 {
+        let name = format!("f{i}.txt");
+        let up = f
+            .client
+            .upload_file(&f.api_token, &f.repo_id, "/", &name, b"x")
+            .await;
+        assert!(up.status().is_success(), "upload {name} failed");
+        let record_id = server::service::fs::metadata::MetadataService::record_id_from_path(
+            &format!("/{name}"),
+        );
+        file_tags_data.push(serde_json::json!({
+            "record_id": record_id,
+            "tags": [tag_id.to_string()],
+        }));
+    }
+    let resp = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/repos/{}/metadata/file-tags/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({ "file_tags_data": file_tags_data }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "set tags failed");
+
+    // Page 1 → 3 entries.
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api/v2.1/repos/{}/metadata/tag-files/{}/?start=0&limit=3",
+                f.repo_id, tag_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["results"].as_array().unwrap().len(), 3, "page 1");
+
+    // Page 2 → remaining 2.
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api/v2.1/repos/{}/metadata/tag-files/{}/?start=3&limit=3",
+                f.repo_id, tag_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["results"].as_array().unwrap().len(), 2, "page 2");
+
+    // No params → everything (backwards compatible with existing clients).
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api/v2.1/repos/{}/metadata/tag-files/{}/",
+                f.repo_id, tag_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["results"].as_array().unwrap().len(), 5, "no params");
+}

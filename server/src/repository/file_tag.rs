@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, Statement,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, Statement,
 };
 use std::sync::Arc;
 
@@ -25,10 +26,14 @@ pub trait FileTagRepository: Send + Sync {
         repo_id: &str,
         file_path: &str,
     ) -> Result<Vec<file_tag::Model>, AppError>;
+    /// Files carrying a tag, in stable id order. `start`/`limit` push
+    /// pagination down to SQL; `None` returns everything (default).
     async fn find_by_repo_and_tag_id(
         &self,
         repo_id: &str,
         tag_id: i32,
+        start: Option<usize>,
+        limit: Option<usize>,
     ) -> Result<Vec<file_tag::Model>, AppError>;
     async fn delete_by_id(&self, id: i32) -> Result<(), AppError>;
     /// Replace the tags of a single file path with the given set.
@@ -96,12 +101,20 @@ impl FileTagRepository for DbFileTagRepository {
         &self,
         repo_id: &str,
         tag_id: i32,
+        start: Option<usize>,
+        limit: Option<usize>,
     ) -> Result<Vec<file_tag::Model>, AppError> {
-        Ok(file_tag::Entity::find()
+        let mut q = file_tag::Entity::find()
             .filter(file_tag::Column::RepoId.eq(repo_id))
             .filter(file_tag::Column::RepoTagId.eq(tag_id))
-            .all(self.db.as_ref())
-            .await?)
+            .order_by_asc(file_tag::Column::Id);
+        if let Some(offset) = start {
+            q = q.offset(offset as u64);
+        }
+        if let Some(l) = limit {
+            q = q.limit(l as u64);
+        }
+        Ok(q.all(self.db.as_ref()).await?)
     }
 
     async fn delete_by_id(&self, id: i32) -> Result<(), AppError> {
