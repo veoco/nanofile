@@ -109,6 +109,52 @@ fn parse_content_range(header: &str) -> Result<(u64, u64, u64), AppError> {
     Ok((start, end, file_size))
 }
 
+/// Read a chunked upload's file field into memory under the per-chunk cap.
+///
+/// Rejects an oversized chunk from the Content-Range header before reading any
+/// body, and independently caps the number of bytes actually read so a client
+/// that lies about the header cannot force the server to buffer more than
+/// `max_chunk_bytes`. (`field.bytes()` would otherwise read the whole part
+/// before the cap in `try_handle_chunked` is reached.)
+async fn read_chunked_field(
+    field: &mut multer::Field<'_>,
+    content_range: Option<&str>,
+    max_chunk_bytes: u64,
+) -> Result<Vec<u8>, AppError> {
+    let Some(header) = content_range else {
+        // Only reached when a Content-Range header exists but failed to parse
+        // as UTF-8 (callers invoke this only on chunked requests). Reject it
+        // rather than reading the field unbounded.
+        return Err(AppError::BadRequest("invalid content-range header".into()));
+    };
+    let (start, end, _file_size) = parse_content_range(header)?;
+    let expected_len = (end - start + 1) as usize;
+    // Reject oversized chunks from the header alone, before reading any body.
+    if max_chunk_bytes > 0 && expected_len as u64 > max_chunk_bytes {
+        return Err(AppError::BadRequest(format!(
+            "chunk size {expected_len} exceeds per-chunk limit {max_chunk_bytes}"
+        )));
+    }
+    // Stream the part in bounded chunks and enforce the cap on bytes actually
+    // read (chunk() may return one large Bytes when the body is pre-buffered).
+    // Cap the initial allocation (1 MiB) so a lying header can't force a large
+    // upfront reserve; the Vec grows to the real size on demand.
+    let mut out = Vec::with_capacity(expected_len.min(1 << 20));
+    while let Some(c) = field
+        .chunk()
+        .await
+        .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+    {
+        if max_chunk_bytes > 0 && (out.len() + c.len()) as u64 > max_chunk_bytes {
+            return Err(AppError::BadRequest(format!(
+                "chunk exceeds per-chunk limit {max_chunk_bytes}"
+            )));
+        }
+        out.extend_from_slice(&c);
+    }
+    Ok(out)
+}
+
 /// Handle a chunked (resumable) upload when a `Content-Range` header is
 /// present.
 ///
@@ -403,7 +449,8 @@ pub async fn upload_aj(
 
     // Resumable (Content-Range) uploads send the whole part at once — the
     // resumable path needs the bytes in hand, so it keeps the buffered read.
-    let is_chunked = headers.get("content-range").is_some();
+    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+    let is_chunked = content_range.is_some();
     let mut chunked_file_data: Option<Vec<u8>> = None;
     // Streaming (non-chunked) upload: CDC the file straight into blocks.
     let mut block_ids: Vec<String> = Vec::new();
@@ -419,11 +466,12 @@ pub async fn upload_aj(
             filename = field.file_name().unwrap_or("unknown").to_string();
             if is_chunked {
                 chunked_file_data = Some(
-                    field
-                        .bytes()
-                        .await
-                        .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-                        .to_vec(),
+                    read_chunked_field(
+                        &mut field,
+                        content_range,
+                        state.config.server.max_chunk_size_mb * 1024 * 1024,
+                    )
+                    .await?,
                 );
             } else {
                 // Stream: feed underlying bytes straight into the CDC chunker
@@ -466,9 +514,8 @@ pub async fn upload_aj(
 
     if is_chunked {
         let file_data = chunked_file_data.unwrap_or_default();
-        if !file_data.is_empty() {
-            let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-            if let Some(resp) = try_handle_chunked(
+        if !file_data.is_empty()
+            && let Some(resp) = try_handle_chunked(
                 &state.temp_file_manager,
                 &state,
                 repo_id,
@@ -480,9 +527,8 @@ pub async fn upload_aj(
                 Some(user.user_id),
             )
             .await?
-            {
-                return Ok(resp);
-            }
+        {
+            return Ok(resp);
         }
         return Ok(Json(json!([{"name": filename, "uploaded": true}])));
     }
@@ -660,7 +706,8 @@ pub async fn update_aj(
     let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
     let mut fields: HashMap<String, String> = HashMap::new();
-    let is_chunked = headers.get("content-range").is_some();
+    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+    let is_chunked = content_range.is_some();
     let mut chunked_file_data: Option<Vec<u8>> = None;
     let mut block_ids: Vec<String> = Vec::new();
     let mut total_size: i64 = 0;
@@ -674,11 +721,12 @@ pub async fn update_aj(
         if name == "file" {
             if is_chunked {
                 chunked_file_data = Some(
-                    field
-                        .bytes()
-                        .await
-                        .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-                        .to_vec(),
+                    read_chunked_field(
+                        &mut field,
+                        content_range,
+                        state.config.server.max_chunk_size_mb * 1024 * 1024,
+                    )
+                    .await?,
                 );
             } else {
                 let (bids, size) =
@@ -723,9 +771,8 @@ pub async fn update_aj(
 
     if is_chunked {
         let file_data = chunked_file_data.unwrap_or_default();
-        if !file_data.is_empty() {
-            let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-            if let Some(resp) = try_handle_chunked(
+        if !file_data.is_empty()
+            && let Some(resp) = try_handle_chunked(
                 &state.temp_file_manager,
                 &state,
                 repo_id,
@@ -737,9 +784,8 @@ pub async fn update_aj(
                 Some(user.user_id),
             )
             .await?
-            {
-                return Ok(resp);
-            }
+        {
+            return Ok(resp);
         }
         return Ok(ok_json());
     }
@@ -807,7 +853,8 @@ pub async fn upload_aj_token(
 
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut filename = String::new();
-    let is_chunked = headers.get("content-range").is_some();
+    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+    let is_chunked = content_range.is_some();
     let mut chunked_file_data: Option<Vec<u8>> = None;
     let mut block_ids: Vec<String> = Vec::new();
     let mut total_size: i64 = 0;
@@ -822,11 +869,12 @@ pub async fn upload_aj_token(
             filename = field.file_name().unwrap_or("unknown").to_string();
             if is_chunked {
                 chunked_file_data = Some(
-                    field
-                        .bytes()
-                        .await
-                        .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-                        .to_vec(),
+                    read_chunked_field(
+                        &mut field,
+                        content_range,
+                        state.config.server.max_chunk_size_mb * 1024 * 1024,
+                    )
+                    .await?,
                 );
             } else {
                 let (bids, size) =
@@ -857,9 +905,8 @@ pub async fn upload_aj_token(
 
     if is_chunked {
         let file_data = chunked_file_data.unwrap_or_default();
-        if !file_data.is_empty() {
-            let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-            if let Some(resp) = try_handle_chunked(
+        if !file_data.is_empty()
+            && let Some(resp) = try_handle_chunked(
                 &state.temp_file_manager,
                 &state,
                 &info.repo_id,
@@ -871,9 +918,8 @@ pub async fn upload_aj_token(
                 None,
             )
             .await?
-            {
-                return Ok(resp);
-            }
+        {
+            return Ok(resp);
         }
         return Ok(Json(json!([{"name": filename, "uploaded": true}])));
     }
@@ -1625,5 +1671,96 @@ mod tests {
         let result = parse_multipart(body.as_bytes(), boundary);
         assert_eq!(result.file_name.as_deref(), Some("photo.jpg"));
         assert_eq!(result.file_data.as_deref(), Some(&b"filedata"[..]));
+    }
+
+    // ── read_chunked_field (bounded chunk reads) ─────────────────────────
+
+    /// Build a single-part multipart body carrying `data` as the `file` field.
+    fn multipart_body(boundary: &str, data: &[u8]) -> String {
+        format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"file\"; filename=\"f.bin\"\r\n\
+             Content-Type: application/octet-stream\r\n\r\n\
+             {}\r\n\
+             --{boundary}--\r\n",
+            String::from_utf8_lossy(data)
+        )
+    }
+
+    /// A chunk whose Content-Range declares more bytes than the per-chunk cap
+    /// must be rejected before any body is read.
+    #[tokio::test]
+    async fn test_read_chunked_field_rejects_oversized_header() {
+        let body = multipart_body("HDRBOUND", b"hi");
+        let stream = futures_util::stream::once(async move {
+            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
+                body.into_bytes(),
+            ))
+        });
+        let mut multipart = multer::Multipart::new(stream, "HDRBOUND");
+        let mut field = multipart.next_field().await.unwrap().unwrap();
+
+        // Declared chunk is 4096 bytes, cap is 1024 — rejected from the header.
+        let err = read_chunked_field(&mut field, Some("bytes 0-4095/4096"), 1024)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    /// A client that lies about the header (declares a small chunk but sends a
+    /// larger body) must be cut off at the actual-bytes cap.
+    #[tokio::test]
+    async fn test_read_chunked_field_rejects_oversized_body() {
+        let body = multipart_body("BODYBOUND", b"01234567890123456789");
+        let stream = futures_util::stream::once(async move {
+            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
+                body.into_bytes(),
+            ))
+        });
+        let mut multipart = multer::Multipart::new(stream, "BODYBOUND");
+        let mut field = multipart.next_field().await.unwrap().unwrap();
+
+        // Header says 10 bytes (within the cap) but the actual body is 20.
+        let err = read_chunked_field(&mut field, Some("bytes 0-9/100"), 10)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    /// A valid chunk within the cap is read back verbatim.
+    #[tokio::test]
+    async fn test_read_chunked_field_reads_valid_chunk() {
+        let body = multipart_body("OKBOUND", b"hello");
+        let stream = futures_util::stream::once(async move {
+            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
+                body.into_bytes(),
+            ))
+        });
+        let mut multipart = multer::Multipart::new(stream, "OKBOUND");
+        let mut field = multipart.next_field().await.unwrap().unwrap();
+
+        let data = read_chunked_field(&mut field, Some("bytes 0-4/100"), 1024)
+            .await
+            .unwrap();
+        assert_eq!(data, b"hello");
+    }
+
+    /// A chunk whose Content-Range header can't be parsed (e.g. non-UTF-8)
+    /// must be rejected instead of being read unbounded.
+    #[tokio::test]
+    async fn test_read_chunked_field_without_range_rejects() {
+        let body = multipart_body("NORANGE", b"fullbody");
+        let stream = futures_util::stream::once(async move {
+            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
+                body.into_bytes(),
+            ))
+        });
+        let mut multipart = multer::Multipart::new(stream, "NORANGE");
+        let mut field = multipart.next_field().await.unwrap().unwrap();
+
+        let err = read_chunked_field(&mut field, None, 1024)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
     }
 }

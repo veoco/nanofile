@@ -120,10 +120,11 @@ pub struct ServerConfig {
     pub site_url: String,
     #[serde(default = "default_max_upload_size_mb")]
     pub max_upload_size_mb: u64,
-    /// Per-chunk size cap for resumable (Content-Range) uploads. A single
-    /// request's multipart body is buffered before being written to the temp
-    /// file, so this bounds how much one chunk can consume in memory. 0
-    /// disables the cap. Env: NANOFILE_SERVER_MAX_CHUNK_SIZE_MB
+    /// Per-chunk size cap for resumable (Content-Range) uploads. Enforced
+    /// before the chunk body is read: an oversized chunk is rejected from the
+    /// Content-Range header alone, and the bytes actually read are also capped,
+    /// so one request can never buffer more than this amount. 0 disables the
+    /// cap. Env: NANOFILE_SERVER_MAX_CHUNK_SIZE_MB
     #[serde(default = "default_max_chunk_size_mb")]
     pub max_chunk_size_mb: u64,
     #[serde(default = "default_request_timeout_secs")]
