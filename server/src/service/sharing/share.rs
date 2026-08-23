@@ -141,15 +141,19 @@ pub async fn list_share_links_for_path(
     base_url: &str,
     repo_id: &str,
     path: &str,
+    creator_id: i32,
 ) -> Result<Vec<ShareLinkInfo>, AppError> {
     let links = repos
         .share_link
         .find_by_repo_and_path(repo_id, path)
         .await?;
 
+    // Only the caller's own links: share tokens are unauthenticated bearer
+    // URLs, so a read-only member must not learn other members' tokens.
     let infos: Vec<ShareLinkInfo> = links
-        .iter()
-        .map(|l| share_link_info_from_model(l, base_url))
+        .into_iter()
+        .filter(|l| l.creator_id == creator_id)
+        .map(|l| share_link_info_from_model(&l, base_url))
         .collect();
 
     Ok(infos)

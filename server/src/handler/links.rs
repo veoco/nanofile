@@ -166,7 +166,8 @@ pub async fn list_share_links_v21(
             auth.user_id,
         )
         .await?;
-        share::list_share_links_for_path(&state.repos, base_url, repo_id, path).await?
+        share::list_share_links_for_path(&state.repos, base_url, repo_id, path, auth.user_id)
+            .await?
     } else {
         share::list_share_links(&state.repos, base_url, auth.user_id).await?
     };
@@ -391,7 +392,7 @@ pub async fn list_upload_links_v21(
             auth.user_id,
         )
         .await?;
-        link::list_upload_links_for_path(&state.repos, repo_id, path).await?
+        link::list_upload_links_for_path(&state.repos, repo_id, path, auth.user_id).await?
     } else {
         link::list_upload_links_v21(&state.repos, auth.user_id).await?
     };
@@ -588,8 +589,12 @@ pub async fn list_repo_upload_links_v21(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let repo_id = path.repo_id;
-    let items =
-        link::list_upload_links_for_repo_v21(&state.repos, &state.config.server.site_url, &repo_id)
-            .await?;
+    let items = link::list_upload_links_for_repo_v21(
+        &state.repos,
+        &state.config.server.site_url,
+        &repo_id,
+        path.user.user_id,
+    )
+    .await?;
     Ok(Json(serde_json::Value::Array(items)))
 }

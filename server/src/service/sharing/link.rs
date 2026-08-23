@@ -167,12 +167,19 @@ pub async fn list_upload_links_for_path(
     repos: &Repositories,
     repo_id: &str,
     path: &str,
+    creator_id: i32,
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let links = repos
         .upload_link
         .find_by_repo_and_path(repo_id, path)
         .await?;
-    let items: Vec<serde_json::Value> = links.iter().map(upload_link_json).collect();
+    // Only the caller's own links: an upload token grants anonymous write, so
+    // a read-only member must not learn other members' tokens.
+    let items: Vec<serde_json::Value> = links
+        .into_iter()
+        .filter(|l| l.creator_id == creator_id)
+        .map(|l| upload_link_json(&l))
+        .collect();
     Ok(items)
 }
 
@@ -315,6 +322,7 @@ pub async fn list_upload_links_for_repo_v21(
     repos: &Repositories,
     base_url: &str,
     repo_id: &str,
+    creator_id: i32,
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let links = repos.upload_link.find_by_repo_id(repo_id).await?;
 
@@ -328,6 +336,8 @@ pub async fn list_upload_links_for_repo_v21(
 
     let items: Vec<serde_json::Value> = links
         .into_iter()
+        // Only the caller's own links: an upload token grants anonymous write.
+        .filter(|l| l.creator_id == creator_id)
         .map(|l| {
             let obj_name = upload_link_obj_name(&l.path);
 

@@ -942,3 +942,214 @@ async fn test_share_dir_view_paginates_large_folder() {
         "page 2 should link back to page 1"
     );
 }
+
+// ==================== Security: repo-filtered link enumeration ====================
+
+/// Create a second user, share the repo with them at `permission`, and return
+/// their login token.
+async fn shared_member_token(f: &TestFixture, email: &str, permission: &str) -> String {
+    create_test_user(&f.server.db, email, "password").await;
+    let share_resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": email,
+                "permission": permission,
+            }),
+        )
+        .await;
+    assert_eq!(share_resp.status(), 200);
+
+    let resp = f.client.login(email, "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    body["token"].as_str().unwrap().to_string()
+}
+
+/// A read-only shared member must not be able to enumerate the owner's
+/// share-link tokens via the repo-filtered listing (tokens are unauthenticated
+/// bearer URLs).
+#[tokio::test]
+async fn test_share_link_repo_filter_only_returns_own() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let ro_token = shared_member_token(&f, "readonly-links@test.com", "r").await;
+
+    // Read-only member sees an empty list (no owner tokens leaked).
+    let list = f
+        .client
+        .get(
+            &format!("/api/v2.1/share-links/?repo_id={}&path=/", f.repo_id),
+            Some(&ro_token),
+        )
+        .await;
+    assert_eq!(list.status(), 200);
+    let links = list.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 0);
+
+    // Owner still sees their own link.
+    let list = f
+        .client
+        .get(
+            &format!("/api/v2.1/share-links/?repo_id={}&path=/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(list.status(), 200);
+    let links = list.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 1);
+}
+
+/// A read-only shared member must not be able to enumerate the owner's
+/// upload-link tokens via the repo+path filtered listing (an upload token
+/// grants anonymous write access).
+#[tokio::test]
+async fn test_upload_link_repo_filter_only_returns_own() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let ro_token = shared_member_token(&f, "readonly-ul@test.com", "r").await;
+
+    let list = f
+        .client
+        .get(
+            &format!("/api/v2.1/upload-links/?repo_id={}&path=/", f.repo_id),
+            Some(&ro_token),
+        )
+        .await;
+    assert_eq!(list.status(), 200);
+    let links = list.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 0);
+
+    let list = f
+        .client
+        .get(
+            &format!("/api/v2.1/upload-links/?repo_id={}&path=/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let links = list.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 1);
+}
+
+/// The repo-scoped upload-links endpoint must only return the caller's own
+/// upload links, never other members'.
+#[tokio::test]
+async fn test_repo_upload_links_only_returns_own() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let ro_token = shared_member_token(&f, "readonly-rul@test.com", "r").await;
+
+    let list = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/upload-links/", f.repo_id),
+            Some(&ro_token),
+        )
+        .await;
+    assert_eq!(list.status(), 200);
+    let links = list.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 0);
+
+    let list = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/upload-links/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let links = list.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 1);
+}
+
+/// A read-write member who creates their own links sees only those, never the
+/// owner's.
+#[tokio::test]
+async fn test_rw_member_sees_only_own_links() {
+    let f = TestFixture::new().await;
+
+    let rw_token = shared_member_token(&f, "rw-links@test.com", "rw").await;
+
+    // Owner creates a share link.
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // RW member creates their own share + upload links.
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&rw_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&rw_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // RW member's repo-filtered lists contain their own links, not the owner's.
+    let list = f
+        .client
+        .get(
+            &format!("/api/v2.1/share-links/?repo_id={}&path=/", f.repo_id),
+            Some(&rw_token),
+        )
+        .await;
+    let links = list.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 1);
+
+    let list = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/upload-links/", f.repo_id),
+            Some(&rw_token),
+        )
+        .await;
+    let links = list.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 1);
+}
