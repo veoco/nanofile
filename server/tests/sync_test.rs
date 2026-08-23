@@ -319,6 +319,131 @@ async fn test_put_commit_rejects_oversized_body() {
     assert_eq!(resp.status(), 500);
 }
 
+// ==================== Security: write permission on sync writes ====================
+
+/// Security: a read-only shared member can download but must not be able to
+/// inject blocks / fs objects / commits into the repo.
+#[tokio::test]
+async fn test_readonly_member_cannot_write_to_repo() {
+    let f = TestFixture::new().await;
+
+    // Share the repo with a second user as read-only.
+    common::create_test_user(&f.server.db, "readonly@test.com", "password").await;
+    let share_resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "readonly@test.com",
+                "permission": "r"
+            }),
+        )
+        .await;
+    assert_eq!(share_resp.status(), 200);
+
+    let resp = f.client.login("readonly@test.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let ro_token = body["token"].as_str().unwrap();
+    let ro_sync_token = get_sync_token(&f.client, ro_token, &f.repo_id).await;
+
+    // Read-only members keep read access...
+    let resp = f
+        .client
+        .permission_check(&ro_sync_token, &f.repo_id, "download")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // ...but must not be able to write.
+    let block_id = "0".repeat(40);
+    let resp = f
+        .client
+        .put_block(&ro_sync_token, &f.repo_id, &block_id, b"data".to_vec())
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = f
+        .client
+        .recv_fs(&ro_sync_token, &f.repo_id, b"not a pack".to_vec())
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = f
+        .client
+        .put_commit(&ro_sync_token, &f.repo_id, &"0".repeat(40), b"{}".to_vec())
+        .await;
+    assert_eq!(resp.status(), 403);
+}
+
+/// Security: a read-write shared member keeps write access on all three
+/// sync write endpoints (guards against over-restriction).
+#[tokio::test]
+async fn test_rw_member_can_write_to_repo() {
+    let f = TestFixture::new().await;
+
+    common::create_test_user(&f.server.db, "rw@test.com", "password").await;
+    let share_resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "rw@test.com",
+                "permission": "rw"
+            }),
+        )
+        .await;
+    assert_eq!(share_resp.status(), 200);
+
+    let resp = f.client.login("rw@test.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let rw_token = body["token"].as_str().unwrap();
+    let rw_sync_token = get_sync_token(&f.client, rw_token, &f.repo_id).await;
+
+    // put_block with a SHA-1-matching payload.
+    let block_data = b"rw member block data";
+    let block_id = {
+        use sha1::{Digest, Sha1};
+        let mut hasher = Sha1::new();
+        hasher.update(block_data);
+        hex::encode(hasher.finalize())
+    };
+    let resp = f
+        .client
+        .put_block(&rw_sync_token, &f.repo_id, &block_id, block_data.to_vec())
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // recv_fs with an empty pack is valid.
+    let resp = f.client.recv_fs(&rw_sync_token, &f.repo_id, vec![]).await;
+    assert_eq!(resp.status(), 200);
+
+    // put_commit with a well-formed commit.
+    let commit_id = "a".repeat(40);
+    let commit_json = serde_json::json!({
+        "commit_id": commit_id,
+        "repo_id": f.repo_id,
+        "root_id": "0".repeat(40),
+        "creator_name": "rw@test.com",
+        "creator": "0".repeat(40),
+        "description": "test commit",
+        "ctime": 1234567890,
+        "version": 1,
+    });
+    let resp = f
+        .client
+        .put_commit(
+            &rw_sync_token,
+            &f.repo_id,
+            &commit_id,
+            serde_json::to_vec(&commit_json).unwrap(),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+}
+
 // ==================== Regression tests ====================
 
 /// Regression: sync endpoints must accept API tokens (not just sync tokens).

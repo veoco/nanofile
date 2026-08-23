@@ -118,11 +118,20 @@ pub async fn get_block(
 
 pub async fn put_block(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
-    Path((_repo_id, block_id)): Path<(String, String)>,
+    auth: SyncAuth,
+    Path((repo_id, block_id)): Path<(String, String)>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
     validate_block_id(&block_id)?;
+
+    // Writing a block mutates the repo's object store; a read-only member must
+    // not be able to inject data. Checked before the body is buffered.
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let data = axum::body::to_bytes(body, MAX_BLOCK_UPLOAD_BYTES)
         .await

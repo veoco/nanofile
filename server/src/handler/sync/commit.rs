@@ -133,10 +133,19 @@ pub async fn get_commit(
 
 pub async fn put_commit(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    auth: SyncAuth,
     Path((repo_id, _commit_id)): Path<(String, String)>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
+    // Writing commit objects mutates the repo's object store; a read-only
+    // member must not be able to inject data. Checked before the body is read.
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let data = axum::body::to_bytes(body, MAX_COMMIT_BYTES)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;

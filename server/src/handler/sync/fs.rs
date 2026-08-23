@@ -203,10 +203,19 @@ pub async fn check_fs(
 
 pub async fn recv_fs(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    auth: SyncAuth,
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
+    // Writing fs objects mutates the repo's object store; a read-only member
+    // must not be able to inject data. Checked before the body is buffered.
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let data = axum::body::to_bytes(body, MAX_FS_PACK_BYTES)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
