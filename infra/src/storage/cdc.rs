@@ -277,9 +277,13 @@ pub struct Chunker {
     chunk_buf: Vec<u8>,
     /// Global offset of the current chunk's first byte.
     chunk_start: usize,
-    /// Rabin fingerprint state once the current chunk has reached `min` bytes.
-    /// `None` before that point or after a chunk has been emitted.
-    state: Option<RabinState>,
+    /// Rabin fingerprint state. Meaningful once the current chunk has reached
+    /// `min` bytes (`rolling == true`); `init` re-seeds it per chunk.
+    state: RabinState,
+    /// `false` while the current chunk is still accumulating its first `min`
+    /// bytes (no break checks yet); `true` once the rolling fingerprint is
+    /// being advanced byte by byte.
+    rolling: bool,
 }
 
 impl Chunker {
@@ -296,19 +300,86 @@ impl Chunker {
             max,
             mask,
             target: BREAK_VALUE & mask,
-            chunk_buf: Vec::new(),
+            chunk_buf: Vec::with_capacity(max),
             chunk_start: 0,
-            state: None,
+            state: RabinState::new(),
+            rolling: false,
         }
     }
 
     /// Feed a slice of bytes, returning any chunks that become complete.
     /// May be called repeatedly with arbitrary boundaries; chunk boundaries
     /// are derived solely from the content, not the feed call sizes.
+    ///
+    /// The prefix phase (first `min` bytes of a chunk) is a bulk memcpy; the
+    /// rolling phase scans byte by byte without any Option checks.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
-        for &b in bytes {
-            self.push_byte(b, &mut out);
+        let mut i = 0usize;
+        // Local mirror of the current chunk length, so the rolling loop never
+        // re-reads `chunk_buf.len()` (a capacity check) on every byte.
+        let mut chunk_len = self.chunk_buf.len();
+
+        while i < bytes.len() {
+            if !self.rolling {
+                // Prefix phase: accumulate up to `min` bytes in one memcpy.
+                while !self.rolling && i < bytes.len() {
+                    let take = (self.min - chunk_len).min(bytes.len() - i);
+                    self.chunk_buf.extend_from_slice(&bytes[i..i + take]);
+                    chunk_len += take;
+                    i += take;
+                    if chunk_len == self.min {
+                        self.finish_min_chunk(&mut out);
+                        // Either the chunk was emitted (buffer emptied, so
+                        // chunk_len is 0) or rolling flipped on (chunk_len
+                        // stays min).
+                        chunk_len = self.chunk_buf.len();
+                    }
+                }
+            } else {
+                // Rolling phase: the fingerprint corresponds to
+                // `pos = chunk_start+len-1` (the last byte in `chunk_buf`);
+                // `bytes[i]` is `data[pos+1]`.
+                while self.rolling && i < bytes.len() {
+                    let b = bytes[i];
+                    let pos = self.chunk_start + chunk_len - 1;
+                    let fp = self.state.get_fingerprint();
+                    let next_pos = pos + 1;
+
+                    // Break point at `pos` — emit this chunk (without `b`).
+                    if (fp & self.mask) == self.target {
+                        out.push(self.take_chunk());
+                        self.rolling = false;
+                        self.chunk_start = next_pos;
+                        self.chunk_buf.push(b);
+                        chunk_len = 1;
+                        i += 1;
+                        continue;
+                    }
+
+                    // Max size / end of file — emit this chunk (without `b`).
+                    // When `file_size == 0` the total size is unknown (A2's
+                    // multipart path has no field size), so the end-of-file test
+                    // is suppressed and the trailing chunk comes from `finish()`.
+                    if next_pos >= self.chunk_start + self.max
+                        || (self.file_size > 0 && next_pos >= self.file_size)
+                    {
+                        out.push(self.take_chunk());
+                        self.rolling = false;
+                        self.chunk_start = next_pos;
+                        self.chunk_buf.push(b);
+                        chunk_len = 1;
+                        i += 1;
+                        continue;
+                    }
+
+                    // Roll `b` into the window.
+                    self.state.update(b);
+                    self.chunk_buf.push(b);
+                    chunk_len += 1;
+                    i += 1;
+                }
+            }
         }
         out
     }
@@ -318,73 +389,31 @@ impl Chunker {
         self.chunk_buf
     }
 
-    fn push_byte(&mut self, b: u8, out: &mut Vec<Vec<u8>>) {
-        if self.state.is_none() {
-            self.chunk_buf.push(b);
-            if self.chunk_buf.len() == self.min {
-                self.init_chunk(out);
-            }
-            return;
-        }
-
-        // Rolling: the fingerprint corresponds to `pos = chunk_start+len-1`
-        // (the last byte already in `chunk_buf`); `b` is `data[pos+1]`.
-        let pos = self.chunk_start + self.chunk_buf.len() - 1;
-        let fp = self.state.as_ref().unwrap().get_fingerprint();
-        let next_pos = pos + 1;
-
-        // Break point at `pos` — emit this chunk (without `b`).
-        if (fp & self.mask) == self.target {
-            out.push(std::mem::take(&mut self.chunk_buf));
-            self.state = None;
-            self.chunk_start = next_pos;
-            self.chunk_buf.push(b);
-            if self.chunk_buf.len() == self.min {
-                self.init_chunk(out);
-            }
-            return;
-        }
-
-        // Max size / end of file — emit this chunk (without `b`). When
-        // `file_size == 0` the total size is unknown (A2's multipart path has no
-        // field size), so the "end of file" test is suppressed and the trailing
-        // chunk is produced by `finish()`; only break/max drive chunk emission.
-        if next_pos >= self.chunk_start + self.max
-            || (self.file_size > 0 && next_pos >= self.file_size)
-        {
-            out.push(std::mem::take(&mut self.chunk_buf));
-            self.state = None;
-            self.chunk_start = next_pos;
-            self.chunk_buf.push(b);
-            if self.chunk_buf.len() == self.min {
-                self.init_chunk(out);
-            }
-            return;
-        }
-
-        // Roll `b` into the window.
-        self.state.as_mut().unwrap().update(b);
-        self.chunk_buf.push(b);
+    /// Emit the accumulated chunk and leave a buffer pre-sized to `max` so the
+    /// next chunk grows without repeated reallocations.
+    fn take_chunk(&mut self) -> Vec<u8> {
+        std::mem::replace(&mut self.chunk_buf, Vec::with_capacity(self.max))
     }
 
     /// Initialise the Rabin fingerprint once the current chunk reaches `min`
-    /// bytes (matching `file_chunk_cdc`'s `scan_start = chunk_start+min-1`).
-    fn init_chunk(&mut self, out: &mut Vec<Vec<u8>>) {
+    /// bytes (matching `file_chunk_cdc`'s `scan_start = chunk_start+min-1`),
+    /// then decide whether the chunk ends here or rolling continues.
+    fn finish_min_chunk(&mut self, out: &mut Vec<Vec<u8>>) {
         debug_assert!(
             self.chunk_buf.len() >= WINDOW_SIZE,
             "chunk must exceed the window before fingerprint init"
         );
-        let mut st = RabinState::new();
-        st.init(&self.chunk_buf[self.chunk_buf.len() - WINDOW_SIZE..]);
-        let fp = st.get_fingerprint();
+        self.state
+            .init(&self.chunk_buf[self.chunk_buf.len() - WINDOW_SIZE..]);
+        let fp = self.state.get_fingerprint();
         let pos = self.chunk_start + self.chunk_buf.len() - 1;
         let next_pos = pos + 1;
 
         // Break point at `pos` — chunk is `min` bytes.
         if (fp & self.mask) == self.target {
-            out.push(std::mem::take(&mut self.chunk_buf));
+            out.push(self.take_chunk());
             self.chunk_start = next_pos;
-            self.state = None;
+            self.rolling = false;
             return;
         }
 
@@ -394,13 +423,13 @@ impl Chunker {
         if next_pos >= self.chunk_start + self.max
             || (self.file_size > 0 && next_pos >= self.file_size)
         {
-            out.push(std::mem::take(&mut self.chunk_buf));
+            out.push(self.take_chunk());
             self.chunk_start = next_pos;
-            self.state = None;
+            self.rolling = false;
             return;
         }
 
-        self.state = Some(st);
+        self.rolling = true;
     }
 }
 
@@ -532,6 +561,58 @@ mod tests {
                     "Chunker::new(0) concat mismatch: case={label} feed_len={feed_len}"
                 );
             }
+        }
+    }
+
+    /// Feed sizes that straddle the `min` boundary must not shift chunk
+    /// boundaries; a single 5 MiB feed must also emit multiple chunks in one
+    /// call (the new inline-loop path).
+    #[test]
+    fn test_chunker_feed_len_across_min_boundary() {
+        let data: Vec<u8> = (0..2 * 1024 * 1024)
+            .map(|i: usize| (i.wrapping_mul(41) ^ (i >> 3)) as u8)
+            .collect();
+        let expected: Vec<usize> = file_chunk_cdc(&data).iter().map(|(_, s)| *s).collect();
+        for feed_len in [256 * 1024 - 1, 256 * 1024, 256 * 1024 + 1, 5 * 1024 * 1024] {
+            let blocks = stream_blocks(&data, feed_len);
+            let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
+            assert_eq!(sizes, expected, "feed_len={feed_len}");
+            assert_eq!(blocks.concat(), data, "feed_len={feed_len}");
+        }
+    }
+
+    /// Known total size of `max + min`: the first chunk is forced out by the
+    /// max-size check, the second by the end-of-file check in
+    /// `finish_min_chunk`.
+    #[test]
+    fn test_chunker_max_min_known_size() {
+        let data = vec![0u8; 4 * 1024 * 1024 + 256 * 1024];
+        let expected: Vec<usize> = file_chunk_cdc(&data).iter().map(|(_, s)| *s).collect();
+        let blocks = stream_blocks(&data, 1024);
+        let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
+        assert_eq!(sizes, expected);
+        assert_eq!(blocks.concat(), data);
+    }
+
+    /// Unknown total size (`new(0)`) over 4 MiB of break-free (zero) content
+    /// forces the max-size branch during the rolling phase.
+    #[test]
+    fn test_chunker_zero_unknown_size_over_max() {
+        let data = vec![0u8; 4 * 1024 * 1024 + 512 * 1024];
+        let expected: Vec<usize> = file_chunk_cdc(&data).iter().map(|(_, s)| *s).collect();
+        for feed_len in [64usize, 1024, 4 * 1024 * 1024, 5 * 1024 * 1024] {
+            let mut ch = Chunker::new(0);
+            let mut blocks = Vec::new();
+            for slice in data.chunks(feed_len) {
+                blocks.extend(ch.feed(slice));
+            }
+            let last = ch.finish();
+            if !last.is_empty() {
+                blocks.push(last);
+            }
+            let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
+            assert_eq!(sizes, expected, "feed_len={feed_len}");
+            assert_eq!(blocks.concat(), data, "feed_len={feed_len}");
         }
     }
 
