@@ -389,6 +389,35 @@ async fn test_put_get_roundtrip() {
 }
 
 #[tokio::test]
+async fn test_put_large_file_crosses_blocks() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+
+    // >4MiB of varied bytes so the streaming CDC chunker spans multiple
+    // blocks — the WebDAV PUT path streams the body straight into block
+    // writes instead of buffering the whole file in memory.
+    let size = 4 * 1024 * 1024 + 123;
+    let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+    let resp = dav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/large.bin",
+        &f.email,
+        &key,
+        &data,
+    )
+    .await;
+    assert_eq!(resp.status(), 201);
+
+    let resp = dav_get(&client, base, &f.repo_id, "/large.bin", &f.email, &key).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), data.as_slice());
+}
+
+#[tokio::test]
 async fn test_put_overwrite_returns_204() {
     let f = TestFixture::new().await;
     let base = &f.server.base_url;

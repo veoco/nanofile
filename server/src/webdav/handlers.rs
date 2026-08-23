@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::extract::{Path, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -9,7 +10,7 @@ use base::error::AppError;
 use infra::common::util::{basename, parent_path_from};
 
 use crate::AppState;
-use crate::service::fs::file::UploadedFile;
+use crate::fs::core::FileOps;
 use crate::webdav::auth::WebDavAuth;
 use crate::webdav::util::{
     entry_metadata, join_path, normalize_webdav_path, parse_destination, parse_overwrite,
@@ -57,7 +58,7 @@ async fn route_request(
         }
         "GET" => get_handler(&state, &auth, &webdav_path, false).await,
         "HEAD" => get_handler(&state, &auth, &webdav_path, true).await,
-        "PUT" => put_handler(&state, &auth, &webdav_path, body).await,
+        "PUT" => put_handler(&state, &auth, &webdav_path, &headers, body).await,
         "MKCOL" => mkcol_handler(&state, &auth, &webdav_path).await,
         "DELETE" => delete_handler(&state, &auth, &webdav_path).await,
         "MOVE" => move_copy_handler(&state, &auth, &webdav_path, &headers, true).await,
@@ -115,7 +116,13 @@ async fn get_handler(
 
 // ── Write methods ────────────────────────────────────────────────────────
 
-async fn put_handler(state: &Arc<AppState>, auth: &WebDavAuth, path: &str, body: Body) -> Response {
+async fn put_handler(
+    state: &Arc<AppState>,
+    auth: &WebDavAuth,
+    path: &str,
+    headers: &HeaderMap,
+    body: Body,
+) -> Response {
     if auth.permission != "rw" {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -142,23 +149,50 @@ async fn put_handler(state: &Arc<AppState>, auth: &WebDavAuth, path: &str, body:
         Ok(Some(_))
     );
 
-    let bytes = match axum::body::to_bytes(body, usize::MAX).await {
-        Ok(b) => b,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    // Stream the request body straight into CDC-chunked block writes — the file
+    // never has to be buffered whole in memory (a large PUT would otherwise
+    // peak at ~2× the file size between the collected body and the copy).
+    let content_length = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    let stream = body
+        .into_data_stream()
+        .map_err(|e| std::io::Error::other(format!("WebDAV PUT body read failed: {e}")));
+
+    let (block_ids, total_size) = match FileOps::write_stream_blocks(
+        &state.block_store,
+        content_length,
+        stream,
+        None,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("WebDAV PUT block write failed for {path}: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     };
 
-    let upload = UploadedFile {
-        file_name: name.to_string(),
-        file_data: bytes.to_vec(),
-        parent_dir: parent.to_string(),
-        replace: true,
-    };
     match state
         .file_service()
-        .upload_file(&auth.repo_id, upload, &auth.email, auth.user_id)
+        .upload_file_committed_stream(
+            &auth.repo_id,
+            parent,
+            name,
+            block_ids,
+            total_size,
+            &auth.email,
+            Some(auth.user_id),
+            false,
+            Some(true),
+        )
         .await
     {
-        Ok(()) => {
+        Ok(_) => {
             if existed {
                 StatusCode::NO_CONTENT.into_response()
             } else {

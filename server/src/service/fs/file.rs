@@ -15,14 +15,6 @@ use infra::common::util::{
 };
 use infra::serialization::{S_IFDIR, S_IFREG};
 
-/// Parsed upload data, extracted from multipart at the handler layer.
-pub struct UploadedFile {
-    pub file_name: String,
-    pub file_data: Vec<u8>,
-    pub parent_dir: String,
-    pub replace: bool,
-}
-
 // ── Rename entry (pub(crate), shared by file and dir services) ───────────
 
 /// Rename a file or directory entry in place.
@@ -386,167 +378,12 @@ impl FileService {
         Ok(self.build_block_download_url(&token, file_id, block_id, host_header))
     }
 
-    /// Upload a file from pre-parsed upload data.
-    pub async fn upload_file(
-        &self,
-        repo_id: &str,
-        upload: UploadedFile,
-        email: &str,
-        user_id: i32,
-    ) -> Result<(), AppError> {
-        let file_data = upload.file_data;
-        let file_name = upload.file_name;
-        let parent_dir = upload.parent_dir;
-        let replace = upload.replace;
-
-        let _fs_id = self
-            .upload_file_committed(
-                repo_id,
-                &parent_dir,
-                &file_name,
-                &file_data,
-                email,
-                Some(user_id),
-                None,
-                false,
-                Some(replace),
-            )
-            .await?;
-
-        // Full-text index the uploaded file in the background (web uploads
-        // index lazily on read), so a large text file doesn't stall the upload
-        // response while it waits on the tokenize + index write.
-        if let Some(indexer) = &self.indexer {
-            let full_path = if parent_dir.ends_with('/') {
-                format!("{parent_dir}{file_name}")
-            } else if parent_dir == "/" {
-                format!("/{file_name}")
-            } else {
-                format!("{parent_dir}/{file_name}")
-            };
-            let idx = indexer.clone();
-            let repo_id = repo_id.to_string();
-            let file_name = file_name.to_string();
-            let is_text = crate::indexer::is_indexable_text(&file_name, &file_data);
-            let content = String::from_utf8_lossy(&file_data).into_owned();
-            tokio::spawn(async move {
-                if is_text {
-                    if let Err(e) = idx
-                        .index_file_async(&repo_id, &full_path, &file_name, &content)
-                        .await
-                    {
-                        tracing::warn!("Failed to index file {file_name}: {e}");
-                    }
-                } else if replace && let Err(e) = idx.delete_file_async(&repo_id, &full_path).await
-                {
-                    tracing::warn!("Failed to delete index for {file_name}: {e}");
-                }
-            });
-        }
-
-        Ok(())
-    }
-
-    /// Write a file into a repo and commit it, returning the new `fs_id`.
-    ///
-    /// This is the canonical write path shared by `upload_file` and the web
-    /// upload handlers. It handles old-size detection, storage-quota checks,
-    /// optional directory creation, encryption, repo-size adjustment and
-    /// activity logging in one place.
-    ///
-    /// `replace`:
-    /// - `Some(true)` — overwrite the existing entry (logged as "edit")
-    /// - `Some(false)` — never overwrite
-    /// - `None` — auto-detect from whether the file already exists
-    pub async fn upload_file_committed(
-        &self,
-        repo_id: &str,
-        target_dir: &str,
-        filename: &str,
-        data: &[u8],
-        modifier: &str,
-        user_id: Option<i32>,
-        enc_key: Option<(&[u8], &[u8])>,
-        ensure_dir: bool,
-        replace: Option<bool>,
-    ) -> Result<String, AppError> {
-        base::sanitize::validate_filename(filename)
-            .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
-
-        let fp = base::sanitize::safe_join_path(target_dir, filename)
-            .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
-
-        // Detect the existing entry to decide old-size / replace / op_type.
-        let size_result = crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await;
-        let file_exists = size_result.is_ok();
-        let old_size = size_result.ok().unwrap_or(0);
-        let replace_eff = replace.unwrap_or(file_exists);
-        let old_size_eff = if replace_eff { old_size } else { 0 };
-
-        // Check storage quota before accepting the upload.
-        if let Some(uid) = user_id {
-            crate::service::fs::quota::check_upload_quota(
-                &self.repos,
-                uid,
-                data.len() as i64,
-                self.config.storage.max_storage_bytes,
-            )
-            .await?;
-        }
-
-        // Ensure the target directory exists (folder uploads with missing subdirs).
-        if ensure_dir && let Some(uid) = user_id {
-            self.ensure_dir_recursive(repo_id, target_dir, modifier, uid)
-                .await?;
-        }
-
-        let fs_id = FileOps::create_file(
-            self.db(),
-            &self.repos,
-            repo_id,
-            target_dir,
-            filename,
-            data,
-            modifier,
-            replace_eff,
-            &self.block_store,
-            enc_key,
-        )
-        .await
-        .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
-
-        // Adjust repo size (delta = new_size - old_size).
-        crate::fs::core::adjust_repo_size(&self.repos, repo_id, data.len() as i64 - old_size_eff)
-            .await?;
-
-        // Log activity.
-        if let Some(uid) = user_id {
-            let op_type = if replace_eff { "edit" } else { "create" };
-            activity_log::log_activity(
-                self.db(),
-                repo_id,
-                op_type,
-                "file",
-                &fp,
-                uid,
-                None,
-                Some(data.len() as i64),
-                Some(&fs_id),
-                None,
-                None,
-            )
-            .await;
-        }
-
-        Ok(fs_id)
-    }
-
     /// Commit a file whose blocks have already been written to the block store
-    /// (e.g. by a streaming uploader) into a repo — the block-sequence twin of
-    /// [`FileService::upload_file_committed`]. Handles old-size detection,
-    /// storage-quota checks, directory creation, repo-size adjustment and
-    /// activity logging in one place; the actual block I/O was already done by
-    /// the caller, so the whole file never had to be buffered in memory.
+    /// (e.g. by a streaming uploader) into a repo. Handles old-size detection,
+    /// storage-quota checks, directory creation, repo-size adjustment, activity
+    /// logging and background full-text indexing in one place; the actual block
+    /// I/O was already done by the caller, so the whole file never had to be
+    /// buffered in memory.
     pub async fn upload_file_committed_stream(
         &self,
         repo_id: &str,
