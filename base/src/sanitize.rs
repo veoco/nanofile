@@ -8,6 +8,24 @@ const INVALID_FILENAME_CHARS: &[char] = &['\0', '\n', '\r', '\t', '\'', '"', '<'
 const MAX_FILENAME_LEN: usize = 255;
 const MAX_PATH_LEN: usize = 4096;
 
+/// Windows reserves these device names regardless of extension or trailing
+/// dots/spaces — Win32 treats `CON.txt` as the device `CON`, so a Windows
+/// desktop client can never materialize such an entry on NTFS.
+const WINDOWS_RESERVED_NAMES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM1", "COM2", "COM3", "COM4", "COM5",
+    "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
+    "LPT9",
+];
+
+/// True if `name` would collide with a Windows device name (case-insensitive,
+/// ignoring extension and trailing dots/spaces).
+fn is_windows_reserved_name(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or(name);
+    let base = base.trim_end_matches([' ', '.']);
+    let upper = base.to_ascii_uppercase();
+    WINDOWS_RESERVED_NAMES.contains(&upper.as_str())
+}
+
 /// Validate a single filename or directory name.
 ///
 /// Returns `Ok(())` if the name is safe, or an error description.
@@ -23,6 +41,9 @@ pub fn validate_filename(name: &str) -> Result<(), &'static str> {
     }
     if name.contains('/') {
         return Err("filename must not contain path separators");
+    }
+    if is_windows_reserved_name(name) {
+        return Err("filename is reserved by Windows");
     }
     Ok(())
 }
@@ -257,6 +278,43 @@ mod tests {
         assert!(validate_filename("a<b").is_err());
         assert!(validate_filename("a>b").is_err());
         assert!(validate_filename("a\\b").is_err());
+    }
+
+    #[test]
+    fn test_windows_reserved_names_rejected() {
+        // Bare device names.
+        for n in [
+            "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM1", "COM9", "LPT1", "LPT9",
+        ] {
+            assert!(validate_filename(n).is_err(), "{n} should be rejected");
+        }
+        // Case-insensitive.
+        assert!(validate_filename("con").is_err());
+        assert!(validate_filename("Com2").is_err());
+        assert!(validate_filename("lpt8").is_err());
+        // Reserved names with an extension are still reserved.
+        assert!(validate_filename("CON.txt").is_err());
+        assert!(validate_filename("nul.log").is_err());
+        assert!(validate_filename("COM3.dat").is_err());
+        // Trailing dot / space.
+        assert!(validate_filename("CON.").is_err());
+        assert!(validate_filename("LPT1. ").is_err());
+    }
+
+    #[test]
+    fn test_non_reserved_names_accepted() {
+        for n in [
+            "context.txt",
+            "console",
+            "COM10",
+            "com0",
+            "LPT0",
+            "control",
+            "autumn",
+            "normal.txt",
+        ] {
+            assert!(validate_filename(n).is_ok(), "{n} should be accepted");
+        }
     }
 
     #[test]

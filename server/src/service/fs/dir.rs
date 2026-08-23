@@ -224,6 +224,8 @@ pub(crate) async fn create_dir_by_path(
     }
 
     let dir_name = parts.last().unwrap();
+    base::sanitize::validate_filename(dir_name)
+        .map_err(|e| AppError::BadRequest(format!("invalid directory name: {e}")))?;
     let parent_path = if parts.len() > 1 {
         format!("/{}", parts[..parts.len() - 1].join("/"))
     } else {
