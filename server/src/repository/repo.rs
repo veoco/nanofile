@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
-    QuerySelect, Set,
+    QueryOrder, QuerySelect, Set,
 };
 use std::sync::Arc;
 
@@ -48,6 +48,10 @@ pub trait RepoRepository: Send + Sync {
     /// SQLite variable limit). Repos that don't exist are simply absent.
     async fn find_by_ids(&self, repo_ids: &[String]) -> Result<Vec<repo::Model>, AppError>;
     async fn find_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError>;
+    /// The earliest repo owned by the user (by created_at), used as the default
+    /// library. Limits to a single row in SQL instead of loading every owned
+    /// repo just to pick the first by creation time.
+    async fn find_earliest_by_owner(&self, user_id: i32) -> Result<Option<repo::Model>, AppError>;
     /// Sum the `size` of all repos owned by a user, in a single SQL query.
     async fn sum_size_by_owner(&self, user_id: i32) -> Result<i64, AppError>;
     /// Sum the `size` of repos per owner, grouped in one query, for the given
@@ -158,6 +162,15 @@ impl RepoRepository for DbRepoRepository {
         Ok(repo::Entity::find()
             .filter(repo::Column::OwnerId.eq(user_id))
             .all(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_earliest_by_owner(&self, user_id: i32) -> Result<Option<repo::Model>, AppError> {
+        Ok(repo::Entity::find()
+            .filter(repo::Column::OwnerId.eq(user_id))
+            .order_by_asc(repo::Column::CreatedAt)
+            .limit(1)
+            .one(self.db.as_ref())
             .await?)
     }
 

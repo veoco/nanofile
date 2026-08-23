@@ -909,9 +909,11 @@ impl RepoService {
         repos: &Repositories,
         user_id: i32,
     ) -> Result<Option<String>, AppError> {
-        let mut owned = repos.repo.find_by_owner_id(user_id).await?;
-        owned.sort_by_key(|r| r.created_at);
-        Ok(owned.first().map(|r| r.id.clone()))
+        Ok(repos
+            .repo
+            .find_earliest_by_owner(user_id)
+            .await?
+            .map(|r| r.id))
     }
 }
 

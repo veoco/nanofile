@@ -20,6 +20,36 @@ async fn test_create_repo() {
     assert_eq!(body["name"].as_str().unwrap(), "My Library");
 }
 
+/// `GET /api2/default-repo/` must return the user's earliest-owned repo (the
+/// proxy for the virtual-drive default library). Created repos use second
+/// resolution for `created_at`, so space the two creations out to pin the
+/// ordering.
+#[tokio::test]
+async fn test_default_repo_returns_earliest_owned() {
+    let server = TestServer::start().await;
+    let client = server.client();
+
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+    let resp = client.login("test@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let api_token = body["token"].as_str().unwrap();
+
+    let first_id = common::create_test_repo(&client, api_token, "First Library").await;
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let second_id = common::create_test_repo(&client, api_token, "Second Library").await;
+    assert_ne!(first_id, second_id, "two distinct repos required");
+
+    let resp = client.get("/api2/default-repo/", Some(api_token)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["exists"], true, "user owns repos");
+    assert_eq!(
+        body["repo_id"].as_str().unwrap(),
+        first_id,
+        "default repo must be the earliest-created one"
+    );
+}
+
 /// Security: a repo name containing script-breaking characters must be
 /// rejected at creation — repo names are rendered into inline `<script>`
 /// blocks, so `</script>` must never be persisted.
