@@ -348,6 +348,27 @@ fn rfc5987_encode(name: &str) -> String {
     out
 }
 
+/// ASCII-only fallback for the `filename=` parameter when the real name has
+/// non-ASCII characters. The raw UTF-8 bytes would make the header value
+/// invalid (`HeaderValue::from_str` accepts only visible ASCII), which used to
+/// drop the whole disposition to a bare `attachment` — losing the filename.
+/// Keeps the ASCII part (usually the extension) so legacy clients still get
+/// something useful; the full name travels via `filename*=utf-8''…`.
+fn ascii_fallback(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_ascii_graphic() || c == ' ' {
+            out.push(c);
+        }
+    }
+    let trimmed = out.trim_matches([' ', '.']);
+    if trimmed.is_empty() {
+        "download".to_string()
+    } else {
+        trimmed.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+}
+
 /// Build a `Content-Disposition` value in the official fileserver format
 /// (see fileserver/fileop.go): both the RFC 5987 encoded filename (for
 /// Safari, which cannot parse raw UTF-8) and the raw filename are sent.
@@ -355,9 +376,13 @@ fn rfc5987_encode(name: &str) -> String {
 pub fn content_disposition(filename: &str, attachment: bool) -> String {
     let mode = if attachment { "attachment" } else { "inline" };
     // Quote / backslash in the raw filename must not break the header value.
-    let escaped = filename.replace('\\', "\\\\").replace('"', "\\\"");
+    let fallback = if filename.is_ascii() {
+        filename.replace('\\', "\\\\").replace('"', "\\\"")
+    } else {
+        ascii_fallback(filename)
+    };
     format!(
-        "{mode};filename*=utf-8''{};filename=\"{escaped}\"",
+        "{mode};filename*=utf-8''{};filename=\"{fallback}\"",
         rfc5987_encode(filename)
     )
 }
@@ -445,8 +470,8 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_range;
-    use super::range_stream;
+    use super::{content_disposition, parse_range, range_stream};
+    use axum::http::HeaderValue;
     use futures::StreamExt;
     use infra::storage::{BlockStorageBackend, DynBlockStorage};
     use std::collections::HashMap;
@@ -583,5 +608,50 @@ mod tests {
         assert_eq!(parse_range("bytes=0-99,200-299", 1000), None);
         // Zero-length file.
         assert_eq!(parse_range("bytes=0-", 0), None);
+    }
+
+    #[test]
+    fn content_disposition_ascii_name_unchanged() {
+        assert_eq!(
+            content_disposition("hello.txt", true),
+            "attachment;filename*=utf-8''hello.txt;filename=\"hello.txt\""
+        );
+        // Quotes / backslashes stay escaped in both parts.
+        assert_eq!(
+            content_disposition("a\"b\\c.txt", false),
+            "inline;filename*=utf-8''a%22b%5Cc.txt;filename=\"a\\\"b\\\\c.txt\""
+        );
+    }
+
+    #[test]
+    fn content_disposition_non_ascii_name_uses_ascii_fallback() {
+        let d = content_disposition("中文报告.txt", true);
+        // The whole value must be valid ASCII so HeaderValue::from_str accepts
+        // it (previously the raw UTF-8 bytes dropped it to a bare `attachment`).
+        assert!(
+            HeaderValue::from_str(&d).is_ok(),
+            "must be a valid header: {d}"
+        );
+        assert!(
+            d.starts_with("attachment;filename*=utf-8''%E4%B8%AD%E6%96%87"),
+            "full name must ride in filename*: {d}"
+        );
+        assert!(
+            d.ends_with(r#"filename="txt""#),
+            "fallback should keep the ASCII extension: {d}"
+        );
+    }
+
+    #[test]
+    fn content_disposition_all_non_ascii_falls_back_to_download() {
+        let d = content_disposition("中文", true);
+        assert!(
+            HeaderValue::from_str(&d).is_ok(),
+            "must be a valid header: {d}"
+        );
+        assert!(
+            d.ends_with(r#"filename="download""#),
+            "empty ASCII fallback should be 'download': {d}"
+        );
     }
 }

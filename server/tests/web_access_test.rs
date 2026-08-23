@@ -777,3 +777,50 @@ async fn test_sync_batch_copy_item_not_found() {
         "copying nonexistent file should return 404"
     );
 }
+
+/// Downloading a file whose name contains non-ASCII characters must keep the
+/// full name in `filename*=utf-8''…` and an ASCII fallback in `filename="…"` —
+/// not fall back to a bare `attachment` and lose the filename.
+#[tokio::test]
+async fn test_download_non_ascii_filename_keeps_disposition() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "中文报告.txt", b"hello")
+        .await;
+    assert!(
+        resp.status().is_success(),
+        "upload failed: {}",
+        resp.status()
+    );
+
+    let dl = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/中文报告.txt")
+        .await;
+    assert_eq!(dl.status(), 200);
+
+    let cd = dl
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        cd.as_bytes().iter().all(|b| b.is_ascii()),
+        "content-disposition must be pure ASCII: {cd}"
+    );
+    assert!(
+        cd.starts_with("attachment;filename*=utf-8''"),
+        "full name must ride in filename*: {cd}"
+    );
+    assert!(
+        cd.ends_with(r#"filename="txt""#),
+        "ASCII fallback should keep the extension: {cd}"
+    );
+
+    let body = dl.bytes().await.unwrap();
+    assert_eq!(&body[..], b"hello", "downloaded content must match");
+}
