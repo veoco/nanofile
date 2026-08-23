@@ -52,6 +52,69 @@ impl FileOps {
     /// deterministic IV before writing (matching `create_file`), yielding
     /// `block_id == sha1(encrypted_block)` so Seafile sync clients can still
     /// re-derive the content-addressed ids for encrypted repos.
+    /// Feed `(idx, block)` pairs from `producer` to a bounded concurrent writer
+    /// that persists them to the block store, so the producer's read loop never
+    /// blocks on disk I/O. `buffered(4)` keeps block ids in input order (like
+    /// `create_file`), and the bounded channel back-pressures the producer when
+    /// the disk is the bottleneck. Returns `block_ids` in order plus the
+    /// producer's `total_size`.
+    pub(crate) async fn stream_blocks_pipelined<F, Fut>(
+        store: &DynBlockStorage,
+        enc_key: Option<(&[u8], &[u8])>,
+        producer: F,
+    ) -> Result<(Vec<String>, i64), AppError>
+    where
+        F: FnOnce(tokio::sync::mpsc::Sender<(usize, Vec<u8>)>) -> Fut,
+        Fut: futures::Future<Output = Result<i64, AppError>>,
+    {
+        const CONCURRENCY: usize = 4;
+
+        // The writer task needs owned handles and key material.
+        let store = store.clone();
+        let enc_key_owned: Option<(Vec<u8>, Vec<u8>)> =
+            enc_key.map(|(key, iv)| (key.to_vec(), iv.to_vec()));
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(CONCURRENCY * 2);
+
+        let writer = tokio::spawn(async move {
+            futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|item| (item, rx))
+            })
+            .map(|(idx, blk)| {
+                let store = store.clone();
+                let enc_key = enc_key_owned.clone();
+                async move {
+                    let block_id = match &enc_key {
+                        Some((key, iv)) => {
+                            let encrypted = encrypt_block(&blk, key, iv);
+                            store.write_block(&encrypted).await?
+                        }
+                        None => store.write_block(&blk).await?,
+                    };
+                    Ok((idx, block_id))
+                }
+            })
+            .buffered(CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await
+        });
+
+        let total_size = producer(tx).await?;
+
+        let results: Vec<Result<(usize, String), AppError>> = writer
+            .await
+            .map_err(|e| AppError::Internal(format!("block writer join failed: {e}")))?;
+
+        let mut block_ids = Vec::with_capacity(results.len());
+        for r in results {
+            let (idx, block_id) = r?;
+            debug_assert_eq!(idx, block_ids.len(), "buffered preserves input order");
+            block_ids.push(block_id);
+        }
+
+        Ok((block_ids, total_size))
+    }
+
     pub async fn write_stream_blocks<S>(
         store: &DynBlockStorage,
         file_size: usize,
@@ -61,41 +124,32 @@ impl FileOps {
     where
         S: futures::Stream<Item = std::io::Result<bytes::Bytes>> + Unpin,
     {
-        let mut chunker = infra::storage::cdc::Chunker::new(file_size);
-        let mut block_ids = Vec::new();
-        let mut total_size: i64 = 0;
-
         let mut stream = stream;
-        while let Some(chunk) = stream.next().await {
-            let chunk =
-                chunk.map_err(|e| AppError::Internal(format!("stream read failed: {e}")))?;
-            for blk in chunker.feed(chunk.as_ref()) {
-                let block_id = match enc_key {
-                    Some((key, iv)) => {
-                        let encrypted = encrypt_block(&blk, key, iv);
-                        store.write_block(&encrypted).await?
-                    }
-                    None => store.write_block(&blk).await?,
-                };
-                total_size += blk.len() as i64;
-                block_ids.push(block_id);
-            }
-        }
-
-        let tail = chunker.finish();
-        if !tail.is_empty() {
-            let block_id = match enc_key {
-                Some((key, iv)) => {
-                    let encrypted = encrypt_block(&tail, key, iv);
-                    store.write_block(&encrypted).await?
+        Self::stream_blocks_pipelined(store, enc_key, move |tx| async move {
+            let mut chunker = infra::storage::cdc::Chunker::new(file_size);
+            let mut total_size: i64 = 0;
+            let mut idx = 0usize;
+            while let Some(chunk) = stream.next().await {
+                let chunk =
+                    chunk.map_err(|e| AppError::Internal(format!("stream read failed: {e}")))?;
+                for blk in chunker.feed(chunk.as_ref()) {
+                    total_size += blk.len() as i64;
+                    tx.send((idx, blk))
+                        .await
+                        .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+                    idx += 1;
                 }
-                None => store.write_block(&tail).await?,
-            };
-            total_size += tail.len() as i64;
-            block_ids.push(block_id);
-        }
-
-        Ok((block_ids, total_size))
+            }
+            let tail = chunker.finish();
+            if !tail.is_empty() {
+                total_size += tail.len() as i64;
+                tx.send((idx, tail))
+                    .await
+                    .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+            }
+            Ok(total_size)
+        })
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -864,5 +918,104 @@ impl FileOps {
         fs_id: &str,
     ) -> Result<FsFileData, AppError> {
         crate::fs::core::read_fs_file_data(repos, repo_id, fs_id).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_store() -> (tempfile::TempDir, DynBlockStorage) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = infra::storage::new_block_store(dir.path());
+        (dir, store)
+    }
+
+    /// A deterministic pseudo-random byte vector (no rand dependency).
+    fn pseudo_data(len: usize) -> Vec<u8> {
+        let mut x: u64 = 0x9E3779B97F4A7C15;
+        (0..len)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (x >> 33) as u8
+            })
+            .collect()
+    }
+
+    fn bytes_stream(
+        data: Vec<u8>,
+        chunk_size: usize,
+    ) -> impl futures::Stream<Item = std::io::Result<bytes::Bytes>> {
+        let items: Vec<std::io::Result<bytes::Bytes>> = data
+            .chunks(chunk_size)
+            .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+            .collect();
+        futures::stream::iter(items)
+    }
+
+    /// The streaming path must emit exactly the block ids that the whole-buffer
+    /// `create_file` chunking produces, in order, across more than four blocks
+    /// (so the pipeline concurrency and ordering are both exercised).
+    #[tokio::test]
+    async fn test_write_stream_blocks_matches_create_file_chunking() {
+        let (_dir, store) = temp_store();
+        let data = pseudo_data(6 * 1024 * 1024 + 123); // >4 blocks at ~1MiB avg
+
+        // Reference: create_file's whole-buffer chunking.
+        let chunks = infra::storage::cdc::file_chunk_cdc(&data);
+        assert!(chunks.len() > 1, "fixture must span multiple blocks");
+        let mut expected_ids = Vec::new();
+        for (offset, size) in &chunks {
+            let id = store
+                .write_block(&data[*offset..offset + size])
+                .await
+                .unwrap();
+            expected_ids.push(id);
+        }
+
+        let stream = bytes_stream(data.clone(), 8192);
+        let (ids, total) = FileOps::write_stream_blocks(&store, data.len(), stream, None)
+            .await
+            .unwrap();
+        assert_eq!(ids, expected_ids);
+        assert_eq!(total as usize, data.len());
+    }
+
+    /// Directly exercise the pipeline with more blocks than the channel
+    /// capacity plus the in-flight window (8 + 4), so full-load ordering and
+    /// content addressing are both verified.
+    #[tokio::test]
+    async fn test_stream_blocks_pipelined_many_blocks_in_order() {
+        let (_dir, store) = temp_store();
+        let (ids, total) = FileOps::stream_blocks_pipelined(&store, None, move |tx| async move {
+            for i in 0..12u8 {
+                tx.send((i as usize, vec![i; 128]))
+                    .await
+                    .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+            }
+            Ok(12i64 * 128)
+        })
+        .await
+        .unwrap();
+        assert_eq!(ids.len(), 12);
+        assert_eq!(total, 12 * 128);
+        // Content addressing: each block id round-trips to its bytes in order.
+        for (i, id) in ids.iter().enumerate() {
+            assert_eq!(store.read_block(id).await.unwrap(), vec![i as u8; 128]);
+        }
+    }
+
+    /// A stream that errors mid-way must surface as a request failure.
+    #[tokio::test]
+    async fn test_write_stream_blocks_error_propagation() {
+        let (_dir, store) = temp_store();
+        let stream = futures::stream::iter(vec![
+            Ok(bytes::Bytes::from_static(b"hello")),
+            Err(std::io::Error::other("boom")),
+        ]);
+        let result = FileOps::write_stream_blocks(&store, 10, stream, None).await;
+        assert!(result.is_err(), "stream error must propagate");
     }
 }

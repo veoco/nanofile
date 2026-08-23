@@ -392,31 +392,10 @@ pub async fn upload_aj(
                 // Stream: feed underlying bytes straight into the CDC chunker
                 // and write each chunk to the block store, so the file never
                 // needs to be fully buffered in memory.
-                let mut chunker = infra::storage::cdc::Chunker::new(0);
                 let store = state.block_store.clone();
-                while let Some(c) = field
-                    .chunk()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-                {
-                    for block in chunker.feed(&c) {
-                        total_size += block.len() as i64;
-                        let bid = store
-                            .write_block(&block)
-                            .await
-                            .map_err(|e| AppError::Internal(format!("block write failed: {e}")))?;
-                        block_ids.push(bid);
-                    }
-                }
-                let last = chunker.finish();
-                if !last.is_empty() {
-                    total_size += last.len() as i64;
-                    let bid = store
-                        .write_block(&last)
-                        .await
-                        .map_err(|e| AppError::Internal(format!("block write failed: {e}")))?;
-                    block_ids.push(bid);
-                }
+                let (bids, size) = stream_file_into_blocks(store, &mut field).await?;
+                block_ids.extend(bids);
+                total_size += size;
             }
         } else {
             fields.insert(
@@ -514,33 +493,33 @@ pub(crate) async fn stream_file_into_blocks(
     store: infra::storage::DynBlockStorage,
     field: &mut multer::Field<'_>,
 ) -> Result<(Vec<String>, i64), AppError> {
-    let mut chunker = infra::storage::cdc::Chunker::new(0);
-    let mut block_ids = Vec::new();
-    let mut total_size = 0i64;
-    while let Some(c) = field
-        .chunk()
-        .await
-        .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-    {
-        for block in chunker.feed(&c) {
-            total_size += block.len() as i64;
-            let bid = store
-                .write_block(&block)
-                .await
-                .map_err(|e| AppError::Internal(format!("block write failed: {e}")))?;
-            block_ids.push(bid);
-        }
-    }
-    let last = chunker.finish();
-    if !last.is_empty() {
-        total_size += last.len() as i64;
-        let bid = store
-            .write_block(&last)
+    crate::fs::core::FileOps::stream_blocks_pipelined(&store, None, move |tx| async move {
+        let mut chunker = infra::storage::cdc::Chunker::new(0);
+        let mut total_size = 0i64;
+        let mut idx = 0usize;
+        while let Some(c) = field
+            .chunk()
             .await
-            .map_err(|e| AppError::Internal(format!("block write failed: {e}")))?;
-        block_ids.push(bid);
-    }
-    Ok((block_ids, total_size))
+            .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+        {
+            for block in chunker.feed(&c) {
+                total_size += block.len() as i64;
+                tx.send((idx, block))
+                    .await
+                    .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+                idx += 1;
+            }
+        }
+        let last = chunker.finish();
+        if !last.is_empty() {
+            total_size += last.len() as i64;
+            tx.send((idx, last))
+                .await
+                .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+        }
+        Ok(total_size)
+    })
+    .await
 }
 
 /// POST /update-api/ — Update existing file (web UI, no token).
