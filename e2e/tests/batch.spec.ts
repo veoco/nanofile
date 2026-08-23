@@ -61,7 +61,13 @@ test("batch copy duplicates a file into a subdirectory", async ({ page }) => {
   await page.locator("#js-selection-actions .js-batch-copy").click();
   await expect(page.locator("#dir-picker-overlay")).toBeVisible();
   await page.locator("#dir-picker-list .js-picker-dir").first().click();
+  // Wait for the copy request to finish before navigating, otherwise the
+  // in-flight fetch can be aborted by the page load and the copy never lands.
+  const copyDone = page.waitForResponse(
+    (r) => r.url().includes("sync-batch-copy-item") && r.request().method() === "POST",
+  );
   await page.locator(".js-picker-confirm").click();
+  await copyDone;
   // Original stays in place…
   await expect(row(page, "alpha.txt")).toBeVisible();
   // …and a copy appears in the subdirectory.

@@ -65,3 +65,25 @@ test("click an entry tag chip to filter the folder", async ({ page }) => {
     page.locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="bravo.txt"]'),
   ).toHaveCount(0);
 });
+
+// Regression: the initial tag-list load must not roll the right panel back
+// over a tag the user just saved when that load resolves late (CI flake).
+// Uses a distinct file/tag and runs last so the persisted tag doesn't leak
+// into the other tests, which share one seeded repo.
+test("add a tag completes even when the initial tag list loads slowly", async ({ page }) => {
+  await page.route("**/api/v2.1/repos/*/metadata/record/**", async (route) => {
+    await new Promise((r) => setTimeout(r, 800));
+    await route.continue();
+  });
+  await page.goto(`/libraries/${repoId}/files`);
+  await page.waitForSelector(".js-entry-row");
+  // Let the delayed initial-load response land after the save; without the
+  // frontend fix it rolls the freshly-added chip back.
+  const recDone = page.waitForResponse((r) => r.url().includes("/metadata/record/"));
+  await selectFile(page, "bravo.txt");
+  await expect(page.locator(".js-rp-tags-section")).toBeVisible();
+  await page.locator(".js-rp-tag-input").fill("slowtag");
+  await page.locator(".js-rp-tag-add").click();
+  await recDone;
+  await expect(page.locator(".js-rp-tag-chip")).toContainText("slowtag");
+});

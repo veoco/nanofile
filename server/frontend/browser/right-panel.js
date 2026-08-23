@@ -215,6 +215,9 @@ export function openRightPanel(d) {
     var recordId = d.recordId;
     var allTags = [];   // [{id, name, color}]
     var fileTagIds = []; // tag ids currently attached
+    // Set once the user saves a change; the initial load response (which
+    // reflects pre-save state) must not roll the panel back over it.
+    var userMutated = false;
 
     function renderTagChips() {
       tagsList.innerHTML = "";
@@ -253,6 +256,7 @@ export function openRightPanel(d) {
           body: JSON.stringify({ file_tags_data: [{ record_id: recordId, tags: nextTagIds }] }),
         }
       ).then(function () {
+        userMutated = true;
         fileTagIds = nextTagIds;
         renderTagChips();
         refreshFileList();
@@ -269,7 +273,7 @@ export function openRightPanel(d) {
       apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/tags/?start=0&limit=1000").then(function (r) { return r.json(); }),
       apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/record/?parent_dir=" + encodeURIComponent(parentDir) + "&name=" + encodeURIComponent(fileName) + "&file_name=" + encodeURIComponent(fileName)).then(function (r) { return r.json(); }),
     ]).then(function (results) {
-      if (tagsReqId !== rpReqId) return; // stale response
+      if (tagsReqId !== rpReqId || userMutated) return; // stale response
       var tagData = results[0] || {};
       var recData = results[1] || {};
       allTags = (tagData.results || []).map(function (t) {
@@ -287,7 +291,7 @@ export function openRightPanel(d) {
       fileTagIds = (rec._tags || []).map(function (l) { return l.row_id; });
       renderTagChips();
     }).catch(function () {
-      if (tagsReqId !== rpReqId) return; // stale response
+      if (tagsReqId !== rpReqId || userMutated) return; // stale response
       renderTagChips(); // fileTagIds is empty → shows the "no tags" hint
     });
 
