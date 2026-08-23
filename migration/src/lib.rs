@@ -68,6 +68,7 @@ migrations!(
     m20260814_000009_drop_dir_entries,
     m20260816_000001_hash_tokens,
     m20260816_000002_add_api_token_pending,
+    m20260823_000001_hash_short_lived_tokens,
 );
 
 #[cfg(test)]

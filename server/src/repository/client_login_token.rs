@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use sea_orm::{DatabaseConnection, EntityTrait, ModelTrait, Set};
 use std::sync::Arc;
 
+use crate::service::auth::token::hash_token;
 use base::error::AppError;
 use infra::entity::client_login_token;
 
@@ -52,7 +53,7 @@ impl ClientLoginTokenRepository for DbClientLoginTokenRepository {
         use sea_orm::QueryFilter;
 
         Ok(client_login_token::Entity::find()
-            .filter(client_login_token::Column::Token.eq(token))
+            .filter(client_login_token::Column::Token.eq(hash_token(token)))
             .one(self.db.as_ref())
             .await?)
     }
@@ -68,12 +69,15 @@ impl ClientLoginTokenRepository for DbClientLoginTokenRepository {
     ) -> Result<client_login_token::Model, AppError> {
         let token = params.token.clone();
         client_login_token::Entity::insert(client_login_token::ActiveModel {
-            token: Set(params.token),
+            token: Set(hash_token(&params.token)),
             username: Set(params.username),
             created_at: Set(params.created_at),
         })
         .exec(self.db.as_ref())
         .await?;
+        // `find_by_token` hashes its input, so the plaintext `token` matches the
+        // stored hash. The returned model's `.token` field is the hash; callers
+        // must keep the plaintext around to hand to the client.
         self.find_by_token(&token)
             .await?
             .ok_or_else(|| AppError::Internal("failed to find created client login token".into()))

@@ -1,6 +1,12 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// A one-time SSO / "view on website" login token.
+///
+/// `token` is stored as a SHA-256 hash (bearer tokens are never stored in
+/// plaintext). `api_token` holds the plaintext API token minted on completion —
+/// the `poll_sso_link` flow must re-present it to the client, so it cannot be
+/// hashed (a documented limitation).
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "sso_login_tokens")]
 pub struct Model {

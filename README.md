@@ -31,6 +31,10 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
 - **Security**: TOTP two-factor auth with backup codes and trusted devices, SSO / "view on website"
   login, invitation-code registration, login rate limiting with lockout, password reset (email-gated),
   hashed session cookies with CSRF protection, path-traversal-safe filename handling.
+  - **Security note**: API, S2FA, SSO-login and client-login bearer tokens are stored as SHA-256
+    hashes, so a leaked database does not yield usable credentials. Share-link and sync tokens
+    remain plaintext because clients re-present them (the "my shares" list shows copyable URLs, and
+    desktop clients poll for a stable per-library sync token) — matching official Seafile.
 - **Encrypted libraries**: AES-256-CBC blocks with Seafile-compatible `magic` / `random_key`,
   in-memory password cache with TTL.
   - **Security note**: the stored `magic` is derived with PBKDF2-SHA256 at **1000 iterations**,

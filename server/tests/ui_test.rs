@@ -1095,12 +1095,13 @@ async fn test_client_login_flow_works() {
 async fn test_client_login_expired_token_redirects() {
     let fixture = TestFixture::new().await;
 
-    // Create an expired token directly in DB
+    // Create an expired token directly in DB (stored hashed, like the repo does).
     use sea_orm::EntityTrait;
     let now = chrono::Utc::now().timestamp();
+    let raw = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     infra::entity::client_login_token::Entity::insert(
         infra::entity::client_login_token::ActiveModel {
-            token: sea_orm::Set("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+            token: sea_orm::Set(server::service::auth::token::hash_token(raw)),
             username: sea_orm::Set("test@example.com".to_string()),
             created_at: sea_orm::Set(now - 60), // 60 seconds ago (past 30s TTL)
         },
