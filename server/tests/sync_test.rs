@@ -267,6 +267,58 @@ async fn test_put_and_get_block() {
     assert_eq!(data.as_ref(), block_data);
 }
 
+// ==================== Security: oversized bodies ====================
+
+/// Security: put_block must reject bodies larger than the per-block cap
+/// (8 MiB) instead of buffering up to the 4 GiB upload limit.
+#[tokio::test]
+async fn test_put_block_rejects_oversized_body() {
+    let f = TestFixture::new().await;
+
+    // Block ids must pass validate_block_id (40 lowercase hex/digits).
+    let block_id = "0".repeat(40);
+    let resp = f
+        .client
+        .put_block(
+            &f.sync_token,
+            &f.repo_id,
+            &block_id,
+            vec![0u8; 8 * 1024 * 1024 + 1],
+        )
+        .await;
+    assert_eq!(resp.status(), 500);
+}
+
+/// Security: recv_fs must reject packs larger than the 32 MiB cap.
+#[tokio::test]
+async fn test_recv_fs_rejects_oversized_body() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .recv_fs(&f.sync_token, &f.repo_id, vec![0u8; 32 * 1024 * 1024 + 1])
+        .await;
+    assert_eq!(resp.status(), 500);
+}
+
+/// Security: put_commit must reject bodies larger than the 4 MiB cap.
+#[tokio::test]
+async fn test_put_commit_rejects_oversized_body() {
+    let f = TestFixture::new().await;
+
+    let commit_id = "0".repeat(40);
+    let resp = f
+        .client
+        .put_commit(
+            &f.sync_token,
+            &f.repo_id,
+            &commit_id,
+            vec![0u8; 4 * 1024 * 1024 + 1],
+        )
+        .await;
+    assert_eq!(resp.status(), 500);
+}
+
 // ==================== Regression tests ====================
 
 /// Regression: sync endpoints must accept API tokens (not just sync tokens).

@@ -13,6 +13,11 @@ use base::common::EMPTY_SHA1;
 use base::error::AppError;
 use infra::serialization::pack_fs;
 
+/// One recv-fs pack carries a batch of compressed fs objects (each already
+/// capped at MAX_FS_OBJECT_BYTES on decompress). 32 MiB is far above any
+/// normal sync batch and bounds the per-request buffer.
+const MAX_FS_PACK_BYTES: usize = 32 * 1024 * 1024;
+
 /// Parse fs_ids from the request body. The seaf-daemon may send either:
 /// 1. JSON array: ["id1", "id2"] (newer versions)
 /// 2. URL-encoded form: fs_ids=id1&fs_ids=id2 (older versions)
@@ -202,8 +207,7 @@ pub async fn recv_fs(
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
-    let max_bytes = (state.config.server.max_upload_size_mb * 1024 * 1024) as usize;
-    let data = axum::body::to_bytes(body, max_bytes)
+    let data = axum::body::to_bytes(body, MAX_FS_PACK_BYTES)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 

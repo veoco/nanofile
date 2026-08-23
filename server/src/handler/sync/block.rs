@@ -27,6 +27,11 @@ pub fn block_routes() -> Router<Arc<AppState>> {
         )
 }
 
+/// A block is at most the CDC max block (4 MiB); 2x leaves room for encrypted
+/// (AES-padded) block data. Cap the request so a sync client can't force a
+/// multi-GB buffered allocation per request.
+const MAX_BLOCK_UPLOAD_BYTES: usize = 8 * 1024 * 1024;
+
 /// Validate that a block_id is exactly 40 lowercase hex characters.
 /// Matches seafile-server's is_object_id_valid() behavior.
 fn validate_block_id(block_id: &str) -> Result<(), AppError> {
@@ -119,8 +124,7 @@ pub async fn put_block(
 ) -> Result<StatusCode, AppError> {
     validate_block_id(&block_id)?;
 
-    let max_bytes = (state.config.server.max_upload_size_mb * 1024 * 1024) as usize;
-    let data = axum::body::to_bytes(body, max_bytes)
+    let data = axum::body::to_bytes(body, MAX_BLOCK_UPLOAD_BYTES)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 

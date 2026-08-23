@@ -11,6 +11,10 @@ use crate::middleware::auth::SyncAuth;
 use base::common::EMPTY_SHA1;
 use base::error::AppError;
 
+/// A commit is a small JSON document (commit id, root/parent ids, message);
+/// a few KB in practice. Cap the request to avoid unbounded buffering.
+const MAX_COMMIT_BYTES: usize = 4 * 1024 * 1024;
+
 #[derive(Serialize)]
 pub struct HeadCommitResponse {
     pub is_corrupted: i32,
@@ -133,8 +137,7 @@ pub async fn put_commit(
     Path((repo_id, _commit_id)): Path<(String, String)>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
-    let max_bytes = (state.config.server.max_upload_size_mb * 1024 * 1024) as usize;
-    let data = axum::body::to_bytes(body, max_bytes)
+    let data = axum::body::to_bytes(body, MAX_COMMIT_BYTES)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
