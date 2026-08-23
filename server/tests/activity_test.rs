@@ -1068,6 +1068,56 @@ async fn test_activity_async_batch_move() {
     }
 }
 
+/// Async copy respects the configured active-task cap: a concurrent second
+/// copy is rejected with 429 while the first is still running.
+#[tokio::test]
+async fn test_async_copy_rejects_when_active_limit_reached() {
+    let f = TestFixture::new_with_task_limits(1).await;
+
+    // Upload enough files that a copy task stays active while a concurrent
+    // second request is handled, so the active-task cap is hit deterministically.
+    let file_names: Vec<String> = (0..200).map(|i| format!("cap_file_{i}.txt")).collect();
+    for name in &file_names {
+        let resp = f
+            .client
+            .upload_file(&f.api_token, &f.repo_id, "/", name, b"content")
+            .await;
+        assert_eq!(resp.status(), 200, "upload failed for {name}");
+    }
+    create_dir(&f, "/cap_dst").await;
+
+    let dirents: Vec<&str> = file_names.iter().map(|s| s.as_str()).collect();
+
+    // Fire two copies concurrently; exactly one is accepted, the other hits the
+    // active-task cap and is rejected with 429 (order independent).
+    let (r1, r2) = tokio::join!(
+        f.client.async_batch_copy(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            &dirents,
+            &f.repo_id,
+            "/cap_dst",
+        ),
+        f.client.async_batch_copy(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            &dirents,
+            &f.repo_id,
+            "/cap_dst",
+        ),
+    );
+
+    let mut statuses = [r1.status().as_u16(), r2.status().as_u16()];
+    statuses.sort_unstable();
+    assert_eq!(
+        statuses,
+        [200, 429],
+        "expected one accepted async copy (200) and one rejected by the active-task cap (429)"
+    );
+}
+
 /// Batch delete of mixed files + directories → verify obj_type is correct
 #[tokio::test]
 async fn test_activity_batch_delete_mixed_types() {

@@ -28,6 +28,8 @@ pub struct Config {
     #[serde(default)]
     pub notification: NotificationConfig,
     #[serde(default)]
+    pub tasks: TaskConfig,
+    #[serde(default)]
     pub admin_init: AdminInitConfig,
     #[serde(default)]
     pub email: EmailConfig,
@@ -121,6 +123,30 @@ impl Default for NotificationConfig {
             max_connections: default_notif_max_connections(),
             max_connections_per_ip: default_notif_max_connections_per_ip(),
             subscribe_timeout_secs: default_subscribe_timeout_secs(),
+        }
+    }
+}
+
+/// Background copy/move task limits.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TaskConfig {
+    /// Max async copy/move tasks in Pending or Processing state (0 = unlimited).
+    /// New tasks beyond the cap are rejected with HTTP 429, preventing
+    /// authenticated users from exhausting the server with unbounded
+    /// background copy tasks.
+    /// Env: NANOFILE_TASKS_MAX_ACTIVE
+    #[serde(default = "default_task_max_active")]
+    pub max_active_tasks: u64,
+}
+
+fn default_task_max_active() -> u64 {
+    100
+}
+
+impl Default for TaskConfig {
+    fn default() -> Self {
+        Self {
+            max_active_tasks: default_task_max_active(),
         }
     }
 }
@@ -747,6 +773,7 @@ impl Config {
             "NANOFILE_NOTIFICATION_SUBSCRIBE_TIMEOUT_SECS",
             self.notification.subscribe_timeout_secs
         );
+        env_parse!("NANOFILE_TASKS_MAX_ACTIVE", self.tasks.max_active_tasks);
         env_parse!("NANOFILE_INDEX_ENABLED", self.index.enabled);
         env_path!("NANOFILE_INDEX_INDEX_DIR", self.index.index_dir);
         env_parse!("NANOFILE_CORS_MAX_AGE_SECS", self.server.cors_max_age_secs);

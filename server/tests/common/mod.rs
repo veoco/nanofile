@@ -59,6 +59,20 @@ impl Default for NotifLimits {
     }
 }
 
+/// Background copy/move task-limit overrides for tests.
+#[derive(Clone, Copy)]
+pub struct TaskLimits {
+    pub max_active_tasks: u64,
+}
+
+impl Default for TaskLimits {
+    fn default() -> Self {
+        Self {
+            max_active_tasks: 100,
+        }
+    }
+}
+
 impl TestServer {
     pub async fn start() -> Self {
         Self::start_with_config(false, false, 30, 90).await
@@ -81,7 +95,37 @@ impl TestServer {
     /// Start a server with notification and custom connection limits /
     /// subscribe timeout. Useful for testing the WebSocket DoS defenses.
     pub async fn start_with_notification_limits(limits: NotifLimits) -> Self {
-        Self::start_full_tweaked(true, false, 30, 90, true, false, true, Some(limits), |_| {}).await
+        Self::start_full_tweaked(
+            true,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            Some(limits),
+            None,
+            |_| {},
+        )
+        .await
+    }
+
+    /// Start a server with a custom background copy/move task limit. Useful
+    /// for testing the async copy DoS defenses.
+    pub async fn start_with_task_limits(limits: TaskLimits) -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            Some(limits),
+            |_| {},
+        )
+        .await
     }
 
     /// Start a server with a specific `webdav_enabled` setting (for testing
@@ -107,7 +151,7 @@ impl TestServer {
     pub async fn start_with_server_info_config(
         tweak: impl FnOnce(&mut infra::config::ServerConfig) + Send + 'static,
     ) -> Self {
-        Self::start_full_tweaked(false, false, 30, 90, true, false, true, None, tweak).await
+        Self::start_full_tweaked(false, false, 30, 90, true, false, true, None, None, tweak).await
     }
 
     async fn start_with_config(
@@ -146,6 +190,7 @@ impl TestServer {
             email_enabled,
             sso_enabled,
             None,
+            None,
             |_| {},
         )
         .await
@@ -163,6 +208,7 @@ impl TestServer {
         email_enabled: bool,
         sso_enabled: bool,
         notif_limits: Option<NotifLimits>,
+        task_limits: Option<TaskLimits>,
         tweak: F,
     ) -> Self
     where
@@ -255,6 +301,9 @@ impl TestServer {
             index: infra::config::IndexConfig {
                 enabled: enable_index,
                 index_dir: index_dir.clone(),
+            },
+            tasks: infra::config::TaskConfig {
+                max_active_tasks: task_limits.unwrap_or_default().max_active_tasks,
             },
             admin_init: Default::default(),
             email: infra::config::EmailConfig {
@@ -442,6 +491,34 @@ impl TestFixture {
     /// Create a test environment with notification server enabled.
     pub async fn new_with_notification() -> Self {
         let server = TestServer::start_with_notification().await;
+        let client = server.client();
+        let db = &*server.db;
+
+        let user_id = create_test_user(db, "test@example.com", "password").await;
+
+        let resp = client.login("test@example.com", "password").await;
+        assert_eq!(resp.status(), 200, "login failed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let api_token = body["token"].as_str().unwrap().to_string();
+
+        let repo_id = create_test_repo(&client, &api_token, "test-repo").await;
+        let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
+
+        Self {
+            server,
+            client,
+            email: "test@example.com".to_string(),
+            password: "password".to_string(),
+            api_token,
+            repo_id,
+            sync_token,
+            user_id,
+        }
+    }
+
+    /// Create a test environment with a custom background copy/move task limit.
+    pub async fn new_with_task_limits(max_active_tasks: u64) -> Self {
+        let server = TestServer::start_with_task_limits(TaskLimits { max_active_tasks }).await;
         let client = server.client();
         let db = &*server.db;
 

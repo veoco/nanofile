@@ -180,6 +180,9 @@ impl AppState {
             &temp_file_manager,
         );
 
+        // Built before `config` is moved into the Arc below.
+        let task_manager = Arc::new(TaskManager::new(config.tasks.max_active_tasks));
+
         Self {
             repos,
             db,
@@ -187,7 +190,7 @@ impl AppState {
             block_store,
             block_dir,
             token_manager: Arc::new(AccessTokenManager::new()),
-            task_manager: Arc::new(TaskManager::new()),
+            task_manager,
             notification_manager,
             indexer,
             auth_limiters,

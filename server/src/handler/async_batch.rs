@@ -44,7 +44,7 @@ pub async fn async_batch_copy_item(
         "copy",
         body.src_dirents.len(),
         &description,
-    );
+    )?;
 
     let state_clone = state.clone();
     let repo_id = body.src_repo_id;
@@ -126,7 +126,7 @@ pub async fn async_batch_move_item(
         "move",
         body.src_dirents.len(),
         &description,
-    );
+    )?;
 
     let state_clone = state.clone();
     let repo_id = body.src_repo_id;
@@ -212,7 +212,7 @@ pub async fn copy_move_task(
 
     state
         .task_manager
-        .create_task(task_id.clone(), &operation, 1, &description);
+        .create_task(task_id.clone(), &operation, 1, &description)?;
 
     let state_clone = state.clone();
     let repo_id = body.src_repo_id;

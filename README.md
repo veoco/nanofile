@@ -140,6 +140,7 @@ migration is applied in memory only.
 | `[gc]` | Enable / schedule garbage collection. |
 | `[index]` | Full-text search switch (`enabled`) and index directory. |
 | `[notification]` | WebSocket notification settings and JWT private key, plus connection caps (`max_connections`, `max_connections_per_ip`) and the unauthenticated-connection subscribe timeout (`subscribe_timeout_secs`). |
+| `[tasks]` | Max concurrent background copy/move tasks (`max_active_tasks`, `0` = unlimited; excess requests get HTTP 429). |
 
 `secret_key` is the single master key: the notification key and CSRF signing key are derived from it.
 Generate a unique one for production with `openssl rand -hex 32` and set it via

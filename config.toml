@@ -152,6 +152,9 @@ level = "info"
 enabled = false
 interval_hours = 24
 
+[tasks]
+max_active_tasks = 100
+
 [index]
 # Environment variables:
 #   NANOFILE_INDEX_ENABLED
