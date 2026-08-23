@@ -27,6 +27,15 @@ pub(crate) fn spawn_reindex(
     });
 }
 
+/// Join a directory prefix and entry name into an absolute path.
+fn join_sync_path(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        format!("/{name}")
+    } else {
+        format!("{prefix}/{name}")
+    }
+}
+
 /// Service for sync protocol operations.
 pub struct SyncService {
     pub(super) repos: Arc<Repositories>,
@@ -252,6 +261,10 @@ impl SyncService {
     /// `fs-id-list` when the client head differs from the server head so we
     /// don't return the whole tree (the client dedups locally anyway, so the
     /// full tree only wastes bandwidth — but the diff keeps the response small).
+    ///
+    /// Walks a paired (client, server) frontier and only descends into
+    /// subtrees whose ids differ, so a one-file change costs O(change) instead
+    /// of materialising the whole client tree.
     pub async fn diff_fs_ids(
         &self,
         repo_id: &str,
@@ -261,68 +274,105 @@ impl SyncService {
     ) -> Result<HashSet<String>, AppError> {
         use crate::fs::core::tree::read_fs_dir_data_batch;
 
-        // Collect client tree: path → object id.
-        let mut client_ids: HashMap<String, String> = HashMap::new();
-        {
-            let mut frontier: Vec<(String, String)> =
-                vec![(client_root.to_string(), String::new())];
-            while !frontier.is_empty() {
-                let ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
-                let dir_map = read_fs_dir_data_batch(&self.repos, repo_id, &ids).await?;
-                let mut next = Vec::new();
-                for (fs_id, prefix) in &frontier {
-                    let Some(dir) = dir_map.get(fs_id) else {
-                        continue;
-                    };
-                    for entry in &dir.dirents {
-                        let path = if prefix.is_empty() {
-                            format!("/{}", entry.name)
-                        } else {
-                            format!("{}/{}", prefix, entry.name)
-                        };
-                        client_ids.insert(path.clone(), entry.id.clone());
-                        if entry.mode & S_IFDIR != 0 {
-                            next.push((entry.id.clone(), path));
-                        }
-                    }
-                }
-                frontier = next;
-            }
+        struct Frame {
+            client_fs_id: Option<String>, // None = client side missing
+            server_fs_id: String,
+            prefix: String,
         }
 
-        // Walk the server tree; emit every object the client lacks.
         let mut result = HashSet::new();
         // Roots differ, so the server root object itself is always needed.
         result.insert(server_root.to_string());
 
-        let mut frontier: Vec<(String, String)> = vec![(server_root.to_string(), String::new())];
+        let mut frontier: Vec<Frame> = vec![Frame {
+            client_fs_id: Some(client_root.to_string()),
+            server_fs_id: server_root.to_string(),
+            prefix: String::new(),
+        }];
+
         while !frontier.is_empty() {
-            let ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
-            let dir_map = read_fs_dir_data_batch(&self.repos, repo_id, &ids).await?;
-            let mut next = Vec::new();
-            for (fs_id, prefix) in &frontier {
-                let Some(dir) = dir_map.get(fs_id) else {
-                    continue;
+            let mut server_ids: Vec<String> = Vec::new();
+            let mut client_ids: Vec<String> = Vec::new();
+            for frame in &frontier {
+                server_ids.push(frame.server_fs_id.clone());
+                if let Some(c) = &frame.client_fs_id {
+                    client_ids.push(c.clone());
+                }
+            }
+            let server_map = read_fs_dir_data_batch(&self.repos, repo_id, &server_ids).await?;
+            let client_map = if client_ids.is_empty() {
+                HashMap::new()
+            } else {
+                read_fs_dir_data_batch(&self.repos, repo_id, &client_ids).await?
+            };
+
+            let mut next: Vec<Frame> = Vec::new();
+
+            for frame in &frontier {
+                let Some(server_dir) = server_map.get(&frame.server_fs_id) else {
+                    continue; // missing/empty server dir → nothing to sync
                 };
-                for entry in &dir.dirents {
-                    let path = if prefix.is_empty() {
-                        format!("/{}", entry.name)
-                    } else {
-                        format!("{}/{}", prefix, entry.name)
-                    };
-                    let is_dir = entry.mode & S_IFDIR != 0;
-                    // Identical id → identical subtree, skip it entirely.
-                    if client_ids.get(&path).is_some_and(|cid| cid == &entry.id) {
-                        continue;
+                // A present client id that fails to resolve (missing or not a
+                // directory) is treated as absent, like the original code which
+                // only ever matched paths present in the client map.
+                let client_dir = frame
+                    .client_fs_id
+                    .as_ref()
+                    .and_then(|cid| client_map.get(cid));
+
+                match client_dir {
+                    None => {
+                        // Client lacks this directory → the whole server
+                        // subtree must be sent.
+                        for entry in &server_dir.dirents {
+                            let path = join_sync_path(&frame.prefix, &entry.name);
+                            let is_dir = entry.mode & S_IFDIR != 0;
+                            if !dir_only || is_dir {
+                                result.insert(entry.id.clone());
+                            }
+                            if is_dir {
+                                next.push(Frame {
+                                    client_fs_id: None,
+                                    server_fs_id: entry.id.clone(),
+                                    prefix: path,
+                                });
+                            }
+                        }
                     }
-                    if !dir_only || is_dir {
-                        result.insert(entry.id.clone());
-                    }
-                    if is_dir {
-                        next.push((entry.id.clone(), path));
+                    Some(client_dir) => {
+                        let client_entries: HashMap<&str, &base::common::DirEntryData> = client_dir
+                            .dirents
+                            .iter()
+                            .map(|d| (d.name.as_str(), d))
+                            .collect();
+                        for entry in &server_dir.dirents {
+                            let path = join_sync_path(&frame.prefix, &entry.name);
+                            let is_dir = entry.mode & S_IFDIR != 0;
+                            // Identical id → identical subtree, skip it entirely.
+                            if client_entries
+                                .get(entry.name.as_str())
+                                .is_some_and(|c| c.id == entry.id)
+                            {
+                                continue;
+                            }
+                            if !dir_only || is_dir {
+                                result.insert(entry.id.clone());
+                            }
+                            if is_dir {
+                                let client_child = client_entries
+                                    .get(entry.name.as_str())
+                                    .map(|c| c.id.clone());
+                                next.push(Frame {
+                                    client_fs_id: client_child,
+                                    server_fs_id: entry.id.clone(),
+                                    prefix: path,
+                                });
+                            }
+                        }
                     }
                 }
             }
+
             frontier = next;
         }
 
