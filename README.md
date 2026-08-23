@@ -12,6 +12,13 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
 - **Seafile sync protocol** (`/seafhttp/`, protocol version 2): content-addressed commits and FS
   objects, block transfer with SHA-1 verification, packed FS objects, `check-fs` / `check-blocks`,
   quota & permission pre-checks, per-repo sync tokens, file locking.
+  - **Security note**: `/seafhttp/repo/head-commits-multi/` is unauthenticated by protocol
+    requirement — the official desktop client calls it with no credentials (seafile
+    `daemon/http-tx-mgr.c`), and the official server validates no token (`server/http-server.c`);
+    requiring auth would make desktop clients silently stop detecting remote updates. Exposure is
+    bounded: library IDs are 128-bit random UUIDs (blind enumeration is infeasible), and knowing an
+    ID only confirms existence and reveals the head-commit SHA, which is unusable without a repo
+    sync token. The endpoint still rejects non-UUID ids and caps the array at 4096.
 - **REST API**: legacy v1 (`/api2/*`) and v2.1 (`/api/v2.1/*`) surfaces covering libraries, files,
   directories, sharing, activities, search, trash, devices, avatars and more — compatible with the
   official mobile apps.
