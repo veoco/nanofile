@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use crate::repository::Repositories;
 use base::error::AppError;
@@ -49,7 +50,11 @@ impl BackupCodeManager {
     ) -> Result<bool, AppError> {
         let hash = Self::hash_code(code);
         let codes = repos.user_2fa_backup_code.find_by_user(user_id).await?;
-        let record = codes.into_iter().find(|c| c.code_hash == hash && !c.used);
+        // Constant-time comparison so the response time cannot be used to probe
+        // the stored hash byte-by-byte (matching password/csrf verification).
+        let record = codes
+            .into_iter()
+            .find(|c| !c.used && c.code_hash.as_bytes().ct_eq(hash.as_bytes()).into());
 
         match record {
             Some(model) => {

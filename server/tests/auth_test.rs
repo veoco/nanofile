@@ -2,6 +2,7 @@ mod common;
 
 use common::{TestServer, create_test_user};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
+use server::service::auth::backup_codes::BackupCodeManager;
 
 /// Security: spoofing X-Forwarded-For must NOT bypass the per-IP login rate
 /// limit. The limiter keys on the TCP peer address, so rotating the header
@@ -504,5 +505,43 @@ async fn test_pending_token_rejected_as_session() {
         resp.status(),
         401,
         "pending token must not authenticate as a full session"
+    );
+}
+
+/// Backup codes verify once, consume on use, and reject wrong codes.
+#[tokio::test]
+async fn test_backup_code_verify_and_consume() {
+    let server = TestServer::start().await;
+    let user_id = create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    let codes = BackupCodeManager::generate_codes(10);
+    BackupCodeManager::store_codes(&server.repos, user_id, &codes)
+        .await
+        .unwrap();
+
+    // A correct code verifies the first time…
+    assert!(
+        BackupCodeManager::verify_code(&server.repos, user_id, &codes[0])
+            .await
+            .unwrap()
+    );
+    // …but is consumed (used) and rejected on a second attempt.
+    assert!(
+        !BackupCodeManager::verify_code(&server.repos, user_id, &codes[0])
+            .await
+            .unwrap(),
+        "a used backup code must not verify again"
+    );
+    // Other unused codes still work.
+    assert!(
+        BackupCodeManager::verify_code(&server.repos, user_id, &codes[1])
+            .await
+            .unwrap()
+    );
+    // An unknown code is rejected.
+    assert!(
+        !BackupCodeManager::verify_code(&server.repos, user_id, &"F".repeat(20))
+            .await
+            .unwrap()
     );
 }
