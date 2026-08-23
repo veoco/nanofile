@@ -259,6 +259,39 @@ impl BlockStorageBackend for BlockStorage {
 
         Ok(blocks)
     }
+
+    /// Stream every block ID directly from the two-level directory layout
+    /// without materialising the full list in memory.
+    async fn for_each_block(
+        &self,
+        mut f: Box<dyn for<'a> FnMut(&'a str) + Send>,
+    ) -> Result<(), std::io::Error> {
+        let mut entries = tokio::fs::read_dir(&self.base_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            if entry.file_type().await?.is_dir() {
+                let prefix = entry.file_name();
+                let prefix_str = prefix.to_string_lossy();
+                if prefix_str.len() == 2 {
+                    let mut sub_entries = tokio::fs::read_dir(entry.path()).await?;
+                    while let Some(sub_entry) = sub_entries.next_entry().await? {
+                        // Only visit regular files matching 40-char hex IDs
+                        if sub_entry.file_type().await?.is_file() {
+                            let name = sub_entry.file_name();
+                            if let Some(name) = name.to_str()
+                                && name.len() == 40
+                                && name.bytes().all(|b| b.is_ascii_hexdigit())
+                            {
+                                f(name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +321,34 @@ mod tests {
         assert!(store.block_size(&id).await.unwrap() > 0);
         store.remove_block(&id).await.unwrap();
         assert!(!store.has_block(&id).await);
+    }
+
+    /// The streaming visitor must yield exactly the same ids as `list_blocks`.
+    #[tokio::test]
+    async fn for_each_block_matches_list_blocks() {
+        let (_root, store) = temp_storage();
+        for i in 0..3 {
+            let _ = store
+                .write_block(format!("content {i}").as_bytes())
+                .await
+                .unwrap();
+        }
+
+        let mut listed = store.list_blocks().await.unwrap();
+        let visited = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let visited_ref = visited.clone();
+        store
+            .for_each_block(Box::new(move |id| {
+                visited_ref.lock().unwrap().push(id.to_string());
+            }))
+            .await
+            .unwrap();
+        let mut visited = visited.lock().unwrap().clone();
+
+        listed.sort();
+        visited.sort();
+        assert_eq!(visited, listed);
+        assert_eq!(visited.len(), 3);
     }
 
     #[tokio::test]

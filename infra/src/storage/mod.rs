@@ -38,6 +38,20 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     /// List all block IDs stored on disk.
     async fn list_blocks(&self) -> Result<Vec<String>, std::io::Error>;
 
+    /// Visit every block ID stored on disk without necessarily materialising
+    /// the full list. The default walks [`Self::list_blocks`]; backends may
+    /// override to stream directly from the filesystem.
+    async fn for_each_block(
+        &self,
+        mut f: Box<dyn for<'a> FnMut(&'a str) + Send>,
+    ) -> Result<(), std::io::Error> {
+        let ids = self.list_blocks().await?;
+        for id in &ids {
+            f(id);
+        }
+        Ok(())
+    }
+
     /// Drop any cached "block exists" results. Called before a batch of blocks
     /// is deleted (e.g. by GC) so a later [`Self::has_block`] re-stats disk
     /// instead of trusting a stale presence entry. No-op for backends that keep

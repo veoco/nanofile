@@ -25,7 +25,8 @@ impl GcManager {
         let now = chrono::Utc::now().timestamp();
         let all_repos = repos.repo.find_all().await?;
 
-        let mut alive_blocks: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut alive_blocks: std::collections::HashSet<[u8; 20]> =
+            std::collections::HashSet::new();
         let mut removed = 0u64;
 
         for repo_model in &all_repos {
@@ -45,7 +46,7 @@ impl GcManager {
                 repo_model.history_ttl_days,
                 now,
             );
-            Self::collect_repo_alive_blocks(
+            let reachable = Self::collect_repo_alive_blocks(
                 repos,
                 &repo_model.id,
                 &commits,
@@ -57,26 +58,31 @@ impl GcManager {
             // Prune only repos that have retention limits; unlimited repos are
             // left untouched (all of their history is live).
             if repo_model.history_limit != 0 || repo_model.history_ttl_days != 0 {
-                removed += Self::prune_repo(repos, repo_model, &commits, &keep).await?;
+                removed += Self::prune_repo(repos, repo_model, &commits, &keep, reachable).await?;
             }
         }
 
         // Delete blocks no longer referenced by any retained commit anywhere.
-        let disk_blocks = block_store.list_blocks().await?;
-        let orphan_blocks: Vec<String> = disk_blocks
-            .iter()
-            .filter(|id| !alive_blocks.contains(*id))
-            .cloned()
-            .collect();
-        if !orphan_blocks.is_empty() {
-            // Drop cached presence so later checks re-stat disk instead of
-            // trusting the just-deleted entries.
-            block_store.invalidate_exists_cache();
-            for id in &orphan_blocks {
-                block_store.remove_block(id).await?;
-            }
-            removed += orphan_blocks.len() as u64;
+        // Stream disk blocks so the full on-disk list is never materialised;
+        // only the orphan subset (usually tiny) is collected for deletion.
+        block_store.invalidate_exists_cache();
+        // The callback is a `'static` trait object, so the live set and orphan
+        // collector are shared through Arc rather than borrowed.
+        let alive_blocks = std::sync::Arc::new(alive_blocks);
+        let orphan_blocks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (alive_ref, orphan_ref) = (alive_blocks.clone(), orphan_blocks.clone());
+        block_store
+            .for_each_block(Box::new(move |id| {
+                if !alive_ref.contains(&Self::decode_block_id(id)) {
+                    orphan_ref.lock().unwrap().push(id.to_string());
+                }
+            }))
+            .await?;
+        let orphan_blocks = orphan_blocks.lock().unwrap().clone();
+        for id in &orphan_blocks {
+            block_store.remove_block(id).await?;
         }
+        removed += orphan_blocks.len() as u64;
 
         Ok(removed)
     }
@@ -123,13 +129,14 @@ impl GcManager {
         repo_id: &str,
         commits: &[commit::Model],
         keep: &std::collections::HashSet<i64>,
-        alive_blocks: &mut std::collections::HashSet<String>,
-    ) -> Result<(), AppError> {
+        alive_blocks: &mut std::collections::HashSet<[u8; 20]>,
+    ) -> Result<std::collections::HashSet<String>, AppError> {
         if commits.is_empty() {
-            return Ok(());
+            return Ok(std::collections::HashSet::new());
         }
 
-        // Every fs_id reachable from the retained commits' roots.
+        // Every fs_id reachable from the retained commits' roots. Returned so
+        // `prune_repo` can reuse it instead of re-walking the same trees.
         let mut reachable = std::collections::HashSet::new();
         for c in commits {
             if keep.contains(&c.id) {
@@ -137,18 +144,18 @@ impl GcManager {
             }
         }
         if reachable.is_empty() {
-            return Ok(());
+            return Ok(reachable);
         }
 
         // Batch-fetch the reachable *file* objects and record their block ids.
-        let ids: Vec<String> = reachable.into_iter().collect();
+        let ids: Vec<String> = reachable.iter().cloned().collect();
         let files = read_fs_file_data_batch(repos, repo_id, &ids).await?;
         for file in files.values() {
             for block_id in &file.block_ids {
-                alive_blocks.insert(block_id.clone());
+                alive_blocks.insert(Self::decode_block_id(block_id));
             }
         }
-        Ok(())
+        Ok(reachable)
     }
 
     /// Prune one repo's history according to its retention settings, deleting
@@ -160,17 +167,10 @@ impl GcManager {
         repo_model: &repo::Model,
         commits: &[commit::Model],
         keep: &std::collections::HashSet<i64>,
+        active_fs_ids: std::collections::HashSet<String>,
     ) -> Result<u64, AppError> {
         if keep.len() == commits.len() {
             return Ok(0);
-        }
-
-        // Collect fs ids reachable from the kept commits' roots.
-        let mut active_fs_ids = std::collections::HashSet::new();
-        for c in commits {
-            if keep.contains(&c.id) {
-                Self::collect_fs_ids(repos, &repo_model.id, &c.root_id, &mut active_fs_ids).await?;
-            }
         }
 
         // Delete fs objects of this repo that are no longer reachable. Only
@@ -201,6 +201,16 @@ impl GcManager {
         }
 
         Ok(removed as u64)
+    }
+
+    /// Decode a 40-char hex block id to its raw 20-byte SHA-1, so the live set
+    /// can be stored compactly. `list_blocks` / `for_each_block` only yield
+    /// validated 40-hex ids, so this cannot fail; a corrupt id decodes to
+    /// all-zeroes and is treated as an orphan.
+    fn decode_block_id(hex_str: &str) -> [u8; 20] {
+        let mut buf = [0u8; 20];
+        let _ = hex::decode_to_slice(hex_str, &mut buf);
+        buf
     }
 
     /// Breadth-first walk from `root_id`, adding every reachable fs_id to
@@ -568,5 +578,29 @@ mod tests {
             !store.has_block(&orphan_id).await,
             "orphan block must be deleted"
         );
+    }
+
+    /// When the TTL window retains no commits at all (all history expired),
+    /// every fs_object of the repo becomes unreachable and is pruned.
+    #[tokio::test]
+    async fn test_gc_prunes_all_when_no_commits_kept() {
+        let db = setup_gc_test_db(0, 1).await; // 1-day TTL
+        let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+
+        // Both commits are older than the 1-day TTL window, so keep is empty.
+        let old = chrono::Utc::now().timestamp() - 172_800; // 2 days ago
+        insert_commit(&db, "c1", "root-c1", old).await;
+        insert_commit(&db, "c2", "root-c2", old).await;
+        insert_fs_object(&db, "root-c1", 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
+        insert_fs_object(&db, "root-c2", 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
+
+        let removed = GcManager::garbage_collect(&repos, &store)
+            .await
+            .expect("gc succeeds");
+        // Both fs objects and both commits are orphaned and pruned.
+        assert_eq!(removed, 2);
+        assert_eq!(count_rows(&db, "commits").await, 0);
+        assert_eq!(count_rows(&db, "fs_objects").await, 0);
     }
 }

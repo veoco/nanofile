@@ -112,7 +112,8 @@ pub fn register_default_tasks(
         });
     }
 
-    // Periodic: garbage collection (configurable interval).
+    // Periodic: garbage collection (configurable interval). Runs on a blocking
+    // thread so the JSON parsing / DB / block I/O never stalls the runtime.
     if gc_config.enabled {
         let repos = repos.clone();
         let block_store = block_store.clone();
@@ -120,13 +121,19 @@ pub fn register_default_tasks(
             let repos = repos.clone();
             let block_store = block_store.clone();
             async move {
-                match GcManager::garbage_collect(&repos, &block_store).await {
-                    Ok(count) if count > 0 => TaskOutput::success(
+                let result = tokio::task::spawn_blocking(move || {
+                    tokio::runtime::Handle::current()
+                        .block_on(GcManager::garbage_collect(&repos, &block_store))
+                })
+                .await;
+                match result {
+                    Ok(Ok(count)) if count > 0 => TaskOutput::success(
                         format!("GC removed {count} unreferenced objects/blocks"),
                         Some(count),
                     ),
-                    Ok(_) => TaskOutput::success("GC completed: nothing to remove", None),
-                    Err(e) => TaskOutput::error(format!("GC failed: {e}")),
+                    Ok(Ok(_)) => TaskOutput::success("GC completed: nothing to remove", None),
+                    Ok(Err(e)) => TaskOutput::error(format!("GC failed: {e}")),
+                    Err(e) => TaskOutput::error(format!("GC task join failed: {e}")),
                 }
             }
         });
