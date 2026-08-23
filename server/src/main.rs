@@ -54,11 +54,15 @@ async fn health_check() -> impl IntoResponse {
     StatusCode::OK
 }
 
-/// Add baseline security headers to every response. This deliberately leaves
-/// out `default-src`/`script-src` for now — `default-src 'self'` would fall
-/// back to `script-src` and block the remaining inline scripts in `base.html`
-/// (dark-mode guard + `window.__T` injection), which still need
-/// `'unsafe-inline'`. A strict `script-src` with nonces is a follow-up.
+/// Add baseline security headers to every response.
+///
+/// `script-src 'self' 'unsafe-inline'` keeps the inline dark-mode guard,
+/// view-mode probe and `window.__T` i18n injection in `base.html` working,
+/// while still blocking remote / third-party script, image, frame and font
+/// loading (`default-src 'self'` — no fallback to `*`). `style-src
+/// 'unsafe-inline'` is needed for the inline `<style>` block and `style=""`
+/// attributes. A strict nonce-based `script-src` (dropping `'unsafe-inline'`)
+/// is a possible follow-up.
 async fn security_headers(
     req: axum::extract::Request,
     next: axum::middleware::Next,
@@ -81,7 +85,11 @@ async fn security_headers(
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; \
+             style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+             font-src 'self'; connect-src 'self' ws: wss:; \
+             object-src 'none'; frame-ancestors 'none'; base-uri 'self'; \
+             form-action 'self'",
         ),
     );
     response
