@@ -155,6 +155,16 @@ async fn read_chunked_field(
     Ok(out)
 }
 
+/// Map temp-file I/O errors onto HTTP errors: quota caps and out-of-range
+/// chunk writes are client errors (429/400), everything else is a 500.
+fn map_temp_error(e: std::io::Error) -> AppError {
+    match e.kind() {
+        std::io::ErrorKind::QuotaExceeded => AppError::TooManyRequests,
+        std::io::ErrorKind::InvalidInput => AppError::BadRequest(e.to_string()),
+        _ => AppError::Internal(format!("temp file operation failed: {e}")),
+    }
+}
+
 /// Handle a chunked (resumable) upload when a `Content-Range` header is
 /// present.
 ///
@@ -231,13 +241,13 @@ async fn try_handle_chunked(
     temp_mgr
         .get_or_create(repo_id, &file_path, file_size)
         .await
-        .map_err(|e| AppError::Internal(format!("temp file create failed: {e}")))?;
+        .map_err(map_temp_error)?;
 
     // Write the chunk at the declared offset
     temp_mgr
         .write_chunk(repo_id, &file_path, start, file_data)
         .await
-        .map_err(|e| AppError::Internal(format!("chunk write failed: {e}")))?;
+        .map_err(map_temp_error)?;
 
     // In-transit streaming: feed in-order chunks through the upload's CDC
     // chunker so a fully in-order upload commits on the final chunk without
@@ -915,7 +925,9 @@ pub async fn upload_aj_token(
                 &file_data,
                 content_range,
                 &info.username,
-                None,
+                // Bind anonymous (upload-link) chunked uploads to the token
+                // owner's storage quota, matching the non-chunked path below.
+                Some(info.user_id),
             )
             .await?
         {

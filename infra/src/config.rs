@@ -423,6 +423,21 @@ pub struct StorageConfig {
     /// Env: NANOFILE_STORAGE_FFMPEG_PATH
     #[serde(default = "default_ffmpeg_path")]
     pub ffmpeg_path: String,
+    /// Max concurrent in-flight resumable (Content-Range) uploads tracked by
+    /// the temp manager (0 = unlimited). Prevents abandoned chunked uploads —
+    /// including anonymous upload-link uploads — from exhausting memory and
+    /// disk. Env: NANOFILE_STORAGE_MAX_TEMP_UPLOADS
+    #[serde(default = "default_max_temp_uploads")]
+    pub max_temp_uploads: u64,
+    /// Max total declared bytes across active temp uploads (0 = unlimited).
+    /// Env: NANOFILE_STORAGE_MAX_TEMP_UPLOAD_BYTES
+    #[serde(default)]
+    pub max_temp_upload_bytes: u64,
+    /// Hours an abandoned resumable-upload temp file is retained before the
+    /// periodic cleanup task removes it (0 = disable the cleanup task).
+    /// Env: NANOFILE_STORAGE_TEMP_UPLOAD_TTL_HOURS
+    #[serde(default = "default_temp_upload_ttl_hours")]
+    pub temp_upload_ttl_hours: u64,
 }
 
 fn default_block_dir() -> PathBuf {
@@ -434,6 +449,12 @@ fn default_temp_dir() -> PathBuf {
 fn default_ffmpeg_path() -> String {
     "ffmpeg".to_string()
 }
+fn default_max_temp_uploads() -> u64 {
+    1000
+}
+fn default_temp_upload_ttl_hours() -> u64 {
+    24
+}
 
 impl Default for StorageConfig {
     fn default() -> Self {
@@ -442,6 +463,9 @@ impl Default for StorageConfig {
             temp_dir: default_temp_dir(),
             max_storage_bytes: 0,
             ffmpeg_path: default_ffmpeg_path(),
+            max_temp_uploads: default_max_temp_uploads(),
+            max_temp_upload_bytes: 0,
+            temp_upload_ttl_hours: default_temp_upload_ttl_hours(),
         }
     }
 }
@@ -708,6 +732,18 @@ impl Config {
         env_parse!(
             "NANOFILE_STORAGE_MAX_STORAGE_BYTES",
             self.storage.max_storage_bytes
+        );
+        env_parse!(
+            "NANOFILE_STORAGE_MAX_TEMP_UPLOADS",
+            self.storage.max_temp_uploads
+        );
+        env_parse!(
+            "NANOFILE_STORAGE_MAX_TEMP_UPLOAD_BYTES",
+            self.storage.max_temp_upload_bytes
+        );
+        env_parse!(
+            "NANOFILE_STORAGE_TEMP_UPLOAD_TTL_HOURS",
+            self.storage.temp_upload_ttl_hours
         );
         env_parse!(
             "NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS",

@@ -158,6 +158,8 @@ async fn main() -> anyhow::Result<()> {
 
             let temp_file_manager = server::handler::web::temp_file::TempFileManager::new(
                 config.storage.temp_dir.clone(),
+                config.storage.max_temp_uploads,
+                config.storage.max_temp_upload_bytes,
             )
             .await;
 

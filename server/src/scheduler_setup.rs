@@ -30,6 +30,7 @@ pub fn register_default_tasks(
     block_store: &DynBlockStorage,
     indexer: Option<&TextIndexer>,
     temp_file_manager: &TempFileManager,
+    temp_upload_ttl_hours: u64,
 ) {
     // Continuous: event listener (forwards repo-update events to WebSocket subscribers).
     if let Some(mgr) = notification_manager {
@@ -168,13 +169,14 @@ pub fn register_default_tasks(
     });
 
     // Periodic: clean stale resumable-upload temp files (every 30 minutes).
-    {
+    // Skipped entirely when `temp_upload_ttl_hours` is 0.
+    if temp_upload_ttl_hours > 0 {
         let tmp = temp_file_manager.clone();
+        let ttl = std::time::Duration::from_secs(temp_upload_ttl_hours * 3600);
         scheduler.spawn_periodic("temp upload cleanup", 1800, move || {
             let tmp = tmp.clone();
             async move {
-                tmp.cleanup_stale(std::time::Duration::from_secs(24 * 3600))
-                    .await;
+                tmp.cleanup_stale(ttl).await;
                 TaskOutput::success("ok", None)
             }
         });

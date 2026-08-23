@@ -27,11 +27,25 @@ pub struct TempFileManager {
     inner: Arc<Inner>,
 }
 
-struct Inner {
+/// Active temp uploads plus the running total of their declared sizes. Both
+/// live under one write lock so the reserved-bytes quota is enforced
+/// atomically with the entry map.
+struct ActiveUploads {
     /// (repo_id, file_path_in_repo) → active temp file entry
-    active: RwLock<HashMap<(String, String), TempFileEntry>>,
+    entries: HashMap<(String, String), TempFileEntry>,
+    /// Sum of declared `file_size` over active entries.
+    reserved_bytes: u64,
+}
+
+struct Inner {
+    /// All active temp uploads.
+    active: RwLock<ActiveUploads>,
     /// Root directory for upload temp files, e.g. `data/temp`
     temp_dir: PathBuf,
+    /// Cap on concurrent active uploads (0 = unlimited).
+    max_uploads: u64,
+    /// Cap on total reserved bytes across active uploads (0 = unlimited).
+    max_bytes: u64,
 }
 
 struct TempFileEntry {
@@ -76,7 +90,10 @@ pub enum FeedOutcome {
 impl TempFileManager {
     /// Create a new manager and clean up any leftover temp files from a
     /// previous run by removing `{temp_dir}/upload/` entirely.
-    pub async fn new(temp_dir: PathBuf) -> Self {
+    ///
+    /// `max_uploads` and `max_bytes` bound concurrent active uploads (count)
+    /// and the sum of their declared sizes (bytes); `0` disables each limit.
+    pub async fn new(temp_dir: PathBuf, max_uploads: u64, max_bytes: u64) -> Self {
         let upload_dir = temp_dir.join("upload");
         if upload_dir.exists() {
             if let Err(e) = fs::remove_dir_all(&upload_dir).await {
@@ -90,8 +107,13 @@ impl TempFileManager {
         }
         Self {
             inner: Arc::new(Inner {
-                active: RwLock::new(HashMap::new()),
+                active: RwLock::new(ActiveUploads {
+                    entries: HashMap::new(),
+                    reserved_bytes: 0,
+                }),
                 temp_dir,
+                max_uploads,
+                max_bytes,
             }),
         }
     }
@@ -99,6 +121,11 @@ impl TempFileManager {
     /// Return or create the temp file path for a given upload.
     /// On first call for a given (repo_id, file_path), creates a new unique
     /// temp file and records it in the in-memory index.
+    ///
+    /// Rejects the upload with `ErrorKind::QuotaExceeded` when the configured
+    /// active-upload count or total reserved-bytes cap would be exceeded, so an
+    /// attacker (e.g. an anonymous upload link) cannot pile up unbounded temp
+    /// files on disk or entries in memory by starting abandoned uploads.
     pub async fn get_or_create(
         &self,
         repo_id: &str,
@@ -108,8 +135,23 @@ impl TempFileManager {
         let key = (repo_id.to_string(), file_path.to_string());
         let mut guard = self.inner.active.write().await;
 
-        if let Some(entry) = guard.get(&key) {
+        if let Some(entry) = guard.entries.get(&key) {
             return Ok(entry.tmp_path.clone());
+        }
+
+        if self.inner.max_uploads > 0 && guard.entries.len() as u64 >= self.inner.max_uploads {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::QuotaExceeded,
+                "too many concurrent uploads",
+            ));
+        }
+        if self.inner.max_bytes > 0
+            && guard.reserved_bytes.saturating_add(file_size) > self.inner.max_bytes
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::QuotaExceeded,
+                "temp upload byte quota exceeded",
+            ));
         }
 
         let dir = self.inner.temp_dir.join("upload").join(repo_id);
@@ -119,7 +161,8 @@ impl TempFileManager {
         // Create an empty file so other chunks can open it for writing
         fs::write(&tmp_path, &[]).await?;
 
-        guard.insert(
+        guard.reserved_bytes += file_size;
+        guard.entries.insert(
             key,
             TempFileEntry {
                 tmp_path: tmp_path.clone(),
@@ -141,6 +184,10 @@ impl TempFileManager {
     /// Write `data` at `offset` into the temp file identified by
     /// (repo_id, file_path).  The file must already exist (via
     /// `get_or_create`).
+    ///
+    /// Rejects with `ErrorKind::InvalidInput` when the chunk would extend past
+    /// the file's declared size — otherwise a client could write at an
+    /// arbitrary offset and create a huge sparse file on disk.
     pub async fn write_chunk(
         &self,
         repo_id: &str,
@@ -151,12 +198,19 @@ impl TempFileManager {
         let key = (repo_id.to_string(), file_path.to_string());
         let tmp_path = {
             let guard = self.inner.active.read().await;
-            guard.get(&key).map(|e| e.tmp_path.clone()).ok_or_else(|| {
+            let entry = guard.entries.get(&key).ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "no active temp file for this upload",
                 )
-            })?
+            })?;
+            if offset.saturating_add(data.len() as u64) > entry.file_size {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "chunk extends beyond the declared file size",
+                ));
+            }
+            entry.tmp_path.clone()
         };
 
         let data = data.to_vec(); // clone for the blocking closure
@@ -196,7 +250,10 @@ impl TempFileManager {
         // the long-running stream lock + block writes (no lock nesting).
         let stream_handle = {
             let guard = self.inner.active.read().await;
-            match guard.get(&(repo_id.to_string(), file_path.to_string())) {
+            match guard
+                .entries
+                .get(&(repo_id.to_string(), file_path.to_string()))
+            {
                 Some(e) => e.stream.clone(),
                 None => return FeedOutcome::Broken,
             }
@@ -248,6 +305,7 @@ impl TempFileManager {
         let stream_handle = {
             let guard = self.inner.active.read().await;
             guard
+                .entries
                 .get(&(repo_id.to_string(), file_path.to_string()))
                 .map(|e| e.stream.clone())?
         };
@@ -278,7 +336,7 @@ impl TempFileManager {
         let key = (repo_id.to_string(), file_path.to_string());
         let tmp_path = {
             let guard = self.inner.active.read().await;
-            guard.get(&key).map(|e| e.tmp_path.clone())?
+            guard.entries.get(&key).map(|e| e.tmp_path.clone())?
         };
         match fs::metadata(&tmp_path).await {
             Ok(m) => Some(m.len()),
@@ -293,7 +351,7 @@ impl TempFileManager {
         let key = (repo_id.to_string(), file_path.to_string());
         let tmp_path = {
             let guard = self.inner.active.read().await;
-            guard.get(&key).map(|e| e.tmp_path.clone())?
+            guard.entries.get(&key).map(|e| e.tmp_path.clone())?
         };
         fs::read(&tmp_path).await.ok()
     }
@@ -309,7 +367,7 @@ impl TempFileManager {
         let key = (repo_id.to_string(), file_path.to_string());
         let tmp_path = {
             let guard = self.inner.active.read().await;
-            guard.get(&key).map(|e| e.tmp_path.clone())?
+            guard.entries.get(&key).map(|e| e.tmp_path.clone())?
         };
         let file = tokio::fs::File::open(&tmp_path).await.ok()?;
         Some(
@@ -333,7 +391,11 @@ impl TempFileManager {
         let key = (repo_id.to_string(), file_path.to_string());
         let tmp_path = {
             let mut guard = self.inner.active.write().await;
-            guard.remove(&key).map(|e| e.tmp_path)
+            let removed = guard.entries.remove(&key);
+            if let Some(e) = &removed {
+                guard.reserved_bytes -= e.file_size;
+            }
+            removed.map(|e| e.tmp_path)
         };
         if let Some(p) = tmp_path {
             let _ = fs::remove_file(&p).await;
@@ -345,7 +407,11 @@ impl TempFileManager {
         let key = (repo_id.to_string(), file_path.to_string());
         let tmp_path = {
             let mut guard = self.inner.active.write().await;
-            guard.remove(&key).map(|e| e.tmp_path)
+            let removed = guard.entries.remove(&key);
+            if let Some(e) = &removed {
+                guard.reserved_bytes -= e.file_size;
+            }
+            removed.map(|e| e.tmp_path)
         };
         if let Some(p) = tmp_path {
             let _ = fs::remove_file(&p).await;
@@ -360,14 +426,20 @@ impl TempFileManager {
         let stale: Vec<PathBuf> = {
             let mut guard = self.inner.active.write().await;
             let mut paths = Vec::new();
-            guard.retain(|_, e| {
-                if e.created_at < cutoff {
-                    paths.push(e.tmp_path.clone());
-                    false
-                } else {
-                    true
+            // Collect the stale keys first so the closure doesn't borrow both
+            // `entries` and `reserved_bytes` from `guard` at once.
+            let stale_keys: Vec<(String, String)> = guard
+                .entries
+                .iter()
+                .filter(|(_, e)| e.created_at < cutoff)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in stale_keys {
+                if let Some(e) = guard.entries.remove(&key) {
+                    guard.reserved_bytes -= e.file_size;
+                    paths.push(e.tmp_path);
                 }
-            });
+            }
             paths
         };
         for p in stale {
@@ -381,7 +453,7 @@ impl TempFileManager {
     pub async fn get_file_size(&self, repo_id: &str, file_path: &str) -> Option<u64> {
         let key = (repo_id.to_string(), file_path.to_string());
         let guard = self.inner.active.read().await;
-        guard.get(&key).map(|e| e.file_size)
+        guard.entries.get(&key).map(|e| e.file_size)
     }
 }
 
@@ -400,9 +472,73 @@ mod tests {
                 let tmp =
                     std::env::temp_dir().join(format!("nanofile-temp-test-{}", Uuid::new_v4()));
                 fs::create_dir_all(&tmp).await.unwrap();
-                TempFileManager::new(tmp).await
+                TempFileManager::new(tmp, 0, 0).await
             })
             .await
+    }
+
+    /// A fresh manager for cap tests (the shared `manager()` is unlimited).
+    async fn capped_manager(max_uploads: u64, max_bytes: u64) -> TempFileManager {
+        let tmp = std::env::temp_dir().join(format!("nanofile-temp-cap-{}", Uuid::new_v4()));
+        fs::create_dir_all(&tmp).await.unwrap();
+        TempFileManager::new(tmp, max_uploads, max_bytes).await
+    }
+
+    #[tokio::test]
+    async fn write_chunk_beyond_file_size_rejected() {
+        let mgr = capped_manager(0, 0).await;
+        let repo = "bounds-repo";
+        let path = "/f.bin";
+        mgr.get_or_create(repo, path, 10).await.unwrap();
+
+        // Writing at offset 9 with 2 bytes extends past the declared size 10.
+        let result = mgr.write_chunk(repo, path, 9, b"xx").await;
+        assert_eq!(
+            result.err().map(|e| e.kind()),
+            Some(std::io::ErrorKind::InvalidInput)
+        );
+
+        // Writing exactly up to the declared size is still allowed.
+        mgr.write_chunk(repo, path, 0, b"0123456789").await.unwrap();
+        mgr.finish(repo, path).await;
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_when_upload_count_full() {
+        let mgr = capped_manager(1, 0).await;
+        let repo = "count-repo";
+        mgr.get_or_create(repo, "/a.txt", 10).await.unwrap();
+
+        let result = mgr.get_or_create(repo, "/b.txt", 10).await;
+        assert_eq!(
+            result.err().map(|e| e.kind()),
+            Some(std::io::ErrorKind::QuotaExceeded)
+        );
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_when_bytes_quota_full() {
+        let mgr = capped_manager(0, 100).await;
+        let repo = "bytes-repo";
+        mgr.get_or_create(repo, "/a.txt", 100).await.unwrap();
+
+        let result = mgr.get_or_create(repo, "/b.txt", 1).await;
+        assert_eq!(
+            result.err().map(|e| e.kind()),
+            Some(std::io::ErrorKind::QuotaExceeded)
+        );
+    }
+
+    #[tokio::test]
+    async fn finish_releases_reserved_bytes() {
+        let mgr = capped_manager(0, 100).await;
+        let repo = "release-repo";
+        mgr.get_or_create(repo, "/a.txt", 100).await.unwrap();
+        mgr.finish(repo, "/a.txt").await;
+
+        // After finishing the first upload, a new one fits the quota again.
+        assert!(mgr.get_or_create(repo, "/b.txt", 100).await.is_ok());
+        mgr.finish(repo, "/b.txt").await;
     }
 
     #[tokio::test]

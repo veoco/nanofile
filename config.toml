@@ -86,6 +86,9 @@ max_storage_bytes = 0
 # ffmpeg binary used to generate video thumbnails. Video files keep showing a
 # play-icon placeholder when this binary isn't installed. Playback works without it.
 ffmpeg_path = "ffmpeg"
+max_temp_uploads = 1000
+max_temp_upload_bytes = 0
+temp_upload_ttl_hours = 24
 
 [auth]
 # Environment variables:

@@ -270,6 +270,52 @@ async fn test_chunked_upload_resume_after_interrupt() {
     assert_eq!(resp.bytes().await.unwrap().as_ref(), content);
 }
 
+/// The temp-upload active cap is enforced end-to-end: a second concurrent
+/// resumable upload is rejected with 429 while the first is still in flight
+/// (its temp entry persists until the final chunk or the TTL cleanup).
+#[tokio::test]
+async fn test_chunked_upload_rejects_when_temp_cap_reached() {
+    let f = TestFixture::new_with_temp_limits(1).await;
+    let base = f.server.base_url.clone();
+    let repo_id = f.repo_id.clone();
+
+    let token = get_upload_token(&f).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    // Chunk 1 of file A — intermediate (not final), so its temp entry stays
+    // active and the second upload must hit the cap.
+    let resp = client
+        .post(format!("{}/upload-aj/{}", base, token))
+        .header("content-range", "bytes 0-5/12")
+        .multipart(chunked_upload_form(&repo_id, b"hello ".to_vec()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Chunk 1 of file B — different name → different temp entry → cap reached.
+    let form_b = reqwest::multipart::Form::new()
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(b"hello ".to_vec()).file_name("big2.txt"),
+        )
+        .text("repo_id", repo_id)
+        .text("parent_dir", "/")
+        .text("relative_path", "");
+    let resp = client
+        .post(format!("{}/upload-aj/{}", base, token))
+        .header("content-range", "bytes 0-5/12")
+        .multipart(form_b)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        429,
+        "second active upload should be rejected"
+    );
+}
+
 /// Security: a chunk whose byte length doesn't match its declared
 /// Content-Range span must be rejected with a 400 (not silently truncated).
 #[tokio::test]

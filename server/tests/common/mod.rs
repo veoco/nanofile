@@ -73,6 +73,24 @@ impl Default for TaskLimits {
     }
 }
 
+/// Temp-upload (resumable Content-Range) limit overrides for tests.
+#[derive(Clone, Copy)]
+pub struct TempLimits {
+    pub max_uploads: u64,
+    pub max_bytes: u64,
+    pub ttl_hours: u64,
+}
+
+impl Default for TempLimits {
+    fn default() -> Self {
+        Self {
+            max_uploads: 1000,
+            max_bytes: 0,
+            ttl_hours: 24,
+        }
+    }
+}
+
 impl TestServer {
     pub async fn start() -> Self {
         Self::start_with_config(false, false, 30, 90).await
@@ -105,6 +123,7 @@ impl TestServer {
             true,
             Some(limits),
             None,
+            None,
             |_| {},
         )
         .await
@@ -121,6 +140,26 @@ impl TestServer {
             true,
             false,
             true,
+            None,
+            Some(limits),
+            None,
+            |_| {},
+        )
+        .await
+    }
+
+    /// Start a server with custom temp-upload (resumable Content-Range) limits.
+    /// Useful for testing the anonymous-upload temp DoS defenses.
+    pub async fn start_with_temp_limits(limits: TempLimits) -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
             None,
             Some(limits),
             |_| {},
@@ -151,7 +190,10 @@ impl TestServer {
     pub async fn start_with_server_info_config(
         tweak: impl FnOnce(&mut infra::config::ServerConfig) + Send + 'static,
     ) -> Self {
-        Self::start_full_tweaked(false, false, 30, 90, true, false, true, None, None, tweak).await
+        Self::start_full_tweaked(
+            false, false, 30, 90, true, false, true, None, None, None, tweak,
+        )
+        .await
     }
 
     async fn start_with_config(
@@ -191,6 +233,7 @@ impl TestServer {
             sso_enabled,
             None,
             None,
+            None,
             |_| {},
         )
         .await
@@ -209,6 +252,7 @@ impl TestServer {
         sso_enabled: bool,
         notif_limits: Option<NotifLimits>,
         task_limits: Option<TaskLimits>,
+        temp_limits: Option<TempLimits>,
         tweak: F,
     ) -> Self
     where
@@ -262,6 +306,9 @@ impl TestServer {
                 temp_dir: block_root.join("tmp"),
                 max_storage_bytes: 10_737_418_240,
                 ffmpeg_path: "ffmpeg".to_string(),
+                max_temp_uploads: temp_limits.unwrap_or_default().max_uploads,
+                max_temp_upload_bytes: temp_limits.unwrap_or_default().max_bytes,
+                temp_upload_ttl_hours: temp_limits.unwrap_or_default().ttl_hours,
             },
             auth: infra::config::AuthConfig {
                 password_hash_iterations: 1000,
@@ -315,9 +362,12 @@ impl TestServer {
         // Ensure block directory exists
         std::fs::create_dir_all(&config.storage.block_dir).unwrap();
 
-        let temp_file_manager =
-            server::handler::web::temp_file::TempFileManager::new(config.storage.temp_dir.clone())
-                .await;
+        let temp_file_manager = server::handler::web::temp_file::TempFileManager::new(
+            config.storage.temp_dir.clone(),
+            config.storage.max_temp_uploads,
+            config.storage.max_temp_upload_bytes,
+        )
+        .await;
 
         let state = Arc::new(AppState::new(db, config, temp_file_manager));
 
@@ -519,6 +569,39 @@ impl TestFixture {
     /// Create a test environment with a custom background copy/move task limit.
     pub async fn new_with_task_limits(max_active_tasks: u64) -> Self {
         let server = TestServer::start_with_task_limits(TaskLimits { max_active_tasks }).await;
+        let client = server.client();
+        let db = &*server.db;
+
+        let user_id = create_test_user(db, "test@example.com", "password").await;
+
+        let resp = client.login("test@example.com", "password").await;
+        assert_eq!(resp.status(), 200, "login failed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let api_token = body["token"].as_str().unwrap().to_string();
+
+        let repo_id = create_test_repo(&client, &api_token, "test-repo").await;
+        let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
+
+        Self {
+            server,
+            client,
+            email: "test@example.com".to_string(),
+            password: "password".to_string(),
+            api_token,
+            repo_id,
+            sync_token,
+            user_id,
+        }
+    }
+
+    /// Create a test environment with a custom temp-upload (resumable
+    /// Content-Range) active-upload cap.
+    pub async fn new_with_temp_limits(max_uploads: u64) -> Self {
+        let server = TestServer::start_with_temp_limits(TempLimits {
+            max_uploads,
+            ..Default::default()
+        })
+        .await;
         let client = server.client();
         let db = &*server.db;
 

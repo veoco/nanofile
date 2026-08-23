@@ -178,6 +178,7 @@ impl AppState {
             &block_store,
             indexer.as_ref(),
             &temp_file_manager,
+            config.storage.temp_upload_ttl_hours,
         );
 
         // Built before `config` is moved into the Arc below.
