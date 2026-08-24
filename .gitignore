@@ -1,5 +1,6 @@
 /target
 /data
+server/data/
 config.toml.bak
 config.toml.*.tmp
 *.db
@@ -15,6 +16,7 @@ tailwindcss
 node_modules/
 e2e/test-results/
 e2e/playwright-report/
+/test-results/
 /package-lock.json
 /package.json
 /CLAUDE.md
