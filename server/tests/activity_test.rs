@@ -2,6 +2,7 @@ mod common;
 
 use common::TestFixture;
 use common::create_test_user;
+use reqwest::Method;
 use sea_orm::ColumnTrait;
 use sea_orm::ConnectionTrait;
 use sea_orm::DatabaseBackend;
@@ -74,6 +75,55 @@ async fn create_second_user(f: &TestFixture) -> String {
     assert_eq!(resp.status(), 200);
     let tv: Value = resp.json().await.unwrap();
     tv["token"].as_str().unwrap().to_string()
+}
+
+// ── WebDAV helpers ──────────────────────────────────────────────────────────
+
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder().no_proxy().build().unwrap()
+}
+
+fn dav_url(base: &str, repo_id: &str, path: &str) -> String {
+    format!("{base}/dav/{repo_id}{path}")
+}
+
+/// Generate a WebDAV key and return it.
+async fn gen_webdav_key(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    repo_id: &str,
+) -> String {
+    let resp = client
+        .post(format!("{base}/api2/repos/{repo_id}/webdav-keys/"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "name": "test-key" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "generate webdav key failed");
+    let body: Value = resp.json().await.unwrap();
+    body["key"].as_str().unwrap().to_string()
+}
+
+/// PUT a file over WebDAV.
+async fn webdav_put(
+    client: &reqwest::Client,
+    base: &str,
+    repo_id: &str,
+    path: &str,
+    email: &str,
+    key: &str,
+    data: &[u8],
+) -> reqwest::Response {
+    let m = Method::from_bytes(b"PUT").unwrap();
+    client
+        .request(m, dav_url(base, repo_id, path))
+        .basic_auth(email, Some(key))
+        .body(data.to_vec())
+        .send()
+        .await
+        .unwrap()
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -1603,4 +1653,92 @@ async fn test_activity_cleanup_trash_days() {
         .expect("clean-up-trash event should exist");
     assert_eq!(ev["obj_type"], "repo");
     assert_eq!(ev["days"], 30, "top-level days should be emitted");
+}
+
+// ── WebDAV activity tests ───────────────────────────────────────────────────
+
+/// WebDAV PUT for a new file should log a "create" activity.
+#[tokio::test]
+async fn test_activity_webdav_upload_new_file() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http_client();
+    let key = gen_webdav_key(&client, base, &f.api_token, &f.repo_id).await;
+
+    // Upload a new file via WebDAV
+    let resp = webdav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/newfile.txt",
+        &f.email,
+        &key,
+        b"content",
+    )
+    .await;
+    assert_eq!(resp.status(), 201, "WebDAV PUT should return 201 CREATED");
+
+    // Verify activity is logged as "create"
+    let (events, _) = get_activities(&f, 1, 10).await;
+    let file_ev = events
+        .iter()
+        .find(|e| e["obj_type"] == "file")
+        .expect("file activity should exist");
+    assert_eq!(
+        file_ev["op_type"], "create",
+        "new file upload should be logged as 'create', not 'edit'"
+    );
+    assert_eq!(file_ev["name"], "newfile.txt");
+}
+
+/// WebDAV PUT overwriting an existing file should log an "edit" activity.
+#[tokio::test]
+async fn test_activity_webdav_upload_overwrite() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http_client();
+    let key = gen_webdav_key(&client, base, &f.api_token, &f.repo_id).await;
+
+    // First upload - creates the file
+    let resp = webdav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/editme.txt",
+        &f.email,
+        &key,
+        b"original",
+    )
+    .await;
+    assert_eq!(resp.status(), 201);
+
+    // Second upload - overwrites the file
+    let resp = webdav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/editme.txt",
+        &f.email,
+        &key,
+        b"modified",
+    )
+    .await;
+    assert_eq!(resp.status(), 204, "overwrite should return 204 NO_CONTENT");
+
+    // Verify activities: should have repo create, file create, and file edit
+    let (events, _) = get_activities(&f, 1, 10).await;
+    let file_events: Vec<_> = events.iter().filter(|e| e["obj_type"] == "file").collect();
+    assert_eq!(file_events.len(), 2, "should have 2 file events");
+
+    // Events are returned in reverse chronological order (newest first)
+    // So the edit (most recent) comes before the create
+    assert_eq!(
+        file_events[0]["op_type"], "edit",
+        "most recent should be edit"
+    );
+    assert_eq!(
+        file_events[1]["op_type"], "create",
+        "older should be create"
+    );
+    assert_eq!(file_events[0]["name"], "editme.txt");
 }
