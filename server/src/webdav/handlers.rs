@@ -188,7 +188,7 @@ async fn put_handler(
             &auth.email,
             Some(auth.user_id),
             false,
-            Some(true),
+            None,
         )
         .await
     {
