@@ -21,6 +21,7 @@ tray = [
     "dep:notify-rust",
     "dep:winreg",
     "dep:windows-sys",
+    "dep:objc2",
     "dep:objc2-app-kit",
     "dep:gtk",
     "dep:resvg",
@@ -115,7 +116,14 @@ windows-sys = { version = "0.59", optional = true, features = [
     "Win32_System_Threading",
 ] }
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3", optional = true, features = ["NSApplication"] }
+objc2 = { version = "0.6", optional = true }
+# NSApplication: sharedApplication/run; NSResponder gates sharedApplication;
+# NSRunningApplication provides NSApplicationActivationPolicy::Accessory.
+objc2-app-kit = { version = "0.3", optional = true, features = [
+    "NSApplication",
+    "NSResponder",
+    "NSRunningApplication",
+] }
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18", optional = true }
 
