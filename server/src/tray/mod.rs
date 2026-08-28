@@ -241,45 +241,101 @@ thread_local! {
     static MENU_STATE: RefCell<Option<MenuState>> = const { RefCell::new(None) };
 }
 
-fn on_menu_event(event: MenuEvent) {
-    let id: &str = event.id.as_ref();
-    MENU_STATE.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        let Some(state) = slot.as_mut() else {
-            return;
-        };
-        match id {
-            ID_OPEN_WEB => {
-                tracing::info!("Opening web UI {}", state.ctx.web_url);
-                if let Err(e) = open::that(&state.ctx.web_url) {
-                    tracing::warn!("Failed to open web UI: {e}");
-                }
-            }
-            ID_AUTOSTART => toggle_autostart(state),
-            ID_OPEN_CONFIG => open_config_file(&state.ctx.config_path),
-            ID_QUIT => {
-                tracing::info!("Quit requested from tray");
-                let _ = state.quit_tx.send(TrayCommand::Quit);
-            }
-            _ => {}
-        }
-    });
+/// Menu action snapshot, taken in a short borrow of `MENU_STATE` and executed
+/// outside of it — the handler must never hold the RefCell across work that
+/// pumps messages (modal dialogs, spawned processes), or a re-entrant menu
+/// event would panic on the live borrow.
+enum MenuAction {
+    OpenWeb(String),
+    ToggleAutostart(autostart::PlatformAutostart, CheckMenuItem),
+    OpenConfig(PathBuf),
+    Quit(Sender<TrayCommand>),
 }
 
-fn toggle_autostart(state: &mut MenuState) {
-    let result = if state.autostart.is_enabled() {
+fn on_menu_event(event: MenuEvent) {
+    let id: &str = event.id.as_ref();
+
+    // muda invokes this handler synchronously inside its WM_COMMAND dispatch
+    // (Windows) while it holds a borrow of the clicked item itself. Snapshot
+    // the action in a short borrow and act outside of it, so a re-entrant
+    // menu event can never touch a live borrow.
+    let action = MENU_STATE.with(|slot| {
+        let slot = slot.borrow();
+        let state = slot.as_ref()?;
+        match id {
+            ID_OPEN_WEB => Some(MenuAction::OpenWeb(state.ctx.web_url.clone())),
+            ID_AUTOSTART => Some(MenuAction::ToggleAutostart(
+                state.autostart.clone(),
+                state.autostart_item.clone(),
+            )),
+            ID_OPEN_CONFIG => Some(MenuAction::OpenConfig(state.ctx.config_path.clone())),
+            ID_QUIT => Some(MenuAction::Quit(state.quit_tx.clone())),
+            _ => None,
+        }
+    });
+
+    match action {
+        Some(MenuAction::OpenWeb(web_url)) => {
+            tracing::info!("Opening web UI {web_url}");
+            if let Err(e) = open::that(&web_url) {
+                tracing::warn!("Failed to open web UI: {e}");
+            }
+        }
+        Some(MenuAction::ToggleAutostart(autostart, item)) => {
+            toggle_autostart(autostart, item);
+        }
+        Some(MenuAction::OpenConfig(config_path)) => open_config_file(&config_path),
+        Some(MenuAction::Quit(quit_tx)) => {
+            tracing::info!("Quit requested from tray");
+            let _ = quit_tx.send(TrayCommand::Quit);
+        }
+        None => {}
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn toggle_autostart(_autostart: autostart::PlatformAutostart, _item: CheckMenuItem) {
+    // muda's WM_COMMAND dispatch is still on the stack: it holds a borrow of
+    // the clicked item itself, so calling `set_checked` here panics — and the
+    // registry toggle below may show a modal elevation dialog, which pumps
+    // messages. Defer the whole toggle to the message loop via a thread
+    // message; muda has already flipped the checkbox optimistically and the
+    // deferred sync corrects it if the toggle fails or is cancelled.
+    backend::request_autostart_toggle();
+}
+
+#[cfg(not(target_os = "windows"))]
+fn toggle_autostart(autostart: autostart::PlatformAutostart, item: CheckMenuItem) {
+    perform_autostart_toggle_with(autostart, item);
+}
+
+/// Run the launch-at-login toggle now. Only call outside muda's synchronous
+/// menu dispatch (on Windows the backend loop invokes this from a posted
+/// thread message), because it ends in a `set_checked` on the clicked item.
+#[cfg(target_os = "windows")]
+pub(super) fn perform_autostart_toggle() {
+    let Some((autostart, item)) = MENU_STATE.with(|slot| {
+        slot.borrow_mut()
+            .as_ref()
+            .map(|state| (state.autostart.clone(), state.autostart_item.clone()))
+    }) else {
+        return;
+    };
+    perform_autostart_toggle_with(autostart, item);
+}
+
+fn perform_autostart_toggle_with(autostart: autostart::PlatformAutostart, item: CheckMenuItem) {
+    let result = if autostart.is_enabled() {
         tracing::info!("Disabling launch at login");
-        state.autostart.disable()
+        autostart.disable()
     } else {
         tracing::info!("Enabling launch at login");
-        state.autostart.enable()
+        autostart.enable()
     };
     if let Err(e) = result {
         tracing::error!("Failed to update launch-at-login: {e:#}");
     }
-    state
-        .autostart_item
-        .set_checked(state.autostart.is_enabled());
+    item.set_checked(autostart.is_enabled());
 }
 
 fn open_config_file(config_path: &Path) {

@@ -9,6 +9,7 @@ use super::Autostart;
 
 const LABEL: &str = "com.nanofile.nanofile";
 
+#[derive(Clone)]
 pub(crate) struct AutostartManager {
     exe: PathBuf,
     config: PathBuf,

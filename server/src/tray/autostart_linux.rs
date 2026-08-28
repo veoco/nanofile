@@ -8,6 +8,7 @@ use super::Autostart;
 
 const FILE_NAME: &str = "nanofile.desktop";
 
+#[derive(Clone)]
 pub(crate) struct AutostartManager {
     exe: PathBuf,
     config: PathBuf,

@@ -12,6 +12,7 @@ use super::Autostart;
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const VALUE_NAME: &str = "Nanofile";
 
+#[derive(Clone)]
 pub(crate) struct AutostartManager {
     exe: PathBuf,
     config: PathBuf,

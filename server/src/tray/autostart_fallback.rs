@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use super::Autostart;
 
+#[derive(Clone)]
 pub(super) struct AutostartManager;
 
 impl AutostartManager {
