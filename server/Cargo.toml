@@ -92,7 +92,13 @@ serde_urlencoded = "0.7"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 multer = "3.1"
 
+# Full-text search
+tantivy = "0.26.1"
+tantivy-jieba = "0.20.0"
+
 # ── Optional system tray dependencies (enabled by the `tray` feature) ───────
+# NOTE: keep these target-specific tables LAST — everything after a
+# `[target.*.dependencies]` header belongs to that target only.
 tray-icon = { version = "0.24", optional = true, default-features = false }
 open = { version = "5", optional = true }
 # Startup notification: Windows toast / Linux org.freedesktop.Notifications.
@@ -112,10 +118,6 @@ windows-sys = { version = "0.59", optional = true, features = [
 objc2-app-kit = { version = "0.3", optional = true, features = ["NSApplication"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18", optional = true }
-
-# Full-text search
-tantivy = "0.26.1"
-tantivy-jieba = "0.20.0"
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json", "multipart", "cookies", "form"] }
