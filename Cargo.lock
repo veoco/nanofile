@@ -5627,6 +5627,7 @@ dependencies = [
  "migration",
  "multer",
  "notify-rust",
+ "objc2",
  "objc2-app-kit",
  "open",
  "pbkdf2 0.13.0",
