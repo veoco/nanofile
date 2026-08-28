@@ -378,7 +378,7 @@ mod tests {
         let path = tmp_log(&dir, "nanofile.log");
         let log = RotatingLog::open(&path, 10, 2).unwrap();
 
-        for tag in [b'1', b'2', b'3', b'4'] {
+        for tag in *b"1234" {
             log.write_chunk(&[tag; 12]); // each write rotates
         }
         // Four rotations: .log.2 / .log.1 / .log kept, nothing older.
@@ -440,7 +440,7 @@ mod tests {
     fn default_candidates_prefer_the_binary_directory() {
         let mut config = Config::default();
         let candidates = candidate_paths(&config);
-        assert!(candidates.len() >= 1);
+        assert!(!candidates.is_empty());
         assert_eq!(
             candidates[0].file_name().and_then(|n| n.to_str()),
             Some("nanofile.log")
