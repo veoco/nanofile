@@ -5,6 +5,29 @@ edition = "2024"
 description = "Nanofile server — Seafile-compatible sync server"
 license = "MIT"
 
+[features]
+# System tray icon with a right-click menu (open Web UI, toggle auto-start,
+# open config file, quit). The tray icon and the Windows exe icon are
+# rasterized from static/img/favicon.svg at compile time (see build.rs), so no
+# image assets ship in the repo. Linux additionally needs the system packages
+# libgtk-3 and libayatana-appindicator3.
+tray = [
+    # default-features = false drops muda's `libxdo` (clipboard menu items we
+    # do not use, which would add a libxdo system dependency); the Linux GTK
+    # backend is re-enabled explicitly below.
+    "dep:tray-icon",
+    "tray-icon/gtk",
+    "dep:open",
+    "dep:notify-rust",
+    "dep:winreg",
+    "dep:windows-sys",
+    "dep:objc2-app-kit",
+    "dep:gtk",
+    "dep:resvg",
+    "dep:tiny-skia",
+    "dep:winresource",
+]
+
 [dependencies]
 base = { path = "../base", features = ["with-axum"] }
 infra = { path = "../infra" }
@@ -69,6 +92,27 @@ serde_urlencoded = "0.7"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 multer = "3.1"
 
+# ── Optional system tray dependencies (enabled by the `tray` feature) ───────
+tray-icon = { version = "0.24", optional = true, default-features = false }
+open = { version = "5", optional = true }
+# Startup notification: Windows toast / Linux org.freedesktop.Notifications.
+# macOS is excluded — an unsigned, non-bundled CLI binary cannot reliably post
+# notifications there.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+notify-rust = { version = "4", optional = true }
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = { version = "0.55", optional = true }
+windows-sys = { version = "0.59", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", optional = true, features = ["NSApplication"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", optional = true }
+
 # Full-text search
 tantivy = "0.26.1"
 tantivy-jieba = "0.20.0"
@@ -86,3 +130,11 @@ path = "src/main.rs"
 
 [build-dependencies]
 sha2 = "0.11"
+# Tray feature build-time dependencies: rasterize static/img/favicon.svg into
+# the tray icon RGBA (all platforms) and the Windows exe icon (via winresource).
+resvg = { version = "0.45", optional = true, default-features = false, features = [
+    "text",
+    "system-fonts",
+] }
+tiny-skia = { version = "0.11", optional = true }
+winresource = { version = "0.1", optional = true }

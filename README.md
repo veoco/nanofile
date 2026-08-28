@@ -129,7 +129,7 @@ migration is applied in memory only.
 
 | Section | Purpose |
 |---------|---------|
-| `[server]` | Bind address/port, `site_url` (external URL used for download/share links and cookies — set to your HTTPS domain behind a TLS proxy), max upload size, request timeout, CORS, WebDAV switch, feature switches (`sso_enabled`, `file_search_enabled`), desktop-client branding (`desktop_custom_brand` / `desktop_custom_logo`), trusted reverse proxies. |
+| `[server]` | Bind address/port, `site_url` (external URL used for download/share links and cookies — set to your HTTPS domain behind a TLS proxy), max upload size, request timeout, CORS, WebDAV switch, feature switches (`sso_enabled`, `file_search_enabled`, `tray`), desktop-client branding (`desktop_custom_brand` / `desktop_custom_logo`), trusted reverse proxies. |
 | `[database]` | SeaORM/SQLite connection URL (default `sqlite:data/nanofile.db?mode=rwc`) and pool size. |
 | `[storage]` | Block store and temp directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited), ffmpeg path for video thumbnails, resumable-upload temp limits (`max_temp_uploads`, `max_temp_upload_bytes`, `temp_upload_ttl_hours`), and zip-archive caps (`max_zip_entries`, `max_zip_bytes`, `0` = unlimited). |
 | `[auth]` | Password hashing cost, token TTLs, login lockout, invitation registration, password policy, rate limits (incl. per-IP anonymous share-download cap). |
@@ -146,6 +146,47 @@ migration is applied in memory only.
 Generate a unique one for production with `openssl rand -hex 32` and set it via
 `NANOFILE_SERVER_SECRET_KEY` (an empty value auto-generates a random key on startup, which invalidates
 sessions on restart).
+
+## System Tray (optional)
+
+Release archives whose name ends in `-tray` (Windows / macOS / Linux-amd64) include an optional
+system tray icon, compiled in with the `tray` feature. Plain builds contain no tray code at all,
+so servers without a desktop are unaffected.
+
+Right-clicking the tray icon opens a menu with:
+
+- **Open Web UI** — opens `site_url` in the default browser
+- **Launch at Login** (checkable) — registers/unregisters auto-start for the current user:
+  - Windows: `HKCU\...\CurrentVersion\Run` registry value (no admin rights needed). When the server
+    runs elevated ("Run as administrator"), a dialog asks for confirmation before registering, since
+    the entry then belongs to the elevated account; a login-started instance always runs without
+    elevation.
+  - macOS: a LaunchAgent at `~/Library/LaunchAgents/com.nanofile.nanofile.plist`
+  - Linux: an XDG autostart entry at `~/.config/autostart/nanofile.desktop` (GNOME and KDE)
+- **Open Config File** — reveals the config file actually in use (in Explorer / Finder / the file manager)
+- **Quit** — triggers the same graceful shutdown as Ctrl+C
+
+The auto-start entries always point at the running binary and pass `--config <absolute path>`, so
+the auto-started instance uses the same config regardless of its working directory.
+
+Notes:
+
+- Toggle the tray off with `tray = false` in `[server]` (or `NANOFILE_SERVER_TRAY=false`), e.g. for
+  an auto-started instance that should stay invisible.
+- On Linux the tray needs a desktop session; without `DISPLAY`/`WAYLAND_DISPLAY` (or when the
+  desktop session is broken) the server logs a warning and runs headless instead of failing.
+- GNOME only shows tray icons with the "AppIndicator and KStatusNotifierItem Support" extension
+  installed; KDE Plasma supports them out of the box.
+
+To build the tray variant yourself (Linux additionally needs `libgtk-3-dev` and
+`libayatana-appindicator3-dev`):
+
+```bash
+cargo build --release -p server --features tray
+```
+
+The tray icon and the Windows executable icon are rasterized from `server/static/img/favicon.svg`
+at compile time — no image assets are shipped in the repository.
 
 ## Docker
 

@@ -242,6 +242,13 @@ pub struct ServerConfig {
     /// Env: NANOFILE_SERVER_TRUSTED_PROXIES (comma-separated)
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
+    /// Whether the system tray icon is shown. Only meaningful for binaries
+    /// compiled with `--features tray` (plain builds have no tray code at
+    /// all). Set to false to run headless even in a desktop session, e.g. for
+    /// auto-started instances that should stay invisible.
+    /// Env: NANOFILE_SERVER_TRAY
+    #[serde(default = "default_true")]
+    pub tray: bool,
 }
 
 fn default_addr() -> String {
@@ -290,6 +297,7 @@ impl Default for ServerConfig {
             encrypted_library_pwd_hash_params: None,
             file_search_enabled: default_true(),
             trusted_proxies: Vec::new(),
+            tray: default_true(),
         }
     }
 }
@@ -841,6 +849,7 @@ impl Config {
         env_path!("NANOFILE_INDEX_INDEX_DIR", self.index.index_dir);
         env_parse!("NANOFILE_CORS_MAX_AGE_SECS", self.server.cors_max_age_secs);
         env_parse!("NANOFILE_SERVER_WEBDAV_ENABLED", self.server.webdav_enabled);
+        env_parse!("NANOFILE_SERVER_TRAY", self.server.tray);
         env_parse!("NANOFILE_SERVER_SSO_ENABLED", self.server.sso_enabled);
         env_parse!(
             "NANOFILE_SERVER_FILE_SEARCH_ENABLED",

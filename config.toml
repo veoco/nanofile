@@ -16,6 +16,7 @@
 #   NANOFILE_SERVER_DESKTOP_CUSTOM_LOGO
 #   NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO
 #   NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS
+#   NANOFILE_SERVER_TRAY
 addr = "0.0.0.0"
 # Seafile-compatible version advertised to clients via /api2/server-info/.
 # Clients parse the major/minor/patch numbers to gate feature availability.
@@ -55,6 +56,11 @@ file_search_enabled = true
 # honored for rate limiting when the TCP peer is one of these. Keep empty when
 # the server is exposed directly.
 trusted_proxies = []
+# System tray icon (only exists in binaries built with `--features tray`;
+# plain builds have no tray code at all). Set to false (or NANOFILE_SERVER_TRAY=false)
+# to run headless even in a desktop session — e.g. for an auto-started instance
+# that should stay invisible.
+# tray = true
 #   NANOFILE_SERVER_SECRET_KEY               (generate with: openssl rand -hex 32)
 # IMPORTANT: Generate a unique secret key for production:
 #   openssl rand -hex 32

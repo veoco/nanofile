@@ -1,0 +1,298 @@
+//! Optional system tray integration, compiled in with `--features tray`.
+//!
+//! Threading model: tray APIs need an event loop, and on macOS the tray must
+//! be created on the main thread — so in tray mode the platform event loop
+//! owns the main thread while the tokio runtime runs on background worker
+//! threads (see `main.rs`). Menu actions are handled on the event-loop thread;
+//! "Quit" is forwarded to the async server task over a std mpsc channel, and
+//! the server performs its normal graceful shutdown before ending the process
+//! (which also removes the tray icon).
+
+pub(crate) mod autostart;
+mod icon;
+pub(crate) mod icon_gen;
+mod notify;
+
+#[cfg(target_os = "windows")]
+#[path = "backend_windows.rs"]
+mod backend;
+#[cfg(target_os = "macos")]
+#[path = "backend_macos.rs"]
+mod backend;
+#[cfg(target_os = "linux")]
+#[path = "backend_linux.rs"]
+mod backend;
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+#[path = "backend_fallback.rs"]
+mod backend;
+
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::Sender;
+
+use anyhow::Context;
+use infra::config::Config;
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::{TrayIcon, TrayIconBuilder};
+
+use crate::TrayCommand;
+use autostart::Autostart as _;
+
+const ID_OPEN_WEB: &str = "nanofile.open-web";
+const ID_AUTOSTART: &str = "nanofile.autostart";
+const ID_OPEN_CONFIG: &str = "nanofile.open-config";
+const ID_QUIT: &str = "nanofile.quit";
+
+pub(crate) struct TrayContext {
+    /// Absolute path of the running `nanofile` binary.
+    exe_path: PathBuf,
+    /// Absolute path of the config file this instance was started with — the
+    /// auto-start entries pass it via `--config` so a login-started instance
+    /// (whose working directory is not this one) finds the same config.
+    config_path: PathBuf,
+    /// `site_url` with a trailing slash, opened by the "Open Web UI" action.
+    web_url: String,
+}
+
+/// Whether the tray can and should run for this process and platform.
+pub fn should_run(config: &Config) -> bool {
+    if !config.server.tray {
+        tracing::info!("Tray disabled via config (server.tray = false), running headless");
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            tracing::info!("No desktop session (DISPLAY/WAYLAND_DISPLAY unset), running headless");
+            return false;
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        tracing::info!("System tray is not supported on this platform, running headless");
+        return false;
+    }
+    true
+}
+
+/// Runs the server on a background tokio runtime and blocks the main thread in
+/// the platform tray event loop. Never returns on its own: the server task
+/// exits the process when it is done (clean shutdown, Ctrl+C or error).
+pub fn run(config: Config, config_path: PathBuf) -> ! {
+    let exe_path = absolute(
+        std::env::current_exe()
+            .expect("failed to locate the running executable")
+            .as_path(),
+    );
+    let ctx = TrayContext {
+        exe_path,
+        config_path: absolute(&config_path),
+        web_url: format!("{}/", config.server.site_url.trim_end_matches('/')),
+    };
+
+    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    let (quit_tx, quit_rx) = std::sync::mpsc::channel::<TrayCommand>();
+
+    rt.spawn(async move {
+        let result = crate::run_server_flow(config, Some(quit_rx)).await;
+        match result {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                tracing::error!("Server failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    });
+
+    tracing::info!("Starting system tray icon");
+    backend::run(&ctx, quit_tx);
+}
+
+/// Blocks the main thread forever. Used when tray initialization fails after
+/// the server is already running in the background: the process keeps serving
+/// headless, just without a tray icon.
+pub(super) fn park_forever() -> ! {
+    loop {
+        std::thread::park();
+    }
+}
+
+/// Builds the tray icon and menu. Fails when the desktop integration is
+/// broken (e.g. `DISPLAY` points at a dead X server); callers fall back to
+/// running headless instead of taking the server down.
+fn create_tray(ctx: &TrayContext, quit_tx: Sender<TrayCommand>) -> anyhow::Result<TrayIcon> {
+    let autostart =
+        autostart::PlatformAutostart::new(ctx.exe_path.clone(), ctx.config_path.clone());
+
+    let item_open_web = MenuItem::with_id(ID_OPEN_WEB, "Open Web UI", true, None);
+    let item_autostart = CheckMenuItem::with_id(
+        ID_AUTOSTART,
+        "Launch at Login",
+        true,
+        autostart.is_enabled(),
+        None,
+    );
+    let item_open_config = MenuItem::with_id(ID_OPEN_CONFIG, "Open Config File", true, None);
+    let item_quit = MenuItem::with_id(ID_QUIT, "Quit", true, None);
+
+    let menu = Menu::new();
+    menu.append(&item_open_web)
+        .context("failed to build tray menu")?;
+    menu.append(&PredefinedMenuItem::separator())
+        .context("failed to build tray menu")?;
+    menu.append(&item_autostart)
+        .context("failed to build tray menu")?;
+    menu.append(&item_open_config)
+        .context("failed to build tray menu")?;
+    menu.append(&PredefinedMenuItem::separator())
+        .context("failed to build tray menu")?;
+    menu.append(&item_quit)
+        .context("failed to build tray menu")?;
+
+    MENU_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(MenuState {
+            ctx: TrayContext {
+                exe_path: ctx.exe_path.clone(),
+                config_path: ctx.config_path.clone(),
+                web_url: ctx.web_url.clone(),
+            },
+            autostart,
+            autostart_item: item_autostart,
+            quit_tx,
+        });
+    });
+    MenuEvent::set_event_handler(Some(on_menu_event));
+
+    TrayIconBuilder::new()
+        .with_id("nanofile")
+        .with_menu(Box::new(menu))
+        .with_menu_on_left_click(false)
+        .with_tooltip("Nanofile")
+        .with_icon(icon::tray_icon())
+        .build()
+        .context("failed to create tray icon")
+}
+
+struct MenuState {
+    ctx: TrayContext,
+    autostart: autostart::PlatformAutostart,
+    autostart_item: CheckMenuItem,
+    quit_tx: Sender<TrayCommand>,
+}
+
+thread_local! {
+    /// Menu items and OS handles are only valid on the event-loop thread;
+    /// keeping them here lets the (Send-bounded) muda event handler reach the
+    /// shared state without ever moving anything across threads — the handler
+    /// is always invoked on the loop thread.
+    static MENU_STATE: RefCell<Option<MenuState>> = const { RefCell::new(None) };
+}
+
+fn on_menu_event(event: MenuEvent) {
+    let id: &str = event.id.as_ref();
+    MENU_STATE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(state) = slot.as_mut() else {
+            return;
+        };
+        match id {
+            ID_OPEN_WEB => {
+                tracing::info!("Opening web UI {}", state.ctx.web_url);
+                if let Err(e) = open::that(&state.ctx.web_url) {
+                    tracing::warn!("Failed to open web UI: {e}");
+                }
+            }
+            ID_AUTOSTART => toggle_autostart(state),
+            ID_OPEN_CONFIG => open_config_file(&state.ctx.config_path),
+            ID_QUIT => {
+                tracing::info!("Quit requested from tray");
+                let _ = state.quit_tx.send(TrayCommand::Quit);
+            }
+            _ => {}
+        }
+    });
+}
+
+fn toggle_autostart(state: &mut MenuState) {
+    let result = if state.autostart.is_enabled() {
+        tracing::info!("Disabling launch at login");
+        state.autostart.disable()
+    } else {
+        tracing::info!("Enabling launch at login");
+        state.autostart.enable()
+    };
+    if let Err(e) = result {
+        tracing::error!("Failed to update launch-at-login: {e:#}");
+    }
+    state
+        .autostart_item
+        .set_checked(state.autostart.is_enabled());
+}
+
+fn open_config_file(config_path: &Path) {
+    tracing::info!("Opening config file {}", config_path.display());
+    #[cfg(target_os = "windows")]
+    {
+        // Reveal the file in Explorer. `raw_arg` keeps the `/select,"…"`
+        // quoting intact (std would otherwise re-quote it); Explorer always
+        // runs unelevated, so this also works from an elevated process.
+        use std::os::windows::process::CommandExt;
+        if let Err(e) = std::process::Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", config_path.display()))
+            .status()
+        {
+            tracing::warn!("Failed to open Explorer: {e}");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(e) = std::process::Command::new("open")
+            .arg("-R")
+            .arg(config_path)
+            .status()
+        {
+            tracing::warn!("Failed to reveal config file in Finder: {e}");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let opened = std::process::Command::new("xdg-open")
+            .arg(config_path)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !opened {
+            // No handler for the file itself (or xdg-open missing) — show the
+            // containing directory instead.
+            let dir = config_path.parent().unwrap_or(config_path);
+            if let Err(e) = std::process::Command::new("xdg-open").arg(dir).status() {
+                tracing::warn!("Failed to open config directory: {e}");
+            }
+        }
+    }
+}
+
+/// Canonical absolute path with Windows `\\?\` verbatim prefixes stripped,
+/// falling back to cwd-joining for not-yet-existing files.
+fn absolute(path: &Path) -> PathBuf {
+    let resolved = path.canonicalize().unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_default().join(path)
+        }
+    });
+    #[cfg(windows)]
+    {
+        let s = resolved.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{rest}"))
+        } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+            PathBuf::from(rest)
+        } else {
+            resolved
+        }
+    }
+    #[cfg(not(windows))]
+    resolved
+}

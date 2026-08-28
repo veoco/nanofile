@@ -377,6 +377,7 @@ impl TestServer {
                 encrypted_library_pwd_hash_params: None,
                 file_search_enabled: true,
                 trusted_proxies: vec![],
+                tray: false,
             },
             database: infra::config::DatabaseConfig {
                 url: "sqlite::memory:".to_string(),

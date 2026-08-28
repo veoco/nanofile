@@ -74,12 +74,37 @@ jobs:
             asset_suffix: macos-arm64
             tw_name: macos-arm64
             cross: false
+          # Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: ".exe"
             asset_suffix: windows-amd64
             tw_name: windows-x64.exe
             cross: false
+          # ── Tray builds (--features tray) ────────────────────────────────
+          # Native runners only: the GTK system libraries cannot be
+          # cross-compiled, so musl/ARM/LoongArch targets get no tray variant.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+            asset_suffix: linux-amd64-tray
+            tw_name: linux-x64
+            cross: false
+            features: tray
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            ext: ""
+            asset_suffix: macos-arm64-tray
+            tw_name: macos-arm64
+            cross: false
+            features: tray
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+            asset_suffix: windows-amd64-tray
+            tw_name: windows-x64.exe
+            cross: false
+            features: tray
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -105,6 +130,12 @@ jobs:
       - name: Install Tailwind CSS
         run: npm install --silent tailwindcss @tailwindcss/cli esbuild
 
+      - name: Install GTK dev packages (tray build)
+        if: matrix.features == 'tray' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
+
       - name: Install cargo-zigbuild
         if: matrix.cross
         run: cargo install cargo-zigbuild
@@ -116,6 +147,7 @@ jobs:
           ${{ matrix.cross && 'cargo zigbuild' || 'cargo build' }}
           --release
           ${{ matrix.cross && format('--target {0}', matrix.target) || '' }}
+          ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
 
       - name: Upload binary
         uses: actions/upload-artifact@v7
@@ -331,6 +363,9 @@ jobs:
           | Linux (LoongArch64, musl) | \`nanofile-$RELEASE_TAG-linux-loong64-musl.tar.gz\` |
           | macOS (Apple Silicon) | \`nanofile-$RELEASE_TAG-macos-arm64.tar.gz\` |
           | Windows (amd64) | \`nanofile-$RELEASE_TAG-windows-amd64.zip\` |
+          | Linux (amd64, glibc, tray icon) | \`nanofile-$RELEASE_TAG-linux-amd64-tray.tar.gz\` |
+          | macOS (Apple Silicon, tray icon) | \`nanofile-$RELEASE_TAG-macos-arm64-tray.tar.gz\` |
+          | Windows (amd64, tray icon) | \`nanofile-$RELEASE_TAG-windows-amd64-tray.zip\` |
           EOF
 
           gh release create "$RELEASE_TAG" \
