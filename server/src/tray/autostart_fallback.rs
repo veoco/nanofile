@@ -1,5 +1,5 @@
 //! Stub auto-start backend for platforms without a supported desktop
-//! integration. Unreachable in practice: `should_run` already returns false
+//! integration. Unreachable in practice: `run_mode` already returns `Headless`
 //! there; it exists only to keep the crate compiling on unusual targets.
 
 use std::path::PathBuf;

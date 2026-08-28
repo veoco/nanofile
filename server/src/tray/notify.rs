@@ -8,12 +8,13 @@
 pub(super) fn started() {
     #[cfg(not(target_os = "macos"))]
     {
+        let t = super::lang();
         // Spawn so a missing/unresponsive notification service can never
         // delay (or outlive) the tray startup path.
-        std::thread::spawn(|| {
+        std::thread::spawn(move || {
             let result = notify_rust::Notification::new()
-                .summary("Nanofile")
-                .body("nanofile server is running in the tray")
+                .summary(t.tr("tray.notify_title"))
+                .body(t.tr("tray.notify_body"))
                 .show();
             if let Err(e) = result {
                 tracing::debug!("Tray notification failed: {e}");

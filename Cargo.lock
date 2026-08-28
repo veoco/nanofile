@@ -5647,6 +5647,7 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.0",
  "subtle",
+ "sys-locale",
  "tantivy",
  "tantivy-jieba",
  "tempfile",
@@ -6187,6 +6188,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

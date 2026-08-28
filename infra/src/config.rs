@@ -44,18 +44,29 @@ pub struct UiConfig {
     /// browser's Accept-Language doesn't match a supported language.
     #[serde(default = "default_ui_language")]
     pub default_language: String,
+    /// Language of the system tray menu (desktop builds only): `"auto"`
+    /// follows the OS locale (falling back to `default_language`), `"en"` /
+    /// `"zh"` force a language.
+    /// Env: NANOFILE_UI_TRAY_LANGUAGE
+    #[serde(default = "default_tray_language")]
+    pub tray_language: String,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
             default_language: default_ui_language(),
+            tray_language: default_tray_language(),
         }
     }
 }
 
 fn default_ui_language() -> String {
     "en".to_string()
+}
+
+fn default_tray_language() -> String {
+    "auto".to_string()
 }
 
 /// Email delivery configuration.
@@ -593,18 +604,52 @@ fn default_password_min_length() -> u32 {
 pub struct LoggingConfig {
     #[serde(default = "default_log_level")]
     pub level: String,
+    /// Whether logs go to a rotating file instead of stdout. Unset = auto:
+    /// file when running as a desktop (tray) app or in a Windows
+    /// GUI-subsystem build, stdout otherwise (servers, Docker).
+    /// Env: NANOFILE_LOG_FILE_ENABLED
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_enabled: Option<bool>,
+    /// Log file path. Unset: resolved to `nanofile.log` next to the nanofile
+    /// binary in file-logging mode and written back here (absolute), so a
+    /// login-started instance always uses the same file. A relative path is
+    /// resolved against the binary's directory, never the (variable) working
+    /// directory.
+    /// Env: NANOFILE_LOG_FILE
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<PathBuf>,
+    /// Per-file size cap in MB before rotation. Clamped to a minimum of 1 so
+    /// the log file can never grow unbounded.
+    #[serde(default = "default_log_max_file_size_mb")]
+    pub max_file_size_mb: u64,
+    /// How many rotated backup files (`nanofile.log.1`, `.2`, …) to keep.
+    /// 0 truncates the log in place once the size cap is reached.
+    #[serde(default = "default_log_max_backups")]
+    pub max_backups: u32,
 }
 
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             level: default_log_level(),
+            file_enabled: None,
+            file: None,
+            max_file_size_mb: default_log_max_file_size_mb(),
+            max_backups: default_log_max_backups(),
         }
     }
 }
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+fn default_log_max_file_size_mb() -> u64 {
+    10
+}
+
+fn default_log_max_backups() -> u32 {
+    3
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -817,6 +862,14 @@ impl Config {
             self.auth.require_strong_password
         );
         env_str!("NANOFILE_LOG_LEVEL", self.logging.level);
+        if let Ok(v) = std::env::var("NANOFILE_LOG_FILE_ENABLED")
+            && let Ok(p) = v.parse::<bool>()
+        {
+            self.logging.file_enabled = Some(p);
+        }
+        if let Ok(v) = std::env::var("NANOFILE_LOG_FILE") {
+            self.logging.file = Some(PathBuf::from(v));
+        }
         env_parse!("NANOFILE_GC_ENABLED", self.gc.enabled);
         env_parse!("NANOFILE_GC_INTERVAL_HOURS", self.gc.interval_hours);
         env_parse!("NANOFILE_NOTIFICATION_ENABLED", self.notification.enabled);
@@ -870,6 +923,7 @@ impl Config {
         }
         env_parse!("NANOFILE_EMAIL_ENABLED", self.email.enabled);
         env_str!("NANOFILE_UI_DEFAULT_LANGUAGE", self.ui.default_language);
+        env_str!("NANOFILE_UI_TRAY_LANGUAGE", self.ui.tray_language);
 
         // Admin init env vars
         if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_EMAIL") {
@@ -930,6 +984,41 @@ fn fill_missing(dst: &mut toml_edit::Table, src: &toml_edit::Table) -> bool {
         }
     }
     changed
+}
+
+/// Persist a single string value into the config file, preserving comments
+/// and formatting. Creates the section if missing. Used for runtime-resolved
+/// defaults that `fill_missing` cannot know (e.g. the log file path next to
+/// the binary in desktop mode): baking the resolved absolute path into the
+/// config keeps later runs — including login-started instances — on the same
+/// file. An existing value for `key` is overwritten only by this explicit
+/// call.
+pub fn write_config_value(
+    path: impl AsRef<Path>,
+    section: &str,
+    key: &str,
+    value: &str,
+) -> anyhow::Result<()> {
+    let path = path.as_ref();
+    let original = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", path.display()))?;
+    let mut doc: toml_edit::DocumentMut = original
+        .parse()
+        .map_err(|e| anyhow::anyhow!("failed to parse {}: {e}", path.display()))?;
+    let table = doc
+        .entry(section)
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[{section}] in {} is not a table", path.display()))?;
+    table.insert(key, toml_edit::value(value));
+    persist_with_backup(path, &doc.to_string()).with_context(|| {
+        format!(
+            "failed to persist [{}] {} in {}",
+            section,
+            key,
+            path.display()
+        )
+    })
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -1209,5 +1298,69 @@ request_timeout_secs = 600
         assert_eq!(config.database.url, "sqlite:data/nanofile.db?mode=rwc");
         assert_eq!(config.storage.block_dir, PathBuf::from("data/blocks"));
         assert_eq!(config.auth.password_hash_iterations, 600000);
+    }
+
+    #[test]
+    fn logging_defaults_are_auto_and_capped() {
+        let c = LoggingConfig::default();
+        assert_eq!(c.level, "info");
+        assert_eq!(c.file_enabled, None);
+        assert_eq!(c.file, None);
+        assert_eq!(c.max_file_size_mb, 10);
+        assert_eq!(c.max_backups, 3);
+    }
+
+    #[test]
+    fn logging_section_roundtrips_and_fills_missing() {
+        // An old config with only `[logging] level` gains the new keys on
+        // load (written back by fill_missing), and None-valued options stay
+        // absent from the document.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[logging]\nlevel = \"debug\"\n").unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.logging.level, "debug");
+        assert_eq!(config.logging.file_enabled, None);
+        assert_eq!(config.logging.file, None);
+        assert_eq!(config.logging.max_file_size_mb, 10);
+
+        let filled = std::fs::read_to_string(&path).unwrap();
+        assert!(filled.contains("level = \"debug\""));
+        assert!(filled.contains("max_file_size_mb = 10"));
+        assert!(filled.contains("max_backups = 3"));
+        assert!(
+            !filled.contains("file_enabled"),
+            "None options are not written"
+        );
+    }
+
+    #[test]
+    fn write_config_value_persists_and_preserves_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "# header comment\n[logging]\n# keep me\nlevel = \"info\"\n",
+        )
+        .unwrap();
+
+        write_config_value(&path, "logging", "file", "/opt/nanofile/nanofile.log").unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("# header comment"));
+        assert!(out.contains("# keep me"));
+        assert!(out.contains("level = \"info\""));
+        assert!(out.contains("file = \"/opt/nanofile/nanofile.log\""));
+
+        // A missing section is created.
+        write_config_value(&path, "ui", "tray_language", "zh").unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("[ui]"));
+        assert!(out.contains("tray_language = \"zh\""));
+        // The [logging] values survive the second write.
+        assert!(out.contains("file = \"/opt/nanofile/nanofile.log\""));
+
+        // A .bak of the pre-write state is kept, like every config write.
+        assert!(dir.path().join("config.toml.bak").exists());
     }
 }

@@ -92,6 +92,7 @@ pub(crate) fn desktop_entry(exe: &Path, config: &Path) -> String {
          Type=Application\n\
          Name=Nanofile\n\
          Comment=Nanofile sync server\n\
+         Comment[zh_CN]=Nanofile 同步服务器\n\
          Exec={} --config {}\n\
          Path={}\n\
          Terminal=false\n\

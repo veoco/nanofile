@@ -247,4 +247,36 @@ mod tests {
         );
         assert!(out.contains("\\u003c/script"));
     }
+
+    /// Every tray string must exist in both languages, otherwise the menu
+    /// would show raw keys like "tray.quit" on one language.
+    #[test]
+    fn tray_keys_present_in_all_languages() {
+        const KEYS: &[&str] = &[
+            "tray.open_web",
+            "tray.launch_at_login",
+            "tray.open_config",
+            "tray.quit",
+            "tray.tooltip",
+            "tray.notify_title",
+            "tray.notify_body",
+            "tray.elevated_user_fallback",
+            "tray.elevated_body",
+        ];
+        for lang in [None, Some("en"), Some("zh")] {
+            let t = I18n::get(lang);
+            for key in KEYS {
+                assert_ne!(t.tr(key), *key, "missing {key} for {}", t.lang);
+            }
+        }
+        // Locale variants like the OS reporting "zh-CN" resolve to Chinese.
+        assert_eq!(I18n::get(Some("zh-CN")).tr("tray.quit"), "退出");
+        assert_eq!(I18n::get(Some("en")).tr("tray.quit"), "Quit");
+        // The elevated-account dialog substitutes the username.
+        assert!(
+            I18n::get(Some("zh"))
+                .trf("tray.elevated_body", &[("user", "admin@x.com")])
+                .contains("admin@x.com")
+        );
+    }
 }

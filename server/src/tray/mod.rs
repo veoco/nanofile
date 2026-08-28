@@ -28,10 +28,12 @@ mod backend;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::mpsc::Sender;
 
 use anyhow::Context;
 use infra::config::Config;
+use server::i18n::I18n;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
@@ -55,30 +57,80 @@ pub(crate) struct TrayContext {
 }
 
 /// Whether the tray can and should run for this process and platform.
-pub fn should_run(config: &Config) -> bool {
+///
+/// A pure check, taken before logging is initialized (the log target depends
+/// on it); callers log the outcome once the subscriber is up.
+pub enum RunMode {
+    /// Present the tray UI.
+    Tray,
+    /// Run headless, with the reason why.
+    Headless(&'static str),
+}
+
+pub fn run_mode(config: &Config) -> RunMode {
     if !config.server.tray {
-        tracing::info!("Tray disabled via config (server.tray = false), running headless");
-        return false;
+        return RunMode::Headless(
+            "Tray disabled via config (server.tray = false), running headless",
+        );
     }
     #[cfg(target_os = "linux")]
     {
         if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
-            tracing::info!("No desktop session (DISPLAY/WAYLAND_DISPLAY unset), running headless");
-            return false;
+            return RunMode::Headless(
+                "No desktop session (DISPLAY/WAYLAND_DISPLAY unset), running headless",
+            );
         }
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
-        tracing::info!("System tray is not supported on this platform, running headless");
-        return false;
+        return RunMode::Headless(
+            "System tray is not supported on this platform, running headless",
+        );
     }
-    true
+    RunMode::Tray
+}
+
+/// Translation table for every user-visible tray string (menu, tooltip,
+/// notification, dialogs). Resolved once in [`run`] — the menu is built
+/// once, so its language is fixed for the process lifetime.
+pub(super) fn lang() -> &'static I18n {
+    TRAY_I18N.get_or_init(|| I18n::get(None))
+}
+
+static TRAY_I18N: OnceLock<&'static I18n> = OnceLock::new();
+
+/// Pick the tray language: an explicit `ui.tray_language` override wins,
+/// then the OS locale (a Chinese system shows Chinese), then the web UI's
+/// `default_language`, then English.
+fn resolve_lang(config: &Config) -> &'static I18n {
+    resolve_lang_with(config, sys_locale::get_locale().as_deref())
+}
+
+fn resolve_lang_with(config: &Config, locale: Option<&str>) -> &'static I18n {
+    let forced = config.ui.tray_language.trim();
+    if !forced.is_empty()
+        && !forced.eq_ignore_ascii_case("auto")
+        && let Some(tag) = I18n::normalize_lang(forced)
+    {
+        return I18n::get(Some(tag));
+    }
+    if let Some(locale) = locale {
+        let base = locale.split(['-', '_']).next().unwrap_or("");
+        match base.to_ascii_lowercase().as_str() {
+            "zh" => return I18n::get(Some("zh")),
+            "en" => return I18n::get(Some("en")),
+            _ => {}
+        }
+    }
+    I18n::get(Some(&config.ui.default_language))
 }
 
 /// Runs the server on a background tokio runtime and blocks the main thread in
 /// the platform tray event loop. Never returns on its own: the server task
 /// exits the process when it is done (clean shutdown, Ctrl+C or error).
 pub fn run(config: Config, config_path: PathBuf) -> ! {
+    let _ = TRAY_I18N.set(resolve_lang(&config));
+
     let exe_path = absolute(
         std::env::current_exe()
             .expect("failed to locate the running executable")
@@ -124,16 +176,17 @@ fn create_tray(ctx: &TrayContext, quit_tx: Sender<TrayCommand>) -> anyhow::Resul
     let autostart =
         autostart::PlatformAutostart::new(ctx.exe_path.clone(), ctx.config_path.clone());
 
-    let item_open_web = MenuItem::with_id(ID_OPEN_WEB, "Open Web UI", true, None);
+    let t = lang();
+    let item_open_web = MenuItem::with_id(ID_OPEN_WEB, t.tr("tray.open_web"), true, None);
     let item_autostart = CheckMenuItem::with_id(
         ID_AUTOSTART,
-        "Launch at Login",
+        t.tr("tray.launch_at_login"),
         true,
         autostart.is_enabled(),
         None,
     );
-    let item_open_config = MenuItem::with_id(ID_OPEN_CONFIG, "Open Config File", true, None);
-    let item_quit = MenuItem::with_id(ID_QUIT, "Quit", true, None);
+    let item_open_config = MenuItem::with_id(ID_OPEN_CONFIG, t.tr("tray.open_config"), true, None);
+    let item_quit = MenuItem::with_id(ID_QUIT, t.tr("tray.quit"), true, None);
 
     let menu = Menu::new();
     menu.append(&item_open_web)
@@ -167,7 +220,7 @@ fn create_tray(ctx: &TrayContext, quit_tx: Sender<TrayCommand>) -> anyhow::Resul
         .with_id("nanofile")
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
-        .with_tooltip("Nanofile")
+        .with_tooltip(lang().tr("tray.tooltip"))
         .with_icon(icon::tray_icon())
         .build()
         .context("failed to create tray icon")
@@ -295,4 +348,30 @@ fn absolute(path: &Path) -> PathBuf {
     }
     #[cfg(not(windows))]
     resolved
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_lang_prefers_override_then_os_locale() {
+        // Explicit override always wins.
+        let mut config = Config::default();
+        config.ui.tray_language = "zh".into();
+        assert_eq!(resolve_lang_with(&config, Some("en_US.UTF-8")).lang, "zh");
+        config.ui.tray_language = "en".into();
+        assert_eq!(resolve_lang_with(&config, Some("zh_CN")).lang, "en");
+        config.ui.tray_language = "auto".into();
+
+        // "auto": the OS locale decides (a Chinese system shows Chinese).
+        assert_eq!(resolve_lang_with(&config, Some("zh_CN.UTF-8")).lang, "zh");
+        assert_eq!(resolve_lang_with(&config, Some("en_US.UTF-8")).lang, "en");
+
+        // Unsupported locale falls back to the web UI's default language.
+        config.ui.default_language = "zh".into();
+        assert_eq!(resolve_lang_with(&config, Some("fr_FR.UTF-8")).lang, "zh");
+        // No locale at all: same fallback chain.
+        assert_eq!(resolve_lang_with(&config, None).lang, "zh");
+    }
 }

@@ -1,5 +1,5 @@
 //! Stub tray backend for platforms without tray support. Unreachable in
-//! practice (`should_run` returns false there); exists to keep the crate
+//! practice (`run_mode` returns `Headless` there); exists to keep the crate
 //! compiling on unusual targets.
 
 use std::sync::mpsc::Sender;

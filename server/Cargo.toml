@@ -27,6 +27,8 @@ tray = [
     "dep:resvg",
     "dep:tiny-skia",
     "dep:winresource",
+    # OS locale detection for the tray menu language (tray.quit etc.).
+    "dep:sys-locale",
 ]
 
 [dependencies]
@@ -102,6 +104,8 @@ tantivy-jieba = "0.20.0"
 # `[target.*.dependencies]` header belongs to that target only.
 tray-icon = { version = "0.24", optional = true, default-features = false }
 open = { version = "5", optional = true }
+# OS locale detection (zero transitive dependencies) for the tray language.
+sys-locale = { version = "0.3", optional = true }
 # Startup notification: Windows toast / Linux org.freedesktop.Notifications.
 # macOS is excluded — an unsigned, non-bundled CLI binary cannot reliably post
 # notifications there.
@@ -114,6 +118,9 @@ windows-sys = { version = "0.59", optional = true, features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Security",
     "Win32_System_Threading",
+    # GUI-subsystem builds: reattach the parent console for CLI subcommands.
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
 ] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

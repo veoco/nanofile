@@ -132,9 +132,13 @@ share_download_max_per_minute = 30
 [ui]
 # Environment variables:
 #   NANOFILE_UI_DEFAULT_LANGUAGE
+#   NANOFILE_UI_TRAY_LANGUAGE
 # Fallback UI language when the user hasn't set a preference and the browser's
 # Accept-Language doesn't match a supported language. Supported: "en", "zh".
 default_language = "en"
+# Language of the system tray menu (desktop builds): "auto" follows the OS
+# locale (falling back to default_language), "en"/"zh" force a language.
+tray_language = "auto"
 
 [email]
 # Environment variables:
@@ -156,7 +160,24 @@ enabled = false
 [logging]
 # Environment variables:
 #   NANOFILE_LOG_LEVEL
+#   NANOFILE_LOG_FILE_ENABLED
+#   NANOFILE_LOG_FILE
+# Log level: "trace"/"debug"/"info"/"warn"/"error" (or an EnvFilter expression).
 level = "info"
+# Send logs to a size-capped, rotating file instead of stdout. Unset = auto:
+# desktop (tray) runs log to a file, headless runs (servers, Docker) log to
+# stdout. Set true/false to force either.
+#file_enabled = true
+# Log file path. Unset: resolved to "nanofile.log" next to the nanofile binary
+# in file-logging mode and written back here (absolute path), so a
+# login-started instance always uses the same file. A relative path resolves
+# against the binary's directory, never the working directory.
+#file = "nanofile.log"
+# Per-file size cap (MB) before rotation; at most max_backups older files
+# (nanofile.log.1, nanofile.log.2, ...) are kept. max_backups = 0 truncates
+# the log in place instead of keeping backups.
+max_file_size_mb = 10
+max_backups = 3
 
 [gc]
 # Environment variables:

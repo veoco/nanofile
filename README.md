@@ -133,10 +133,10 @@ migration is applied in memory only.
 | `[database]` | SeaORM/SQLite connection URL (default `sqlite:data/nanofile.db?mode=rwc`) and pool size. |
 | `[storage]` | Block store and temp directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited), ffmpeg path for video thumbnails, resumable-upload temp limits (`max_temp_uploads`, `max_temp_upload_bytes`, `temp_upload_ttl_hours`), and zip-archive caps (`max_zip_entries`, `max_zip_bytes`, `0` = unlimited). |
 | `[auth]` | Password hashing cost, token TTLs, login lockout, invitation registration, password policy, rate limits (incl. per-IP anonymous share-download cap). |
-| `[ui]` | Default UI language (`en` / `zh`). |
+| `[ui]` | Default UI language (`en` / `zh`), tray menu language (`tray_language`: `auto` follows the OS locale, `en`/`zh` force one). |
 | `[email]` | Master switch for the email backend. Password-reset links are only delivered to the owner's inbox and are never echoed back by the server, so the reset flow stays disabled until an SMTP backend exists. |
 | `[admin_init]` | Optional first-start admin auto-creation. Prefer `NANOFILE_ADMIN_INIT_PASSWORD_FILE` for the password. |
-| `[logging]` | Log level. |
+| `[logging]` | Log level, optional rotating log file (`file_enabled`, `file`, `max_file_size_mb`, `max_backups`). |
 | `[gc]` | Enable / schedule garbage collection. |
 | `[index]` | Full-text search switch (`enabled`) and index directory. |
 | `[notification]` | WebSocket notification settings and JWT private key, plus connection caps (`max_connections`, `max_connections_per_ip`) and the unauthenticated-connection subscribe timeout (`subscribe_timeout_secs`). |
@@ -147,13 +147,32 @@ Generate a unique one for production with `openssl rand -hex 32` and set it via
 `NANOFILE_SERVER_SECRET_KEY` (an empty value auto-generates a random key on startup, which invalidates
 sessions on restart).
 
+## Logging
+
+Headless runs (servers, Docker, CLI subcommands) log to stdout as before, controlled by
+`[logging] level` (or `NANOFILE_LOG_LEVEL`).
+
+Desktop (tray) runs log to a size-capped rotating file instead:
+
+- The default location is `nanofile.log` **next to the nanofile binary**; the resolved absolute path
+  is written back into `config.toml` (`[logging] file`) on first run, so login-started instances
+  always use the same file regardless of their working directory, and you can change it there.
+- `[logging] file` accepts an explicit path; a relative one resolves against the binary's directory
+  (never the working directory, which is meaningless for auto-started instances).
+- `max_file_size_mb` (default 10) caps each file; once exceeded it rotates to `nanofile.log.1`,
+  `.2`, … with `max_backups` (default 3) older files kept. `max_backups = 0` truncates in place.
+- `file_enabled = true/false` forces file/stdout output; unset means automatic (file in desktop
+  mode, stdout otherwise). If the log file cannot be opened (e.g. a read-only binary directory),
+  the server falls back to the working directory, then to stdout.
+
 ## System Tray (optional)
 
 Release archives whose name ends in `-tray` (Windows / macOS / Linux-amd64) include an optional
 system tray icon, compiled in with the `tray` feature. Plain builds contain no tray code at all,
 so servers without a desktop are unaffected.
 
-Right-clicking the tray icon opens a menu with:
+Right-clicking the tray icon opens a menu with (translated to the system language — Chinese systems
+get Chinese menus; force a language with `tray_language = "en"/"zh"` in `[ui]`):
 
 - **Open Web UI** — opens `site_url` in the default browser
 - **Launch at Login** (checkable) — registers/unregisters auto-start for the current user:
@@ -177,6 +196,11 @@ Notes:
   desktop session is broken) the server logs a warning and runs headless instead of failing.
 - GNOME only shows tray icons with the "AppIndicator and KStatusNotifierItem Support" extension
   installed; KDE Plasma supports them out of the box.
+- On Windows, `-tray` builds are GUI-subsystem binaries: no console window ever appears (double-click,
+  auto-start, or terminal). Logs go to the rotating log file (see Logging). CLI-only output such as
+  `--version` or `adduser` prompts is only visible when launched from a terminal (the binary
+  reattaches to it, but `cmd` does not wait for the process) — for full console use the plain
+  (non-`-tray`) build, which behaves exactly as before.
 
 To build the tray variant yourself (Linux additionally needs `libgtk-3-dev` and
 `libayatana-appindicator3-dev`):

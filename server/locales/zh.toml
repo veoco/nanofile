@@ -637,3 +637,14 @@ webdav.never_used = "从未使用"
 webdav.new_key_generated = "新密钥已生成,仅显示这一次"
 webdav.no_keys = "尚未生成 WebDAV 密钥。"
 
+# 系统托盘菜单(桌面构建)
+tray.open_web = "打开网页"
+tray.launch_at_login = "开机自动启动"
+tray.open_config = "打开配置文件"
+tray.quit = "退出"
+tray.tooltip = "Nanofile 正在运行"
+tray.notify_title = "Nanofile"
+tray.notify_body = "Nanofile 正在系统托盘中运行。"
+tray.elevated_user_fallback = "当前用户"
+tray.elevated_body = "Nanofile 正在以管理员权限运行。\n\n将为账户“{user}”注册开机自动启动,登录时将以普通(非管理员)权限启动。\n\n是否继续?"
+

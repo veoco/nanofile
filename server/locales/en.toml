@@ -637,3 +637,14 @@ webdav.never_used = "Never used"
 webdav.new_key_generated = "New key generated. It is shown only once."
 webdav.no_keys = "No WebDAV keys generated yet."
 
+
+# System tray menu (desktop builds)
+tray.open_web = "Open Web UI"
+tray.launch_at_login = "Start at Login"
+tray.open_config = "Open Config File"
+tray.quit = "Quit"
+tray.tooltip = "Nanofile is running"
+tray.notify_title = "Nanofile"
+tray.notify_body = "Nanofile is running in the system tray."
+tray.elevated_user_fallback = "the current user"
+tray.elevated_body = "Nanofile is running with administrator privileges.\n\nLaunch at login will be registered for the account \"{user}\", and will start at login without administrator rights.\n\nContinue?"

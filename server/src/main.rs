@@ -1,3 +1,12 @@
+// Windows tray builds are GUI-subsystem binaries: the tray icon is the whole
+// UI, so no console window is ever shown (double-click, Run-key autostart, or
+// terminal). Logs go to a file instead (see logging.rs); non-tray builds keep
+// the console subsystem for headless server use.
+#![cfg_attr(
+    all(target_os = "windows", feature = "tray"),
+    windows_subsystem = "windows"
+)]
+
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::HeaderValue;
@@ -18,11 +27,13 @@ use tokio::sync::oneshot;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
-use tracing_subscriber::EnvFilter;
 
 use infra::config::Config;
 use infra::db::establish_connection;
 use server::AppState;
+
+mod console;
+mod logging;
 
 #[cfg(feature = "tray")]
 mod tray;
@@ -119,13 +130,51 @@ fn main() -> anyhow::Result<()> {
         None => Config::load()?,
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
-                .parse_lossy(&config.logging.level),
-        )
-        .init();
+    // Same resolution order as `Config::load()` — the tray's auto-start
+    // entries pass it on and the log target persistence uses it.
+    let config_path: PathBuf = match &cli.config {
+        Some(path) => path.clone(),
+        None => std::env::var(infra::config::CONFIG_PATH_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(infra::config::DEFAULT_CONFIG_PATH)),
+    };
+
+    // Panics must reach the log file even in GUI-subsystem Windows builds
+    // (no console shows them), so install the hook before anything else.
+    logging::install_panic_hook();
+
+    // ── Decide the run mode first: the log target depends on it ────────
+    let command = cli.command.unwrap_or(Command::Server);
+    #[cfg(feature = "tray")]
+    let (tray_mode, headless_reason) = match command {
+        Command::Server => match tray::run_mode(&config) {
+            tray::RunMode::Tray => (true, None),
+            tray::RunMode::Headless(reason) => (false, Some(reason)),
+        },
+        _ => (false, None),
+    };
+    #[cfg(not(feature = "tray"))]
+    let (tray_mode, headless_reason): (bool, Option<&'static str>) = (false, None);
+
+    // CLI subcommands may be interactive; GUI-subsystem builds have no
+    // console, so reattach to the launching terminal before any output.
+    if !matches!(command, Command::Server) {
+        console::attach_parent_console();
+    }
+
+    logging::init(
+        &config,
+        if matches!(command, Command::Server) {
+            logging::Kind::Server
+        } else {
+            logging::Kind::Cli
+        },
+        tray_mode,
+        &config_path,
+    );
+    if let Some(reason) = headless_reason {
+        tracing::info!("{reason}");
+    }
 
     // ── Server secret key: auto-generate if empty ──────────────────────
     if config.server.secret_key.is_empty() || config.server.secret_key == "nanofile-server-secret" {
@@ -149,22 +198,14 @@ fn main() -> anyhow::Result<()> {
         config.notification.private_key = hex::encode(hasher.finalize());
     }
 
-    match cli.command.unwrap_or(Command::Server) {
+    match command {
         Command::Server => {
             // With the tray feature compiled in and a desktop session
             // present, the platform tray event loop owns the main thread and
             // the server runs on background tokio workers instead.
             #[cfg(feature = "tray")]
-            {
-                if tray::should_run(&config) {
-                    let config_path = match &cli.config {
-                        Some(path) => path.clone(),
-                        None => std::env::var(infra::config::CONFIG_PATH_ENV)
-                            .map(PathBuf::from)
-                            .unwrap_or_else(|_| PathBuf::from(infra::config::DEFAULT_CONFIG_PATH)),
-                    };
-                    tray::run(config, config_path);
-                }
+            if tray_mode {
+                tray::run(config, config_path);
             }
 
             let rt = tokio::runtime::Runtime::new()?;

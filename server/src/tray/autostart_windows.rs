@@ -93,14 +93,12 @@ fn is_elevated() -> bool {
 fn confirm_elevated_registration() -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OKCANCEL, MessageBoxW};
 
-    let user = std::env::var("USERNAME").unwrap_or_else(|_| "the current user".into());
-    let text = format!(
-        "nanofile is running with administrator privileges.\n\n\
-         Launch at login will be registered for account '{user}' and will\n\
-         start at login without administrator rights.\n\nContinue?"
-    );
+    let t = crate::tray::lang();
+    let user = std::env::var("USERNAME")
+        .unwrap_or_else(|_| t.tr("tray.elevated_user_fallback").to_string());
+    let text = t.trf("tray.elevated_body", &[("user", user.as_str())]);
     let text = wide(&text);
-    let caption = wide("nanofile");
+    let caption = wide(t.tr("tray.notify_title"));
     let result = unsafe {
         MessageBoxW(
             std::ptr::null_mut(),

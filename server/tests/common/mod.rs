@@ -414,6 +414,7 @@ impl TestServer {
             },
             logging: infra::config::LoggingConfig {
                 level: "debug".to_string(),
+                ..Default::default()
             },
             gc: infra::config::GcConfig {
                 enabled: false,
