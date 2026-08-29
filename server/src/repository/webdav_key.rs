@@ -15,6 +15,7 @@ pub trait WebdavKeyRepository: Send + Sync {
         repo_id: &str,
         user_id: i32,
         name: &str,
+        permission: &str,
         key_hash: &str,
     ) -> Result<webdav_key::Model, AppError>;
     /// List all keys a user holds for a repo.
@@ -59,6 +60,7 @@ impl WebdavKeyRepository for DbWebdavKeyRepository {
         repo_id: &str,
         user_id: i32,
         name: &str,
+        permission: &str,
         key_hash: &str,
     ) -> Result<webdav_key::Model, AppError> {
         let model = webdav_key::ActiveModel {
@@ -66,6 +68,7 @@ impl WebdavKeyRepository for DbWebdavKeyRepository {
             repo_id: Set(repo_id.to_string()),
             user_id: Set(user_id),
             name: Set(name.to_string()),
+            permission: Set(permission.to_string()),
             key_hash: Set(key_hash.to_string()),
             created_at: Set(chrono::Utc::now().timestamp()),
             last_used_at: Set(None),

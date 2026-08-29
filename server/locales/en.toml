@@ -636,6 +636,9 @@ webdav.loading = "Loading..."
 webdav.never_used = "Never used"
 webdav.new_key_generated = "New key generated. It is shown only once."
 webdav.no_keys = "No WebDAV keys generated yet."
+webdav.permission = "Permission"
+webdav.permission_rw = "Read & write"
+webdav.permission_r = "Read only"
 
 
 # System tray menu (desktop builds)

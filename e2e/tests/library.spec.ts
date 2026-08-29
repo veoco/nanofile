@@ -52,10 +52,13 @@ test("manage webdav keys from the edit dialog", async ({ page }) => {
   await li.locator('button[data-action="show-edit"]').click();
   await expect(page.locator("#edit-overlay")).toBeVisible();
   await page.locator("#webdav-key-name").fill("e2e-device");
+  await page.locator("#webdav-key-permission").selectOption("r");
   await page.locator('button[data-action="create-webdav-key"]').click();
   await expect(page.locator("#new-key-box")).toBeVisible();
   await expect(page.locator("#new-key-value")).not.toHaveValue("");
   await expect(page.locator("#webdav-key-list")).toContainText("e2e-device");
+  // Read-only badge is shown for the r key.
+  await expect(page.locator("#webdav-key-list")).toContainText("Read only");
   // Delete the key (native confirm).
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#webdav-key-list button", { hasText: /Delete/ }).click();

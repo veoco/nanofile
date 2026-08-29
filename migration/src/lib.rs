@@ -69,6 +69,7 @@ migrations!(
     m20260816_000001_hash_tokens,
     m20260816_000002_add_api_token_pending,
     m20260823_000001_hash_short_lived_tokens,
+    m20260829_000001_add_permission_to_webdav_keys,
 );
 
 #[cfg(test)]

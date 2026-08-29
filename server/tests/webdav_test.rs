@@ -43,10 +43,22 @@ async fn gen_key(
     repo_id: &str,
     name: &str,
 ) -> String {
+    gen_key_with_permission(client, base, token, repo_id, name, "rw").await
+}
+
+/// Generate a WebDAV key with an explicit permission ("rw" or "r").
+async fn gen_key_with_permission(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    repo_id: &str,
+    name: &str,
+    permission: &str,
+) -> String {
     let resp = client
         .post(format!("{base}/api2/repos/{repo_id}/webdav-keys/"))
         .bearer_auth(token)
-        .json(&serde_json::json!({ "name": name }))
+        .json(&serde_json::json!({ "name": name, "permission": permission }))
         .send()
         .await
         .unwrap();
@@ -311,6 +323,87 @@ async fn test_auth_readonly_member_cannot_write() {
         "/no.txt",
         "reader@example.com",
         &reader_key,
+        b"nope",
+    )
+    .await;
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn test_readonly_key_cannot_write() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+
+    // The owner (rw member) generates a read-only key.
+    let key = gen_key_with_permission(&client, base, &f.api_token, &f.repo_id, "ro", "r").await;
+
+    // Read works.
+    let resp = dav(
+        &client,
+        "PROPFIND",
+        &dav_url(base, &f.repo_id, "/"),
+        &f.email,
+        &key,
+    )
+    .await;
+    assert_eq!(resp.status(), 207);
+
+    // Write is forbidden even though the member is rw.
+    let resp = dav_put(
+        &client, base, &f.repo_id, "/no.txt", &f.email, &key, b"nope",
+    )
+    .await;
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn test_rw_key_still_writes() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+
+    let key = gen_key_with_permission(&client, base, &f.api_token, &f.repo_id, "rw", "rw").await;
+    let resp = dav_put(
+        &client, base, &f.repo_id, "/ok.txt", &f.email, &key, b"data",
+    )
+    .await;
+    assert_eq!(resp.status(), 201);
+}
+
+#[tokio::test]
+async fn test_readonly_member_with_rw_key_still_readonly() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+
+    // Read-only member.
+    let member_id = create_test_user(f.server.db.as_ref(), "reader@example.com", "password").await;
+    f.server
+        .repos
+        .member
+        .create_member(CreateMemberParams {
+            repo_id: f.repo_id.clone(),
+            user_id: member_id,
+            permission: "r".to_string(),
+            created_at: chrono::Utc::now().timestamp(),
+        })
+        .await
+        .unwrap();
+
+    let resp = f.client.login("reader@example.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let reader_token = body["token"].as_str().unwrap().to_string();
+
+    // Even an rw key cannot escalate a read-only member to write.
+    let key = gen_key_with_permission(&client, base, &reader_token, &f.repo_id, "rw", "rw").await;
+    let resp = dav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/no.txt",
+        "reader@example.com",
+        &key,
         b"nope",
     )
     .await;

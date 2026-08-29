@@ -95,12 +95,21 @@ function loadWebdavKeys(repoId) {
             name.textContent = k.name;
             var meta = document.createElement('p');
             meta.className = 'text-xs text-gray-500 dark:text-gray-400';
+            var badge = document.createElement('span');
+            badge.className = 'mr-1 inline-block rounded px-1 py-0.5 text-[10px] font-medium ' +
+                (k.permission === 'r'
+                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                    : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400');
+            badge.textContent = k.permission === 'r'
+                ? __t('webdav.permission_r')
+                : __t('webdav.permission_rw');
+            meta.appendChild(badge);
             var firstUsed = new Date(k.created_at * 1000).toLocaleDateString();
-            meta.textContent = __t('webdav.created_at', { date: firstUsed });
+            meta.appendChild(document.createTextNode(__t('webdav.created_at', { date: firstUsed })));
             if (k.last_used_at) {
-                meta.textContent += ' · ' + __t('webdav.last_used_at', { date: new Date(k.last_used_at * 1000).toLocaleDateString() });
+                meta.appendChild(document.createTextNode(' · ' + __t('webdav.last_used_at', { date: new Date(k.last_used_at * 1000).toLocaleDateString() })));
             } else {
-                meta.textContent += ' · ' + __t('webdav.never_used');
+                meta.appendChild(document.createTextNode(' · ' + __t('webdav.never_used')));
             }
             text.appendChild(name);
             text.appendChild(meta);
@@ -125,6 +134,7 @@ function createWebdavKey() {
     var repoId = document.getElementById('edit-repo-id').value;
     if (!repoId) return;
     var name = document.getElementById('webdav-key-name').value.trim() || 'default';
+    var permission = document.getElementById('webdav-key-permission').value || 'rw';
     var csrfToken = getCookie('sfcsrftoken');
     fetch('/api2/repos/' + repoId + '/webdav-keys/', {
         method: 'POST',
@@ -133,7 +143,7 @@ function createWebdavKey() {
             'Content-Type': 'application/json;charset=utf-8',
             'X-CSRFToken': csrfToken,
         },
-        body: JSON.stringify({ name: name }),
+        body: JSON.stringify({ name: name, permission: permission }),
     }).then(function (resp) {
         if (!resp.ok) {
             alert(__t('webdav.generate_failed') + resp.status);

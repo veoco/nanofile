@@ -15,6 +15,8 @@ pub struct Model {
     pub user_id: i32,
     #[sea_orm(not_null)]
     pub name: String,
+    #[sea_orm(not_null)]
+    pub permission: String,
     #[sea_orm(not_null, length = 64)]
     pub key_hash: String,
     #[sea_orm(not_null)]

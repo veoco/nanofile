@@ -15,6 +15,8 @@ use base::error::AppError;
 pub struct CreateWebdavKeyRequest {
     /// Device/usage label, e.g. "MacBook" or "rclone".
     pub name: Option<String>,
+    /// Key permission: "rw" (default) or "r" (read-only).
+    pub permission: Option<String>,
 }
 
 /// POST /api2/repos/{repo_id}/webdav-keys/
@@ -28,12 +30,15 @@ pub async fn create_webdav_key(
     Json(body): Json<CreateWebdavKeyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let name = body.name.unwrap_or_else(|| "default".to_string());
+    let permission = body.permission.unwrap_or_else(|| "rw".to_string());
     let (model, key) =
-        WebdavKeyService::generate_key(&state.repos, &repo_id, auth.user_id, &name).await?;
+        WebdavKeyService::generate_key(&state.repos, &repo_id, auth.user_id, &name, &permission)
+            .await?;
     Ok(Json(serde_json::json!({
         "key_id": model.id,
         "repo_id": model.repo_id,
         "name": model.name,
+        "permission": model.permission,
         "created_at": model.created_at,
         "key": key,
     })))
@@ -55,6 +60,7 @@ pub async fn list_webdav_keys(
                 "id": k.id,
                 "repo_id": k.repo_id,
                 "name": k.name,
+                "permission": k.permission,
                 "created_at": k.created_at,
                 "last_used_at": k.last_used_at,
             })

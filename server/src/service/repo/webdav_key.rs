@@ -68,6 +68,7 @@ impl WebdavKeyService {
         repo_id: &str,
         user_id: i32,
         name: &str,
+        permission: &str,
     ) -> Result<(webdav_key::Model, String), AppError> {
         let repo = repos
             .repo
@@ -93,10 +94,13 @@ impl WebdavKeyService {
         } else {
             name.trim().to_string()
         };
+        // Only "rw" and "r" are valid; anything else falls back to "rw" so a
+        // malformed request never silently downgrades a key to read-only.
+        let permission = if permission == "r" { "r" } else { "rw" };
 
         let model = repos
             .webdav_key
-            .create(repo_id, user_id, &name, &key_hash)
+            .create(repo_id, user_id, &name, permission, &key_hash)
             .await?;
         Ok((model, key))
     }

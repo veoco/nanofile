@@ -134,6 +134,16 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
             .map_err(|_| WebDavAuthError::Unauthorized)?
             .ok_or(WebDavAuthError::Unauthorized)?;
 
+        // Effective permission is the stricter of the membership permission
+        // and the key's own permission — a read-only key stays read-only even
+        // for an rw member, and a read-only member stays read-only even with
+        // an rw key.
+        let permission = if permission == "r" || key_model.permission == "r" {
+            "r"
+        } else {
+            "rw"
+        };
+
         // Best-effort last_used_at update (fire-and-forget), throttled to once
         // per hour per key so high-frequency WebDAV traffic does not write on
         // every request.
