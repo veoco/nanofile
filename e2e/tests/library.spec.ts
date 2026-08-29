@@ -5,6 +5,10 @@ let state: ReturnType<typeof readState>;
 
 test.beforeAll(async () => {
   state = readState();
+  // Seed a library so the list page is non-empty. Without this the spec only
+  // passes when run as part of the full suite (other specs seed repos first);
+  // running it in isolation would time out waiting for a list row.
+  await createRepo(state.baseURL, state.adminToken, `seed-lib-${Date.now()}`);
 });
 
 async function openLibraries(page: import("@playwright/test").Page): Promise<void> {
