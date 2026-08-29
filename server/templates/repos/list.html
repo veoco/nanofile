@@ -35,15 +35,28 @@
         <li class="transition-colors hover:bg-gray-50 dark:hover:bg-surface-700/50">
             <div class="flex items-center justify-between px-4 py-4">
                 <a href="/libraries/{{ r.id }}/files/" class="flex items-center min-w-0 flex-1 gap-4">
+                    {% if r.encrypted %}
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 flex-shrink-0">
+                        {{ icons::icon_lock("h-5 w-5") }}
+                    </div>
+                    {% else %}
                     <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-100 dark:bg-brand-500/20 text-brand-600 dark:text-brand-400 flex-shrink-0">
                         {{ icons::icon_folder_outline("h-5 w-5") }}
                     </div>
+                    {% endif %}
                     <div class="min-w-0">
-                        <p class="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{{ r.name }}</p>
+                        <p class="flex items-center gap-2">
+                            <span class="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{{ r.name }}</span>
+                            {% if r.encrypted %}
+                            <span class="badge badge-gray flex-shrink-0">{{ t.tr("repo.encrypted") }}</span>
+                            {% endif %}
+                        </p>
                         {% if !r.description.is_empty() %}
                         <p class="truncate text-sm text-gray-500 dark:text-gray-400">{{ r.description }}</p>
                         {% endif %}
-                        <p class="text-xs text-gray-400 dark:text-gray-500">{{ r.size_display }}</p>
+                        <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
+                            {{ r.size_display }}<span class="mx-1">·</span>{{ r.mtime_display }}
+                        </p>
                     </div>
                 </a>
                 <div class="ml-4 flex-shrink-0 flex items-center gap-1">

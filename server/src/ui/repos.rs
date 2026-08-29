@@ -38,6 +38,7 @@ pub struct RepoInfo {
     pub size: i64,
     pub size_display: String,
     pub mtime: i64,
+    pub mtime_display: String,
     pub encrypted: bool,
     pub owner_id: i32,
     pub history_limit: i32,
@@ -54,6 +55,7 @@ pub async fn list_repos(
     // Find repos where user is a member
     let memberships = state.repos.member.find_by_user_id(user.user_id).await?;
 
+    let t = I18n::get(user.language.as_deref());
     let mut repos = Vec::new();
     for membership in memberships {
         if let Some(r) = state.repos.repo.find_by_id(&membership.repo_id).await? {
@@ -64,6 +66,7 @@ pub async fn list_repos(
                 size: r.size,
                 size_display: format_size(r.size),
                 mtime: r.updated_at,
+                mtime_display: crate::ui::files::format_mtime(t, r.updated_at),
                 encrypted: r.encrypted != 0,
                 owner_id: r.owner_id,
                 history_limit: r.history_limit,

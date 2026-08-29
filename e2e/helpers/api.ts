@@ -41,6 +41,55 @@ export async function createRepo(baseURL: string, token: string, name: string): 
   return data.id;
 }
 
+/**
+ * Create an encrypted repo (enc_version 2) and return its repo id.
+ *
+ * The magic / random_key are derived client-side exactly as the Rust
+ * `infra::crypto::key_derivation` module does for v2 (fixed MAGIC_SALT):
+ *   magic      = PBKDF2-SHA256(repo_id + password, MAGIC_SALT, 1000) → 32B hex
+ *   derivedKey = PBKDF2-SHA256(password, MAGIC_SALT, 1000) → 32B
+ *   derivedIv  = PBKDF2-SHA256(derivedKey, MAGIC_SALT, 10) → 16B
+ *   random_key = AES-256-CBC-encrypt(32B secret, derivedKey, derivedIv) + PKCS7 → 48B hex
+ */
+export async function createEncryptedRepo(
+  baseURL: string,
+  token: string,
+  name: string,
+  password: string,
+): Promise<string> {
+  const crypto = await import("node:crypto");
+  const MAGIC_SALT = Buffer.from([0xda, 0x90, 0x45, 0xc3, 0x06, 0xc7, 0xcc, 0x26]);
+  const repoId = crypto.randomUUID();
+
+  const magic = crypto
+    .pbkdf2Sync(Buffer.from(`${repoId}${password}`), MAGIC_SALT, 1000, 32, "sha256")
+    .toString("hex");
+
+  const derivedKey = crypto.pbkdf2Sync(Buffer.from(password), MAGIC_SALT, 1000, 32, "sha256");
+  const derivedIv = crypto.pbkdf2Sync(derivedKey, MAGIC_SALT, 10, 16, "sha256");
+  const secret = crypto.randomBytes(32);
+  const cipher = crypto.createCipheriv("aes-256-cbc", derivedKey, derivedIv);
+  const randomKey = Buffer.concat([cipher.update(secret), cipher.final()]).toString("hex");
+
+  const res = await fetch(`${baseURL}/api2/repos/`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      name,
+      repo_id: repoId,
+      encrypted: "1",
+      enc_version: "2",
+      magic,
+      random_key: randomKey,
+    }),
+  });
+  if (!res.ok) throw new Error(`create encrypted repo failed: ${res.status} ${await res.text()}`);
+  return repoId;
+}
+
 /** POST /api2/repos/{id}/file/ (multipart) → upload a file. */
 export async function uploadFile(
   baseURL: string,

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { readState, createRepo } from "../helpers/api";
+import { readState, createRepo, createEncryptedRepo } from "../helpers/api";
 
 let state: ReturnType<typeof readState>;
 
@@ -78,4 +78,21 @@ test("delete a library", async ({ page }) => {
   page.once("dialog", (dialog) => dialog.accept());
   await li.locator('button[data-action="delete-repo"]').click();
   await expect(li).toHaveCount(0, { timeout: 15_000 });
+});
+
+test("renders folder icon for normal and lock icon for encrypted libraries", async ({ page }) => {
+  const normalName = `icon-normal-${Date.now()}`;
+  const encName = `icon-enc-${Date.now()}`;
+  await createRepo(state.baseURL, state.adminToken, normalName);
+  await createEncryptedRepo(state.baseURL, state.adminToken, encName, "e2e-password");
+  await openLibraries(page);
+
+  // Normal library: brand folder icon block (single svg inside the name link).
+  const normalRow = page.locator("li").filter({ hasText: normalName });
+  await expect(normalRow.locator("a svg")).toHaveCount(1);
+
+  // Encrypted library: lock icon block + "Encrypted" badge, no folder icon.
+  const encRow = page.locator("li").filter({ hasText: encName });
+  await expect(encRow.locator("a svg")).toHaveCount(1);
+  await expect(encRow).toContainText("Encrypted");
 });
