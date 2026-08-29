@@ -18,6 +18,19 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
+/// Get a human-readable platform name.
+fn platform_display_name(platform: &str) -> String {
+    match platform {
+        "windows" => "Windows".to_string(),
+        "linux" => "Linux".to_string(),
+        "mac" => "macOS".to_string(),
+        "ios" => "iOS".to_string(),
+        "android" => "Android".to_string(),
+        "harmonyos" => "HarmonyOS".to_string(),
+        _ => platform.to_string(),
+    }
+}
+
 #[derive(Template)]
 #[template(path = "settings/index.html")]
 pub struct SettingsTemplate {
@@ -57,10 +70,11 @@ pub struct DevicesTemplate {
 
 pub struct DeviceInfo {
     pub platform: String,
+    pub platform_display: String,
     pub device_id: String,
     pub device_name: String,
     pub client_version: String,
-    pub last_accessed: i64,
+    pub last_accessed: String,
     pub is_desktop_client: bool,
 }
 
@@ -260,16 +274,15 @@ pub async fn devices_page(
     for token in tokens {
         let dev_key = (token.platform.clone(), token.device_id.clone());
         if seen.insert(dev_key) {
-            let is_desktop = matches!(
-                token.platform.as_deref(),
-                Some("windows") | Some("linux") | Some("mac")
-            );
+            let platform = token.platform.unwrap_or_default();
+            let is_desktop = matches!(platform.as_str(), "windows" | "linux" | "mac");
             devices.push(DeviceInfo {
-                platform: token.platform.unwrap_or_default(),
+                platform: platform.clone(),
+                platform_display: platform_display_name(&platform),
                 device_id: token.device_id.unwrap_or_default(),
                 device_name: token.device_name.unwrap_or_default(),
                 client_version: token.client_version.unwrap_or_default(),
-                last_accessed: token.created_at,
+                last_accessed: super::format_ts(token.created_at),
                 is_desktop_client: is_desktop,
             });
         }

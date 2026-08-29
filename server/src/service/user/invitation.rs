@@ -9,9 +9,9 @@ use infra::entity::invitation_code;
 pub struct InvitationInfo {
     pub code: String,
     pub bound_email: Option<String>,
-    pub created_at: i64,
+    pub created_at: String,
     pub used_by_email: Option<String>,
-    pub used_at: Option<i64>,
+    pub used_at: Option<String>,
     pub id: i32,
 }
 
@@ -47,14 +47,15 @@ impl InvitationService {
         let mut invitations = Vec::with_capacity(codes.len());
         for code in codes {
             let used_by_email = code.used_by.and_then(|uid| email_by_id.get(&uid).cloned());
+            let used_at_display = code.used_at.map(crate::ui::format_ts);
 
             invitations.push(InvitationInfo {
                 id: code.id,
                 code: code.code,
                 bound_email: code.email,
-                created_at: code.created_at,
+                created_at: crate::ui::format_ts(code.created_at),
                 used_by_email,
-                used_at: code.used_at,
+                used_at: used_at_display,
             });
         }
 

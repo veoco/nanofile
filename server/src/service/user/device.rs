@@ -36,7 +36,7 @@ impl DeviceService {
                     "device_id": token.device_id,
                     "device_name": token.device_name,
                     "client_version": token.client_version,
-                    "last_accessed": token.created_at,
+                    "last_accessed": crate::ui::format_ts(token.created_at),
                     "is_desktop_client": is_desktop,
                 }));
             }

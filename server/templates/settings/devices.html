@@ -48,14 +48,14 @@
                             {% endif %}
                         </p>
                         <p class="text-xs text-gray-500 dark:text-gray-400">
-                            {{ device.platform }}
+                            {{ device.platform_display }}
                             {% if !device.client_version.is_empty() %}
                             &middot; v{{ device.client_version }}
                             {% endif %}
                         </p>
                         <p class="text-xs text-gray-400 dark:text-gray-500">
                             {{ t.tr("device.last_accessed") }}:
-                            <span class="select-all inline-block">{{- device.last_accessed -}}</span>
+                            <span class="select-all inline-block">{{ device.last_accessed }}</span>
                         </p>
                     </div>
                 </div>
