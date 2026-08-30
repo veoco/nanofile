@@ -256,7 +256,7 @@ impl AppState {
         crate::service::fs::thumbnail::ThumbnailService::new(
             self.repos.clone(),
             self.block_store.clone(),
-            self.block_dir.clone(),
+            Arc::new(self.config.storage.thumbnail_dir.clone()),
             Arc::new(self.config.storage.temp_dir.clone()),
             Arc::new(self.config.storage.ffmpeg_path.clone()),
         )
@@ -264,6 +264,13 @@ impl AppState {
 
     pub fn exif_service(&self) -> crate::service::fs::exif::ExifService {
         crate::service::fs::exif::ExifService::new(self.repos.clone(), self.block_store.clone())
+    }
+
+    pub fn avatar_service(&self) -> crate::service::user::AvatarService {
+        crate::service::user::AvatarService::new(
+            self.repos.clone(),
+            Arc::new(self.config.storage.avatar_dir.clone()),
+        )
     }
 
     pub fn login_service(&self) -> crate::service::auth::login::LoginService {

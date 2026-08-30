@@ -8,4 +8,4 @@ pub use avatar::AvatarService;
 pub use device::DeviceService;
 pub use invitation::{InvitationInfo, InvitationService};
 
-pub use avatar::{avatar_storage_dir, default_avatar_bytes, primary_avatar_url, resolve_size};
+pub use avatar::{default_avatar_bytes, primary_avatar_url, resolve_size};

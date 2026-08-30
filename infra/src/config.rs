@@ -467,6 +467,16 @@ pub struct StorageConfig {
     /// Env: NANOFILE_STORAGE_MAX_ZIP_BYTES
     #[serde(default)]
     pub max_zip_bytes: u64,
+    /// Thumbnail cache directory for file thumbnails.
+    /// Defaults to `data/thumbnails` for backward compatibility.
+    /// Env: NANOFILE_STORAGE_THUMBNAIL_DIR
+    #[serde(default = "default_thumbnail_dir")]
+    pub thumbnail_dir: PathBuf,
+    /// Avatar storage directory for user avatar files.
+    /// Defaults to `data/avatars` for backward compatibility.
+    /// Env: NANOFILE_STORAGE_AVATAR_DIR
+    #[serde(default = "default_avatar_dir")]
+    pub avatar_dir: PathBuf,
 }
 
 fn default_block_dir() -> PathBuf {
@@ -487,6 +497,12 @@ fn default_temp_upload_ttl_hours() -> u64 {
 fn default_max_zip_entries() -> u64 {
     10000
 }
+fn default_thumbnail_dir() -> PathBuf {
+    PathBuf::from("data/thumbnails")
+}
+fn default_avatar_dir() -> PathBuf {
+    PathBuf::from("data/avatars")
+}
 
 impl Default for StorageConfig {
     fn default() -> Self {
@@ -500,6 +516,8 @@ impl Default for StorageConfig {
             temp_upload_ttl_hours: default_temp_upload_ttl_hours(),
             max_zip_entries: default_max_zip_entries(),
             max_zip_bytes: 0,
+            thumbnail_dir: default_thumbnail_dir(),
+            avatar_dir: default_avatar_dir(),
         }
     }
 }
@@ -803,6 +821,8 @@ impl Config {
         );
         env_path!("NANOFILE_STORAGE_BLOCK_DIR", self.storage.block_dir);
         env_path!("NANOFILE_STORAGE_TEMP_DIR", self.storage.temp_dir);
+        env_path!("NANOFILE_STORAGE_THUMBNAIL_DIR", self.storage.thumbnail_dir);
+        env_path!("NANOFILE_STORAGE_AVATAR_DIR", self.storage.avatar_dir);
         env_str!("NANOFILE_STORAGE_FFMPEG_PATH", self.storage.ffmpeg_path);
         env_parse!(
             "NANOFILE_STORAGE_MAX_STORAGE_BYTES",

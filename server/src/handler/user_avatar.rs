@@ -7,7 +7,6 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::handler::read_multipart_field_limited;
 use crate::middleware::auth::AuthUser;
-use crate::service::user::AvatarService;
 use crate::service::user::avatar::MAX_AVATAR_SIZE;
 use base::error::AppError;
 
@@ -58,7 +57,7 @@ pub async fn upload_avatar(
     let (file_name, data, _content_type) =
         avatar_field.ok_or_else(|| AppError::BadRequest("no avatar file provided".into()))?;
 
-    let svc = AvatarService::new(state.repos.clone());
+    let svc = state.avatar_service();
     let avatar_url = svc.upload_avatar(&auth.email, file_name, data).await?;
 
     Ok(Json(serde_json::json!({

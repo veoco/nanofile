@@ -393,6 +393,8 @@ impl TestServer {
                 temp_upload_ttl_hours: temp_limits.unwrap_or_default().ttl_hours,
                 max_zip_entries: zip_limits.unwrap_or_default().max_entries,
                 max_zip_bytes: zip_limits.unwrap_or_default().max_bytes,
+                thumbnail_dir: block_root.join("thumbnails"),
+                avatar_dir: block_root.join("avatars"),
             },
             auth: infra::config::AuthConfig {
                 password_hash_iterations: 1000,

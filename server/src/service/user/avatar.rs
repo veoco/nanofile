@@ -21,15 +21,6 @@ pub fn default_avatar_bytes() -> &'static [u8] {
     DEFAULT_AVATAR
 }
 
-/// Compute the on-disk storage directory for a user's avatar files.
-///
-/// Uses the first 16 hex characters of the SHA-256 of the user's email as the
-/// directory name, matching seafile's `AVATAR_HASH_USERDIRNAMES` behaviour.
-pub fn avatar_storage_dir(email: &str) -> PathBuf {
-    let hash = hex::encode(Sha256::digest(email.as_bytes()));
-    PathBuf::from("data/avatars").join(&hash[..16])
-}
-
 /// Build the avatar URL path used by the rest of the codebase
 /// (activities, groups, share links, etc.).
 pub fn primary_avatar_url(email: &str, size: u32) -> String {
@@ -40,11 +31,21 @@ pub fn primary_avatar_url(email: &str, size: u32) -> String {
 
 pub struct AvatarService {
     repos: Arc<Repositories>,
+    avatar_dir: Arc<PathBuf>,
 }
 
 impl AvatarService {
-    pub fn new(repos: Arc<Repositories>) -> Self {
-        Self { repos }
+    pub fn new(repos: Arc<Repositories>, avatar_dir: Arc<PathBuf>) -> Self {
+        Self { repos, avatar_dir }
+    }
+
+    /// Compute the on-disk storage directory for a user's avatar files.
+    ///
+    /// Uses the first 16 hex characters of the SHA-256 of the user's email as the
+    /// directory name, matching seafile's `AVATAR_HASH_USERDIRNAMES` behaviour.
+    fn avatar_storage_dir(&self, email: &str) -> PathBuf {
+        let hash = hex::encode(Sha256::digest(email.as_bytes()));
+        self.avatar_dir.join(&hash[..16])
     }
 
     /// Find an avatar record by email.
@@ -94,7 +95,7 @@ impl AvatarService {
         };
 
         // Build storage path
-        let storage_dir = avatar_storage_dir(email);
+        let storage_dir = self.avatar_storage_dir(email);
         tokio::fs::create_dir_all(&storage_dir)
             .await
             .map_err(|e| AppError::Internal(format!("failed to create avatar dir: {e}")))?;
@@ -134,7 +135,7 @@ impl AvatarService {
         avatar: &infra::entity::avatar::Model,
         size: u32,
     ) -> Option<(Vec<u8>, &'static str)> {
-        let storage_dir = avatar_storage_dir(&avatar.email);
+        let storage_dir = self.avatar_storage_dir(&avatar.email);
         let thumbnail_path = storage_dir.join(format!("{}.png", size));
 
         // Fast path — thumbnail already cached on disk

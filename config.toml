@@ -84,10 +84,16 @@ max_connections = 5
 # Environment variables:
 #   NANOFILE_STORAGE_BLOCK_DIR
 #   NANOFILE_STORAGE_TEMP_DIR
+#   NANOFILE_STORAGE_THUMBNAIL_DIR
+#   NANOFILE_STORAGE_AVATAR_DIR
 #   NANOFILE_STORAGE_MAX_STORAGE_BYTES
 #   NANOFILE_STORAGE_FFMPEG_PATH
 block_dir = "data/blocks"
 temp_dir = "data/temp"
+# Thumbnail cache directory. Defaults to data/thumbnails.
+# thumbnail_dir = "data/thumbnails"
+# Avatar storage directory. Defaults to data/avatars.
+# avatar_dir = "data/avatars"
 max_storage_bytes = 0
 # ffmpeg binary used to generate video thumbnails. Video files keep showing a
 # play-icon placeholder when this binary isn't installed. Playback works without it.

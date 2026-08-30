@@ -15,7 +15,8 @@ use base::error::AppError;
 pub struct ThumbnailService {
     repos: Arc<Repositories>,
     block_store: infra::storage::DynBlockStorage,
-    block_dir: Arc<PathBuf>,
+    /// Thumbnail cache directory (configurable).
+    thumbnail_dir: Arc<PathBuf>,
     /// Scratch directory for streaming video files before ffmpeg extracts a frame.
     temp_dir: Arc<PathBuf>,
     /// Path to the `ffmpeg` binary ("ffmpeg" by default).
@@ -26,14 +27,14 @@ impl ThumbnailService {
     pub fn new(
         repos: Arc<Repositories>,
         block_store: infra::storage::DynBlockStorage,
-        block_dir: Arc<PathBuf>,
+        thumbnail_dir: Arc<PathBuf>,
         temp_dir: Arc<PathBuf>,
         ffmpeg_path: Arc<String>,
     ) -> Self {
         Self {
             repos,
             block_store,
-            block_dir,
+            thumbnail_dir,
             temp_dir,
             ffmpeg_path,
         }
@@ -41,11 +42,7 @@ impl ThumbnailService {
 
     /// Path to the repo-level thumbnail cache directory.
     fn thumbnail_repo_dir(&self, repo_id: &str) -> PathBuf {
-        self.block_dir
-            .parent()
-            .unwrap_or(&self.block_dir)
-            .join("thumbnails")
-            .join(repo_id)
+        self.thumbnail_dir.join(repo_id)
     }
 
     /// Deterministic on-disk filename for a thumbnail, matching seahub's
@@ -215,17 +212,11 @@ impl ThumbnailService {
                 .update_mtime(repo_id, &normalized_path, size as i32, current_mtime, now)
                 .await?;
             // Delete old-naming disk file if it still exists (migration from old path scheme)
-            let legacy_path = self
-                .block_dir
-                .parent()
-                .unwrap_or(&self.block_dir)
-                .join("thumbnails")
-                .join(repo_id)
-                .join(format!(
-                    "{}_{}.png",
-                    normalize_path_for_file(&normalized_path),
-                    size
-                ));
+            let legacy_path = self.thumbnail_dir.join(repo_id).join(format!(
+                "{}_{}.png",
+                normalize_path_for_file(&normalized_path),
+                size
+            ));
             let _ = tokio::fs::remove_file(&legacy_path).await;
         } else {
             self.repos

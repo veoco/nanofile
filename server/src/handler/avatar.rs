@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::middleware::auth::AuthUser;
-use crate::service::user::AvatarService;
 use crate::service::user::{primary_avatar_url, resolve_size};
 use base::error::AppError;
 
@@ -56,7 +55,7 @@ pub async fn get_avatar(
     let origin = state.config.server.site_url_origin();
     let url = format!("{}{}", origin, primary_avatar_url(&email, size));
 
-    let svc = AvatarService::new(state.repos.clone());
+    let svc = state.avatar_service();
     let avatar = svc.find_avatar(&email).await?;
 
     match avatar {
@@ -89,7 +88,7 @@ pub async fn serve_avatar_image(
         Err(e) => return e.into_response(),
     };
 
-    let svc = AvatarService::new(state.repos.clone());
+    let svc = state.avatar_service();
     let avatar = svc.find_avatar(&email).await;
 
     match avatar {

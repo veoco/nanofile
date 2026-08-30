@@ -419,7 +419,7 @@ pub async fn upload_avatar(
 
     // Delegate to the shared AvatarService which handles validation (size/ext),
     // persistence, thumbnail generation (with square crop + EXIF), and DB upsert.
-    let svc = crate::service::user::AvatarService::new(state.repos.clone());
+    let svc = state.avatar_service();
     match svc.upload_avatar(&user.email, file_name, data).await {
         Ok(_url) => Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response()),
         Err(e) => {
