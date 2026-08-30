@@ -60,7 +60,7 @@ trusted_proxies = []
 # plain builds have no tray code at all). Set to false (or NANOFILE_SERVER_TRAY=false)
 # to run headless even in a desktop session — e.g. for an auto-started instance
 # that should stay invisible.
-# tray = true
+tray = true
 #   NANOFILE_SERVER_SECRET_KEY               (generate with: openssl rand -hex 32)
 # IMPORTANT: Generate a unique secret key for production:
 #   openssl rand -hex 32
@@ -90,10 +90,10 @@ max_connections = 5
 #   NANOFILE_STORAGE_FFMPEG_PATH
 block_dir = "data/blocks"
 temp_dir = "data/temp"
-# Thumbnail cache directory. Defaults to data/thumbnails.
-# thumbnail_dir = "data/thumbnails"
-# Avatar storage directory. Defaults to data/avatars.
-# avatar_dir = "data/avatars"
+# Thumbnail cache directory.
+thumbnail_dir = "data/thumbnails"
+# Avatar storage directory.
+avatar_dir = "data/avatars"
 max_storage_bytes = 0
 # ffmpeg binary used to generate video thumbnails. Video files keep showing a
 # play-icon placeholder when this binary isn't installed. Playback works without it.
