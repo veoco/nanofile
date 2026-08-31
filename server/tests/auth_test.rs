@@ -285,7 +285,7 @@ fn generate_valid_totp() -> String {
         "",
     )
     .unwrap();
-    totp.generate_current().unwrap()
+    totp.generate_current().to_string()
 }
 
 #[tokio::test]

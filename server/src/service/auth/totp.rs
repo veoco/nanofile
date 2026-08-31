@@ -1,4 +1,4 @@
-use totp_rs::{Algorithm, Secret, TOTP};
+use totp_rs::{Builder, Secret, Totp};
 
 use crate::repository::Repositories;
 use base::error::AppError;
@@ -8,34 +8,28 @@ pub struct TotpManager;
 
 impl TotpManager {
     pub fn generate_secret() -> String {
-        let secret = Secret::generate_secret();
-        secret.to_encoded().to_string()
+        Secret::generate().to_base32()
     }
 
-    pub fn create_totp(secret: &str, account_name: &str, issuer: &str) -> Result<TOTP, AppError> {
-        let secret_obj = Secret::Encoded(secret.to_string());
-        let secret_bytes = secret_obj
-            .to_bytes()
+    pub fn create_totp(secret: &str, account_name: &str, issuer: &str) -> Result<Totp, AppError> {
+        let secret =
+            Secret::try_from_base32(secret).map_err(|e| AppError::internal(e.to_string()))?;
+        let totp = Builder::new()
+            .with_secret(secret)
+            .with_issuer(Some(issuer.to_string()))
+            .with_account_name(account_name.to_string())
+            .build()
             .map_err(|e| AppError::internal(e.to_string()))?;
-        let totp = TOTP::new(
-            Algorithm::SHA1,
-            6,
-            1,
-            30,
-            secret_bytes,
-            Some(issuer.to_string()),
-            account_name.to_string(),
-        )
-        .map_err(|e| AppError::internal(e.to_string()))?;
         Ok(totp)
     }
 
-    pub fn verify_code(totp: &TOTP, code: &str) -> bool {
-        totp.check_current(code).unwrap_or(false)
+    pub fn verify_code(totp: &Totp, code: &str) -> bool {
+        totp.check_current(code).is_some()
     }
 
-    pub fn get_otpauth_url(totp: &TOTP) -> String {
-        totp.get_url()
+    pub fn get_otpauth_url(totp: &Totp) -> String {
+        totp.to_url()
+            .expect("otpauth url generation cannot fail for a valid account name")
     }
 
     pub async fn get_or_create_2fa(
