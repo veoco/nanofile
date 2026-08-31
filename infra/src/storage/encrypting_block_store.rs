@@ -151,6 +151,20 @@ impl BlockStorageBackend for EncryptingBlockStore {
         }
     }
 
+    async fn convert_legacy_block(&self, block_id: &str) -> Result<bool, io::Error> {
+        // Read the raw on-disk bytes (not through `read_decrypted`, which in
+        // `Lazy` mode would fall back to plaintext and hide the distinction).
+        let raw = self.inner.read_block(block_id).await?;
+        // Probe the GCM-SIV tag: a successful decrypt means the block is already
+        // ciphertext (nothing to do); a tag mismatch means legacy plaintext.
+        if self.cipher.decrypt(&raw).is_ok() {
+            return Ok(false);
+        }
+        let ct = self.cipher.encrypt(&raw);
+        self.inner.write_block_with_id_force(block_id, &ct).await?;
+        Ok(true)
+    }
+
     async fn list_blocks(&self) -> Result<Vec<String>, io::Error> {
         self.inner.list_blocks().await
     }

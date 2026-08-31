@@ -30,6 +30,26 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
         self.write_block(data).await
     }
 
+    /// Write raw block data under a pre-computed ID, overwriting any existing
+    /// block. Unlike [`Self::write_block_with_id`], this never short-circuits
+    /// on an existing block. Used by the lazy→encrypted conversion task to
+    /// rewrite a legacy plaintext block as ciphertext under the same ID.
+    async fn write_block_with_id_force(
+        &self,
+        block_id: &str,
+        data: &[u8],
+    ) -> Result<String, std::io::Error> {
+        self.write_block_with_id(block_id, data).await
+    }
+
+    /// Convert one legacy plaintext block to ciphertext in place (same ID).
+    /// Returns `Ok(true)` if the block was converted, `Ok(false)` if it was
+    /// already encrypted or absent. Default no-op for backends without
+    /// at-rest encryption.
+    async fn convert_legacy_block(&self, _block_id: &str) -> Result<bool, std::io::Error> {
+        Ok(false)
+    }
+
     /// Delete a block file from disk.
     async fn remove_block(&self, block_id: &str) -> Result<(), std::io::Error>;
 

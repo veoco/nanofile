@@ -202,6 +202,27 @@ impl BlockStorageBackend for BlockStorage {
         Ok(block_id.to_string())
     }
 
+    async fn write_block_with_id_force(
+        &self,
+        block_id: &str,
+        data: &[u8],
+    ) -> Result<String, std::io::Error> {
+        // Same as `write_block_with_id` but never short-circuits on an existing
+        // block: the caller (lazy→encrypted conversion) needs to overwrite a
+        // legacy plaintext block with its ciphertext under the same ID.
+        if !Self::is_valid_block_id(block_id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid block id",
+            ));
+        }
+        let path = self.block_path(block_id);
+        self.ensure_dirs().await?;
+        tokio::fs::write(&path, data).await?;
+        self.exists_cache_insert(block_id);
+        Ok(block_id.to_string())
+    }
+
     async fn remove_block(&self, block_id: &str) -> Result<(), std::io::Error> {
         if !Self::is_valid_block_id(block_id) {
             return Ok(());

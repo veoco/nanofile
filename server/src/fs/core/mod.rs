@@ -4,6 +4,7 @@
 //! (Phase 2). It contains the fundamental file-system operations that were mixed
 //! in with repo-management code.  Repo-management-only code remains in `server::repo`.
 
+pub mod block_encryption_convert;
 pub mod download;
 pub mod file_ops;
 pub mod gc;

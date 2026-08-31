@@ -216,6 +216,7 @@ impl AppState {
             indexer.as_ref(),
             &temp_file_manager,
             config.storage.temp_upload_ttl_hours,
+            enc_mode,
         );
 
         // Built before `config` is moved into the Arc below.
