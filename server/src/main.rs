@@ -198,6 +198,22 @@ fn main() -> anyhow::Result<()> {
         config.notification.private_key = hex::encode(hasher.finalize());
     }
 
+    // ── Derive storage encryption key from secret_key if not set ────────
+    let enc_mode = config.storage.block_encryption_mode();
+    if enc_mode != infra::storage::encrypting_block_store::BlockEncryptionMode::Off
+        && config.storage.encryption_key.is_none()
+    {
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(b"storage-encrypt-v1:");
+        hasher.update(config.server.secret_key.as_bytes());
+        config.storage.encryption_key = Some(hex::encode(hasher.finalize()));
+        tracing::info!(
+            "Storage encryption key auto-derived from server secret key. \
+             Set NANOFILE_STORAGE_ENCRYPTION_KEY(_FILE) to use a dedicated key."
+        );
+    }
+
     match command {
         Command::Server => {
             // With the tray feature compiled in and a desktop session
