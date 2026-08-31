@@ -4,10 +4,11 @@
 //! All periodic / continuous housekeeping tasks are registered here once,
 //! keyed off the config flags they depend on.
 
-use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
-use crate::fs::core::block_encryption_convert;
+use crate::fs::core::block_encryption_convert::BlockEncryptionConverter;
 use crate::fs::core::gc::GcManager;
 use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
@@ -35,6 +36,7 @@ pub fn register_default_tasks(
     temp_file_manager: &TempFileManager,
     temp_upload_ttl_hours: u64,
     enc_mode: BlockEncryptionMode,
+    block_dir: &Path,
 ) {
     // Continuous: event listener (forwards repo-update events to WebSocket subscribers).
     if let Some(mgr) = notification_manager {
@@ -144,46 +146,51 @@ pub fn register_default_tasks(
         });
     }
 
-    // Periodic: convert legacy plaintext blocks to at-rest ciphertext (lazy
+    // Manual: convert legacy plaintext blocks to at-rest ciphertext (lazy
     // migration). Only meaningful in `Lazy` mode, where new writes are
-    // encrypted but pre-existing blocks may still be plaintext. A bounded batch
-    // is converted per run to keep load low; a shared in-memory set of
-    // confirmed-ciphertext ids avoids re-probing already-converted blocks.
+    // encrypted but pre-existing blocks may still be plaintext. Registered as a
+    // manual task so it appears in /sysadmin/tasks/ and can be re-triggered;
+    // AppState::new triggers it once at startup. A marker file in block_dir
+    // records completion so later runs skip it entirely.
     if enc_mode == BlockEncryptionMode::Lazy {
-        const CONVERT_INTERVAL_SECS: u64 = 60;
         const CONVERT_BATCH: usize = 100;
+        const CONVERT_BATCH_SLEEP_MS: u64 = 100;
         let block_store = block_store.clone();
-        let known_encrypted = Arc::new(std::sync::Mutex::new(HashSet::<[u8; 20]>::new()));
-        scheduler.spawn_periodic(
-            "block encryption convert",
-            CONVERT_INTERVAL_SECS,
-            move || {
-                let block_store = block_store.clone();
-                let known_encrypted = known_encrypted.clone();
-                async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        tokio::runtime::Handle::current().block_on(
-                            block_encryption_convert::convert_legacy_blocks(
-                                &block_store,
-                                &known_encrypted,
-                                CONVERT_BATCH,
-                            ),
-                        )
-                    })
-                    .await;
-                    match result {
-                        Ok(Ok(n)) if n > 0 => {
+        let block_dir = block_dir.to_path_buf();
+        scheduler.spawn_manual("block encryption convert", move || {
+            let block_store = block_store.clone();
+            let block_dir = block_dir.clone();
+            async move {
+                // Marker present → already converted, skip with zero I/O.
+                if BlockEncryptionConverter::is_converted(&block_dir).await {
+                    return TaskOutput::success("already converted, skipped", None);
+                }
+                let result = tokio::task::spawn_blocking(move || {
+                    tokio::runtime::Handle::current().block_on(
+                        BlockEncryptionConverter::convert_legacy_blocks(
+                            &block_store,
+                            CONVERT_BATCH,
+                            Duration::from_millis(CONVERT_BATCH_SLEEP_MS),
+                        ),
+                    )
+                })
+                .await;
+                match result {
+                    Ok(Ok(n)) => {
+                        // Full conversion done; record completion.
+                        let _ = tokio::fs::write(block_dir.join(".encryption_converted"), b"done")
+                            .await;
+                        if n > 0 {
                             TaskOutput::success(format!("Converted {n} legacy blocks"), Some(n))
-                        }
-                        Ok(Ok(_)) => TaskOutput::success("no legacy blocks to convert", None),
-                        Ok(Err(e)) => TaskOutput::error(format!("Block conversion failed: {e}")),
-                        Err(e) => {
-                            TaskOutput::error(format!("Block conversion task join failed: {e}"))
+                        } else {
+                            TaskOutput::success("no legacy blocks to convert", None)
                         }
                     }
+                    Ok(Err(e)) => TaskOutput::error(format!("Block conversion failed: {e}")),
+                    Err(e) => TaskOutput::error(format!("Block conversion task join failed: {e}")),
                 }
-            },
-        );
+            }
+        });
     }
 
     // Periodic: index background committer (every 30 seconds). Skips when there

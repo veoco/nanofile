@@ -217,7 +217,16 @@ impl AppState {
             &temp_file_manager,
             config.storage.temp_upload_ttl_hours,
             enc_mode,
+            block_dir.as_ref(),
         );
+
+        // In Lazy mode, run the one-shot legacy-block conversion once at startup.
+        if enc_mode == infra::storage::encrypting_block_store::BlockEncryptionMode::Lazy {
+            let scheduler = scheduler.clone();
+            tokio::spawn(async move {
+                scheduler.trigger_now("block encryption convert").await;
+            });
+        }
 
         // Built before `config` is moved into the Arc below.
         let task_manager = Arc::new(TaskManager::new(config.tasks.max_active_tasks));
