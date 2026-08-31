@@ -170,7 +170,7 @@ impl MemberRepository for DbMemberRepository {
     ) -> Result<Option<(i32, Option<String>)>, AppError> {
         let row = self
             .db
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "SELECT r.owner_id, m.permission FROM repos r \
                  LEFT JOIN repo_members m ON r.id = m.repo_id AND m.user_id = $1 \

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, QueryFilter, Set,
-    sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DeleteResult, EntityTrait, ExprTrait,
+    QueryFilter, Set, sea_query::Expr,
 };
 use std::sync::Arc;
 

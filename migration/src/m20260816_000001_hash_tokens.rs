@@ -1,4 +1,3 @@
-use sea_orm::Statement;
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -12,17 +11,8 @@ impl MigrationTrait for Migration {
         // credential survives in the database; affected users simply log in
         // again (and trusted devices re-run 2FA once).
         let db = manager.get_connection();
-        let backend = db.get_database_backend();
-        db.execute(Statement::from_string(
-            backend,
-            "DELETE FROM api_tokens".to_string(),
-        ))
-        .await?;
-        db.execute(Statement::from_string(
-            backend,
-            "DELETE FROM s2fa_tokens".to_string(),
-        ))
-        .await?;
+        db.execute_unprepared("DELETE FROM api_tokens").await?;
+        db.execute_unprepared("DELETE FROM s2fa_tokens").await?;
         Ok(())
     }
 

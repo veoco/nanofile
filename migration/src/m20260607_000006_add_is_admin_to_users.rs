@@ -1,4 +1,3 @@
-use sea_orm::Statement;
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -23,12 +22,8 @@ impl MigrationTrait for Migration {
 
         // Mark existing root users (invited_by IS NULL) as admins.
         let db = manager.get_connection();
-        let backend = db.get_database_backend();
-        db.execute(Statement::from_string(
-            backend,
-            "UPDATE users SET is_admin = 1 WHERE invited_by IS NULL".to_string(),
-        ))
-        .await?;
+        db.execute_unprepared("UPDATE users SET is_admin = 1 WHERE invited_by IS NULL")
+            .await?;
 
         Ok(())
     }

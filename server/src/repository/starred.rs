@@ -168,7 +168,7 @@ impl StarredRepository for DbStarredRepository {
     ) -> Result<(), AppError> {
         self.db
             .as_ref()
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 self.db.as_ref().get_database_backend(),
                 "UPDATE starred_files SET path = $1 || substr(path, length($2) + 1) \
                  WHERE repo_id = $3 AND path >= $2 AND path < $2 || '/\u{10FFFF}'",

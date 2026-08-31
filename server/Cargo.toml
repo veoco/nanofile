@@ -49,14 +49,15 @@ bytes = "1"
 futures = "0.3"
 http-body-util = "0.1"
 
-sea-orm = { version = "1.1.20", features = [
+sea-orm = { version = "2", features = [
     "sqlx-sqlite",
     "runtime-tokio-rustls",
     "macros",
     "with-chrono",
     "with-uuid",
+    "serde",
 ] }
-sea-orm-migration = { version = "1.1.20", features = [
+sea-orm-migration = { version = "2", features = [
     "sqlx-sqlite",
     "runtime-tokio-rustls",
 ] }

@@ -21,12 +21,13 @@ toml = "1.1"
 toml_edit = "0.25"
 dotenvy = "0.15"
 
-sea-orm = { version = "1.1.20", features = [
+sea-orm = { version = "2", features = [
     "sqlx-sqlite",
     "runtime-tokio-rustls",
     "macros",
     "with-chrono",
     "with-uuid",
+    "serde",
 ] }
 
 aes = "0.9"

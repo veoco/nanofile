@@ -12,7 +12,7 @@ impl MigrationTrait for Migration {
 
         // Query all existing fs_objects to migrate compressed data to JSON
         let rows = db
-            .query_all(Statement::from_string(
+            .query_all_raw(Statement::from_string(
                 backend,
                 "SELECT id, data FROM fs_objects".to_string(),
             ))
@@ -34,7 +34,7 @@ impl MigrationTrait for Migration {
                 Ok(out)
             })() {
                 let json_str = String::from_utf8_lossy(&decompressed);
-                db.execute(Statement::from_sql_and_values(
+                db.execute_raw(Statement::from_sql_and_values(
                     backend,
                     "UPDATE fs_objects SET data = ? WHERE id = ?",
                     [json_str.into(), id.into()],
@@ -52,7 +52,7 @@ impl MigrationTrait for Migration {
 
         // Re-compress all fs_objects back to zlib
         let rows = db
-            .query_all(Statement::from_string(
+            .query_all_raw(Statement::from_string(
                 backend,
                 "SELECT id, data FROM fs_objects".to_string(),
             ))
@@ -73,7 +73,7 @@ impl MigrationTrait for Migration {
             if encoder.write_all(data.as_bytes()).is_ok()
                 && let Ok(compressed) = encoder.finish()
             {
-                db.execute(Statement::from_sql_and_values(
+                db.execute_raw(Statement::from_sql_and_values(
                     backend,
                     "UPDATE fs_objects SET data = ? WHERE id = ?",
                     [compressed.into(), id.into()],

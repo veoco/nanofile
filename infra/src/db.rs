@@ -1,4 +1,4 @@
-use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection};
+use sea_orm::{ConnectOptions, Database, DatabaseBackend, DatabaseConnection};
 
 use crate::config::DatabaseConfig;
 

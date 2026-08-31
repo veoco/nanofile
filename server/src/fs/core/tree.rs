@@ -300,7 +300,7 @@ mod tests {
 
     async fn setup_tree_db() -> sea_orm::DatabaseConnection {
         let db = Database::connect("sqlite::memory:").await.unwrap();
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "CREATE TABLE fs_objects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -316,7 +316,7 @@ mod tests {
     }
 
     async fn insert(db: &sea_orm::DatabaseConnection, fs_id: &str, obj_type: i8, data: &str) {
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
                 "INSERT INTO fs_objects (repo_id, fs_id, obj_type, data) \

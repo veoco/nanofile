@@ -1533,7 +1533,7 @@ async fn test_activity_avatar_deleted_user() {
     // disable FK enforcement so the cascade-delete does not remove them,
     // simulating a residual activity for a deleted author.
     let db = &*f.server.db;
-    db.execute(Statement::from_string(
+    db.execute_raw(Statement::from_string(
         DatabaseBackend::Sqlite,
         "PRAGMA foreign_keys = OFF".to_owned(),
     ))
@@ -1544,7 +1544,7 @@ async fn test_activity_avatar_deleted_user() {
         .exec(db)
         .await
         .unwrap();
-    db.execute(Statement::from_string(
+    db.execute_raw(Statement::from_string(
         DatabaseBackend::Sqlite,
         "PRAGMA foreign_keys = ON".to_owned(),
     ))

@@ -208,7 +208,7 @@ impl FileTagRepository for DbFileTagRepository {
     async fn delete_by_path_prefix(&self, repo_id: &str, path: &str) -> Result<(), AppError> {
         self.db
             .as_ref()
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 self.db.as_ref().get_database_backend(),
                 "DELETE FROM file_tags WHERE repo_id = $1 \
                  AND file_path >= $2 AND file_path < $2 || '/\u{10FFFF}'",
@@ -226,7 +226,7 @@ impl FileTagRepository for DbFileTagRepository {
     ) -> Result<(), AppError> {
         self.db
             .as_ref()
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 self.db.as_ref().get_database_backend(),
                 "UPDATE file_tags SET file_path = $1 || substr(file_path, length($2) + 1) \
                  WHERE repo_id = $3 AND file_path >= $2 AND file_path < $2 || '/\u{10FFFF}'",

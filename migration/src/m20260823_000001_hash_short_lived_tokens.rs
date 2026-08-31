@@ -1,4 +1,3 @@
-use sea_orm::Statement;
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -12,17 +11,8 @@ impl MigrationTrait for Migration {
         // credential survives in the database; both are one-shot, short-lived
         // tokens, so in-flight flows simply restart.
         let db = manager.get_connection();
-        let backend = db.get_database_backend();
-        db.execute(Statement::from_string(
-            backend,
-            "DELETE FROM sso_login_tokens".to_string(),
-        ))
-        .await?;
-        db.execute(Statement::from_string(
-            backend,
-            "DELETE FROM client_login_tokens".to_string(),
-        ))
-        .await?;
+        db.execute_unprepared("DELETE FROM sso_login_tokens").await?;
+        db.execute_unprepared("DELETE FROM client_login_tokens").await?;
         Ok(())
     }
 

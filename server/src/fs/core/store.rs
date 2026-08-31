@@ -16,7 +16,7 @@ pub async fn store_fs_dir_object(
     }
     let (fs_id, json) = domain::fs::compute_dir(data).expect("non-empty directory");
     let _ = db
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "INSERT OR IGNORE INTO fs_objects (repo_id, fs_id, obj_type, data) VALUES ($1, $2, $3, $4)",
             vec![
@@ -39,7 +39,7 @@ pub async fn store_fs_file_object(
 ) -> Result<String, AppError> {
     let (fs_id, json) = domain::fs::compute_file(data);
     let _ = db
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "INSERT OR IGNORE INTO fs_objects (repo_id, fs_id, obj_type, data) VALUES ($1, $2, $3, $4)",
             vec![

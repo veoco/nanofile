@@ -278,7 +278,7 @@ mod tests {
     ) -> sea_orm::DatabaseConnection {
         let db = Database::connect("sqlite::memory:").await.unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "
             CREATE TABLE repos (
@@ -328,7 +328,7 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
                 "INSERT INTO repos (id, name, description, owner_id, encrypted, enc_version, salt, \
@@ -349,7 +349,7 @@ mod tests {
         root_id: &str,
         ctime: i64,
     ) {
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
                 "INSERT INTO commits (repo_id, commit_id, root_id, creator_name, ctime, version) \
@@ -367,7 +367,7 @@ mod tests {
         obj_type: i8,
         data: &str,
     ) {
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
                 "INSERT INTO fs_objects (repo_id, fs_id, obj_type, data) \
@@ -381,7 +381,7 @@ mod tests {
     async fn count_rows(db: &sea_orm::DatabaseConnection, table: &str) -> u64 {
         use sea_orm::TryGetable;
         let row = db
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 format!("SELECT COUNT(*) AS c FROM {table}"),
             ))

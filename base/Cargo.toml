@@ -15,7 +15,7 @@ serde_json = "1"
 axum = { version = "0.8.9", optional = true, default-features = false, features = ["json"] }
 serde_urlencoded = { version = "0.7", optional = true }
 # Optional: sea-orm DbErr conversion (used by infra)
-sea-orm = { version = "1.1.20", optional = true, default-features = false }
+sea-orm = { version = "2", optional = true, default-features = false }
 
 [features]
 default = []

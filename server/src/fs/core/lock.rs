@@ -160,7 +160,7 @@ mod tests {
         let db = Database::connect("sqlite::memory:").await.unwrap();
 
         // Create required tables
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "
             CREATE TABLE repos (
@@ -224,7 +224,7 @@ mod tests {
         .unwrap();
 
         // Insert a repo using raw SQL to avoid ORM issues with string PKs
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "
             INSERT INTO repos (id, name, description, owner_id, encrypted, enc_version,
@@ -256,7 +256,7 @@ mod tests {
         let db = setup_lock_test_db().await;
 
         // Seed a root dir with a file
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             r#"
             INSERT INTO fs_objects (repo_id, fs_id, obj_type, data)
@@ -267,7 +267,7 @@ mod tests {
         .unwrap();
 
         // Seed a commit that references the root dir
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "
             INSERT INTO commits (repo_id, commit_id, root_id, parent_id, creator_name, description, ctime, version)
@@ -288,7 +288,7 @@ mod tests {
         let db = setup_lock_test_db().await;
 
         // Root dir with a file
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             r#"
             INSERT INTO fs_objects (repo_id, fs_id, obj_type, data)
@@ -299,7 +299,7 @@ mod tests {
         .unwrap();
 
         // Insert the file fs_object that the directory entry references
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             r#"
             INSERT INTO fs_objects (repo_id, fs_id, obj_type, data)
@@ -310,7 +310,7 @@ mod tests {
         .unwrap();
 
         // Commit
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "
             INSERT INTO commits (repo_id, commit_id, root_id, parent_id, creator_name, description, ctime, version)
@@ -321,7 +321,7 @@ mod tests {
         .unwrap();
 
         // Insert a lock record for this file by user 2
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "
             INSERT INTO locked_files (repo_id, path, user_id, locked_at, lock_owner_name)

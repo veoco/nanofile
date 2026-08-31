@@ -1,5 +1,4 @@
 use sea_orm_migration::prelude::*;
-use std::fmt;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -79,16 +78,16 @@ enum User2fa {
 }
 
 impl Iden for User2fa {
-    fn unquoted(&self, s: &mut dyn fmt::Write) {
+    fn unquoted(&self) -> &str {
         match self {
-            Self::Table => write!(s, "user_2fa").unwrap(),
-            Self::UserId => write!(s, "user_id").unwrap(),
-            Self::TotpSecret => write!(s, "totp_secret").unwrap(),
-            Self::Algorithm => write!(s, "algorithm").unwrap(),
-            Self::Digits => write!(s, "digits").unwrap(),
-            Self::Period => write!(s, "period").unwrap(),
-            Self::Enabled => write!(s, "enabled").unwrap(),
-            Self::EnabledAt => write!(s, "enabled_at").unwrap(),
+            Self::Table => "user_2fa",
+            Self::UserId => "user_id",
+            Self::TotpSecret => "totp_secret",
+            Self::Algorithm => "algorithm",
+            Self::Digits => "digits",
+            Self::Period => "period",
+            Self::Enabled => "enabled",
+            Self::EnabledAt => "enabled_at",
         }
     }
 }

@@ -377,7 +377,7 @@ mod tests {
 
     async fn setup_diff_db() -> sea_orm::DatabaseConnection {
         let db = Database::connect("sqlite::memory:").await.unwrap();
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "CREATE TABLE fs_objects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -398,7 +398,7 @@ mod tests {
         entries: &[(&str, bool, &str)],
     ) {
         let data = dir_data(entries);
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
                 "INSERT INTO fs_objects (repo_id, fs_id, obj_type, data) \
