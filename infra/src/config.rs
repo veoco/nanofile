@@ -477,6 +477,25 @@ pub struct StorageConfig {
     /// Env: NANOFILE_STORAGE_AVATAR_DIR
     #[serde(default = "default_avatar_dir")]
     pub avatar_dir: PathBuf,
+    /// Server-side transparent at-rest encryption for file blocks.
+    ///
+    /// - `off`: blocks are stored exactly as received (legacy plaintext).
+    /// - `on`: every newly written block is encrypted on disk and every read is
+    ///   decrypted; requires `encryption_key`.
+    /// - `lazy`: new writes are encrypted, reads accept both encrypted and
+    ///   legacy plaintext blocks — the migration window.
+    ///
+    /// The block id (`sha1` of the logical bytes) is unchanged in every mode, so
+    /// Seafile clients and the existing content-addressed dedup keep working.
+    /// Env: NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE
+    #[serde(default = "default_block_encryption_mode")]
+    pub block_encryption_mode: String,
+    /// Master key for block at-rest encryption. Set it via the
+    /// `NANOFILE_STORAGE_ENCRYPTION_KEY` / `NANOFILE_STORAGE_ENCRYPTION_KEY_FILE`
+    /// environment variables. It is never serialized into `config.toml` (or its
+    /// `.bak`), so secrets never end up on disk or in backups via the config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption_key: Option<String>,
 }
 
 fn default_block_dir() -> PathBuf {
@@ -503,6 +522,26 @@ fn default_thumbnail_dir() -> PathBuf {
 fn default_avatar_dir() -> PathBuf {
     PathBuf::from("data/avatars")
 }
+fn default_block_encryption_mode() -> String {
+    "off".to_string()
+}
+
+impl StorageConfig {
+    /// Parse `block_encryption_mode` into the runtime encryption mode.
+    ///
+    /// Invalid values default to `Off` (legacy behaviour) so a bad value can
+    /// never silently encrypt or decrypt blocks.
+    pub fn block_encryption_mode(
+        &self,
+    ) -> crate::storage::encrypting_block_store::BlockEncryptionMode {
+        use crate::storage::encrypting_block_store::BlockEncryptionMode;
+        match self.block_encryption_mode.to_ascii_lowercase().as_str() {
+            "on" => BlockEncryptionMode::On,
+            "lazy" => BlockEncryptionMode::Lazy,
+            _ => BlockEncryptionMode::Off,
+        }
+    }
+}
 
 impl Default for StorageConfig {
     fn default() -> Self {
@@ -518,6 +557,8 @@ impl Default for StorageConfig {
             max_zip_bytes: 0,
             thumbnail_dir: default_thumbnail_dir(),
             avatar_dir: default_avatar_dir(),
+            block_encryption_mode: default_block_encryption_mode(),
+            encryption_key: None,
         }
     }
 }
@@ -824,6 +865,37 @@ impl Config {
         env_path!("NANOFILE_STORAGE_THUMBNAIL_DIR", self.storage.thumbnail_dir);
         env_path!("NANOFILE_STORAGE_AVATAR_DIR", self.storage.avatar_dir);
         env_str!("NANOFILE_STORAGE_FFMPEG_PATH", self.storage.ffmpeg_path);
+        env_str!(
+            "NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE",
+            self.storage.block_encryption_mode
+        );
+
+        // Block at-rest encryption master key. Direct-env usage gets a warning
+        // (it can leak via process listings), and the key is never serialized
+        // back into config.toml or its `.bak`. The `*_FILE` variant is
+        // preferred, mirroring NANOFILE_ADMIN_INIT_PASSWORD_FILE.
+        if let Ok(v) = std::env::var("NANOFILE_STORAGE_ENCRYPTION_KEY") {
+            tracing::warn!(
+                "NANOFILE_STORAGE_ENCRYPTION_KEY is set via environment variable. \
+                 Consider using NANOFILE_STORAGE_ENCRYPTION_KEY_FILE instead, \
+                 which is less likely to leak via process listings or logs."
+            );
+            self.storage.encryption_key = Some(v);
+        }
+        if let Ok(filepath) = std::env::var("NANOFILE_STORAGE_ENCRYPTION_KEY_FILE") {
+            match std::fs::read_to_string(&filepath) {
+                Ok(key) => {
+                    self.storage.encryption_key = Some(key.trim().to_string());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to read NANOFILE_STORAGE_ENCRYPTION_KEY_FILE from {}: {}",
+                        filepath,
+                        e
+                    );
+                }
+            }
+        }
         env_parse!(
             "NANOFILE_STORAGE_MAX_STORAGE_BYTES",
             self.storage.max_storage_bytes

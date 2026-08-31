@@ -1,5 +1,6 @@
 pub mod block_store;
 pub mod cdc;
+pub mod encrypting_block_store;
 
 use std::sync::Arc;
 

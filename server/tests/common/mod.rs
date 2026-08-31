@@ -395,6 +395,8 @@ impl TestServer {
                 max_zip_bytes: zip_limits.unwrap_or_default().max_bytes,
                 thumbnail_dir: block_root.join("thumbnails"),
                 avatar_dir: block_root.join("avatars"),
+                block_encryption_mode: "off".to_string(),
+                encryption_key: None,
             },
             auth: infra::config::AuthConfig {
                 password_hash_iterations: 1000,

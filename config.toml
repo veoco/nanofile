@@ -103,6 +103,7 @@ max_temp_upload_bytes = 0
 temp_upload_ttl_hours = 24
 max_zip_entries = 10000
 max_zip_bytes = 0
+block_encryption_mode = "off"
 
 [auth]
 # Environment variables:

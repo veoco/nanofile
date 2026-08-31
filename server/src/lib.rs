@@ -45,6 +45,21 @@ use infra::config::Config;
 use infra::crypto::password_manager::PasswordManager;
 use infra::storage::DynBlockStorage;
 
+/// Decode the configured block-encryption master key. A 64-char hex string is
+/// treated as 32 raw bytes (AES-256); any other length is used verbatim. The
+/// caller already validated the key is present; an invalid hex string here is a
+/// configuration error and must not silently produce a weak key.
+fn decode_master_key(key: &str) -> Vec<u8> {
+    if key.len() == 64 {
+        match hex::decode(key) {
+            Ok(bytes) => bytes,
+            Err(e) => panic!("NANOFILE_STORAGE_ENCRYPTION_KEY is 64 chars but not valid hex: {e}"),
+        }
+    } else {
+        key.as_bytes().to_vec()
+    }
+}
+
 /// Unified application state injected into all axum handlers.
 #[derive(Clone)]
 pub struct AppState {
@@ -116,7 +131,29 @@ impl std::fmt::Debug for AppState {
 impl AppState {
     pub fn new(db: DatabaseConnection, config: Config, temp_file_manager: TempFileManager) -> Self {
         let block_dir = Arc::new(PathBuf::from(&config.storage.block_dir));
-        let block_store = infra::storage::new_block_store(&block_dir);
+        let mut block_store: infra::storage::DynBlockStorage =
+            infra::storage::new_block_store(&block_dir);
+        // Wrap the raw store in the at-rest encryption decorator when enabled.
+        let enc_mode = config.storage.block_encryption_mode();
+        if enc_mode != infra::storage::encrypting_block_store::BlockEncryptionMode::Off {
+            let master_key = config.storage.encryption_key.as_deref().unwrap_or_else(|| {
+                panic!(
+                    "Block at-rest encryption is enabled (mode {:?}) but \
+                         NANOFILE_STORAGE_ENCRYPTION_KEY(_FILE) is not set",
+                    config.storage.block_encryption_mode
+                )
+            });
+            let cipher = infra::crypto::block_encryption::BlockCipher::from_master_key(
+                &decode_master_key(master_key),
+            );
+            block_store = Arc::new(
+                infra::storage::encrypting_block_store::EncryptingBlockStore::new(
+                    block_store,
+                    cipher,
+                    enc_mode,
+                ),
+            );
+        }
         let shutdown_token = CancellationToken::new();
         let scheduler = Arc::new(Scheduler::new(shutdown_token.child_token()));
 
