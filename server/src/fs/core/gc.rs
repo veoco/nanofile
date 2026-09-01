@@ -73,7 +73,7 @@ impl GcManager {
         let (alive_ref, orphan_ref) = (alive_blocks.clone(), orphan_blocks.clone());
         block_store
             .for_each_block(Box::new(move |id| {
-                if !alive_ref.contains(&Self::decode_block_id(id)) {
+                if !alive_ref.contains(&Self::decode_sha1_hex(id)) {
                     orphan_ref.lock().unwrap().push(id.to_string());
                 }
             }))
@@ -130,7 +130,7 @@ impl GcManager {
         commits: &[commit::Model],
         keep: &std::collections::HashSet<i64>,
         alive_blocks: &mut std::collections::HashSet<[u8; 20]>,
-    ) -> Result<std::collections::HashSet<String>, AppError> {
+    ) -> Result<std::collections::HashSet<[u8; 20]>, AppError> {
         if commits.is_empty() {
             return Ok(std::collections::HashSet::new());
         }
@@ -148,11 +148,11 @@ impl GcManager {
         }
 
         // Batch-fetch the reachable *file* objects and record their block ids.
-        let ids: Vec<String> = reachable.iter().cloned().collect();
+        let ids: Vec<String> = reachable.iter().map(hex::encode).collect();
         let files = read_fs_file_data_batch(repos, repo_id, &ids).await?;
         for file in files.values() {
             for block_id in &file.block_ids {
-                alive_blocks.insert(Self::decode_block_id(block_id));
+                alive_blocks.insert(Self::decode_sha1_hex(block_id));
             }
         }
         Ok(reachable)
@@ -167,7 +167,7 @@ impl GcManager {
         repo_model: &repo::Model,
         commits: &[commit::Model],
         keep: &std::collections::HashSet<i64>,
-        active_fs_ids: std::collections::HashSet<String>,
+        active_fs_ids: std::collections::HashSet<[u8; 20]>,
     ) -> Result<u64, AppError> {
         if keep.len() == commits.len() {
             return Ok(0);
@@ -203,11 +203,11 @@ impl GcManager {
         Ok(removed as u64)
     }
 
-    /// Decode a 40-char hex block id to its raw 20-byte SHA-1, so the live set
-    /// can be stored compactly. `list_blocks` / `for_each_block` only yield
-    /// validated 40-hex ids, so this cannot fail; a corrupt id decodes to
-    /// all-zeroes and is treated as an orphan.
-    fn decode_block_id(hex_str: &str) -> [u8; 20] {
+    /// Decode a 40-char hex SHA-1 (block id or fs id) to its raw 20 bytes, so
+    /// sets can be stored compactly without per-element heap allocation.
+    /// `list_blocks` / `for_each_block` only yield validated 40-hex ids, so
+    /// this cannot fail; a corrupt id decodes to all-zeroes.
+    fn decode_sha1_hex(hex_str: &str) -> [u8; 20] {
         let mut buf = [0u8; 20];
         let _ = hex::decode_to_slice(hex_str, &mut buf);
         buf
@@ -220,12 +220,12 @@ impl GcManager {
         repos: &Repositories,
         repo_id: &str,
         root_id: &str,
-        collected: &mut std::collections::HashSet<String>,
+        collected: &mut std::collections::HashSet<[u8; 20]>,
     ) -> Result<(), AppError> {
-        if collected.contains(root_id) {
+        if collected.contains(&Self::decode_sha1_hex(root_id)) {
             return Ok(());
         }
-        collected.insert(root_id.to_string());
+        collected.insert(Self::decode_sha1_hex(root_id));
 
         let mut frontier = vec![root_id.to_string()];
         while !frontier.is_empty() {
@@ -239,7 +239,7 @@ impl GcManager {
                     let dir_data: FsDirData = serde_json::from_str(&obj.data)
                         .map_err(|e| AppError::internal(e.to_string()))?;
                     for entry in &dir_data.dirents {
-                        let is_new = collected.insert(entry.id.clone());
+                        let is_new = collected.insert(Self::decode_sha1_hex(&entry.id));
                         // Only directories have children to recurse into; use
                         // the dirent's `mode` bit so file objects are never
                         // fetched just to discover they aren't directories.
@@ -401,24 +401,24 @@ mod tests {
         let (_dir, store) = temp_block_store();
 
         // Three commits, newest first by ctime:
-        //   c1 (root-c1 → fileA), c2 (root-c2), c3 (root-c3 → fileB)
-        insert_commit(&db, "c1", "root-c1", 3000).await;
-        insert_commit(&db, "c2", "root-c2", 2000).await;
-        insert_commit(&db, "c3", "root-c3", 1000).await;
+        //   c1 (a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 → b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1), c2 (a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2), c3 (a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3 → b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2)
+        insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 3000).await;
+        insert_commit(&db, "c2", "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", 2000).await;
+        insert_commit(&db, "c3", "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3", 1000).await;
 
-        // root-c1 and root-c3 are directories referencing fileA / fileB.
-        insert_fs_object(&db, "root-c1", 3, r#"{"dirents":[{"id":"fileA","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#).await;
+        // a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 and a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3 are directories referencing b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1 / b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2.
+        insert_fs_object(&db, "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 3, r#"{"dirents":[{"id":"b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#).await;
         insert_fs_object(
             &db,
-            "fileA",
+            "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
             1,
             r#"{"block_ids":["aaaa"],"size":10,"type":1,"version":1}"#,
         )
         .await;
-        insert_fs_object(&db, "root-c3", 3, r#"{"dirents":[{"id":"fileB","mode":33188,"modifier":"u1","mtime":1000,"name":"b.txt","size":20}],"type":3,"version":1}"#).await;
+        insert_fs_object(&db, "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3", 3, r#"{"dirents":[{"id":"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2","mode":33188,"modifier":"u1","mtime":1000,"name":"b.txt","size":20}],"type":3,"version":1}"#).await;
         insert_fs_object(
             &db,
-            "fileB",
+            "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
             1,
             r#"{"block_ids":["bbbb"],"size":20,"type":1,"version":1}"#,
         )
@@ -432,7 +432,7 @@ mod tests {
 
         // Newest commit retained; c2/c3 pruned.
         assert_eq!(count_rows(&db, "commits").await, 1);
-        // root-c1 + fileA remain; root-c3 + fileB deleted.
+        // a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 + b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1 remain; a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3 + b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 deleted.
         assert_eq!(count_rows(&db, "fs_objects").await, 2);
     }
 
@@ -444,9 +444,15 @@ mod tests {
         let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
-        insert_commit(&db, "c1", "root-c1", 3000).await;
-        insert_commit(&db, "c2", "root-c2", 1000).await;
-        insert_fs_object(&db, "root-c1", 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
+        insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 3000).await;
+        insert_commit(&db, "c2", "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", 1000).await;
+        insert_fs_object(
+            &db,
+            "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
 
         let removed = GcManager::garbage_collect(&repos, &store)
             .await
@@ -465,28 +471,40 @@ mod tests {
         let (_dir, store) = temp_block_store();
 
         // now (today) is used by GC; old commit is > 1 day old, new one is recent.
-        insert_commit(&db, "c-new", "root-new", chrono::Utc::now().timestamp()).await;
+        insert_commit(
+            &db,
+            "c-new",
+            "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+            chrono::Utc::now().timestamp(),
+        )
+        .await;
         insert_commit(
             &db,
             "c-old",
-            "root-old",
+            "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
             chrono::Utc::now().timestamp() - 172_800,
         )
         .await; // 2 days ago
-        insert_fs_object(&db, "root-new", 3, r#"{"dirents":[{"id":"fileA","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#).await;
+        insert_fs_object(&db, "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4", 3, r#"{"dirents":[{"id":"b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#).await;
         insert_fs_object(
             &db,
-            "fileA",
+            "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
             1,
             r#"{"block_ids":["aaaa"],"size":10,"type":1,"version":1}"#,
         )
         .await;
-        insert_fs_object(&db, "root-old", 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
+        insert_fs_object(
+            &db,
+            "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
 
         let removed = GcManager::garbage_collect(&repos, &store)
             .await
             .expect("gc succeeds");
-        // root-old is orphaned (only reachable from the pruned commit).
+        // a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5 is orphaned (only reachable from the pruned commit).
         assert_eq!(removed, 1);
         assert_eq!(count_rows(&db, "commits").await, 1);
         assert_eq!(count_rows(&db, "fs_objects").await, 2);
@@ -503,16 +521,22 @@ mod tests {
         let kept_id = store.write_block(b"kept content").await.unwrap();
         let orphan_id = store.write_block(b"orphan content").await.unwrap();
 
-        insert_commit(&db, "c1", "root-c1", 3000).await;
+        insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 3000).await;
         insert_fs_object(
             &db,
-            "root-c1",
+            "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
             3,
-            r#"{"dirents":[{"id":"fileA","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#,
+            r#"{"dirents":[{"id":"b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#,
         )
         .await;
         let kept_json = format!(r#"{{"block_ids":["{kept_id}"],"size":10,"type":1,"version":1}}"#);
-        insert_fs_object(&db, "fileA", 1, &kept_json).await;
+        insert_fs_object(
+            &db,
+            "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+            1,
+            &kept_json,
+        )
+        .await;
 
         let removed = GcManager::garbage_collect(&repos, &store)
             .await
@@ -542,34 +566,46 @@ mod tests {
         let shared_json =
             format!(r#"{{"block_ids":["{shared_id}"],"size":10,"type":1,"version":1}}"#);
 
-        // Older commit (pruned by history_limit=1) references the block via fileA.
-        insert_commit(&db, "c1", "root-c1", 1000).await;
+        // Older commit (pruned by history_limit=1) references the block via b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1.
+        insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 1000).await;
         insert_fs_object(
             &db,
-            "root-c1",
+            "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
             3,
-            r#"{"dirents":[{"id":"fileA","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#,
+            r#"{"dirents":[{"id":"b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#,
         )
         .await;
-        insert_fs_object(&db, "fileA", 1, &shared_json).await;
+        insert_fs_object(
+            &db,
+            "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+            1,
+            &shared_json,
+        )
+        .await;
 
-        // Retained head commit still references the block via fileB.
-        insert_commit(&db, "c2", "root-c2", 3000).await;
+        // Retained head commit still references the block via b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2.
+        insert_commit(&db, "c2", "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", 3000).await;
         insert_fs_object(
             &db,
-            "root-c2",
+            "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
             3,
-            r#"{"dirents":[{"id":"fileB","mode":33188,"modifier":"u1","mtime":1000,"name":"b.txt","size":10}],"type":3,"version":1}"#,
+            r#"{"dirents":[{"id":"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2","mode":33188,"modifier":"u1","mtime":1000,"name":"b.txt","size":10}],"type":3,"version":1}"#,
         )
         .await;
-        insert_fs_object(&db, "fileB", 1, &shared_json).await;
+        insert_fs_object(
+            &db,
+            "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+            1,
+            &shared_json,
+        )
+        .await;
 
         let removed = GcManager::garbage_collect(&repos, &store)
             .await
             .expect("gc succeeds");
-        // 2 orphaned fs rows (root-c1, fileA) + 1 orphan block.
+        // 2 orphaned fs rows (a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1, b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1) + 1 orphan block.
         assert_eq!(removed, 3);
-        // Shared block is still referenced by c2's fileB → must survive.
+        // Shared block is still referenced by c2's b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 → must survive.
         assert!(
             store.has_block(&shared_id).await,
             "shared block must survive"
@@ -590,10 +626,22 @@ mod tests {
 
         // Both commits are older than the 1-day TTL window, so keep is empty.
         let old = chrono::Utc::now().timestamp() - 172_800; // 2 days ago
-        insert_commit(&db, "c1", "root-c1", old).await;
-        insert_commit(&db, "c2", "root-c2", old).await;
-        insert_fs_object(&db, "root-c1", 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
-        insert_fs_object(&db, "root-c2", 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
+        insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", old).await;
+        insert_commit(&db, "c2", "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", old).await;
+        insert_fs_object(
+            &db,
+            "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
+        insert_fs_object(
+            &db,
+            "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
 
         let removed = GcManager::garbage_collect(&repos, &store)
             .await
