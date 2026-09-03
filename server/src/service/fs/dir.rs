@@ -37,7 +37,18 @@ pub(crate) async fn list_dir_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    let dir_id = match crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, path).await {
+    list_dir_from_root(repos, repo_id, &head.root_id, path).await
+}
+
+/// Like [`list_dir_from_fs_tree`] but reuses an already-resolved root fs_id,
+/// skipping the repo + head commit lookups.
+pub(crate) async fn list_dir_from_root(
+    repos: &Repositories,
+    repo_id: &str,
+    root_id: &str,
+    path: &str,
+) -> Result<(String, Vec<DirEntry>), AppError> {
+    let dir_id = match crate::fs::core::resolve_fs_id(repos, repo_id, root_id, path).await {
         Ok(id) => id,
         Err(e) => {
             let msg = e.to_string();
@@ -102,7 +113,18 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    let dir_id = match crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, path).await {
+    list_dir_recursive_from_root(repos, repo_id, &head.root_id, path).await
+}
+
+/// Like [`list_dir_recursive_from_fs_tree`] but reuses an already-resolved
+/// root fs_id, skipping the repo + head commit lookups.
+pub(crate) async fn list_dir_recursive_from_root(
+    repos: &Repositories,
+    repo_id: &str,
+    root_id: &str,
+    path: &str,
+) -> Result<(String, Vec<DirEntry>), AppError> {
+    let dir_id = match crate::fs::core::resolve_fs_id(repos, repo_id, root_id, path).await {
         Ok(id) => id,
         Err(e) => {
             let msg = e.to_string();

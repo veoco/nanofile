@@ -102,13 +102,46 @@ pub fn parse_destination(dest: &str) -> Result<(String, String), StatusCode> {
     Ok((repo_id, normalized))
 }
 
-/// Resolve a path's metadata from the FS tree.
+/// Per-request head commit context, resolved once and reused by all handlers
+/// so a single request does not re-query the repo record and head commit for
+/// every path it probes.
+pub struct HeadContext {
+    pub root_id: String,
+}
+
+/// Resolve the repo record and its head commit once. Returns `Err` when the
+/// repo is missing; when the repo has no head commit yet, the returned context
+/// carries an empty `root_id` (so root-path probes still work on an empty
+/// repo, while any non-root path resolves to "not found").
+pub async fn resolve_head(repos: &Repositories, repo_id: &str) -> Result<HeadContext, AppError> {
+    let repo_record = repos
+        .repo
+        .find_by_id(repo_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+    let root_id = match repo_record.head_commit_id {
+        Some(head_commit_id) => {
+            repos
+                .commit
+                .find_by_repo_and_commit_id(repo_id, &head_commit_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound("head commit not found".into()))?
+                .root_id
+        }
+        None => String::new(),
+    };
+    Ok(HeadContext { root_id })
+}
+
+/// Resolve a path's metadata from the FS tree, reusing an already-resolved
+/// head context (skips the repo + head commit lookups).
 ///
 /// Returns `Ok(None)` when the path does not exist, and `Ok(Some((is_dir,
 /// size, mtime)))` otherwise.
-pub async fn entry_metadata(
+pub async fn entry_metadata_with_head(
     repos: &Repositories,
     repo_id: &str,
+    head: &HeadContext,
     path: &str,
 ) -> Result<Option<(bool, i64, i64)>, AppError> {
     if path == "/" || path.is_empty() {
@@ -119,20 +152,6 @@ pub async fn entry_metadata(
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
         return Ok(Some((true, repo.size, repo.updated_at)));
     }
-
-    let repo_record = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-    let Some(head_commit_id) = repo_record.head_commit_id else {
-        return Ok(None);
-    };
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
     let parent = parent_path_from(path);
     let name = basename(path);
@@ -149,6 +168,19 @@ pub async fn entry_metadata(
         None => return Ok(None),
     };
     Ok(Some((entry.mode & S_IFDIR != 0, entry.size, entry.mtime)))
+}
+
+/// Resolve a path's metadata from the FS tree.
+///
+/// Returns `Ok(None)` when the path does not exist, and `Ok(Some((is_dir,
+/// size, mtime)))` otherwise.
+pub async fn entry_metadata(
+    repos: &Repositories,
+    repo_id: &str,
+    path: &str,
+) -> Result<Option<(bool, i64, i64)>, AppError> {
+    let head = resolve_head(repos, repo_id).await?;
+    entry_metadata_with_head(repos, repo_id, &head, path).await
 }
 
 /// Format a unix timestamp as an HTTP-date (RFC 1123) string.

@@ -150,8 +150,19 @@ impl Downloader {
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
-        let fs_id =
-            crate::fs::core::resolve_fs_id(repos, repo_id, &head_commit.root_id, path).await?;
+        Self::resolve_blocks_from_root(repos, repo_id, &head_commit.root_id, path).await
+    }
+
+    /// Resolve a file's block IDs from an already-resolved root fs_id, skipping
+    /// the repo + head commit lookups. Callers that already resolved the head
+    /// (e.g. WebDAV) reuse it here instead of re-querying.
+    pub async fn resolve_blocks_from_root(
+        repos: &Repositories,
+        repo_id: &str,
+        root_id: &str,
+        path: &str,
+    ) -> Result<(FsFileData, Vec<String>), AppError> {
+        let fs_id = crate::fs::core::resolve_fs_id(repos, repo_id, root_id, path).await?;
 
         let file_data =
             crate::fs::core::file_ops::FileOps::read_file_fs_object(repos, repo_id, &fs_id).await?;

@@ -13,7 +13,8 @@ use crate::AppState;
 use crate::fs::core::FileOps;
 use crate::webdav::auth::WebDavAuth;
 use crate::webdav::util::{
-    entry_metadata, join_path, normalize_webdav_path, parse_destination, parse_overwrite,
+    HeadContext, entry_metadata_with_head, join_path, normalize_webdav_path, parse_destination,
+    parse_overwrite, resolve_head,
 };
 use crate::webdav::xml::{build_empty_multistatus, build_lock_body};
 
@@ -51,18 +52,27 @@ async fn route_request(
     let method = request.method().clone();
     let (parts, body) = request.into_parts();
     let headers = parts.headers;
+
+    // Resolve the repo + head commit once per request; every handler reuses it
+    // so a single request does not re-query the repo record and head commit for
+    // each path it probes.
+    let head = match resolve_head(&state.repos, &auth.repo_id).await {
+        Ok(h) => h,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+
     match method.as_str() {
         "OPTIONS" => options_response(),
         "PROPFIND" => {
-            crate::webdav::propfind::propfind(state, auth, webdav_path, &headers, body).await
+            crate::webdav::propfind::propfind(state, auth, webdav_path, &headers, body, &head).await
         }
-        "GET" => get_handler(&state, &auth, &webdav_path, false).await,
-        "HEAD" => get_handler(&state, &auth, &webdav_path, true).await,
-        "PUT" => put_handler(&state, &auth, &webdav_path, &headers, body).await,
-        "MKCOL" => mkcol_handler(&state, &auth, &webdav_path).await,
-        "DELETE" => delete_handler(&state, &auth, &webdav_path).await,
-        "MOVE" => move_copy_handler(&state, &auth, &webdav_path, &headers, true).await,
-        "COPY" => move_copy_handler(&state, &auth, &webdav_path, &headers, false).await,
+        "GET" => get_handler(&state, &auth, &webdav_path, false, &head).await,
+        "HEAD" => get_handler(&state, &auth, &webdav_path, true, &head).await,
+        "PUT" => put_handler(&state, &auth, &webdav_path, &headers, body, &head).await,
+        "MKCOL" => mkcol_handler(&state, &auth, &webdav_path, &head).await,
+        "DELETE" => delete_handler(&state, &auth, &webdav_path, &head).await,
+        "MOVE" => move_copy_handler(&state, &auth, &webdav_path, &headers, true, &head).await,
+        "COPY" => move_copy_handler(&state, &auth, &webdav_path, &headers, false, &head).await,
         "PROPPATCH" => proppatch_response(),
         "LOCK" => lock_response(),
         "UNLOCK" => unlock_response(),
@@ -77,24 +87,27 @@ async fn get_handler(
     auth: &WebDavAuth,
     path: &str,
     is_head: bool,
+    head: &HeadContext,
 ) -> Response {
-    match entry_metadata(&state.repos, &auth.repo_id, path).await {
+    match entry_metadata_with_head(&state.repos, &auth.repo_id, head, path).await {
         Ok(Some((true, _, _))) => return StatusCode::METHOD_NOT_ALLOWED.into_response(),
         Ok(Some((false, _, _))) => {}
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 
-    let (file_data, block_ids) = match crate::fs::core::download::Downloader::resolve_blocks(
-        &state.repos,
-        &auth.repo_id,
-        path,
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
+    let (file_data, block_ids) =
+        match crate::fs::core::download::Downloader::resolve_blocks_from_root(
+            &state.repos,
+            &auth.repo_id,
+            &head.root_id,
+            path,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        };
 
     let filename = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("download");
     let mime = crate::ui::files::mime_guess(filename);
@@ -122,6 +135,7 @@ async fn put_handler(
     path: &str,
     headers: &HeaderMap,
     body: Body,
+    head: &HeadContext,
 ) -> Response {
     if auth.permission != "rw" {
         return StatusCode::FORBIDDEN.into_response();
@@ -139,13 +153,13 @@ async fn put_handler(
 
     let parent = parent_path_from(path);
     // The parent must exist (RFC 4918: 409 Conflict otherwise).
-    match entry_metadata(&state.repos, &auth.repo_id, parent).await {
+    match entry_metadata_with_head(&state.repos, &auth.repo_id, head, parent).await {
         Ok(Some((true, _, _))) => {}
         _ => return StatusCode::CONFLICT.into_response(),
     }
 
     let existed = matches!(
-        entry_metadata(&state.repos, &auth.repo_id, path).await,
+        entry_metadata_with_head(&state.repos, &auth.repo_id, head, path).await,
         Ok(Some(_))
     );
 
@@ -206,7 +220,12 @@ async fn put_handler(
     }
 }
 
-async fn mkcol_handler(state: &Arc<AppState>, auth: &WebDavAuth, path: &str) -> Response {
+async fn mkcol_handler(
+    state: &Arc<AppState>,
+    auth: &WebDavAuth,
+    path: &str,
+    head: &HeadContext,
+) -> Response {
     if auth.permission != "rw" {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -222,13 +241,13 @@ async fn mkcol_handler(state: &Arc<AppState>, auth: &WebDavAuth, path: &str) -> 
     }
     // Target must not already exist (405).
     if matches!(
-        entry_metadata(&state.repos, &auth.repo_id, path).await,
+        entry_metadata_with_head(&state.repos, &auth.repo_id, head, path).await,
         Ok(Some(_))
     ) {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
     let parent = parent_path_from(path);
-    match entry_metadata(&state.repos, &auth.repo_id, parent).await {
+    match entry_metadata_with_head(&state.repos, &auth.repo_id, head, parent).await {
         Ok(Some((true, _, _))) => {}
         _ => return StatusCode::CONFLICT.into_response(),
     }
@@ -242,14 +261,19 @@ async fn mkcol_handler(state: &Arc<AppState>, auth: &WebDavAuth, path: &str) -> 
     }
 }
 
-async fn delete_handler(state: &Arc<AppState>, auth: &WebDavAuth, path: &str) -> Response {
+async fn delete_handler(
+    state: &Arc<AppState>,
+    auth: &WebDavAuth,
+    path: &str,
+    head: &HeadContext,
+) -> Response {
     if auth.permission != "rw" {
         return StatusCode::FORBIDDEN.into_response();
     }
     if path == "/" {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
-    let meta = match entry_metadata(&state.repos, &auth.repo_id, path).await {
+    let meta = match entry_metadata_with_head(&state.repos, &auth.repo_id, head, path).await {
         Ok(m) => m,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -267,18 +291,21 @@ async fn delete_handler(state: &Arc<AppState>, auth: &WebDavAuth, path: &str) ->
     }
 }
 
-/// `entry_metadata` with per-path memoization for handlers that probe the
-/// same paths several times (MOVE/COPY probes src and dst twice each).
+/// `entry_metadata_with_head` with per-path memoization for handlers that probe
+/// the same paths several times (MOVE/COPY probes src and dst twice each).
 async fn cached_entry_metadata(
     cache: &mut HashMap<String, Option<(bool, i64, i64)>>,
     repos: &crate::repository::Repositories,
     repo_id: &str,
+    head: &HeadContext,
     path: &str,
 ) -> Option<Option<(bool, i64, i64)>> {
     if let Some(v) = cache.get(path) {
         return Some(*v);
     }
-    let v = entry_metadata(repos, repo_id, path).await.ok()?;
+    let v = entry_metadata_with_head(repos, repo_id, head, path)
+        .await
+        .ok()?;
     cache.insert(path.to_string(), v);
     Some(v)
 }
@@ -289,6 +316,7 @@ async fn move_copy_handler(
     src_path: &str,
     headers: &HeaderMap,
     is_move: bool,
+    head: &HeadContext,
 ) -> Response {
     // Memoize per-path metadata so repeated probes of src/dst don't re-resolve
     // the repo record + head commit every time.
@@ -316,7 +344,7 @@ async fn move_copy_handler(
     }
     // Moving/copying a directory into its own subtree is invalid.
     if let Some(Some((true, _, _))) =
-        cached_entry_metadata(&mut meta_cache, &state.repos, &auth.repo_id, src_path).await
+        cached_entry_metadata(&mut meta_cache, &state.repos, &auth.repo_id, head, src_path).await
     {
         let prefix = format!("{}/", src_path);
         if dst_path.starts_with(&prefix) {
@@ -328,13 +356,27 @@ async fn move_copy_handler(
 
     // Destination parent must exist.
     let dst_parent = parent_path_from(&dst_path);
-    match cached_entry_metadata(&mut meta_cache, &state.repos, &auth.repo_id, dst_parent).await {
+    match cached_entry_metadata(
+        &mut meta_cache,
+        &state.repos,
+        &auth.repo_id,
+        head,
+        dst_parent,
+    )
+    .await
+    {
         Some(Some((true, _, _))) => {}
         _ => return StatusCode::CONFLICT.into_response(),
     }
 
-    let dst_meta =
-        cached_entry_metadata(&mut meta_cache, &state.repos, &auth.repo_id, &dst_path).await;
+    let dst_meta = cached_entry_metadata(
+        &mut meta_cache,
+        &state.repos,
+        &auth.repo_id,
+        head,
+        &dst_path,
+    )
+    .await;
     let dst_existed = matches!(dst_meta, Some(Some(_)));
     if dst_existed {
         if !overwrite {
@@ -356,9 +398,9 @@ async fn move_copy_handler(
     }
 
     let result = if is_move {
-        do_move(state, auth, src_path, &dst_path).await
+        do_move(state, auth, src_path, &dst_path, head).await
     } else {
-        do_copy(state, auth, src_path, &dst_path).await
+        do_copy(state, auth, src_path, &dst_path, head).await
     };
     match result {
         Ok(()) => {
@@ -380,13 +422,14 @@ async fn do_move(
     auth: &WebDavAuth,
     src: &str,
     dst: &str,
+    head: &HeadContext,
 ) -> Result<(), AppError> {
     let src_parent = parent_path_from(src);
     let src_name = basename(src);
     let dst_parent = parent_path_from(dst);
     let dst_name = basename(dst);
 
-    let is_dir = entry_metadata(&state.repos, &auth.repo_id, src)
+    let is_dir = entry_metadata_with_head(&state.repos, &auth.repo_id, head, src)
         .await?
         .map(|m| m.0)
         .unwrap_or(false);
@@ -453,6 +496,7 @@ async fn do_copy(
     auth: &WebDavAuth,
     src: &str,
     dst: &str,
+    head: &HeadContext,
 ) -> Result<(), AppError> {
     let src_parent = parent_path_from(src);
     let src_name = basename(src);
@@ -474,7 +518,7 @@ async fn do_copy(
 
     if dst_name != src_name {
         let copied_path = join_path(dst_parent, src_name);
-        let is_dir = entry_metadata(&state.repos, &auth.repo_id, &copied_path)
+        let is_dir = entry_metadata_with_head(&state.repos, &auth.repo_id, head, &copied_path)
             .await?
             .map(|m| m.0)
             .unwrap_or(false);

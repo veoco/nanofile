@@ -6,9 +6,11 @@ use std::sync::Arc;
 use base::common::DirEntry;
 
 use crate::AppState;
-use crate::service::fs::dir::{list_dir_from_fs_tree, list_dir_recursive_from_fs_tree};
+use crate::service::fs::dir::{list_dir_from_root, list_dir_recursive_from_root};
 use crate::webdav::auth::WebDavAuth;
-use crate::webdav::util::{Depth, build_href, entry_metadata, http_date, join_path, parse_depth};
+use crate::webdav::util::{
+    Depth, HeadContext, build_href, entry_metadata_with_head, http_date, join_path, parse_depth,
+};
 use crate::webdav::xml::{PropResponse, ResourceProps, build_multistatus};
 
 /// PROPFIND handler. Returns a 207 Multi-Status document listing the target
@@ -19,6 +21,7 @@ pub async fn propfind(
     path: String,
     headers: &HeaderMap,
     body: Body,
+    head: &HeadContext,
 ) -> Response {
     let depth = match parse_depth(headers) {
         Ok(d) => d,
@@ -26,7 +29,8 @@ pub async fn propfind(
     };
     let propname_only = body_requests_propname(body).await;
 
-    let target_meta = match entry_metadata(&state.repos, &auth.repo_id, &path).await {
+    let target_meta = match entry_metadata_with_head(&state.repos, &auth.repo_id, head, &path).await
+    {
         Ok(Some(m)) => m,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -76,7 +80,7 @@ pub async fn propfind(
             Depth::Zero => {}
             Depth::One => {
                 if let Ok((_, entries)) =
-                    list_dir_from_fs_tree(&state.repos, &auth.repo_id, &path).await
+                    list_dir_from_root(&state.repos, &auth.repo_id, &head.root_id, &path).await
                 {
                     for e in entries {
                         let child = join_path(&path, &e.name);
@@ -86,7 +90,8 @@ pub async fn propfind(
             }
             Depth::Infinity => {
                 if let Ok((_, entries)) =
-                    list_dir_recursive_from_fs_tree(&state.repos, &auth.repo_id, &path).await
+                    list_dir_recursive_from_root(&state.repos, &auth.repo_id, &head.root_id, &path)
+                        .await
                 {
                     for e in entries {
                         let parent = e.parent_dir.as_deref().unwrap_or(&path);
