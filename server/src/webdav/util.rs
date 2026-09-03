@@ -170,19 +170,6 @@ pub async fn entry_metadata_with_head(
     Ok(Some((entry.mode & S_IFDIR != 0, entry.size, entry.mtime)))
 }
 
-/// Resolve a path's metadata from the FS tree.
-///
-/// Returns `Ok(None)` when the path does not exist, and `Ok(Some((is_dir,
-/// size, mtime)))` otherwise.
-pub async fn entry_metadata(
-    repos: &Repositories,
-    repo_id: &str,
-    path: &str,
-) -> Result<Option<(bool, i64, i64)>, AppError> {
-    let head = resolve_head(repos, repo_id).await?;
-    entry_metadata_with_head(repos, repo_id, &head, path).await
-}
-
 /// Format a unix timestamp as an HTTP-date (RFC 1123) string.
 pub fn http_date(ts: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
