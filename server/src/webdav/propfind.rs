@@ -89,9 +89,14 @@ pub async fn propfind(
                 }
             }
             Depth::Infinity => {
-                if let Ok((_, entries)) =
-                    list_dir_recursive_from_root(&state.repos, &auth.repo_id, &head.root_id, &path)
-                        .await
+                if let Ok((_, entries)) = list_dir_recursive_from_root(
+                    &state.repos,
+                    &auth.repo_id,
+                    &head.root_id,
+                    &path,
+                    false,
+                )
+                .await
                 {
                     for e in entries {
                         let parent = e.parent_dir.as_deref().unwrap_or(&path);

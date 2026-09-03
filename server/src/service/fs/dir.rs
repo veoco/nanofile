@@ -113,16 +113,21 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    list_dir_recursive_from_root(repos, repo_id, &head.root_id, path).await
+    list_dir_recursive_from_root(repos, repo_id, &head.root_id, path, true).await
 }
 
 /// Like [`list_dir_recursive_from_fs_tree`] but reuses an already-resolved
 /// root fs_id, skipping the repo + head commit lookups.
+///
+/// `include_modifier_names` controls whether modifier nicknames are batch-fetched
+/// and attached to file entries. WebDAV PROPFIND does not use those fields, so it
+/// passes `false` to skip the `find_by_emails` query on large recursive listings.
 pub(crate) async fn list_dir_recursive_from_root(
     repos: &Repositories,
     repo_id: &str,
     root_id: &str,
     path: &str,
+    include_modifier_names: bool,
 ) -> Result<(String, Vec<DirEntry>), AppError> {
     let dir_id = match crate::fs::core::resolve_fs_id(repos, repo_id, root_id, path).await {
         Ok(id) => id,
@@ -199,24 +204,27 @@ pub(crate) async fn list_dir_recursive_from_root(
     }
 
     // Batch-fetch modifier nicknames for all distinct emails in one query.
-    let emails: Vec<String> = modifier_emails.into_iter().collect();
-    let nickname_by_email: std::collections::HashMap<String, String> = repos
-        .user
-        .find_by_emails(&emails)
-        .await?
-        .into_iter()
-        .map(|u| (u.email.clone(), u.nickname()))
-        .collect();
+    // Skipped when the caller (e.g. WebDAV PROPFIND) does not consume them.
+    if include_modifier_names {
+        let emails: Vec<String> = modifier_emails.into_iter().collect();
+        let nickname_by_email: std::collections::HashMap<String, String> = repos
+            .user
+            .find_by_emails(&emails)
+            .await?
+            .into_iter()
+            .map(|u| (u.email.clone(), u.nickname()))
+            .collect();
 
-    for entry in &mut entries {
-        if entry.entry_type == "file" && !entry.modifier.is_empty() {
-            let fallback = entry.modifier.split('@').next().unwrap_or("").to_string();
-            let nickname = nickname_by_email
-                .get(&entry.modifier)
-                .cloned()
-                .unwrap_or(fallback);
-            entry.modifier_name = Some(nickname);
-            entry.modifier_contact_email = Some(entry.modifier.clone());
+        for entry in &mut entries {
+            if entry.entry_type == "file" && !entry.modifier.is_empty() {
+                let fallback = entry.modifier.split('@').next().unwrap_or("").to_string();
+                let nickname = nickname_by_email
+                    .get(&entry.modifier)
+                    .cloned()
+                    .unwrap_or(fallback);
+                entry.modifier_name = Some(nickname);
+                entry.modifier_contact_email = Some(entry.modifier.clone());
+            }
         }
     }
 
