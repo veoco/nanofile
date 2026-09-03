@@ -226,7 +226,14 @@ impl SearchService {
         ids.dedup();
 
         if let Some(filter) = repo_id_filter {
-            ids.retain(|id| id == filter);
+            // seahub scope keywords ("all"/"mine"/"shared"/"group"/"public")
+            // mean "search across all accessible repos", not a specific repo.
+            // seadroid sends search_repo="all" for global search; treating it
+            // as a repo id would filter out every repo and return no results.
+            let is_scope = matches!(filter, "all" | "mine" | "shared" | "group" | "public");
+            if !is_scope {
+                ids.retain(|id| id == filter);
+            }
         }
 
         Ok(ids)
