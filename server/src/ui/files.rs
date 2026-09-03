@@ -164,7 +164,6 @@ pub struct FileEntry {
     pub size: i64,
     pub size_display: String,
     pub mtime: i64,
-    pub mtime_display: String,
     pub icon_color: &'static str,
     /// Relative path for use in URL construction, e.g. "Documents/file.txt"
     pub relative_path: String,
@@ -324,7 +323,6 @@ fn is_media_dirent(e: &DirEntry) -> bool {
 /// Build the display `FileEntry` for a single dirent (called only on the
 /// current page slice after sorting/pagination, so cost scales with page size).
 fn build_file_entry(
-    t: &I18n,
     repo_id: &str,
     path: &str,
     e: &DirEntry,
@@ -374,7 +372,6 @@ fn build_file_entry(
         size: e.size,
         size_display: format_size(e.size),
         mtime: e.mtime,
-        mtime_display: format_mtime(t, e.mtime),
         icon_color: file_icon_color(&e.name),
         relative_path,
         is_previewable,
@@ -545,18 +542,6 @@ fn file_extension(name: &str) -> Option<String> {
 }
 
 pub use super::format_size;
-
-pub fn format_mtime(t: &I18n, timestamp: i64) -> String {
-    chrono::DateTime::from_timestamp(timestamp, 0)
-        .map(|dt| {
-            if t.lang.starts_with("zh") {
-                dt.format("%Y年%m月%d日 %H:%M").to_string()
-            } else {
-                dt.format("%Y-%m-%d %H:%M").to_string()
-            }
-        })
-        .unwrap_or_else(|| timestamp.to_string())
-}
 
 /// Relative time matching the Android client's `translateCommitTime`:
 /// "Just now" → N seconds → N minutes → N hours → N days → absolute date
@@ -859,13 +844,13 @@ async fn file_browser_inner(
     // gallery media slice); both views share the same tag/star maps.
     let entries: Vec<FileEntry> = list_slice
         .iter()
-        .map(|d| build_file_entry(t, &repo_id, &path, d, &starred_set, &tags_by_path))
+        .map(|d| build_file_entry(&repo_id, &path, d, &starred_set, &tags_by_path))
         .collect();
     let gallery_groups: Vec<GalleryMonthGroup> = group_entries_by_month(
         t,
         gallery_slice
             .iter()
-            .map(|d| build_file_entry(t, &repo_id, &path, d, &starred_set, &tags_by_path))
+            .map(|d| build_file_entry(&repo_id, &path, d, &starred_set, &tags_by_path))
             .collect(),
     );
 
@@ -1278,7 +1263,6 @@ mod tests {
             size,
             size_display: String::new(),
             mtime,
-            mtime_display: String::new(),
             icon_color: "",
             relative_path: String::new(),
             is_previewable: false,

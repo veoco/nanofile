@@ -32,7 +32,7 @@ pub struct StarredItemView {
     pub path: String,
     pub obj_name: String,
     pub is_dir: bool,
-    pub mtime_display: String,
+    pub created_at: i64,
     pub deleted: bool,
 }
 
@@ -80,10 +80,7 @@ pub async fn starred_page(
             path: entry.path.clone(),
             obj_name,
             is_dir: entry.is_dir,
-            mtime_display: crate::ui::files::format_mtime(
-                I18n::get(user.language.as_deref()),
-                entry.created_at,
-            ),
+            created_at: entry.created_at,
             deleted,
         };
 
@@ -97,8 +94,7 @@ pub async fn starred_page(
     }
 
     // Sort by mtime descending (most recently starred first)
-    let sort_desc =
-        |a: &StarredItemView, b: &StarredItemView| b.mtime_display.cmp(&a.mtime_display);
+    let sort_desc = |a: &StarredItemView, b: &StarredItemView| b.created_at.cmp(&a.created_at);
     starred_repos.sort_by(sort_desc);
     starred_folders.sort_by(sort_desc);
     starred_files.sort_by(sort_desc);
