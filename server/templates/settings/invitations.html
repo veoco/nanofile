@@ -58,7 +58,7 @@
                 <div>
                     <p class="text-sm font-mono font-semibold inline-block {% if inv.used_by_email.is_some() %}text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-gray-100{% endif %}"><span class="select-all">{{ inv.code }}</span></p>
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        {{ t.tr("invite.created") }}: <span class="select-all inline-block">{{ inv.created_at }}</span>
+                        {{ t.tr("invite.created") }}: <span class="select-all inline-block" data-ts="{{ inv.created_at_ts }}"></span>
                     </p>
                     {% if let Some(email) = inv.bound_email %}
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">

@@ -132,7 +132,7 @@
                class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate">
                 {{ entry.name }}/
             </a>
-            <div class="text-xs text-gray-400 dark:text-gray-500">{{ entry.mtime_display }}</div>
+            <div class="text-xs text-gray-400 dark:text-gray-500" data-ts="{{ entry.mtime }}"></div>
             {% if !entry.tags.is_empty() %}
             <div class="flex items-center gap-1 mt-1 flex-wrap">
                 {% for tag in entry.tags %}
@@ -217,7 +217,7 @@
             {% endif %}
             <div class="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
                 {% if entry.entry_type == "file" %}<span>{{ entry.size_display }}</span>{% endif %}
-                <span>{{ entry.mtime_display }}</span>
+                <span data-ts="{{ entry.mtime }}"></span>
             </div>
             {% if !entry.tags.is_empty() %}
             <div class="flex items-center gap-1 mt-1 flex-wrap">

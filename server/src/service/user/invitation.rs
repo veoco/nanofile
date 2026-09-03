@@ -10,8 +10,10 @@ pub struct InvitationInfo {
     pub code: String,
     pub bound_email: Option<String>,
     pub created_at: String,
+    pub created_at_ts: i64,
     pub used_by_email: Option<String>,
     pub used_at: Option<String>,
+    pub used_at_ts: Option<i64>,
     pub id: i32,
 }
 
@@ -54,8 +56,10 @@ impl InvitationService {
                 code: code.code,
                 bound_email: code.email,
                 created_at: crate::ui::format_ts(code.created_at),
+                created_at_ts: code.created_at,
                 used_by_email,
                 used_at: used_at_display,
+                used_at_ts: code.used_at,
             });
         }
 

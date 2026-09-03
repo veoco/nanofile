@@ -74,8 +74,8 @@
                         </span>
                         {% endif %}
                     </td>
-                    <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ s.created_at }}</td>
-                    <td class="td {% if s.expires_at != "Never" %}text-red-500{% else %}text-gray-500 dark:text-gray-400{% endif %} whitespace-nowrap">{{ s.expires_at }}</td>
+                    <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap"><span data-ts="{{ s.created_at_ts }}"></span></td>
+                    <td class="td {% if s.expires_at != "Never" %}text-red-500{% else %}text-gray-500 dark:text-gray-400{% endif %} whitespace-nowrap">{% if let Some(ts) = s.expires_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}Never{% endif %}</td>
                     <td class="td text-gray-500 dark:text-gray-400 max-w-0">
                         {% if s.description.is_some() %}
                         <span class="truncate block" title="{{ s.description.as_deref().unwrap_or("") }}">{{ s.description.as_deref().unwrap_or("") }}</span>
@@ -153,8 +153,8 @@
                             {{ u.name }}
                         </a>
                     </td>
-                    <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ u.created_at }}</td>
-                    <td class="td {% if u.expires_at != "Never" %}text-red-500{% else %}text-gray-500 dark:text-gray-400{% endif %} whitespace-nowrap">{{ u.expires_at }}</td>
+                    <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap"><span data-ts="{{ u.created_at_ts }}"></span></td>
+                    <td class="td {% if u.expires_at != "Never" %}text-red-500{% else %}text-gray-500 dark:text-gray-400{% endif %} whitespace-nowrap">{% if let Some(ts) = u.expires_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}Never{% endif %}</td>
                     <td class="td text-gray-500 dark:text-gray-400 max-w-0">
                         {% if u.description.is_some() %}
                         <span class="truncate block" title="{{ u.description.as_deref().unwrap_or("") }}">{{ u.description.as_deref().unwrap_or("") }}</span>

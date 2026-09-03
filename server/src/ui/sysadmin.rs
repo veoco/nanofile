@@ -43,6 +43,8 @@ pub struct UserRow {
     pub quota_formatted: String,
     pub created_at: String,
     pub last_login_at: String,
+    pub created_at_ts: i64,
+    pub last_login_at_ts: Option<i64>,
 }
 
 /// GET /sysadmin/users/ — user management page (admin only).
@@ -91,6 +93,8 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
                         .tr("common.never")
                         .to_string()
                 }),
+                created_at_ts: u.created_at,
+                last_login_at_ts: u.last_login_at,
             }
         })
         .collect();

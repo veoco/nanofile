@@ -44,7 +44,7 @@
                         {% endif %}
                     </td>
                     <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ task.interval_secs_display }}</td>
-                    <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ task.last_run_at }}</td>
+                    <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{% if let Some(ts) = task.last_run_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ task.last_run_at }}{% endif %}</td>
                     <td class="td text-gray-500 dark:text-gray-400 text-center whitespace-nowrap">
                         {% if task.last_duration_ms > 0 %}
                         {{ task.last_duration_ms }}ms

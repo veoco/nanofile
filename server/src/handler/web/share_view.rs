@@ -14,7 +14,7 @@ use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
 use crate::fs::zip::{ZipLimits, collect_dir_entries, stream_zip};
 use crate::i18n::I18n;
-use crate::ui::{format_size, format_ts};
+use crate::ui::format_size;
 use base::common::FsFileData;
 use base::error::AppError;
 use infra::common::S_IFDIR;
@@ -29,8 +29,8 @@ struct ShareViewTemplate {
     pub file_ext: String,
     pub file_size: String,
     pub has_password: bool,
-    pub expires_at_display: String,
-    pub created_at_display: String,
+    pub created_at_ts: i64,
+    pub expires_at_ts: Option<i64>,
     pub download_url: String,
     pub description: Option<String>,
 }
@@ -167,11 +167,6 @@ pub async fn shared_file_view(
         .map(|(_, e)| e.to_string())
         .unwrap_or_else(|| "?".to_string());
     let file_size = _file_data.size;
-    let expires_display = match link.expires_at {
-        Some(ts) => format_ts(ts),
-        None => "Never".to_string(),
-    };
-    let created_display = format_ts(link.created_at);
 
     let mut download_url = format!("/f/{}/?dl=1", link.token);
     // Pass password through to download URL if provided
@@ -185,8 +180,8 @@ pub async fn shared_file_view(
         file_ext,
         file_size: format_size(file_size),
         has_password: link.password.is_some(),
-        expires_at_display: expires_display,
-        created_at_display: created_display,
+        created_at_ts: link.created_at,
+        expires_at_ts: link.expires_at,
         download_url,
         description: link.description.clone(),
     };
@@ -264,8 +259,8 @@ struct SharedDirViewTemplate {
     pub entries: Vec<DirEntryInfo>,
     pub item_count: usize,
     pub has_password: bool,
-    pub expires_at_display: String,
-    pub created_at_display: String,
+    pub created_at_ts: i64,
+    pub expires_at_ts: Option<i64>,
     pub download_url: String,
     pub password_query: String,
     pub description: Option<String>,
@@ -508,12 +503,6 @@ pub async fn shared_dir_view(
 
     let item_count = total;
 
-    let expires_display = match link.expires_at {
-        Some(ts) => format_ts(ts),
-        None => "Never".to_string(),
-    };
-    let created_display = format_ts(link.created_at);
-
     let pw_query = if let Some(pwd) = params.get("password") {
         format!("&password={}", pwd)
     } else {
@@ -538,8 +527,8 @@ pub async fn shared_dir_view(
         entries,
         item_count,
         has_password: link.password.is_some(),
-        expires_at_display: expires_display,
-        created_at_display: created_display,
+        created_at_ts: link.created_at,
+        expires_at_ts: link.expires_at,
         download_url,
         password_query: pw_query,
         description: link.description.clone(),

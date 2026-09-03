@@ -55,7 +55,7 @@
                         <p class="truncate text-sm text-gray-500 dark:text-gray-400">{{ r.description }}</p>
                         {% endif %}
                         <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
-                            {{ r.size_display }}<span class="mx-1">·</span>{{ r.mtime_display }}
+                            {{ r.size_display }}<span class="mx-1">·</span><span data-ts="{{ r.mtime }}"></span>
                         </p>
                     </div>
                 </a>

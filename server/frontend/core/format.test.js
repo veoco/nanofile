@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatFileSize, formatBitrate, formatHistorySize, formatHistoryTime } from "./format.js";
+import { formatFileSize, formatBitrate, formatHistorySize, formatHistoryTime, formatLocalDateTime } from "./format.js";
 
 test("formatFileSize formats B/KB/MB/GB with 1000-based units", () => {
   assert.equal(formatFileSize(0), "0 B");
@@ -41,4 +41,16 @@ test("formatHistorySize formats B/KB/MB/GB with 1024-based units", () => {
 test("formatHistoryTime returns a non-empty string", () => {
   assert.equal(typeof formatHistoryTime(0), "string");
   assert.ok(formatHistoryTime(1234567890).length > 0);
+});
+
+test("formatLocalDateTime formats a Unix timestamp as YYYY-MM-DD HH:MM", () => {
+  // 2026-09-03 12:34:56 UTC → local rendering depends on the test runner's
+  // timezone, so assert the shape and that the components round-trip.
+  var out = formatLocalDateTime(1756902896);
+  assert.match(out, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+});
+
+test("formatLocalDateTime returns empty for invalid input", () => {
+  assert.equal(formatLocalDateTime(NaN), "");
+  assert.equal(formatLocalDateTime(undefined), "");
 });

@@ -96,7 +96,7 @@
                     {% endif %}
                 </td>
                 <td class="td text-gray-500 dark:text-gray-400 text-right hidden sm:table-cell whitespace-nowrap">
-                    {{ item.deleted_time_display }}
+                    <span data-ts="{{ item.deleted_time_ts }}"></span>
                 </td>
                 <td class="td text-gray-500 dark:text-gray-400 text-right whitespace-nowrap">
                     {% if !item.is_dir %}{{ item.size_display }}{% else %}&mdash;{% endif %}

@@ -126,7 +126,7 @@
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
-                {{ created_at_display }}
+                <span data-ts="{{ created_at_ts }}"></span>
             </span>
             {% if has_password %}
             <span class="password-badge">
@@ -147,13 +147,27 @@
         </a>
 
         <!-- Expiry info -->
-        {% if expires_at_display != "Never" %}
+        {% if let Some(ts) = expires_at_ts %}
         <p style="margin-top: 1rem; font-size: 0.8rem; color: #ef4444;">
-            {{ t.tr("pub.expires") }}: {{ expires_at_display }}
+            {{ t.tr("pub.expires") }}: <span data-ts="{{ ts }}"></span>
         </p>
         {% endif %}
 
         <div class="footer">{{ t.tr("pub.powered_by") }}</div>
     </div>
+    <script>
+        (function () {
+            function fmt(ts) {
+                var d = new Date(ts * 1000);
+                if (isNaN(d.getTime())) return "";
+                var p = function (n) { return ("0" + n).slice(-2); };
+                return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+            }
+            document.querySelectorAll("[data-ts]").forEach(function (el) {
+                var ts = parseInt(el.dataset.ts, 10);
+                if (!isNaN(ts)) el.textContent = fmt(ts);
+            });
+        })();
+    </script>
 </body>
 </html>

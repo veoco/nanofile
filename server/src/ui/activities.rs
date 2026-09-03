@@ -44,6 +44,8 @@ pub struct ActivityView {
     /// Relative-time display, matching the Android client.
     pub time_display: String,
     pub time_iso: String,
+    /// Raw Unix seconds, for the local-timezone tooltip.
+    pub time_ts: i64,
     /// UTC day key (`YYYY-MM-DD`) for grouping consecutive rows.
     pub day_key: String,
     /// Grouping header label (Today / Yesterday / date).
@@ -265,6 +267,7 @@ pub async fn activities_page(
             author_avatar_url,
             time_display: formatted,
             time_iso,
+            time_ts: e.created_at,
             day_key,
             day_label,
             show_day_header,

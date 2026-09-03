@@ -11,6 +11,10 @@ import "../pages/starred.js";
 import "../pages/trash.js";
 import "../pages/shares.js";
 
+// Render `[data-ts]` timestamps in the browser's local timezone.
+import { initLocalTime } from "../core/local-time.js";
+initLocalTime();
+
 // ─── Response time display ──────────────────────────────────────────────
 var respTimeEl = document.getElementById("resp-time");
 if (respTimeEl) {

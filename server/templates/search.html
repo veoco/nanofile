@@ -76,7 +76,7 @@
                 {% if !item.is_dir %}
                 <div>{{ item.size_display }}</div>
                 {% endif %}
-                <div>{{ item.last_modified_readable }}</div>
+                <div data-ts="{{ item.last_modified }}"></div>
             </div>
         </li>
         {% endfor %}

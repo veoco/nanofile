@@ -39,6 +39,7 @@ pub struct TrashEntry {
     pub parent_dir: String,
     pub obj_name: String,
     pub deleted_time: String, // RFC 3339
+    pub deleted_time_ts: i64, // Unix seconds
     pub commit_id: String,
     pub is_dir: bool,
     pub size: i64,
@@ -285,6 +286,7 @@ fn map_trash_rows_to_entries(
                 parent_dir: m.path.clone(),
                 obj_name: m.obj_name.clone(),
                 deleted_time: timestamp_rfc3339(m.delete_time),
+                deleted_time_ts: m.delete_time,
                 commit_id: m.commit_id.clone(),
                 is_dir: m.obj_type == "dir",
                 size: m.size,
@@ -402,6 +404,7 @@ pub async fn list_trash_cursor(
             parent_dir: m.path,
             obj_name: m.obj_name,
             deleted_time: timestamp_rfc3339(m.delete_time),
+            deleted_time_ts: m.delete_time,
             commit_id: m.commit_id,
             is_dir: m.obj_type == "dir",
             size: m.size,

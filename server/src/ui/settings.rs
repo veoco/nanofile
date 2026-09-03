@@ -75,6 +75,7 @@ pub struct DeviceInfo {
     pub device_name: String,
     pub client_version: String,
     pub last_accessed: String,
+    pub last_accessed_ts: i64,
     pub is_desktop_client: bool,
 }
 
@@ -283,6 +284,7 @@ pub async fn devices_page(
                 device_name: token.device_name.unwrap_or_default(),
                 client_version: token.client_version.unwrap_or_default(),
                 last_accessed: super::format_ts(token.created_at),
+                last_accessed_ts: token.created_at,
                 is_desktop_client: is_desktop,
             });
         }

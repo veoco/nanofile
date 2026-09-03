@@ -58,8 +58,8 @@
                 </td>
                 <td class="td text-gray-500 dark:text-gray-400">{{ u.usage_formatted }}</td>
                 <td class="td text-gray-500 dark:text-gray-400">{{ u.quota_formatted }}</td>
-                <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ u.created_at }}</td>
-                <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ u.last_login_at }}</td>
+                <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap"><span data-ts="{{ u.created_at_ts }}"></span></td>
+                <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{% if let Some(ts) = u.last_login_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ u.last_login_at }}{% endif %}</td>
                 <td class="td text-right">
                     <div class="flex items-center justify-end gap-1">
                         <button type="button" class="btn btn-ghost-brand btn-icon"
