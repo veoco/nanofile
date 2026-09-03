@@ -89,25 +89,30 @@ async fn get_handler(
     is_head: bool,
     head: &HeadContext,
 ) -> Response {
-    match entry_metadata_with_head(&state.repos, &auth.repo_id, head, path).await {
-        Ok(Some((true, _, _))) => return StatusCode::METHOD_NOT_ALLOWED.into_response(),
-        Ok(Some((false, _, _))) => {}
+    // Resolve the entry's fs_id + metadata in a single tree walk, then read the
+    // file fs_object directly — avoids a second full traversal of the path.
+    let (fs_id, size) = match crate::fs::core::resolve_file_entry_with_head(
+        &state.repos,
+        &auth.repo_id,
+        &head.root_id,
+        path,
+    )
+    .await
+    {
+        Ok(Some((_, true, _, _))) => return StatusCode::METHOD_NOT_ALLOWED.into_response(),
+        Ok(Some((fs_id, false, size, _))) => (fs_id, size),
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
+    };
 
-    let (file_data, block_ids) =
-        match crate::fs::core::download::Downloader::resolve_blocks_from_root(
-            &state.repos,
-            &auth.repo_id,
-            &head.root_id,
-            path,
-        )
-        .await
+    let file_data =
+        match crate::fs::core::FileOps::read_file_fs_object(&state.repos, &auth.repo_id, &fs_id)
+            .await
         {
-            Ok(v) => v,
+            Ok(d) => d,
             Err(_) => return StatusCode::NOT_FOUND.into_response(),
         };
+    let block_ids = file_data.block_ids;
 
     let filename = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("download");
     let mime = crate::ui::files::mime_guess(filename);
@@ -116,7 +121,7 @@ async fn get_handler(
     resp_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
     resp_headers.insert(
         header::CONTENT_LENGTH,
-        HeaderValue::from_str(&file_data.size.to_string()).unwrap(),
+        HeaderValue::from_str(&size.to_string()).unwrap(),
     );
 
     if is_head {

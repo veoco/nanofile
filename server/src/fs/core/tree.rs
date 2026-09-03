@@ -5,6 +5,7 @@ use base::common::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR, SEAF_METADATA_
 use base::error::AppError;
 use infra::common::EMPTY_SHA1;
 use infra::entity::fs_object;
+use infra::serialization::S_IFDIR;
 
 /// Read and parse a directory fs_object (FsDirData) from the database.
 pub async fn read_fs_dir_data(
@@ -202,6 +203,54 @@ pub async fn resolve_file_entry(
         .find(|d| d.name == *last)
         .ok_or_else(|| AppError::NotFound(format!("path segment not found: {last}")))?;
     Ok((entry.id.clone(), entry.mtime))
+}
+
+/// Resolve a path to its `fs_id`, `is_dir`, `size` and `mtime` in a single
+/// walk, reusing an already-resolved root fs_id.
+///
+/// Like [`resolve_file_entry`], the size and mtime are read from the final
+/// hop's parent dirent, so callers that need the entry's metadata alongside its
+/// fs_id (e.g. WebDAV GET) don't have to re-walk the tree or re-read the parent
+/// directory. Returns `Ok(None)` when the path does not exist; a missing segment
+/// yields `NotFound` (matching [`resolve_fs_id`]).
+pub async fn resolve_file_entry_with_head(
+    repos: &Repositories,
+    repo_id: &str,
+    root_id: &str,
+    path: &str,
+) -> Result<Option<(String, bool, i64, i64)>, AppError> {
+    let segments: Vec<&str> = path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if segments.is_empty() {
+        return Ok(Some((root_id.to_string(), true, 0, 0)));
+    }
+
+    let mut current_fs_id = root_id.to_string();
+    for segment in &segments[..segments.len() - 1] {
+        let dir_data = read_fs_dir_data(repos, repo_id, &current_fs_id).await?;
+        let entry = dir_data
+            .dirents
+            .iter()
+            .find(|d| d.name == *segment)
+            .ok_or_else(|| AppError::NotFound(format!("path segment not found: {segment}")))?;
+        current_fs_id = entry.id.clone();
+    }
+
+    let last = segments.last().unwrap();
+    let dir_data = read_fs_dir_data(repos, repo_id, &current_fs_id).await?;
+    let entry = match dir_data.dirents.iter().find(|d| d.name == *last) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(Some((
+        entry.id.clone(),
+        entry.mode & S_IFDIR != 0,
+        entry.size,
+        entry.mtime,
+    )))
 }
 
 /// Batch version of `resolve_fs_id` for many `(root_fs_id, path)` targets.
@@ -431,6 +480,61 @@ mod tests {
 
         // Missing segment -> NotFound.
         let err = resolve_file_entry(&repos, "r", "root", "/photos/nope.jpg")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("path segment not found"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_file_entry_with_head_returns_fs_id_is_dir_size_mtime() {
+        let db = setup_tree_db().await;
+        // root ── photos ── pic.jpg (size 99, mtime 1700000000)
+        insert(&db, "root", 3, r#"{"dirents":[{"id":"photos","mode":16384,"modifier":"","mtime":0,"name":"photos","size":0}],"type":3,"version":1}"#).await;
+        insert(&db, "photos", 3, r#"{"dirents":[{"id":"pic","mode":33188,"modifier":"u","mtime":1700000000,"name":"pic.jpg","size":99}],"type":3,"version":1}"#).await;
+        insert(
+            &db,
+            "pic",
+            1,
+            r#"{"block_ids":["x"],"size":99,"type":1,"version":1}"#,
+        )
+        .await;
+        let repos = Repositories::new(Arc::new(db));
+
+        // A file resolves to its fs_id, is_dir=false, size and mtime.
+        let (fs_id, is_dir, size, mtime) =
+            resolve_file_entry_with_head(&repos, "r", "root", "/photos/pic.jpg")
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(fs_id, "pic");
+        assert!(!is_dir);
+        assert_eq!(size, 99);
+        assert_eq!(mtime, 1700000000);
+
+        // A directory entry resolves to its own fs_id, is_dir=true.
+        let (fs_id, is_dir, _, _) = resolve_file_entry_with_head(&repos, "r", "root", "/photos")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fs_id, "photos");
+        assert!(is_dir);
+
+        // Empty path returns the root as a directory.
+        let (fs_id, is_dir, _, _) = resolve_file_entry_with_head(&repos, "r", "root", "/")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fs_id, "root");
+        assert!(is_dir);
+
+        // Missing path -> Ok(None).
+        let got = resolve_file_entry_with_head(&repos, "r", "root", "/photos/nope.jpg")
+            .await
+            .unwrap();
+        assert!(got.is_none());
+
+        // Missing intermediate segment -> NotFound.
+        let err = resolve_file_entry_with_head(&repos, "r", "root", "/nope/pic.jpg")
             .await
             .unwrap_err();
         assert!(err.to_string().contains("path segment not found"));
