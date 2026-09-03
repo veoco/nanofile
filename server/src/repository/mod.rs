@@ -159,7 +159,9 @@ impl Repositories {
             password_reset_token: Arc::new(DbPasswordResetTokenRepository::new(db.clone())),
             user_2fa_backup_code: Arc::new(DbUser2faBackupCodeRepository::new(db.clone())),
             file_lock_timestamp: Arc::new(DbFileLockTimestampRepository::new(db.clone())),
-            webdav_key: Arc::new(DbWebdavKeyRepository::new(db.clone())),
+            webdav_key: Arc::new(auth_cache::CachingWebdavKeyRepository::new(Arc::new(
+                DbWebdavKeyRepository::new(db.clone()),
+            ))),
         }
     }
 

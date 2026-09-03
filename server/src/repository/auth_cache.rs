@@ -26,10 +26,11 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 
 use base::error::AppError;
-use infra::entity::{api_token, sync_token};
+use infra::entity::{api_token, sync_token, webdav_key};
 
 use super::api_token::{ApiTokenRepository, CreateSessionTokenParams};
 use super::sync_token::SyncTokenRepository;
+use super::webdav_key::WebdavKeyRepository;
 
 /// How long a cached `find_by_token` result is considered fresh.
 const TOKEN_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -299,6 +300,111 @@ impl ApiTokenRepository for CachingApiTokenRepository {
     }
 }
 
+/// Caching decorator for WebDAV key lookups.
+///
+/// WebDAV clients (Windows/macOS file managers, rclone) authenticate on every
+/// request with a per-library key. Each request previously looked the key up
+/// in the DB by `(repo_id, user_id, key_hash)`, adding a round-trip + SQLite
+/// lock wait on the hot path. This decorator caches `find_by_repo_user_hash`
+/// results so the hot path short-circuits to memory.
+///
+/// # Correctness / security
+///
+/// - TTL (5 min) bounds staleness.
+/// - `create` / `delete_by_id` clear the whole cache (rare operations), so a
+///   newly generated or revoked key takes effect immediately.
+/// - `update_last_used_at` does **not** clear the cache: it is called on
+///   nearly every request and only touches `last_used_at`, which the auth
+///   layer never reads from the cached model.
+/// - The auth layer still checks user existence + `is_active` and the repo
+///   membership permission against the DB on every request, so a stale cached
+///   key cannot authenticate a deleted/deactivated account or a member whose
+///   permission was revoked (defense in depth).
+pub struct CachingWebdavKeyRepository {
+    inner: Arc<dyn WebdavKeyRepository>,
+    cache: TokenCache<webdav_key::Model>,
+}
+
+impl CachingWebdavKeyRepository {
+    pub fn new(inner: Arc<dyn WebdavKeyRepository>) -> Self {
+        Self {
+            inner,
+            cache: TokenCache::new(TOKEN_CACHE_TTL),
+        }
+    }
+}
+
+#[async_trait]
+impl WebdavKeyRepository for CachingWebdavKeyRepository {
+    async fn create(
+        &self,
+        repo_id: &str,
+        user_id: i32,
+        name: &str,
+        permission: &str,
+        key_hash: &str,
+    ) -> Result<webdav_key::Model, AppError> {
+        let result = self
+            .inner
+            .create(repo_id, user_id, name, permission, key_hash)
+            .await;
+        // A newly generated key must be usable immediately.
+        self.cache.clear();
+        result
+    }
+
+    async fn find_by_repo_and_user(
+        &self,
+        repo_id: &str,
+        user_id: i32,
+    ) -> Result<Vec<webdav_key::Model>, AppError> {
+        self.inner.find_by_repo_and_user(repo_id, user_id).await
+    }
+
+    async fn find_by_repo(&self, repo_id: &str) -> Result<Vec<webdav_key::Model>, AppError> {
+        self.inner.find_by_repo(repo_id).await
+    }
+
+    async fn find_by_id_and_repo(
+        &self,
+        key_id: i32,
+        repo_id: &str,
+    ) -> Result<Option<webdav_key::Model>, AppError> {
+        self.inner.find_by_id_and_repo(key_id, repo_id).await
+    }
+
+    async fn find_by_repo_user_hash(
+        &self,
+        repo_id: &str,
+        user_id: i32,
+        key_hash: &str,
+    ) -> Result<Option<webdav_key::Model>, AppError> {
+        let cache_key = format!("{repo_id}\u{1f}{user_id}\u{1f}{key_hash}");
+        if let Some(model) = self.cache.get(&cache_key, |_| true) {
+            return Ok(Some(model));
+        }
+        let result = self
+            .inner
+            .find_by_repo_user_hash(repo_id, user_id, key_hash)
+            .await?;
+        if let Some(model) = &result {
+            self.cache.insert(&cache_key, model.clone());
+        }
+        Ok(result)
+    }
+
+    async fn delete_by_id(&self, key_id: i32) -> Result<(), AppError> {
+        let result = self.inner.delete_by_id(key_id).await;
+        // A revoked key must stop authenticating immediately.
+        self.cache.clear();
+        result
+    }
+
+    async fn update_last_used_at(&self, key_id: i32, ts: i64) -> Result<(), AppError> {
+        self.inner.update_last_used_at(key_id, ts).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -445,6 +551,151 @@ mod tests {
             .await
             .unwrap();
         repo.find_by_token("tok-1").await.unwrap().unwrap();
+        assert_eq!(
+            db_calls.load(Ordering::SeqCst),
+            3,
+            "create must clear the cache"
+        );
+    }
+
+    /// Minimal in-memory `WebdavKeyRepository` recording how many times the
+    /// DB-backed `find_by_repo_user_hash` was called.
+    struct MockWebdavKeyRepo {
+        db_calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl WebdavKeyRepository for MockWebdavKeyRepo {
+        async fn create(
+            &self,
+            repo_id: &str,
+            user_id: i32,
+            name: &str,
+            permission: &str,
+            key_hash: &str,
+        ) -> Result<webdav_key::Model, AppError> {
+            Ok(webdav_key::Model {
+                id: 1,
+                repo_id: repo_id.to_string(),
+                user_id,
+                name: name.to_string(),
+                permission: permission.to_string(),
+                key_hash: key_hash.to_string(),
+                created_at: 0,
+                last_used_at: None,
+            })
+        }
+
+        async fn find_by_repo_and_user(
+            &self,
+            _repo_id: &str,
+            _user_id: i32,
+        ) -> Result<Vec<webdav_key::Model>, AppError> {
+            Ok(Vec::new())
+        }
+
+        async fn find_by_repo(&self, _repo_id: &str) -> Result<Vec<webdav_key::Model>, AppError> {
+            Ok(Vec::new())
+        }
+
+        async fn find_by_id_and_repo(
+            &self,
+            _key_id: i32,
+            _repo_id: &str,
+        ) -> Result<Option<webdav_key::Model>, AppError> {
+            Ok(None)
+        }
+
+        async fn find_by_repo_user_hash(
+            &self,
+            repo_id: &str,
+            user_id: i32,
+            key_hash: &str,
+        ) -> Result<Option<webdav_key::Model>, AppError> {
+            self.db_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(webdav_key::Model {
+                id: 1,
+                repo_id: repo_id.to_string(),
+                user_id,
+                name: "default".to_string(),
+                permission: "rw".to_string(),
+                key_hash: key_hash.to_string(),
+                created_at: 0,
+                last_used_at: None,
+            }))
+        }
+
+        async fn delete_by_id(&self, _key_id: i32) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        async fn update_last_used_at(&self, _key_id: i32, _ts: i64) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn webdav_key_lookup_short_circuits_to_cache() {
+        let db_calls = Arc::new(AtomicUsize::new(0));
+        let repo = CachingWebdavKeyRepository::new(Arc::new(MockWebdavKeyRepo {
+            db_calls: db_calls.clone(),
+        }));
+
+        let first = repo
+            .find_by_repo_user_hash("repo-1", 7, "hash-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.user_id, 7);
+        assert_eq!(db_calls.load(Ordering::SeqCst), 1, "first lookup hits DB");
+
+        let second = repo
+            .find_by_repo_user_hash("repo-1", 7, "hash-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.user_id, 7);
+        assert_eq!(
+            db_calls.load(Ordering::SeqCst),
+            1,
+            "second lookup must be served from cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn webdav_key_create_and_delete_clear_the_cache() {
+        let db_calls = Arc::new(AtomicUsize::new(0));
+        let repo = CachingWebdavKeyRepository::new(Arc::new(MockWebdavKeyRepo {
+            db_calls: db_calls.clone(),
+        }));
+
+        // Warm the cache.
+        repo.find_by_repo_user_hash("repo-1", 7, "hash-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(db_calls.load(Ordering::SeqCst), 1);
+
+        // Deleting a key invalidates the cached entry → next lookup goes to DB.
+        repo.delete_by_id(1).await.unwrap();
+        repo.find_by_repo_user_hash("repo-1", 7, "hash-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            db_calls.load(Ordering::SeqCst),
+            2,
+            "delete must clear the cache"
+        );
+
+        // Same for create (a newly generated key shadows any stale cached one).
+        repo.create("repo-1", 7, "MacBook", "rw", "hash-2")
+            .await
+            .unwrap();
+        repo.find_by_repo_user_hash("repo-1", 7, "hash-1")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             db_calls.load(Ordering::SeqCst),
             3,
