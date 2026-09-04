@@ -129,7 +129,7 @@
         <div class="flex-1 min-w-0">
             <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
                class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate">
-                {{ entry.name }}/
+                {{ entry.name }}
             </a>
             <div class="text-xs text-gray-400 dark:text-gray-500" data-ts="{{ entry.mtime }}"></div>
             {% if !entry.tags.is_empty() %}
@@ -325,7 +325,7 @@
         {% endif %}
         <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
            class="block text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate text-center leading-snug">
-            {{ entry.name }}{% if entry.entry_type == "dir" %}/{% endif %}
+            {{ entry.name }}
         </a>
         {% if entry.entry_type == "file" %}
         <p class="text-xs text-gray-400 text-center mt-0.5">{{ entry.size_display }}</p>

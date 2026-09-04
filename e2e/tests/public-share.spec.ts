@@ -44,7 +44,7 @@ test("password-protected file share requires the password", async ({ page }) => 
 test("directory share lists entries and navigates into subdirectories", async ({ page }) => {
   await page.goto(`/d/${dirToken}/`);
   const alpha = page.locator("a.entry", { hasText: "alpha.txt" });
-  const subdir = page.locator("a.entry", { hasText: "subdir/" });
+  const subdir = page.locator("a.entry", { hasText: "subdir" });
   await expect(alpha).toBeVisible();
   await expect(subdir).toBeVisible();
 
