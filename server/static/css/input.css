@@ -60,11 +60,14 @@
    `[data-ts]` elements are rendered empty by the server and filled by
    local-time.js with `YYYY-MM-DD HH:MM` (fixed 16 chars). Reserve the width
    up front so the layout doesn't shift when the text appears.
-   inline-block is required — min-width has no effect on plain inline spans. */
+   min-width only affects inline elements once they're inline-block, so scope
+   that to spans — block divs (folder rows) must keep their own line. */
 [data-ts] {
-  display: inline-block;
   min-width: 16ch;
   font-variant-numeric: tabular-nums;
+}
+span[data-ts] {
+  display: inline-block;
 }
 
 /* ─── Base layer overrides ─────────────────────────────────────────────────── */
