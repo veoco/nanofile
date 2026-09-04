@@ -69,6 +69,12 @@
 span[data-ts] {
   display: inline-block;
 }
+/* Block divs (folder rows, search results) render empty with zero height;
+   reserve one line so the row doesn't shift when the text is filled in.
+   Both div[data-ts] usages are text-xs (line-height 1rem). */
+div[data-ts] {
+  min-height: 1rem;
+}
 
 /* ─── Base layer overrides ─────────────────────────────────────────────────── */
 @layer base {
