@@ -30,6 +30,9 @@ test("sort by name toggles file order", async ({ page }) => {
   await page.locator('.js-sort-btn[data-sort="name"]').click();
   await expect(fileRows.nth(0)).toHaveAttribute("data-name", "delta.txt");
   await expect(fileRows.nth(3)).toHaveAttribute("data-name", "alpha.txt");
+  // After the sort-triggered list refresh, the JS-filled time cells must
+  // still be populated (regression: observer used to die with the container).
+  await expect(fileRows.nth(0).locator("[data-ts]").first()).not.toHaveText("");
 });
 
 test("sort by size ascending then descending", async ({ page }) => {

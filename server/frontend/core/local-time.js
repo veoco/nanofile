@@ -22,10 +22,10 @@ export function initLocalTime() {
   document.querySelectorAll("[data-ts-title]").forEach(renderTitle);
 
   // The file list is refreshed/paginated via AJAX, which swaps in new DOM
-  // containing fresh `[data-ts]` elements. Watch the list container so those
+  // containing fresh `[data-ts]` elements. Watch the document body (not the
+  // list container, which list.js replaces wholesale via outerHTML) so those
   // get rendered too, without list.js needing to know about this module.
-  var container = document.querySelector(".file-list-container");
-  if (container && "MutationObserver" in window) {
+  if ("MutationObserver" in window) {
     var observer = new MutationObserver(function (mutations) {
       mutations.forEach(function (m) {
         m.addedNodes.forEach(function (node) {
@@ -40,6 +40,6 @@ export function initLocalTime() {
         });
       });
     });
-    observer.observe(container, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 }
