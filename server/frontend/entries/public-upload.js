@@ -204,8 +204,8 @@
     function formatSize(bytes) {
         if (bytes === 0) return '0 B';
         var units = ['B', 'KB', 'MB', 'GB'];
-        var i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-        var val = (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1);
+        var i = Math.min(Math.floor(Math.log(bytes) / Math.log(1000)), units.length - 1);
+        var val = (bytes / Math.pow(1000, i)).toFixed(i === 0 ? 0 : 1);
         return val + ' ' + units[i];
     }
 

@@ -30,12 +30,12 @@ test("formatBitrate returns empty for zero/negative/non-numeric", () => {
   assert.equal(formatBitrate(null), "");
 });
 
-test("formatHistorySize formats B/KB/MB/GB with 1024-based units", () => {
+test("formatHistorySize formats B/KB/MB/GB with 1000-based units", () => {
   assert.equal(formatHistorySize(0), "0 B");
-  assert.equal(formatHistorySize(1023), "1023 B");
-  assert.equal(formatHistorySize(1024), "1.0 KB");
-  assert.equal(formatHistorySize(1024 * 1024), "1.0 MB");
-  assert.equal(formatHistorySize(1024 * 1024 * 1024), "1.0 GB");
+  assert.equal(formatHistorySize(999), "999 B");
+  assert.equal(formatHistorySize(1000), "1.0 KB");
+  assert.equal(formatHistorySize(1000 * 1000), "1.0 MB");
+  assert.equal(formatHistorySize(1000 * 1000 * 1000), "1.0 GB");
 });
 
 test("formatHistoryTime returns a non-empty string", () => {

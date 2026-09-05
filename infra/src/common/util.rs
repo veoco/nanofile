@@ -121,12 +121,13 @@ pub fn timestamp_rfc3339(ts: i64) -> String {
 }
 
 /// Format a byte count as a human-readable size (`B`/`KB`/`MB`/`GB`/`TB`).
+/// Uses decimal (1000-based) units, matching the frontend `formatFileSize`.
 pub fn format_size(size: i64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut s = size as f64;
     let mut unit = 0;
-    while s >= 1024.0 && unit < UNITS.len() - 1 {
-        s /= 1024.0;
+    while s >= 1000.0 && unit < UNITS.len() - 1 {
+        s /= 1000.0;
         unit += 1;
     }
     if unit == 0 {
@@ -157,5 +158,21 @@ pub fn generate_unique_filename(existing: &[DirEntryData], name: &str) -> String
             return candidate;
         }
         i += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_size;
+
+    #[test]
+    fn format_size_uses_decimal_units() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(999), "999 B");
+        assert_eq!(format_size(1000), "1.0 KB");
+        assert_eq!(format_size(999_999), "1000.0 KB");
+        assert_eq!(format_size(1_000_000), "1.0 MB");
+        assert_eq!(format_size(1_000_000_000), "1.0 GB");
+        assert_eq!(format_size(1_000_000_000_000), "1.0 TB");
     }
 }

@@ -15,12 +15,11 @@ export function formatFileSize(size) {
   return size + ' B';
 }
 
-// History dialog size — 1024-based units (differs from formatFileSize's
-// 1000-based units; do not merge).
+// History dialog size — decimal (1000-based) units, matching formatFileSize.
 export function formatHistorySize(n) {
-  if (n >= 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
-  if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n >= 1000 * 1000 * 1000) return (n / (1000 * 1000 * 1000)).toFixed(1) + ' GB';
+  if (n >= 1000 * 1000) return (n / (1000 * 1000)).toFixed(1) + ' MB';
+  if (n >= 1000) return (n / 1000).toFixed(1) + ' KB';
   return n + ' B';
 }
 
