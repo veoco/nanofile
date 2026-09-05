@@ -311,6 +311,10 @@ export function openRightPanel(d) {
             body: JSON.stringify({ tags_data: [{ _tag_name: name, _tag_color: color }] }),
           }).then(function (r) { return r.json(); }).then(function (data) {
             var created = (data.tags || [])[0];
+            // Mark the panel as user-mutated so the initial tags/record load
+            // (which may still be in flight and reflects pre-save state) is
+            // discarded instead of overwriting the tag we just created.
+            userMutated = true;
             allTags.push({ id: created._id, name: created._tag_name, color: created._tag_color });
             if (tagDatalist) {
               var opt = document.createElement("option");
