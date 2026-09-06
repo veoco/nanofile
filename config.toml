@@ -44,6 +44,11 @@ sso_enabled = true
 # Advertise the `file-search` feature (gates the desktop client's search tab
 # and mobile search). The backend has a search API either way.
 file_search_enabled = true
+# Whether anonymous share links and upload links are allowed at all. When false,
+# creating new share/upload links is rejected, existing links (/f/, /d/, /u/)
+# become inaccessible, and the `share-link-disabled` feature is advertised so
+# clients hide sharing. Manage pages still let admins view/delete existing links.
+share_link_enabled = true
 # Optional desktop-client customization — only advertised in /api2/server-info/
 # when set:
 # desktop_custom_brand = "My Company"

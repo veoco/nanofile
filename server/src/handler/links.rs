@@ -198,6 +198,7 @@ pub async fn create_share_link_v21(
     State(state): State<Arc<AppState>>,
     JsonOrForm(v): JsonOrForm,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     let req = parse_link_request(&v)?;
     let expire_days = resolve_expire_days(&req)?;
     let info = share::create_share_link_v21(
@@ -288,6 +289,7 @@ pub async fn create_multi_share_link_v21(
     State(state): State<Arc<AppState>>,
     JsonOrForm(v): JsonOrForm,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     let req = parse_link_request(&v)?;
     let expire_days = resolve_expire_days(&req)?;
     let info = share::create_share_link_v21(
@@ -405,6 +407,7 @@ pub async fn create_upload_link_v21(
     State(state): State<Arc<AppState>>,
     JsonOrForm(v): JsonOrForm,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     let req = parse_link_request(&v)?;
     let expire_days = resolve_expire_days(&req)?;
     let has_password = req.password.is_some();

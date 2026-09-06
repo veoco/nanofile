@@ -208,6 +208,7 @@ pub async fn create_share(
     State(state): State<Arc<AppState>>,
     axum::Form(form): axum::Form<CreateShareForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,

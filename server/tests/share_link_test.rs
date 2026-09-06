@@ -1192,3 +1192,96 @@ async fn test_share_download_rate_limited() {
         "download beyond the per-minute cap should be rate limited"
     );
 }
+
+/// When `server.share_link_enabled` is false, creating share/upload links is
+/// rejected with 403 and the server advertises the `share-link-disabled`
+/// feature so clients hide sharing UI.
+#[tokio::test]
+async fn test_share_link_disabled_globally() {
+    let f = TestFixture::new_with_share_link_disabled().await;
+
+    // Upload a file — uploads themselves are unaffected by the share switch.
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "disabled.txt", b"data")
+        .await;
+    assert!(up.status().is_success(), "upload failed");
+
+    // Creating a share link is rejected.
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/disabled.txt" }),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "share-link creation should be forbidden"
+    );
+
+    // Creating an upload link is rejected too.
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({ "repo_id": f.repo_id, "path": "/" }),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "upload-link creation should be forbidden"
+    );
+
+    // server-info advertises the disable marker.
+    let resp = f.client.get("/api2/server-info/", None).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let features = body["features"].as_array().unwrap();
+    assert!(
+        features.iter().any(|f| f == "share-link-disabled"),
+        "share-link-disabled feature should be advertised"
+    );
+}
+
+/// A share link that already existed before the global switch was turned off
+/// becomes inaccessible: `/f/{token}/` returns 403.
+#[tokio::test]
+async fn test_share_link_disabled_blocks_existing_links() {
+    let f = TestFixture::new_with_share_link_disabled().await;
+
+    // Insert a share link directly (as if created before the switch was off).
+    let token = "pre-existing-token".to_string();
+    let now = chrono::Utc::now().timestamp();
+    let model = infra::entity::share_link::ActiveModel {
+        id: sea_orm::NotSet,
+        repo_id: sea_orm::Set(f.repo_id.clone()),
+        creator_id: sea_orm::Set(f.user_id),
+        path: sea_orm::Set("/".to_string()),
+        token: sea_orm::Set(token.clone()),
+        password: sea_orm::Set(None),
+        expires_at: sea_orm::Set(None),
+        created_at: sea_orm::Set(now),
+        s_type: sea_orm::Set("d".to_string()),
+        view_cnt: sea_orm::Set(0i64),
+        description: sea_orm::Set(None),
+    };
+    use infra::entity::share_link;
+    use sea_orm::EntityTrait;
+    share_link::Entity::insert(model)
+        .exec(&*f.server.db)
+        .await
+        .expect("failed to insert pre-existing share link");
+
+    // Accessing the folder share is rejected while disabled.
+    let resp = f.client.get(&format!("/d/{}/", token), None).await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "existing share link should be inaccessible"
+    );
+}

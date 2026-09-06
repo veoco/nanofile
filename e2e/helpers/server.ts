@@ -16,12 +16,31 @@ export interface ServerHandle {
   logPath: string;
 }
 
+/** Options for spawning an additional, isolated server instance. */
+export interface StartServerOptions {
+  /** Port to bind (default: the shared `PORT`). */
+  port?: number;
+  /** Extra NANOFILE_* env overrides applied on top of the defaults. */
+  env?: Record<string, string>;
+}
+
+/** Resolve the debug nanofile binary path (used by global-setup and specs that
+ * spawn their own isolated instance). */
+export function resolveBinary(): string {
+  return path.resolve(process.cwd(), "..", "target", "debug", "nanofile");
+}
+
 /**
  * Spawn the nanofile binary with an isolated temp SQLite DB + storage dirs.
  * stdout/stderr are appended to test-results/server.log so backend logs are
  * preserved for debugging failures.
  */
-export async function startServer(binaryPath: string): Promise<ServerHandle> {
+export async function startServer(
+  binaryPath: string,
+  opts: StartServerOptions = {},
+): Promise<ServerHandle> {
+  const port = opts.port ?? PORT;
+  const baseURL = `http://127.0.0.1:${port}`;
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nanofile-e2e-"));
   const blockDir = path.join(tmpRoot, "blocks");
   const tempDir = path.join(tmpRoot, "temp");
@@ -36,8 +55,8 @@ export async function startServer(binaryPath: string): Promise<ServerHandle> {
     ...process.env,
     NANOFILE_DATABASE_URL: `sqlite:${path.join(tmpRoot, "nanofile.db")}?mode=rwc`,
     NANOFILE_SERVER_ADDR: "127.0.0.1",
-    NANOFILE_SERVER_PORT: String(PORT),
-    NANOFILE_SERVER_SITE_URL: BASE_URL,
+    NANOFILE_SERVER_PORT: String(port),
+    NANOFILE_SERVER_SITE_URL: baseURL,
     NANOFILE_STORAGE_BLOCK_DIR: blockDir,
     NANOFILE_STORAGE_TEMP_DIR: tempDir,
     NANOFILE_ADMIN_INIT_EMAIL: ADMIN_EMAIL,
@@ -45,6 +64,7 @@ export async function startServer(binaryPath: string): Promise<ServerHandle> {
     NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS: "1000",
     NANOFILE_SERVER_SECRET_KEY: "nanofile-e2e-fixed-secret",
     NANOFILE_LOG_LEVEL: process.env.E2E_LOG_LEVEL || "info",
+    ...opts.env,
   };
 
   // Pass the config path explicitly via --config so the server does not depend
@@ -58,23 +78,23 @@ export async function startServer(binaryPath: string): Promise<ServerHandle> {
   child.stdout?.pipe(logStream);
   child.stderr?.pipe(logStream);
 
-  await waitForHealth();
+  await waitForHealth(baseURL);
 
-  return { child, baseURL: BASE_URL, tmpRoot, logPath };
+  return { child, baseURL, tmpRoot, logPath };
 }
 
-async function waitForHealth(timeoutMs = 30_000): Promise<void> {
+async function waitForHealth(baseURL: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${BASE_URL}/health`);
+      const res = await fetch(`${baseURL}/health`);
       if (res.ok) return;
     } catch {
       // server not up yet
     }
     await new Promise((r) => setTimeout(r, 200));
   }
-  throw new Error(`Server did not become healthy at ${BASE_URL}`);
+  throw new Error(`Server did not become healthy at ${baseURL}`);
 }
 
 export async function stopServer(handle: ServerHandle): Promise<void> {

@@ -65,6 +65,12 @@ pub async fn server_info(State(state): State<Arc<AppState>>) -> impl IntoRespons
     if state.config.server.sso_enabled {
         features.push("client-sso-via-local-browser".to_string());
     }
+    // Advertise that external share/upload links are disabled, so clients hide
+    // sharing entry points. The feature name is a best-effort convention; keep
+    // it in sync with the server config toggle `server.share_link_enabled`.
+    if !state.config.server.share_link_enabled {
+        features.push("share-link-disabled".to_string());
+    }
 
     let response = ServerInfoResponse {
         version: state.config.server.version.clone(),

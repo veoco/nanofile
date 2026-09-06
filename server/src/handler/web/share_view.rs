@@ -85,6 +85,7 @@ pub async fn shared_file_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
     // Password check
@@ -202,6 +203,7 @@ pub async fn shared_file_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
     let password = form
@@ -286,6 +288,7 @@ pub async fn shared_dir_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
     // Only handle directory shares
@@ -551,6 +554,7 @@ pub async fn shared_dir_file_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
     if link.s_type != "d" {
@@ -619,6 +623,7 @@ pub async fn shared_dir_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
     let password = form

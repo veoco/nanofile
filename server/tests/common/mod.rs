@@ -376,6 +376,7 @@ impl TestServer {
                 encrypted_library_pwd_hash_algo: None,
                 encrypted_library_pwd_hash_params: None,
                 file_search_enabled: true,
+                share_link_enabled: true,
                 trusted_proxies: vec![],
                 tray: false,
             },
@@ -633,6 +634,37 @@ impl TestFixture {
     /// Create a test environment with notification server enabled.
     pub async fn new_with_notification() -> Self {
         let server = TestServer::start_with_notification().await;
+        let client = server.client();
+        let db = &*server.db;
+
+        let user_id = create_test_user(db, "test@example.com", "password").await;
+
+        let resp = client.login("test@example.com", "password").await;
+        assert_eq!(resp.status(), 200, "login failed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let api_token = body["token"].as_str().unwrap().to_string();
+
+        let repo_id = create_test_repo(&client, &api_token, "test-repo").await;
+        let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
+
+        Self {
+            server,
+            client,
+            email: "test@example.com".to_string(),
+            password: "password".to_string(),
+            api_token,
+            repo_id,
+            sync_token,
+            user_id,
+        }
+    }
+
+    /// Create a full test environment with the global share-link switch turned
+    /// off (`server.share_link_enabled = false`), for testing that creating and
+    /// accessing external share/upload links is rejected.
+    pub async fn new_with_share_link_disabled() -> Self {
+        let server =
+            TestServer::start_with_server_info_config(|cfg| cfg.share_link_enabled = false).await;
         let client = server.client();
         let db = &*server.db;
 

@@ -112,6 +112,7 @@ pub async fn upload_link_view(
     Path(token): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     let link = validate_upload_link(&state, &token).await?;
 
     // Password check
@@ -195,6 +196,7 @@ pub async fn upload_link_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    crate::middleware::ensure_share_links_enabled(&state)?;
     let link = validate_upload_link(&state, &token).await?;
 
     let password = form

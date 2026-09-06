@@ -5,6 +5,20 @@ pub mod repo_extractor;
 
 use std::net::SocketAddr;
 
+use crate::AppState;
+use base::error::AppError;
+
+/// Reject a request when external share/upload links are globally disabled by
+/// the `server.share_link_enabled` setting. Call this at the top of handlers
+/// that create or serve anonymous share/upload links.
+pub fn ensure_share_links_enabled(state: &std::sync::Arc<AppState>) -> Result<(), AppError> {
+    if state.config.server.share_link_enabled {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
 /// Determine the effective client IP for rate limiting.
 ///
 /// Uses the TCP peer address exposed via `ConnectInfo`. The `X-Forwarded-For`

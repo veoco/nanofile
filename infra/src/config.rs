@@ -246,6 +246,14 @@ pub struct ServerConfig {
     /// Env: NANOFILE_SERVER_FILE_SEARCH_ENABLED
     #[serde(default = "default_true")]
     pub file_search_enabled: bool,
+    /// Whether anonymous share links and upload links are allowed at all.
+    /// When false, creating new share/upload links is rejected and all existing
+    /// links (web preview `/f/`, `/d/`, `/u/`) become inaccessible, while the
+    /// manage pages still allow viewing/deleting them. Set to false to disable
+    /// all external link sharing server-wide.
+    /// Env: NANOFILE_SERVER_SHARE_LINK_ENABLED
+    #[serde(default = "default_true")]
+    pub share_link_enabled: bool,
     /// IP addresses of trusted reverse proxies. The `X-Forwarded-For` header is
     /// only honored for rate limiting when the TCP peer is one of these. When
     /// empty (default) rate limiting uses the raw TCP peer address, so clients
@@ -307,6 +315,7 @@ impl Default for ServerConfig {
             encrypted_library_pwd_hash_algo: None,
             encrypted_library_pwd_hash_params: None,
             file_search_enabled: default_true(),
+            share_link_enabled: default_true(),
             trusted_proxies: Vec::new(),
             tray: default_true(),
         }
@@ -999,6 +1008,10 @@ impl Config {
         env_parse!(
             "NANOFILE_SERVER_FILE_SEARCH_ENABLED",
             self.server.file_search_enabled
+        );
+        env_parse!(
+            "NANOFILE_SERVER_SHARE_LINK_ENABLED",
+            self.server.share_link_enabled
         );
         // Optional server-info fields: an empty env var keeps the field absent.
         if let Ok(v) = std::env::var("NANOFILE_SERVER_DESKTOP_CUSTOM_BRAND") {
