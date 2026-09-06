@@ -334,22 +334,31 @@ impl TextIndexer {
         }
         let idx = self.clone();
         // Debounce on an async task: the sleep coalesces a batch of writes,
-        // then the commit runs synchronously on the executor. The fsync does
-        // briefly occupy a worker, but never the read path (search reads a
-        // committed snapshot); a spawn_blocking handle is avoided because
-        // awaiting it deadlocks under a current-thread runtime.
+        // then the commit runs off the async executor so the Tantivy fsync
+        // doesn't occupy a worker. A plain `spawn_blocking(move || commit())`
+        // would deadlock under a current-thread runtime (Tantivy's commit
+        // waits on its own threads, which can't run while the executor is
+        // blocked on the join), so the commit runs on a dedicated OS thread
+        // and only the join is offloaded to the blocking pool.
         tokio::runtime::Handle::current().spawn(async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let result = idx.commit();
+            let commit_idx = idx.clone();
+            let thread_handle = std::thread::spawn(move || commit_idx.commit());
+            let result = tokio::task::spawn_blocking(move || thread_handle.join()).await;
             // Store `false` before the re-check: a write that lands after this
             // store but before the `has_pending` load is seen by the load and
             // re-schedules. A write that lands before the store is either
             // included in this commit or seen by the load.
             idx.commit_scheduled.store(false, Ordering::Release);
-            if let Err(e) = result {
-                tracing::warn!("index debounce commit failed: {e}");
-            } else if idx.has_pending() {
-                idx.schedule_debounced_commit();
+            match result {
+                Ok(Ok(Ok(()))) => {
+                    if idx.has_pending() {
+                        idx.schedule_debounced_commit();
+                    }
+                }
+                Ok(Ok(Err(e))) => tracing::warn!("index debounce commit failed: {e}"),
+                Ok(Err(e)) => tracing::warn!("index debounce commit panicked: {e:?}"),
+                Err(e) => tracing::warn!("index debounce commit join task failed: {e}"),
             }
         });
     }
@@ -1091,7 +1100,7 @@ mod tests {
             .index_file_async("repo-1", "/hello.txt", "hello.txt", "Hello World")
             .await?;
         // No explicit commit: rely on the write-side debounce.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
         let results = indexer.search("hello", &[], 10, 0, false).await?;
         assert_eq!(results.len(), 1, "debounce must commit before search");
 
