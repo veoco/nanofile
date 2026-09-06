@@ -1123,10 +1123,22 @@ mod tests {
         indexer
             .index_file_async("repo-1", "/hello.txt", "hello.txt", "Hello World")
             .await?;
-        // No explicit commit: rely on the write-side debounce.
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        let results = indexer.search("hello", &[], 10, 0, false).await?;
-        assert_eq!(results.len(), 1, "debounce must commit before search");
+        // No explicit commit: rely on the write-side debounce. Poll instead of
+        // sleeping a fixed duration — the debounce commit runs on a dedicated
+        // OS thread and Tantivy's first commit has a cold-start cost, so a
+        // fixed sleep is flaky on slow CI runners.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let results = indexer.search("hello", &[], 10, 0, false).await?;
+            if results.len() == 1 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "debounce must commit before search (timed out after 15s)"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
 
         Ok(())
     }

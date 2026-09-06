@@ -8,6 +8,47 @@
 
 mod common;
 
+/// Perform a full-text content search and return the `results` array.
+async fn search_results(f: &common::TestFixture, token: &str, q: &str) -> Vec<serde_json::Value> {
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/search/?q={q}&search_filename_only=false"),
+            Some(token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    resp.json::<serde_json::Value>().await.unwrap()["results"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// Poll `predicate` until it returns true or `timeout` elapses. Returns `true`
+/// if the predicate became true, `false` on timeout.
+///
+/// The indexer commits asynchronously (debounced), so a freshly uploaded,
+/// renamed, moved or deleted file is not searchable immediately. Polling
+/// instead of sleeping a fixed duration keeps these tests robust on slow CI
+/// runners where the debounced commit (and Tantivy's first-commit cold start)
+/// can exceed a fixed delay.
+async fn wait_for<F, Fut>(timeout: std::time::Duration, mut predicate: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if predicate().await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 /// Upload a text file, then search for content → should find it.
 #[tokio::test]
 async fn test_upload_and_search_content() {
@@ -27,21 +68,18 @@ async fn test_upload_and_search_content() {
         .await;
     assert_eq!(resp.status(), 200, "upload should succeed");
 
-    // Give the indexer time to commit
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    // Give the indexer time to commit (poll, not fixed sleep)
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "nanofile").await;
+            !results.is_empty()
+        })
+        .await,
+        "should find file via content search"
+    );
 
     // Search for content (not filename) — should find the file
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=nanofile&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
-    assert!(!results.is_empty(), "should find file via content search");
+    let results = search_results(&f, token, "nanofile").await;
     assert_eq!(results[0]["name"], "hello.txt");
     assert_eq!(results[0]["fullpath"], "/hello.txt");
 }
@@ -65,21 +103,13 @@ async fn test_search_content_not_filename() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Full-text search should find it (content matches)
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=installation&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
+    // Full-text search should find it (content matches) — poll for the commit
     assert!(
-        !results.is_empty(),
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "installation").await;
+            !results.is_empty()
+        })
+        .await,
         "full-text search should find 'installation' in content"
     );
 
@@ -118,19 +148,25 @@ async fn test_binary_file_skipped() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Search for content in binary file — should not find it
+    // Upload a text file as a commit signal: once it is searchable, the
+    // debounced commit has definitely run, so the binary file's absence from
+    // the index is meaningful (not just a pre-commit artifact).
     let resp = f
         .client
-        .get(
-            "/api2/search/?q=binary&search_filename_only=false",
-            Some(token),
-        )
+        .upload_file(token, &f.repo_id, "/", "signal.txt", b"commit signal")
         .await;
     assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "signal").await;
+            !results.is_empty()
+        })
+        .await,
+        "text signal file should be indexed"
+    );
+
+    // Search for content in binary file — should not find it.
+    let results = search_results(&f, token, "binary").await;
     assert!(results.is_empty(), "binary file should not be indexed");
 }
 
@@ -153,20 +189,13 @@ async fn test_delete_cleans_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Verify it's in the index
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=delete&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
+    // Verify it's in the index (poll for the debounced commit)
     assert!(
-        !body["results"].as_array().unwrap().is_empty(),
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "delete").await;
+            !results.is_empty()
+        })
+        .await,
         "file should be in index before delete"
     );
 
@@ -180,24 +209,13 @@ async fn test_delete_cleans_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Search again — should not find it
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=delete&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
-    // The filename "delete_me.txt" would still match in filename search,
-    // but the content "content to delete" should not.
-    // After deletion, the file is gone from both filename and content index.
+    // Search again — should not find it (poll for the delete to commit)
     assert!(
-        results.is_empty(),
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "delete").await;
+            results.is_empty()
+        })
+        .await,
         "file should be removed from index after deletion"
     );
 }
@@ -215,8 +233,6 @@ async fn test_rename_updates_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
     // Rename via form POST
     let resp = f
         .client
@@ -228,20 +244,16 @@ async fn test_rename_updates_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Content search at new path should work
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=rename+content&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
-    assert!(!results.is_empty(), "should find renamed file via content");
+    // Content search at new path should work (poll for the commit)
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "rename+content").await;
+            !results.is_empty()
+        })
+        .await,
+        "should find renamed file via content"
+    );
+    let results = search_results(&f, token, "rename+content").await;
     assert_eq!(results[0]["name"], "renamed.txt");
 }
 
@@ -262,8 +274,6 @@ async fn test_move_updates_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
     // Move via form POST
     let resp = f
         .client
@@ -279,20 +289,16 @@ async fn test_move_updates_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Content search at new path should work
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=move+content&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
-    assert!(!results.is_empty(), "should find moved file via content");
+    // Content search at new path should work (poll for the commit)
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "move+content").await;
+            !results.is_empty()
+        })
+        .await,
+        "should find moved file via content"
+    );
+    let results = search_results(&f, token, "move+content").await;
     assert_eq!(results[0]["fullpath"], "/subdir/move_me.txt");
 }
 
@@ -313,20 +319,15 @@ async fn test_batch_delete_cleans_index() {
         assert_eq!(resp.status(), 200);
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Verify files are in index
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=batch&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let total = body["total"].as_i64().unwrap();
-    assert!(total >= 3, "should find batch files in index");
+    // Verify files are in index (poll for the debounced commit)
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "batch").await;
+            results.len() >= 3
+        })
+        .await,
+        "should find batch files in index"
+    );
 
     // Batch delete via v2.1 API
     let resp = f
@@ -343,31 +344,18 @@ async fn test_batch_delete_cleans_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Search again — should not find batch content (filenames might match)
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=batch+0&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
-    // Filename "batch-0.txt" still matches in filename search if the dir_entries exist via FS tree.
-    // But content search for "batch content 0" should not find it.
-    // This test is checking that the full-text content index is cleaned up.
-    // The filename might still match, so check for the content term specifically.
-    let _has_content_match = results
-        .iter()
-        .any(|r| r["fullpath"].as_str().unwrap_or("").contains("batch-0.txt"));
-    // Actually, after deletion, the filename shouldn't match either (dir entry is removed).
-    // But to be safe, check that total results decreased.
+    // Search again — should not find batch content (poll for the delete to
+    // commit). Filenames might still match via the FS tree walk, so assert the
+    // content term "batch content 0" is gone rather than an empty result set.
     assert!(
-        results.len() < total as usize,
-        "batch delete should reduce index results"
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "batch+0").await;
+            !results
+                .iter()
+                .any(|r| r["fullpath"].as_str().unwrap_or("").contains("batch-0.txt"))
+        })
+        .await,
+        "batch delete should remove the content index entry"
     );
 }
 
@@ -392,22 +380,13 @@ async fn test_content_search_multi_repo() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Search from first user — should find both repos
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=xyz987&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
-    assert_eq!(
-        results.len(),
-        2,
+    // Search from first user — should find both repos (poll for the commit)
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "xyz987").await;
+            results.len() == 2
+        })
+        .await,
         "should find content in both repos for same user"
     );
 }
@@ -431,19 +410,15 @@ async fn test_reindex_endpoint() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Verify it's indexed
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=reindexable&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let before: serde_json::Value = resp.json().await.unwrap();
-    assert!(!before["results"].as_array().unwrap().is_empty());
+    // Verify it's indexed (poll for the debounced commit)
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "reindexable").await;
+            !results.is_empty()
+        })
+        .await,
+        "file should be indexed before reindex"
+    );
 
     // Call the reindex endpoint — starts a background task.
     let resp = f
@@ -499,20 +474,26 @@ async fn test_index_file_text_for_binary() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Verify it's NOT found via content search (binary file skipped).
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
+    // Upload a text signal file so we know the debounced commit has run before
+    // asserting the binary file is absent from the index.
     let resp = f
         .client
-        .get(
-            "/api2/search/?q=vision+model&search_filename_only=false",
-            Some(token),
-        )
+        .upload_file(token, &f.repo_id, "/", "signal.txt", b"commit signal text")
         .await;
     assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
     assert!(
-        body["results"].as_array().unwrap().is_empty(),
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "signal").await;
+            !results.is_empty()
+        })
+        .await,
+        "signal file should be indexed"
+    );
+
+    // Verify the binary file is NOT found via content search.
+    let results = search_results(&f, token, "vision+model").await;
+    assert!(
+        results.is_empty(),
         "binary file should not be indexed at upload"
     );
 
@@ -533,26 +514,14 @@ async fn test_index_file_text_for_binary() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");
 
-    // Now search for the extracted text — should find the image.
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=vision+model+extracted&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
+    // Now search for the extracted text — should find the image (poll).
     assert!(
-        !results.is_empty(),
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "vision+model+extracted").await;
+            !results.is_empty() && results[0]["name"].as_str().unwrap_or("") == "screenshot.png"
+        })
+        .await,
         "should find image via custom text index"
-    );
-    assert_eq!(
-        results[0]["name"], "screenshot.png",
-        "should match the image file"
     );
 
     // Update with different text — should replace the old index entry.
@@ -570,36 +539,18 @@ async fn test_index_file_text_for_binary() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Old text should no longer match (replaced).
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=login+page+username&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
+    // Old text should no longer match, new text should match (poll for both).
     assert!(
-        body["results"].as_array().unwrap().is_empty(),
-        "old text should be replaced"
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let old_results = search_results(&f, token, "login+page+username").await;
+            let new_results = search_results(&f, token, "different+vision+model").await;
+            old_results.is_empty()
+                && !new_results.is_empty()
+                && new_results[0]["name"].as_str().unwrap_or("") == "screenshot.png"
+        })
+        .await,
+        "old text should be replaced by updated text"
     );
-
-    // New text should match.
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=different+vision+model&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
-    assert!(!results.is_empty(), "should find image via updated text");
-    assert_eq!(results[0]["name"], "screenshot.png");
 }
 
 /// Prefix matching: search "case" should find file containing "Caseend".
@@ -621,33 +572,20 @@ async fn test_prefix_matching_in_content() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Exact match should still work
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=Caseend&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
-    assert!(!results.is_empty(), "exact match should find Caseend");
+    // Exact match should still work (poll for the debounced commit)
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "Caseend").await;
+            !results.is_empty()
+        })
+        .await,
+        "exact match should find Caseend"
+    );
+    let results = search_results(&f, token, "Caseend").await;
     assert_eq!(results[0]["name"], "readme.md");
 
     // Prefix match: "case" should find "Caseend"
-    let resp = f
-        .client
-        .get(
-            "/api2/search/?q=case&search_filename_only=false",
-            Some(token),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let results = body["results"].as_array().unwrap();
+    let results = search_results(&f, token, "case").await;
     assert!(!results.is_empty(), "prefix 'case' should match 'Caseend'");
     assert_eq!(results[0]["name"], "readme.md");
 }
