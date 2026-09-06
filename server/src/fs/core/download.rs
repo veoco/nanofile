@@ -12,6 +12,24 @@ use infra::storage::DynBlockStorage;
 
 pub struct Downloader;
 
+/// Decrypt a block on the blocking thread pool. AES-CBC is CPU-bound, so
+/// running it inline on the async executor would stall other tasks sharing the
+/// worker thread.
+async fn decrypt_block_offload(
+    data: Vec<u8>,
+    key: &[u8],
+    iv: &[u8],
+) -> Result<Vec<u8>, std::io::Error> {
+    let key = key.to_vec();
+    let iv = iv.to_vec();
+    // `decrypt_block` returns `Box<dyn Error>` (not `Send`), so map it to a
+    // `String` inside the blocking closure to keep the join handle `Send`.
+    tokio::task::spawn_blocking(move || decrypt_block(&data, &key, &iv).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| std::io::Error::other(e.to_string()))?
+        .map_err(std::io::Error::other)
+}
+
 impl Downloader {
     pub async fn download_file(
         repos: &Repositories,
@@ -32,7 +50,8 @@ impl Downloader {
                 .map_err(|e| AppError::internal(e.to_string()))?;
             // If decryption key is provided, decrypt the block.
             let block_data = if let Some((key, iv)) = dec_key {
-                decrypt_block(&block_data, key, iv)
+                decrypt_block_offload(block_data, key, iv)
+                    .await
                     .map_err(|e| AppError::internal(e.to_string()))?
             } else {
                 block_data
@@ -66,7 +85,8 @@ impl Downloader {
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
             let block_data = if let Some((key, iv)) = dec_key {
-                decrypt_block(&block_data, key, iv)
+                decrypt_block_offload(block_data, key, iv)
+                    .await
                     .map_err(|e| AppError::internal(e.to_string()))?
             } else {
                 block_data
@@ -102,7 +122,8 @@ impl Downloader {
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
             let block_data = if let Some((key, iv)) = dec_key {
-                decrypt_block(&block_data, key, iv)
+                decrypt_block_offload(block_data, key, iv)
+                    .await
                     .map_err(|e| AppError::internal(e.to_string()))?
             } else {
                 block_data
@@ -190,9 +211,7 @@ pub fn stream_blocks(
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             let data = match &key {
-                Some((k, iv)) => {
-                    decrypt_block(&data, k, iv).map_err(|e| std::io::Error::other(e.to_string()))?
-                }
+                Some((k, iv)) => decrypt_block_offload(data, k, iv).await?,
                 None => data,
             };
             Ok(bytes::Bytes::from(data))
@@ -305,18 +324,16 @@ pub fn range_stream(
                     return Some((Err(std::io::Error::other(e.to_string())), (iter, pos, done)));
                 }
             };
-            let data = bytes::Bytes::from(match &key {
-                Some((k, iv)) => match decrypt_block(&data, k, iv) {
+            let data = match &key {
+                Some((k, iv)) => match decrypt_block_offload(data, k, iv).await {
                     Ok(d) => d,
                     Err(e) => {
-                        return Some((
-                            Err(std::io::Error::other(e.to_string())),
-                            (iter, pos, done),
-                        ));
+                        return Some((Err(e), (iter, pos, done)));
                     }
                 },
                 None => data,
-            });
+            };
+            let data = bytes::Bytes::from(data);
 
             let len = data.len() as u64;
             let block_start = pos;

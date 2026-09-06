@@ -86,7 +86,15 @@ impl FileOps {
                 async move {
                     let block_id = match &enc_key {
                         Some((key, iv)) => {
-                            let encrypted = encrypt_block(&blk, key, iv);
+                            // AES-CBC is CPU-bound; run it on the blocking pool
+                            // so the async writer task doesn't stall the worker.
+                            let key = key.clone();
+                            let iv = iv.clone();
+                            let blk = blk.clone();
+                            let encrypted =
+                                tokio::task::spawn_blocking(move || encrypt_block(&blk, &key, &iv))
+                                    .await
+                                    .map_err(|e| AppError::internal(e.to_string()))?;
                             store.write_block(&encrypted).await?
                         }
                         None => store.write_block(&blk).await?,

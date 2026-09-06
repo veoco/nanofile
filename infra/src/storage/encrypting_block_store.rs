@@ -70,7 +70,7 @@ impl EncryptingBlockStore {
     /// Encrypt-write `data` under the caller-assigned `id`. Never re-hashes:
     /// the caller has already verified `sha1(data) == id`.
     async fn write_encrypted_with_id(&self, id: &str, data: &[u8]) -> Result<String, io::Error> {
-        let ct = self.cipher.encrypt(data);
+        let ct = self.encrypt_offload(data.to_vec()).await?;
         self.inner.write_block_with_id(id, &ct).await
     }
 
@@ -80,19 +80,38 @@ impl EncryptingBlockStore {
     /// bytes); `on` treats it as an error.
     async fn read_decrypted(&self, id: &str) -> Result<Vec<u8>, io::Error> {
         let raw = self.inner.read_block(id).await?;
-        match self.mode {
+        self.decrypt_offload(raw).await
+    }
+
+    /// Encrypt `data` on the blocking thread pool. AES-GCM-SIV is CPU-bound, so
+    /// running it inline on the async executor would stall other tasks sharing
+    /// the worker thread.
+    async fn encrypt_offload(&self, data: Vec<u8>) -> Result<Vec<u8>, io::Error> {
+        let cipher = self.cipher.clone();
+        tokio::task::spawn_blocking(move || cipher.encrypt(&data))
+            .await
+            .map_err(|e| io::Error::other(e.to_string()))
+    }
+
+    /// Decrypt `raw` on the blocking thread pool, honoring `self.mode`.
+    async fn decrypt_offload(&self, raw: Vec<u8>) -> Result<Vec<u8>, io::Error> {
+        let cipher = self.cipher.clone();
+        let mode = self.mode;
+        tokio::task::spawn_blocking(move || match mode {
             BlockEncryptionMode::Off => Ok(raw),
-            BlockEncryptionMode::On => self.cipher.decrypt(&raw).map_err(|_| {
+            BlockEncryptionMode::On => cipher.decrypt(&raw).map_err(|_| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     "block at-rest decryption failed",
                 )
             }),
-            BlockEncryptionMode::Lazy => match self.cipher.decrypt(&raw) {
+            BlockEncryptionMode::Lazy => match cipher.decrypt(&raw) {
                 Ok(pt) => Ok(pt),
                 Err(_) => Ok(raw),
             },
-        }
+        })
+        .await
+        .map_err(|e| io::Error::other(e.to_string()))?
     }
 }
 
@@ -143,10 +162,13 @@ impl BlockStorageBackend for EncryptingBlockStore {
             // without reading, so probe the tag.
             BlockEncryptionMode::Lazy => {
                 let raw = self.inner.read_block(block_id).await?;
-                match self.cipher.decrypt(&raw) {
+                let cipher = self.cipher.clone();
+                tokio::task::spawn_blocking(move || match cipher.decrypt(&raw) {
                     Ok(pt) => Ok(pt.len() as i64),
                     Err(_) => Ok(raw.len() as i64),
-                }
+                })
+                .await
+                .map_err(|e| io::Error::other(e.to_string()))?
             }
         }
     }
@@ -157,12 +179,23 @@ impl BlockStorageBackend for EncryptingBlockStore {
         let raw = self.inner.read_block(block_id).await?;
         // Probe the GCM-SIV tag: a successful decrypt means the block is already
         // ciphertext (nothing to do); a tag mismatch means legacy plaintext.
-        if self.cipher.decrypt(&raw).is_ok() {
-            return Ok(false);
+        // Both the probe and the re-encryption are CPU-bound, so run them on the
+        // blocking thread pool.
+        let cipher = self.cipher.clone();
+        let converted = tokio::task::spawn_blocking(move || {
+            if cipher.decrypt(&raw).is_ok() {
+                return None;
+            }
+            Some(cipher.encrypt(&raw))
+        })
+        .await
+        .map_err(|e| io::Error::other(e.to_string()))?;
+        if let Some(ct) = converted {
+            self.inner.write_block_with_id_force(block_id, &ct).await?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        let ct = self.cipher.encrypt(&raw);
-        self.inner.write_block_with_id_force(block_id, &ct).await?;
-        Ok(true)
     }
 
     async fn list_blocks(&self) -> Result<Vec<String>, io::Error> {
