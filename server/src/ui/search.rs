@@ -15,6 +15,11 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
+/// Cap the total result set so a huge repo can't force a full-tree walk (and
+/// unbounded memory) on every search. Phase 1 (content) and Phase 2 (filename)
+/// share this budget; once it is reached the remaining phases are skipped.
+const MAX_SEARCH_RESULTS: usize = 200;
+
 #[derive(Template)]
 #[template(path = "search.html")]
 pub struct SearchTemplate {
@@ -87,7 +92,10 @@ pub async fn search_page(
         // the authoritative filename matcher and covers binary files the index
         // never sees.
         if !search_filename_only && let Some(indexer) = &state.indexer {
-            let ft_results = match indexer.search(&q, &repo_ids, 200, 0, false).await {
+            let ft_results = match indexer
+                .search(&q, &repo_ids, MAX_SEARCH_RESULTS, 0, false)
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("Tantivy search failed: {e}");
@@ -155,43 +163,49 @@ pub async fn search_page(
 
         // Phase 2: Filename search via FS tree walk — always run, since it is
         // the only complete filename matcher (covers binary/non-indexed files
-        // and performs true substring matching).
-        for repo_id in &repo_ids {
-            let repo_record = match state.repos.repo.find_by_id(repo_id).await {
-                Ok(Some(r)) => r,
-                _ => continue,
-            };
+        // and performs true substring matching). It only tops up the budget
+        // left over from Phase 1; once the cap is reached we stop walking the
+        // tree so a huge repo doesn't force a full traversal on every search.
+        let phase2_budget = MAX_SEARCH_RESULTS.saturating_sub(all_results.len());
+        if phase2_budget > 0 {
+            for repo_id in &repo_ids {
+                let repo_record = match state.repos.repo.find_by_id(repo_id).await {
+                    Ok(Some(r)) => r,
+                    _ => continue,
+                };
 
-            let head_commit_id = match &repo_record.head_commit_id {
-                Some(id) => id.clone(),
-                None => continue,
-            };
+                let head_commit_id = match &repo_record.head_commit_id {
+                    Some(id) => id.clone(),
+                    None => continue,
+                };
 
-            let head = match state
-                .repos
-                .commit
-                .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-                .await
-            {
-                Ok(Some(h)) => h,
-                _ => continue,
-            };
+                let head = match state
+                    .repos
+                    .commit
+                    .find_by_repo_and_commit_id(repo_id, &head_commit_id)
+                    .await
+                {
+                    Ok(Some(h)) => h,
+                    _ => continue,
+                };
 
-            if head.root_id == EMPTY_SHA1 {
-                continue;
+                if head.root_id == EMPTY_SHA1 {
+                    continue;
+                }
+
+                search_fs_tree(
+                    &state.repos,
+                    repo_id,
+                    &repo_record.name,
+                    &head.root_id,
+                    "",
+                    &q,
+                    &mut all_results,
+                    &mut seen,
+                    phase2_budget,
+                )
+                .await;
             }
-
-            search_fs_tree(
-                &state.repos,
-                repo_id,
-                &repo_record.name,
-                &head.root_id,
-                "",
-                &q,
-                &mut all_results,
-                &mut seen,
-            )
-            .await;
         }
 
         // Sort: directories first, then by name.
@@ -353,6 +367,10 @@ async fn get_accessible_repo_ids(
     Ok(ids)
 }
 
+/// Recursively search the FS tree for files/directories whose name contains the keyword.
+///
+/// Stops early once `results.len()` reaches `max_results`, so a huge repo
+/// doesn't force a full traversal when the budget is already filled.
 #[allow(clippy::too_many_arguments)]
 async fn search_fs_tree(
     repos: &crate::repository::Repositories,
@@ -363,13 +381,14 @@ async fn search_fs_tree(
     keyword: &str,
     results: &mut Vec<SearchResultItem>,
     seen: &mut std::collections::HashSet<(String, String)>,
+    max_results: usize,
 ) {
     let keyword_lower = keyword.to_lowercase();
     // Level frontier: each level reads all its directories with one batched
     // `IN` query (O(#dirs) → O(depth)).
     let mut frontier: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
 
-    while !frontier.is_empty() {
+    while !frontier.is_empty() && results.len() < max_results {
         let ids: Vec<String> = frontier
             .iter()
             .map(|(fs_id, _)| fs_id.clone())
@@ -427,6 +446,9 @@ async fn search_fs_tree(
                         dir_url,
                         content_highlight: String::new(),
                     });
+                    if results.len() >= max_results {
+                        return;
+                    }
                 }
 
                 if entry.mode & infra::serialization::S_IFDIR != 0 {

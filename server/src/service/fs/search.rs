@@ -5,6 +5,11 @@ use base::error::AppError;
 use infra::common::EMPTY_SHA1;
 use infra::serialization::S_IFDIR;
 
+/// Cap the total result set so a huge repo can't force a full-tree walk (and
+/// unbounded memory) on every search. Phase 1 (content) and Phase 2 (filename)
+/// share this budget; once it is reached the remaining phases are skipped.
+const MAX_SEARCH_RESULTS: usize = 200;
+
 /// A single file search result entry.
 #[derive(serde::Serialize, Clone)]
 pub struct FileSearchResult {
@@ -62,7 +67,10 @@ impl SearchService {
         // the authoritative filename matcher and covers binary files the index
         // never sees.
         if !search_filename_only && let Some(indexer) = &self.indexer {
-            match indexer.search(q, &repo_ids, 200, 0, false).await {
+            match indexer
+                .search(q, &repo_ids, MAX_SEARCH_RESULTS, 0, false)
+                .await
+            {
                 Ok(ft_results) => {
                     // Collect unique hits, then group by repo so the repo
                     // record + head commit are resolved once per repo and all
@@ -159,31 +167,38 @@ impl SearchService {
             .map(|c| (c.commit_id.clone(), c))
             .collect();
 
-        for repo_id in &repo_ids {
-            let Some(repo_record) = repos_map.get(repo_id) else {
-                continue;
-            };
-            let Some(head_commit_id) = &repo_record.head_commit_id else {
-                continue;
-            };
-            let Some(head) = commits_map.get(head_commit_id) else {
-                continue;
-            };
-            if head.root_id == EMPTY_SHA1 {
-                continue;
-            }
+        // Phase 2 only tops up the budget left over from Phase 1. Once the cap
+        // is reached we stop walking the tree — a huge repo must not force a
+        // full traversal (and unbounded result growth) on every search.
+        let phase2_budget = MAX_SEARCH_RESULTS.saturating_sub(all_results.len());
+        if phase2_budget > 0 {
+            for repo_id in &repo_ids {
+                let Some(repo_record) = repos_map.get(repo_id) else {
+                    continue;
+                };
+                let Some(head_commit_id) = &repo_record.head_commit_id else {
+                    continue;
+                };
+                let Some(head) = commits_map.get(head_commit_id) else {
+                    continue;
+                };
+                if head.root_id == EMPTY_SHA1 {
+                    continue;
+                }
 
-            search_fs_tree(
-                &self.repos,
-                repo_id,
-                &repo_record.name,
-                &head.root_id,
-                "",
-                q,
-                &mut all_results,
-                &mut seen,
-            )
-            .await;
+                search_fs_tree(
+                    &self.repos,
+                    repo_id,
+                    &repo_record.name,
+                    &head.root_id,
+                    "",
+                    q,
+                    &mut all_results,
+                    &mut seen,
+                    phase2_budget,
+                )
+                .await;
+            }
         }
 
         // Sort: directories first, then by name
@@ -343,6 +358,9 @@ impl SearchService {
 }
 
 /// Recursively search the FS tree for files/directories whose name contains the keyword.
+///
+/// Stops early once `results.len()` reaches `max_results`, so a huge repo
+/// doesn't force a full traversal when the budget is already filled.
 #[allow(clippy::too_many_arguments)]
 async fn search_fs_tree(
     repos: &Repositories,
@@ -353,13 +371,14 @@ async fn search_fs_tree(
     keyword: &str,
     results: &mut Vec<FileSearchResult>,
     seen: &mut std::collections::HashSet<(String, String)>,
+    max_results: usize,
 ) {
     let keyword_lower = keyword.to_lowercase();
     // Level frontier: each level reads all its directories with one batched
     // `IN` query (O(#dirs) → O(depth)).
     let mut frontier: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
 
-    while !frontier.is_empty() {
+    while !frontier.is_empty() && results.len() < max_results {
         let ids: Vec<String> = frontier
             .iter()
             .map(|(fs_id, _)| fs_id.clone())
@@ -412,6 +431,9 @@ async fn search_fs_tree(
                             dir_url,
                             content_highlight: String::new(),
                         });
+                        if results.len() >= max_results {
+                            return;
+                        }
                     }
                 }
 
