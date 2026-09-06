@@ -1,5 +1,7 @@
 # Nanofile
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 A wire-compatible [Seafile](https://www.seafile.com/) server written in Rust.
 
 Nanofile speaks the Seafile sync protocol and REST APIs, so official Seafile desktop / mobile
