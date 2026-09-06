@@ -454,7 +454,31 @@ impl TextIndexer {
         if keyword.trim().is_empty() {
             return Ok(Vec::new());
         }
+        let idx = self.clone();
+        let keyword = keyword.to_string();
+        let repo_ids = repo_ids.to_vec();
+        // The query build + Tantivy search + highlight are CPU-bound and run
+        // synchronously (Tantivy's default executor is single-threaded, so the
+        // search runs on the calling thread and does not depend on an internal
+        // thread pool). Offload them to the blocking pool so they don't occupy
+        // an async worker.
+        tokio::task::spawn_blocking(move || {
+            idx.search_sync(&keyword, &repo_ids, limit, offset, filename_only)
+        })
+        .await
+        .map_err(|e| AppError::internal(format!("indexer search task failed: {e}")))?
+    }
 
+    /// Synchronous core of [`TextIndexer::search`]. Runs the Tantivy query on
+    /// the calling thread; callers offload it to a blocking thread.
+    fn search_sync(
+        &self,
+        keyword: &str,
+        repo_ids: &[String],
+        limit: usize,
+        offset: usize,
+        filename_only: bool,
+    ) -> Result<Vec<IndexHit>, AppError> {
         // Reload so the reader sees documents committed by the write-side
         // debounce or the background committer. Search reads a recent committed
         // snapshot; the fsync is never on this read path.
