@@ -27,7 +27,9 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   settings (profile, devices, 2FA, invitations), and a **sysadmin panel** (users, shares,
   background tasks). Localized in English and Chinese.
 - **Sharing**: share links (optional password / expiry / view counting), anonymous upload links,
-  user shares with rw/r permissions, custom share permissions.
+  user shares with rw/r permissions, custom share permissions. A global `share_link_enabled` switch
+  can disable anonymous share/upload links entirely (existing links become inaccessible and the
+  `share-link-disabled` feature is advertised so clients hide sharing).
 - **Security**: TOTP two-factor auth with backup codes and trusted devices, SSO / "view on website"
   login, invitation-code registration, login rate limiting with lockout, password reset (email-gated),
   hashed session cookies with CSRF protection, path-traversal-safe filename handling.
@@ -47,7 +49,10 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
     created through the sync protocol.
 - **Storage & versioning**: per-user quotas, content-addressed block store, full history with
   revision browse / restore, per-repo history limits and TTL, garbage collection (history pruning +
-  unreachable FS-object cleanup), trash with revert, deleted-library restore.
+  unreachable FS-object cleanup), trash with revert, deleted-library restore. Optional transparent
+  at-rest encryption for file blocks (`block_encryption_mode`: `off` / `on` / `lazy`), with the
+  block id (SHA-1 of logical bytes) unchanged so Seafile clients and content-addressed dedup keep
+  working.
 - **Full-text search**: built-in Tantivy index with a jieba Chinese tokenizer; filename and content
   search across libraries.
 - **Real-time notifications**: WebSocket push for repo updates, file locks, folder permissions and
@@ -129,10 +134,10 @@ migration is applied in memory only.
 
 | Section | Purpose |
 |---------|---------|
-| `[server]` | Bind address/port, `site_url` (external URL used for download/share links and cookies — set to your HTTPS domain behind a TLS proxy), max upload size, request timeout, CORS, WebDAV switch, feature switches (`sso_enabled`, `file_search_enabled`, `tray`), desktop-client branding (`desktop_custom_brand` / `desktop_custom_logo`), trusted reverse proxies. |
+| `[server]` | Bind address/port, `site_url` (external URL used for download/share links and cookies — set to your HTTPS domain behind a TLS proxy), max upload size, request timeout, CORS, WebDAV switch, feature switches (`sso_enabled`, `file_search_enabled`, `share_link_enabled`, `tray`), desktop-client branding (`desktop_custom_brand` / `desktop_custom_logo`), trusted reverse proxies (`trusted_proxies`). |
 | `[database]` | SeaORM/SQLite connection URL (default `sqlite:data/nanofile.db?mode=rwc`) and pool size. |
-| `[storage]` | Block store and temp directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited), ffmpeg path for video thumbnails, resumable-upload temp limits (`max_temp_uploads`, `max_temp_upload_bytes`, `temp_upload_ttl_hours`), and zip-archive caps (`max_zip_entries`, `max_zip_bytes`, `0` = unlimited). |
-| `[auth]` | Password hashing cost, token TTLs, login lockout, invitation registration, password policy, rate limits (incl. per-IP anonymous share-download cap). |
+| `[storage]` | Block store, temp, thumbnail and avatar directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited), ffmpeg path for video thumbnails, resumable-upload temp limits (`max_temp_uploads`, `max_temp_upload_bytes`, `temp_upload_ttl_hours`), zip-archive caps (`max_zip_entries`, `max_zip_bytes`, `0` = unlimited), and transparent at-rest block encryption (`block_encryption_mode` / `encryption_key`). |
+| `[auth]` | Password hashing cost, token TTLs, login lockout, invitation registration, password policy, and per-IP rate limits (password reset, registration, TOTP verification, share/upload-link passwords, anonymous share downloads). |
 | `[ui]` | Default UI language (`en` / `zh`), tray menu language (`tray_language`: `auto` follows the OS locale, `en`/`zh` force one). |
 | `[email]` | Master switch for the email backend. Password-reset links are only delivered to the owner's inbox and are never echoed back by the server, so the reset flow stays disabled until an SMTP backend exists. |
 | `[admin_init]` | Optional first-start admin auto-creation. Prefer `NANOFILE_ADMIN_INIT_PASSWORD_FILE` for the password. |
@@ -264,6 +269,8 @@ data/
 ├── nanofile.db-wal    # WAL journal
 ├── blocks/            # content-addressed block store: {2-hex prefix}/{40-hex SHA-1}
 ├── temp/              # resumable / chunked upload staging
+├── thumbnails/        # generated image / video thumbnail cache
+├── avatars/           # user avatar images
 └── index/             # Tantivy full-text search index
 ```
 
