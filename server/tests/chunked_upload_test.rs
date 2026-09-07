@@ -403,7 +403,7 @@ async fn test_upload_blks_commit_rejects_size_lie() {
     assert_eq!(resp.status(), 400, "size lie must be rejected");
 }
 
-/// Security: upload-blks `file` parts must respect the 8 MiB per-block cap so
+/// Security: upload-blks `file` parts must respect the 12 MiB per-block cap so
 /// a token holder can't force a multi-GB in-memory buffer per part.
 #[tokio::test]
 async fn test_upload_blks_block_size_limited() {
@@ -413,10 +413,10 @@ async fn test_upload_blks_block_size_limited() {
     assert_eq!(resp.status(), 200);
     let url: String = resp.json().await.unwrap();
 
-    // A 9 MiB block part: over the 8 MiB cap, far under the 4 GiB global limit.
+    // A 13 MiB block part: over the 12 MiB cap, far under the 4 GiB global limit.
     let form = reqwest::multipart::Form::new().part(
         "file",
-        reqwest::multipart::Part::bytes(vec![0u8; 9 * 1024 * 1024]).file_name("a"),
+        reqwest::multipart::Part::bytes(vec![0u8; 13 * 1024 * 1024]).file_name("a"),
     );
     let resp = f.client.post_multipart_url(&url, form).await;
     assert_eq!(

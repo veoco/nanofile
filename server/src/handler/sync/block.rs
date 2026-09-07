@@ -7,7 +7,7 @@ use futures::stream::{self, StreamExt};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::MAX_BLOCK_UPLOAD_BYTES;
+use crate::handler::{MAX_BLOCK_UPLOAD_BYTES, read_body_limited};
 use crate::middleware::auth::SyncAuth;
 use base::error::AppError;
 use infra::crypto::fs_id::sha1_hex;
@@ -52,7 +52,7 @@ pub async fn check_blocks(
 ) -> Result<Json<Vec<String>>, AppError> {
     let data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| AppError::internal(e.to_string()))?;
 
     // Try JSON array first, then fall back to URL-encoded form
     let block_ids: Vec<String> = if let Ok(arr) = serde_json::from_slice::<Vec<String>>(&data) {
@@ -109,7 +109,7 @@ pub async fn get_block(
     block_store
         .read_block(&block_id)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))
+        .map_err(|e| AppError::internal(e.to_string()))
 }
 
 pub async fn put_block(
@@ -129,9 +129,7 @@ pub async fn put_block(
     )
     .await?;
 
-    let data = axum::body::to_bytes(body, MAX_BLOCK_UPLOAD_BYTES)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let data = read_body_limited(body, MAX_BLOCK_UPLOAD_BYTES).await?;
 
     // Verify the data hash matches the URL block_id.
     // The seaf-daemon sends PUT with block_id = SHA1 of (encrypted) block data.
@@ -157,7 +155,7 @@ pub async fn put_block(
     block_store
         .write_block_with_id(&block_id, &data)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| AppError::internal(e.to_string()))?;
 
     Ok(StatusCode::OK)
 }
@@ -175,12 +173,12 @@ pub async fn get_block_map(
         .ok_or_else(|| AppError::NotFound("file not found".into()))?;
 
     let json_val: serde_json::Value =
-        serde_json::from_str(&fs_obj.data).map_err(|e| AppError::Internal(e.to_string()))?;
+        serde_json::from_str(&fs_obj.data).map_err(|e| AppError::internal(e.to_string()))?;
 
     let block_ids = json_val
         .get("block_ids")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| AppError::Internal("invalid file object".into()))?;
+        .ok_or_else(|| AppError::internal("invalid file object"))?;
 
     let block_store = state.block_store.clone();
 
