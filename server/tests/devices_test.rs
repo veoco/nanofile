@@ -312,3 +312,80 @@ async fn test_device_wiped_scoped_to_user() {
         "another user's token must not be deleted"
     );
 }
+
+/// An expired API token must not be able to trigger device-wiped even though
+/// it can no longer authenticate.
+#[tokio::test]
+async fn test_device_wiped_expired_token_rejected() {
+    let server = TestServer::start().await;
+    let client = server.client();
+    let user_id = create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    let resp = client.login("test@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let healthy_token = body["token"].as_str().unwrap().to_string();
+
+    // Insert an already-expired token tied to a device.
+    let expired = server::service::auth::token::generate_api_token();
+    let now = chrono::Utc::now().timestamp();
+    let model = infra::entity::api_token::ActiveModel {
+        id: sea_orm::NotSet,
+        user_id: sea_orm::Set(user_id),
+        token: sea_orm::Set(server::service::auth::token::hash_token(&expired)),
+        created_at: sea_orm::Set(now),
+        expires_at: sea_orm::Set(Some(now - 1)),
+        device_id: sea_orm::Set(Some("dev-expired".to_string())),
+        platform: sea_orm::Set(None),
+        device_name: sea_orm::Set(None),
+        client_version: sea_orm::Set(None),
+        is_pending: sea_orm::Set(false),
+    };
+    model.insert(server.db.as_ref()).await.unwrap();
+
+    // The expired token must be rejected without touching the user's sessions.
+    let resp = client
+        .post_form("/api2/device-wiped/", None, &[("token", &expired)])
+        .await;
+    assert_eq!(resp.status(), 400, "expired token must be rejected");
+
+    // The healthy token of the same user survives.
+    let resp = client.ping(&healthy_token).await;
+    assert_eq!(resp.status(), 200, "healthy token must not be revoked");
+}
+
+/// A 2FA-pending token must not be able to trigger device-wiped.
+#[tokio::test]
+async fn test_device_wiped_pending_token_rejected() {
+    let server = TestServer::start().await;
+    let client = server.client();
+    let user_id = create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    let resp = client.login("test@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let healthy_token = body["token"].as_str().unwrap().to_string();
+
+    // Insert a 2FA-pending token tied to a device.
+    let pending = server::service::auth::token::generate_api_token();
+    let now = chrono::Utc::now().timestamp();
+    let model = infra::entity::api_token::ActiveModel {
+        id: sea_orm::NotSet,
+        user_id: sea_orm::Set(user_id),
+        token: sea_orm::Set(server::service::auth::token::hash_token(&pending)),
+        created_at: sea_orm::Set(now),
+        expires_at: sea_orm::Set(Some(now + 300)),
+        device_id: sea_orm::Set(Some("dev-pending".to_string())),
+        platform: sea_orm::Set(None),
+        device_name: sea_orm::Set(None),
+        client_version: sea_orm::Set(None),
+        is_pending: sea_orm::Set(true),
+    };
+    model.insert(server.db.as_ref()).await.unwrap();
+
+    let resp = client
+        .post_form("/api2/device-wiped/", None, &[("token", &pending)])
+        .await;
+    assert_eq!(resp.status(), 400, "pending token must be rejected");
+
+    let resp = client.ping(&healthy_token).await;
+    assert_eq!(resp.status(), 200, "healthy token must not be revoked");
+}

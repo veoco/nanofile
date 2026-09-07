@@ -28,6 +28,19 @@ pub async fn device_wiped(
         .await?
         .ok_or_else(|| AppError::BadRequest("invalid token".into()))?;
 
+    // An expired token must not be able to trigger session revocation even
+    // though it can no longer authenticate (matches middleware/auth.rs).
+    if matches!(
+        token_record.expires_at,
+        Some(exp) if chrono::Utc::now().timestamp() > exp
+    ) {
+        return Err(AppError::BadRequest("token expired".into()));
+    }
+    // A 2FA-pending token is not a full credential and must not revoke sessions.
+    if token_record.is_pending {
+        return Err(AppError::BadRequest("token is pending".into()));
+    }
+
     let device_id = token_record
         .device_id
         .clone()
