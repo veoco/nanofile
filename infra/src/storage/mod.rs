@@ -30,6 +30,23 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
         self.write_block(data).await
     }
 
+    /// Like [`Self::write_block_with_id`] but also reports whether this call
+    /// created the block on disk (`was_new`). Used by the upload quota-cleanup
+    /// path: only blocks newly written by the current upload are safe to delete
+    /// on quota failure — deduped blocks may be referenced by other files.
+    ///
+    /// Implementations should use exclusive creation (O_CREAT|O_EXCL) so the
+    /// `was_new` flag is race-free under concurrent writes of the same block.
+    /// The default falls back to the untracked path and always reports `true`.
+    async fn write_block_with_id_tracked(
+        &self,
+        block_id: &str,
+        data: &[u8],
+    ) -> Result<(String, bool), std::io::Error> {
+        let id = self.write_block_with_id(block_id, data).await?;
+        Ok((id, true))
+    }
+
     /// Write raw block data under a pre-computed ID, overwriting any existing
     /// block. Unlike [`Self::write_block_with_id`], this never short-circuits
     /// on an existing block. Used by the lazy→encrypted conversion task to

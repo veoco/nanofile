@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures::stream::StreamExt;
+use infra::crypto::fs_id::sha1_hex;
 use infra::storage::DynBlockStorage;
 use infra::storage::cdc::Chunker;
 use tokio::fs;
@@ -72,6 +73,10 @@ struct UploadStream {
     next_offset: u64,
     /// Block ids for the completed blocks produced so far, in order.
     block_ids: Vec<String>,
+    /// Block ids that were **newly written** by this upload (not deduped).
+    /// Tracked so the caller can clean them up on quota failure without
+    /// deleting blocks shared with other files.
+    new_block_ids: Vec<String>,
     /// Total declared file size, copied from the entry so the stream is
     /// self-contained once the map lock is released.
     file_size: u64,
@@ -82,7 +87,11 @@ struct UploadStream {
 /// Outcome of feeding one chunk to an upload's streaming CDC state.
 pub enum FeedOutcome {
     /// The chunk was in order and its completed blocks were persisted.
-    Streamed { block_ids: Vec<String> },
+    Streamed {
+        block_ids: Vec<String>,
+        /// Block ids that were newly written (not deduped) by this feed.
+        new_block_ids: Vec<String>,
+    },
     /// The chunk was out of order or a write failed; streaming is disabled.
     Broken,
 }
@@ -172,6 +181,7 @@ impl TempFileManager {
                     chunker: None,
                     next_offset: 0,
                     block_ids: Vec::new(),
+                    new_block_ids: Vec::new(),
                     file_size,
                     broken: false,
                 }))),
@@ -271,9 +281,16 @@ impl TempFileManager {
             .chunker
             .get_or_insert_with(|| Chunker::new(state.file_size as usize));
         let mut ids = Vec::new();
+        let mut new_ids = Vec::new();
         for blk in chunker.feed(data) {
-            match store.write_block(&blk).await {
-                Ok(id) => ids.push(id),
+            let block_id = sha1_hex(&blk);
+            match store.write_block_with_id_tracked(&block_id, &blk).await {
+                Ok((id, was_new)) => {
+                    ids.push(id.clone());
+                    if was_new {
+                        new_ids.push(id);
+                    }
+                }
                 Err(_) => {
                     // The chunker has advanced but the block is lost; disable
                     // streaming and rely on the temp file for assembly.
@@ -283,25 +300,31 @@ impl TempFileManager {
             }
         }
         state.block_ids.extend(ids.iter().cloned());
+        state.new_block_ids.extend(new_ids.iter().cloned());
         state.next_offset += data.len() as u64;
-        FeedOutcome::Streamed { block_ids: ids }
+        FeedOutcome::Streamed {
+            block_ids: ids,
+            new_block_ids: new_ids,
+        }
     }
 
     /// Consume the fully-streamed block ids for an upload, if it streamed the
     /// whole file in order.
     ///
-    /// Returns `Some((block_ids, total_size))` only when the stream is intact
-    /// and covered the entire declared file (`next_offset == file_size ==
-    /// expected_size`). `expected_size` is a defensive cross-check against a
-    /// client changing `file_size` mid-upload. Otherwise returns `None` and the
-    /// caller falls back to reading the temp file.
+    /// Returns `Some((block_ids, total_size, new_block_ids))` only when the
+    /// stream is intact and covered the entire declared file (`next_offset ==
+    /// file_size == expected_size`). `new_block_ids` is the subset of
+    /// `block_ids` that were newly written by this upload, so the caller can
+    /// clean them up on quota failure. `expected_size` is a defensive
+    /// cross-check against a client changing `file_size` mid-upload. Otherwise
+    /// returns `None` and the caller falls back to reading the temp file.
     pub async fn take_streamed_blocks(
         &self,
         store: &DynBlockStorage,
         repo_id: &str,
         file_path: &str,
         expected_size: u64,
-    ) -> Option<(Vec<String>, i64)> {
+    ) -> Option<(Vec<String>, i64, Vec<String>)> {
         let stream_handle = {
             let guard = self.inner.active.read().await;
             guard
@@ -322,12 +345,22 @@ impl TempFileManager {
         state.broken = true;
         let tail = chunker.finish();
         if !tail.is_empty() {
-            match store.write_block(&tail).await {
-                Ok(id) => state.block_ids.push(id),
+            let block_id = sha1_hex(&tail);
+            match store.write_block_with_id_tracked(&block_id, &tail).await {
+                Ok((id, was_new)) => {
+                    if was_new {
+                        state.new_block_ids.push(id.clone());
+                    }
+                    state.block_ids.push(id);
+                }
                 Err(_) => return None,
             }
         }
-        Some((std::mem::take(&mut state.block_ids), state.file_size as i64))
+        Some((
+            std::mem::take(&mut state.block_ids),
+            state.file_size as i64,
+            std::mem::take(&mut state.new_block_ids),
+        ))
     }
 
     /// How many bytes have been written to the temp file so far?
@@ -709,7 +742,7 @@ mod tests {
             fed = end;
         }
 
-        let (block_ids, total) = mgr
+        let (block_ids, total, _new_ids) = mgr
             .take_streamed_blocks(&store, repo, path, data.len() as u64)
             .await
             .expect("fully in-order upload should stream");

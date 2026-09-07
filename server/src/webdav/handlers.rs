@@ -181,7 +181,7 @@ async fn put_handler(
         .into_data_stream()
         .map_err(|e| std::io::Error::other(format!("WebDAV PUT body read failed: {e}")));
 
-    let (block_ids, total_size) = match FileOps::write_stream_blocks(
+    let (block_ids, total_size, new_block_ids) = match FileOps::write_stream_blocks(
         &state.block_store,
         content_length,
         stream,
@@ -208,6 +208,7 @@ async fn put_handler(
             Some(auth.user_id),
             false,
             None,
+            new_block_ids,
         )
         .await
     {

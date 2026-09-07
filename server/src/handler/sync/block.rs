@@ -143,6 +143,16 @@ pub async fn put_block(
         )));
     }
 
+    // Check storage quota before writing the block. Without this, a user can
+    // accumulate unlimited orphan blocks via put_block + never-commit.
+    crate::service::fs::quota::check_upload_quota(
+        &state.repos,
+        auth.user_id,
+        data.len() as i64,
+        state.config.storage.max_storage_bytes,
+    )
+    .await?;
+
     let block_store = state.block_store.clone();
     block_store
         .write_block_with_id(&block_id, &data)

@@ -34,6 +34,8 @@ pub struct TestServer {
     pub base_url: String,
     pub db: Arc<DatabaseConnection>,
     pub repos: Arc<Repositories>,
+    /// Block storage directory — used by tests to inspect orphan blocks.
+    pub block_dir: std::path::PathBuf,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     /// Directories created under `/tmp` for this server (block storage root and
     /// the full-text index dir). Removed on `Drop` so repeated test runs don't
@@ -465,6 +467,7 @@ impl TestServer {
         .await;
 
         let state = Arc::new(AppState::new(db, config, temp_file_manager));
+        let block_dir = state.config.storage.block_dir.clone();
 
         let sync_routes = server::handler::sync::sync_routes();
         let web_routes = server::handler::web::web_routes();
@@ -520,6 +523,7 @@ impl TestServer {
             base_url,
             db: state.db.clone(),
             repos: state.repos.clone(),
+            block_dir,
             shutdown_tx: Some(shutdown_tx),
             temp_dirs: vec![block_root, index_dir],
         }

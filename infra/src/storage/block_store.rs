@@ -223,6 +223,47 @@ impl BlockStorageBackend for BlockStorage {
         Ok(block_id.to_string())
     }
 
+    async fn write_block_with_id_tracked(
+        &self,
+        block_id: &str,
+        data: &[u8],
+    ) -> Result<(String, bool), std::io::Error> {
+        // Race-free tracked write: O_CREAT|O_EXCL atomically creates the file.
+        // If two concurrent calls write the same block, only one sees
+        // `was_new = true`, so the quota-cleanup path can safely delete only
+        // the blocks this upload actually created.
+        if !Self::is_valid_block_id(block_id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid block id",
+            ));
+        }
+        if self.exists_cache_contains(block_id) {
+            return Ok((block_id.to_string(), false));
+        }
+        let path = self.block_path(block_id);
+        self.ensure_dirs().await?;
+        use tokio::io::AsyncWriteExt;
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+        {
+            Ok(mut file) => {
+                file.write_all(data).await?;
+                file.flush().await?;
+                self.exists_cache_insert(block_id);
+                Ok((block_id.to_string(), true))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                self.exists_cache_insert(block_id);
+                Ok((block_id.to_string(), false))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     async fn remove_block(&self, block_id: &str) -> Result<(), std::io::Error> {
         if !Self::is_valid_block_id(block_id) {
             return Ok(());

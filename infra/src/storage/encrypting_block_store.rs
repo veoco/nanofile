@@ -138,6 +138,18 @@ impl BlockStorageBackend for EncryptingBlockStore {
         self.write_encrypted_with_id(block_id, data).await
     }
 
+    async fn write_block_with_id_tracked(
+        &self,
+        block_id: &str,
+        data: &[u8],
+    ) -> Result<(String, bool), io::Error> {
+        // Encrypt the logical bytes, then delegate to inner's tracked write
+        // so the `was_new` flag reflects whether the ciphertext file was
+        // created on disk.
+        let ct = self.encrypt_offload(data.to_vec()).await?;
+        self.inner.write_block_with_id_tracked(block_id, &ct).await
+    }
+
     async fn remove_block(&self, block_id: &str) -> Result<(), io::Error> {
         self.inner.remove_block(block_id).await
     }

@@ -154,3 +154,103 @@ async fn test_quota_exact_boundary() {
         resp.status()
     );
 }
+
+/// Count block files on disk by walking the two-level prefix directory tree.
+fn count_blocks_on_disk(block_dir: &std::path::Path) -> usize {
+    let mut count = 0;
+    if let Ok(prefix_entries) = std::fs::read_dir(block_dir) {
+        for prefix in prefix_entries.flatten() {
+            if let Ok(file_entries) = std::fs::read_dir(prefix.path()) {
+                count += file_entries.flatten().count();
+            }
+        }
+    }
+    count
+}
+
+/// Quota failure must clean up newly-written blocks so they don't accumulate
+/// as orphan blocks on disk (GC is disabled by default).
+#[tokio::test]
+async fn test_quota_failure_cleans_up_new_blocks() {
+    let f = TestFixture::new().await;
+    set_user_quota(&f, Some(1024)).await; // 1 KB quota
+
+    let blocks_before = count_blocks_on_disk(&f.server.block_dir);
+
+    // Upload a file larger than 1 KB — should fail with 443.
+    let data = vec![0u8; 2048];
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "large.txt", &data)
+        .await;
+    assert_eq!(resp.status(), 443, "over-quota upload should be rejected");
+
+    // The newly-written blocks must have been cleaned up — no orphan blocks
+    // left on disk.
+    let blocks_after = count_blocks_on_disk(&f.server.block_dir);
+    assert_eq!(
+        blocks_after, blocks_before,
+        "orphan blocks must be cleaned up after quota failure (before={}, after={})",
+        blocks_before, blocks_after
+    );
+}
+
+/// Content-Length precheck: an over-quota upload is rejected before any blocks
+/// are written to disk.
+#[tokio::test]
+async fn test_quota_precheck_rejects_without_writing_blocks() {
+    let f = TestFixture::new().await;
+    set_user_quota(&f, Some(100)).await; // 100 bytes quota
+
+    let blocks_before = count_blocks_on_disk(&f.server.block_dir);
+
+    // Upload a file that's well over the 100-byte quota. The Content-Length
+    // header (multipart body) will be even larger than the file, so the
+    // precheck should reject before any block I/O.
+    let data = vec![0xABu8; 4096];
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "big.dat", &data)
+        .await;
+    assert_eq!(resp.status(), 443, "precheck should reject over-quota upload");
+
+    let blocks_after = count_blocks_on_disk(&f.server.block_dir);
+    assert_eq!(
+        blocks_after, blocks_before,
+        "no blocks should be written when precheck rejects (before={}, after={})",
+        blocks_before, blocks_after
+    );
+}
+
+/// sync put_block must check quota — an over-quota user can't accumulate
+/// unlimited orphan blocks via put_block + never-commit.
+#[tokio::test]
+async fn test_sync_put_block_rejects_over_quota() {
+    let f = TestFixture::new().await;
+    set_user_quota(&f, Some(10)).await; // 10 bytes quota
+
+    // Upload one small file to consume the quota.
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "small.txt", b"0123456789")
+        .await;
+    assert_eq!(resp.status(), 200, "small upload under quota should succeed");
+
+    // Now try to put a block via sync — should be rejected with 443.
+    let block_data = b"some block data that exceeds remaining quota";
+    let block_id = infra::crypto::fs_id::sha1_hex(block_data);
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/block/{}", f.repo_id, block_id),
+            &f.sync_token,
+            block_data.to_vec(),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        443,
+        "put_block over quota should return 443, got {}",
+        resp.status()
+    );
+}

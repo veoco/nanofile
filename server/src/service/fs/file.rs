@@ -384,6 +384,12 @@ impl FileService {
     /// logging and background full-text indexing in one place; the actual block
     /// I/O was already done by the caller, so the whole file never had to be
     /// buffered in memory.
+    ///
+    /// `new_block_ids` is the subset of `block_ids` that were newly written by
+    /// this upload (not deduped). On quota failure they are removed so they
+    /// don't linger as orphan blocks — safe because no other file references
+    /// them yet. Deduped blocks are never deleted.
+    #[allow(clippy::too_many_arguments)]
     pub async fn upload_file_committed_stream(
         &self,
         repo_id: &str,
@@ -395,6 +401,7 @@ impl FileService {
         user_id: Option<i32>,
         ensure_dir: bool,
         replace: Option<bool>,
+        new_block_ids: Vec<String>,
     ) -> Result<String, AppError> {
         base::sanitize::validate_filename(filename)
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
@@ -409,15 +416,24 @@ impl FileService {
         let replace_eff = replace.unwrap_or(file_exists);
         let old_size_eff = if replace_eff { old_size } else { 0 };
 
-        // Check storage quota against the (now known) file size.
-        if let Some(uid) = user_id {
-            crate::service::fs::quota::check_upload_quota(
+        // Check storage quota against the (now known) file size. On failure,
+        // remove newly-written blocks so they don't accumulate as orphans
+        // (GC is disabled by default). Deduped blocks are left alone.
+        if let Some(uid) = user_id
+            && let Err(e) = crate::service::fs::quota::check_upload_quota(
                 &self.repos,
                 uid,
                 total_size,
                 self.config.storage.max_storage_bytes,
             )
-            .await?;
+            .await
+        {
+            for id in &new_block_ids {
+                if let Err(e) = self.block_store.remove_block(id).await {
+                    tracing::warn!("failed to cleanup orphaned block {id}: {e}");
+                }
+            }
+            return Err(e);
         }
 
         // Ensure the target directory exists (folder uploads with missing subdirs).

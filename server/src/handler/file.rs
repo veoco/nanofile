@@ -114,6 +114,7 @@ pub async fn file_post_handler(
         let mut fields: HashMap<String, String> = HashMap::new();
         let mut file_name = String::new();
         let mut file_block_ids: Vec<String> = Vec::new();
+        let mut file_new_block_ids: Vec<String> = Vec::new();
         let mut file_total_size: i64 = 0;
         let mut has_file = false;
 
@@ -126,13 +127,14 @@ pub async fn file_post_handler(
             match field_name.as_str() {
                 "file" => {
                     file_name = field.file_name().unwrap_or_default().to_string();
-                    let (block_ids, total_size) =
+                    let (block_ids, total_size, new_block_ids) =
                         crate::handler::web::upload::stream_file_into_blocks(
                             state.block_store.clone(),
                             &mut field,
                         )
                         .await?;
                     file_block_ids = block_ids;
+                    file_new_block_ids = new_block_ids;
                     file_total_size = total_size;
                     has_file = true;
                 }
@@ -191,6 +193,7 @@ pub async fn file_post_handler(
             Some(access.user.user_id),
             false,
             Some(replace),
+            file_new_block_ids,
         )
         .await?;
         Ok(ok_json())

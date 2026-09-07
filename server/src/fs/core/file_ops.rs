@@ -3,6 +3,7 @@ use crate::repository::Repositories;
 use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use futures::StreamExt;
+use infra::crypto::fs_id::sha1_hex;
 use infra::crypto::random_key::encrypt_block;
 use infra::entity::{commit, repo};
 use infra::events;
@@ -44,7 +45,8 @@ pub struct FileOps;
 impl FileOps {
     /// Stream bytes from `stream` through the CDC chunker and write each
     /// resulting block to the content-addressed block store, returning the
-    /// `block_ids` (in chunk order) and the aggregate `total_size` — the
+    /// `block_ids` (in chunk order), the aggregate `total_size`, and the
+    /// subset of `block_ids` that were **newly written** by this call — the
     /// block-sequence twin of `create_file`'s in-memory chunking, so a
     /// resumable upload never has to hold the whole file in memory.
     ///
@@ -52,6 +54,11 @@ impl FileOps {
     /// deterministic IV before writing (matching `create_file`), yielding
     /// `block_id == sha1(encrypted_block)` so Seafile sync clients can still
     /// re-derive the content-addressed ids for encrypted repos.
+    ///
+    /// The `new_block_ids` return value lets the caller clean up blocks that
+    /// this upload created if a subsequent quota check fails — without
+    /// risking deletion of blocks shared with other files (deduped blocks
+    /// are excluded).
     /// Feed `(idx, block)` pairs from `producer` to a bounded concurrent writer
     /// that persists them to the block store, so the producer's read loop never
     /// blocks on disk I/O. `buffered(4)` keeps block ids in input order (like
@@ -62,7 +69,7 @@ impl FileOps {
         store: &DynBlockStorage,
         enc_key: Option<(&[u8], &[u8])>,
         producer: F,
-    ) -> Result<(Vec<String>, i64), AppError>
+    ) -> Result<(Vec<String>, i64, Vec<String>), AppError>
     where
         F: FnOnce(tokio::sync::mpsc::Sender<(usize, Vec<u8>)>) -> Fut,
         Fut: futures::Future<Output = Result<i64, AppError>>,
@@ -84,7 +91,7 @@ impl FileOps {
                 let store = store.clone();
                 let enc_key = enc_key_owned.clone();
                 async move {
-                    let block_id = match &enc_key {
+                    let (block_id, was_new) = match &enc_key {
                         Some((key, iv)) => {
                             // AES-CBC is CPU-bound; run it on the blocking pool
                             // so the async writer task doesn't stall the worker.
@@ -95,11 +102,15 @@ impl FileOps {
                                 tokio::task::spawn_blocking(move || encrypt_block(&blk, &key, &iv))
                                     .await
                                     .map_err(|e| AppError::internal(e.to_string()))?;
-                            store.write_block(&encrypted).await?
+                            let id = sha1_hex(&encrypted);
+                            store.write_block_with_id_tracked(&id, &encrypted).await?
                         }
-                        None => store.write_block(&blk).await?,
+                        None => {
+                            let id = sha1_hex(&blk);
+                            store.write_block_with_id_tracked(&id, &blk).await?
+                        }
                     };
-                    Ok((idx, block_id))
+                    Ok((idx, block_id, was_new))
                 }
             })
             .buffered(CONCURRENCY)
@@ -109,18 +120,22 @@ impl FileOps {
 
         let total_size = producer(tx).await?;
 
-        let results: Vec<Result<(usize, String), AppError>> = writer
+        let results: Vec<Result<(usize, String, bool), AppError>> = writer
             .await
             .map_err(|e| AppError::Internal(format!("block writer join failed: {e}")))?;
 
         let mut block_ids = Vec::with_capacity(results.len());
+        let mut new_block_ids = Vec::with_capacity(results.len());
         for r in results {
-            let (idx, block_id) = r?;
+            let (idx, block_id, was_new) = r?;
             debug_assert_eq!(idx, block_ids.len(), "buffered preserves input order");
+            if was_new {
+                new_block_ids.push(block_id.clone());
+            }
             block_ids.push(block_id);
         }
 
-        Ok((block_ids, total_size))
+        Ok((block_ids, total_size, new_block_ids))
     }
 
     pub async fn write_stream_blocks<S>(
@@ -128,7 +143,7 @@ impl FileOps {
         file_size: usize,
         stream: S,
         enc_key: Option<(&[u8], &[u8])>,
-    ) -> Result<(Vec<String>, i64), AppError>
+    ) -> Result<(Vec<String>, i64, Vec<String>), AppError>
     where
         S: futures::Stream<Item = std::io::Result<bytes::Bytes>> + Unpin,
     {
@@ -753,7 +768,7 @@ mod tests {
         }
 
         let stream = bytes_stream(data.clone(), 8192);
-        let (ids, total) = FileOps::write_stream_blocks(&store, data.len(), stream, None)
+        let (ids, total, _new_ids) = FileOps::write_stream_blocks(&store, data.len(), stream, None)
             .await
             .unwrap();
         assert_eq!(ids, expected_ids);
@@ -766,18 +781,21 @@ mod tests {
     #[tokio::test]
     async fn test_stream_blocks_pipelined_many_blocks_in_order() {
         let (_dir, store) = temp_store();
-        let (ids, total) = FileOps::stream_blocks_pipelined(&store, None, move |tx| async move {
-            for i in 0..12u8 {
-                tx.send((i as usize, vec![i; 128]))
-                    .await
-                    .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-            }
-            Ok(12i64 * 128)
-        })
-        .await
-        .unwrap();
+        let (ids, total, new_ids) =
+            FileOps::stream_blocks_pipelined(&store, None, move |tx| async move {
+                for i in 0..12u8 {
+                    tx.send((i as usize, vec![i; 128]))
+                        .await
+                        .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+                }
+                Ok(12i64 * 128)
+            })
+            .await
+            .unwrap();
         assert_eq!(ids.len(), 12);
         assert_eq!(total, 12 * 128);
+        // All blocks were newly written (fresh store).
+        assert_eq!(new_ids.len(), 12);
         // Content addressing: each block id round-trips to its bytes in order.
         for (i, id) in ids.iter().enumerate() {
             assert_eq!(store.read_block(id).await.unwrap(), vec![i as u8; 128]);
