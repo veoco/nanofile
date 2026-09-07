@@ -1008,3 +1008,101 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
         }
     }
 }
+
+/// Security: recv_fs must reject directory objects whose dirent names
+/// contain path-traversal sequences or other invalid characters. Without
+/// this check, a rogue client can inject names like `../../evil.sh` that
+/// later cause Zip Slip when another user downloads a zip of the repo.
+#[tokio::test]
+async fn test_recv_fs_rejects_invalid_dirent_name() {
+    let f = TestFixture::new().await;
+
+    // Build a dir object with a traversal dirent name.
+    let bad_dir = base::common::FsDirData {
+        dirents: vec![base::common::DirEntryData {
+            id: "0".repeat(40),
+            mode: base::common::S_IFDIR,
+            modifier: String::new(),
+            mtime: 0,
+            name: "../../evil.sh".to_string(),
+            size: 0,
+        }],
+        obj_type: 3,
+        version: 1,
+    };
+    let dir_json = serde_json::to_string(&bad_dir).unwrap();
+    let dir_compressed =
+        infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
+
+    let mut packed = Vec::new();
+    packed.extend_from_slice(b"0".repeat(40).as_slice()); // fake fs_id
+    packed.extend_from_slice(&(dir_compressed.len() as u32).to_be_bytes());
+    packed.extend_from_slice(&dir_compressed);
+
+    let resp = f.client.recv_fs(&f.sync_token, &f.repo_id, packed).await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "recv_fs must reject dirent names with path traversal"
+    );
+
+    // Also verify that a NUL-containing name is rejected.
+    let bad_dir = base::common::FsDirData {
+        dirents: vec![base::common::DirEntryData {
+            id: "0".repeat(40),
+            mode: base::common::S_IFDIR,
+            modifier: String::new(),
+            mtime: 0,
+            name: "file\x00name".to_string(),
+            size: 0,
+        }],
+        obj_type: 3,
+        version: 1,
+    };
+    let dir_json = serde_json::to_string(&bad_dir).unwrap();
+    let dir_compressed =
+        infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
+
+    let mut packed = Vec::new();
+    packed.extend_from_slice(b"1".repeat(40).as_slice());
+    packed.extend_from_slice(&(dir_compressed.len() as u32).to_be_bytes());
+    packed.extend_from_slice(&dir_compressed);
+
+    let resp = f.client.recv_fs(&f.sync_token, &f.repo_id, packed).await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "recv_fs must reject dirent names with NUL bytes"
+    );
+}
+
+/// A directory object with valid dirent names must still be accepted.
+#[tokio::test]
+async fn test_recv_fs_accepts_valid_dirent_name() {
+    let f = TestFixture::new().await;
+
+    let good_dir = base::common::FsDirData {
+        dirents: vec![base::common::DirEntryData {
+            id: "0".repeat(40),
+            mode: base::common::S_IFDIR,
+            modifier: String::new(),
+            mtime: 0,
+            name: "normal_folder".to_string(),
+            size: 0,
+        }],
+        obj_type: 3,
+        version: 1,
+    };
+    let dir_json = serde_json::to_string(&good_dir).unwrap();
+    let dir_fs_id = infra::crypto::fs_id::sha1_hex(dir_json.as_bytes());
+    let dir_compressed =
+        infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
+
+    let mut packed = Vec::new();
+    packed.extend_from_slice(dir_fs_id.as_bytes());
+    packed.extend_from_slice(&(dir_compressed.len() as u32).to_be_bytes());
+    packed.extend_from_slice(&dir_compressed);
+
+    let resp = f.client.recv_fs(&f.sync_token, &f.repo_id, packed).await;
+    assert_eq!(resp.status(), 200);
+}
