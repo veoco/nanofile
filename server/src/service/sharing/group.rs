@@ -226,7 +226,13 @@ pub async fn search_user(
         return Ok(Vec::new());
     }
 
-    let pattern = format!("%{}%", query);
+    // Escape LIKE wildcards so a query of "%" or "_" can't enumerate all
+    // emails (the repository query uses `ESCAPE '\'`).
+    let escaped = query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let pattern = format!("%{}%", escaped);
     let users = repos.user.find_by_email_like(&pattern).await?;
 
     let result: Vec<serde_json::Value> = users

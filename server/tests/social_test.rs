@@ -94,6 +94,50 @@ async fn test_search_user_not_found() {
     assert_eq!(body.as_array().unwrap().len(), 0);
 }
 
+/// Security: LIKE wildcards in the search query must be matched literally, so
+/// a query of "%" or "_" can't enumerate every registered email.
+#[tokio::test]
+async fn test_search_user_wildcard_not_wildcard() {
+    let f = TestFixture::new().await;
+    // The fixture already has one user (f.email). Add a second distinct one.
+    create_test_user(f.server.db.as_ref(), "bob@example.com", "password123").await;
+
+    // A bare "%" must not return every user.
+    let resp = f
+        .client
+        .get("/api2/search-user/?q=%25", Some(&f.api_token))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body.as_array().unwrap().len(),
+        0,
+        "a bare % must not enumerate all emails"
+    );
+
+    // A bare "_" must not match every single-char-prefixed email.
+    let resp = f
+        .client
+        .get("/api2/search-user/?q=_", Some(&f.api_token))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body.as_array().unwrap().len(),
+        0,
+        "a bare _ must not enumerate all emails"
+    );
+
+    // A normal substring still works.
+    let resp = f
+        .client
+        .get("/api2/search-user/?q=bob", Some(&f.api_token))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body.as_array().unwrap().len(), 1, "substring search works");
+}
+
 /// v2.1 — GET /api/v2.1/groups/ (required by seadroid `getGroupsAsync`, part of
 /// the library-list load chain; must return 200 + array, never 404).
 #[tokio::test]

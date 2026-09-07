@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set,
@@ -112,8 +113,14 @@ impl UserRepository for DbUserRepository {
     }
 
     async fn find_by_email_like(&self, pattern: &str) -> Result<Vec<user::Model>, AppError> {
+        // `LIKE ... ESCAPE '\'` so `%`/`_` in the caller's pattern are matched
+        // literally instead of acting as wildcards (sea-orm's `like` has no
+        // ESCAPE clause). The pattern is bound as a value, not interpolated.
         Ok(user::Entity::find()
-            .filter(user::Column::Email.like(pattern))
+            .filter(Expr::cust_with_values(
+                "email LIKE ? ESCAPE '\\'",
+                [pattern],
+            ))
             .all(self.db.as_ref())
             .await?)
     }
