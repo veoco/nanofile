@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::i18n::I18n;
 use crate::repository::api_token::CreateSessionTokenParams;
-use crate::service::auth::password::verify_password_async;
+use crate::service::auth::password::{DUMMY_PASSWORD_HASH, verify_password_async};
 use crate::service::auth::password_reset::PasswordResetService;
 use crate::service::auth::registration::{RegistrationParams, RegistrationService};
 use crate::service::auth::token::generate_api_token;
@@ -227,6 +227,15 @@ pub async fn login(
                 .auth_limiters
                 .login
                 .record_failures(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()]);
+            // Run PBKDF2 against a dummy hash so a "user not found" response
+            // takes as long as a wrong-password response, avoiding username
+            // enumeration via a response-time side channel.
+            let _ = verify_password_async(
+                form.password.clone(),
+                DUMMY_PASSWORD_HASH.to_string(),
+                state.config.auth.password_hash_iterations,
+            )
+            .await;
             return render_login_page(
                 &state,
                 &headers,

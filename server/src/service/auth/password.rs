@@ -5,6 +5,13 @@ use subtle::ConstantTimeEq;
 const SALT_LEN: usize = 16;
 const HASH_LEN: usize = 32;
 
+/// A syntactically-valid PBKDF2 hash (16-byte salt + 32-byte hash, hex) used to
+/// equalize login latency when the user does not exist. Without this, a
+/// "user not found" response returns instantly while a wrong-password response
+/// runs PBKDF2 for tens to hundreds of ms, leaking which emails are registered
+/// via a response-time side channel.
+pub const DUMMY_PASSWORD_HASH: &str = "00000000000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000";
+
 fn pbkdf2_hash(password: &[u8], salt: &[u8], iterations: u32) -> [u8; HASH_LEN] {
     let mut key = [0u8; HASH_LEN];
     pbkdf2::pbkdf2_hmac::<Sha256>(password, salt, iterations, &mut key);

@@ -1,18 +1,12 @@
 use std::sync::Arc;
 
 use crate::repository::Repositories;
-use crate::service::auth::password::verify_password_async;
+use crate::service::auth::password::{DUMMY_PASSWORD_HASH, verify_password_async};
 use crate::service::auth::s2fa::{S2FA_TTL_SECONDS, generate_s2fa_token};
 use crate::service::auth::token::generate_api_token;
 use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
 use infra::rate_limit::LoginRateLimiter;
-
-/// A syntactically-valid PBKDF2 hash (16-byte salt + 32-byte hash, hex) used to
-/// equalize login latency when the user does not exist. Without this, a
-/// "user not found" response returns instantly while a wrong-password response
-/// runs PBKDF2 for hundreds of ms, leaking which emails are registered via timing.
-const DUMMY_PASSWORD_HASH: &str = "00000000000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000";
 
 /// Represents all possible outcomes of a login attempt.
 pub enum LoginResult {
