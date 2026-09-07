@@ -617,6 +617,9 @@ pub struct AuthConfig {
     /// Max reindex requests per user per hour (0 = unlimited).
     #[serde(default = "default_five")]
     pub reindex_max_per_hour: u32,
+    /// Max search requests per user per minute (0 = unlimited).
+    #[serde(default = "default_search_max_per_minute")]
+    pub search_max_per_minute: u32,
 }
 
 impl Default for AuthConfig {
@@ -637,6 +640,7 @@ impl Default for AuthConfig {
             link_password_max_per_hour: default_five(),
             share_download_max_per_minute: default_share_download_max_per_minute(),
             reindex_max_per_hour: default_five(),
+            search_max_per_minute: default_search_max_per_minute(),
         }
     }
 }
@@ -667,6 +671,9 @@ fn default_five() -> u32 {
 }
 fn default_share_download_max_per_minute() -> u32 {
     30
+}
+fn default_search_max_per_minute() -> u32 {
+    60
 }
 fn default_password_min_length() -> u32 {
     8

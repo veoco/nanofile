@@ -589,3 +589,71 @@ async fn test_prefix_matching_in_content() {
     assert!(!results.is_empty(), "prefix 'case' should match 'Caseend'");
     assert_eq!(results[0]["name"], "readme.md");
 }
+
+/// Invalid query syntax (regex, field:foo, unbalanced quotes) should
+/// return 200 with an empty result set, not a 500 error.
+#[tokio::test]
+async fn test_invalid_query_syntax_returns_empty_not_500() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    // Upload a file so the index is non-empty.
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "doc.txt", b"some content here")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "content").await;
+            !results.is_empty()
+        })
+        .await,
+        "file should be indexed"
+    );
+
+    // Various invalid/special syntaxes that used to return 500.
+    for bad_query in &[
+        "/.*a.*b.*/",   // regex syntax (disabled by default)
+        "field:value",  // field-qualified query on non-existent field
+        "\"unbalanced", // unbalanced quote
+        "(a OR b",      // unbalanced paren
+        "a~",           // fuzzy without valid distance
+    ] {
+        let resp = f
+            .client
+            .get(
+                &format!("/api2/search/?q={bad_query}&search_filename_only=false"),
+                Some(token),
+            )
+            .await;
+        assert_eq!(
+            resp.status(),
+            200,
+            "query {bad_query:?} should return 200, not 500"
+        );
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let results = body["results"].as_array().unwrap();
+        assert!(
+            results.is_empty(),
+            "query {bad_query:?} should return empty results"
+        );
+    }
+}
+
+/// Overly long keyword should return 200 with empty results, not reach Tantivy.
+#[tokio::test]
+async fn test_overlong_keyword_returns_empty() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    let long_query = "a".repeat(300); // exceeds MAX_KEYWORD_LEN (256)
+    let resp = f
+        .client
+        .get(&format!("/api2/search/?q={long_query}"), Some(token))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let results = body["results"].as_array().unwrap();
+    assert!(results.is_empty(), "overlong keyword should return empty");
+}

@@ -454,6 +454,12 @@ impl TextIndexer {
         if keyword.trim().is_empty() {
             return Ok(Vec::new());
         }
+        // Bound the keyword length so a multi-MB payload doesn't reach the
+        // Tantivy parser or the blocking pool.
+        const MAX_KEYWORD_LEN: usize = 256;
+        if keyword.len() > MAX_KEYWORD_LEN {
+            return Ok(Vec::new());
+        }
         let idx = self.clone();
         let keyword = keyword.to_string();
         let repo_ids = repo_ids.to_vec();
@@ -462,11 +468,20 @@ impl TextIndexer {
         // search runs on the calling thread and does not depend on an internal
         // thread pool). Offload them to the blocking pool so they don't occupy
         // an async worker.
-        tokio::task::spawn_blocking(move || {
+        let join = tokio::task::spawn_blocking(move || {
             idx.search_sync(&keyword, &repo_ids, limit, offset, filename_only)
-        })
-        .await
-        .map_err(|e| AppError::internal(format!("indexer search task failed: {e}")))?
+        });
+        // Cap wall-clock time; the blocking thread may still run to completion
+        // but the HTTP request won't wait indefinitely for a slow query.
+        match tokio::time::timeout(std::time::Duration::from_secs(10), join).await {
+            Ok(res) => {
+                res.map_err(|e| AppError::internal(format!("indexer search task failed: {e}")))?
+            }
+            Err(_) => {
+                tracing::warn!("indexer search timed out");
+                Ok(Vec::new())
+            }
+        }
     }
 
     /// Synchronous core of [`TextIndexer::search`]. Runs the Tantivy query on
@@ -524,9 +539,11 @@ impl TextIndexer {
             vec![filename_field, content_field]
         };
         let query_parser = QueryParser::for_index(&self.index, query_fields);
-        let exact_query = query_parser
-            .parse_query(keyword)
-            .map_err(|e| AppError::internal(format!("parse query: {e}")))?;
+        // Lenient parsing: invalid syntax (e.g. unbalanced quotes, field:foo,
+        // /regex/ which is disabled by default) becomes a match-nothing
+        // subquery instead of a hard error. The user gets an empty result
+        // set for garbage input, which is the expected UX.
+        let (exact_query, _errors) = query_parser.parse_query_lenient(keyword);
 
         let mut subqueries: Vec<(Occur, Box<dyn tantivy::query::Query>)> =
             vec![(Occur::Should, exact_query)];

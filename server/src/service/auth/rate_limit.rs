@@ -17,6 +17,7 @@ pub struct AuthRateLimiters {
     pub link_password: Arc<GenericRateLimiter>,
     pub share_download: Arc<GenericRateLimiter>,
     pub reindex: Arc<GenericRateLimiter>,
+    pub search: Arc<GenericRateLimiter>,
 }
 
 impl AuthRateLimiters {
@@ -47,6 +48,10 @@ impl AuthRateLimiters {
             reindex: Arc::new(GenericRateLimiter::new(
                 cfg.reindex_max_per_hour.max(1),
                 3600,
+            )),
+            search: Arc::new(GenericRateLimiter::new(
+                cfg.search_max_per_minute.max(1),
+                60,
             )),
         })
     }

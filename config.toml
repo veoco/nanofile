@@ -166,6 +166,8 @@ link_password_max_per_hour = 5
 # Max anonymous share-link downloads per IP per minute (0 = unlimited)
 share_download_max_per_minute = 30
 reindex_max_per_hour = 5
+# Max search requests per user per minute (0 = unlimited)
+search_max_per_minute = 60
 
 [ui]
 # Environment variables:

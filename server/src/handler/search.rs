@@ -46,6 +46,12 @@ pub async fn search_file(
         return Err(AppError::BadRequest("q invalid.".into()));
     }
 
+    let rl_key = format!("search:{}", auth.user_id);
+    if state.auth_limiters.search.is_limited(&rl_key) {
+        return Err(AppError::TooManyRequests);
+    }
+    state.auth_limiters.search.record_attempt(&rl_key);
+
     let svc = state.search_service();
     // Filename-only search scoped to the single repo; fetch a large page and
     // paginate the reshaped result below.
@@ -93,6 +99,12 @@ pub async fn search(
     let per_page = query.per_page.unwrap_or(10).max(1);
     let page = query.page.unwrap_or(1).max(1);
     let search_filename_only = query.search_filename_only.unwrap_or(false);
+
+    let rl_key = format!("search:{}", auth.user_id);
+    if state.auth_limiters.search.is_limited(&rl_key) {
+        return Err(AppError::TooManyRequests);
+    }
+    state.auth_limiters.search.record_attempt(&rl_key);
 
     let svc = state.search_service();
     let (results, total, has_more) = svc
