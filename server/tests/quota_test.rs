@@ -212,7 +212,11 @@ async fn test_quota_precheck_rejects_without_writing_blocks() {
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "big.dat", &data)
         .await;
-    assert_eq!(resp.status(), 443, "precheck should reject over-quota upload");
+    assert_eq!(
+        resp.status(),
+        443,
+        "precheck should reject over-quota upload"
+    );
 
     let blocks_after = count_blocks_on_disk(&f.server.block_dir);
     assert_eq!(
@@ -234,7 +238,11 @@ async fn test_sync_put_block_rejects_over_quota() {
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "small.txt", b"0123456789")
         .await;
-    assert_eq!(resp.status(), 200, "small upload under quota should succeed");
+    assert_eq!(
+        resp.status(),
+        200,
+        "small upload under quota should succeed"
+    );
 
     // Now try to put a block via sync — should be rejected with 443.
     let block_data = b"some block data that exceeds remaining quota";
