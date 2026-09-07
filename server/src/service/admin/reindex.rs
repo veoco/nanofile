@@ -45,6 +45,34 @@ impl AdminService {
         Ok(repo_model)
     }
 
+    /// Verify that the user is the repo owner or a server admin.
+    /// Stricter than `check_repo_access` — used for heavy operations
+    /// (full-text reindex) that must not be triggerable by read-only members.
+    pub async fn check_repo_admin(
+        &self,
+        repo_id: &str,
+        user_id: i32,
+    ) -> Result<infra::entity::repo::Model, AppError> {
+        let repo_model = self
+            .repos
+            .repo
+            .find_by_id(repo_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+        if repo_model.owner_id != user_id {
+            let user = self
+                .repos
+                .user
+                .find_by_id(user_id)
+                .await?
+                .ok_or(AppError::Forbidden)?;
+            if !user.is_admin {
+                return Err(AppError::Forbidden);
+            }
+        }
+        Ok(repo_model)
+    }
+
     /// Index a single file with custom extracted text.
     pub async fn index_file_text(
         &self,

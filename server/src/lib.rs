@@ -98,6 +98,9 @@ pub struct AppState {
     /// task_id. Stored on AppState because `admin_service()` builds a new
     /// `AdminService` per request.
     pub reindex_tasks: Arc<std::sync::Mutex<HashMap<String, ReindexProgress>>>,
+    /// Repos that currently have a running reindex task, to prevent
+    /// concurrent reindex of the same repo. Keyed by repo_id.
+    pub reindex_running: Arc<std::sync::Mutex<HashMap<String, ()>>>,
     /// Per-user TTL cache of the left-panel repo list (web UI).
     pub left_panel_cache: Arc<crate::ui::left_panel_cache::LeftPanelRepoCache>,
 }
@@ -113,6 +116,10 @@ pub struct ReindexProgress {
     pub indexed: u64,
     pub skipped: u64,
     pub error: Option<String>,
+    /// Unix timestamp when the task reached a terminal state. None while running.
+    pub finished_at: Option<i64>,
+    /// User ID of the task creator (for progress query authorization).
+    pub creator_id: i32,
 }
 
 impl std::fmt::Debug for AppState {
@@ -248,6 +255,7 @@ impl AppState {
             password_manager,
             scheduler,
             reindex_tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            reindex_running: Arc::new(std::sync::Mutex::new(HashMap::new())),
             left_panel_cache: Arc::new(crate::ui::left_panel_cache::LeftPanelRepoCache::default()),
         }
     }

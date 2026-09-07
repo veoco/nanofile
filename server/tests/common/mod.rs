@@ -416,6 +416,7 @@ impl TestServer {
                 share_download_max_per_minute: auth_limits
                     .unwrap_or_default()
                     .share_download_max_per_minute,
+                reindex_max_per_hour: 5,
             },
             logging: infra::config::LoggingConfig {
                 level: "debug".to_string(),

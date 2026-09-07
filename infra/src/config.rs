@@ -614,6 +614,9 @@ pub struct AuthConfig {
     /// Max anonymous share-link downloads per IP per minute (0 = unlimited).
     #[serde(default = "default_share_download_max_per_minute")]
     pub share_download_max_per_minute: u32,
+    /// Max reindex requests per user per hour (0 = unlimited).
+    #[serde(default = "default_five")]
+    pub reindex_max_per_hour: u32,
 }
 
 impl Default for AuthConfig {
@@ -633,6 +636,7 @@ impl Default for AuthConfig {
             totp_max_attempts: default_five(),
             link_password_max_per_hour: default_five(),
             share_download_max_per_minute: default_share_download_max_per_minute(),
+            reindex_max_per_hour: default_five(),
         }
     }
 }

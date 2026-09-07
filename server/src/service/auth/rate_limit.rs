@@ -16,6 +16,7 @@ pub struct AuthRateLimiters {
     pub disable_2fa: Arc<GenericRateLimiter>,
     pub link_password: Arc<GenericRateLimiter>,
     pub share_download: Arc<GenericRateLimiter>,
+    pub reindex: Arc<GenericRateLimiter>,
 }
 
 impl AuthRateLimiters {
@@ -42,6 +43,10 @@ impl AuthRateLimiters {
             share_download: Arc::new(GenericRateLimiter::new(
                 cfg.share_download_max_per_minute.max(1),
                 60,
+            )),
+            reindex: Arc::new(GenericRateLimiter::new(
+                cfg.reindex_max_per_hour.max(1),
+                3600,
             )),
         })
     }

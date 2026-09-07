@@ -165,6 +165,7 @@ totp_max_attempts = 5
 link_password_max_per_hour = 5
 # Max anonymous share-link downloads per IP per minute (0 = unlimited)
 share_download_max_per_minute = 30
+reindex_max_per_hour = 5
 
 [ui]
 # Environment variables:
