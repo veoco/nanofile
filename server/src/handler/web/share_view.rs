@@ -154,7 +154,7 @@ pub async fn shared_file_view(
 
         crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
-        let disposition = format!("attachment; filename=\"{}\"", filename);
+        let disposition = crate::fs::core::download::content_disposition(&filename, true);
         let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
         return Ok(crate::fs::core::download::file_download_response(
             crate::fs::core::download::FileDownloadParams {
@@ -405,8 +405,11 @@ pub async fn shared_dir_view(
         );
         headers.insert(
             HeaderName::from_static("content-disposition"),
-            HeaderValue::from_str(&format!("attachment; filename=\"{}.zip\"", dir_name))
-                .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+            HeaderValue::from_str(&crate::fs::core::download::content_disposition(
+                &format!("{dir_name}.zip"),
+                true,
+            ))
+            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
         );
         return Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response());
     }
@@ -622,7 +625,7 @@ pub async fn shared_dir_file_view(
         .rsplit_once('/')
         .map(|(_, n)| n.to_string())
         .unwrap_or_else(|| full_path.clone());
-    let disposition = format!("attachment; filename=\"{}\"", filename);
+    let disposition = crate::fs::core::download::content_disposition(&filename, true);
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
     Ok(crate::fs::core::download::file_download_response(
         crate::fs::core::download::FileDownloadParams {
