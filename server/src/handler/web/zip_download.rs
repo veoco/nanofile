@@ -23,7 +23,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
-use crate::fs::zip::{ZipFileEntry, ZipLimits, collect_selected_entries, stream_zip};
+use crate::fs::zip::{
+    ZipFileEntry, ZipLimits, acquire_zip_permit, collect_selected_entries, stream_zip,
+};
 use crate::middleware::auth::AuthUser;
 use base::error::AppError;
 
@@ -134,6 +136,11 @@ pub async fn zip_task_handler(
     // Resolve head commit root
     let root_fs_id = infra::common::util::get_head_root_id(&state.db, &repo_id).await?;
 
+    // Gate the expensive collection phase (recursive DB traversal) so a flood
+    // of zip tokens can't bypass the global concurrency cap. The permit is held
+    // as a scoped guard for the duration of the walk and dropped after.
+    let _permit = acquire_zip_permit().await?;
+
     // Collect files (recursively for directories), bounded by the configured
     // per-archive entry/byte caps (429 when exceeded).
     let files = collect_selected_entries(
@@ -230,7 +237,10 @@ pub async fn zip_download_handler(
 
     let zip_filename = format!("{}.zip", task.zip_name);
 
-    let stream = stream_zip(state.block_store.clone(), task.files, dec_key);
+    // Acquire a permit for the streaming phase; moved into stream_zip and held
+    // for the writer task's full lifecycle.
+    let permit = acquire_zip_permit().await?;
+    let stream = stream_zip(state.block_store.clone(), task.files, dec_key, permit);
 
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(

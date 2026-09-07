@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
-use crate::fs::zip::{ZipLimits, collect_dir_entries, stream_zip};
+use crate::fs::zip::{ZipLimits, acquire_zip_permit, collect_dir_entries, stream_zip};
 use crate::i18n::I18n;
 use crate::ui::format_size;
 use base::common::FsFileData;
@@ -379,6 +379,9 @@ pub async fn shared_dir_view(
         } else {
             dir_name
         };
+        // Gate the expensive tree walk too, so a flood of anonymous link-token
+        // requests can't bypass the global zip concurrency cap.
+        let permit = acquire_zip_permit().await?;
         let files = collect_dir_entries(
             &state.repos,
             &link.repo_id,
@@ -393,7 +396,7 @@ pub async fn shared_dir_view(
         .await?;
 
         crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
-        let stream = stream_zip(state.block_store.clone(), files, None);
+        let stream = stream_zip(state.block_store.clone(), files, None, permit);
 
         let mut headers = HeaderMap::new();
         headers.insert(

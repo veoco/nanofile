@@ -5,7 +5,7 @@
 use futures::StreamExt;
 use futures::io::AsyncWriteExt;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::io::ReaderStream;
 
 use async_zip::tokio::write::ZipFileWriter;
@@ -58,6 +58,22 @@ static ZIP_CONCURRENCY: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 fn zip_semaphore() -> &'static Arc<Semaphore> {
     ZIP_CONCURRENCY.get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_ZIPS)))
+}
+
+/// Acquire a permit covering the full zip lifecycle (tree collection + zipping).
+///
+/// Callers must obtain the permit *before* running `collect_*_entries`, so the
+/// potentially-expensive recursive DB traversal that builds the file list is
+/// also gated — otherwise a flood of independent zip tokens could bypass the
+/// concurrency cap in the collection phase, which is what actually loads the
+/// CPU/DB. Acquiring is queueing, not rejecting, preserving the original
+/// concurrency-limit semantics.
+pub async fn acquire_zip_permit() -> Result<OwnedSemaphorePermit, AppError> {
+    zip_semaphore()
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| AppError::Internal(format!("zip concurrency gate failed: {e}")))
 }
 
 /// Recursively collect all files under `dir_path`.
@@ -238,18 +254,14 @@ pub fn stream_zip(
     block_store: infra::storage::DynBlockStorage,
     files: Vec<ZipFileEntry>,
     enc_key: Option<(Vec<u8>, Vec<u8>)>,
+    _permit: OwnedSemaphorePermit,
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
     let (duplex_writer, duplex_reader) = tokio::io::duplex(64 * 1024);
 
     tokio::spawn(async move {
-        // Gate concurrent archive generation so a burst of large downloads
-        // can't saturate the runtime. The permit drops when the writer task
-        // finishes (including error paths), freeing a slot for the next zip.
-        let _permit = zip_semaphore()
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|e| std::io::Error::other(format!("zip concurrency gate failed: {e}")))?;
+        // The concurrency permit is held for the full lifecycle: it is acquired
+        // by the caller before the collection phase and moved in here, so the
+        // writer task (including error paths) keeps it until it finishes.
         let mut zip = ZipFileWriter::with_tokio(duplex_writer);
 
         for entry in &files {
