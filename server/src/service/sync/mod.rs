@@ -422,41 +422,57 @@ impl SyncService {
         repo_id: &str,
         entries: Vec<(String, Vec<u8>)>,
     ) -> Result<(), AppError> {
-        let models: Vec<infra::entity::fs_object::ActiveModel> = entries
-            .into_iter()
-            .map(|(fs_id, obj_data)| -> Result<_, AppError> {
-                let decompressed = pack_fs::decompress_fs_data(&obj_data)
-                    .map_err(|e| AppError::BadRequest(format!("decompress fs object: {e}")))?;
-                let json_str = String::from_utf8(decompressed)
-                    .map_err(|_| AppError::BadRequest("invalid utf-8 in fs object".into()))?;
-                let json_val: serde_json::Value = serde_json::from_str(&json_str)
-                    .map_err(|e| AppError::BadRequest(format!("invalid json in fs object: {e}")))?;
-                let obj_type = json_val.get("type").and_then(|v| v.as_i64()).unwrap_or(1) as i8;
-
-                // Validate dirent names in directory objects to prevent Zip Slip
-                // and other downstream injection via malicious names.
-                if obj_type == SEAF_METADATA_TYPE_DIR as i8 {
-                    let dir_data: FsDirData = serde_json::from_str(&json_str)
-                        .map_err(|e| AppError::BadRequest(format!("invalid dir object: {e}")))?;
-                    for dirent in &dir_data.dirents {
-                        validate_filename(&dirent.name).map_err(|e| {
-                            AppError::BadRequest(format!(
-                                "invalid dirent name {:?}: {}",
-                                dirent.name, e
-                            ))
+        let repo_id = repo_id.to_string();
+        // Decompression, JSON parsing, and filename validation are CPU-bound;
+        // offload to the blocking pool so the async runtime is not stalled.
+        let models = tokio::task::spawn_blocking(move || {
+            entries
+                .into_iter()
+                .map(
+                    |(fs_id, obj_data)| -> Result<infra::entity::fs_object::ActiveModel, AppError> {
+                        let decompressed = pack_fs::decompress_fs_data(&obj_data).map_err(|e| {
+                            AppError::BadRequest(format!("decompress fs object: {e}"))
                         })?;
-                    }
-                }
+                        let json_str = String::from_utf8(decompressed).map_err(|_| {
+                            AppError::BadRequest("invalid utf-8 in fs object".into())
+                        })?;
+                        let json_val: serde_json::Value =
+                            serde_json::from_str(&json_str).map_err(|e| {
+                                AppError::BadRequest(format!("invalid json in fs object: {e}"))
+                            })?;
+                        let obj_type =
+                            json_val.get("type").and_then(|v| v.as_i64()).unwrap_or(1) as i8;
 
-                Ok(infra::entity::fs_object::ActiveModel {
-                    id: sea_orm::NotSet,
-                    repo_id: sea_orm::Set(repo_id.to_string()),
-                    fs_id: sea_orm::Set(fs_id),
-                    obj_type: sea_orm::Set(obj_type),
-                    data: sea_orm::Set(json_str),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                        // Validate dirent names in directory objects to prevent Zip Slip
+                        // and other downstream injection via malicious names.
+                        if obj_type == SEAF_METADATA_TYPE_DIR as i8 {
+                            let dir_data: FsDirData =
+                                serde_json::from_str(&json_str).map_err(|e| {
+                                    AppError::BadRequest(format!("invalid dir object: {e}"))
+                                })?;
+                            for dirent in &dir_data.dirents {
+                                validate_filename(&dirent.name).map_err(|e| {
+                                    AppError::BadRequest(format!(
+                                        "invalid dirent name {:?}: {}",
+                                        dirent.name, e
+                                    ))
+                                })?;
+                            }
+                        }
+
+                        Ok(infra::entity::fs_object::ActiveModel {
+                            id: sea_orm::NotSet,
+                            repo_id: sea_orm::Set(repo_id.clone()),
+                            fs_id: sea_orm::Set(fs_id),
+                            obj_type: sea_orm::Set(obj_type),
+                            data: sea_orm::Set(json_str),
+                        })
+                    },
+                )
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))??;
 
         if models.is_empty() {
             return Ok(());

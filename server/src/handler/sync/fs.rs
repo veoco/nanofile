@@ -138,7 +138,7 @@ pub async fn pack_fs_handler(
 ) -> Result<axum::response::Response, AppError> {
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| AppError::internal(e.to_string()))?;
     let fs_ids = parse_fs_ids_from_bytes(&body_data)?;
 
     let objects = state
@@ -146,26 +146,31 @@ pub async fn pack_fs_handler(
         .fetch_fs_objects(&repo_id, &fs_ids)
         .await?;
 
-    let obj_map: std::collections::HashMap<&str, &infra::entity::fs_object::Model> = objects
-        .iter()
-        .map(|obj| (obj.fs_id.as_str(), obj))
-        .collect();
-
-    let mut entries = Vec::new();
-    for fs_id in &fs_ids {
-        if let Some(obj) = obj_map.get(fs_id.as_str()) {
-            let compressed = pack_fs::compress_fs_data(obj.data.as_bytes())
-                .map_err(|e| AppError::Internal(e.to_string()))?;
-            entries.push((obj.fs_id.clone(), compressed));
+    // zlib compression is CPU-bound; offload to the blocking pool so the
+    // async runtime can serve other requests (locked-files, commit/HEAD)
+    // concurrently instead of stalling on a busy worker thread.
+    let packed = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, std::io::Error> {
+        let obj_map: std::collections::HashMap<&str, &infra::entity::fs_object::Model> = objects
+            .iter()
+            .map(|obj| (obj.fs_id.as_str(), obj))
+            .collect();
+        let mut entries = Vec::new();
+        for fs_id in &fs_ids {
+            if let Some(obj) = obj_map.get(fs_id.as_str()) {
+                let compressed = pack_fs::compress_fs_data(obj.data.as_bytes())?;
+                entries.push((obj.fs_id.clone(), compressed));
+            }
         }
-    }
-    let packed = pack_fs::encode_pack_fs_entries(&entries);
+        Ok(pack_fs::encode_pack_fs_entries(&entries))
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?
+    .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let response = axum::response::Response::builder()
+    axum::response::Response::builder()
         .header("Content-Type", "application/octet-stream")
         .body(Body::from(packed))
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    Ok(response)
+        .map_err(|e| AppError::internal(e.to_string()))
 }
 
 #[derive(Serialize)]
@@ -181,7 +186,7 @@ pub async fn check_fs(
 ) -> Result<Json<Vec<String>>, AppError> {
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| AppError::internal(e.to_string()))?;
     let fs_ids = parse_fs_ids_from_bytes(&body_data)?;
 
     // Only fs_ids are needed, so use the column-projected, chunked query
@@ -218,9 +223,9 @@ pub async fn recv_fs(
 
     let data = axum::body::to_bytes(body, MAX_FS_PACK_BYTES)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let entries = pack_fs::decode_pack_fs_entries(&data).map_err(AppError::Internal)?;
+    let entries = pack_fs::decode_pack_fs_entries(&data).map_err(AppError::internal)?;
     state
         .sync_service()
         .insert_fs_objects(&repo_id, entries)

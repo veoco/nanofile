@@ -381,7 +381,8 @@ async fn run_server(
                 .on_request(tower_http::trace::DefaultOnRequest::new().level(tracing::Level::INFO))
                 .on_response(
                     tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
-                ),
+                )
+                .on_failure(tower_http::trace::DefaultOnFailure::new().level(tracing::Level::WARN)),
         )
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
