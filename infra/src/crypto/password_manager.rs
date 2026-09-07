@@ -1,18 +1,23 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use zeroize::Zeroizing;
 
 use crate::crypto::key_derivation;
 use crate::crypto::verify::verify_repo_password;
 use base::AppError;
 
 /// A cached decryption key entry for an encrypted repo.
+///
+/// The key material is wrapped in [`Zeroizing`] so it is scrubbed from memory
+/// when the entry is evicted or dropped, rather than lingering as plaintext
+/// for the full cache TTL (default 1 hour) where a memory dump could read it.
 #[derive(Debug, Clone)]
 struct CachedDecryptKey {
     /// The actual encryption key (32 bytes for AES-256).
-    enc_key: Vec<u8>,
+    enc_key: Zeroizing<Vec<u8>>,
     /// The IV for block encryption/decryption (16 bytes).
-    enc_iv: Vec<u8>,
+    enc_iv: Zeroizing<Vec<u8>>,
     /// UNIX timestamp when this entry expires.
     expires_at: i64,
 }
@@ -108,8 +113,8 @@ impl PasswordManager {
         // 3. Cache the decrypted key with expiry
         let now = chrono::Utc::now().timestamp();
         let cached = CachedDecryptKey {
-            enc_key,
-            enc_iv,
+            enc_key: Zeroizing::new(enc_key),
+            enc_iv: Zeroizing::new(enc_iv),
             expires_at: now + self.ttl_secs,
         };
 
@@ -165,7 +170,7 @@ impl PasswordManager {
             Some(entry) => {
                 let now = chrono::Utc::now().timestamp();
                 if now < entry.expires_at {
-                    Some((entry.enc_key.clone(), entry.enc_iv.clone()))
+                    Some((entry.enc_key.to_vec(), entry.enc_iv.to_vec()))
                 } else {
                     None
                 }
