@@ -223,6 +223,70 @@ async fn test_share_link_password_rate_limited() {
     );
 }
 
+/// Security: failed password attempts on the GET preview endpoint (which has
+/// no IP limiter) are capped per link token, so distributed-IP brute force
+/// against a single link is throttled. A correct password still works after
+/// the failed attempts (successful traffic is never throttled).
+#[tokio::test]
+async fn test_share_link_password_limited_by_token_on_get() {
+    let f = TestFixture::new().await;
+
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "secret.txt", b"secret data")
+        .await;
+    assert!(up.status().is_success(), "upload failed");
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/secret.txt",
+                "password": "mypassword",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let token = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // link_password_max_per_hour = 10 in the test config; the 11th failed GET
+    // attempt should be rejected with 429.
+    for _ in 0..10 {
+        let resp = f
+            .client
+            .get(&format!("/f/{}/?password=wrongpass", token), None)
+            .await;
+        assert_ne!(
+            resp.status(),
+            429,
+            "should not be rate limited before exceeding the threshold"
+        );
+    }
+    let resp = f
+        .client
+        .get(&format!("/f/{}/?password=wrongpass", token), None)
+        .await;
+    assert_eq!(
+        resp.status(),
+        429,
+        "GET preview should be rate limited per token after failed attempts"
+    );
+
+    // A correct password still works — successful requests must not be
+    // throttled even after the earlier failures.
+    let ok = f
+        .client
+        .get(&format!("/f/{}/?dl=1&password=mypassword", token), None)
+        .await;
+    assert_eq!(ok.status(), 200, "correct password must still succeed");
+}
+
 /// H.3 — Share link with expiry (past timestamp)
 #[tokio::test]
 async fn test_share_link_expired() {

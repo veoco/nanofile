@@ -64,6 +64,19 @@ fn check_share_download_rate(
     Ok(())
 }
 
+/// Rate-limit failed share-link password attempts, keyed by the link token
+/// rather than client IP. The IP-based limiter (in the POST handler) can be
+/// bypassed by spreading attempts across many IPs; a per-token cap stops a
+/// distributed brute force against a single link.
+fn record_link_password_failure(state: &Arc<AppState>, token: &str) -> Result<(), AppError> {
+    let key = format!("link_password_token:{token}");
+    if state.auth_limiters.link_password.is_limited(&key) {
+        return Err(AppError::TooManyRequests);
+    }
+    state.auth_limiters.link_password.record_attempt(&key);
+    Ok(())
+}
+
 /// Resolve file metadata from the repo.
 async fn resolve_file_meta(
     repos: &crate::repository::Repositories,
@@ -102,6 +115,12 @@ pub async fn shared_file_view(
 
     // If password is required but not provided, show password form
     if link.password.is_some() && !pw_ok {
+        // Only count genuinely-failed attempts (successful refreshes carry the
+        // password in the URL and must not be throttled). The password may be
+        // delivered via the X-Seafile-Sharelink-Password header or ?password=.
+        if provided_pwd.is_some() {
+            record_link_password_failure(&state, &token)?;
+        }
         // Check if this is a POST-back with wrong password
         let error = if params.contains_key("password") {
             Some("Incorrect password".to_string())
@@ -230,6 +249,9 @@ pub async fn shared_file_view_post(
     .await;
 
     if !valid {
+        // Token-dimension cap on top of the existing IP cap, so distributed
+        // brute force against one link can't slip under the IP-based limit.
+        record_link_password_failure(&state, &token)?;
         // Show password form again with error
         let tpl = ShareAccessValidationTemplate {
             t: I18n::from_headers(&headers, &state.config.ui.default_language),
