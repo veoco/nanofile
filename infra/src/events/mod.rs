@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use tokio::sync::broadcast;
 
 /// A (repo_id, commit_id) pair representing a repo update.
-pub type RepoHeadUpdate = (String, String);
+type RepoHeadUpdate = (String, String);
 
 /// Maximum number of pending events in the broadcast channel.
 const CHANNEL_CAPACITY: usize = 1024;

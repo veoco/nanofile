@@ -36,7 +36,6 @@ aes-gcm-siv = "0.12"
 hkdf = "0.13"
 sha1 = "0.11"
 sha2 = "0.11"
-hmac = "0.13"
 pbkdf2 = { version = "0.13", features = ["hmac"] }
 cipher = { version = "0.5", features = ["block-padding", "alloc"] }
 rand = "0.10"

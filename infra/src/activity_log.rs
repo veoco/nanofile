@@ -474,16 +474,3 @@ async fn dedup_edit_items(
         tracing::warn!("Failed to insert deduped edit activities: {e}");
     }
 }
-
-/// Look up a user's numeric ID by their email address.
-///
-/// Returns `None` if the user is not found or the query fails.
-pub async fn user_id_by_email(db: &DatabaseConnection, email: &str) -> Option<i32> {
-    crate::entity::user::Entity::find()
-        .filter(crate::entity::user::Column::Email.eq(email))
-        .one(db)
-        .await
-        .ok()
-        .flatten()
-        .map(|u| u.id)
-}

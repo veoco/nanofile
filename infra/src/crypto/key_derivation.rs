@@ -245,12 +245,6 @@ pub fn extract_key_from_magic(magic: &str, enc_version: i32) -> Option<Vec<u8>> 
     }
 }
 
-/// The magic string does not include IV data in seafile-server protocol.
-/// This function always returns None for all versions.
-pub fn extract_iv_from_magic(_magic: &str, _enc_version: i32) -> Option<Vec<u8>> {
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,9 +301,6 @@ mod tests {
 
         let key = extract_key_from_magic(&magic, 2).unwrap();
         assert_eq!(key.len(), 32);
-
-        let iv = extract_iv_from_magic(&magic, 2);
-        assert!(iv.is_none()); // magic doesn't contain IV
     }
 
     #[test]

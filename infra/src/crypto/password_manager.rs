@@ -55,15 +55,6 @@ impl PasswordManager {
         }
     }
 
-    /// Create a new PasswordManager with a custom TTL and capacity.
-    pub fn new_with_capacity(ttl_secs: i64, max_entries: usize) -> Self {
-        Self {
-            cache: Arc::new(RwLock::new(HashMap::with_capacity(max_entries))),
-            ttl_secs,
-            max_entries,
-        }
-    }
-
     /// Build the composite cache key.
     fn cache_key(repo_id: &str, user_id: i32) -> String {
         format!("{}:{}", repo_id, user_id)
@@ -210,28 +201,6 @@ impl PasswordManager {
         let before = cache.len();
         cache.retain(|_, entry| now < entry.expires_at);
         (before - cache.len()) as u64
-    }
-
-    /// Run periodic cleanup of expired entries.
-    ///
-    /// This is intended to be called from a background tokio task.
-    /// The interval controls how often expired entries are purged.
-    /// Pass a `CancellationToken` to allow graceful shutdown.
-    pub async fn cleanup_expired(&self, token: tokio_util::sync::CancellationToken) {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    let now = chrono::Utc::now().timestamp();
-                    let mut cache = self.cache.write().await;
-                    cache.retain(|_, entry| now < entry.expires_at);
-                }
-                _ = token.cancelled() => {
-                    break;
-                }
-            }
-        }
     }
 }
 

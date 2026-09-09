@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::crypto::fs_id::sha1_hex;
-use crate::crypto::random_key::{decrypt_block, encrypt_block};
 use crate::storage::BlockStorageBackend;
 
 /// Upper bound on the number of block ids held in the existence cache. Blocks
@@ -99,30 +98,6 @@ impl BlockStorage {
             })
             .await
             .map(|_| ())
-    }
-
-    /// Read and decrypt a block.
-    pub async fn read_encrypted_block(
-        &self,
-        block_id: &str,
-        file_key: &[u8],
-        file_iv: &[u8],
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        let encrypted = self.read_block(block_id).await?;
-        let decrypted = decrypt_block(&encrypted, file_key, file_iv)?;
-        Ok(decrypted)
-    }
-
-    /// Encrypt data and write as a block.
-    pub async fn write_encrypted_block(
-        &self,
-        data: &[u8],
-        file_key: &[u8],
-        file_iv: &[u8],
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let encrypted = encrypt_block(data, file_key, file_iv);
-        let block_id = self.write_block(&encrypted).await?;
-        Ok(block_id)
     }
 }
 
