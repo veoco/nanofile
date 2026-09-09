@@ -31,37 +31,6 @@ async fn decrypt_block_offload(
 }
 
 impl Downloader {
-    pub async fn download_file(
-        repos: &Repositories,
-        repo_id: &str,
-        path: &str,
-        block_store: &DynBlockStorage,
-        // Optional decryption key (key, iv) — when set, blocks are decrypted
-        // after reading. Used for encrypted repos during web download.
-        dec_key: Option<(&[u8], &[u8])>,
-    ) -> Result<Vec<u8>, AppError> {
-        let (file_data, block_ids) = Self::download_file_stream(repos, repo_id, path).await?;
-
-        let mut file_content = Vec::with_capacity(file_data.size as usize);
-        for block_id in &block_ids {
-            let block_data = block_store
-                .read_block(block_id)
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            // If decryption key is provided, decrypt the block.
-            let block_data = if let Some((key, iv)) = dec_key {
-                decrypt_block_offload(block_data, key, iv)
-                    .await
-                    .map_err(|e| AppError::internal(e.to_string()))?
-            } else {
-                block_data
-            };
-            file_content.extend_from_slice(&block_data);
-        }
-
-        Ok(file_content)
-    }
-
     /// Read at most the first `max_bytes` of a file's content. Returns fewer
     /// bytes when the file is smaller. Used by previews and thumbnails so a
     /// huge file can't be loaded fully into memory.
