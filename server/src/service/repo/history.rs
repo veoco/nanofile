@@ -55,7 +55,10 @@ async fn collect_files(
     // Level frontier: each level reads all its directories with one batched
     // `IN` query (O(#dirs) → O(depth)), mirroring `compute_tree_size`.
     let mut frontier: Vec<(String, String)> = vec![(root_id.to_string(), prefix.to_string())];
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
+        guard.enter_level()?;
+        guard.visit(frontier.len())?;
         let ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
         let dir_map = read_fs_dir_data_batch(repos, repo_id, &ids).await?;
         let mut next: Vec<(String, String)> = Vec::new();

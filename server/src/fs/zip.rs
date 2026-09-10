@@ -104,7 +104,10 @@ pub async fn collect_dir_entries(
     let mut frontier: Vec<(String, String)> = vec![(dir_id, zip_prefix.to_string())];
     let mut pending_files: Vec<(String, String)> = Vec::new();
 
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
+        guard.enter_level()?;
+        guard.visit(frontier.len())?;
         // Bail out before the next batched query once the entry cap is clearly
         // exceeded, bounding both the DB traversal and the pending-file memory.
         if limits.max_entries > 0 && pending_files.len() as u64 >= limits.max_entries {

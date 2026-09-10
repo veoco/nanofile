@@ -202,6 +202,13 @@ impl AppState {
             token_cipher.clone(),
         ));
 
+        // Apply sync-protocol hardening knobs (process-wide).
+        crate::fs::core::traversal::configure(
+            config.sync.max_tree_depth,
+            config.sync.max_tree_visits,
+        );
+        crate::service::sync::configure_fs_object_verification(&config.sync.verify_fs_objects);
+
         // Full-text indexer (its commit task is registered below alongside the
         // other background tasks).
         let indexer = if config.index.enabled {

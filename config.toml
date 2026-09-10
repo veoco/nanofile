@@ -135,6 +135,21 @@ block_encryption_mode = "off"
 # NANOFILE_STORAGE_ENCRYPTION_KEY_FILE for a dedicated key.
 # encryption_key = ...
 
+[sync]
+# Environment variables:
+#   NANOFILE_SYNC_VERIFY_FS_OBJECTS
+#   NANOFILE_SYNC_MAX_TREE_DEPTH
+#   NANOFILE_SYNC_MAX_TREE_VISITS
+# Verify that each received FS object's id equals sha1(uncompressed JSON):
+#   "strict" (default) rejects mismatches with 400; "log" accepts but warns;
+#   "off" skips the check. The official server does not verify, but every
+#   legitimate repo-v1 client sends a matching id.
+verify_fs_objects = "strict"
+# Cycle/DoS guard for directory-tree walks (see H-5): maximum BFS depth and
+# total nodes visited per walk. Defaults are far above any real tree.
+max_tree_depth = 512
+max_tree_visits = 1000000
+
 [auth]
 # Environment variables:
 #   NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS

@@ -228,7 +228,10 @@ impl GcManager {
         collected.insert(Self::decode_sha1_hex(root_id));
 
         let mut frontier = vec![root_id.to_string()];
+        let mut guard = crate::fs::core::traversal::TreeGuard::new();
         while !frontier.is_empty() {
+            guard.enter_level()?;
+            guard.visit(frontier.len())?;
             // `fetch_fs_object_map` chunks the IN list to stay under SQLite's
             // variable limit, unlike `find_by_repo_and_fs_ids` which does not.
             let objs =

@@ -47,7 +47,10 @@ pub async fn compute_tree_size(
     // `IN` query (O(#dirs) → O(depth)).
     let mut frontier: Vec<String> = vec![root_fs_id.to_string()];
 
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
+        guard.enter_level()?;
+        guard.visit(frontier.len())?;
         let dir_map = read_fs_dir_data_batch(repos, repo_id, &frontier).await?;
         let mut next: Vec<String> = Vec::new();
 

@@ -398,8 +398,21 @@ async fn search_fs_tree(
     // Level frontier: each level reads all its directories with one batched
     // `IN` query (O(#dirs) → O(depth)).
     let mut frontier: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
+    let max_depth = crate::fs::core::traversal::max_tree_depth();
+    let mut depth = 0usize;
 
     while !frontier.is_empty() && results.len() < max_results {
+        // Cycle guard (H-5): this helper returns no error, so cap the depth and
+        // stop rather than expanding forever.
+        depth += 1;
+        if depth > max_depth {
+            tracing::warn!(
+                repo_id,
+                max_depth,
+                "file-tree search hit the traversal depth cap; truncating"
+            );
+            break;
+        }
         let ids: Vec<String> = frontier
             .iter()
             .map(|(fs_id, _)| fs_id.clone())

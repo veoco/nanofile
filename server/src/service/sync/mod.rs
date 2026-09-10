@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Semaphore;
 
@@ -10,8 +11,40 @@ use crate::repository::Repositories;
 use base::common::{EMPTY_SHA1, FsDirData, S_IFDIR, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use base::sanitize::validate_filename;
+use infra::crypto::fs_id::sha1_hex;
 use infra::serialization::pack_fs;
 use infra::storage::DynBlockStorage;
+
+/// How received FS objects are checked against their claimed id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FsObjectVerifyMode {
+    /// Accept without checking (legacy/compat escape hatch).
+    Off = 0,
+    /// Reject a mismatch with 400 (default; safe for all official clients).
+    Strict = 1,
+    /// Accept but log a warning.
+    Log = 2,
+}
+
+static FS_OBJECT_VERIFY_MODE: AtomicU8 = AtomicU8::new(FsObjectVerifyMode::Strict as u8);
+
+/// Configure FS-object verification from `[sync] verify_fs_objects`.
+pub fn configure_fs_object_verification(mode: &str) {
+    let mode = match mode.to_ascii_lowercase().as_str() {
+        "off" => FsObjectVerifyMode::Off,
+        "log" => FsObjectVerifyMode::Log,
+        _ => FsObjectVerifyMode::Strict,
+    };
+    FS_OBJECT_VERIFY_MODE.store(mode as u8, Ordering::Relaxed);
+}
+
+fn fs_object_verify_mode() -> FsObjectVerifyMode {
+    match FS_OBJECT_VERIFY_MODE.load(Ordering::Relaxed) {
+        0 => FsObjectVerifyMode::Off,
+        2 => FsObjectVerifyMode::Log,
+        _ => FsObjectVerifyMode::Strict,
+    }
+}
 
 /// Cap on concurrent background reindex tasks spawned from sync commits and
 /// REST batch file ops. Each task reads up to 8MB from block storage and
@@ -251,7 +284,10 @@ impl SyncService {
         // Level frontier: each level fetches all its fs_objects with one
         // batched `IN` query (O(#objects) → O(depth)).
         let mut frontier = vec![root_fs_id.to_string()];
+        let mut guard = crate::fs::core::traversal::TreeGuard::new();
         while !frontier.is_empty() {
+            guard.enter_level()?;
+            guard.visit(frontier.len())?;
             let objects = self
                 .repos
                 .fs_object
@@ -317,7 +353,10 @@ impl SyncService {
             prefix: String::new(),
         }];
 
+        let mut guard = crate::fs::core::traversal::TreeGuard::new();
         while !frontier.is_empty() {
+            guard.enter_level()?;
+            guard.visit(frontier.len())?;
             let mut server_ids: Vec<String> = Vec::new();
             let mut client_ids: Vec<String> = Vec::new();
             for frame in &frontier {
@@ -439,6 +478,31 @@ impl SyncService {
                         let decompressed = pack_fs::decompress_fs_data(&obj_data).map_err(|e| {
                             AppError::BadRequest(format!("decompress fs object: {e}"))
                         })?;
+
+                        // The object id is sha1 over the *uncompressed* JSON, so
+                        // hash the bytes exactly as received rather than any
+                        // re-serialization. Every legitimate repo-v1 client sends
+                        // a matching id; rejecting a mismatch stops a rogue client
+                        // from storing arbitrary bytes under a chosen id (H-5).
+                        if fs_id != EMPTY_SHA1 {
+                            let computed = sha1_hex(&decompressed);
+                            if computed != fs_id {
+                                match fs_object_verify_mode() {
+                                    FsObjectVerifyMode::Off => {}
+                                    FsObjectVerifyMode::Log => tracing::warn!(
+                                        expected = %fs_id,
+                                        computed = %computed,
+                                        "fs object id/content mismatch (log-only mode)"
+                                    ),
+                                    FsObjectVerifyMode::Strict => {
+                                        return Err(AppError::BadRequest(format!(
+                                            "fs object id mismatch: expected {fs_id}, computed {computed}"
+                                        )));
+                                    }
+                                }
+                            }
+                        }
+
                         let json_str = String::from_utf8(decompressed).map_err(|_| {
                             AppError::BadRequest("invalid utf-8 in fs object".into())
                         })?;
@@ -586,7 +650,10 @@ impl SyncService {
                 prefix: String::new(),
             }];
 
+            let mut guard = crate::fs::core::traversal::TreeGuard::new();
             while !frontier.is_empty() {
+                guard.enter_level()?;
+                guard.visit(frontier.len())?;
                 let mut new_ids = Vec::new();
                 let mut base_ids = Vec::new();
                 for frame in &frontier {
@@ -782,7 +849,10 @@ impl SyncService {
             path: String::new(),
         }];
 
+        let mut guard = crate::fs::core::traversal::TreeGuard::new();
         while !frontier.is_empty() {
+            guard.enter_level()?;
+            guard.visit(frontier.len())?;
             let ids: Vec<String> = frontier
                 .iter()
                 .map(|f| f.fs_id.clone())

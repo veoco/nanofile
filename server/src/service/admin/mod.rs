@@ -16,7 +16,10 @@ pub(crate) async fn collect_file_paths(
 ) -> Result<Vec<String>, AppError> {
     let mut results = Vec::new();
     let mut frontier = vec![(root_fs_id.to_string(), String::new())];
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
+        guard.enter_level()?;
+        guard.visit(frontier.len())?;
         let ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
         let dir_map = crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &ids).await?;
 

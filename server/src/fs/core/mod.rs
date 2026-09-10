@@ -14,6 +14,7 @@ pub mod store;
 pub mod trash;
 pub mod tree;
 pub mod tree_diff;
+pub mod traversal;
 
 pub use download::{Downloader, stream_blocks};
 pub use file_ops::FileOps;

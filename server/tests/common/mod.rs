@@ -454,6 +454,7 @@ impl TestServer {
                 enabled: email_enabled,
             },
             ui: Default::default(),
+            sync: Default::default(),
         };
         tweak(&mut config.server);
         // Ensure block directory exists

@@ -1139,11 +1139,13 @@ async fn test_recv_fs_rejects_invalid_dirent_name() {
         version: 1,
     };
     let dir_json = serde_json::to_string(&bad_dir).unwrap();
+    let dir_fs_id = infra::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
         infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
-    packed.extend_from_slice(b"0".repeat(40).as_slice()); // fake fs_id
+    // Correct id, so the rejection is specifically the dirent-name check.
+    packed.extend_from_slice(dir_fs_id.as_bytes());
     packed.extend_from_slice(&(dir_compressed.len() as u32).to_be_bytes());
     packed.extend_from_slice(&dir_compressed);
 
@@ -1168,11 +1170,12 @@ async fn test_recv_fs_rejects_invalid_dirent_name() {
         version: 1,
     };
     let dir_json = serde_json::to_string(&bad_dir).unwrap();
+    let dir_fs_id = infra::crypto::fs_id::sha1_hex(dir_json.as_bytes());
     let dir_compressed =
         infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
-    packed.extend_from_slice(b"1".repeat(40).as_slice());
+    packed.extend_from_slice(dir_fs_id.as_bytes());
     packed.extend_from_slice(&(dir_compressed.len() as u32).to_be_bytes());
     packed.extend_from_slice(&dir_compressed);
 
@@ -1181,6 +1184,46 @@ async fn test_recv_fs_rejects_invalid_dirent_name() {
         resp.status(),
         400,
         "recv_fs must reject dirent names with NUL bytes"
+    );
+}
+
+/// Security (H-5): `recv-fs` must verify that the object id equals
+/// `sha1(uncompressed JSON)`, so a rogue client cannot store arbitrary bytes
+/// under a chosen id (the basis of the self-referential-directory DoS).
+#[tokio::test]
+async fn test_recv_fs_rejects_fs_id_mismatch() {
+    let f = TestFixture::new().await;
+
+    let dir = base::common::FsDirData {
+        dirents: vec![base::common::DirEntryData {
+            id: "0".repeat(40),
+            mode: base::common::S_IFDIR,
+            modifier: String::new(),
+            mtime: 0,
+            name: "normal_folder".to_string(),
+            size: 0,
+        }],
+        obj_type: 3,
+        version: 1,
+    };
+    let dir_json = serde_json::to_string(&dir).unwrap();
+    let dir_compressed =
+        infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
+
+    // Claim a different id than sha1(json).
+    let wrong_id = "a".repeat(40);
+    assert_ne!(wrong_id, infra::crypto::fs_id::sha1_hex(dir_json.as_bytes()));
+
+    let mut packed = Vec::new();
+    packed.extend_from_slice(wrong_id.as_bytes());
+    packed.extend_from_slice(&(dir_compressed.len() as u32).to_be_bytes());
+    packed.extend_from_slice(&dir_compressed);
+
+    let resp = f.client.recv_fs(&f.sync_token, &f.repo_id, packed).await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "recv_fs must reject an object whose id does not match its content"
     );
 }
 

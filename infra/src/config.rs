@@ -35,6 +35,66 @@ pub struct Config {
     pub email: EmailConfig,
     #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
+    pub sync: SyncConfig,
+}
+
+/// Sync-protocol hardening knobs.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SyncConfig {
+    /// Verify that a received FS object's id equals `sha1(uncompressed JSON)`.
+    ///
+    /// `"strict"` (default) rejects mismatches with 400; `"log"` accepts but
+    /// warns; `"off"` skips the check. The official server performs no such
+    /// check, but every legitimate repo-v1 client sends a matching id, so
+    /// strict is safe and prevents a client from storing an object under an id
+    /// whose content it does not match.
+    /// Env: NANOFILE_SYNC_VERIFY_FS_OBJECTS
+    #[serde(default = "default_verify_fs_objects")]
+    pub verify_fs_objects: String,
+    /// Maximum BFS depth for directory-tree walks (cycle/DoS guard, H-5).
+    /// Env: NANOFILE_SYNC_MAX_TREE_DEPTH
+    #[serde(default = "default_max_tree_depth")]
+    pub max_tree_depth: usize,
+    /// Maximum number of directory nodes visited per tree walk.
+    /// Env: NANOFILE_SYNC_MAX_TREE_VISITS
+    #[serde(default = "default_max_tree_visits")]
+    pub max_tree_visits: usize,
+}
+
+fn default_verify_fs_objects() -> String {
+    "strict".to_string()
+}
+fn default_max_tree_depth() -> usize {
+    512
+}
+fn default_max_tree_visits() -> usize {
+    1_000_000
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            verify_fs_objects: default_verify_fs_objects(),
+            max_tree_depth: default_max_tree_depth(),
+            max_tree_visits: default_max_tree_visits(),
+        }
+    }
+}
+
+impl SyncConfig {
+    /// Whether received FS objects should be rejected on an id/content mismatch.
+    pub fn reject_fs_object_mismatch(&self) -> bool {
+        !matches!(
+            self.verify_fs_objects.to_ascii_lowercase().as_str(),
+            "log" | "off"
+        )
+    }
+
+    /// Whether to verify at all (strict or log).
+    pub fn verify_fs_objects(&self) -> bool {
+        !matches!(self.verify_fs_objects.to_ascii_lowercase().as_str(), "off")
+    }
 }
 
 /// Web UI localization settings.
@@ -1040,6 +1100,9 @@ impl Config {
         env_parse!("NANOFILE_EMAIL_ENABLED", self.email.enabled);
         env_str!("NANOFILE_UI_DEFAULT_LANGUAGE", self.ui.default_language);
         env_str!("NANOFILE_UI_TRAY_LANGUAGE", self.ui.tray_language);
+        env_str!("NANOFILE_SYNC_VERIFY_FS_OBJECTS", self.sync.verify_fs_objects);
+        env_parse!("NANOFILE_SYNC_MAX_TREE_DEPTH", self.sync.max_tree_depth);
+        env_parse!("NANOFILE_SYNC_MAX_TREE_VISITS", self.sync.max_tree_visits);
 
         // Admin init env vars
         if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_EMAIL") {

@@ -146,7 +146,10 @@ pub(crate) async fn list_dir_recursive_from_root(
     let mut entries: Vec<DirEntry> = Vec::new();
     let mut modifier_emails: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
+        guard.enter_level()?;
+        guard.visit(frontier.len())?;
         let ids: Vec<String> = frontier
             .iter()
             .map(|(fs_id, _)| fs_id.clone())
@@ -892,7 +895,10 @@ async fn copy_fs_tree(
     // objects, then batch-insert the rest — instead of three round-trips per
     // object.
     let mut frontier = vec![root_fs_id.to_string()];
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
+        guard.enter_level()?;
+        guard.visit(frontier.len())?;
         // Content-addressed storage lets the same fs_id be referenced from
         // several directories; dedup so each object is fetched/copied once.
         let mut seen = HashSet::new();

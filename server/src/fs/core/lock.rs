@@ -54,7 +54,10 @@ pub async fn check_commit_file_locks(
     // `IN` query instead of one query per file/directory.
     let mut frontier: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
 
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
+        guard.enter_level()?;
+        guard.visit(frontier.len())?;
         let ids: Vec<String> = frontier
             .iter()
             .map(|(fs_id, _)| fs_id.clone())

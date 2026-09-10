@@ -46,7 +46,10 @@ async fn collect_entries(
         prefix: prefix.to_string(),
     }];
 
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
+        guard.enter_level()?;
+        guard.visit(frontier.len())?;
         let ids: Vec<String> = frontier.iter().map(|f| f.fs_id.clone()).collect();
         let dir_map = read_fs_dir_data_batch(repos, repo_id, &ids).await?;
         let mut next: Vec<Frame> = Vec::new();
@@ -143,7 +146,10 @@ pub async fn diff_trees(
         prefix: String::new(),
     }];
 
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
+        guard.enter_level()?;
+        guard.visit(frontier.len())?;
         let mut old_ids: Vec<String> = Vec::new();
         let mut new_ids: Vec<String> = Vec::new();
         for frame in &frontier {
