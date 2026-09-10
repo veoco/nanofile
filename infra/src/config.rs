@@ -1103,7 +1103,10 @@ impl Config {
         env_parse!("NANOFILE_EMAIL_ENABLED", self.email.enabled);
         env_str!("NANOFILE_UI_DEFAULT_LANGUAGE", self.ui.default_language);
         env_str!("NANOFILE_UI_TRAY_LANGUAGE", self.ui.tray_language);
-        env_str!("NANOFILE_SYNC_VERIFY_FS_OBJECTS", self.sync.verify_fs_objects);
+        env_str!(
+            "NANOFILE_SYNC_VERIFY_FS_OBJECTS",
+            self.sync.verify_fs_objects
+        );
         env_parse!("NANOFILE_SYNC_MAX_TREE_DEPTH", self.sync.max_tree_depth);
         env_parse!("NANOFILE_SYNC_MAX_TREE_VISITS", self.sync.max_tree_visits);
 

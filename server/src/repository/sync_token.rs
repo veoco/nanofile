@@ -256,10 +256,7 @@ pub async fn encrypt_legacy_sync_tokens(
     }
 
     if migrated > 0 {
-        tracing::info!(
-            migrated,
-            "encrypted legacy plaintext sync tokens at rest"
-        );
+        tracing::info!(migrated, "encrypted legacy plaintext sync tokens at rest");
     }
     Ok(migrated)
 }

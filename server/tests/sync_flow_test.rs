@@ -805,8 +805,7 @@ async fn test_commit_root_validated_at_branch_update_not_commit_write() {
     let f = common::TestFixture::new().await;
 
     let missing_root = random_hex_id();
-    let (commit_id, body) =
-        commit_with_root(&f.repo_id, &missing_root, "test@example.com");
+    let (commit_id, body) = commit_with_root(&f.repo_id, &missing_root, "test@example.com");
 
     let resp = f
         .client

@@ -1212,7 +1212,10 @@ async fn test_recv_fs_rejects_fs_id_mismatch() {
 
     // Claim a different id than sha1(json).
     let wrong_id = "a".repeat(40);
-    assert_ne!(wrong_id, infra::crypto::fs_id::sha1_hex(dir_json.as_bytes()));
+    assert_ne!(
+        wrong_id,
+        infra::crypto::fs_id::sha1_hex(dir_json.as_bytes())
+    );
 
     let mut packed = Vec::new();
     packed.extend_from_slice(wrong_id.as_bytes());
@@ -1301,12 +1304,10 @@ async fn test_legacy_plaintext_sync_token_is_migrated_and_still_valid() {
 
     // The test server uses an empty `secret_key`, so the derived cipher matches.
     let cipher = infra::crypto::token_encryption::TokenCipher::from_master_key(b"");
-    let migrated = server::repository::sync_token::encrypt_legacy_sync_tokens(
-        f.server.db.as_ref(),
-        &cipher,
-    )
-    .await
-    .unwrap();
+    let migrated =
+        server::repository::sync_token::encrypt_legacy_sync_tokens(f.server.db.as_ref(), &cipher)
+            .await
+            .unwrap();
     assert!(migrated >= 1, "expected at least one legacy row migrated");
 
     let stored = infra::entity::sync_token::Entity::find()

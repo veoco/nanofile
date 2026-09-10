@@ -38,8 +38,8 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         // `Path` extractor hands the *decoded* value to the handler, so treating
         // an undecodable segment as "not a repo endpoint" would let a
         // percent-encoded id (`%63cab3e0-…`) bypass the binding check entirely.
-        let url_repo_id = extract_url_repo_id(parts.uri.path())
-            .map_err(|_| base::error::AppError::Forbidden)?;
+        let url_repo_id =
+            extract_url_repo_id(parts.uri.path()).map_err(|_| base::error::AppError::Forbidden)?;
 
         // First try to authenticate via sync token (primary sync protocol path).
         // We look up sync_tokens directly here (rather than delegating to from_token)
@@ -327,9 +327,7 @@ impl SyncAuth {
         let (sync_result, api_result) = tokio::join!(sync_fut, api_fut);
 
         // Check sync token first (has repo_id — preferred).
-        if let Some(record) =
-            sync_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        {
+        if let Some(record) = sync_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
             if is_token_expired(record.expires_at) {
                 return Err(StatusCode::FORBIDDEN);
             }

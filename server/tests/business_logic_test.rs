@@ -616,7 +616,10 @@ async fn web_login_client(f: &TestFixture) -> reqwest::Client {
         .unwrap();
     let resp = client
         .post(format!("{}/accounts/login/", f.server.base_url))
-        .form(&[("email", f.email.as_str()), ("password", f.password.as_str())])
+        .form(&[
+            ("email", f.email.as_str()),
+            ("password", f.password.as_str()),
+        ])
         .send()
         .await
         .unwrap();
@@ -689,14 +692,16 @@ async fn test_disable_2fa_rate_limited() {
 
         if i < 10 {
             assert_eq!(
-                status, 200,
+                status,
+                200,
                 "attempt {} should re-render (wrong password), got {}",
                 i + 1,
                 status
             );
         } else {
             assert_eq!(
-                status, 429,
+                status,
+                429,
                 "attempt {} should be rate limited, got {}",
                 i + 1,
                 status
@@ -755,7 +760,10 @@ async fn test_disable_2fa_rate_limit_cleared_on_success() {
         .one(f.server.db.as_ref())
         .await
         .unwrap();
-    assert!(twofa.is_none(), "2FA record should be removed after disable");
+    assert!(
+        twofa.is_none(),
+        "2FA record should be removed after disable"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -872,10 +880,9 @@ async fn test_delete_expired_tokens() {
     .await
     .unwrap();
 
-    let removed =
-        server::repository::token_cleanup::delete_expired_tokens(server.db.as_ref(), now)
-            .await
-            .unwrap();
+    let removed = server::repository::token_cleanup::delete_expired_tokens(server.db.as_ref(), now)
+        .await
+        .unwrap();
     assert!(
         removed >= 2,
         "expected at least the two stale rows removed, got {removed}"

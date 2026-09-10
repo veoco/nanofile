@@ -703,10 +703,7 @@ async fn test_web_upload_rejects_non_member() {
     // H-4: the rejected bytes must never reach the global block store. The
     // handler stages the body on disk and only ingests it after authorization.
     let expected_id = infra::crypto::fs_id::sha1_hex(b"hello");
-    let block_path = server
-        .block_dir
-        .join(&expected_id[..2])
-        .join(&expected_id);
+    let block_path = server.block_dir.join(&expected_id[..2]).join(&expected_id);
     assert!(
         !block_path.exists(),
         "rejected upload must not write a block ({block_path:?})"

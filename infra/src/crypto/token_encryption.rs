@@ -113,7 +113,10 @@ mod tests {
     #[test]
     fn legacy_plaintext_passes_through() {
         let c = cipher();
-        assert_eq!(c.decrypt("plain-legacy-token").as_deref(), Some("plain-legacy-token"));
+        assert_eq!(
+            c.decrypt("plain-legacy-token").as_deref(),
+            Some("plain-legacy-token")
+        );
     }
 
     #[test]
