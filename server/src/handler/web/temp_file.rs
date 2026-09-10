@@ -96,6 +96,16 @@ pub enum FeedOutcome {
     Broken,
 }
 
+/// Filesystem-safe subdirectory name for a repo's in-progress uploads.
+///
+/// `repo_id` reaches this module from multipart fields and URL segments, so it
+/// must not be used as a path segment: `../../../../tmp/x` or `/etc/cron.d/y`
+/// would resolve outside `{temp_dir}/upload/` (C-3). Hashing it keeps uploads
+/// separated per repo without any path semantics.
+fn repo_dir_name(repo_id: &str) -> String {
+    infra::crypto::fs_id::sha1_hex(repo_id.as_bytes())
+}
+
 impl TempFileManager {
     /// Create a new manager and clean up any leftover temp files from a
     /// previous run by removing `{temp_dir}/upload/` entirely.
@@ -163,10 +173,21 @@ impl TempFileManager {
             ));
         }
 
-        let dir = self.inner.temp_dir.join("upload").join(repo_id);
+        let dir = self
+            .inner
+            .temp_dir
+            .join("upload")
+            .join(repo_dir_name(repo_id));
         fs::create_dir_all(&dir).await?;
 
         let tmp_path = dir.join(Uuid::new_v4().to_string());
+        // Defense in depth: `repo_dir_name` removes all path semantics from the
+        // identifier, but assert the invariant anyway so a future refactor
+        // cannot silently reintroduce a traversal (C-3).
+        debug_assert!(
+            tmp_path.starts_with(&self.inner.temp_dir),
+            "temp upload path escaped temp_dir: {tmp_path:?}"
+        );
         // Create an empty file so other chunks can open it for writing
         fs::write(&tmp_path, &[]).await?;
 

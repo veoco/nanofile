@@ -41,8 +41,13 @@ impl ThumbnailService {
     }
 
     /// Path to the repo-level thumbnail cache directory.
+    ///
+    /// The directory name is `sha1(repo_id)` rather than the raw id: the cache
+    /// is keyed by a client-supplied identifier that must never be able to
+    /// escape `thumbnail_dir` via `..` or an absolute path (C-3). The
+    /// directory is a regenerable cache, so the naming scheme is internal.
     fn thumbnail_repo_dir(&self, repo_id: &str) -> PathBuf {
-        self.thumbnail_dir.join(repo_id)
+        self.thumbnail_dir.join(thumbnail_dir_name(repo_id))
     }
 
     /// Deterministic on-disk filename for a thumbnail, matching seahub's
@@ -212,11 +217,14 @@ impl ThumbnailService {
                 .update_mtime(repo_id, &normalized_path, size as i32, current_mtime, now)
                 .await?;
             // Delete old-naming disk file if it still exists (migration from old path scheme)
-            let legacy_path = self.thumbnail_dir.join(repo_id).join(format!(
-                "{}_{}.png",
-                normalize_path_for_file(&normalized_path),
-                size
-            ));
+            let legacy_path = self
+                .thumbnail_dir
+                .join(thumbnail_dir_name(repo_id))
+                .join(format!(
+                    "{}_{}.png",
+                    normalize_path_for_file(&normalized_path),
+                    size
+                ));
             let _ = tokio::fs::remove_file(&legacy_path).await;
         } else {
             self.repos
@@ -260,7 +268,7 @@ impl ThumbnailService {
             .map_err(|e| AppError::Internal(format!("create scratch dir failed: {e}")))?;
         let scratch_media = scratch_dir.join(format!(
             "{}_{}.bin",
-            repo_id,
+            thumbnail_dir_name(repo_id),
             thumbnail_key(repo_id, normalized_path)
         ));
         let scratch_png = scratch_media.with_extension("png");
@@ -460,6 +468,16 @@ fn run_with_timeout(cmd: &mut Command, timeout: std::time::Duration) -> bool {
 /// mistakenly returns a cached image).
 fn etag_for(data: &[u8]) -> String {
     format!("\"{}\"", infra::crypto::fs_id::sha1_hex(data))
+}
+
+/// Filesystem-safe directory name for a repo's thumbnail cache.
+///
+/// `repo_id` is a client-supplied identifier, so it must never be used as a
+/// path segment directly: a value such as `../../x` or `/etc/cron.d/y` would
+/// resolve outside `thumbnail_dir` (C-3). Hashing it keeps the mapping stable
+/// and collision-free while removing all path semantics.
+fn thumbnail_dir_name(repo_id: &str) -> String {
+    infra::crypto::fs_id::sha1_hex(repo_id.as_bytes())
 }
 
 /// Build a deterministic, collision-free filename prefix for a thumbnail.

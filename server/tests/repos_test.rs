@@ -522,3 +522,163 @@ async fn test_metadata_thumbnail_exif_history_require_membership() {
         .await;
     assert_eq!(resp.status(), 200, "owner keeps access to metadata");
 }
+
+// ── repo_id validation (C-3) ────────────────────────────────────────────────
+
+/// POST /api2/repos/ with an explicit `repo_id` in the body.
+async fn create_repo_with_id(f: &TestFixture, name: &str, repo_id: &str) -> reqwest::Response {
+    f.client
+        .post_json(
+            "/api2/repos/",
+            Some(&f.api_token),
+            &serde_json::json!({ "name": name, "repo_id": repo_id }),
+        )
+        .await
+}
+
+/// Regression (C-3): `repo_id` is interpolated into on-disk directory names
+/// (temp uploads, thumbnail cache), so a client-supplied value must be a
+/// well-formed UUID. Free-form ids such as `../../x` or `/etc/cron.d/y` used to
+/// be accepted and let an authenticated user create directories and write
+/// files outside the storage root.
+#[tokio::test]
+async fn test_create_repo_rejects_non_uuid_repo_id() {
+    let f = TestFixture::new().await;
+
+    for bad_id in [
+        "../../nf-traversal-poc",
+        "../../../../../../tmp/nf-traversal-poc",
+        "/etc/cron.d/nanofile-poc",
+        "not-a-uuid",
+        "..",
+        "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290", // 35 chars: one short
+        "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290dd", // 37 chars: one long
+        "cfcab3e0_9eb4_4c4f_92d0_87db2cd8290d", // wrong separator
+        "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290g", // non-hex char
+    ] {
+        let resp = create_repo_with_id(&f, "trav", bad_id).await;
+        assert_eq!(
+            resp.status(),
+            400,
+            "repo_id {bad_id:?} must be rejected, body={:?}",
+            resp.text().await
+        );
+    }
+
+    // None of the rejected ids may exist in the database.
+    use sea_orm::EntityTrait;
+    let count = infra::entity::repo::Entity::find()
+        .all(f.server.db.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        count.iter().all(|r| uuid::Uuid::parse_str(&r.id).is_ok()),
+        "every stored repo id must be a valid UUID, got {:?}",
+        count.iter().map(|r| r.id.clone()).collect::<Vec<_>>()
+    );
+}
+
+/// A client-proposed UUID is still accepted (the sync clients generate their
+/// own ids) and is normalised to canonical lowercase form.
+#[tokio::test]
+async fn test_create_repo_accepts_valid_uuid_repo_id() {
+    let f = TestFixture::new().await;
+
+    let proposed = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D";
+    let resp = create_repo_with_id(&f, "client-id-repo", proposed).await;
+    assert_eq!(resp.status(), 201, "a valid UUID must be accepted");
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["repo_id"].as_str().unwrap(),
+        proposed.to_lowercase(),
+        "the id must be normalised to canonical form"
+    );
+}
+
+/// Regression (C-3): temp uploads are stored under `{temp_dir}/upload/<hash>`,
+/// never under a directory named after the raw repo id, so the identifier can
+/// no longer address a path outside the storage root.
+#[tokio::test]
+async fn test_chunked_upload_temp_dir_is_hashed_not_raw_repo_id() {
+    let f = TestFixture::new().await;
+    let base = f.server.base_url.clone();
+    let repo_id = f.repo_id.clone();
+
+    // Mint a short-lived upload token (`GET /api2/repos/{id}/upload-link/`),
+    // then send an intermediate Content-Range chunk. Intermediate chunks are
+    // buffered to a temp file instead of being committed.
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{repo_id}/upload-link/?from=web"),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "upload-link request failed");
+    let url: String = resp.json().await.unwrap();
+    let upload_token = url
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_string();
+
+    let content = b"hello world!";
+    let split = 6;
+    let (c1, _) = content.split_at(split);
+    let form = reqwest::multipart::Form::new()
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(c1.to_vec()).file_name("big.txt"),
+        )
+        .text("repo_id", repo_id.clone())
+        .text("parent_dir", "/")
+        .text("relative_path", "");
+
+    let resp = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{base}/upload-aj/{upload_token}"))
+        .header(
+            "content-range",
+            format!("bytes 0-{}/{}", split - 1, content.len()),
+        )
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "intermediate chunk should be accepted");
+
+    let port = base.rsplit(':').next().unwrap().to_string();
+    let upload_root = std::env::temp_dir()
+        .join(format!("nf-test-{port}/tmp"))
+        .join("upload");
+
+    let hashed = infra::crypto::fs_id::sha1_hex(repo_id.as_bytes());
+    assert!(
+        upload_root.join(&hashed).is_dir(),
+        "temp uploads must live in a hashed repo dir ({})",
+        upload_root.join(&hashed).display()
+    );
+    assert!(
+        !upload_root.join(&repo_id).exists(),
+        "no directory may be named after the raw repo id"
+    );
+
+    // Nothing escaped `{temp_dir}/upload/`.
+    for entry in std::fs::read_dir(&upload_root).unwrap() {
+        let path = entry.unwrap().path();
+        assert!(
+            path.starts_with(&upload_root),
+            "temp upload dir escaped upload root: {}",
+            path.display()
+        );
+        assert_ne!(
+            path.file_name().unwrap().to_string_lossy(),
+            repo_id,
+            "a temp dir must never be named after the raw repo id"
+        );
+    }
+}

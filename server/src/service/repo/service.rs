@@ -240,7 +240,22 @@ impl RepoService {
         sync_token_ttl_days: u64,
     ) -> Result<(RepoInfo, String), AppError> {
         let name = validate_repo_name(name)?;
-        let repo_id = repo_id_opt.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        // The client may propose a repo id (the sync clients generate their
+        // own). Only accept a well-formed UUID: the id is part of DNS-free
+        // URL paths, is interpolated into on-disk directory names (temp
+        // uploads, thumbnail cache) and is compared against sync tokens, so a
+        // free-form string such as "../../x" or "/etc/cron.d/y" would escape
+        // the storage root (C-3). Anything else is rejected rather than
+        // silently replaced, so a client that expected its own id learns that
+        // it was not used.
+        let repo_id = match repo_id_opt {
+            Some(client_id) => {
+                let parsed = uuid::Uuid::parse_str(client_id.trim())
+                    .map_err(|_| AppError::BadRequest("repo_id must be a valid UUID".into()))?;
+                parsed.to_string()
+            }
+            None => uuid::Uuid::new_v4().to_string(),
+        };
         let now = chrono::Utc::now().timestamp();
 
         if encrypted_val == 1 {
