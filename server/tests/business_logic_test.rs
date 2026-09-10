@@ -833,3 +833,57 @@ async fn test_upload_file_normal_name_succeeds() {
         resp.status()
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// M-7: expired token cleanup removes stale rows.
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_delete_expired_tokens() {
+    let server = common::TestServer::start().await;
+    let now = chrono::Utc::now().timestamp();
+
+    // An expired SSO login token...
+    infra::entity::sso_login_token::ActiveModel {
+        id: sea_orm::NotSet,
+        token: sea_orm::Set("a".repeat(64)),
+        platform: sea_orm::Set(None),
+        device_id: sea_orm::Set(None),
+        device_name: sea_orm::Set(None),
+        status: sea_orm::Set("pending".to_string()),
+        username: sea_orm::Set(None),
+        api_token: sea_orm::Set(None),
+        created_at: sea_orm::Set(now - 1000),
+        expires_at: sea_orm::Set(Some(now - 10)),
+        accessed_at: sea_orm::Set(None),
+        client_version: sea_orm::Set(None),
+    }
+    .insert(server.db.as_ref())
+    .await
+    .unwrap();
+
+    // ...and a stale client-login token (no expiry column; older than an hour).
+    infra::entity::client_login_token::ActiveModel {
+        token: sea_orm::Set("b".repeat(64)),
+        username: sea_orm::Set("x@example.com".to_string()),
+        created_at: sea_orm::Set(now - 7200),
+    }
+    .insert(server.db.as_ref())
+    .await
+    .unwrap();
+
+    let removed =
+        server::repository::token_cleanup::delete_expired_tokens(server.db.as_ref(), now)
+            .await
+            .unwrap();
+    assert!(
+        removed >= 2,
+        "expected at least the two stale rows removed, got {removed}"
+    );
+
+    let remaining = infra::entity::sso_login_token::Entity::find()
+        .all(server.db.as_ref())
+        .await
+        .unwrap();
+    assert!(remaining.is_empty(), "expired SSO token must be removed");
+}

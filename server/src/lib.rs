@@ -236,6 +236,7 @@ impl AppState {
         crate::scheduler_setup::register_default_tasks(
             &scheduler,
             &repos,
+            &db,
             notification_manager.as_ref(),
             &password_manager,
             &config.gc,

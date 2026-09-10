@@ -33,6 +33,7 @@ pub mod sso_login_token;
 pub mod starred;
 pub mod sync_token;
 pub mod thumbnail;
+pub mod token_cleanup;
 pub mod upload_link;
 pub mod user;
 pub mod user_2fa;

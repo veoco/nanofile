@@ -28,6 +28,7 @@ use infra::storage::encrypting_block_store::BlockEncryptionMode;
 pub fn register_default_tasks(
     scheduler: &Arc<Scheduler>,
     repos: &Arc<Repositories>,
+    db: &Arc<sea_orm::DatabaseConnection>,
     notification_manager: Option<&NotificationManager>,
     password_manager: &Arc<PasswordManager>,
     gc_config: &GcConfig,
@@ -72,6 +73,28 @@ pub fn register_default_tasks(
                     )
                 } else {
                     TaskOutput::success("no expired entries", None)
+                }
+            }
+        });
+    }
+
+    // Periodic: expired bearer/one-time token cleanup (hourly). M-7: anonymous
+    // endpoints mint SSO/client-login tokens and nothing removed them, so the
+    // tables could grow without bound.
+    {
+        let db = db.clone();
+        scheduler.spawn_periodic("expired token cleanup", 3600, move || {
+            let db = db.clone();
+            async move {
+                let now = chrono::Utc::now().timestamp();
+                match crate::repository::token_cleanup::delete_expired_tokens(db.as_ref(), now)
+                    .await
+                {
+                    Ok(count) if count > 0 => {
+                        TaskOutput::success(format!("Deleted {count} expired tokens"), Some(count))
+                    }
+                    Ok(_) => TaskOutput::success("no expired tokens", None),
+                    Err(e) => TaskOutput::error(format!("Failed to clean expired tokens: {e}")),
                 }
             }
         });
