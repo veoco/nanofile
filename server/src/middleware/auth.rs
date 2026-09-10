@@ -39,7 +39,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         // an undecodable segment as "not a repo endpoint" would let a
         // percent-encoded id (`%63cab3e0-…`) bypass the binding check entirely.
         let url_repo_id = extract_url_repo_id(parts.uri.path())
-            .map_err(|_| base::error::AppError::Unauthorized)?;
+            .map_err(|_| base::error::AppError::Forbidden)?;
 
         // First try to authenticate via sync token (primary sync protocol path).
         // We look up sync_tokens directly here (rather than delegating to from_token)
@@ -47,9 +47,12 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         let sync_record = repos.sync_token.find_by_token(&token).await?;
 
         if let Some(record) = sync_record {
-            // Check token expiry.
+            // Check token expiry / repository binding. seaf-daemon only
+            // understands 403 (permission) and 400 (malformed request), so an
+            // invalid or cross-repo repo token is rejected as 403 — matching
+            // seafile's fileserver (`server/http-server.c`, `fileserver/sync_api.go`).
             if is_token_expired(record.expires_at) {
-                return Err(base::error::AppError::Unauthorized);
+                return Err(base::error::AppError::Forbidden);
             }
 
             // A sync token is bound to exactly one repo: it must match the repo
@@ -57,7 +60,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             if let Some(url_repo) = &url_repo_id
                 && record.repo_id != *url_repo
             {
-                return Err(base::error::AppError::Unauthorized);
+                return Err(base::error::AppError::Forbidden);
             }
 
             let user_id = record.user_id;
@@ -113,7 +116,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         // Fall back to API token (for requests using Bearer/Token auth).
         SyncAuth::from_token(repos, &token, url_repo_id.as_deref())
             .await
-            .map_err(|_| base::error::AppError::Unauthorized)
+            .map_err(|_| base::error::AppError::Forbidden)
     }
 }
 
@@ -209,14 +212,18 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             },
         };
 
-        // Query both token tables concurrently.
-        let api_fut = repos.api_token.find_by_token(&token_str);
-        let sync_fut = repos.sync_token.find_by_token(&token_str);
-
-        let (api_result, sync_result) = tokio::join!(api_fut, sync_fut);
-
-        let api_record = api_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let sync_record = sync_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        // Only account credentials authenticate `/api2/*` and the Web UI:
+        // API tokens (which also back hashed session cookies) are the sole
+        // accepted bearer type here. Repository-scoped sync tokens are accepted
+        // exclusively by [`SyncAuth`] on `/seafhttp/...`, mirroring seahub's
+        // `TokenAuthentication`, which never consults the repo-token table.
+        // Treating a repo token as an account session would let a leaked
+        // library credential read the whole account (H-2).
+        let api_record = repos
+            .api_token
+            .find_by_token(&token_str)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let user_id = if let Some(token_record) = api_record {
             // Check API token expiration.
@@ -228,11 +235,6 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
                 return Err(StatusCode::UNAUTHORIZED);
             }
             token_record.user_id
-        } else if let Some(sync_rec) = sync_record {
-            if is_token_expired(sync_rec.expires_at) {
-                return Err(StatusCode::UNAUTHORIZED);
-            }
-            sync_rec.user_id
         } else {
             return Err(StatusCode::UNAUTHORIZED);
         };
@@ -325,17 +327,17 @@ impl SyncAuth {
         let (sync_result, api_result) = tokio::join!(sync_fut, api_fut);
 
         // Check sync token first (has repo_id — preferred).
-        if let Ok(Some(record)) = sync_result
-            && let Ok(_) = &api_result
+        if let Some(record) =
+            sync_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         {
             if is_token_expired(record.expires_at) {
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::FORBIDDEN);
             }
 
             if let Some(url_repo) = url_repo_id
                 && record.repo_id != url_repo
             {
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::FORBIDDEN);
             }
 
             ensure_active_user(repos, record.user_id).await?;
@@ -347,13 +349,13 @@ impl SyncAuth {
         }
 
         // Fall back to API token — check expiration like AuthUser does.
-        if let Ok(Some(record)) = api_result {
+        if let Some(record) = api_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
             if is_token_expired(record.expires_at) {
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::FORBIDDEN);
             }
             // A 2FA pending token must not be usable as a full session.
             if record.is_pending {
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::FORBIDDEN);
             }
 
             // API tokens are not repo-scoped. On repo-scoped endpoints the
@@ -367,7 +369,7 @@ impl SyncAuth {
                     record.user_id,
                 )
                 .await
-                .map_err(|_| StatusCode::UNAUTHORIZED)?;
+                .map_err(|_| StatusCode::FORBIDDEN)?;
             }
 
             ensure_active_user(repos, record.user_id).await?;
@@ -378,7 +380,7 @@ impl SyncAuth {
             });
         }
 
-        Err(StatusCode::UNAUTHORIZED)
+        Err(StatusCode::FORBIDDEN)
     }
 }
 
@@ -426,7 +428,9 @@ pub fn extract_sync_token(
         return Ok(token.to_string());
     }
 
-    Err(AppError::Unauthorized)
+    // Missing credentials are a malformed request: seafile's fileserver answers
+    // 400 here, and seaf-daemon classifies 400 as a general request error.
+    Err(AppError::BadRequest("token is null".into()))
 }
 
 /// How often a sync token's peer info may be persisted to the DB at most.

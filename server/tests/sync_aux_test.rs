@@ -28,7 +28,9 @@ async fn test_jwt_token_unauthorized() {
     let server = common::TestServer::start().await;
     let client = server.client();
     let resp = client.get("/seafhttp/repo/some-repo/jwt-token", None).await;
-    assert_eq!(resp.status(), 401);
+    // Missing credentials → 400 (seafile fileserver returns BADREQ), which
+    // seaf-daemon classifies as a general request error.
+    assert_eq!(resp.status(), 400);
 }
 
 /// C.2.2 — POST /seafhttp/repo/folder-perm
@@ -124,7 +126,8 @@ async fn test_accessible_repos_unauthorized() {
     let server = common::TestServer::start().await;
     let client = server.client();
     let resp = client.get("/seafhttp/accessible-repos", None).await;
-    assert_eq!(resp.status(), 401);
+    // Missing credentials → 400 (see test_jwt_token_unauthorized).
+    assert_eq!(resp.status(), 400);
 }
 
 /// Security hardening: head-commits-multi must reject malformed repo ids

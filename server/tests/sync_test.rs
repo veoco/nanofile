@@ -929,16 +929,17 @@ async fn test_percent_encoded_repo_id_cannot_bypass_sync_token_binding() {
     let encoded = percent_encode_first_hex_char(&f.repo_id);
     assert_ne!(encoded, f.repo_id);
 
-    // Baseline: the un-encoded victim repo id is already rejected.
+    // Baseline: the un-encoded victim repo id is already rejected (403, the
+    // code seaf-daemon understands as a permission error).
     let resp = f.client.get_head_commit(&attacker_sync, &f.repo_id).await;
-    assert_eq!(resp.status(), 401, "un-encoded cross-repo read must be 401");
+    assert_eq!(resp.status(), 403, "un-encoded cross-repo read must be 403");
 
     // The bypass: same token, percent-encoded victim repo id.
     let head_path = format!("/seafhttp/repo/{encoded}/commit/HEAD/");
     let resp = f.client.get_sync(&head_path, &attacker_sync).await;
     assert_eq!(
         resp.status(),
-        401,
+        403,
         "C-1: percent-encoded repo id must not bypass the binding check"
     );
 
@@ -947,34 +948,34 @@ async fn test_percent_encoded_repo_id_cannot_bypass_sync_token_binding() {
         "0".repeat(40)
     );
     let resp = f.client.get_sync(&fs_id_list_path, &attacker_sync).await;
-    assert_eq!(resp.status(), 401, "C-1: fs-id-list must be rejected");
+    assert_eq!(resp.status(), 403, "C-1: fs-id-list must be rejected");
 
     let pack_path = format!("/seafhttp/repo/{encoded}/pack-fs/");
     let resp = f
         .client
         .post_sync_raw(&pack_path, &attacker_sync, &serde_json::json!([]))
         .await;
-    assert_eq!(resp.status(), 401, "C-1: pack-fs must be rejected");
+    assert_eq!(resp.status(), 403, "C-1: pack-fs must be rejected");
 
     let check_path = format!("/seafhttp/repo/{encoded}/check-fs/");
     let resp = f
         .client
         .post_sync_raw(&check_path, &attacker_sync, &serde_json::json!([]))
         .await;
-    assert_eq!(resp.status(), 401, "C-1: check-fs must be rejected");
+    assert_eq!(resp.status(), 403, "C-1: check-fs must be rejected");
 
     let block_path = format!("/seafhttp/repo/{encoded}/block/{}", "a".repeat(40));
     let resp = f.client.get_sync(&block_path, &attacker_sync).await;
-    assert_eq!(resp.status(), 401, "C-1: block read must be rejected");
+    assert_eq!(resp.status(), 403, "C-1: block read must be rejected");
 
     let jwt_path = format!("/seafhttp/repo/{encoded}/jwt-token");
     let resp = f.client.get_sync(&jwt_path, &attacker_sync).await;
-    assert_eq!(resp.status(), 401, "C-1: jwt-token must be rejected");
+    assert_eq!(resp.status(), 403, "C-1: jwt-token must be rejected");
 
     // Failure must be authorization, not a decode/500 error.
     let malformed_path = "/seafhttp/repo/not-a-uuid/commit/HEAD/";
     let resp = f.client.get_sync(malformed_path, &attacker_sync).await;
-    assert_eq!(resp.status(), 401, "malformed repo segment must be 401");
+    assert_eq!(resp.status(), 403, "malformed repo segment must be 403");
 }
 
 /// Control for C-1: legitimate requests (un-encoded, token's own repo) still
