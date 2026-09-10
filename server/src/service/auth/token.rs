@@ -27,9 +27,14 @@ pub async fn ensure_sync_token(
     {
         let expired = existing.expires_at.is_some_and(|exp| now > exp);
         if !expired {
-            return Ok(existing.token);
+            // Tokens are stored as ciphertext; reveal the raw value. A row that
+            // cannot be decrypted (e.g. the server secret changed) is treated as
+            // invalid and replaced rather than surfaced as an error.
+            if let Some(raw) = repos.sync_token.reveal_token(&existing) {
+                return Ok(raw);
+            }
         }
-        repos.sync_token.delete_by_token(&existing.token).await?;
+        repos.sync_token.delete_by_id(existing.id).await?;
     }
 
     let token_value = generate_sync_token();

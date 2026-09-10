@@ -85,6 +85,8 @@ pub struct AppState {
     pub auth_limiters: Arc<AuthRateLimiters>,
     /// Server-wide secret for CSRF token generation.
     pub csrf_secret: Arc<Vec<u8>>,
+    /// Domain-separated AEAD key for encrypting repository sync tokens at rest.
+    pub token_cipher: Arc<infra::crypto::token_encryption::TokenCipher>,
     /// Temporary file manager for resumable/chunked uploads.
     pub temp_file_manager: TempFileManager,
     /// Cancellation token for graceful shutdown.
@@ -186,8 +188,19 @@ impl AppState {
 
         let password_manager = Arc::new(PasswordManager::new());
 
+        // Sync tokens stay recoverable (clients re-present them), so they are
+        // encrypted at rest with a key domain-separated from the server secret.
+        let token_cipher = Arc::new(
+            infra::crypto::token_encryption::TokenCipher::from_master_key(
+                config.server.secret_key.as_bytes(),
+            ),
+        );
+
         let db = Arc::new(db);
-        let repos = Arc::new(crate::repository::Repositories::new(db.clone()));
+        let repos = Arc::new(crate::repository::Repositories::new(
+            db.clone(),
+            token_cipher.clone(),
+        ));
 
         // Full-text indexer (its commit task is registered below alongside the
         // other background tasks).
@@ -250,6 +263,7 @@ impl AppState {
             indexer,
             auth_limiters,
             csrf_secret,
+            token_cipher,
             temp_file_manager,
             shutdown_token,
             password_manager,

@@ -397,7 +397,7 @@ mod tests {
     #[tokio::test]
     async fn test_gc_prunes_old_history_and_orphaned_fs_objects() {
         let db = setup_gc_test_db(1, 0).await;
-        let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
         // Three commits, newest first by ctime:
@@ -441,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn test_gc_skips_unlimited_repos() {
         let db = setup_gc_test_db(0, 0).await;
-        let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
         insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 3000).await;
@@ -467,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn test_gc_prunes_by_ttl() {
         let db = setup_gc_test_db(0, 1).await; // 1-day TTL
-        let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
         // now (today) is used by GC; old commit is > 1 day old, new one is recent.
@@ -515,7 +515,7 @@ mod tests {
     #[tokio::test]
     async fn test_gc_deletes_orphan_block_keeps_referenced_block() {
         let db = setup_gc_test_db(0, 0).await; // unlimited → nothing pruned
-        let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
         let kept_id = store.write_block(b"kept content").await.unwrap();
@@ -558,7 +558,7 @@ mod tests {
     #[tokio::test]
     async fn test_gc_keeps_block_referenced_by_retained_commit() {
         let db = setup_gc_test_db(1, 0).await; // history_limit = 1
-        let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
         let shared_id = store.write_block(b"shared content").await.unwrap();
@@ -621,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn test_gc_prunes_all_when_no_commits_kept() {
         let db = setup_gc_test_db(0, 1).await; // 1-day TTL
-        let repos = crate::repository::Repositories::new(Arc::new(db.clone()));
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
         // Both commits are older than the 1-day TTL window, so keep is empty.

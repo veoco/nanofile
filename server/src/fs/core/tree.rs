@@ -397,7 +397,7 @@ mod tests {
     async fn test_resolve_fs_ids_batch_resolves_and_shares() {
         let db = setup_tree_db().await;
         seed_tree(&db).await;
-        let repos = Repositories::new(Arc::new(db));
+        let repos = Repositories::new_for_tests(Arc::new(db));
 
         let targets = vec![
             ("root".to_string(), "/a/f1.txt".to_string()),
@@ -424,7 +424,7 @@ mod tests {
     async fn test_resolve_fs_ids_batch_missing_segments_are_none() {
         let db = setup_tree_db().await;
         seed_tree(&db).await;
-        let repos = Repositories::new(Arc::new(db));
+        let repos = Repositories::new_for_tests(Arc::new(db));
 
         let targets = vec![
             ("root".to_string(), "/nonexistent".to_string()),
@@ -439,7 +439,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_fs_ids_batch_empty_targets() {
         let db = setup_tree_db().await;
-        let repos = Repositories::new(Arc::new(db));
+        let repos = Repositories::new_for_tests(Arc::new(db));
 
         let got = resolve_fs_ids_batch(&repos, "r", &[]).await.unwrap();
         assert!(got.is_empty());
@@ -459,7 +459,7 @@ mod tests {
             r#"{"block_ids":["x"],"size":99,"type":1,"version":1}"#,
         )
         .await;
-        let repos = Repositories::new(Arc::new(db));
+        let repos = Repositories::new_for_tests(Arc::new(db));
 
         let (fs_id, mtime) = resolve_file_entry(&repos, "r", "root", "/photos/pic.jpg")
             .await
@@ -498,7 +498,7 @@ mod tests {
             r#"{"block_ids":["x"],"size":99,"type":1,"version":1}"#,
         )
         .await;
-        let repos = Repositories::new(Arc::new(db));
+        let repos = Repositories::new_for_tests(Arc::new(db));
 
         // A file resolves to its fs_id, is_dir=false, size and mtime.
         let (fs_id, is_dir, size, mtime) =

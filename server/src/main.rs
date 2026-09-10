@@ -281,6 +281,15 @@ async fn run_server(
 
     let state = Arc::new(AppState::new(db, config.clone(), temp_file_manager));
 
+    // Rewrite any legacy plaintext sync tokens as AEAD ciphertext. This is
+    // non-disruptive — clients keep presenting the same raw token — and must
+    // happen before the HTTP server starts serving requests.
+    server::repository::sync_token::encrypt_legacy_sync_tokens(
+        state.db.as_ref(),
+        &state.token_cipher,
+    )
+    .await?;
+
     // ── Auto-create admin user from config/env on first startup ──────
     if let (Some(admin_email), Some(admin_password)) = (
         &state.config.admin_init.email,

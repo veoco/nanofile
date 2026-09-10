@@ -171,6 +171,12 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
         result
     }
 
+    async fn delete_by_id(&self, id: i32) -> Result<(), AppError> {
+        let result = self.inner.delete_by_id(id).await;
+        self.cache.clear();
+        result
+    }
+
     async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError> {
         let result = self.inner.delete_by_user(user_id).await;
         self.cache.clear();
@@ -202,6 +208,10 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
                 last_sync_time,
             )
             .await
+    }
+
+    fn reveal_token(&self, model: &sync_token::Model) -> Option<String> {
+        self.inner.reveal_token(model)
     }
 }
 
@@ -481,6 +491,10 @@ mod tests {
             Ok(())
         }
 
+        async fn delete_by_id(&self, _id: i32) -> Result<(), AppError> {
+            Ok(())
+        }
+
         async fn delete_by_user(&self, _user_id: i32) -> Result<u64, AppError> {
             Ok(0)
         }
@@ -503,6 +517,10 @@ mod tests {
             _last_sync_time: Option<i64>,
         ) -> Result<(), AppError> {
             Ok(())
+        }
+
+        fn reveal_token(&self, model: &sync_token::Model) -> Option<String> {
+            Some(model.token.clone())
         }
     }
 

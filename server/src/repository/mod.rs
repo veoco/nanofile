@@ -122,7 +122,10 @@ impl std::fmt::Debug for Repositories {
 }
 
 impl Repositories {
-    pub fn new(db: Arc<DatabaseConnection>) -> Self {
+    pub fn new(
+        db: Arc<DatabaseConnection>,
+        token_cipher: Arc<infra::crypto::token_encryption::TokenCipher>,
+    ) -> Self {
         Self {
             user: Arc::new(DbUserRepository::new(db.clone())),
             repo: Arc::new(DbRepoRepository::new(db.clone())),
@@ -141,7 +144,7 @@ impl Repositories {
             invitation_code: Arc::new(DbInvitationCodeRepository::new(db.clone())),
             locked_file: Arc::new(DbLockedFileRepository::new(db.clone())),
             sync_token: Arc::new(auth_cache::CachingSyncTokenRepository::new(Arc::new(
-                DbSyncTokenRepository::new(db.clone()),
+                DbSyncTokenRepository::new(db.clone(), token_cipher),
             ))),
             api_token: Arc::new(auth_cache::CachingApiTokenRepository::new(Arc::new(
                 DbApiTokenRepository::new(db.clone()),
@@ -163,6 +166,17 @@ impl Repositories {
                 DbWebdavKeyRepository::new(db.clone()),
             ))),
         }
+    }
+
+    /// Test-only constructor: derives the sync-token cipher from an empty
+    /// master key. Production must call [`Repositories::new`] with a cipher
+    /// derived from the configured server secret.
+    #[cfg(test)]
+    pub fn new_for_tests(db: Arc<DatabaseConnection>) -> Self {
+        Self::new(
+            db,
+            Arc::new(infra::crypto::token_encryption::TokenCipher::from_master_key(b"")),
+        )
     }
 
     /// Compute total storage usage for a user (sum of all owned repo sizes,

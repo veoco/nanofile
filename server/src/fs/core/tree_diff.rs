@@ -525,7 +525,7 @@ mod tests {
     #[tokio::test]
     async fn test_diff_edit() {
         let db = setup_diff_db().await;
-        let repos = Repositories::new(Arc::new(db.clone()));
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
         insert_dir(&db, "root-old", &[("f1", false, "a.txt")]).await;
         insert_dir(&db, "root-new", &[("f2", false, "a.txt")]).await;
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
@@ -534,7 +534,7 @@ mod tests {
     #[tokio::test]
     async fn test_diff_create() {
         let db = setup_diff_db().await;
-        let repos = Repositories::new(Arc::new(db.clone()));
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
         insert_dir(&db, "root-old", &[]).await;
         insert_dir(&db, "root-new", &[("f2", false, "b.txt")]).await;
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
@@ -543,7 +543,7 @@ mod tests {
     #[tokio::test]
     async fn test_diff_delete() {
         let db = setup_diff_db().await;
-        let repos = Repositories::new(Arc::new(db.clone()));
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
         insert_dir(&db, "root-old", &[("f1", false, "a.txt")]).await;
         insert_dir(&db, "root-new", &[]).await;
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
@@ -552,7 +552,7 @@ mod tests {
     #[tokio::test]
     async fn test_diff_rename() {
         let db = setup_diff_db().await;
-        let repos = Repositories::new(Arc::new(db.clone()));
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
         insert_dir(&db, "root-old", &[("f1", false, "a.txt")]).await;
         insert_dir(&db, "root-new", &[("f1", false, "b.txt")]).await;
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
@@ -561,7 +561,7 @@ mod tests {
     #[tokio::test]
     async fn test_diff_move() {
         let db = setup_diff_db().await;
-        let repos = Repositories::new(Arc::new(db.clone()));
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
         insert_dir(&db, "root-old", &[("d1", true, "d")]).await;
         insert_dir(&db, "d1", &[("f1", false, "a.txt")]).await;
         insert_dir(&db, "root-new", &[("e1", true, "e")]).await;
@@ -572,7 +572,7 @@ mod tests {
     #[tokio::test]
     async fn test_diff_dir_rename_internal_unchanged() {
         let db = setup_diff_db().await;
-        let repos = Repositories::new(Arc::new(db.clone()));
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
         insert_dir(&db, "root-old", &[("d1", true, "d")]).await;
         insert_dir(&db, "d1", &[("f1", false, "a.txt")]).await;
         insert_dir(&db, "root-new", &[("d1", true, "e")]).await;
@@ -583,7 +583,7 @@ mod tests {
     #[tokio::test]
     async fn test_diff_dir_rename_internal_modified() {
         let db = setup_diff_db().await;
-        let repos = Repositories::new(Arc::new(db.clone()));
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
         insert_dir(&db, "root-old", &[("d1", true, "d")]).await;
         insert_dir(&db, "d1", &[("f1", false, "a.txt")]).await;
         insert_dir(&db, "root-new", &[("d2", true, "e")]).await;
@@ -594,7 +594,7 @@ mod tests {
     #[tokio::test]
     async fn test_diff_file_to_dir() {
         let db = setup_diff_db().await;
-        let repos = Repositories::new(Arc::new(db.clone()));
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
         insert_dir(&db, "root-old", &[("f1", false, "x")]).await;
         insert_dir(&db, "root-new", &[("d1", true, "x")]).await;
         insert_dir(&db, "d1", &[("f3", false, "c.txt")]).await;
@@ -604,7 +604,7 @@ mod tests {
     #[tokio::test]
     async fn test_diff_dir_to_file() {
         let db = setup_diff_db().await;
-        let repos = Repositories::new(Arc::new(db.clone()));
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
         insert_dir(&db, "root-old", &[("d1", true, "x")]).await;
         insert_dir(&db, "d1", &[("f3", false, "c.txt")]).await;
         insert_dir(&db, "root-new", &[("f1", false, "x")]).await;

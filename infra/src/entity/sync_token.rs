@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    #[sea_orm(unique, not_null, length = 40)]
+    /// Stored token value: `enc1:<hex>` AEAD ciphertext of the raw token
+    /// (see [`infra::crypto::token_encryption`]). Legacy rows may still hold
+    /// the plaintext 40-hex token until the startup migration rewrites them.
+    #[sea_orm(unique, not_null, length = 128)]
     pub token: String,
     #[sea_orm(not_null, length = 36)]
     pub repo_id: String,

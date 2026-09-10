@@ -130,20 +130,26 @@ impl SyncService {
             let Some(r) = repo_by_id.get(member.repo_id.as_str()) else {
                 continue; // repo deleted → skip, matching the previous behavior
             };
-            let token = match token_by_repo.get(r.id.as_str()) {
-                Some(t)
-                    if !t
-                        .expires_at
-                        .is_some_and(|exp| chrono::Utc::now().timestamp() > exp) =>
-                {
-                    t.token.clone()
+            // Reuse the existing non-expired token when it can be revealed;
+            // otherwise (expired or undecryptable) mint a fresh one.
+            let reusable = token_by_repo.get(r.id.as_str()).and_then(|t| {
+                let expired = t
+                    .expires_at
+                    .is_some_and(|exp| chrono::Utc::now().timestamp() > exp);
+                if expired {
+                    None
+                } else {
+                    self.repos.sync_token.reveal_token(t)
                 }
-                _ => {
+            });
+            let token = match reusable {
+                Some(raw) => raw,
+                None => {
                     // Membership already grants access, so the permission
                     // re-check inside ensure_sync_token is redundant here.
                     // Create (or replace an expired) token directly.
                     if let Some(t) = token_by_repo.get(r.id.as_str()) {
-                        let _ = self.repos.sync_token.delete_by_token(&t.token).await;
+                        let _ = self.repos.sync_token.delete_by_id(t.id).await;
                     }
                     let value = crate::service::auth::token::generate_sync_token();
                     let now = chrono::Utc::now().timestamp();

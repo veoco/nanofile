@@ -54,7 +54,9 @@ async fn test_update_branch_no_auth() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401);
+    // Missing credentials → 400 (seafile fileserver returns BADREQ); 401 is not
+    // understood by seaf-daemon.
+    assert_eq!(resp.status(), 400);
 }
 
 #[tokio::test]
@@ -81,7 +83,7 @@ async fn test_recv_fs_no_auth() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401);
+    assert_eq!(resp.status(), 400);
 }
 
 #[tokio::test]
@@ -108,7 +110,7 @@ async fn test_pack_fs_no_auth() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401);
+    assert_eq!(resp.status(), 400);
 }
 
 #[tokio::test]
@@ -135,7 +137,7 @@ async fn test_check_blocks_no_auth() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401);
+    assert_eq!(resp.status(), 400);
 }
 
 #[tokio::test]

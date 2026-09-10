@@ -834,17 +834,23 @@ impl RepoService {
             if !has_access {
                 continue;
             }
-            let token = match token_map.get(*repo_id) {
-                Some(t)
-                    if !t
-                        .expires_at
-                        .is_some_and(|exp| chrono::Utc::now().timestamp() > exp) =>
-                {
-                    t.token.clone()
+            // Reuse the existing non-expired token when it can be revealed;
+            // otherwise (expired or undecryptable) mint a fresh one.
+            let reusable = token_map.get(*repo_id).and_then(|t| {
+                let expired = t
+                    .expires_at
+                    .is_some_and(|exp| chrono::Utc::now().timestamp() > exp);
+                if expired {
+                    None
+                } else {
+                    repos.sync_token.reveal_token(t)
                 }
-                _ => {
+            });
+            let token = match reusable {
+                Some(raw) => raw,
+                None => {
                     if let Some(t) = token_map.get(*repo_id) {
-                        let _ = repos.sync_token.delete_by_token(&t.token).await;
+                        let _ = repos.sync_token.delete_by_id(t.id).await;
                     }
                     let value = generate_sync_token();
                     let now = chrono::Utc::now().timestamp();

@@ -1,7 +1,7 @@
 mod common;
 
 use common::{TestFixture, TestServer, create_test_user, get_sync_token};
-use sea_orm::{ActiveModelTrait, EntityTrait};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
 
 #[tokio::test]
 async fn test_protocol_version() {
@@ -1213,4 +1213,77 @@ async fn test_recv_fs_accepts_valid_dirent_name() {
 
     let resp = f.client.recv_fs(&f.sync_token, &f.repo_id, packed).await;
     assert_eq!(resp.status(), 200);
+}
+
+/// Sync tokens must not be readable from a leaked database: the stored value is
+/// AEAD ciphertext (prefixed), while the raw token the client holds still works.
+#[tokio::test]
+async fn test_sync_tokens_are_encrypted_at_rest() {
+    let f = TestFixture::new().await;
+
+    let stored = infra::entity::sync_token::Entity::find()
+        .filter(infra::entity::sync_token::Column::RepoId.eq(&f.repo_id))
+        .one(f.server.db.as_ref())
+        .await
+        .unwrap()
+        .expect("a sync token row exists");
+    assert!(
+        stored.token.starts_with("enc1:"),
+        "sync token must be stored encrypted, got {:?}",
+        stored.token
+    );
+    assert_ne!(stored.token, f.sync_token);
+
+    // The raw token still authenticates on /seafhttp.
+    let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+}
+
+/// Legacy plaintext rows are rewritten in place by the startup migration and
+/// keep working with the same raw token (no forced re-login).
+#[tokio::test]
+async fn test_legacy_plaintext_sync_token_is_migrated_and_still_valid() {
+    let f = TestFixture::new().await;
+
+    // Simulate a row written before encryption existed: put the raw token back.
+    let model = infra::entity::sync_token::Entity::find()
+        .filter(infra::entity::sync_token::Column::RepoId.eq(&f.repo_id))
+        .one(f.server.db.as_ref())
+        .await
+        .unwrap()
+        .expect("a sync token row exists");
+    let mut active: infra::entity::sync_token::ActiveModel = model.into();
+    active.token = sea_orm::Set(f.sync_token.clone());
+    active.update(f.server.db.as_ref()).await.unwrap();
+
+    // The test server uses an empty `secret_key`, so the derived cipher matches.
+    let cipher = infra::crypto::token_encryption::TokenCipher::from_master_key(b"");
+    let migrated = server::repository::sync_token::encrypt_legacy_sync_tokens(
+        f.server.db.as_ref(),
+        &cipher,
+    )
+    .await
+    .unwrap();
+    assert!(migrated >= 1, "expected at least one legacy row migrated");
+
+    let stored = infra::entity::sync_token::Entity::find()
+        .filter(infra::entity::sync_token::Column::RepoId.eq(&f.repo_id))
+        .one(f.server.db.as_ref())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.token.starts_with("enc1:"));
+
+    let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+}
+
+/// Existing "reuse the non-expired token" semantics are preserved (the desktop
+/// daemon has no re-auth path, so a stable token is friendlier).
+#[tokio::test]
+async fn test_repo_tokens_reuse_stable_token() {
+    let f = TestFixture::new().await;
+    let first = get_sync_token(&f.client, &f.api_token, &f.repo_id).await;
+    let second = get_sync_token(&f.client, &f.api_token, &f.repo_id).await;
+    assert_eq!(first, second, "non-expired sync token must be reused");
 }
