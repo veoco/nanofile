@@ -237,6 +237,7 @@ impl RepoService {
         enc_version_val: i32,
         magic: Option<String>,
         random_key: Option<String>,
+        salt: Option<String>,
         sync_token_ttl_days: u64,
     ) -> Result<(RepoInfo, String), AppError> {
         let name = validate_repo_name(name)?;
@@ -258,6 +259,18 @@ impl RepoService {
         };
         let now = chrono::Utc::now().timestamp();
 
+        // The desktop client sends `enc_version`/`magic`/`random_key` instead
+        // of the legacy `encrypted` flag, so a library carrying encryption
+        // material is encrypted even when the flag is absent (it used to be
+        // created as a plain library, making its files unreadable).
+        let has_enc_material = magic.as_deref().is_some_and(|m| !m.trim().is_empty())
+            || random_key.as_deref().is_some_and(|k| !k.trim().is_empty());
+        let encrypted_val = if encrypted_val != 0 || has_enc_material || enc_version_val >= 2 {
+            1
+        } else {
+            0
+        };
+
         if encrypted_val == 1 {
             // The server can only operate encrypted repos of version 2/4 (v1/v3
             // are rejected by derive_key), and magic/random_key come from the
@@ -278,6 +291,16 @@ impl RepoService {
                     "magic must be 64 hex chars and random_key must be 96 hex chars".into(),
                 ));
             }
+            // enc_version 4 uses a per-library random salt that the client
+            // generated; losing it would make the library undecryptable (the
+            // client derives `magic`/`random_key` from it), so require and
+            // store it. (nanofile used to accept v4 and silently store an empty
+            // salt, producing a library the client could not open.)
+            if enc_version_val == 4 && !salt.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+                return Err(AppError::BadRequest(
+                    "salt is required for enc_version 4".into(),
+                ));
+            }
         }
 
         let params = crate::repository::repo::CreateRepoParams {
@@ -289,7 +312,13 @@ impl RepoService {
             enc_version: enc_version_val as i8,
             magic: magic.clone(),
             random_key: random_key.clone(),
-            salt: String::new(),
+            // v2 libraries use a fixed salt (empty here); v4 stores the
+            // client-generated per-library salt.
+            salt: if enc_version_val == 4 {
+                salt.clone().unwrap_or_default()
+            } else {
+                String::new()
+            },
             permission: "rw".to_string(),
             created_at: now,
             updated_at: now,
@@ -351,7 +380,14 @@ impl RepoService {
             type_: "repo".to_string(),
             virtual_: false,
             root: None,
-            salt: None,
+            // Echo the stored salt so a client that created a v4 library sees
+            // the value its keys were derived from (mirrors the list/get
+            // responses, which include `salt` for `enc_version >= 3`).
+            salt: if encrypted && enc_version_val == 4 {
+                salt.clone()
+            } else {
+                None
+            },
             magic: if encrypted { magic } else { None },
             random_key: if encrypted { random_key } else { None },
             repo_version: 1,

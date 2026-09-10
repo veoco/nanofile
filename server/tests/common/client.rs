@@ -5,6 +5,17 @@ pub struct TestClient {
     base_url: String,
 }
 
+/// Parameters for creating an encrypted repo with client-derived keys.
+pub struct EncRepoCreate<'a> {
+    pub name: &'a str,
+    pub repo_id: &'a str,
+    pub magic: &'a str,
+    pub random_key: &'a str,
+    pub enc_version: i32,
+    /// Per-library random salt (required for enc_version 4).
+    pub salt: Option<&'a str>,
+}
+
 impl TestClient {
     /// Create a test client that does NOT track cookies (default for API tests).
     pub fn new(base_url: &str) -> Self {
@@ -1269,7 +1280,8 @@ impl TestClient {
 
     // ========== Encrypted Repo Operations ==========
 
-    /// POST /api2/repos/ with client-side encryption params.
+    /// POST /api2/repos/ with client-side encryption params (enc_version 2,
+    /// no per-library salt).
     pub async fn create_encrypted_repo(
         &self,
         token: &str,
@@ -1279,17 +1291,44 @@ impl TestClient {
         random_key: &str,
         enc_version: i32,
     ) -> reqwest::Response {
+        self.create_encrypted_repo_with_params(
+            token,
+            &EncRepoCreate {
+                name,
+                repo_id,
+                magic,
+                random_key,
+                enc_version,
+                salt: None,
+            },
+        )
+        .await
+    }
+
+    /// POST /api2/repos/ with the full client-side encryption params, including
+    /// the per-library `salt` that enc_version 4 clients generate (and which the
+    /// server must store for the library to stay decryptable).
+    pub async fn create_encrypted_repo_with_params(
+        &self,
+        token: &str,
+        params: &EncRepoCreate<'_>,
+    ) -> reqwest::Response {
+        let mut form = vec![
+            ("name", params.name.to_string()),
+            ("repo_id", params.repo_id.to_string()),
+            ("encrypted", "1".to_string()),
+            ("enc_version", params.enc_version.to_string()),
+            ("magic", params.magic.to_string()),
+            ("random_key", params.random_key.to_string()),
+        ];
+        if let Some(salt) = params.salt {
+            form.push(("salt", salt.to_string()));
+        }
+        let form: Vec<(&str, String)> = form;
         self.client
             .post(format!("{}/api2/repos/", self.base_url))
             .bearer_auth(token)
-            .form(&[
-                ("name", name),
-                ("repo_id", repo_id),
-                ("encrypted", "1"),
-                ("enc_version", &enc_version.to_string()),
-                ("magic", magic),
-                ("random_key", random_key),
-            ])
+            .form(&form)
             .send()
             .await
             .unwrap()

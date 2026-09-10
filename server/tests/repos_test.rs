@@ -716,34 +716,145 @@ async fn test_compat_desktop_plain_repo_without_repo_id() {
     assert_eq!(resp.status(), 200, "sync on the new repo must work");
 }
 
-/// Compatibility: for an **encrypted** library the desktop client generates the
-/// UUID itself (`QUuid::createUuid().toString().mid(1, 36)` in
-/// `create-repo-dialog.cpp`) because `magic`/`random_key` are derived from it,
-/// and sends it as the `repo_id` field together with `magic`/`random_key`.
+/// Compatibility: the desktop client's **encrypted-library creation** payload,
+/// reproduced exactly.
 ///
-/// The C-3 validation must accept that id. The encrypted create itself is
-/// currently rejected before the insert by a separate, pre-existing
-/// deserialization mismatch (`enc_version` is sent as the string `"4"` while
-/// the request struct expects an `i32`), so this test asserts only what the
-/// C-3 change is responsible for: a **valid UUID** passes repo-id validation,
-/// a **malformed one** is rejected.
+/// `CreateRepoRequest` in `seafile-client/src/api/requests.cpp` sends
+/// `application/x-www-form-urlencoded` with every value stringified by
+/// `QString::number()` / `setFormParam`:
+///
+/// ```text
+/// name, desc, enc_version="4", repo_id, magic, random_key, salt,
+/// pwd_hash_algo, pwd_hash_params, pwd_hash
+/// ```
+///
+/// Note there is **no** `encrypted` field — the client only ever sent that
+/// through `passwd`-based creation. Two things used to break this request:
+/// `enc_version` typed as a number (deserialization failed → 500 for *every*
+/// encrypted create), and the encryption material being ignored (the library
+/// was stored as plaintext, so the client's own key derivation no longer
+/// matched).
+#[tokio::test]
+async fn test_compat_desktop_encrypted_create_form_payload() {
+    let f = TestFixture::new().await;
+    let password = "desktop-password";
+    let repo_id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    let salt = "c".repeat(64);
+
+    let magic = infra::crypto::key_derivation::generate_magic(repo_id, password, 4, &salt).unwrap();
+    let random_key =
+        infra::crypto::key_derivation::generate_random_key_for_repo(password, 4, &salt).unwrap();
+
+    // Exactly the desktop's form fields, in the client's order, all as strings.
+    let resp = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}/api2/repos/", f.server.base_url))
+        .bearer_auth(&f.api_token)
+        .form(&[
+            ("name", "desktop-encrypted"),
+            ("desc", "desktop-encrypted"),
+            ("enc_version", "4"),
+            ("repo_id", repo_id),
+            ("magic", magic.as_str()),
+            ("random_key", random_key.as_str()),
+            ("salt", salt.as_str()),
+            ("pwd_hash_algo", "PBKDF2"),
+            ("pwd_hash_params", "iterations=1000"),
+            ("pwd_hash", "d".repeat(64).as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        201,
+        "desktop encrypted-create form payload must succeed, body={:?}",
+        resp.text().await
+    );
+
+    let created: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(created["repo_id"].as_str().unwrap(), repo_id);
+    assert_eq!(
+        created["encrypted"], true,
+        "the library must be stored encrypted even though the client sends no `encrypted` flag"
+    );
+    assert_eq!(created["enc_version"], 4);
+    assert_eq!(created["magic"], magic);
+    assert_eq!(created["random_key"], random_key);
+    assert_eq!(
+        created["salt"], salt,
+        "the v4 per-library salt must be kept"
+    );
+
+    // The stored library must be usable: the client's password verifies
+    // against it (i.e. magic/salt were stored, not discarded).
+    let resp = f
+        .client
+        .set_repo_password_v2(&f.api_token, repo_id, password)
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the client's password must verify against the created library"
+    );
+}
+
+/// Compatibility: `enc_version` arrives as a string from the official clients,
+/// so a malformed value must be a client error (400), never a 500.
+#[tokio::test]
+async fn test_compat_bad_enc_version_is_a_client_error() {
+    let f = TestFixture::new().await;
+
+    let resp = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}/api2/repos/", f.server.base_url))
+        .bearer_auth(&f.api_token)
+        .form(&[("name", "bad-enc-version"), ("enc_version", "not-a-number")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        400,
+        "a non-numeric enc_version must be a 400, not an internal error"
+    );
+}
+
+/// Compatibility: the same failure mode through the JSON branch must also be a
+/// 400 — `From<serde_json::Error>` used to turn it into a 500.
+#[tokio::test]
+async fn test_compat_malformed_json_create_is_a_client_error() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api2/repos/",
+            Some(&f.api_token),
+            &serde_json::json!({ "name": "x", "enc_version": "not-a-number" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "malformed JSON must be a 400");
+}
+
+/// Compatibility: a client-proposed UUID passes validation (and a malformed id
+/// is still rejected) — the C-3 guarantee on the encrypted path.
 #[tokio::test]
 async fn test_compat_client_uuid_is_validated_not_rejected_wholesale() {
     let f = TestFixture::new().await;
 
-    // Mirrors `QUuid::createUuid()`: canonical lowercase UUID.
-    let client_repo_id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    let client_repo_id = "3f2504e0-4f89-41d3-9a0c-0305e82c3302";
     let body = serde_json::json!({
-        "name": "desktop-encrypted",
-        "desc": "desktop-encrypted",
-        "enc_version": 4,
+        "name": "client-uuid-check",
+        "enc_version": 2,
         "repo_id": client_repo_id,
         "magic": "a".repeat(64),
         "random_key": "b".repeat(96),
-        "salt": "c".repeat(64),
-        "pwd_hash_algo": "PBKDF2",
-        "pwd_hash_params": "iterations=1000",
-        "pwd_hash": "d".repeat(64),
     });
 
     let resp = f
@@ -760,8 +871,8 @@ async fn test_compat_client_uuid_is_validated_not_rejected_wholesale() {
 
     // The same request with a traversal id stays rejected — that is the C-3 fix.
     let mut bad = body.clone();
-    bad["repo_id"] = serde_json::json!("../../desktop-encrypted");
-    bad["name"] = serde_json::json!("desktop-encrypted-2");
+    bad["repo_id"] = serde_json::json!("../../client-uuid-check");
+    bad["name"] = serde_json::json!("client-uuid-check-2");
     let resp = f
         .client
         .post_json("/api2/repos/", Some(&f.api_token), &bad)

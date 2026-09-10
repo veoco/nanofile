@@ -20,15 +20,63 @@ pub use crate::service::repo::service::{
     DownloadInfoResponse, RepoInfo, V21RepoInfo, V21RepoListResponse,
 };
 
+/// Accept an integer that may arrive as a JSON number or as a string.
+///
+/// The official clients send this endpoint as
+/// `application/x-www-form-urlencoded` (and, for the Android client,
+/// `multipart/form-data`), where every value is a string. The desktop client in
+/// particular sends `enc_version` as `QString::number(enc_version)`, i.e.
+/// `"4"` — deserializing that into `i32` used to fail the whole request with a
+/// 500 for every encrypted-library creation.
+fn de_int_or_string<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum IntOrString {
+        Int(i64),
+        Str(String),
+    }
+
+    let value = Option::<IntOrString>::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(IntOrString::Int(v)) => i32::try_from(v)
+            .map(Some)
+            .map_err(|_| serde::de::Error::custom(format!("value out of range: {v}"))),
+        Some(IntOrString::Str(s)) => {
+            let s = s.trim();
+            if s.is_empty() {
+                return Ok(None);
+            }
+            s.parse::<i32>().map(Some).map_err(serde::de::Error::custom)
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct CreateRepoRequest {
     pub name: String,
     pub desc: Option<String>,
     pub repo_id: Option<String>,
+    #[serde(default, deserialize_with = "de_int_or_string")]
     pub encrypted: Option<i32>,
+    #[serde(default, deserialize_with = "de_int_or_string")]
     pub enc_version: Option<i32>,
     pub magic: Option<String>,
     pub random_key: Option<String>,
+    /// Per-library random salt for `enc_version` 4 libraries (empty/ignored for
+    /// v2, which uses a fixed salt). The desktop client sends it for v3/v4.
+    pub salt: Option<String>,
+    /// Only used by clients that compute the magic themselves; nanofile derives
+    /// from `magic`/`random_key`, so these are accepted and ignored.
+    pub pwd_hash_algo: Option<String>,
+    pub pwd_hash_params: Option<String>,
+    pub pwd_hash: Option<String>,
+    /// Sent by clients that let the server hash the password instead of
+    /// pre-computing `magic`/`random_key`.
+    pub passwd: Option<String>,
 }
 
 pub fn repo_routes() -> Router<Arc<AppState>> {
@@ -69,27 +117,46 @@ pub async fn create_repo(
 ) -> Result<(StatusCode, Json<RepoInfo>), AppError> {
     // Support JSON (web frontend), form-encoded (desktop client), and
     // multipart/form-data (Android client) bodies.
-    let repo_req: CreateRepoRequest = if headers
+    //
+    // Both parse failures must be client errors (400). A plain `?` on the JSON
+    // branch used to go through `From<serde_json::Error>` → `Internal`, which
+    // turned the desktop client's string-typed `enc_version` into a 500 for
+    // every encrypted-library creation.
+    //
+    // The branch is chosen by content type rather than by trying each parser in
+    // turn: a form body whose `enc_version` is not a number must report *that*,
+    // not fall through to the multipart parser and claim `name required`.
+    let content_type = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|ct| ct.contains("json"))
-    {
-        serde_json::from_slice(&bytes)?
-    } else if let Ok(form) = serde_urlencoded::from_bytes::<CreateRepoRequest>(&bytes) {
-        form
-    } else {
-        let name = extract_multipart_field(&bytes, "name")
-            .ok_or_else(|| AppError::BadRequest("name required".into()))?;
-        let desc = extract_multipart_field(&bytes, "desc");
-        CreateRepoRequest {
-            name,
-            desc,
+        .unwrap_or_default();
+    let repo_req: CreateRepoRequest = if content_type.contains("json") {
+        serde_json::from_slice(&bytes)
+            .map_err(|e| AppError::BadRequest(format!("invalid JSON body: {e}")))?
+    } else if content_type.contains("multipart/form-data") {
+        let mut req = CreateRepoRequest {
+            name: String::new(),
+            desc: None,
             repo_id: None,
             encrypted: None,
             enc_version: None,
             magic: None,
             random_key: None,
-        }
+            salt: None,
+            pwd_hash_algo: None,
+            pwd_hash_params: None,
+            pwd_hash: None,
+            passwd: None,
+        };
+        req.name = extract_multipart_field(&bytes, "name")
+            .ok_or_else(|| AppError::BadRequest("name required".into()))?;
+        req.desc = extract_multipart_field(&bytes, "desc");
+        req
+    } else {
+        // Default (and explicit `application/x-www-form-urlencoded`): the
+        // desktop client's format.
+        serde_urlencoded::from_bytes::<CreateRepoRequest>(&bytes)
+            .map_err(|e| AppError::BadRequest(format!("invalid form body: {e}")))?
     };
 
     let (repo_info, _token) = service::RepoService::create_repo(
@@ -98,12 +165,13 @@ pub async fn create_repo(
         auth.user_id,
         &auth.email,
         &repo_req.name,
-        &repo_req.desc.unwrap_or_default(),
-        repo_req.repo_id,
+        &repo_req.desc.clone().unwrap_or_default(),
+        repo_req.repo_id.clone(),
         repo_req.encrypted.unwrap_or(0),
         repo_req.enc_version.unwrap_or(0),
         repo_req.magic.clone(),
         repo_req.random_key.clone(),
+        repo_req.salt.clone(),
         state.config.auth.sync_token_ttl_days,
     )
     .await?;
@@ -485,6 +553,7 @@ pub async fn create_default_repo(
                 None,
                 0,
                 0,
+                None,
                 None,
                 None,
                 state.config.auth.sync_token_ttl_days,

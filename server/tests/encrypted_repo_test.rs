@@ -388,7 +388,8 @@ async fn test_create_encrypted_repo_requires_magic() {
     assert_eq!(resp.status(), 400, "missing magic must be rejected");
 }
 
-/// A valid enc_version 4 repo (per-repo salt) is still accepted.
+/// A valid enc_version 4 repo (per-repo salt) is still accepted, and the salt
+/// the client derived its keys from must be stored with the library.
 #[tokio::test]
 async fn test_create_encrypted_repo_accepts_v4() {
     let f = TestFixture::new().await;
@@ -399,11 +400,48 @@ async fn test_create_encrypted_repo_accepts_v4() {
 
     let resp = f
         .client
-        .create_encrypted_repo(&f.api_token, "v4-lib", &repo_id, &magic, &random_key, 4)
+        .create_encrypted_repo_with_params(
+            &f.api_token,
+            &common::client::EncRepoCreate {
+                name: "v4-lib",
+                repo_id: &repo_id,
+                magic: &magic,
+                random_key: &random_key,
+                enc_version: 4,
+                salt: Some(&salt),
+            },
+        )
         .await;
     assert_eq!(
         resp.status(),
         201,
-        "enc_version 4 with valid keys should succeed"
+        "enc_version 4 with valid keys should succeed, body={:?}",
+        resp.text().await
     );
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["encrypted"], true);
+    assert_eq!(body["enc_version"], 4);
+    assert_eq!(
+        body["salt"], salt,
+        "the per-library salt must be stored, not discarded"
+    );
+}
+
+/// A v4 library without a salt cannot be decrypted by the client that created
+/// it, so the request must be rejected instead of silently storing an empty
+/// salt (which is what used to happen).
+#[tokio::test]
+async fn test_create_encrypted_repo_v4_requires_salt() {
+    let f = TestFixture::new().await;
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let salt = key_derivation::generate_repo_salt();
+    let magic = key_derivation::generate_magic(&repo_id, "pw", 4, &salt).unwrap();
+    let random_key = key_derivation::generate_random_key_for_repo("pw", 4, &salt).unwrap();
+
+    let resp = f
+        .client
+        .create_encrypted_repo(&f.api_token, "v4-no-salt", &repo_id, &magic, &random_key, 4)
+        .await;
+    assert_eq!(resp.status(), 400, "v4 without salt must be rejected");
 }
