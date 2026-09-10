@@ -519,10 +519,10 @@ pub async fn upload_aj(
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let is_chunked = content_range.is_some();
     let mut chunked_file_data: Option<Vec<u8>> = None;
-    // Streaming (non-chunked) upload: CDC the file straight into blocks.
-    let mut block_ids: Vec<String> = Vec::new();
-    let mut new_block_ids: Vec<String> = Vec::new();
-    let mut total_size: i64 = 0;
+    // Non-chunked uploads are staged on disk and only ingested into the global
+    // block store after the write-permission check below (H-4).
+    let mut staged_path: Option<std::path::PathBuf> = None;
+    let staging_dir = upload_staging_dir(&state);
 
     while let Some(mut field) = multipart
         .next_field()
@@ -542,14 +542,9 @@ pub async fn upload_aj(
                     .await?,
                 );
             } else {
-                // Stream: feed underlying bytes straight into the CDC chunker
-                // and write each chunk to the block store, so the file never
-                // needs to be fully buffered in memory.
-                let store = state.block_store.clone();
-                let (bids, size, nids) = stream_file_into_blocks(store, &mut field).await?;
-                block_ids.extend(bids);
-                new_block_ids.extend(nids);
-                total_size += size;
+                let (path, _size) =
+                    stage_file_field(&mut field, &staging_dir, max_upload_bytes(&state)).await?;
+                staged_path = Some(path);
             }
         } else {
             fields.insert(
@@ -571,6 +566,14 @@ pub async fn upload_aj(
         .map(|s| s.as_str())
         .unwrap_or("");
     let target_dir = compute_target_dir(parent_dir, relative_path)?;
+
+    // CSRF: this endpoint authenticates via the session cookie, so a
+    // cross-site form POST must be rejected (L-1).
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        fields.get("csrf_token").map(|s| s.as_str()),
+    )?;
 
     // Authorization: this endpoint trusts the client-supplied repo_id, so the
     // caller must actually be a member with write access to the repo.
@@ -602,25 +605,32 @@ pub async fn upload_aj(
         return Ok(Json(json!([{"name": filename, "uploaded": true}])));
     }
 
-    if !block_ids.is_empty() {
-        let fs_id = state
-            .file_service()
-            .upload_file_committed_stream(
-                repo_id,
-                &target_dir,
-                &filename,
-                block_ids,
-                total_size,
-                &user.email,
-                Some(user.user_id),
-                true,
-                None,
-                new_block_ids,
-            )
-            .await?;
-        return Ok(Json(
-            json!([{"id": fs_id, "name": filename, "size": total_size}]),
-        ));
+    // Ingest the staged bytes now that the caller is authorized. The guard
+    // removes the staging file on every exit path.
+    let staged = StagedUpload(staged_path);
+    if let Some(path) = staged.path() {
+        let ingested = ingest_staged_file(state.block_store.clone(), path.to_path_buf()).await;
+        let (block_ids, total_size, new_block_ids) = ingested?;
+        if !block_ids.is_empty() {
+            let fs_id = state
+                .file_service()
+                .upload_file_committed_stream(
+                    repo_id,
+                    &target_dir,
+                    &filename,
+                    block_ids,
+                    total_size,
+                    &user.email,
+                    Some(user.user_id),
+                    true,
+                    None,
+                    new_block_ids,
+                )
+                .await?;
+            return Ok(Json(
+                json!([{"id": fs_id, "name": filename, "size": total_size}]),
+            ));
+        }
     }
 
     Ok(Json(json!([{"name": filename, "uploaded": true}])))
@@ -675,6 +685,118 @@ pub(crate) async fn stream_file_into_blocks(
     .await
 }
 
+/// A multipart file staged on disk before authorization.
+///
+/// The no-token web endpoints (`/upload-aj/`, `/update-aj/`, `/update-api/`)
+/// carry the repository id inside the multipart body, so permission can only be
+/// checked after parsing. Staging the bytes on disk keeps them out of the
+/// global block store until the caller is authorized (H-4), without buffering
+/// the whole file in memory. The file is removed when the guard drops.
+struct StagedUpload(Option<std::path::PathBuf>);
+
+impl StagedUpload {
+    fn path(&self) -> Option<&std::path::Path> {
+        self.0.as_deref()
+    }
+}
+
+impl Drop for StagedUpload {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// Stream a multipart file field into a request-scoped staging file.
+async fn stage_file_field(
+    field: &mut multer::Field<'_>,
+    staging_dir: &std::path::Path,
+    max_bytes: u64,
+) -> Result<(std::path::PathBuf, i64), AppError> {
+    use tokio::io::AsyncWriteExt;
+
+    tokio::fs::create_dir_all(staging_dir)
+        .await
+        .map_err(|e| AppError::Internal(format!("create staging dir: {e}")))?;
+    let path = staging_dir.join(uuid::Uuid::new_v4().to_string());
+    let mut file = tokio::fs::File::create(&path)
+        .await
+        .map_err(|e| AppError::Internal(format!("create staging file: {e}")))?;
+
+    let mut size: i64 = 0;
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+    {
+        size += chunk.len() as i64;
+        if max_bytes > 0 && size as u64 > max_bytes {
+            return Err(AppError::ContentTooLarge);
+        }
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| AppError::Internal(format!("write staging file: {e}")))?;
+    }
+    file.flush()
+        .await
+        .map_err(|e| AppError::Internal(format!("flush staging file: {e}")))?;
+    Ok((path, size))
+}
+
+/// CDC a staged file into the block store (called only after authorization).
+async fn ingest_staged_file(
+    store: infra::storage::DynBlockStorage,
+    path: std::path::PathBuf,
+) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
+    use tokio::io::AsyncReadExt;
+
+    crate::fs::core::FileOps::stream_blocks_pipelined(&store, None, move |tx| async move {
+        let mut file = tokio::fs::File::open(&path)
+            .await
+            .map_err(|e| AppError::Internal(format!("open staged file: {e}")))?;
+        let mut chunker = infra::storage::cdc::Chunker::new(0);
+        let mut total_size = 0i64;
+        let mut idx = 0usize;
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = file
+                .read(&mut buf)
+                .await
+                .map_err(|e| AppError::Internal(format!("read staged file: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            for block in chunker.feed(&buf[..n]) {
+                total_size += block.len() as i64;
+                tx.send((idx, block))
+                    .await
+                    .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+                idx += 1;
+            }
+        }
+        let last = chunker.finish();
+        if !last.is_empty() {
+            total_size += last.len() as i64;
+            tx.send((idx, last))
+                .await
+                .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+        }
+        Ok(total_size)
+    })
+    .await
+}
+
+/// Staging directory for uploads whose authorization happens after parsing.
+fn upload_staging_dir(state: &AppState) -> std::path::PathBuf {
+    state.config.storage.temp_dir.join("staging")
+}
+
+/// Maximum upload size in bytes (`0` = unlimited).
+fn max_upload_bytes(state: &AppState) -> u64 {
+    state.config.server.max_upload_size_mb * 1024 * 1024
+}
+
 /// POST /update-api/ — Update existing file (web UI, no token).
 ///
 /// Expects multipart fields:
@@ -700,9 +822,10 @@ pub async fn update_api(
 
     let mut repo_id = String::new();
     let mut file_path = String::new();
-    let mut block_ids: Vec<String> = Vec::new();
-    let mut new_block_ids: Vec<String> = Vec::new();
-    let mut total_size: i64 = 0;
+    let mut csrf_token: Option<String> = None;
+    // Stage the bytes on disk; authorization happens after parsing (H-4).
+    let mut staged_path: Option<std::path::PathBuf> = None;
+    let staging_dir = upload_staging_dir(&state);
 
     while let Some(mut field) = multipart
         .next_field()
@@ -711,11 +834,9 @@ pub async fn update_api(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            let (bids, size, nids) =
-                stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
-            block_ids = bids;
-            new_block_ids = nids;
-            total_size = size;
+            let (path, _size) =
+                stage_file_field(&mut field, &staging_dir, max_upload_bytes(&state)).await?;
+            staged_path = Some(path);
         } else {
             let val = field
                 .text()
@@ -723,14 +844,25 @@ pub async fn update_api(
                 .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?;
             if name == "repo_id" {
                 repo_id = val.clone();
-            }
-            if name == "p" || name == "path" {
+            } else if name == "csrf_token" {
+                csrf_token = Some(val);
+            } else if name == "p" || name == "path" {
                 file_path = val;
             }
         }
     }
 
-    if !block_ids.is_empty() && !file_path.is_empty() {
+    let staged = StagedUpload(staged_path);
+
+    if !file_path.is_empty() {
+        // CSRF: these no-token endpoints authenticate via the session cookie,
+        // so a cross-site form POST must be rejected (L-1).
+        crate::service::auth::csrf::check_form_csrf(
+            &state,
+            &user.session_token,
+            csrf_token.as_deref(),
+        )?;
+
         // Authorization: repo_id is client-supplied, so require write access.
         crate::domain::permission::check_repo_write_permission(
             state.repos.member.as_ref(),
@@ -748,24 +880,30 @@ pub async fn update_api(
             .map(|(_, n)| n)
             .unwrap_or(&file_path);
 
-        let fs_id = state
-            .file_service()
-            .upload_file_committed_stream(
-                &repo_id,
-                parent,
-                name,
-                block_ids,
-                total_size,
-                &user.email,
-                Some(user.user_id),
-                true,
-                None,
-                new_block_ids,
-            )
-            .await?;
-        return Ok(Json(
-            json!([{"id": fs_id, "name": name, "size": total_size}]),
-        ));
+        if let Some(path) = staged.path() {
+            let ingested = ingest_staged_file(state.block_store.clone(), path.to_path_buf()).await;
+            let (block_ids, total_size, new_block_ids) = ingested?;
+            if !block_ids.is_empty() {
+                let fs_id = state
+                    .file_service()
+                    .upload_file_committed_stream(
+                        &repo_id,
+                        parent,
+                        name,
+                        block_ids,
+                        total_size,
+                        &user.email,
+                        Some(user.user_id),
+                        true,
+                        None,
+                        new_block_ids,
+                    )
+                    .await?;
+                return Ok(Json(
+                    json!([{"id": fs_id, "name": name, "size": total_size}]),
+                ));
+            }
+        }
     }
 
     Ok(ok_json())
@@ -798,9 +936,9 @@ pub async fn update_aj(
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let is_chunked = content_range.is_some();
     let mut chunked_file_data: Option<Vec<u8>> = None;
-    let mut block_ids: Vec<String> = Vec::new();
-    let mut new_block_ids: Vec<String> = Vec::new();
-    let mut total_size: i64 = 0;
+    // Non-chunked uploads are staged on disk until authorization passes (H-4).
+    let mut staged_path: Option<std::path::PathBuf> = None;
+    let staging_dir = upload_staging_dir(&state);
 
     while let Some(mut field) = multipart
         .next_field()
@@ -819,11 +957,9 @@ pub async fn update_aj(
                     .await?,
                 );
             } else {
-                let (bids, size, nids) =
-                    stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
-                block_ids = bids;
-                new_block_ids = nids;
-                total_size = size;
+                let (path, _size) =
+                    stage_file_field(&mut field, &staging_dir, max_upload_bytes(&state)).await?;
+                staged_path = Some(path);
             }
         } else {
             fields.insert(
@@ -842,6 +978,13 @@ pub async fn update_aj(
     let target_file = fields
         .get("target_file")
         .ok_or_else(|| AppError::BadRequest("target_file required".into()))?;
+
+    // CSRF: session-cookie auth requires the double-submit token (L-1).
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        fields.get("csrf_token").map(|s| s.as_str()),
+    )?;
 
     // Authorization: the repo_id is client-supplied, so require write access.
     crate::domain::permission::check_repo_write_permission(
@@ -881,25 +1024,30 @@ pub async fn update_aj(
         return Ok(ok_json());
     }
 
-    if !block_ids.is_empty() {
-        let fs_id = state
-            .file_service()
-            .upload_file_committed_stream(
-                repo_id,
-                parent,
-                name,
-                block_ids,
-                total_size,
-                &user.email,
-                Some(user.user_id),
-                true,
-                None,
-                new_block_ids,
-            )
-            .await?;
-        return Ok(Json(
-            json!([{"id": fs_id, "name": name, "size": total_size}]),
-        ));
+    let staged = StagedUpload(staged_path);
+    if let Some(path) = staged.path() {
+        let ingested = ingest_staged_file(state.block_store.clone(), path.to_path_buf()).await;
+        let (block_ids, total_size, new_block_ids) = ingested?;
+        if !block_ids.is_empty() {
+            let fs_id = state
+                .file_service()
+                .upload_file_committed_stream(
+                    repo_id,
+                    parent,
+                    name,
+                    block_ids,
+                    total_size,
+                    &user.email,
+                    Some(user.user_id),
+                    true,
+                    None,
+                    new_block_ids,
+                )
+                .await?;
+            return Ok(Json(
+                json!([{"id": fs_id, "name": name, "size": total_size}]),
+            ));
+        }
     }
 
     Ok(ok_json())

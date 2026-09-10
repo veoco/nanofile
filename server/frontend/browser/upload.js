@@ -267,7 +267,13 @@ export function uploadFileDirect(item, url) {
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
     formData.append('repo_name', uploadCtx.repoName);
-    if (!uploadTokenUrl) formData.append('repo_id', uploadCtx.repoId);
+    if (!uploadTokenUrl) {
+        formData.append('repo_id', uploadCtx.repoId);
+        // No-token fallback authenticates with the session cookie, so it needs
+        // the double-submit CSRF token (the tokenized path carries a token).
+        var csrf = getCookie('sfcsrftoken');
+        if (csrf) formData.append('csrf_token', csrf);
+    }
     formData.append('file', item.file, item.name);
     formData.append('xhr', '1');
 
@@ -367,7 +373,11 @@ export function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
     formData.append('repo_name', uploadCtx.repoName);
-    if (!uploadTokenUrl) formData.append('repo_id', uploadCtx.repoId);
+    if (!uploadTokenUrl) {
+        formData.append('repo_id', uploadCtx.repoId);
+        var csrf = getCookie('sfcsrftoken');
+        if (csrf) formData.append('csrf_token', csrf);
+    }
     formData.append('file', chunk, item.name);
     formData.append('xhr', '1');
 

@@ -664,13 +664,34 @@ async fn test_web_upload_rejects_non_member() {
         .unwrap();
     assert_eq!(resp.status(), 302, "login should succeed");
 
+    // Fetch the CSRF token so the request passes the double-submit check and
+    // reaches the membership check (the no-token endpoint now enforces CSRF).
+    let settings = client
+        .get(format!("{}/settings/", server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let marker = r#"name="csrf_token" value=""#;
+    let csrf = settings
+        .find(marker)
+        .map(|i| {
+            let rest = &settings[i + marker.len()..];
+            rest[..rest.find('"').unwrap()].to_string()
+        })
+        .unwrap_or_default();
+    assert!(!csrf.is_empty(), "settings page must expose csrf_token");
+
     // Try to upload into the owner's repo via the no-token /upload-aj/ endpoint.
     let part = reqwest::multipart::Part::bytes(b"hello".to_vec()).file_name("pwned.txt");
     let form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("repo_id", repo_id.clone())
         .text("parent_dir", "/")
-        .text("relative_path", "");
+        .text("relative_path", "")
+        .text("csrf_token", csrf);
     let resp = client
         .post(format!("{}/upload-aj/", server.base_url))
         .multipart(form)
@@ -678,6 +699,18 @@ async fn test_web_upload_rejects_non_member() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 403, "non-member upload must be rejected");
+
+    // H-4: the rejected bytes must never reach the global block store. The
+    // handler stages the body on disk and only ingests it after authorization.
+    let expected_id = infra::crypto::fs_id::sha1_hex(b"hello");
+    let block_path = server
+        .block_dir
+        .join(&expected_id[..2])
+        .join(&expected_id);
+    assert!(
+        !block_path.exists(),
+        "rejected upload must not write a block ({block_path:?})"
+    );
 }
 
 /// Security: a password-protected upload link must not yield an upload URL
