@@ -84,6 +84,9 @@ pub async fn search_page(
         (Vec::new(), 0, false)
     } else {
         let repo_ids = get_accessible_repo_ids(&state.repos, user.user_id, None).await?;
+        // An empty allow-list means the caller can see nothing; never let it
+        // degrade into an unscoped index search (C-2).
+        let has_accessible_repos = !repo_ids.is_empty();
         let mut seen = std::collections::HashSet::new();
         let mut all_results: Vec<SearchResultItem> = Vec::new();
 
@@ -91,7 +94,10 @@ pub async fn search_page(
         // mode. Filename-only mode skips it because the FS tree walk below is
         // the authoritative filename matcher and covers binary files the index
         // never sees.
-        if !search_filename_only && let Some(indexer) = &state.indexer {
+        if has_accessible_repos
+            && !search_filename_only
+            && let Some(indexer) = &state.indexer
+        {
             let ft_results = match indexer
                 .search(&q, &repo_ids, MAX_SEARCH_RESULTS, 0, false)
                 .await

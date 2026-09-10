@@ -442,7 +442,16 @@ impl TextIndexer {
     /// an optional `content_highlight` snippet (only set when the stored
     /// content actually contains a query term).
     /// Results are limited by `limit` and offset by `offset`.
-    /// If `repo_ids` is non-empty, only results from those repos are returned.
+    ///
+    /// # Access control
+    ///
+    /// `repo_ids` is the **allow-list of repos the caller may see** and must be
+    /// non-empty. An empty list is not "search everything": it yields no
+    /// results. Treating an empty allow-list as "no filter" would leak every
+    /// repo's filenames and content snippets to a user with no accessible
+    /// repos (that was the C-2 vulnerability), so callers must resolve the
+    /// caller's accessible repos *before* searching and skip the search when
+    /// the set is empty.
     pub async fn search(
         &self,
         keyword: &str,
@@ -452,6 +461,10 @@ impl TextIndexer {
         filename_only: bool,
     ) -> Result<Vec<IndexHit>, AppError> {
         if keyword.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        // Fail closed: an empty allow-list can never mean "match every repo".
+        if repo_ids.is_empty() {
             return Ok(Vec::new());
         }
         // Bound the keyword length so a multi-MB payload doesn't reach the
@@ -578,43 +591,12 @@ impl TextIndexer {
             }
         }
 
-        // Build the final query.
-        // When repo_ids is non-empty, wrap everything in a top-level Must:
-        //   Must(text_or_prefix_match) AND Must(repo_id filter)
-        let query: Box<dyn tantivy::query::Query> = if !repo_ids.is_empty() {
-            let text_query: Box<dyn tantivy::query::Query> = if subqueries.len() == 1 {
-                subqueries
-                    .into_iter()
-                    .next()
-                    .map(|(_, q)| q)
-                    .expect("non-empty subqueries")
-            } else {
-                Box::new(BooleanQuery::new(subqueries))
-            };
-
-            let repo_query: Box<dyn tantivy::query::Query> = if repo_ids.len() == 1 {
-                Box::new(TermQuery::new(
-                    tantivy::Term::from_field_text(repo_id_field, &repo_ids[0]),
-                    IndexRecordOption::Basic,
-                ))
-            } else {
-                let repo_subqueries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = repo_ids
-                    .iter()
-                    .map(|rid| {
-                        let tq: Box<dyn tantivy::query::Query> = Box::new(TermQuery::new(
-                            tantivy::Term::from_field_text(repo_id_field, rid),
-                            IndexRecordOption::Basic,
-                        ));
-                        (Occur::Should, tq)
-                    })
-                    .collect();
-                Box::new(BooleanQuery::new(repo_subqueries))
-            };
-
-            // Top-level AND: text match AND repo_id filter.
-            let top = vec![(Occur::Must, text_query), (Occur::Must, repo_query)];
-            Box::new(BooleanQuery::new(top))
-        } else if subqueries.len() == 1 {
+        // Build the final query. `repo_ids` is guaranteed non-empty (checked
+        // above), so the query is always
+        //   Must(text_or_prefix_match) AND Must(repo_id ∈ repo_ids).
+        // There is deliberately no "no filter" branch: an unscoped query would
+        // expose every repo's filenames and content snippets.
+        let text_query: Box<dyn tantivy::query::Query> = if subqueries.len() == 1 {
             subqueries
                 .into_iter()
                 .next()
@@ -623,6 +605,30 @@ impl TextIndexer {
         } else {
             Box::new(BooleanQuery::new(subqueries))
         };
+
+        let repo_query: Box<dyn tantivy::query::Query> = if repo_ids.len() == 1 {
+            Box::new(TermQuery::new(
+                tantivy::Term::from_field_text(repo_id_field, &repo_ids[0]),
+                IndexRecordOption::Basic,
+            ))
+        } else {
+            let repo_subqueries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = repo_ids
+                .iter()
+                .map(|rid| {
+                    let tq: Box<dyn tantivy::query::Query> = Box::new(TermQuery::new(
+                        tantivy::Term::from_field_text(repo_id_field, rid),
+                        IndexRecordOption::Basic,
+                    ));
+                    (Occur::Should, tq)
+                })
+                .collect();
+            Box::new(BooleanQuery::new(repo_subqueries))
+        };
+
+        let query: Box<dyn tantivy::query::Query> = Box::new(BooleanQuery::new(vec![
+            (Occur::Must, text_query),
+            (Occur::Must, repo_query),
+        ]));
 
         // Collect enough results for offset + limit.
         let top_docs = searcher
@@ -1012,7 +1018,9 @@ mod tests {
         // Commit so the reader can pick up the new document.
         indexer.commit()?;
 
-        let results = indexer.search("hello", &[], 10, 0, false).await?;
+        let results = indexer
+            .search("hello", &["repo-1".to_string()], 10, 0, false)
+            .await?;
         assert_eq!(
             results.len(),
             1,
@@ -1023,7 +1031,9 @@ mod tests {
         assert_eq!(results[0].fullpath.as_str(), "/hello.txt");
 
         // Search for content (not filename).
-        let results = indexer.search("test file", &[], 10, 0, false).await?;
+        let results = indexer
+            .search("test file", &["repo-1".to_string()], 10, 0, false)
+            .await?;
         assert_eq!(results.len(), 1, "should find 'test file' in content");
         assert_eq!(results[0].repo_id.as_str(), "repo-1");
         assert_eq!(results[0].fullpath.as_str(), "/hello.txt");
@@ -1069,12 +1079,24 @@ mod tests {
 
         indexer.index_file("repo-1", "/hello.txt", "hello.txt", "Hello World")?;
         indexer.commit()?;
-        assert_eq!(indexer.search("hello", &[], 10, 0, false).await?.len(), 1);
+        assert_eq!(
+            indexer
+                .search("hello", &["repo-1".to_string()], 10, 0, false)
+                .await?
+                .len(),
+            1
+        );
 
         indexer.delete_file("repo-1", "/hello.txt")?;
         indexer.commit()?;
 
-        assert_eq!(indexer.search("hello", &[], 10, 0, false).await?.len(), 0);
+        assert_eq!(
+            indexer
+                .search("hello", &["repo-1".to_string()], 10, 0, false)
+                .await?
+                .len(),
+            0
+        );
 
         Ok(())
     }
@@ -1087,7 +1109,9 @@ mod tests {
         indexer.index_file("repo-1", "/file.txt", "file.txt", "old content")?;
         indexer.commit()?;
 
-        let results = indexer.search("old", &[], 10, 0, false).await?;
+        let results = indexer
+            .search("old", &["repo-1".to_string()], 10, 0, false)
+            .await?;
         assert_eq!(results.len(), 1);
 
         // Index same path with new content.
@@ -1095,9 +1119,21 @@ mod tests {
         indexer.commit()?;
 
         // Old content should no longer match.
-        assert_eq!(indexer.search("old", &[], 10, 0, false).await?.len(), 0);
+        assert_eq!(
+            indexer
+                .search("old", &["repo-1".to_string()], 10, 0, false)
+                .await?
+                .len(),
+            0
+        );
         // New content should match.
-        assert_eq!(indexer.search("new", &[], 10, 0, false).await?.len(), 1);
+        assert_eq!(
+            indexer
+                .search("new", &["repo-1".to_string()], 10, 0, false)
+                .await?
+                .len(),
+            1
+        );
 
         Ok(())
     }
@@ -1116,15 +1152,21 @@ mod tests {
         indexer.commit()?;
 
         // First page: limit=3, offset=0
-        let results = indexer.search("content", &[], 3, 0, false).await?;
+        let results = indexer
+            .search("content", &["repo-1".to_string()], 3, 0, false)
+            .await?;
         assert_eq!(results.len(), 3, "first page should have 3");
 
         // Second page: limit=3, offset=3
-        let results = indexer.search("content", &[], 3, 3, false).await?;
+        let results = indexer
+            .search("content", &["repo-1".to_string()], 3, 3, false)
+            .await?;
         assert_eq!(results.len(), 3, "second page should have 3");
 
         // Last page: limit=3, offset=9
-        let results = indexer.search("content", &[], 3, 9, false).await?;
+        let results = indexer
+            .search("content", &["repo-1".to_string()], 3, 9, false)
+            .await?;
         assert_eq!(results.len(), 1, "last page should have 1");
 
         Ok(())
@@ -1146,7 +1188,9 @@ mod tests {
         // fixed sleep is flaky on slow CI runners.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {
-            let results = indexer.search("hello", &[], 10, 0, false).await?;
+            let results = indexer
+                .search("hello", &["repo-1".to_string()], 10, 0, false)
+                .await?;
             if results.len() == 1 {
                 break;
             }
@@ -1155,6 +1199,38 @@ mod tests {
                 "debounce must commit before search (timed out after 15s)"
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        Ok(())
+    }
+
+    /// Regression (C-2): an empty repo allow-list must mean "no results", not
+    /// "no filter". Returning documents here leaked every repo's filenames and
+    /// content snippets to a caller with no accessible repos.
+    #[tokio::test]
+    async fn test_empty_repo_allow_list_returns_nothing() -> Result<(), AppError> {
+        let dir = tempfile::tempdir().unwrap();
+        let indexer = TextIndexer::new(dir.path(), None)?;
+
+        indexer.index_file("repo-1", "/secret.txt", "secret.txt", "top secret content")?;
+        indexer.commit()?;
+
+        // Sanity: the document is reachable when its repo is allowed.
+        assert_eq!(
+            indexer
+                .search("secret", &["repo-1".to_string()], 10, 0, false)
+                .await?
+                .len(),
+            1
+        );
+
+        // An empty allow-list must not fall back to an unscoped query.
+        for keyword in ["secret", "secret.txt", "content"] {
+            let results = indexer.search(keyword, &[], 10, 0, false).await?;
+            assert!(
+                results.is_empty(),
+                "empty allow-list must return nothing for {keyword:?}, got {results:?}"
+            );
         }
 
         Ok(())

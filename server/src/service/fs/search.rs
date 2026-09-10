@@ -58,6 +58,12 @@ impl SearchService {
         let per_page = per_page.max(1);
         let page = page.max(1);
         let repo_ids = self.get_accessible_repo_ids(user_id, search_repo).await?;
+        // No accessible repo ⇒ nothing to search. `repo_ids` is the caller's
+        // access-control allow-list: an empty list must never be handed to the
+        // indexer as "no filter" (that leaked every repo's filenames and
+        // content snippets — C-2). The indexer also fails closed on an empty
+        // list; this early return keeps the intent explicit locally.
+        let has_accessible_repos = !repo_ids.is_empty();
 
         let mut seen = std::collections::HashSet::new();
         let mut all_results: Vec<FileSearchResult> = Vec::new();
@@ -66,7 +72,10 @@ impl SearchService {
         // mode. Filename-only mode skips it because the FS tree walk below is
         // the authoritative filename matcher and covers binary files the index
         // never sees.
-        if !search_filename_only && let Some(indexer) = &self.indexer {
+        if has_accessible_repos
+            && !search_filename_only
+            && let Some(indexer) = &self.indexer
+        {
             match indexer
                 .search(q, &repo_ids, MAX_SEARCH_RESULTS, 0, false)
                 .await
@@ -247,6 +256,9 @@ impl SearchService {
             // as a repo id would filter out every repo and return no results.
             let is_scope = matches!(filter, "all" | "mine" | "shared" | "group" | "public");
             if !is_scope {
+                // A filter naming a repo the caller cannot access leaves the
+                // list empty, which means "no access" — NOT "no filter". It
+                // must never widen the search (see `search`).
                 ids.retain(|id| id == filter);
             }
         }

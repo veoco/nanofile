@@ -657,3 +657,116 @@ async fn test_overlong_keyword_returns_empty() {
     let results = body["results"].as_array().unwrap();
     assert!(results.is_empty(), "overlong keyword should return empty");
 }
+
+// ── Access control (C-2) ─────────────────────────────────────────────────────
+
+/// Fetch the `results` array for a search query, with an optional `search_repo`.
+async fn search_results_with_repo(
+    f: &common::TestFixture,
+    token: &str,
+    q: &str,
+    search_repo: Option<&str>,
+) -> Vec<serde_json::Value> {
+    let mut url = format!("/api2/search/?q={q}&search_filename_only=false");
+    if let Some(repo) = search_repo {
+        url.push_str(&format!("&search_repo={repo}"));
+    }
+    let resp = f.client.get(&url, Some(token)).await;
+    assert_eq!(resp.status(), 200, "search should return 200, url={url}");
+    resp.json::<serde_json::Value>().await.unwrap()["results"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// Regression (C-2): a user with no accessible repos must not be able to use
+/// the full-text index to read another user's filenames or content. An empty
+/// accessible-repo set used to be passed to the indexer as "no filter".
+#[tokio::test]
+async fn test_zero_repo_user_cannot_search_other_repos() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    // Victim indexes a file whose name and content are both distinctive.
+    let resp = f
+        .client
+        .upload_file(
+            token,
+            &f.repo_id,
+            "/",
+            "topsecretfile.txt",
+            b"zqxjwv secret payload",
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed");
+
+    // Wait until the victim can find it — proves the document is indexed.
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            !search_results(&f, token, "zqxjwv").await.is_empty()
+        })
+        .await,
+        "victim should find their own indexed file"
+    );
+
+    // A second user with no repos at all must see nothing.
+    let other = common::TestFixture::no_repo("nosy@example.com", "password").await;
+    let other_token = &other.api_token;
+
+    for (q, repo) in [
+        ("zqxjwv", None),                                         // no search_repo at all
+        ("topsecretfile", None),                                  // filename term
+        ("zqxjwv", Some(f.repo_id.as_str())),                     // explicit victim repo id
+        ("zqxjwv", Some("00000000-0000-0000-0000-000000000000")), // bogus id
+    ] {
+        let results = search_results_with_repo(&other, other_token, q, repo).await;
+        assert!(
+            results.is_empty(),
+            "C-2: zero-repo user must not see other repos' files (q={q:?}, search_repo={repo:?}), got {results:?}"
+        );
+    }
+
+    // Filename-only mode must not leak either.
+    let resp = other
+        .client
+        .get(
+            "/api2/search/?q=topsecretfile&search_filename_only=true",
+            Some(other_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["results"].as_array().unwrap().is_empty(),
+        "C-2: filename-only search must not leak other repos' files"
+    );
+}
+
+/// Control for C-2: a user with an accessible repo still finds their own
+/// indexed content, so the fix does not disable search altogether.
+#[tokio::test]
+async fn test_owner_still_finds_own_content_after_search_fix() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "mine.txt", b"qqzzxx owner content")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            !search_results(&f, token, "qqzzxx").await.is_empty()
+        })
+        .await,
+        "owner must still find their own indexed content"
+    );
+
+    // Scoping to the owner's own repo also works.
+    let scoped = search_results_with_repo(&f, token, "qqzzxx", Some(f.repo_id.as_str())).await;
+    assert!(
+        !scoped.is_empty(),
+        "owner must find content when scoping to their own repo"
+    );
+}
