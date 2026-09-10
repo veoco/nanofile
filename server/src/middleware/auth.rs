@@ -33,8 +33,13 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
 
         // Repo id embedded in the URL path, if any (`/seafhttp/repo/{repo_id}/…`).
         // Endpoints without a repo segment (accessible-repos, head-commits-multi)
-        // skip the repo binding check.
-        let url_repo_id = extract_url_repo_id(parts.uri.path());
+        // skip the repo binding check. A repo segment that is present but is not
+        // a valid UUID is rejected outright (see `extract_url_repo_id`) — axum's
+        // `Path` extractor hands the *decoded* value to the handler, so treating
+        // an undecodable segment as "not a repo endpoint" would let a
+        // percent-encoded id (`%63cab3e0-…`) bypass the binding check entirely.
+        let url_repo_id = extract_url_repo_id(parts.uri.path())
+            .map_err(|_| base::error::AppError::Unauthorized)?;
 
         // First try to authenticate via sync token (primary sync protocol path).
         // We look up sync_tokens directly here (rather than delegating to from_token)
@@ -112,21 +117,60 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
     }
 }
 
+/// Sync-protocol endpoints that live under `/seafhttp/` but carry no repo id.
+///
+/// These are the only paths allowed to skip the token↔repo binding check.
+const NON_REPO_SYNC_ENDPOINTS: [&str; 3] =
+    ["accessible-repos", "head-commits-multi", "protocol-version"];
+
 /// Extract the repo id from a `/seafhttp/repo/{repo_id}/…` URL path.
 ///
-/// axum's `nest("/seafhttp/repo", …)` strips the matched prefix, so handlers
-/// may see either the full path or the stripped `/{repo_id}/…` form. In both
-/// cases the repo id is the first path segment; non-repo endpoints
-/// (accessible-repos, head-commits-multi, protocol-version) have no UUID
-/// segment and return `None` — those endpoints skip the repo binding check.
-fn extract_url_repo_id(path: &str) -> Option<String> {
-    let trimmed = path.trim_start_matches('/');
-    let first = if let Some(rest) = trimmed.strip_prefix("seafhttp/repo/") {
-        rest.split('/').next()
-    } else {
-        trimmed.split('/').next()
-    };
-    first.and_then(|s| is_uuid_str(s).then(|| s.to_string()))
+/// `nest` strips the matched prefix before the request reaches the inner
+/// router, and `SyncAuth` can be extracted at several nesting depths, so the
+/// path may arrive as either the full form (`/seafhttp/repo/{id}/…`) or the
+/// stripped form (`/{id}/…`). Both are accepted.
+///
+/// # Security
+///
+/// The path is percent-decoded **before** the UUID check, because axum's `Path`
+/// extractor also decodes it. Without this, `/seafhttp/repo/%63cab3e0-…/commit`
+/// would look like a non-UUID segment (→ `None` → binding check skipped) while
+/// the handler would see the victim's real repo id — letting any sync token
+/// read any repo.
+///
+/// The check is fail-closed: only the explicit [`NON_REPO_SYNC_ENDPOINTS`]
+/// allow-list may return `Ok(None)`; anything else that fails to yield a UUID
+/// is `Err`, so a malformed or encoded repo segment can never be mistaken for
+/// "this endpoint has no repo".
+fn extract_url_repo_id(path: &str) -> Result<Option<String>, ()> {
+    let decoded = percent_encoding::percent_decode_str(path)
+        .decode_utf8()
+        .map_err(|_| ())?;
+    let trimmed = decoded.trim_start_matches('/');
+
+    // Candidate repo-id positions, most specific first: the full
+    // `seafhttp/repo/{id}` form, the `repo/{id}` form and the stripped
+    // `{id}/…` form.
+    let mut candidates: Vec<&str> = Vec::new();
+    for prefix in ["seafhttp/repo/", "repo/"] {
+        if let Some(rest) = trimmed.strip_prefix(prefix)
+            && let Some(seg) = rest.split('/').next()
+        {
+            candidates.push(seg);
+        }
+    }
+    candidates.push(trimmed.split('/').next().unwrap_or(""));
+
+    if let Some(repo_id) = candidates.iter().find(|c| is_uuid_str(c)) {
+        return Ok(Some((*repo_id).to_string()));
+    }
+
+    // No UUID anywhere: this is only legitimate for a known non-repo endpoint.
+    if NON_REPO_SYNC_ENDPOINTS.contains(&candidates[0]) {
+        return Ok(None);
+    }
+
+    Err(())
 }
 
 /// True when `s` is a UUID-formatted string (8-4-4-4-12 hex).
@@ -415,4 +459,125 @@ fn should_write_peer_info(token_id: i32) -> bool {
     last_writes.retain(|_, last| now.duration_since(*last) < PEER_INFO_WRITE_INTERVAL);
     last_writes.insert(token_id, now);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_url_repo_id;
+
+    const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
+
+    #[test]
+    fn plain_repo_id_is_extracted() {
+        assert_eq!(
+            extract_url_repo_id(&format!("/seafhttp/repo/{REPO}/commit/HEAD")),
+            Ok(Some(REPO.to_string()))
+        );
+        // The nested router strips the prefix, so the handler-side form must
+        // work too.
+        assert_eq!(
+            extract_url_repo_id(&format!("/{REPO}/commit/HEAD")),
+            Ok(Some(REPO.to_string()))
+        );
+        // Trailing slash variants.
+        assert_eq!(
+            extract_url_repo_id(&format!("/seafhttp/repo/{REPO}")),
+            Ok(Some(REPO.to_string()))
+        );
+    }
+
+    #[test]
+    fn endpoints_without_a_repo_segment_return_none() {
+        // `nest` strips the matched prefix before the request reaches the inner
+        // router, so the middleware observes the stripped form for the
+        // non-repo protocol endpoints (`/seafhttp/accessible-repos` arrives as
+        // `/accessible-repos`). These are the only paths allowed to skip the
+        // binding check.
+        for path in [
+            "/accessible-repos",
+            "/head-commits-multi/",
+            "/protocol-version",
+        ] {
+            assert_eq!(extract_url_repo_id(path), Ok(None), "path={path}");
+        }
+    }
+
+    /// Any other path that does not yield a UUID must fail closed rather than
+    /// being treated as "this endpoint has no repo".
+    #[test]
+    fn unknown_non_uuid_paths_fail_closed() {
+        for path in ["/whatever/commit/HEAD", "/seafhttp/whatever", "/not-a-uuid"] {
+            assert_eq!(extract_url_repo_id(path), Err(()), "path={path}");
+        }
+    }
+
+    /// Regression (C-1): the middleware must derive the binding value the same
+    /// way axum's `Path` extractor does — by percent-decoding. Decoding is the
+    /// correct behaviour (it makes the compared value identical to the one the
+    /// handler uses); the vulnerability was that the *undecoded* segment was
+    /// compared, so a `%XX`-encoded id failed the UUID test and skipped the
+    /// binding check entirely.
+    #[test]
+    fn percent_encoded_repo_id_is_decoded_before_the_binding_check() {
+        // '%63' == 'c' — the exact encoding shape used in the C-1 PoC.
+        let encoded = format!("%63{}", &REPO[1..]);
+        assert_ne!(encoded, REPO);
+        assert_eq!(
+            extract_url_repo_id(&format!("/seafhttp/repo/{encoded}/commit/HEAD")),
+            Ok(Some(REPO.to_string())),
+            "the decoded value must be used for the binding comparison"
+        );
+        // Every hex char is encodable — all of them must decode consistently,
+        // in both the full and the stripped path form.
+        for (i, ch) in REPO.char_indices().filter(|(_, c)| c.is_ascii_hexdigit()) {
+            let mut buf = String::new();
+            buf.push_str(&REPO[..i]);
+            buf.push_str(&format!("%{:02x}", ch as u8));
+            buf.push_str(&REPO[i + ch.len_utf8()..]);
+            for path in [
+                format!("/seafhttp/repo/{buf}/commit/HEAD"),
+                format!("/{buf}/commit/HEAD"),
+            ] {
+                assert_eq!(
+                    extract_url_repo_id(&path),
+                    Ok(Some(REPO.to_string())),
+                    "encoded char {ch} at {i} must decode to the real repo id (path={path})"
+                );
+            }
+        }
+    }
+
+    /// Regression (C-1): double encoding (`%2563` → `%63`) must also fail.
+    #[test]
+    fn double_encoded_repo_id_is_rejected() {
+        // One decode yields "…%63…", which is not a UUID ⇒ fail closed.
+        let encoded = format!("%2563{}", &REPO[1..]);
+        assert_eq!(
+            extract_url_repo_id(&format!("/seafhttp/repo/{encoded}/commit/HEAD")),
+            Err(())
+        );
+    }
+
+    #[test]
+    fn malformed_segments_fail_closed() {
+        for path in [
+            "/seafhttp/repo/not-a-uuid/commit/HEAD",
+            "/seafhttp/repo/../../etc/commit/HEAD",
+            "/seafhttp/repo/cfcab3e0-9eb4-4c4f-92d0-87db2cd8290/commit/HEAD", // 35 chars
+            "/seafhttp/repo/cfcab3e0_9eb4_4c4f_92d0_87db2cd8290d/commit/HEAD",
+            // Encoded non-UUID: decodes to something that is still not a UUID.
+            "/seafhttp/repo/%6eot-a-uuid/commit/HEAD",
+        ] {
+            assert_eq!(extract_url_repo_id(path), Err(()), "path={path}");
+        }
+    }
+
+    #[test]
+    fn uppercase_uuid_is_accepted() {
+        let upper = REPO.to_uppercase();
+        assert_eq!(
+            extract_url_repo_id(&format!("/seafhttp/repo/{upper}/commit/HEAD")),
+            Ok(Some(upper))
+        );
+    }
 }

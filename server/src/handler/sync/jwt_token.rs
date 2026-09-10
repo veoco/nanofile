@@ -41,6 +41,16 @@ pub async fn get_jwt_token(
         ));
     }
 
+    // The JWT grants access to this repo's notification stream, so it must
+    // only be issued to a member of that repo (defense in depth on top of the
+    // `SyncAuth` path/repo binding).
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     // Get the user's email from the database.
     let user = state
         .repos

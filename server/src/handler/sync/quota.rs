@@ -28,10 +28,18 @@ pub struct QuotaCheckQuery {
 
 async fn check_quota(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    auth: SyncAuth,
     Path(repo_id): Path<String>,
     Query(query): Query<QuotaCheckQuery>,
 ) -> Result<StatusCode, AppError> {
+    // Quota is a property of the repo owner, so only members may probe it.
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let delta = match query.delta {
         Some(ref d) => d
             .parse::<i64>()

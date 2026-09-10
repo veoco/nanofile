@@ -40,9 +40,18 @@ pub fn commit_routes() -> Router<Arc<AppState>> {
 
 pub async fn get_head_commit(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    auth: SyncAuth,
     Path(repo_id): Path<String>,
 ) -> Result<Json<HeadCommitResponse>, AppError> {
+    // Defense in depth: `SyncAuth` also binds the token to the URL repo (see
+    // `fs_id_list` in `sync/fs.rs`).
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let svc = state.sync_service();
     let repo_model = svc
         .find_repo(&repo_id)
@@ -61,9 +70,19 @@ pub async fn get_head_commit(
 
 pub async fn get_commit(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    auth: SyncAuth,
     Path((repo_id, commit_id)): Path<(String, String)>,
 ) -> Result<Vec<u8>, AppError> {
+    // Membership check (see `get_head_commit`). The commit body carries repo
+    // metadata (name, description, creator), so it must not be readable
+    // cross-repo.
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let svc = state.sync_service();
     let repo_model = svc
         .find_repo(&repo_id)

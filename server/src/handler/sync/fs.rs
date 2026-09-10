@@ -84,10 +84,20 @@ pub fn fs_routes() -> Router<Arc<AppState>> {
 
 pub async fn fs_id_list(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    auth: SyncAuth,
     Path(repo_id): Path<String>,
     Query(query): Query<FsIdListQuery>,
 ) -> Result<Json<Vec<String>>, AppError> {
+    // Defense in depth: `SyncAuth` already fails closed when the URL repo does
+    // not match the token's repo, but every read path checks membership
+    // explicitly so a future gap in the path/repo binding cannot leak data.
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let server_head = query
         .server_head
         .ok_or_else(|| AppError::BadRequest("missing server-head parameter".into()))?;
@@ -132,10 +142,18 @@ pub async fn fs_id_list(
 
 pub async fn pack_fs_handler(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    auth: SyncAuth,
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<axum::response::Response, AppError> {
+    // Membership check before the body is read (see `fs_id_list`).
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
@@ -180,10 +198,18 @@ pub struct CheckFsResponse {
 
 pub async fn check_fs(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    auth: SyncAuth,
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<Json<Vec<String>>, AppError> {
+    // Membership check before the body is read (see `fs_id_list`).
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;

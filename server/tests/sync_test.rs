@@ -895,6 +895,113 @@ async fn test_api_token_rejected_for_other_repo() {
     );
 }
 
+/// Percent-encode the first hex character of a repo id (`c` → `%63`).
+///
+/// This is the exact shape of the C-1 bypass: the auth middleware used the
+/// *raw* path segment, so `%63…` did not look like a UUID and the repo binding
+/// check was skipped, while axum's `Path` extractor decoded it back to the
+/// victim's real repo id for the handler.
+fn percent_encode_first_hex_char(repo_id: &str) -> String {
+    let idx = repo_id
+        .char_indices()
+        .find(|(_, c)| c.is_ascii_hexdigit())
+        .map(|(i, _)| i)
+        .expect("repo id must contain a hex char");
+    format!("%{:02x}{}", repo_id.as_bytes()[idx], &repo_id[idx + 1..])
+}
+
+/// Security (C-1): a percent-encoded repo id must not bypass the sync-token
+/// binding check. Every read endpoint of the sync protocol is covered.
+#[tokio::test]
+async fn test_percent_encoded_repo_id_cannot_bypass_sync_token_binding() {
+    let f = TestFixture::new().await;
+
+    // Victim (f) owns a repo and has a sync token for it. Attacker is a
+    // different user with a repo of their own.
+    create_test_user(f.server.db.as_ref(), "attacker@example.com", "password123").await;
+    let resp = f.client.login("attacker@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let attacker_api = body["token"].as_str().unwrap().to_string();
+    let attacker_repo =
+        common::create_test_repo(&f.client, &attacker_api, "Attacker Library").await;
+    let attacker_sync = get_sync_token(&f.client, &attacker_api, &attacker_repo).await;
+
+    let encoded = percent_encode_first_hex_char(&f.repo_id);
+    assert_ne!(encoded, f.repo_id);
+
+    // Baseline: the un-encoded victim repo id is already rejected.
+    let resp = f.client.get_head_commit(&attacker_sync, &f.repo_id).await;
+    assert_eq!(resp.status(), 401, "un-encoded cross-repo read must be 401");
+
+    // The bypass: same token, percent-encoded victim repo id.
+    let head_path = format!("/seafhttp/repo/{encoded}/commit/HEAD/");
+    let resp = f.client.get_sync(&head_path, &attacker_sync).await;
+    assert_eq!(
+        resp.status(),
+        401,
+        "C-1: percent-encoded repo id must not bypass the binding check"
+    );
+
+    let fs_id_list_path = format!(
+        "/seafhttp/repo/{encoded}/fs-id-list/?server-head={}",
+        "0".repeat(40)
+    );
+    let resp = f.client.get_sync(&fs_id_list_path, &attacker_sync).await;
+    assert_eq!(resp.status(), 401, "C-1: fs-id-list must be rejected");
+
+    let pack_path = format!("/seafhttp/repo/{encoded}/pack-fs/");
+    let resp = f
+        .client
+        .post_sync_raw(&pack_path, &attacker_sync, &serde_json::json!([]))
+        .await;
+    assert_eq!(resp.status(), 401, "C-1: pack-fs must be rejected");
+
+    let check_path = format!("/seafhttp/repo/{encoded}/check-fs/");
+    let resp = f
+        .client
+        .post_sync_raw(&check_path, &attacker_sync, &serde_json::json!([]))
+        .await;
+    assert_eq!(resp.status(), 401, "C-1: check-fs must be rejected");
+
+    let block_path = format!("/seafhttp/repo/{encoded}/block/{}", "a".repeat(40));
+    let resp = f.client.get_sync(&block_path, &attacker_sync).await;
+    assert_eq!(resp.status(), 401, "C-1: block read must be rejected");
+
+    let jwt_path = format!("/seafhttp/repo/{encoded}/jwt-token");
+    let resp = f.client.get_sync(&jwt_path, &attacker_sync).await;
+    assert_eq!(resp.status(), 401, "C-1: jwt-token must be rejected");
+
+    // Failure must be authorization, not a decode/500 error.
+    let malformed_path = "/seafhttp/repo/not-a-uuid/commit/HEAD/";
+    let resp = f.client.get_sync(malformed_path, &attacker_sync).await;
+    assert_eq!(resp.status(), 401, "malformed repo segment must be 401");
+}
+
+/// Control for C-1: legitimate requests (un-encoded, token's own repo) still
+/// work, so the fix must not break the sync protocol.
+#[tokio::test]
+async fn test_sync_own_repo_still_readable_after_binding_fix() {
+    let f = TestFixture::new().await;
+
+    let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "owner must still be able to read their own repo"
+    );
+
+    // Percent-encoding the id of a repo the caller *does* own is also fine:
+    // the decoded value matches the token's repo.
+    let encoded = percent_encode_first_hex_char(&f.repo_id);
+    let path = format!("/seafhttp/repo/{encoded}/commit/HEAD/");
+    let resp = f.client.get_sync(&path, &f.sync_token).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "percent-encoded id of the token's own repo must still work"
+    );
+}
+
 /// Security: repo-tokens must not mint a token for a repo the caller is not a
 /// member of (official seahub skips such repos rather than erroring).
 #[tokio::test]

@@ -99,10 +99,20 @@ pub async fn check_blocks(
 
 pub async fn get_block(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
-    Path((_repo_id, block_id)): Path<(String, String)>,
+    auth: SyncAuth,
+    Path((repo_id, block_id)): Path<(String, String)>,
 ) -> Result<Vec<u8>, AppError> {
     validate_block_id(&block_id)?;
+
+    // Defense in depth: the block store is global and content-addressed, so
+    // without an explicit membership check a token bound to repo A could read
+    // any block whose id it knows (see `fs_id_list` in `sync/fs.rs`).
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
 
     let block_store = state.block_store.clone();
 
@@ -162,9 +172,17 @@ pub async fn put_block(
 
 pub async fn get_block_map(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    auth: SyncAuth,
     Path((repo_id, file_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<i64>>, AppError> {
+    // Membership check (see `get_block`).
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let fs_obj = state
         .repos
         .fs_object
