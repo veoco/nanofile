@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import crypto from "node:crypto";
 import { loginViaUI } from "../helpers/api";
-import { ADMIN_EMAIL, ADMIN_PASSWORD } from "../helpers/server";
+import { ADMIN_EMAIL, ADMIN_PASSWORD, BASE_URL } from "../helpers/server";
 
 const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
@@ -53,13 +53,17 @@ async function freshTotp(secret: string): Promise<string> {
 test("enable 2FA, log in with a backup code, then disable it", async ({ browser }) => {
   // Use a fresh context so the logout/login steps never touch the shared
   // storageState session other specs depend on.
-  const ctx = await browser.newContext();
+  const ctx = await browser.newContext({ baseURL: BASE_URL });
   const page = await ctx.newPage();
   try {
     await loginViaUI(page, ADMIN_EMAIL, ADMIN_PASSWORD);
 
-    // GET /settings/two-factor/ auto-starts setup and shows the manual secret.
+    // GET is read-only now (no side effects): start setup via the POST form,
+    // then read the pending secret it renders.
     await page.goto("/settings/two-factor/");
+    await page
+      .locator('form[action="/settings/two-factor/setup/"] button[type="submit"]')
+      .click();
     const secret = (await page.locator("code").first().innerText()).trim();
     expect(secret.length).toBeGreaterThan(0);
 

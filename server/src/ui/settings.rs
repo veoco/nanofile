@@ -190,7 +190,7 @@ pub async fn change_password(
     // unlike registration and password reset (M-5).
     if let Err(msg) = crate::service::auth::password::validate_password(
         &form.new_password,
-        state.config.auth.password_min_length as u32,
+        state.config.auth.password_min_length,
         state.config.auth.require_strong_password,
     ) {
         return render_settings_error(&state, &user, Some(msg)).await;

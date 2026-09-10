@@ -237,7 +237,7 @@ pub async fn encrypt_legacy_sync_tokens(
     use infra::crypto::token_encryption::TOKEN_CIPHER_PREFIX;
 
     let legacy = sync_token::Entity::find()
-        .filter(sync_token::Column::Token.not_like(&format!("{TOKEN_CIPHER_PREFIX}%")))
+        .filter(sync_token::Column::Token.not_like(format!("{TOKEN_CIPHER_PREFIX}%")))
         .all(db)
         .await?;
 

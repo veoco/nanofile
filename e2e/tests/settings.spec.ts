@@ -1,5 +1,7 @@
 import { test, expect } from "@playwright/test";
-import { readState } from "../helpers/api";
+import fs from "node:fs";
+import path from "node:path";
+import { login, readState } from "../helpers/api";
 import { ADMIN_PASSWORD } from "../helpers/server";
 
 test.beforeEach(async ({ page }) => {
@@ -55,6 +57,16 @@ test("changing the password requires the current password and restores it", asyn
     .locator('form[action="/settings/password/"] button[type="submit"]')
     .click();
   await expect(page).toHaveURL(/\/settings\/$/);
+
+  // A password change revokes existing API/device tokens (matching seahub's
+  // clear_token) while keeping the acting browser session, so refresh the
+  // admin API token persisted for later specs.
+  const state = readState();
+  state.adminToken = await login(state.baseURL, state.adminEmail, ADMIN_PASSWORD);
+  fs.writeFileSync(
+    path.join(process.cwd(), "test-results", ".e2e-state.json"),
+    JSON.stringify(state, null, 2),
+  );
 });
 
 test("switch the interface language to Chinese and back", async ({ page }) => {
