@@ -171,26 +171,29 @@ pub async fn change_password(
     )
     .await
     {
-        let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
-        let tpl = SettingsTemplate {
-            urls: ctx.urls,
-            t: ctx.t,
-            user_language: ctx.t.lang,
-            user_email: ctx.user_email,
-            user_display_name: user.email.split('@').next().unwrap_or("").to_string(),
-            error: Some(ctx.t.tr("settings.incorrect_password").to_string()),
-            success: None,
-            active_page: "settings",
-            two_fa_enabled: false,
-            csrf_token: Some(ctx.csrf_token),
-            is_admin: ctx.is_admin,
-            left_panel_repos: ctx.left_panel_repos,
-            current_repo_id: None,
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok((StatusCode::OK, Html(html)).into_response());
+        return render_settings_error(
+            &state,
+            &user,
+            Some(
+                crate::ui::ctx::build_page_ctx(&state, &user)
+                    .await?
+                    .t
+                    .tr("settings.incorrect_password")
+                    .to_string(),
+            ),
+        )
+        .await;
+    }
+
+    // Enforce the configured password policy. The self-service change form
+    // previously bypassed it entirely (a one-character password was accepted),
+    // unlike registration and password reset (M-5).
+    if let Err(msg) = crate::service::auth::password::validate_password(
+        &form.new_password,
+        state.config.auth.password_min_length as u32,
+        state.config.auth.require_strong_password,
+    ) {
+        return render_settings_error(&state, &user, Some(msg)).await;
     }
 
     let new_hash = hash_password_async(
@@ -204,6 +207,16 @@ pub async fn change_password(
         .update_password(user.user_id, new_hash)
         .await
         .map_err(|e| AppError::internal(format!("update failed: {e}")))?;
+
+    // Revoke every other credential — account API tokens, 2FA device-trust
+    // tokens and all repository sync tokens — while keeping the acting session
+    // alive. Mirrors seahub's `clear_token()` + `update_session_auth_hash()`.
+    crate::service::auth::token::revoke_all_credentials(
+        &state.repos,
+        user.user_id,
+        Some(user.session_token.as_str()),
+    )
+    .await?;
 
     Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }

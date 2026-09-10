@@ -822,6 +822,97 @@ async fn test_change_password_wrong_old() {
     );
 }
 
+#[tokio::test]
+async fn test_change_password_rejects_weak_password() {
+    let fixture = TestFixture::new().await;
+    let client = login_client(&fixture).await;
+    let csrf = settings_csrf_token(&client, &fixture.server.base_url).await;
+
+    let resp = client
+        .post(format!("{}/settings/password/", fixture.server.base_url))
+        .form(&[
+            ("old_password", "password"),
+            ("new_password", "1"),
+            ("csrf_token", csrf.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+
+    // The configured policy (min length 8) must reject this, re-rendering the
+    // form rather than redirecting.
+    assert_eq!(resp.status(), 200, "weak password must not be accepted");
+
+    // The old password still works.
+    let api_resp = fixture.client.login(&fixture.email, "password").await;
+    assert_eq!(api_resp.status(), 200, "password must remain unchanged");
+}
+
+#[tokio::test]
+async fn test_change_password_revokes_other_credentials() {
+    let fixture = TestFixture::new().await;
+    let client = login_client(&fixture).await;
+    let csrf = settings_csrf_token(&client, &fixture.server.base_url).await;
+
+    // Sanity: the fixture's API token and repo sync token work before the change.
+    assert_eq!(
+        fixture
+            .client
+            .get("/api2/repos/", Some(&fixture.api_token))
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        fixture
+            .client
+            .get_head_commit(&fixture.sync_token, &fixture.repo_id)
+            .await
+            .status(),
+        200
+    );
+
+    let resp = client
+        .post(format!("{}/settings/password/", fixture.server.base_url))
+        .form(&[
+            ("old_password", "password"),
+            ("new_password", "newpass123"),
+            ("csrf_token", csrf.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "password change should redirect");
+
+    // Other account tokens and all repo sync tokens are revoked...
+    assert_eq!(
+        fixture
+            .client
+            .get("/api2/repos/", Some(&fixture.api_token))
+            .await
+            .status(),
+        401,
+        "other API token must be revoked"
+    );
+    assert_eq!(
+        fixture
+            .client
+            .get_head_commit(&fixture.sync_token, &fixture.repo_id)
+            .await
+            .status(),
+        403,
+        "sync token must be revoked"
+    );
+
+    // ...but the acting browser session survives, and the new password works.
+    let settings = client
+        .get(format!("{}/settings/", fixture.server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(settings.status(), 200, "acting session must stay logged in");
+}
+
 // ============================================================================
 // Phase 6: Search
 // ============================================================================
@@ -1311,6 +1402,71 @@ async fn test_password_reset_full_flow() {
         resp.status(),
         200,
         "reused token must render the error page"
+    );
+}
+
+/// A completed password reset revokes API tokens *and* repository sync tokens,
+/// matching seahub's `clear_token()` on password reset.
+#[tokio::test]
+async fn test_password_reset_revokes_sync_tokens() {
+    let server = TestServer::start_with_email_enabled().await;
+    create_test_user(&server.db, "reset2@example.com", "oldpassword").await;
+    let base = server.base_url.clone();
+    let client = server.client();
+
+    let resp = client.login("reset2@example.com", "oldpassword").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let api_token = body["token"].as_str().unwrap().to_string();
+    let repo_id = common::create_test_repo(&client, &api_token, "Reset Library").await;
+    let sync_token = common::get_sync_token(&client, &api_token, &repo_id).await;
+
+    // Both credentials work before the reset.
+    assert_eq!(
+        client.get("/api2/repos/", Some(&api_token)).await.status(),
+        200
+    );
+    assert_eq!(
+        client.get_head_commit(&sync_token, &repo_id).await.status(),
+        200
+    );
+
+    let svc =
+        server::service::auth::password_reset::PasswordResetService::new(server.repos.clone());
+    let result = svc
+        .create_reset_token("reset2@example.com", &base)
+        .await
+        .unwrap();
+    let token = result
+        .reset_url
+        .expect("reset link for existing user")
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_string();
+
+    let resp = no_redirect_client()
+        .post(format!("{}/accounts/password/reset/{}/", base, token))
+        .header("origin", &base)
+        .form(&[
+            ("password1", "newpassword123"),
+            ("password2", "newpassword123"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "valid reset should redirect");
+
+    // Both credentials are revoked afterwards.
+    assert_eq!(
+        client.get("/api2/repos/", Some(&api_token)).await.status(),
+        401,
+        "API token must be revoked"
+    );
+    assert_eq!(
+        client.get_head_commit(&sync_token, &repo_id).await.status(),
+        403,
+        "sync token must be revoked"
     );
 }
 

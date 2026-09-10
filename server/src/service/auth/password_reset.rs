@@ -143,10 +143,10 @@ impl PasswordResetService {
             .mark_as_used(record.id)
             .await?;
 
-        // Delete all session tokens for this user (force re-login)
-        self.repos
-            .api_token
-            .delete_many_by_user_id(record.user_id)
+        // Revoke every credential (sessions, API tokens, 2FA device trust and
+        // repository sync tokens) so a stolen credential cannot outlive the
+        // reset — matching seahub's `clear_token()` on password reset.
+        crate::service::auth::token::revoke_all_credentials(&self.repos, record.user_id, None)
             .await?;
 
         Ok(())

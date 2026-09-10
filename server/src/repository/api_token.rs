@@ -43,6 +43,13 @@ pub trait ApiTokenRepository: Send + Sync {
     async fn delete_by_token(&self, token: &str) -> Result<(), AppError>;
     async fn insert(&self, model: api_token::ActiveModel) -> Result<(), AppError>;
     async fn delete_many_by_user_id(&self, user_id: i32) -> Result<(), AppError>;
+    /// Delete every account token for a user **except** one raw session token
+    /// (used when changing a password while keeping the acting session alive).
+    async fn delete_many_by_user_id_except(
+        &self,
+        user_id: i32,
+        keep_raw_token: &str,
+    ) -> Result<(), AppError>;
 
     // ── Methods for UI layer refactoring ───────────────────────────────
     /// Create a session token and return the model.
@@ -137,6 +144,21 @@ impl ApiTokenRepository for DbApiTokenRepository {
     async fn delete_many_by_user_id(&self, user_id: i32) -> Result<(), AppError> {
         api_token::Entity::delete_many()
             .filter(api_token::Column::UserId.eq(user_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_many_by_user_id_except(
+        &self,
+        user_id: i32,
+        keep_raw_token: &str,
+    ) -> Result<(), AppError> {
+        // Tokens are stored hashed; exclude the current session by its hash.
+        let keep_hash = crate::service::auth::token::hash_token(keep_raw_token);
+        api_token::Entity::delete_many()
+            .filter(api_token::Column::UserId.eq(user_id))
+            .filter(api_token::Column::Token.ne(keep_hash))
             .exec(self.db.as_ref())
             .await?;
         Ok(())

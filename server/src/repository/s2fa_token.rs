@@ -22,6 +22,8 @@ pub trait S2faTokenRepository: Send + Sync {
         user_id: i32,
     ) -> Result<Option<s2fa_token::Model>, AppError>;
     async fn delete_expired(&self, user_id: i32, now: i64) -> Result<(), AppError>;
+    /// Delete every 2FA device-trust token for a user (password change/reset).
+    async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError>;
     async fn delete_by_user_and_device(
         &self,
         user_id: i32,
@@ -75,6 +77,14 @@ impl S2faTokenRepository for DbS2faTokenRepository {
         let result = s2fa_token::Entity::delete_many()
             .filter(s2fa_token::Column::UserId.eq(user_id))
             .filter(s2fa_token::Column::DeviceId.eq(device_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
+    }
+
+    async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError> {
+        let result = s2fa_token::Entity::delete_many()
+            .filter(s2fa_token::Column::UserId.eq(user_id))
             .exec(self.db.as_ref())
             .await?;
         Ok(result.rows_affected)

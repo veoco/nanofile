@@ -89,6 +89,33 @@ pub fn hash_token(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Revoke every credential for a user, optionally keeping the acting session.
+///
+/// Mirrors seahub's `clear_token()` on password change/reset: account API
+/// tokens, 2FA device-trust tokens and **all** repository sync tokens are
+/// dropped, so a stolen credential cannot survive the remediation. The acting
+/// session can be preserved via `keep_session_token` (the equivalent of
+/// seahub's `update_session_auth_hash`) so the user is not logged out of the
+/// browser they just used.
+pub async fn revoke_all_credentials(
+    repos: &crate::repository::Repositories,
+    user_id: i32,
+    keep_session_token: Option<&str>,
+) -> Result<(), AppError> {
+    match keep_session_token {
+        Some(token) => {
+            repos
+                .api_token
+                .delete_many_by_user_id_except(user_id, token)
+                .await?;
+        }
+        None => repos.api_token.delete_many_by_user_id(user_id).await?,
+    }
+    repos.s2fa_token.delete_by_user(user_id).await?;
+    repos.sync_token.delete_by_user(user_id).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -300,6 +300,19 @@ impl ApiTokenRepository for CachingApiTokenRepository {
         result
     }
 
+    async fn delete_many_by_user_id_except(
+        &self,
+        user_id: i32,
+        keep_raw_token: &str,
+    ) -> Result<(), AppError> {
+        let result = self
+            .inner
+            .delete_many_by_user_id_except(user_id, keep_raw_token)
+            .await;
+        self.cache.clear();
+        result
+    }
+
     async fn create_session_token(
         &self,
         params: CreateSessionTokenParams,
