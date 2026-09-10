@@ -122,6 +122,20 @@ async fn security_headers(
     response
 }
 
+/// Whether a configured secret has adequate length/entropy.
+///
+/// A 64-character value is treated as raw hex (matching `decode_master_key`);
+/// anything else must provide at least 32 bytes of raw material.
+fn secret_is_strong(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    if s.len() == 64 {
+        return s.chars().all(|c| c.is_ascii_hexdigit());
+    }
+    s.len() >= 32
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -176,15 +190,59 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("{reason}");
     }
 
-    // ── Server secret key: auto-generate if empty ──────────────────────
-    if config.server.secret_key.is_empty() || config.server.secret_key == "nanofile-server-secret" {
-        let mut key = [0u8; 32];
-        rand::rng().fill_bytes(&mut key);
-        config.server.secret_key = hex::encode(key);
-        tracing::warn!(
-            "Auto-generated server secret key. \
-             Set NANOFILE_SERVER_SECRET_KEY to persist across restarts."
-        );
+    // ── Server secret key ──────────────────────────────────────────────
+    // Release builds require an explicit, high-entropy secret: the storage
+    // encryption master key, CSRF/notification JWT keys and the sync-token
+    // encryption key are all derived from it, so an ephemeral secret silently
+    // makes encrypted data unreadable after a restart and rotates sessions.
+    // Debug builds keep the zero-config auto-generated behaviour for local
+    // development. Only `nanofile server` needs the secret; admin CLI
+    // subcommands (adduser, --version, ...) must not be blocked by it.
+    let is_dev = cfg!(debug_assertions);
+    let allow_ephemeral = std::env::var("NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let needs_secret = matches!(command, Command::Server);
+
+    if !secret_is_strong(&config.server.secret_key) {
+        if is_dev || allow_ephemeral || !needs_secret {
+            if config.server.secret_key.is_empty()
+                || config.server.secret_key == "nanofile-server-secret"
+            {
+                let mut key = [0u8; 32];
+                rand::rng().fill_bytes(&mut key);
+                config.server.secret_key = hex::encode(key);
+            }
+            tracing::warn!(
+                "Server secret key is not explicitly configured with a strong value; \
+                 set NANOFILE_SERVER_SECRET_KEY (or [server] secret_key) to persist it."
+            );
+        } else {
+            anyhow::bail!(
+                "NANOFILE_SERVER_SECRET_KEY / [server] secret_key must be set to a \
+                 high-entropy value of at least 32 bytes (64 hex chars is recommended) \
+                 in release builds; generate one with `openssl rand -hex 32`. \
+                 Set NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1 to override for \
+                 local/CI use."
+            );
+        }
+    }
+
+    // An explicitly configured at-rest encryption key must also be strong.
+    if let Some(key) = &config.storage.encryption_key
+        && !secret_is_strong(key)
+    {
+        if is_dev || allow_ephemeral || !needs_secret {
+            tracing::warn!(
+                "NANOFILE_STORAGE_ENCRYPTION_KEY is shorter than 32 bytes; \
+                 use `openssl rand -hex 32` for adequate strength."
+            );
+        } else {
+            anyhow::bail!(
+                "NANOFILE_STORAGE_ENCRYPTION_KEY(_FILE) must be at least 32 bytes \
+                 of high entropy (64 hex chars); generate one with `openssl rand -hex 32`."
+            );
+        }
     }
 
     // ── Derive notification private key from secret_key if not set ─────
@@ -547,4 +605,30 @@ async fn adduser(
     model.insert(&db).await?;
     println!("user '{}' created successfully", email);
     Ok(())
+}
+
+#[cfg(test)]
+mod secret_strength_tests {
+    use super::secret_is_strong;
+
+    #[test]
+    fn rejects_empty_and_placeholder() {
+        assert!(!secret_is_strong(""));
+        assert!(!secret_is_strong("nanofile-server-secret"));
+        assert!(!secret_is_strong("short-secret"));
+    }
+
+    #[test]
+    fn accepts_64_hex_and_long_raw() {
+        assert!(secret_is_strong(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(secret_is_strong("a-32-byte-plus-raw-secret-value!!!"));
+    }
+
+    #[test]
+    fn rejects_non_hex_64_char_value() {
+        // 64 chars that are not hex would panic in `decode_master_key`.
+        assert!(!secret_is_strong(&"z".repeat(64)));
+    }
 }

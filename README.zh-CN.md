@@ -31,9 +31,11 @@ Nanofile 实现了 Seafile 同步协议和 REST API，因此官方 Seafile 桌�
   带锁定机制的登录限流、密码重置（邮件门控）、哈希会话 cookie 与 CSRF 防护、防路径穿越的
   文件名处理。
   - **安全说明**：API、S2FA、SSO 登录和客户端登录的 bearer token 以 SHA-256 哈希存储，因此
-    数据库泄露不会得到可用的凭据。分享链接和同步 token 保持明文，因为客户端会重新提交它们
-    （"我的分享"列表会显示可复制的 URL，桌面客户端会轮询稳定的每库同步 token）——与官方
-    Seafile 一致。
+    数据库泄露不会得到可用的凭据。同步 token 需要可回显（客户端会重新提交），因此以由
+    `secret_key` 派生的 AEAD 密钥**加密**存储；分享链接 token 仍保持明文，因为"我的分享"列表
+    会显示可复制的 URL——与官方 Seafile 的明文 URL 模型一致。**release** 构建下必须显式设置
+    `NANOFILE_SERVER_SECRET_KEY` / `[server] secret_key`（否则拒绝启动，避免用临时密钥派生出
+    无法跨重启解密的密钥）；debug 构建会自动生成。
 - **加密库**：AES-256-CBC 块，带 Seafile 兼容的 `magic` / `random_key`，内存密码缓存带 TTL。
   - **安全说明**：存储的 `magic` 使用 PBKDF2-SHA256 在 **1000 次迭代** 下派生，这是 Seafile
     线上协议固定的，无法提高而不破坏客户端互操作。`magic` 是等价于密码的值，因此数据库泄露

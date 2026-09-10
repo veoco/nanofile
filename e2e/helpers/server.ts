@@ -62,7 +62,8 @@ export async function startServer(
     NANOFILE_ADMIN_INIT_EMAIL: ADMIN_EMAIL,
     NANOFILE_ADMIN_INIT_PASSWORD: ADMIN_PASSWORD,
     NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS: "1000",
-    NANOFILE_SERVER_SECRET_KEY: "nanofile-e2e-fixed-secret",
+    NANOFILE_SERVER_SECRET_KEY:
+      "e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0",
     NANOFILE_LOG_LEVEL: process.env.E2E_LOG_LEVEL || "info",
     ...opts.env,
   };

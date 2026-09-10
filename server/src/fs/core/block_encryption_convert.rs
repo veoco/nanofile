@@ -118,9 +118,9 @@ mod tests {
                 .unwrap();
         assert_eq!(converted, 1);
 
-        // On-disk bytes are now ciphertext (plaintext + 16-byte tag).
+        // On-disk bytes are now `NFE1 || key_id || ciphertext || tag`.
         let on_disk = raw.read_block(&legacy_id).await.unwrap();
-        assert_eq!(on_disk.len(), legacy.len() + 16);
+        assert_eq!(on_disk.len(), legacy.len() + 16 + 6);
     }
 
     #[tokio::test]
@@ -145,7 +145,7 @@ mod tests {
         // The legacy block is now ciphertext.
         assert_eq!(
             raw.read_block(&legacy_id).await.unwrap().len(),
-            legacy.len() + 16
+            legacy.len() + 16 + 6
         );
     }
 

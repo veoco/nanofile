@@ -256,9 +256,12 @@ pub struct ServerConfig {
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
     /// Server-wide secret key for cryptographic operations (CSRF tokens,
-    /// notification JWTs, etc.). Must be a hex-encoded string; recommend 64
-    /// hex characters from `openssl rand -hex 32`. When empty, auto-generated
-    /// on startup with a warning (sessions won't survive a restart).
+    /// notification JWTs, the storage encryption master key and the sync-token
+    /// encryption key). Must be at least 32 bytes of entropy; 64 hex characters
+    /// from `openssl rand -hex 32` is recommended. **Release builds require an
+    /// explicit value** — startup fails rather than deriving keys from an
+    /// ephemeral secret (which would make encrypted data unreadable after a
+    /// restart). Debug builds auto-generate one with a warning.
     /// Env: NANOFILE_SERVER_SECRET_KEY
     #[serde(default)]
     pub secret_key: String,

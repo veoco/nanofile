@@ -70,7 +70,10 @@ tray = true
 # IMPORTANT: Generate a unique secret key for production:
 #   openssl rand -hex 32
 secret_key = ""
-# ^ Set to empty string to auto-generate on startup.
+# ^ Debug builds auto-generate one on startup when empty. Release builds
+#   REQUIRE an explicit value (at least 32 bytes / 64 hex chars) and refuse to
+#   start otherwise, because the storage encryption master key and the
+#   sync-token encryption key are derived from it.
 #   This is the single master key. The notification private key and
 #   CSRF signing key are derived from it automatically.
 #   For production, set NANOFILE_SERVER_SECRET_KEY to persist across restarts.

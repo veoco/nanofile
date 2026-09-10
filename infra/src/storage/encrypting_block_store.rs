@@ -22,7 +22,7 @@
 use async_trait::async_trait;
 use std::io;
 
-use crate::crypto::block_encryption::{BlockCipher, TAG_LEN};
+use crate::crypto::block_encryption::{BlockCipher, HEADER_LEN, TAG_LEN};
 use crate::crypto::fs_id::sha1_hex;
 use crate::storage::BlockStorageBackend;
 use crate::storage::DynBlockStorage;
@@ -159,16 +159,18 @@ impl BlockStorageBackend for EncryptingBlockStore {
         match self.mode {
             // Logical size equals the stored size for legacy plaintext blocks.
             BlockEncryptionMode::Off => Ok(stored),
-            // GCM-SIV adds exactly the 16-byte tag and no padding, so the
-            // logical size is recoverable without reading the block.
+            // GCM-SIV adds exactly the 16-byte tag and no padding, plus the
+            // 6-byte `NFE1 || key_id` header, so the logical size is
+            // recoverable without reading the block.
             BlockEncryptionMode::On => {
-                if stored < TAG_LEN as i64 {
+                let overhead = (TAG_LEN + HEADER_LEN) as i64;
+                if stored < overhead {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "encrypted block shorter than its authentication tag",
+                        "encrypted block shorter than its header and authentication tag",
                     ));
                 }
-                Ok(stored - TAG_LEN as i64)
+                Ok(stored - overhead)
             }
             // In the migration window we cannot tell ciphertext from plaintext
             // without reading, so probe the tag.
@@ -271,7 +273,7 @@ mod tests {
 
         // Logical block_size is the plaintext length; physical is +16 bytes.
         assert_eq!(store.block_size(&id).await.unwrap(), data.len() as i64);
-        assert_eq!(on_disk.len(), data.len() + TAG_LEN);
+        assert_eq!(on_disk.len(), data.len() + TAG_LEN + HEADER_LEN);
         drop(dir);
     }
 
@@ -284,7 +286,7 @@ mod tests {
         assert_eq!(returned, id);
         assert_eq!(store.read_block(&id).await.unwrap(), data);
         // The stored bytes on disk are ciphertext, not the original plaintext.
-        assert!(raw.read_block(&id).await.unwrap().len() == data.len() + TAG_LEN);
+        assert!(raw.read_block(&id).await.unwrap().len() == data.len() + TAG_LEN + HEADER_LEN);
         drop((dir, raw));
     }
 

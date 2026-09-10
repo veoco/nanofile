@@ -12,7 +12,8 @@
 //!   detected on read. Under `lazy` migration mode the tag check doubles as a
 //!   cheap discriminator between newly-encrypted and legacy plaintext blocks.
 //! - **Length-preserving**: GCM-SIV adds no padding; `ciphertext.len() ==
-//!   plaintext.len() + 16`, so logical sizes are recoverable without reading
+//!   plaintext.len() + 16 + 6` (16-byte tag + 6-byte `NFE1 || key_id` header),
+//!   so logical sizes are recoverable without reading
 //!   the whole block (see the store wrapper).
 //!
 //! The 12-byte nonce is fixed to all-zeros. GCM-SIV is nonce-misuse-resistant:
@@ -24,6 +25,14 @@ use aes_gcm_siv::{Aes256GcmSiv, Nonce};
 
 /// Number of bytes appended to a ciphertext as the authentication tag.
 pub const TAG_LEN: usize = 16;
+
+/// Magic prefix identifying a versioned (`NFE1`) ciphertext.
+pub const MAGIC: &[u8; 4] = b"NFE1";
+/// Active key id. Only `0` exists today (no rotation support), but the field
+/// lets a future key-rotation scheme identify which key encrypted a block.
+pub const ACTIVE_KEY_ID: u16 = 0;
+/// Length of the versioned header: magic (4) + key id (2).
+pub const HEADER_LEN: usize = 6;
 
 /// Fixed, all-zero GCM-SIV nonce. Deterministic encryption (see module docs).
 const NONCE: [u8; 12] = [0u8; 12];
@@ -66,19 +75,40 @@ impl BlockCipher {
         }
     }
 
-    /// Encrypt `plaintext`, returning `plaintext || 16-byte tag`.
+    /// Encrypt `plaintext`, returning `NFE1 || key_id || ciphertext || tag`.
+    ///
+    /// The versioned header lets a future key rotation identify the key that
+    /// produced a block; `decrypt` still accepts header-less legacy ciphertext.
     pub fn encrypt(&self, plaintext: &[u8]) -> Vec<u8> {
         let nonce = Nonce::from(NONCE);
-        self.cipher
+        let body = self
+            .cipher
             .encrypt(&nonce, plaintext)
-            .expect("GCM-SIV encryption never fails for a fixed nonce")
+            .expect("GCM-SIV encryption never fails for a fixed nonce");
+        let mut out = Vec::with_capacity(HEADER_LEN + body.len());
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&ACTIVE_KEY_ID.to_be_bytes());
+        out.extend_from_slice(&body);
+        out
     }
 
-    /// Decrypt a value produced by [`BlockCipher::encrypt`]. Returns `Err` on
-    /// tag mismatch (tampered or wrong-key data).
+    /// Decrypt a value produced by [`BlockCipher::encrypt`].
+    ///
+    /// Accepts both the versioned (`NFE1 || key_id`) format written by this
+    /// version and the header-less legacy format from earlier deployments.
+    /// Returns `Err` on tag mismatch (tampered, wrong key) or an unknown key id.
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, aes_gcm_siv::aead::Error> {
         let nonce = Nonce::from(NONCE);
-        self.cipher.decrypt(&nonce, ciphertext)
+        if ciphertext.len() >= HEADER_LEN && &ciphertext[..4] == MAGIC {
+            let key_id = u16::from_be_bytes([ciphertext[4], ciphertext[5]]);
+            if key_id != ACTIVE_KEY_ID {
+                return Err(aes_gcm_siv::aead::Error);
+            }
+            self.cipher.decrypt(&nonce, &ciphertext[HEADER_LEN..])
+        } else {
+            // Legacy ciphertext written before the versioned header existed.
+            self.cipher.decrypt(&nonce, ciphertext)
+        }
     }
 }
 
@@ -136,7 +166,7 @@ mod tests {
             &[0xABu8; 1000],
         ] {
             let ct = c.encrypt(data);
-            assert_eq!(ct.len(), data.len() + TAG_LEN);
+            assert_eq!(ct.len(), data.len() + HEADER_LEN + TAG_LEN);
             assert_eq!(c.decrypt(&ct).unwrap(), data);
         }
     }
@@ -169,5 +199,26 @@ mod tests {
         let c = BlockCipher::from_master_key(&test_key());
         assert!(c.decrypt(&[]).is_err());
         assert!(c.decrypt(&[0u8; TAG_LEN - 1]).is_err());
+    }
+
+    #[test]
+    fn versioned_header_and_legacy_compat() {
+        let c = BlockCipher::from_master_key(&test_key());
+        let data = b"versioned";
+        let ct = c.encrypt(data);
+        assert_eq!(&ct[..4], MAGIC);
+        assert_eq!(u16::from_be_bytes([ct[4], ct[5]]), ACTIVE_KEY_ID);
+        assert_eq!(c.decrypt(&ct).unwrap(), data);
+
+        // Header-less legacy ciphertext (raw GCM-SIV output) still decrypts.
+        let nonce = Nonce::from(NONCE);
+        let legacy = c.cipher.encrypt(&nonce, data.as_slice()).unwrap();
+        assert_ne!(&legacy[..4], MAGIC);
+        assert_eq!(c.decrypt(&legacy).unwrap(), data);
+
+        // An unknown key id is rejected rather than mis-decrypted.
+        let mut foreign = ct.clone();
+        foreign[5] = 0xFF;
+        assert!(c.decrypt(&foreign).is_err());
     }
 }
