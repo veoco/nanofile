@@ -300,7 +300,10 @@ async fn test_update_branch_accepts_zero_sentinel_parent() {
     let commit_data = serde_json::json!({
         "commit_id": commit_id,
         "repo_id": repo_id,
-        "root_id": random_hex_id(),
+        // An empty repo's root is the EMPTY_SHA1 sentinel (no object needed);
+        // using a random id here would (correctly) fail root validation at
+        // update_branch, which is not what this test exercises.
+        "root_id": zero_sentinel,
         "creator_name": "test@example.com",
         "creator": zero_sentinel,
         "description": "first commit from client",
@@ -335,7 +338,7 @@ async fn test_update_branch_accepts_zero_sentinel_parent() {
     let commit_data2 = serde_json::json!({
         "commit_id": commit_id2,
         "repo_id": repo_id,
-        "root_id": random_hex_id(),
+        "root_id": zero_sentinel,
         "creator_name": "test@example.com",
         "creator": zero_sentinel,
         "description": "stale commit",

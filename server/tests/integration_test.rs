@@ -254,9 +254,11 @@ async fn test_upload_sync_flow() {
         "0000000000000000000000000000000000000000"
     );
 
-    // Step 2: Create a commit locally and push it
+    // Step 2: Create a commit locally and push it. A newly-created repo has an
+    // empty root (EMPTY_SHA1), so no root object needs to be uploaded; a random
+    // root would (correctly) fail root validation at update_branch.
     let commit_id = "a".repeat(40);
-    let root_id = "b".repeat(40);
+    let root_id = "0".repeat(40);
     let now = chrono::Utc::now().timestamp();
 
     let commit_data = serde_json::json!({

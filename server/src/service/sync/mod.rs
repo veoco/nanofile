@@ -552,6 +552,10 @@ impl SyncService {
     }
 
     /// Insert a commit if it doesn't already exist.
+    ///
+    /// Deliberately does **not** validate `root_id`: seaf-daemon sends the
+    /// commit before the FS objects it references. The root is validated in
+    /// [`SyncService::update_branch`] once everything has been uploaded.
     pub async fn put_commit(&self, data: &base::common::CommitData) -> Result<(), AppError> {
         use crate::repository::commit::CreateCommitParams;
         let existing = self
@@ -939,6 +943,31 @@ impl SyncService {
             .find_commit(repo_id, new_head)
             .await?
             .ok_or_else(|| AppError::Internal("commit not found".into()))?;
+
+        // Root validation (H-5) must happen here, not at `PUT /commit/{id}`:
+        // seaf-daemon uploads the commit object *before* the FS objects it
+        // references (daemon/http-tx-mgr.c: send_commit_object → recv-fs →
+        // blocks → update_branch), so rejecting a dangling root at commit-write
+        // time would break every official client. By the time the branch is
+        // advanced the objects are on the server, so a dangling root is either
+        // corruption or an attack. Missing → 446 (client re-syncs), wrong type
+        // → 400.
+        if new_commit.root_id != EMPTY_SHA1 {
+            match self
+                .repos
+                .fs_object
+                .find_by_repo_and_fs_id(repo_id, &new_commit.root_id)
+                .await?
+            {
+                Some(obj) if obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 => {}
+                Some(_) => {
+                    return Err(AppError::BadRequest(
+                        "commit root is not a directory object".into(),
+                    ));
+                }
+                None => return Err(AppError::BlockMissing),
+            }
+        }
 
         let base_root_id: Option<String> = if let Some(ref parent_id) = new_commit.parent_id
             && parent_id != EMPTY_SHA1

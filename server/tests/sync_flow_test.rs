@@ -769,3 +769,103 @@ async fn test_empty_directory_sync() {
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.bytes().await.unwrap().as_ref(), b"hello");
 }
+
+fn commit_with_root(repo_id: &str, root_id: &str, creator_name: &str) -> (String, Vec<u8>) {
+    let commit_id = random_hex_id();
+    let commit_data = CommitData {
+        commit_id: commit_id.clone(),
+        repo_id: repo_id.to_string(),
+        root_id: root_id.to_string(),
+        creator_name: creator_name.to_string(),
+        creator: "0".repeat(40),
+        description: "root validation test".to_string(),
+        ctime: chrono::Utc::now().timestamp(),
+        parent_id: None,
+        second_parent_id: None,
+        repo_name: None,
+        repo_desc: None,
+        repo_category: None,
+        encrypted: None,
+        enc_version: None,
+        magic: None,
+        key: None,
+        version: 1,
+    };
+    let json = serde_json::to_string(&commit_data).unwrap();
+    (commit_id, json.into_bytes())
+}
+
+/// H-5 compatibility: the root must **not** be validated at commit-write time.
+/// seaf-daemon uploads the commit object *before* the FS objects it references
+/// (`daemon/http-tx-mgr.c`: send_commit_object → recv-fs → blocks →
+/// update_branch), so rejecting a dangling root there would break the official
+/// client. It is rejected when the branch is advanced instead.
+#[tokio::test]
+async fn test_commit_root_validated_at_branch_update_not_commit_write() {
+    let f = common::TestFixture::new().await;
+
+    let missing_root = random_hex_id();
+    let (commit_id, body) =
+        commit_with_root(&f.repo_id, &missing_root, "test@example.com");
+
+    let resp = f
+        .client
+        .put_commit(&f.sync_token, &f.repo_id, &commit_id, body)
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "commit write must accept a root that has not been uploaded yet"
+    );
+
+    let resp = f
+        .client
+        .update_branch(&f.sync_token, &f.repo_id, &commit_id)
+        .await;
+    assert_eq!(
+        resp.status(),
+        446,
+        "dangling root must be rejected as missing content at update_branch"
+    );
+}
+
+/// A commit whose root exists but is a *file* object is rejected at
+/// update_branch with 400.
+#[tokio::test]
+async fn test_update_branch_rejects_non_directory_root() {
+    let f = common::TestFixture::new().await;
+
+    // Store a file FS object (type 1) under its correct sha1 id.
+    let file = FsFileData {
+        block_ids: vec![],
+        size: 0,
+        obj_type: 1,
+        version: 1,
+    };
+    let file_json = serde_json::to_string(&file).unwrap();
+    let file_id = infra::crypto::fs_id::sha1_hex(file_json.as_bytes());
+    let compressed = pack_fs::compress_fs_data(file_json.as_bytes()).unwrap();
+    let mut packed = Vec::new();
+    packed.extend_from_slice(file_id.as_bytes());
+    packed.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
+    packed.extend_from_slice(&compressed);
+    let resp = f.client.recv_fs(&f.sync_token, &f.repo_id, packed).await;
+    assert_eq!(resp.status(), 200, "file object should be accepted");
+
+    let (commit_id, body) = commit_with_root(&f.repo_id, &file_id, "test@example.com");
+    let resp = f
+        .client
+        .put_commit(&f.sync_token, &f.repo_id, &commit_id, body)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = f
+        .client
+        .update_branch(&f.sync_token, &f.repo_id, &commit_id)
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "a file object must not be accepted as a commit root"
+    );
+}
