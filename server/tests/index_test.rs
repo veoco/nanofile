@@ -770,3 +770,39 @@ async fn test_owner_still_finds_own_content_after_search_fix() {
         "owner must find content when scoping to their own repo"
     );
 }
+
+/// Compatibility: seahub lowercases `search_repo` before comparing it against
+/// the scope keywords (`api2/views.py`: `search_repo = search_repo.lower()`),
+/// so an uppercase scope must still mean "search all accessible repos" rather
+/// than being treated as an inaccessible repo id.
+#[tokio::test]
+async fn test_uppercase_search_scope_is_accepted() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "scoped.txt", b"zzqquu scoped")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            !search_results(&f, token, "zzqquu").await.is_empty()
+        })
+        .await,
+        "file should become searchable"
+    );
+
+    for scope in ["all", "ALL", "All", "MINE", "Shared"] {
+        let results = search_results_with_repo(&f, token, "zzqquu", Some(scope)).await;
+        assert!(
+            !results.is_empty(),
+            "scope {scope:?} must search the caller's accessible repos"
+        );
+    }
+
+    // A repo id is still matched exactly (canonical lowercase form).
+    let scoped = search_results_with_repo(&f, token, "zzqquu", Some(f.repo_id.as_str())).await;
+    assert!(!scoped.is_empty(), "repo-id scoping must still work");
+}

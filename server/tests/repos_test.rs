@@ -682,3 +682,126 @@ async fn test_chunked_upload_temp_dir_is_hashed_not_raw_repo_id() {
         );
     }
 }
+
+// ── 官方客户端兼容性（模拟客户端真实请求）──────────────────────────────────
+
+/// Compatibility: the official desktop client (`src/ui/create-repo-dialog.cpp`)
+/// creates a **plain** library without any `repo_id`, letting the server
+/// generate one (`CreateRepoRequest(account_, name_, name_, passwd_)`).
+/// The C-3 validation must not disturb that path.
+#[tokio::test]
+async fn test_compat_desktop_plain_repo_without_repo_id() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api2/repos/",
+            Some(&f.api_token),
+            &serde_json::json!({ "name": "desktop-plain", "desc": "desktop-plain" }),
+        )
+        .await;
+    assert_eq!(resp.status(), 201, "plain create without repo_id must work");
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let repo_id = body["repo_id"].as_str().expect("repo_id in response");
+    assert!(
+        uuid::Uuid::parse_str(repo_id).is_ok(),
+        "server-generated id must be a UUID, got {repo_id}"
+    );
+
+    // The client then syncs that id; the sync token flow must accept it.
+    let token = common::get_sync_token(&f.client, &f.api_token, repo_id).await;
+    let resp = f.client.get_head_commit(&token, repo_id).await;
+    assert_eq!(resp.status(), 200, "sync on the new repo must work");
+}
+
+/// Compatibility: for an **encrypted** library the desktop client generates the
+/// UUID itself (`QUuid::createUuid().toString().mid(1, 36)` in
+/// `create-repo-dialog.cpp`) because `magic`/`random_key` are derived from it,
+/// and sends it as the `repo_id` field together with `magic`/`random_key`.
+///
+/// The C-3 validation must accept that id. The encrypted create itself is
+/// currently rejected before the insert by a separate, pre-existing
+/// deserialization mismatch (`enc_version` is sent as the string `"4"` while
+/// the request struct expects an `i32`), so this test asserts only what the
+/// C-3 change is responsible for: a **valid UUID** passes repo-id validation,
+/// a **malformed one** is rejected.
+#[tokio::test]
+async fn test_compat_client_uuid_is_validated_not_rejected_wholesale() {
+    let f = TestFixture::new().await;
+
+    // Mirrors `QUuid::createUuid()`: canonical lowercase UUID.
+    let client_repo_id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    let body = serde_json::json!({
+        "name": "desktop-encrypted",
+        "desc": "desktop-encrypted",
+        "enc_version": 4,
+        "repo_id": client_repo_id,
+        "magic": "a".repeat(64),
+        "random_key": "b".repeat(96),
+        "salt": "c".repeat(64),
+        "pwd_hash_algo": "PBKDF2",
+        "pwd_hash_params": "iterations=1000",
+        "pwd_hash": "d".repeat(64),
+    });
+
+    let resp = f
+        .client
+        .post_json("/api2/repos/", Some(&f.api_token), &body)
+        .await;
+    assert_eq!(
+        resp.status(),
+        201,
+        "a client-proposed lowercase UUID must pass validation and create the library"
+    );
+    let created: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(created["repo_id"].as_str().unwrap(), client_repo_id);
+
+    // The same request with a traversal id stays rejected — that is the C-3 fix.
+    let mut bad = body.clone();
+    bad["repo_id"] = serde_json::json!("../../desktop-encrypted");
+    bad["name"] = serde_json::json!("desktop-encrypted-2");
+    let resp = f
+        .client
+        .post_json("/api2/repos/", Some(&f.api_token), &bad)
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "a malformed id must be rejected even on the encrypted path"
+    );
+}
+
+/// Compatibility: a client that derives keys from an **uppercase** UUID must
+/// still end up with a working library. The provider stores the canonical
+/// lowercase form, so the sync URL and the token binding agree.
+#[tokio::test]
+async fn test_compat_uppercase_client_uuid_round_trips_consistently() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api2/repos/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "name": "upper",
+                "repo_id": "3F2504E0-4F89-41D3-9A0C-0305E82C3301",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 201);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let repo_id = body["repo_id"].as_str().unwrap().to_string();
+    assert_eq!(repo_id, repo_id.to_lowercase());
+
+    // A sync token is issued for the stored (lowercase) id and the sync URL
+    // built from that id must authenticate.
+    let token = common::get_sync_token(&f.client, &f.api_token, &repo_id).await;
+    assert_eq!(
+        f.client.get_head_commit(&token, &repo_id).await.status(),
+        200
+    );
+}

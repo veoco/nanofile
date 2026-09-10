@@ -254,7 +254,16 @@ impl SearchService {
             // mean "search across all accessible repos", not a specific repo.
             // seadroid sends search_repo="all" for global search; treating it
             // as a repo id would filter out every repo and return no results.
-            let is_scope = matches!(filter, "all" | "mine" | "shared" | "group" | "public");
+            //
+            // seahub lowercases `search_repo` before comparing
+            // (`api2/views.py`: `search_repo = search_repo.lower()`), so the
+            // scope match must be case-insensitive to stay compatible with a
+            // client that sends e.g. "ALL".
+            let scope = filter.trim().to_ascii_lowercase();
+            let is_scope = matches!(
+                scope.as_str(),
+                "all" | "mine" | "shared" | "group" | "public"
+            );
             if !is_scope {
                 // A filter naming a repo the caller cannot access leaves the
                 // list empty, which means "no access" — NOT "no filter". It
