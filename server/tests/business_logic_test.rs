@@ -601,17 +601,57 @@ async fn test_download_token_revoked_permission() {
 
 // ─────────────────────────────────────────────────────────────────────
 // V-6: 2FA disable — verify rate limiting on incorrect password attempts.
+//
+// 2FA management lives in the Web UI (`/settings/two-factor/disable/`); the
+// nanofile-specific `/api2/2fa/*` API was removed (it had no official-client
+// or first-party consumer).
 // ─────────────────────────────────────────────────────────────────────
 
-#[tokio::test]
-async fn test_disable_2fa_rate_limited() {
-    let f = TestFixture::new().await;
+/// Log in through the browser flow so the session cookie is present.
+async fn web_login_client(f: &TestFixture) -> reqwest::Client {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let resp = client
+        .post(format!("{}/accounts/login/", f.server.base_url))
+        .form(&[("email", f.email.as_str()), ("password", f.password.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_redirection(),
+        "web login failed: {}",
+        resp.status()
+    );
+    client
+}
 
-    // Enable 2FA for the user directly (bypass setup/verify).
-    let totp_secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+/// Scrape the CSRF token from the settings page.
+async fn web_csrf_token(client: &reqwest::Client, base: &str) -> String {
+    let body = client
+        .get(format!("{base}/settings/"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let marker = r#"name="csrf_token" value=""#;
+    body.find(marker)
+        .and_then(|i| {
+            let rest = &body[i + marker.len()..];
+            rest.find('"').map(|end| rest[..end].to_string())
+        })
+        .expect("settings page must expose csrf_token")
+}
+
+/// Insert an enabled 2FA row directly (bypassing setup/verify).
+async fn enable_2fa_row(f: &TestFixture) {
     let user_2fa = infra::entity::user_2fa::ActiveModel {
         user_id: sea_orm::Set(f.user_id),
-        totp_secret: sea_orm::Set(totp_secret.to_string()),
+        totp_secret: sea_orm::Set("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP".to_string()),
         algorithm: sea_orm::Set("SHA1".to_string()),
         digits: sea_orm::Set(6),
         period: sea_orm::Set(30),
@@ -619,40 +659,45 @@ async fn test_disable_2fa_rate_limited() {
         enabled_at: sea_orm::NotSet,
     };
     user_2fa.insert(f.server.db.as_ref()).await.unwrap();
+}
 
-    // The test config sets totp_max_attempts = 10, so we make 11 incorrect
-    // password attempts and expect the 11th to be rate-limited (429).
+#[tokio::test]
+async fn test_disable_2fa_rate_limited() {
+    let f = TestFixture::new().await;
+    // Log in *before* enabling 2FA (an enabled row makes web login demand OTP).
+    let client = web_login_client(&f).await;
+    let csrf = web_csrf_token(&client, &f.server.base_url).await;
+    enable_2fa_row(&f).await;
 
+    // The test config sets totp_max_attempts = 10, so 12 incorrect attempts
+    // should yield 10 re-renders and then 429s.
     for i in 0..12 {
-        // Each attempt uses a unique wrong password so the password check
-        // fails, but the rate limiter operates on the key, not the password.
-        let wrong_pass = format!("wrong_password_{}", i);
-        let resp = f
-            .client
-            .post_json(
-                "/api2/2fa/disable/",
-                Some(&f.api_token),
-                &serde_json::json!({
-                    "password": wrong_pass,
-                }),
-            )
-            .await;
+        let wrong_pass = format!("wrong_password_{i}");
+        let resp = client
+            .post(format!(
+                "{}/settings/two-factor/disable/",
+                f.server.base_url
+            ))
+            .form(&[
+                ("password", wrong_pass.as_str()),
+                ("csrf_token", csrf.as_str()),
+            ])
+            .send()
+            .await
+            .unwrap();
         let status = resp.status().as_u16();
 
         if i < 10 {
             assert_eq!(
-                status,
-                401,
-                "attempt {} should be 401 (wrong password), got {}",
+                status, 200,
+                "attempt {} should re-render (wrong password), got {}",
                 i + 1,
                 status
             );
         } else {
-            // Attempt 11 and 12 should be rate-limited
             assert_eq!(
-                status,
-                429,
-                "attempt {} should be 429 (rate limited), got {}",
+                status, 429,
+                "attempt {} should be rate limited, got {}",
                 i + 1,
                 status
             );
@@ -663,62 +708,54 @@ async fn test_disable_2fa_rate_limited() {
 #[tokio::test]
 async fn test_disable_2fa_rate_limit_cleared_on_success() {
     let f = TestFixture::new().await;
+    // Log in *before* enabling 2FA (an enabled row makes web login demand OTP).
+    let client = web_login_client(&f).await;
+    let csrf = web_csrf_token(&client, &f.server.base_url).await;
+    enable_2fa_row(&f).await;
 
-    // Enable 2FA for the user directly.
-    let totp_secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
-    let user_2fa = infra::entity::user_2fa::ActiveModel {
-        user_id: sea_orm::Set(f.user_id),
-        totp_secret: sea_orm::Set(totp_secret.to_string()),
-        algorithm: sea_orm::Set("SHA1".to_string()),
-        digits: sea_orm::Set(6),
-        period: sea_orm::Set(30),
-        enabled: sea_orm::Set(true),
-        enabled_at: sea_orm::NotSet,
-    };
-    user_2fa.insert(f.server.db.as_ref()).await.unwrap();
-
-    // Make a few wrong attempts (but stay under the limit).
+    // A few wrong attempts, staying under the limit.
     for i in 0..3 {
-        let resp = f
-            .client
-            .post_json(
-                "/api2/2fa/disable/",
-                Some(&f.api_token),
-                &serde_json::json!({
-                    "password": format!("wrong_{}", i),
-                }),
-            )
-            .await;
-        assert_eq!(resp.status(), 401, "wrong password should be 401");
+        let wrong_pass = format!("wrong_{i}");
+        let resp = client
+            .post(format!(
+                "{}/settings/two-factor/disable/",
+                f.server.base_url
+            ))
+            .form(&[
+                ("password", wrong_pass.as_str()),
+                ("csrf_token", csrf.as_str()),
+            ])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "wrong password should re-render");
     }
 
-    // Now disable 2FA with the correct password.
-    let resp = f
-        .client
-        .post_json(
-            "/api2/2fa/disable/",
-            Some(&f.api_token),
-            &serde_json::json!({
-                "password": f.password,
-            }),
-        )
-        .await;
+    // The correct password succeeds.
+    let resp = client
+        .post(format!(
+            "{}/settings/two-factor/disable/",
+            f.server.base_url
+        ))
+        .form(&[
+            ("password", f.password.as_str()),
+            ("csrf_token", csrf.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
     assert_eq!(
         resp.status(),
-        200,
+        302,
         "correct password should succeed after a few wrong tries"
     );
 
-    // Verify 2FA is now disabled by checking the DB.
+    // The Web UI disable path removes the 2FA record entirely.
     let twofa = infra::entity::user_2fa::Entity::find_by_id(f.user_id)
         .one(f.server.db.as_ref())
         .await
         .unwrap();
-    assert!(twofa.is_some(), "2FA record should still exist");
-    assert!(
-        !twofa.unwrap().enabled,
-        "2FA should be disabled after successful disable"
-    );
+    assert!(twofa.is_none(), "2FA record should be removed after disable");
 }
 
 // ─────────────────────────────────────────────────────────────────────

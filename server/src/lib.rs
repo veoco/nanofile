@@ -358,14 +358,6 @@ impl AppState {
         )
     }
 
-    pub fn two_factor_service(&self) -> crate::service::auth::two_factor::TwoFactorService {
-        crate::service::auth::two_factor::TwoFactorService::new(
-            self.repos.clone(),
-            self.config.auth.password_hash_iterations,
-            self.auth_limiters.disable_2fa.clone(),
-        )
-    }
-
     pub fn admin_user_service(&self) -> crate::service::admin::AdminUserService {
         crate::service::admin::AdminUserService::new(self.repos.clone())
     }

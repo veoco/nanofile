@@ -38,7 +38,6 @@ fn v1_routes() -> Router<Arc<AppState>> {
             "/api2/accounts/",
             post(crate::handler::account::register_user),
         )
-        .nest("/api2/2fa", crate::handler::two_factor::two_factor_routes())
         .route(
             "/api2/server-info/",
             get(crate::handler::server_info::server_info),

@@ -143,6 +143,18 @@
         </div>
     </div>
 
+    {% else %}
+    {# ── Not configured yet: starting setup is a POST (no side effects on GET) ── #}
+    <div class="card">
+        <div class="card-body">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("twofactor.status_not_configured") }}</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("twofactor.desc") }}</p>
+            <form action="/settings/two-factor/setup/" method="POST" class="mt-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                <button type="submit" class="btn btn-primary">{{ t.tr("twofactor.setup") }}</button>
+            </form>
+        </div>
+    </div>
     {% endif %}
 
     {# Back link #}

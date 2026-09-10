@@ -110,52 +110,20 @@ async fn render_page(
 
 /// GET /profile/two-factor/ — show the 2FA management page.
 ///
-/// Every visit (including refresh) generates a **fresh** secret and QR code
-/// when still in setup-pending state, so a leaked page snapshot is worthless.
+/// Read-only: a GET must never mutate state (L-8). A pending secret is shown
+/// as-is, and a brand-new setup is started from the POST form below.
 pub async fn setup_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    // Check if already enabled — if so, just show the enabled page.
-    let existing = state.repos.user_2fa.find_by_user_id(user.user_id).await?;
-    if existing.as_ref().is_some_and(|tf| tf.enabled) {
-        return render_page(&user, &state, None, None, None).await;
-    }
-
-    // No record or setup-pending → regenerate a fresh secret every time.
-    // Delete any old record so we start clean.
-    state.repos.user_2fa.delete_by_user_id(user.user_id).await?;
-
-    crate::service::auth::backup_codes::BackupCodeManager::delete_all_for_user(
-        &state.repos,
-        user.user_id,
-    )
-    .await?;
-
-    TotpManager::get_or_create_2fa(&state.repos, user.user_id).await?;
-
-    // Generate backup codes for the post-verify display
-    let raw_codes = crate::service::auth::backup_codes::BackupCodeManager::generate_codes(10);
-    crate::service::auth::backup_codes::BackupCodeManager::store_codes(
-        &state.repos,
-        user.user_id,
-        &raw_codes,
-    )
-    .await?;
-
-    render_page(
-        &user,
-        &state,
-        None,
-        Some(
-            "Scan the QR code with your authenticator app, then enter the verification code below to enable.".to_string(),
-        ),
-        None, // backup codes shown only after successful verification
-    )
-    .await
+    render_page(&user, &state, None, None, None).await
 }
 
-/// POST /profile/two-factor/setup — generate TOTP secret and backup codes.
+/// POST /profile/two-factor/setup — start setup: create/persist a pending
+/// TOTP secret and render the QR + verification form.
+///
+/// Backup codes are deliberately **not** generated here: they are created only
+/// once verification succeeds, so an unfinished setup never rotates codes.
 pub async fn setup_2fa(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -167,22 +135,25 @@ pub async fn setup_2fa(
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
+    // Already enabled: never leak or rotate the existing secret/codes.
+    if state
+        .repos
+        .user_2fa
+        .find_by_user_id(user.user_id)
+        .await?
+        .is_some_and(|tf| tf.enabled)
+    {
+        let msg = I18n::get(user.language.as_deref())
+            .tr("twofactor.status_enabled")
+            .to_string();
+        return render_page(&user, &state, Some(msg), None, None)
+            .await
+            .map(|html| (StatusCode::OK, html).into_response());
+    }
+
+    // Creates a fresh secret when none is pending; keeps an existing pending
+    // secret otherwise (idempotent against double submission).
     TotpManager::get_or_create_2fa(&state.repos, user.user_id).await?;
-
-    // Regenerate backup codes
-    crate::service::auth::backup_codes::BackupCodeManager::delete_all_for_user(
-        &state.repos,
-        user.user_id,
-    )
-    .await?;
-
-    let raw_codes = crate::service::auth::backup_codes::BackupCodeManager::generate_codes(10);
-    crate::service::auth::backup_codes::BackupCodeManager::store_codes(
-        &state.repos,
-        user.user_id,
-        &raw_codes,
-    )
-    .await?;
 
     render_page(
         &user,
@@ -191,7 +162,7 @@ pub async fn setup_2fa(
         Some(
             "Scan the QR code with your authenticator app, then enter the verification code below to enable.".to_string(),
         ),
-        Some(raw_codes),
+        None,
     )
     .await
     .map(|html| (StatusCode::OK, html).into_response())
@@ -296,6 +267,14 @@ pub async fn disable_2fa(
         form.csrf_token.as_deref(),
     )?;
 
+    // Rate-limit password attempts (this limiter used to live on the removed
+    // /api2/2fa API). Checked before the password hashes, like the API did.
+    let rate_key = format!("2fa_disable:{}", user.user_id);
+    if state.auth_limiters.disable_2fa.is_limited(&rate_key) {
+        return Err(AppError::TooManyRequests);
+    }
+    state.auth_limiters.disable_2fa.record_attempt(&rate_key);
+
     let user_record = state
         .repos
         .user
@@ -341,6 +320,9 @@ pub async fn disable_2fa(
         user.user_id,
     )
     .await?;
+
+    // Successful disable clears the attempt counter.
+    state.auth_limiters.disable_2fa.clear(&rate_key);
 
     Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }

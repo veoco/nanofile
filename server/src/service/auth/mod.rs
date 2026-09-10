@@ -10,4 +10,3 @@ pub mod s2fa;
 pub mod sso;
 pub mod token;
 pub mod totp;
-pub mod two_factor;
