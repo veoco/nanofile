@@ -8,6 +8,7 @@
 #![allow(clippy::too_many_arguments)]
 
 // ── Server crate modules ────────────────────────────────────────────────────
+pub mod body_limit;
 pub mod domain;
 pub mod filters;
 pub mod fs;
@@ -208,6 +209,8 @@ impl AppState {
             config.sync.max_tree_visits,
         );
         crate::service::sync::configure_fs_object_verification(&config.sync.verify_fs_objects);
+        // Upload-route body limit (L-3); the JSON default is applied in main.rs.
+        crate::body_limit::configure(config.server.max_upload_size_mb);
 
         // Full-text indexer (its commit task is registered below alongside the
         // other background tasks).

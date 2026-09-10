@@ -242,6 +242,12 @@ pub struct ServerConfig {
     pub site_url: String,
     #[serde(default = "default_max_upload_size_mb")]
     pub max_upload_size_mb: u64,
+    /// Maximum size of a JSON/Form request body, in MiB. Set as the app-wide
+    /// axum `DefaultBodyLimit`; upload routes raise their own limit to
+    /// `max_upload_size_mb`. Prevents one JSON request from buffering
+    /// gigabytes into memory (L-3). Env: NANOFILE_SERVER_MAX_JSON_BODY_MB
+    #[serde(default = "default_max_json_body_mb")]
+    pub max_json_body_mb: u64,
     /// Per-chunk size cap for resumable (Content-Range) uploads. Enforced
     /// before the chunk body is read: an oversized chunk is rejected from the
     /// Content-Range header alone, and the bytes actually read are also capped,
@@ -342,6 +348,9 @@ fn default_port() -> u16 {
 fn default_max_upload_size_mb() -> u64 {
     4096
 }
+fn default_max_json_body_mb() -> u64 {
+    64
+}
 fn default_max_chunk_size_mb() -> u64 {
     256
 }
@@ -366,6 +375,7 @@ impl Default for ServerConfig {
             version: default_server_version(),
             site_url: default_site_url(),
             max_upload_size_mb: default_max_upload_size_mb(),
+            max_json_body_mb: default_max_json_body_mb(),
             max_chunk_size_mb: default_max_chunk_size_mb(),
             request_timeout_secs: default_request_timeout_secs(),
             cors_allowed_origins: Vec::new(),
@@ -927,6 +937,10 @@ impl Config {
         env_parse!(
             "NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB",
             self.server.max_upload_size_mb
+        );
+        env_parse!(
+            "NANOFILE_SERVER_MAX_JSON_BODY_MB",
+            self.server.max_json_body_mb
         );
         env_parse!(
             "NANOFILE_SERVER_MAX_CHUNK_SIZE_MB",

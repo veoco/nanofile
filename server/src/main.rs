@@ -414,11 +414,17 @@ async fn run_server(
             ))
     };
 
-    let sync_routes = server::handler::sync::sync_routes();
-    let web_routes = server::handler::web::web_routes();
+    // Upload-capable route groups accept bodies up to `max_upload_size_mb`.
+    // The app-wide default below is the much smaller JSON/Form cap (L-3).
+    let upload_body_limit = server::body_limit::upload_limit();
+    let sync_routes =
+        server::handler::sync::sync_routes().layer(DefaultBodyLimit::max(upload_body_limit));
+    let web_routes =
+        server::handler::web::web_routes().layer(DefaultBodyLimit::max(upload_body_limit));
     let ui_routes = server::ui::ui_routes();
     let notification_routes = server::notification::notification_routes();
-    let webdav_routes = server::webdav::webdav_routes();
+    let webdav_routes =
+        server::webdav::webdav_routes().layer(DefaultBodyLimit::max(upload_body_limit));
 
     // CORS is applied only to the REST API routes. It must not wrap
     // the WebDAV endpoints: tower-http's CorsLayer answers OPTIONS
@@ -438,7 +444,7 @@ async fn run_server(
         .merge(server::handler::avatar::image_routes())
         .route("/static/{*path}", get(server::static_assets::serve_static))
         .layer(DefaultBodyLimit::max(
-            (config.server.max_upload_size_mb * 1024 * 1024) as usize,
+            (config.server.max_json_body_mb * 1024 * 1024) as usize,
         ))
         .layer(RequestBodyLimitLayer::new(
             (config.server.max_upload_size_mb * 1024 * 1024) as usize,

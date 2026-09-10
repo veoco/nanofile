@@ -30,6 +30,10 @@ port = 8082
 # request Host, and downloads may hang on clients.
 site_url = "http://127.0.0.1:8082"
 max_upload_size_mb = 4096
+# Cap for JSON/Form request bodies (MiB). Applied app-wide; upload routes use
+# max_upload_size_mb instead, so a single JSON request cannot buffer gigabytes
+# into memory (L-3). Env: NANOFILE_SERVER_MAX_JSON_BODY_MB
+max_json_body_mb = 64
 # Per-chunk cap for resumable (Content-Range) uploads. Enforced before the chunk
 # body is read: an oversized chunk is rejected from the header alone, and the
 # bytes actually read are also capped, so one request can never buffer more than

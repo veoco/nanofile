@@ -13,7 +13,12 @@ use crate::AppState;
 
 fn v1_routes() -> Router<Arc<AppState>> {
     let repo_all = crate::handler::repos::repo_routes()
-        .merge(crate::handler::file::file_routes())
+        .merge(
+            // File uploads accept bodies up to max_upload_size_mb; every other
+            // route keeps the smaller JSON/Form default (L-3).
+            crate::handler::file::file_routes()
+                .layer(crate::body_limit::upload_default_body_limit()),
+        )
         .merge(crate::handler::dir::dir_routes());
 
     Router::new()
@@ -26,7 +31,8 @@ fn v1_routes() -> Router<Arc<AppState>> {
         .nest("/api2/repos", crate::handler::fileops::fileops_routes())
         .nest(
             "/api2/repos",
-            crate::handler::chunked_upload::chunked_upload_routes(),
+            crate::handler::chunked_upload::chunked_upload_routes()
+                .layer(crate::body_limit::upload_default_body_limit()),
         )
         .nest("/api2/shared-links", crate::handler::share::share_routes())
         .nest(
@@ -241,7 +247,9 @@ fn v2_routes() -> Router<Arc<AppState>> {
         // File (create=POST, delete delegated to v2 handler)
         .route(
             "/api/v2.1/repos/{repo_id}/file/",
-            post(crate::handler::file::create_file_v21).delete(crate::handler::file::delete_file),
+            post(crate::handler::file::create_file_v21)
+                .delete(crate::handler::file::delete_file)
+                .layer(crate::body_limit::upload_default_body_limit()),
         )
         // Metadata
         .route(
