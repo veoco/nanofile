@@ -4,7 +4,7 @@
 //! `recv-fs` trusts the object id a client supplies for the object bytes
 //! (verified separately in `SyncService::insert_fs_objects`), a client can
 //! still craft a directory object that references itself, which would make an
-//! unbounded walk expand forever (H-5). These guards bound the work:
+//! unbounded walk expand forever. These guards bound the work:
 //!
 //! * [`TreeGuard::enter_level`] caps the BFS depth (a cycle always increases
 //!   depth, so it terminates),
@@ -89,9 +89,17 @@ impl TreeGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Both tests below rewrite the process-wide limits via [`configure`], and
+    /// `cargo test` runs them concurrently, so without this lock one test's
+    /// `configure` can land between the other's setup and assertion (it would
+    /// restore the 1,000,000-visit default and make `visit(1)` succeed).
+    static LIMITS_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn depth_cap_terminates_a_cycle() {
+        let _guard = LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         configure(4, 1000);
         let mut guard = TreeGuard::new();
         for _ in 0..4 {
@@ -104,6 +112,7 @@ mod tests {
 
     #[test]
     fn visit_cap_terminates_wide_trees() {
+        let _guard = LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         configure(100, 10);
         let mut guard = TreeGuard::new();
         assert!(guard.visit(10).is_ok());

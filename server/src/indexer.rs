@@ -449,7 +449,7 @@ impl TextIndexer {
     /// non-empty. An empty list is not "search everything": it yields no
     /// results. Treating an empty allow-list as "no filter" would leak every
     /// repo's filenames and content snippets to a user with no accessible
-    /// repos (that was the C-2 vulnerability), so callers must resolve the
+    /// repos (that was the vulnerability), so callers must resolve the
     /// caller's accessible repos *before* searching and skip the search when
     /// the set is empty.
     pub async fn search(
@@ -796,6 +796,60 @@ impl TextIndexer {
 ///
 /// Returns an empty string when no term matches. The output is HTML-escaped
 /// except for the injected `<mark>` tags, so it is safe to render as raw HTML.
+/// Locate every case-insensitive occurrence of `terms` in `hay`.
+///
+/// Returns byte ranges that are guaranteed to be valid char boundaries of
+/// `hay`, so callers can slice with them.
+///
+/// `hay_lower` must be `hay.to_lowercase()`. Its byte offsets only map back
+/// onto `hay` when lowercasing preserved the byte length; for characters that
+/// change length (`İ` → `i̇`, `ẞ` → `ß`, `ﬃ` → `ffi`) they do not, and slicing
+/// `hay` with them panics. In that case fall back to an ASCII-case-insensitive
+/// byte scan, which is length preserving.
+fn find_match_ranges(hay: &str, hay_lower: &str, terms: &[String]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+
+    if hay_lower.len() == hay.len() {
+        for term in terms {
+            let mut from = 0;
+            while let Some(rel) = hay_lower[from..].find(term.as_str()) {
+                let s = from + rel;
+                let e = s + term.len();
+                if e > hay.len() {
+                    break;
+                }
+                ranges.push((s, e));
+                from = e;
+            }
+        }
+        return ranges;
+    }
+
+    let hay_bytes = hay.as_bytes();
+    for term in terms {
+        let term_bytes = term.as_bytes();
+        if term_bytes.is_empty() || hay_bytes.len() < term_bytes.len() {
+            continue;
+        }
+        let mut i = 0;
+        while i + term_bytes.len() <= hay_bytes.len() {
+            let end = i + term_bytes.len();
+            // Only accept matches that begin and end on char boundaries, so the
+            // resulting range is always sliceable.
+            if hay.is_char_boundary(i)
+                && hay.is_char_boundary(end)
+                && hay_bytes[i..end].eq_ignore_ascii_case(term_bytes)
+            {
+                ranges.push((i, end));
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    ranges
+}
+
 fn build_content_highlight(content: &str, query: &str) -> String {
     let terms: Vec<String> = query
         .split_whitespace()
@@ -807,10 +861,15 @@ fn build_content_highlight(content: &str, query: &str) -> String {
     }
 
     // Locate the earliest match (byte offset). `to_lowercase` is byte-length
-    // preserving for ASCII/CJK (the realistic case), so offsets map directly
-    // back onto `content`.
+    // preserving for ASCII/CJK, but not for every character (`İ`, `ẞ`, `ﬃ`
+    // change length), so the offset is only used to place the window and is
+    // snapped to a char boundary below.
     let lower = content.to_lowercase();
-    let Some(start_match) = terms.iter().filter_map(|t| lower.find(t.as_str())).min() else {
+    let Some(start_match) = find_match_ranges(content, &lower, &terms)
+        .into_iter()
+        .map(|(s, _)| s)
+        .min()
+    else {
         return String::new();
     };
 
@@ -827,16 +886,7 @@ fn build_content_highlight(content: &str, query: &str) -> String {
     // Collect every match range within the window (case-insensitive), merge
     // overlaps, then escape segments and wrap matches in <mark>.
     let win_lower = window.to_lowercase();
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
-    for term in &terms {
-        let mut from = 0;
-        while let Some(rel) = win_lower[from..].find(term.as_str()) {
-            let s = from + rel;
-            let e = s + term.len();
-            ranges.push((s, e));
-            from = e;
-        }
-    }
+    let mut ranges: Vec<(usize, usize)> = find_match_ranges(window, &win_lower, &terms);
     ranges.sort_unstable();
     let mut merged: Vec<(usize, usize)> = Vec::new();
     for (s, e) in ranges {
@@ -1204,7 +1254,7 @@ mod tests {
         Ok(())
     }
 
-    /// Regression (C-2): an empty repo allow-list must mean "no results", not
+    /// Regression: an empty repo allow-list must mean "no results", not
     /// "no filter". Returning documents here leaked every repo's filenames and
     /// content snippets to a caller with no accessible repos.
     #[tokio::test]
@@ -1234,5 +1284,34 @@ mod tests {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod highlight_regression_tests {
+    use super::build_content_highlight;
+
+    /// Characters whose lowercase form has a different byte length used to
+    /// shift the match offsets, so slicing the un-lowercased window panicked
+    /// and any search hitting one returned HTTP 500.
+    #[test]
+    fn length_changing_lowercase_does_not_panic() {
+        for content in [
+            "İ abc",       // U+0130 lowercases to 3 bytes from 2
+            "ẞ abc",       // U+1E9E lowercases to 2 bytes from 3
+            "ﬃ abc",       // U+FB03 lowercases to "ffi"
+            "İİİ aaa bbb", // several, before the match
+            "abc İ",       // after the match
+        ] {
+            let out = build_content_highlight(content, "abc");
+            // Must not panic; a hit may or may not be marked.
+            let _ = out;
+        }
+    }
+
+    #[test]
+    fn ascii_matching_still_marks() {
+        let out = build_content_highlight("Hello World", "hello");
+        assert!(out.contains("<mark>Hello</mark>"), "got {out:?}");
     }
 }
