@@ -161,7 +161,7 @@ path = "src/main.rs"
 sha2 = "0.11"
 # Tray feature build-time dependencies: rasterize static/img/favicon.svg into
 # the tray icon RGBA (all platforms) and the Windows exe icon (via winresource).
-resvg = { version = "0.45", optional = true, default-features = false, features = [
+resvg = { version = "0.48", optional = true, default-features = false, features = [
     "text",
     "system-fonts",
 ] }
