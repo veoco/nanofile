@@ -52,7 +52,7 @@ pub struct SyncConfig {
     /// Env: NANOFILE_SYNC_VERIFY_FS_OBJECTS
     #[serde(default = "default_verify_fs_objects")]
     pub verify_fs_objects: String,
-    /// Maximum BFS depth for directory-tree walks (cycle/DoS guard, H-5).
+    /// Maximum BFS depth for directory-tree walks (cycle/DoS guard).
     /// Env: NANOFILE_SYNC_MAX_TREE_DEPTH
     #[serde(default = "default_max_tree_depth")]
     pub max_tree_depth: usize,
@@ -166,6 +166,14 @@ pub struct NotificationConfig {
     /// connections from being held open indefinitely.
     #[serde(default = "default_subscribe_timeout_secs")]
     pub subscribe_timeout_secs: u64,
+    /// Also accept **event** JWTs signed with the undivided `private_key`, for
+    /// external publishers written against the pre-subkey scheme.
+    ///
+    /// Off by default. Subscription JWTs (handed to every repository member)
+    /// are always rejected on `/notification/events`; enabling this only
+    /// re-admits callers that sign with the raw key themselves.
+    #[serde(default)]
+    pub accept_legacy_event_tokens: bool,
 }
 
 fn default_ping_interval() -> u64 {
@@ -194,6 +202,7 @@ impl Default for NotificationConfig {
             max_connections: default_notif_max_connections(),
             max_connections_per_ip: default_notif_max_connections_per_ip(),
             subscribe_timeout_secs: default_subscribe_timeout_secs(),
+            accept_legacy_event_tokens: false,
         }
     }
 }
@@ -245,7 +254,7 @@ pub struct ServerConfig {
     /// Maximum size of a JSON/Form request body, in MiB. Set as the app-wide
     /// axum `DefaultBodyLimit`; upload routes raise their own limit to
     /// `max_upload_size_mb`. Prevents one JSON request from buffering
-    /// gigabytes into memory (L-3). Env: NANOFILE_SERVER_MAX_JSON_BODY_MB
+    /// gigabytes into memory. Env: NANOFILE_SERVER_MAX_JSON_BODY_MB
     #[serde(default = "default_max_json_body_mb")]
     pub max_json_body_mb: u64,
     /// Per-chunk size cap for resumable (Content-Range) uploads. Enforced
@@ -330,6 +339,22 @@ pub struct ServerConfig {
     /// Env: NANOFILE_SERVER_TRUSTED_PROXIES (comma-separated)
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
+    /// Hosts allowed to appear in generated absolute URLs (download and block
+    /// links) when `site_url` is left at its built-in default.
+    ///
+    /// While `site_url` is unconfigured, the request `Host` is echoed into those
+    /// URLs so LAN clients hitting the server by IP receive a reachable address.
+    /// A `Host` the server did not choose is attacker-influenced (DNS rebinding,
+    /// wildcard vhost, misconfigured proxy), and a client that follows the
+    /// returned URL sends its capability token to that host.
+    ///
+    /// When this list is **non-empty** only those values are accepted and
+    /// anything else falls back to `site_url`. When it is empty the previous
+    /// behaviour is kept, and startup logs an advisory. Setting `site_url` to
+    /// the address clients actually use makes this setting unnecessary.
+    /// Env: NANOFILE_SERVER_ALLOWED_HOSTS (comma-separated)
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
     /// Whether the system tray icon is shown. Only meaningful for binaries
     /// compiled with `--features tray` (plain builds have no tray code at
     /// all). Set to false to run headless even in a desktop session, e.g. for
@@ -390,6 +415,7 @@ impl Default for ServerConfig {
             file_search_enabled: default_true(),
             share_link_enabled: default_true(),
             trusted_proxies: Vec::new(),
+            allowed_hosts: Vec::new(),
             tray: default_true(),
         }
     }
@@ -420,12 +446,22 @@ impl ServerConfig {
     /// used the default 80/443) — the server's internal listen port is never
     /// appended, which used to produce unreachable URLs like
     /// `http://host:8082/...` behind a reverse proxy.
+    ///
+    /// Because the Host is client-supplied, a configured `allowed_hosts` list
+    /// restricts which values may be echoed; anything else falls back to
+    /// `site_url`.
     pub fn download_url_base(&self, host_header: Option<&str>) -> String {
         let base = self.site_url.trim_end_matches('/');
         if !self.site_url_is_default() {
             return base.to_string();
         }
-        if let Some(h) = host_header {
+        if let Some(h) = host_header
+            && (self.allowed_hosts.is_empty()
+                || self
+                    .allowed_hosts
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(h)))
+        {
             return format!("{}://{h}", self.site_url_scheme());
         }
         base.to_string()
@@ -684,6 +720,11 @@ pub struct AuthConfig {
     /// per hour (0 = unlimited).
     #[serde(default = "default_five")]
     pub link_password_max_per_hour: u32,
+    /// Max failed encrypted-library password checks per (user, repo) per hour
+    /// (0 = unlimited). The library KDF iteration count is fixed by the Seafile
+    /// wire protocol, so this is the control against online guessing.
+    #[serde(default = "default_five")]
+    pub repo_password_max_per_hour: u32,
     /// Max anonymous share-link downloads per IP per minute (0 = unlimited).
     #[serde(default = "default_share_download_max_per_minute")]
     pub share_download_max_per_minute: u32,
@@ -711,6 +752,7 @@ impl Default for AuthConfig {
             registration_max_per_hour: default_five(),
             totp_max_attempts: default_five(),
             link_password_max_per_hour: default_five(),
+            repo_password_max_per_hour: default_five(),
             share_download_max_per_minute: default_share_download_max_per_minute(),
             reindex_max_per_hour: default_five(),
             search_max_per_minute: default_search_max_per_minute(),
@@ -1159,6 +1201,15 @@ impl Config {
         // Comma-separated trusted proxy IP list.
         if let Ok(v) = std::env::var("NANOFILE_SERVER_TRUSTED_PROXIES") {
             self.server.trusted_proxies = v.split(',').map(|s| s.trim().to_string()).collect();
+        }
+
+        // Comma-separated allow-list of Host values used in generated URLs.
+        if let Ok(v) = std::env::var("NANOFILE_SERVER_ALLOWED_HOSTS") {
+            self.server.allowed_hosts = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
     }
 }

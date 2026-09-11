@@ -412,7 +412,7 @@ impl Default for NotificationManager {
     }
 }
 
-/// Validate a JWT token against the notification server's private key.
+/// Validate a JWT token against the notification server's subscription key.
 /// Returns the claims if valid, None otherwise.
 pub fn validate_notification_jwt(
     token: &str,
@@ -421,12 +421,17 @@ pub fn validate_notification_jwt(
 ) -> Option<NotificationJwtClaims> {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
-    validation.required_spec_claims = std::collections::HashSet::new();
+    // `exp` is required: an otherwise-valid signature without it would never
+    // expire. (Issuance always sets it.)
+    validation.required_spec_claims = std::collections::HashSet::from(["exp".to_string()]);
     // We check repo_id manually below.
     validation.sub = None;
     validation.iss = None;
 
-    let key = DecodingKey::from_secret(private_key.as_bytes());
+    // Verify against the subscription subkey, so an event token (signed with a
+    // different subkey) cannot be replayed as a subscription.
+    let sub_key = super::keys::subscription_key(private_key);
+    let key = DecodingKey::from_secret(&sub_key);
     let token_data =
         jsonwebtoken::decode::<NotificationJwtClaims>(token, &key, &validation).ok()?;
 

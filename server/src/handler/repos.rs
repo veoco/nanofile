@@ -298,19 +298,48 @@ pub async fn set_repo_password_v2(
     Path(repo_id): Path<String>,
     req: axum::http::Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Membership is required before the password is even looked at. This
+    // endpoint verifies the supplied password against the stored `magic` and
+    // returns a different status for a hit, so without this check it is a
+    // password oracle for any authenticated non-member who knows the repo id.
+    // The KDF is fixed by the wire protocol at a low iteration count, so the
+    // per-(user, repo) limiter below is the practical brute-force control.
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
+    let limiter_key = format!("repo_pw:{}:{}", auth.user_id, repo_id);
+    if state.auth_limiters.repo_password.is_limited(&limiter_key) {
+        return Err(AppError::TooManyRequests);
+    }
+
     let (_parts, body) = req.into_parts();
     let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
     let password = parse_body_field(&bytes, "password", "password required")?;
 
-    PasswordService::set_password(
+    if let Err(e) = PasswordService::set_password(
         &state.password_manager,
         &state.repos,
         &repo_id,
         auth.user_id,
         &password,
     )
-    .await?;
+    .await
+    {
+        // A wrong password is what the limiter counts; other failures (unknown
+        // repo, not encrypted) are not guesses and should not consume budget.
+        if matches!(e, base::error::AppError::RepoPasswdRequired) {
+            state
+                .auth_limiters
+                .repo_password
+                .record_attempt(&limiter_key);
+        }
+        return Err(e);
+    }
 
     Ok(ok_json())
 }

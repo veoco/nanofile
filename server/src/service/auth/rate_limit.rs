@@ -15,6 +15,10 @@ pub struct AuthRateLimiters {
     pub totp: Arc<GenericRateLimiter>,
     pub disable_2fa: Arc<GenericRateLimiter>,
     pub link_password: Arc<GenericRateLimiter>,
+    /// Failed encrypted-library password checks, keyed by `(user, repo)`.
+    /// The wire protocol fixes the KDF iteration count, so throttling is the
+    /// only available control against offline-fast guessing online.
+    pub repo_password: Arc<GenericRateLimiter>,
     pub share_download: Arc<GenericRateLimiter>,
     pub reindex: Arc<GenericRateLimiter>,
     pub search: Arc<GenericRateLimiter>,
@@ -39,6 +43,10 @@ impl AuthRateLimiters {
             disable_2fa: Arc::new(GenericRateLimiter::new(cfg.totp_max_attempts.max(1), 300)),
             link_password: Arc::new(GenericRateLimiter::new(
                 cfg.link_password_max_per_hour.max(1),
+                3600,
+            )),
+            repo_password: Arc::new(GenericRateLimiter::new(
+                cfg.repo_password_max_per_hour.max(1),
                 3600,
             )),
             share_download: Arc::new(GenericRateLimiter::new(

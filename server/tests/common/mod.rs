@@ -381,6 +381,7 @@ impl TestServer {
                 file_search_enabled: true,
                 share_link_enabled: true,
                 trusted_proxies: vec![],
+                allowed_hosts: vec![],
                 tray: false,
             },
             database: infra::config::DatabaseConfig {
@@ -416,6 +417,7 @@ impl TestServer {
                 registration_max_per_hour: 10,
                 totp_max_attempts: 10,
                 link_password_max_per_hour: 10,
+                repo_password_max_per_hour: 10,
                 share_download_max_per_minute: auth_limits
                     .unwrap_or_default()
                     .share_download_max_per_minute,
@@ -442,6 +444,7 @@ impl TestServer {
                 max_connections: notif_limits.unwrap_or_default().max_connections,
                 max_connections_per_ip: notif_limits.unwrap_or_default().max_connections_per_ip,
                 subscribe_timeout_secs: notif_limits.unwrap_or_default().subscribe_timeout_secs,
+                accept_legacy_event_tokens: false,
             },
             index: infra::config::IndexConfig {
                 enabled: enable_index,

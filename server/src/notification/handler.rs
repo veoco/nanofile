@@ -330,7 +330,11 @@ pub async fn post_event(
 
     // Validate the event submission JWT.
     let private_key = &state.config.notification.private_key;
-    if !validate_event_jwt(token, private_key) {
+    if !validate_event_jwt(
+        token,
+        private_key,
+        state.config.notification.accept_legacy_event_tokens,
+    ) {
         return Err(AppError::Unauthorized);
     }
 
@@ -348,14 +352,39 @@ pub async fn post_event(
 
 /// Validate a JWT token for the POST /events endpoint.
 ///
-/// Matches seafile-server/notification-server: the event JWT carries only an
-/// `exp` claim (no `sub`), so we validate signature + expiry and nothing else.
-fn validate_event_jwt(token: &str, private_key: &str) -> bool {
+/// Events are verified against the **event** subkey, which is distinct from the
+/// subscription key. Before that separation both token kinds were signed with
+/// the same key and this endpoint only checked the signature and `exp`, so any
+/// user could take the subscription token from
+/// `/seafhttp/repo/{id}/jwt-token` and post events to any repository.
+///
+/// `accept_legacy` additionally allows the undivided root key, for external
+/// publishers written against the old scheme. It is off by default.
+fn validate_event_jwt(token: &str, private_key: &str, accept_legacy: bool) -> bool {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
 
-    let key = DecodingKey::from_secret(private_key.as_bytes());
-    jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation).is_ok()
+    let event_key = crate::notification::keys::event_key(private_key);
+    if jsonwebtoken::decode::<serde_json::Value>(
+        token,
+        &DecodingKey::from_secret(&event_key),
+        &validation,
+    )
+    .is_ok()
+    {
+        return true;
+    }
+
+    if accept_legacy {
+        return jsonwebtoken::decode::<serde_json::Value>(
+            token,
+            &DecodingKey::from_secret(private_key.as_bytes()),
+            &validation,
+        )
+        .is_ok();
+    }
+
+    false
 }
 
 /// GET /notification/ping — health check.

@@ -70,7 +70,11 @@ pub async fn get_jwt_token(
     });
 
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let key = jsonwebtoken::EncodingKey::from_secret(private_key.as_bytes());
+    // Sign with the subscription-specific subkey, never the raw notification
+    // key: the raw key also authorises posting events, and this token is handed
+    // to every repository member.
+    let sub_key = crate::notification::keys::subscription_key(private_key);
+    let key = jsonwebtoken::EncodingKey::from_secret(&sub_key);
 
     let token = jsonwebtoken::encode(&header, &claims, &key)
         .map_err(|e| AppError::Internal(format!("JWT encoding error: {}", e)))?;
