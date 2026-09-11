@@ -118,7 +118,15 @@ An admin account is needed. Either auto-create one on first startup via `[admin_
 with the CLI:
 
 ```bash
-./target/release/nanofile adduser --email admin@example.com --password 'secret123'
+./target/release/nanofile adduser --email admin@example.com
+```
+
+It prompts for the password. To avoid the prompt, pipe it in or point at a file — a password passed
+as `--password` is also visible in the shell history and in `ps` output on the same host:
+
+```bash
+printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@example.com --password-stdin
+./target/release/nanofile adduser --email admin@example.com --password-file /run/secrets/admin
 ```
 
 Pass `--regular` to create a non-admin account.
@@ -266,6 +274,8 @@ docker run -d --name nanofile \
 ```
 nanofile [--config <path>]           Start the server (default)
 nanofile [--config <path>] adduser   Create a user (admin by default; --regular for a normal user)
+                                     Password: interactive prompt by default, or
+                                     --password-stdin / --password-file <path>
 ```
 
 ## Data Layout

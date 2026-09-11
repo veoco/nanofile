@@ -103,7 +103,15 @@ cp config.toml.example config.toml   # 按需编辑——见下方"配置"
 创建：
 
 ```bash
-./target/release/nanofile adduser --email admin@example.com --password 'secret123'
+./target/release/nanofile adduser --email admin@example.com
+```
+
+会交互式提示输入口令。想跳过提示可以改用管道或文件——用 `--password` 传参会让口令同时出现在
+shell 历史与本机 `ps` 输出中：
+
+```bash
+printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@example.com --password-stdin
+./target/release/nanofile adduser --email admin@example.com --password-file /run/secrets/admin
 ```
 
 传入 `--regular` 可创建非管理员账号。
@@ -238,6 +246,8 @@ docker run -d --name nanofile \
 ```
 nanofile [--config <path>]          启动服务器（默认）
 nanofile [--config <path>] adduser  创建用户（默认管理员；--regular 创建普通用户）
+                                    口令：默认交互式输入，也可用
+                                    --password-stdin / --password-file <path>
 ```
 
 ## 数据布局

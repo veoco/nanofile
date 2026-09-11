@@ -58,9 +58,26 @@ enum Command {
         /// Email address (also used as login name)
         #[arg(long)]
         email: Option<String>,
-        /// Password (prompted interactively if not provided)
+        /// Password. Visible in shell history and in `ps` output on this host,
+        /// so prefer the interactive prompt, --password-stdin or
+        /// --password-file.
         #[arg(long)]
         password: Option<String>,
+        /// Read the password from the first line of standard input
+        #[arg(
+            long,
+            default_value_t = false,
+            conflicts_with_all = ["password", "password_file"]
+        )]
+        password_stdin: bool,
+        /// Read the password from this file (leading/trailing whitespace is
+        /// trimmed, matching NANOFILE_ADMIN_INIT_PASSWORD_FILE)
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with_all = ["password", "password_stdin"]
+        )]
+        password_file: Option<PathBuf>,
         /// Create a regular (non-admin) user
         #[arg(long, default_value_t = false)]
         regular: bool,
@@ -377,13 +394,24 @@ fn main() -> anyhow::Result<()> {
         Command::Adduser {
             email,
             password,
+            password_stdin,
+            password_file,
             regular,
         } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async move {
                 let db = establish_connection(&config.database).await?;
                 migration::Migrator::up(&db, None).await?;
-                adduser(db, config, email, password, regular).await
+                adduser(
+                    db,
+                    config,
+                    email,
+                    password,
+                    password_stdin,
+                    password_file,
+                    regular,
+                )
+                .await
             })
         }
     }
@@ -656,11 +684,29 @@ async fn run_server(
     Ok(())
 }
 
+/// Read a password from the first line of `reader`.
+///
+/// Whitespace is trimmed to match how `NANOFILE_ADMIN_INIT_PASSWORD_FILE` and
+/// `NANOFILE_STORAGE_ENCRYPTION_KEY_FILE` are read, so a trailing newline (or
+/// a CRLF line ending) never becomes part of the password.
+fn read_password_line<R: std::io::BufRead>(reader: R) -> anyhow::Result<String> {
+    let mut line = String::new();
+    let mut reader = reader;
+    reader.read_line(&mut line)?;
+    let password = line.trim();
+    if password.is_empty() {
+        anyhow::bail!("no password provided on standard input");
+    }
+    Ok(password.to_owned())
+}
+
 async fn adduser(
     db: DatabaseConnection,
     config: Config,
     email: Option<String>,
     password: Option<String>,
+    password_stdin: bool,
+    password_file: Option<PathBuf>,
     regular: bool,
 ) -> anyhow::Result<()> {
     use infra::entity::user;
@@ -676,9 +722,25 @@ async fn adduser(
         }
     };
 
-    let password = match password {
-        Some(p) => p,
-        None => rpassword::prompt_password("password: ")?,
+    let password = match (password, password_stdin, password_file) {
+        // A command-line password is readable by every local user through
+        // `ps` and lands in the shell history; keep it working for scripts
+        // that already rely on it, but steer the operator elsewhere.
+        (Some(p), _, _) => {
+            eprintln!(
+                "warning: --password is visible in shell history and process listings; \
+                 prefer the interactive prompt, --password-stdin or --password-file"
+            );
+            p
+        }
+        (None, true, _) => read_password_line(std::io::stdin().lock())?,
+        (None, false, Some(path)) => {
+            let file = std::fs::File::open(&path).map_err(|e| {
+                anyhow::anyhow!("cannot read password file '{}': {e}", path.display())
+            })?;
+            read_password_line(std::io::BufReader::new(file))?
+        }
+        (None, false, None) => rpassword::prompt_password("password: ")?,
     };
 
     let exists = user::Entity::find()
@@ -715,6 +777,31 @@ async fn adduser(
     model.insert(&db).await?;
     println!("user '{}' created successfully", email);
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_password_tests {
+    use super::read_password_line;
+
+    #[test]
+    fn reads_first_line_and_trims_line_ending() {
+        let pw = read_password_line(std::io::Cursor::new(b"secret123\n")).unwrap();
+        assert_eq!(pw, "secret123");
+        // CRLF (e.g. a file written on Windows) must not keep the CR.
+        let pw = read_password_line(std::io::Cursor::new(b"secret123\r\n")).unwrap();
+        assert_eq!(pw, "secret123");
+        // Only the first line is used, and surrounding whitespace is trimmed
+        // exactly like the *_FILE environment variables.
+        let pw = read_password_line(std::io::Cursor::new(b"  secret123  \nignored\n")).unwrap();
+        assert_eq!(pw, "secret123");
+    }
+
+    #[test]
+    fn rejects_empty_input() {
+        assert!(read_password_line(std::io::Cursor::new(b"")).is_err());
+        assert!(read_password_line(std::io::Cursor::new(b"\n")).is_err());
+        assert!(read_password_line(std::io::Cursor::new(b"   \n")).is_err());
+    }
 }
 
 #[cfg(test)]
