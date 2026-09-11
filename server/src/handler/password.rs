@@ -65,9 +65,12 @@ pub async fn change_password_v21(
 
     match operation {
         Some("change-password") => {
-            // Changing the repo password re-encrypts content for all members →
-            // only members with write access may do it.
-            crate::domain::permission::check_repo_write_permission(
+            // Rotating the library password rewrites the repo-wide `magic` and
+            // `random_key`, which locks out every other member if they only
+            // knew the old password. It is a library-wide cryptographic
+            // operation, so it is owner-only — matching how member management
+            // is already gated elsewhere.
+            crate::domain::permission::check_repo_owner(
                 state.repos.member.as_ref(),
                 &repo_id,
                 auth.user_id,
