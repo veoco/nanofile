@@ -128,6 +128,9 @@ impl Repositories {
         token_cipher: Arc<infra::crypto::token_encryption::TokenCipher>,
         totp_cipher: Arc<infra::crypto::totp_encryption::TotpCipher>,
     ) -> Self {
+        // The same cipher is shared by the sync-token store and the SSO flow;
+        // both need a recoverable (not hashed) server-side token.
+        let sso_token_cipher = token_cipher.clone();
         Self {
             user: Arc::new(DbUserRepository::new(db.clone())),
             repo: Arc::new(DbRepoRepository::new(db.clone())),
@@ -146,14 +149,14 @@ impl Repositories {
             invitation_code: Arc::new(DbInvitationCodeRepository::new(db.clone())),
             locked_file: Arc::new(DbLockedFileRepository::new(db.clone())),
             sync_token: Arc::new(auth_cache::CachingSyncTokenRepository::new(Arc::new(
-                DbSyncTokenRepository::new(db.clone(), token_cipher),
+                DbSyncTokenRepository::new(db.clone(), token_cipher.clone()),
             ))),
             api_token: Arc::new(auth_cache::CachingApiTokenRepository::new(Arc::new(
                 DbApiTokenRepository::new(db.clone()),
             ))),
             s2fa_token: Arc::new(DbS2faTokenRepository::new(db.clone())),
             user_2fa: Arc::new(DbUser2faRepository::new(db.clone(), totp_cipher)),
-            sso_login_token: Arc::new(DbSsoLoginTokenRepository::new(db.clone())),
+            sso_login_token: Arc::new(DbSsoLoginTokenRepository::new(db.clone(), sso_token_cipher)),
             client_login_token: Arc::new(DbClientLoginTokenRepository::new(db.clone())),
             metadata_config: Arc::new(DbMetadataConfigRepository::new(db.clone())),
             metadata_record: Arc::new(DbMetadataRecordRepository::new(db.clone())),

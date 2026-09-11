@@ -729,3 +729,72 @@ async fn test_search_unauthorized() {
     let resp = client.get("/api2/search/?q=test", None).await;
     assert_eq!(resp.status(), 401);
 }
+
+/// The API token minted for an SSO login is a live bearer credential that the
+/// polling client must receive verbatim, so it cannot be hashed — it is
+/// encrypted at rest instead. A database copy must not hand out usable tokens.
+#[tokio::test]
+async fn test_sso_api_token_is_encrypted_at_rest() {
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let f = TestFixture::new().await;
+    let token = "sso-encryption-test-token";
+    let api_token = "plaintext-api-token-abcdef";
+
+    f.server
+        .repos
+        .sso_login_token
+        .create_sso_token(
+            server::repository::sso_login_token::CreateSsoLoginTokenParams {
+                token: token.to_string(),
+                platform: None,
+                device_id: None,
+                device_name: None,
+                client_version: None,
+                status: "waiting".to_string(),
+                username: None,
+                api_token: None,
+                created_at: chrono::Utc::now().timestamp(),
+                expires_at: Some(chrono::Utc::now().timestamp() + 3600),
+            },
+        )
+        .await
+        .unwrap();
+    f.server
+        .repos
+        .sso_login_token
+        .complete(token, "user@example.com", api_token)
+        .await
+        .unwrap();
+
+    // Raw row (bypassing the repository's decryption) must not contain the token.
+    let raw = infra::entity::sso_login_token::Entity::find()
+        .filter(
+            infra::entity::sso_login_token::Column::Token
+                .eq(server::service::auth::token::hash_token(token)),
+        )
+        .one(f.server.db.as_ref())
+        .await
+        .unwrap()
+        .expect("row exists");
+    let stored = raw.api_token.expect("api token stored");
+    assert_ne!(
+        stored, api_token,
+        "api token must not be stored in plaintext"
+    );
+    assert!(
+        stored.starts_with("enc1:"),
+        "expected ciphertext marker, got {stored}"
+    );
+
+    // Reading through the repository returns the plaintext for the client.
+    let record = f
+        .server
+        .repos
+        .sso_login_token
+        .find_by_token(token)
+        .await
+        .unwrap()
+        .expect("row exists");
+    assert_eq!(record.api_token.as_deref(), Some(api_token));
+}

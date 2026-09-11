@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::service::auth::token::hash_token;
 use base::error::AppError;
+use infra::crypto::token_encryption::TokenCipher;
 use infra::entity::sso_login_token;
 
 pub struct CreateSsoLoginTokenParams {
@@ -36,21 +37,46 @@ pub trait SsoLoginTokenRepository: Send + Sync {
 
 pub struct DbSsoLoginTokenRepository {
     db: Arc<DatabaseConnection>,
+    /// The API token minted by [`complete`](Self::complete) is a live bearer
+    /// credential, and unlike the token in `api_tokens` it cannot be hashed:
+    /// the polling client must receive the raw value. It is therefore encrypted
+    /// at rest so a database copy (backup, disk image) does not hand out
+    /// long-lived tokens.
+    token_cipher: Arc<TokenCipher>,
 }
 
 impl DbSsoLoginTokenRepository {
-    pub fn new(db: Arc<DatabaseConnection>) -> Self {
-        Self { db }
+    pub fn new(db: Arc<DatabaseConnection>, token_cipher: Arc<TokenCipher>) -> Self {
+        Self { db, token_cipher }
     }
 }
 
 #[async_trait]
 impl SsoLoginTokenRepository for DbSsoLoginTokenRepository {
     async fn find_by_token(&self, token: &str) -> Result<Option<sso_login_token::Model>, AppError> {
-        Ok(sso_login_token::Entity::find()
+        let record = sso_login_token::Entity::find()
             .filter(sso_login_token::Column::Token.eq(hash_token(token)))
             .one(self.db.as_ref())
-            .await?)
+            .await?;
+
+        // Hand callers the plaintext token. A value that cannot be decrypted
+        // (rotated server secret, tampered row) is treated as "no token yet"
+        // rather than an internal error, so the flow reports `error` to the
+        // client instead of a 500.
+        Ok(record.map(|mut record| {
+            if let Some(stored) = record.api_token.take() {
+                match self.token_cipher.decrypt(&stored) {
+                    Some(plaintext) => record.api_token = Some(plaintext),
+                    None => {
+                        tracing::warn!(
+                            "sso_login_token {}: stored api_token could not be decrypted",
+                            record.id
+                        );
+                    }
+                }
+            }
+            record
+        }))
     }
 
     async fn insert(&self, model: sso_login_token::ActiveModel) -> Result<(), AppError> {
@@ -73,7 +99,10 @@ impl SsoLoginTokenRepository for DbSsoLoginTokenRepository {
             client_version: Set(params.client_version),
             status: Set(params.status),
             username: Set(params.username),
-            api_token: Set(params.api_token),
+            api_token: Set(params
+                .api_token
+                .as_deref()
+                .map(|t| self.token_cipher.encrypt(t))),
             created_at: Set(params.created_at),
             expires_at: Set(params.expires_at),
             accessed_at: Set(None),
@@ -98,7 +127,7 @@ impl SsoLoginTokenRepository for DbSsoLoginTokenRepository {
             .set(sso_login_token::ActiveModel {
                 status: Set("success".to_string()),
                 username: Set(Some(username.to_string())),
-                api_token: Set(Some(api_token.to_string())),
+                api_token: Set(Some(self.token_cipher.encrypt(api_token))),
                 ..Default::default()
             })
             .filter(sso_login_token::Column::Token.eq(hash_token(token)))
