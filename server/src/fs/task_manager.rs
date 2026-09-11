@@ -16,6 +16,10 @@ pub enum TaskState {
 #[derive(Clone, Debug)]
 pub struct CopyMoveTask {
     pub task_id: String,
+    /// User who created the task. Progress is only reported to its owner: the
+    /// id is unguessable, but a leaked id (logs, screenshots, a shared
+    /// terminal) must not expose another user's file names and error text.
+    pub user_id: i32,
     pub state: TaskState,
     pub operation: String,
     pub total: usize,
@@ -69,6 +73,7 @@ impl TaskManager {
     pub fn create_task(
         &self,
         task_id: String,
+        user_id: i32,
         operation: &str,
         total: usize,
         description: &str,
@@ -76,6 +81,7 @@ impl TaskManager {
         let now = chrono::Utc::now().timestamp();
         let task = CopyMoveTask {
             task_id: task_id.clone(),
+            user_id,
             state: TaskState::Pending,
             operation: operation.to_string(),
             total,
@@ -100,6 +106,15 @@ impl TaskManager {
 
         tasks.insert(task_id.clone(), task);
         Ok(task_id)
+    }
+
+    /// Retrieve a task by its ID, but only for its owner.
+    ///
+    /// A task that exists but belongs to somebody else is reported as missing
+    /// (rather than forbidden) so the response cannot be used to probe which
+    /// task ids exist.
+    pub fn get_task_for_user(&self, task_id: &str, user_id: i32) -> Option<CopyMoveTask> {
+        self.get_task(task_id).filter(|t| t.user_id == user_id)
     }
 
     /// Retrieve a task by its ID.
@@ -184,9 +199,12 @@ fn evict_oldest_terminal(tasks: &mut HashMap<String, CopyMoveTask>, cap: usize) 
 mod tests {
     use super::*;
 
+    const OWNER: i32 = 7;
+
     fn mk_task(id: &str, state: TaskState, created_at: i64) -> CopyMoveTask {
         CopyMoveTask {
             task_id: id.to_string(),
+            user_id: OWNER,
             state,
             operation: "copy".to_string(),
             total: 1,
@@ -199,9 +217,9 @@ mod tests {
     #[test]
     fn create_task_rejects_when_active_limit_reached() {
         let tm = TaskManager::new(1);
-        assert!(tm.create_task("a".into(), "copy", 1, "a").is_ok());
+        assert!(tm.create_task("a".into(), OWNER, "copy", 1, "a").is_ok());
         assert!(matches!(
-            tm.create_task("b".into(), "copy", 1, "b"),
+            tm.create_task("b".into(), OWNER, "copy", 1, "b"),
             Err(AppError::TooManyRequests)
         ));
     }
@@ -209,9 +227,26 @@ mod tests {
     #[test]
     fn create_task_allows_after_completion() {
         let tm = TaskManager::new(1);
-        tm.create_task("a".into(), "copy", 1, "a").unwrap();
+        tm.create_task("a".into(), OWNER, "copy", 1, "a").unwrap();
         tm.complete_task("a");
-        assert!(tm.create_task("b".into(), "copy", 1, "b").is_ok());
+        assert!(tm.create_task("b".into(), OWNER, "copy", 1, "b").is_ok());
+    }
+
+    /// Progress is only reported to the user who created the task.
+    #[test]
+    fn get_task_for_user_hides_other_users_tasks() {
+        let tm = TaskManager::new(10);
+        tm.create_task("t".into(), OWNER, "copy", 1, "secret.txt")
+            .unwrap();
+
+        assert!(tm.get_task_for_user("t", OWNER).is_some());
+        assert!(
+            tm.get_task_for_user("t", OWNER + 1).is_none(),
+            "another user must not see the task"
+        );
+        assert!(tm.get_task_for_user("missing", OWNER).is_none());
+        // The raw accessor still works for internal callers.
+        assert!(tm.get_task("t").is_some());
     }
 
     #[test]

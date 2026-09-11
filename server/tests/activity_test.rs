@@ -1781,3 +1781,57 @@ async fn test_activity_pagination_is_clamped() {
     let body: Value = resp.json().await.unwrap();
     assert!(body["events"].as_array().unwrap().is_empty());
 }
+
+/// Copy/move progress must only be visible to the user who created the task.
+///
+/// The task id is an unguessable UUID, but the endpoint previously accepted any
+/// authenticated caller: a task id leaked through a log, a screenshot or a
+/// shared terminal exposed another user's file names and failure text.
+#[tokio::test]
+async fn test_copy_move_progress_is_owner_only() {
+    let f = TestFixture::new().await;
+    for i in 1..=2 {
+        create_file(&f, &format!("/owned{i}.txt")).await;
+    }
+    let other_token = create_second_user(&f).await;
+
+    // Start an async copy as the owner.
+    create_dir(&f, "/owner_only_dest").await;
+    let resp = f
+        .client
+        .async_batch_copy(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            &["owned1.txt"],
+            &f.repo_id,
+            "/owner_only_dest",
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let task_id = resp.json::<Value>().await.unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The owner can read it…
+    let resp = f
+        .client
+        .query_copy_move_progress(&f.api_token, &task_id)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // …another user cannot, and learns nothing about whether it exists.
+    let resp = f
+        .client
+        .query_copy_move_progress(&other_token, &task_id)
+        .await;
+    assert_eq!(resp.status(), 404);
+
+    // An unknown id looks exactly the same.
+    let resp = f
+        .client
+        .query_copy_move_progress(&f.api_token, "00000000-0000-4000-8000-000000000000")
+        .await;
+    assert_eq!(resp.status(), 404);
+}

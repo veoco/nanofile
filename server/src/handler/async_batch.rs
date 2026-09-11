@@ -48,6 +48,7 @@ pub async fn async_batch_copy_item(
 
     state.task_manager.create_task(
         task_id.clone(),
+        auth.user_id,
         "copy",
         body.src_dirents.len(),
         &description,
@@ -136,6 +137,7 @@ pub async fn async_batch_move_item(
 
     state.task_manager.create_task(
         task_id.clone(),
+        auth.user_id,
         "move",
         body.src_dirents.len(),
         &description,
@@ -225,7 +227,7 @@ pub async fn copy_move_task(
 
     state
         .task_manager
-        .create_task(task_id.clone(), &operation, 1, &description)?;
+        .create_task(task_id.clone(), auth.user_id, &operation, 1, &description)?;
 
     let state_clone = state.clone();
     let repo_id = body.src_repo_id;
@@ -284,37 +286,36 @@ pub struct QueryProgressQuery {
 }
 
 pub async fn query_copy_move_progress(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Query(query): Query<QueryProgressQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let task_id = query.task_id.unwrap_or_default();
-    let task = state.task_manager.get_task(&task_id);
+    // Only the owner may read a task: its description carries file names and
+    // its failure text can carry paths. A task that is missing, expired or
+    // owned by somebody else is reported identically, so the response cannot
+    // be used to probe which ids exist.
+    let task = state
+        .task_manager
+        .get_task_for_user(&task_id, auth.user_id)
+        .ok_or_else(|| AppError::NotFound("task not found or expired".into()))?;
 
-    match task {
-        Some(t) => {
-            let (state_str, done, failed, successful) = match &t.state {
-                TaskState::Pending => ("pending", false, false, false),
-                TaskState::Processing => ("processing", false, false, false),
-                TaskState::Completed => ("completed", true, false, true),
-                TaskState::Failed(_) => ("failed", true, true, false),
-            };
-            let error_msg = match &t.state {
-                TaskState::Failed(msg) => msg.clone(),
-                _ => String::new(),
-            };
+    let (state_str, done, failed, successful) = match &task.state {
+        TaskState::Pending => ("pending", false, false, false),
+        TaskState::Processing => ("processing", false, false, false),
+        TaskState::Completed => ("completed", true, false, true),
+        TaskState::Failed(_) => ("failed", true, true, false),
+    };
+    let error_msg = match &task.state {
+        TaskState::Failed(msg) => msg.clone(),
+        _ => String::new(),
+    };
 
-            Ok(Json(serde_json::json!({
-                "state": state_str, "done": done, "failed": failed,
-                "successful": successful,
-                "description": error_msg, "total": t.total,
-                "done_count": t.done_count, "failed_count": if failed { 1 } else { 0 },
-                "cancelable": false,
-            })))
-        }
-        None => Ok(Json(serde_json::json!({
-            "state": "completed", "done": true, "failed": false, "successful": true,
-            "description": "", "total": 0, "done_count": 0, "failed_count": 0, "cancelable": false,
-        }))),
-    }
+    Ok(Json(serde_json::json!({
+        "state": state_str, "done": done, "failed": failed,
+        "successful": successful,
+        "description": error_msg, "total": task.total,
+        "done_count": task.done_count, "failed_count": if failed { 1 } else { 0 },
+        "cancelable": false,
+    })))
 }
