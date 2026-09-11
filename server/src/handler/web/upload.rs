@@ -520,7 +520,7 @@ pub async fn upload_aj(
     let is_chunked = content_range.is_some();
     let mut chunked_file_data: Option<Vec<u8>> = None;
     // Non-chunked uploads are staged on disk and only ingested into the global
-    // block store after the write-permission check below (H-4).
+    // block store after the write-permission check below.
     let mut staged_path: Option<std::path::PathBuf> = None;
     let staging_dir = upload_staging_dir(&state);
 
@@ -568,7 +568,7 @@ pub async fn upload_aj(
     let target_dir = compute_target_dir(parent_dir, relative_path)?;
 
     // CSRF: this endpoint authenticates via the session cookie, so a
-    // cross-site form POST must be rejected (L-1).
+    // cross-site form POST must be rejected.
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -690,7 +690,7 @@ pub(crate) async fn stream_file_into_blocks(
 /// The no-token web endpoints (`/upload-aj/`, `/update-aj/`, `/update-api/`)
 /// carry the repository id inside the multipart body, so permission can only be
 /// checked after parsing. Staging the bytes on disk keeps them out of the
-/// global block store until the caller is authorized (H-4), without buffering
+/// global block store until the caller is authorized, without buffering
 /// the whole file in memory. The file is removed when the guard drops.
 struct StagedUpload(Option<std::path::PathBuf>);
 
@@ -823,7 +823,7 @@ pub async fn update_api(
     let mut repo_id = String::new();
     let mut file_path = String::new();
     let mut csrf_token: Option<String> = None;
-    // Stage the bytes on disk; authorization happens after parsing (H-4).
+    // Stage the bytes on disk; authorization happens after parsing.
     let mut staged_path: Option<std::path::PathBuf> = None;
     let staging_dir = upload_staging_dir(&state);
 
@@ -856,7 +856,7 @@ pub async fn update_api(
 
     if !file_path.is_empty() {
         // CSRF: these no-token endpoints authenticate via the session cookie,
-        // so a cross-site form POST must be rejected (L-1).
+        // so a cross-site form POST must be rejected.
         crate::service::auth::csrf::check_form_csrf(
             &state,
             &user.session_token,
@@ -936,7 +936,7 @@ pub async fn update_aj(
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let is_chunked = content_range.is_some();
     let mut chunked_file_data: Option<Vec<u8>> = None;
-    // Non-chunked uploads are staged on disk until authorization passes (H-4).
+    // Non-chunked uploads are staged on disk until authorization passes.
     let mut staged_path: Option<std::path::PathBuf> = None;
     let staging_dir = upload_staging_dir(&state);
 
@@ -979,7 +979,7 @@ pub async fn update_aj(
         .get("target_file")
         .ok_or_else(|| AppError::BadRequest("target_file required".into()))?;
 
-    // CSRF: session-cookie auth requires the double-submit token (L-1).
+    // CSRF: session-cookie auth requires the double-submit token.
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,

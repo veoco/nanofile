@@ -110,7 +110,7 @@ async fn render_page(
 
 /// GET /profile/two-factor/ — show the 2FA management page.
 ///
-/// Read-only: a GET must never mutate state (L-8). A pending secret is shown
+/// Read-only: a GET must never mutate state. A pending secret is shown
 /// as-is, and a brand-new setup is started from the POST form below.
 pub async fn setup_page(
     user: WebUser,

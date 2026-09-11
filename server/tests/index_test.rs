@@ -658,7 +658,7 @@ async fn test_overlong_keyword_returns_empty() {
     assert!(results.is_empty(), "overlong keyword should return empty");
 }
 
-// ── Access control (C-2) ─────────────────────────────────────────────────────
+// ── Access control ─────────────────────────────────────────────────────
 
 /// Fetch the `results` array for a search query, with an optional `search_repo`.
 async fn search_results_with_repo(
@@ -679,7 +679,7 @@ async fn search_results_with_repo(
         .clone()
 }
 
-/// Regression (C-2): a user with no accessible repos must not be able to use
+/// Regression: a user with no accessible repos must not be able to use
 /// the full-text index to read another user's filenames or content. An empty
 /// accessible-repo set used to be passed to the indexer as "no filter".
 #[tokio::test]
@@ -722,7 +722,7 @@ async fn test_zero_repo_user_cannot_search_other_repos() {
         let results = search_results_with_repo(&other, other_token, q, repo).await;
         assert!(
             results.is_empty(),
-            "C-2: zero-repo user must not see other repos' files (q={q:?}, search_repo={repo:?}), got {results:?}"
+            "zero-repo user must not see other repos' files (q={q:?}, search_repo={repo:?}), got {results:?}"
         );
     }
 
@@ -738,11 +738,11 @@ async fn test_zero_repo_user_cannot_search_other_repos() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(
         body["results"].as_array().unwrap().is_empty(),
-        "C-2: filename-only search must not leak other repos' files"
+        "filename-only search must not leak other repos' files"
     );
 }
 
-/// Control for C-2: a user with an accessible repo still finds their own
+/// Control for a user with an accessible repo still finds their own
 /// indexed content, so the fix does not disable search altogether.
 #[tokio::test]
 async fn test_owner_still_finds_own_content_after_search_fix() {

@@ -897,7 +897,7 @@ async fn test_api_token_rejected_for_other_repo() {
 
 /// Percent-encode the first hex character of a repo id (`c` → `%63`).
 ///
-/// This is the exact shape of the C-1 bypass: the auth middleware used the
+/// This is the exact shape of the bypass: the auth middleware used the
 /// *raw* path segment, so `%63…` did not look like a UUID and the repo binding
 /// check was skipped, while axum's `Path` extractor decoded it back to the
 /// victim's real repo id for the handler.
@@ -910,7 +910,7 @@ fn percent_encode_first_hex_char(repo_id: &str) -> String {
     format!("%{:02x}{}", repo_id.as_bytes()[idx], &repo_id[idx + 1..])
 }
 
-/// Security (C-1): a percent-encoded repo id must not bypass the sync-token
+/// Security: a percent-encoded repo id must not bypass the sync-token
 /// binding check. Every read endpoint of the sync protocol is covered.
 #[tokio::test]
 async fn test_percent_encoded_repo_id_cannot_bypass_sync_token_binding() {
@@ -940,7 +940,7 @@ async fn test_percent_encoded_repo_id_cannot_bypass_sync_token_binding() {
     assert_eq!(
         resp.status(),
         403,
-        "C-1: percent-encoded repo id must not bypass the binding check"
+        "percent-encoded repo id must not bypass the binding check"
     );
 
     let fs_id_list_path = format!(
@@ -948,29 +948,29 @@ async fn test_percent_encoded_repo_id_cannot_bypass_sync_token_binding() {
         "0".repeat(40)
     );
     let resp = f.client.get_sync(&fs_id_list_path, &attacker_sync).await;
-    assert_eq!(resp.status(), 403, "C-1: fs-id-list must be rejected");
+    assert_eq!(resp.status(), 403, "fs-id-list must be rejected");
 
     let pack_path = format!("/seafhttp/repo/{encoded}/pack-fs/");
     let resp = f
         .client
         .post_sync_raw(&pack_path, &attacker_sync, &serde_json::json!([]))
         .await;
-    assert_eq!(resp.status(), 403, "C-1: pack-fs must be rejected");
+    assert_eq!(resp.status(), 403, "pack-fs must be rejected");
 
     let check_path = format!("/seafhttp/repo/{encoded}/check-fs/");
     let resp = f
         .client
         .post_sync_raw(&check_path, &attacker_sync, &serde_json::json!([]))
         .await;
-    assert_eq!(resp.status(), 403, "C-1: check-fs must be rejected");
+    assert_eq!(resp.status(), 403, "check-fs must be rejected");
 
     let block_path = format!("/seafhttp/repo/{encoded}/block/{}", "a".repeat(40));
     let resp = f.client.get_sync(&block_path, &attacker_sync).await;
-    assert_eq!(resp.status(), 403, "C-1: block read must be rejected");
+    assert_eq!(resp.status(), 403, "block read must be rejected");
 
     let jwt_path = format!("/seafhttp/repo/{encoded}/jwt-token");
     let resp = f.client.get_sync(&jwt_path, &attacker_sync).await;
-    assert_eq!(resp.status(), 403, "C-1: jwt-token must be rejected");
+    assert_eq!(resp.status(), 403, "jwt-token must be rejected");
 
     // Failure must be authorization, not a decode/500 error.
     let malformed_path = "/seafhttp/repo/not-a-uuid/commit/HEAD/";
@@ -978,7 +978,7 @@ async fn test_percent_encoded_repo_id_cannot_bypass_sync_token_binding() {
     assert_eq!(resp.status(), 403, "malformed repo segment must be 403");
 }
 
-/// Control for C-1: legitimate requests (un-encoded, token's own repo) still
+/// Control for legitimate requests (un-encoded, token's own repo) still
 /// work, so the fix must not break the sync protocol.
 #[tokio::test]
 async fn test_sync_own_repo_still_readable_after_binding_fix() {
@@ -1187,7 +1187,7 @@ async fn test_recv_fs_rejects_invalid_dirent_name() {
     );
 }
 
-/// Security (H-5): `recv-fs` must verify that the object id equals
+/// Security: `recv-fs` must verify that the object id equals
 /// `sha1(uncompressed JSON)`, so a rogue client cannot store arbitrary bytes
 /// under a chosen id (the basis of the self-referential-directory DoS).
 #[tokio::test]

@@ -523,7 +523,7 @@ async fn test_metadata_thumbnail_exif_history_require_membership() {
     assert_eq!(resp.status(), 200, "owner keeps access to metadata");
 }
 
-// ── repo_id validation (C-3) ────────────────────────────────────────────────
+// ── repo_id validation ────────────────────────────────────────────────
 
 /// POST /api2/repos/ with an explicit `repo_id` in the body.
 async fn create_repo_with_id(f: &TestFixture, name: &str, repo_id: &str) -> reqwest::Response {
@@ -536,7 +536,7 @@ async fn create_repo_with_id(f: &TestFixture, name: &str, repo_id: &str) -> reqw
         .await
 }
 
-/// Regression (C-3): `repo_id` is interpolated into on-disk directory names
+/// Regression: `repo_id` is interpolated into on-disk directory names
 /// (temp uploads, thumbnail cache), so a client-supplied value must be a
 /// well-formed UUID. Free-form ids such as `../../x` or `/etc/cron.d/y` used to
 /// be accepted and let an authenticated user create directories and write
@@ -596,7 +596,7 @@ async fn test_create_repo_accepts_valid_uuid_repo_id() {
     );
 }
 
-/// Regression (C-3): temp uploads are stored under `{temp_dir}/upload/<hash>`,
+/// Regression: temp uploads are stored under `{temp_dir}/upload/<hash>`,
 /// never under a directory named after the raw repo id, so the identifier can
 /// no longer address a path outside the storage root.
 #[tokio::test]
@@ -688,7 +688,7 @@ async fn test_chunked_upload_temp_dir_is_hashed_not_raw_repo_id() {
 /// Compatibility: the official desktop client (`src/ui/create-repo-dialog.cpp`)
 /// creates a **plain** library without any `repo_id`, letting the server
 /// generate one (`CreateRepoRequest(account_, name_, name_, passwd_)`).
-/// The C-3 validation must not disturb that path.
+/// The validation must not disturb that path.
 #[tokio::test]
 async fn test_compat_desktop_plain_repo_without_repo_id() {
     let f = TestFixture::new().await;
@@ -843,7 +843,7 @@ async fn test_compat_malformed_json_create_is_a_client_error() {
 }
 
 /// Compatibility: a client-proposed UUID passes validation (and a malformed id
-/// is still rejected) — the C-3 guarantee on the encrypted path.
+/// is still rejected) — the guarantee on the encrypted path.
 #[tokio::test]
 async fn test_compat_client_uuid_is_validated_not_rejected_wholesale() {
     let f = TestFixture::new().await;
@@ -869,7 +869,7 @@ async fn test_compat_client_uuid_is_validated_not_rejected_wholesale() {
     let created: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(created["repo_id"].as_str().unwrap(), client_repo_id);
 
-    // The same request with a traversal id stays rejected — that is the C-3 fix.
+    // The same request with a traversal id stays rejected — that is the fix.
     let mut bad = body.clone();
     bad["repo_id"] = serde_json::json!("../../client-uuid-check");
     bad["name"] = serde_json::json!("client-uuid-check-2");

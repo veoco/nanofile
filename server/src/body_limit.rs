@@ -1,4 +1,4 @@
-//! App-wide HTTP request body limits (L-3).
+//! App-wide HTTP request body limits.
 //!
 //! The JSON/Form default is deliberately small so a single request cannot make
 //! a handler buffer gigabytes into memory. Upload-capable routes raise their

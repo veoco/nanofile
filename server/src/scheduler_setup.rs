@@ -78,7 +78,7 @@ pub fn register_default_tasks(
         });
     }
 
-    // Periodic: expired bearer/one-time token cleanup (hourly). M-7: anonymous
+    // Periodic: expired bearer/one-time token cleanup (hourly). anonymous
     // endpoints mint SSO/client-login tokens and nothing removed them, so the
     // tables could grow without bound.
     {

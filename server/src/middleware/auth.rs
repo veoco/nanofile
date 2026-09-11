@@ -218,7 +218,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         // exclusively by [`SyncAuth`] on `/seafhttp/...`, mirroring seahub's
         // `TokenAuthentication`, which never consults the repo-token table.
         // Treating a repo token as an account session would let a leaked
-        // library credential read the whole account (H-2).
+        // library credential read the whole account.
         let api_record = repos
             .api_token
             .find_by_token(&token_str)
@@ -513,7 +513,7 @@ mod tests {
         }
     }
 
-    /// Regression (C-1): the middleware must derive the binding value the same
+    /// Regression: the middleware must derive the binding value the same
     /// way axum's `Path` extractor does — by percent-decoding. Decoding is the
     /// correct behaviour (it makes the compared value identical to the one the
     /// handler uses); the vulnerability was that the *undecoded* segment was
@@ -521,7 +521,7 @@ mod tests {
     /// binding check entirely.
     #[test]
     fn percent_encoded_repo_id_is_decoded_before_the_binding_check() {
-        // '%63' == 'c' — the exact encoding shape used in the C-1 PoC.
+        // '%63' == 'c' — the exact encoding shape used in the PoC.
         let encoded = format!("%63{}", &REPO[1..]);
         assert_ne!(encoded, REPO);
         assert_eq!(
@@ -549,7 +549,7 @@ mod tests {
         }
     }
 
-    /// Regression (C-1): double encoding (`%2563` → `%63`) must also fail.
+    /// Regression: double encoding (`%2563` → `%63`) must also fail.
     #[test]
     fn double_encoded_repo_id_is_rejected() {
         // One decode yields "…%63…", which is not a UUID ⇒ fail closed.

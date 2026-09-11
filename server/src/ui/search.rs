@@ -85,7 +85,7 @@ pub async fn search_page(
     } else {
         let repo_ids = get_accessible_repo_ids(&state.repos, user.user_id, None).await?;
         // An empty allow-list means the caller can see nothing; never let it
-        // degrade into an unscoped index search (C-2).
+        // degrade into an unscoped index search.
         let has_accessible_repos = !repo_ids.is_empty();
         let mut seen = std::collections::HashSet::new();
         let mut all_results: Vec<SearchResultItem> = Vec::new();
@@ -397,7 +397,7 @@ async fn search_fs_tree(
     let mut depth = 0usize;
 
     while !frontier.is_empty() && results.len() < max_results {
-        // Cycle guard (H-5): cap the depth and stop rather than expand forever.
+        // Cycle guard: cap the depth and stop rather than expand forever.
         depth += 1;
         if depth > max_depth {
             tracing::warn!(

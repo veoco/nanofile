@@ -795,7 +795,7 @@ fn commit_with_root(repo_id: &str, root_id: &str, creator_name: &str) -> (String
     (commit_id, json.into_bytes())
 }
 
-/// H-5 compatibility: the root must **not** be validated at commit-write time.
+/// compatibility: the root must **not** be validated at commit-write time.
 /// seaf-daemon uploads the commit object *before* the FS objects it references
 /// (`daemon/http-tx-mgr.c`: send_commit_object → recv-fs → blocks →
 /// update_branch), so rejecting a dangling root there would break the official

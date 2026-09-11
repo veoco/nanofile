@@ -61,7 +61,7 @@ impl SearchService {
         // No accessible repo ⇒ nothing to search. `repo_ids` is the caller's
         // access-control allow-list: an empty list must never be handed to the
         // indexer as "no filter" (that leaked every repo's filenames and
-        // content snippets — C-2). The indexer also fails closed on an empty
+        // content snippets). The indexer also fails closed on an empty
         // list; this early return keeps the intent explicit locally.
         let has_accessible_repos = !repo_ids.is_empty();
 
@@ -402,7 +402,7 @@ async fn search_fs_tree(
     let mut depth = 0usize;
 
     while !frontier.is_empty() && results.len() < max_results {
-        // Cycle guard (H-5): this helper returns no error, so cap the depth and
+        // Cycle guard: this helper returns no error, so cap the depth and
         // stop rather than expanding forever.
         depth += 1;
         if depth > max_depth {

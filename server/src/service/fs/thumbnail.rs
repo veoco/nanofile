@@ -44,7 +44,7 @@ impl ThumbnailService {
     ///
     /// The directory name is `sha1(repo_id)` rather than the raw id: the cache
     /// is keyed by a client-supplied identifier that must never be able to
-    /// escape `thumbnail_dir` via `..` or an absolute path (C-3). The
+    /// escape `thumbnail_dir` via `..` or an absolute path. The
     /// directory is a regenerable cache, so the naming scheme is internal.
     fn thumbnail_repo_dir(&self, repo_id: &str) -> PathBuf {
         self.thumbnail_dir.join(thumbnail_dir_name(repo_id))
@@ -474,7 +474,7 @@ fn etag_for(data: &[u8]) -> String {
 ///
 /// `repo_id` is a client-supplied identifier, so it must never be used as a
 /// path segment directly: a value such as `../../x` or `/etc/cron.d/y` would
-/// resolve outside `thumbnail_dir` (C-3). Hashing it keeps the mapping stable
+/// resolve outside `thumbnail_dir`. Hashing it keeps the mapping stable
 /// and collision-free while removing all path semantics.
 fn thumbnail_dir_name(repo_id: &str) -> String {
     infra::crypto::fs_id::sha1_hex(repo_id.as_bytes())

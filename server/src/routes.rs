@@ -15,7 +15,7 @@ fn v1_routes() -> Router<Arc<AppState>> {
     let repo_all = crate::handler::repos::repo_routes()
         .merge(
             // File uploads accept bodies up to max_upload_size_mb; every other
-            // route keeps the smaller JSON/Form default (L-3).
+            // route keeps the smaller JSON/Form default.
             crate::handler::file::file_routes()
                 .layer(crate::body_limit::upload_default_body_limit()),
         )

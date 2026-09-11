@@ -246,7 +246,7 @@ impl RepoService {
         // URL paths, is interpolated into on-disk directory names (temp
         // uploads, thumbnail cache) and is compared against sync tokens, so a
         // free-form string such as "../../x" or "/etc/cron.d/y" would escape
-        // the storage root (C-3). Anything else is rejected rather than
+        // the storage root. Anything else is rejected rather than
         // silently replaced, so a client that expected its own id learns that
         // it was not used.
         let repo_id = match repo_id_opt {

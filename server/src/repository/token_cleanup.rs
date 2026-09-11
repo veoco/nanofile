@@ -1,4 +1,4 @@
-//! Periodic cleanup of expired bearer/one-time tokens (M-7).
+//! Periodic cleanup of expired bearer/one-time tokens.
 //!
 //! Several token tables are only ever validated lazily, so nothing removed
 //! rows once they expired. Anonymous endpoints in particular mint

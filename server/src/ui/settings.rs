@@ -187,7 +187,7 @@ pub async fn change_password(
 
     // Enforce the configured password policy. The self-service change form
     // previously bypassed it entirely (a one-character password was accepted),
-    // unlike registration and password reset (M-5).
+    // unlike registration and password reset.
     if let Err(msg) = crate::service::auth::password::validate_password(
         &form.new_password,
         state.config.auth.password_min_length,
