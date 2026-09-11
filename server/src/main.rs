@@ -181,6 +181,16 @@ fn secret_is_strong(s: &str) -> bool {
     s.len() >= 32
 }
 
+/// Whether an explicitly configured notification signing key is too weak.
+///
+/// An empty value (or the legacy placeholder) is *not* weak: it has already
+/// been replaced by a 256-bit key derived from `server.secret_key`, which is
+/// itself required to be strong in release builds. Only a key the operator
+/// set by hand can be weak here.
+fn notification_key_is_weak(key: &str) -> bool {
+    !key.is_empty() && key != "nanofile-notification-secret" && !secret_is_strong(key)
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -313,6 +323,26 @@ fn main() -> anyhow::Result<()> {
         hasher.update(b"notify-v1:");
         hasher.update(config.server.secret_key.as_bytes());
         config.notification.private_key = hex::encode(hasher.finalize());
+    }
+
+    // An explicitly configured notification signing key must also be strong.
+    // Guessing it lets an attacker mint subscription JWTs for any repository
+    // (and event JWTs, when `accept_legacy_event_tokens` is on).
+    if notification_key_is_weak(&config.notification.private_key) {
+        if is_dev || allow_ephemeral || !needs_secret {
+            tracing::warn!(
+                "[notification] private_key is shorter than 32 bytes; use \
+                 `openssl rand -hex 32`, or leave it empty to derive one from \
+                 the server secret key."
+            );
+        } else {
+            anyhow::bail!(
+                "[notification] private_key / NANOFILE_NOTIFICATION_PRIVATE_KEY must \
+                 be at least 32 bytes of high entropy (64 hex chars is recommended); \
+                 generate one with `openssl rand -hex 32`, or leave it empty to \
+                 derive it from the server secret key."
+            );
+        }
     }
 
     // ── Derive storage encryption key from secret_key if not set ────────
@@ -686,7 +716,7 @@ async fn adduser(
 
 #[cfg(test)]
 mod secret_strength_tests {
-    use super::secret_is_strong;
+    use super::{notification_key_is_weak, secret_is_strong};
 
     #[test]
     fn rejects_empty_and_placeholder() {
@@ -707,5 +737,24 @@ mod secret_strength_tests {
     fn rejects_non_hex_64_char_value() {
         // 64 chars that are not hex would panic in `decode_master_key`.
         assert!(!secret_is_strong(&"z".repeat(64)));
+    }
+
+    #[test]
+    fn notification_key_only_weak_when_explicitly_set() {
+        // Derived (empty) and legacy placeholder values are replaced at
+        // startup by a 256-bit derived key, so they are not reportable here.
+        assert!(!notification_key_is_weak(""));
+        assert!(!notification_key_is_weak("nanofile-notification-secret"));
+        // An explicitly configured strong key passes.
+        assert!(!notification_key_is_weak(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!notification_key_is_weak(
+            "a-32-byte-plus-raw-secret-value!!!"
+        ));
+        // Short, non-hex-64 or placeholder-length values are weak.
+        assert!(notification_key_is_weak("abc"));
+        assert!(notification_key_is_weak("nanofile-notify"));
+        assert!(notification_key_is_weak(&"z".repeat(64)));
     }
 }
