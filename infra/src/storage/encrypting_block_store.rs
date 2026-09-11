@@ -105,10 +105,22 @@ impl EncryptingBlockStore {
                     "block at-rest decryption failed",
                 )
             }),
-            BlockEncryptionMode::Lazy => match cipher.decrypt(&raw) {
-                Ok(pt) => Ok(pt),
-                Err(_) => Ok(raw),
-            },
+            // During the migration window a block may still be pre-encryption
+            // plaintext. Decide that by **format**, not by a decryption
+            // failure: a block that carries the `NFE1` header and then fails
+            // authentication is corrupt or tampered with, and returning its
+            // bytes verbatim would defeat the integrity guarantee entirely.
+            BlockEncryptionMode::Lazy => {
+                if !BlockCipher::looks_encrypted(&raw) {
+                    return Ok(raw);
+                }
+                cipher.decrypt(&raw).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "block at-rest decryption failed",
+                    )
+                })
+            }
         })
         .await
         .map_err(|e| io::Error::other(e.to_string()))?
@@ -172,14 +184,21 @@ impl BlockStorageBackend for EncryptingBlockStore {
                 }
                 Ok(stored - overhead)
             }
-            // In the migration window we cannot tell ciphertext from plaintext
-            // without reading, so probe the tag.
+            // In the migration window a block may still be plaintext; decide by
+            // the `NFE1` header rather than by a failed decode.
             BlockEncryptionMode::Lazy => {
                 let raw = self.inner.read_block(block_id).await?;
+                if !BlockCipher::looks_encrypted(&raw) {
+                    return Ok(raw.len() as i64);
+                }
                 let cipher = self.cipher.clone();
-                tokio::task::spawn_blocking(move || match cipher.decrypt(&raw) {
-                    Ok(pt) => Ok(pt.len() as i64),
-                    Err(_) => Ok(raw.len() as i64),
+                tokio::task::spawn_blocking(move || {
+                    cipher.decrypt(&raw).map(|pt| pt.len() as i64).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "block at-rest decryption failed",
+                        )
+                    })
                 })
                 .await
                 .map_err(|e| io::Error::other(e.to_string()))?
@@ -197,7 +216,11 @@ impl BlockStorageBackend for EncryptingBlockStore {
         // blocking thread pool.
         let cipher = self.cipher.clone();
         let converted = tokio::task::spawn_blocking(move || {
-            if cipher.decrypt(&raw).is_ok() {
+            // Only a block without the versioned header can be legacy
+            // plaintext. A block that has the header but fails to authenticate
+            // must not be re-encrypted blind — that would launder a corrupt or
+            // tampered block into a "valid" one.
+            if BlockCipher::looks_encrypted(&raw) {
                 return None;
             }
             Some(cipher.encrypt(&raw))

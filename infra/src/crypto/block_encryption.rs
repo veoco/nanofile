@@ -92,6 +92,18 @@ impl BlockCipher {
         out
     }
 
+    /// Whether `stored` carries the versioned (`NFE1 || key_id`) header, i.e.
+    /// was written by this cipher rather than being pre-encryption plaintext.
+    ///
+    /// Callers that must tolerate legacy plaintext blocks (the `lazy`
+    /// migration mode) use this to decide *by format* whether a decryption
+    /// failure means "legacy plaintext" or "corrupt/tampered ciphertext" — a
+    /// failure on a block that does have the header must never be mistaken for
+    /// plaintext.
+    pub fn looks_encrypted(stored: &[u8]) -> bool {
+        stored.len() >= HEADER_LEN && &stored[..4] == MAGIC
+    }
+
     /// Decrypt a value produced by [`BlockCipher::encrypt`].
     ///
     /// Accepts both the versioned (`NFE1 || key_id`) format written by this
@@ -99,7 +111,7 @@ impl BlockCipher {
     /// Returns `Err` on tag mismatch (tampered, wrong key) or an unknown key id.
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, aes_gcm_siv::aead::Error> {
         let nonce = Nonce::from(NONCE);
-        if ciphertext.len() >= HEADER_LEN && &ciphertext[..4] == MAGIC {
+        if Self::looks_encrypted(ciphertext) {
             let key_id = u16::from_be_bytes([ciphertext[4], ciphertext[5]]);
             if key_id != ACTIVE_KEY_ID {
                 return Err(aes_gcm_siv::aead::Error);
