@@ -66,11 +66,14 @@ pub async fn repo_file_download(
     Query(query): Query<RepoFileQuery>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let normalized = if path.starts_with('/') {
-        path
-    } else {
-        format!("/{path}")
-    };
+    // Normalize through the shared sanitizer exactly like the sibling
+    // `{*path}` handlers (`ui/files.rs`, the share view, WebDAV) instead of
+    // concatenating a leading slash. Resolution below matches dirent names
+    // literally, so a malformed path such as `..` or a NUL byte can only ever
+    // 404 today — but a raw capture that skips validation is the kind of
+    // sibling-path divergence that turns into path confusion later.
+    let normalized = base::sanitize::safe_normalize_path(&path)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
     // Check read permission (matching seahub's check_folder_permission behavior).
     crate::domain::permission::check_repo_read_permission(

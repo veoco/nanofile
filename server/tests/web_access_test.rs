@@ -33,6 +33,64 @@ async fn test_repo_files_download() {
     assert_eq!(&body[..], b"hello web");
 }
 
+/// E.1.5b — malformed paths on `/repos/{repo_id}/files/{*path}` are rejected
+/// by the shared sanitizer instead of being passed through raw.
+///
+/// The download handler used to concatenate a leading slash and hand the
+/// result straight to block resolution, so a path that every sibling
+/// `{*path}` handler rejects still reached the file layer.
+#[tokio::test]
+async fn test_repo_files_download_rejects_malformed_path() {
+    let f = TestFixture::new().await;
+    for name in ["keep.txt", "my file.txt"] {
+        let up = f
+            .client
+            .upload_file(&f.api_token, &f.repo_id, "/", name, b"data")
+            .await;
+        assert!(up.status().is_success(), "upload {name:?} failed");
+    }
+
+    // Escaping above the repo root, and characters the upload path already
+    // refuses to create, must not reach block resolution.
+    //
+    // A literal `../` (and even the percent-encoded `%2e%2e`) is collapsed by
+    // the HTTP client before the request is sent, exactly as a browser would,
+    // so the traversal cases cannot reach the server at all. What can reach it
+    // are the remaining characters the sanitizer rejects.
+    for bad in [
+        "bad%00name.txt",
+        "q%27uote.txt",
+        "back%5Cslash.txt",
+        "lt%3Cname.txt",
+    ] {
+        let resp = f
+            .client
+            .get(
+                &format!("/repos/{}/files/{}", f.repo_id, bad),
+                Some(&f.api_token),
+            )
+            .await;
+        assert_eq!(
+            resp.status(),
+            400,
+            "malformed path {bad:?} should be rejected, got {}",
+            resp.status()
+        );
+    }
+
+    // Well-formed names — including one with a space — still resolve.
+    for good in ["keep.txt", "my%20file.txt"] {
+        let resp = f
+            .client
+            .get(
+                &format!("/repos/{}/files/{}", f.repo_id, good),
+                Some(&f.api_token),
+            )
+            .await;
+        assert_eq!(resp.status(), 200, "valid path {good:?} should download");
+    }
+}
+
 /// E.1.5a — Range requests on /repos/{repo_id}/files/{path} (resumable download).
 #[tokio::test]
 async fn test_repo_files_download_range() {
