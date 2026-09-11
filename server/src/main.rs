@@ -81,6 +81,51 @@ async fn health_check() -> impl IntoResponse {
     StatusCode::OK
 }
 
+/// Path segments immediately preceding a capability token.
+///
+/// Routes such as `/f/{token}`, `/zip/{token}` and `/download-api/{token}` put
+/// the credential itself in the path, so logging the raw URI would write a
+/// usable token into the access log. That token is deliberately not paired with
+/// a session: whoever reads the log can replay it.
+const TOKEN_PATH_PREFIXES: &[&str] = &[
+    "f",
+    "d",
+    "u",
+    "zip",
+    "blks",
+    "download-api",
+    "upload-api",
+    "upload-aj",
+    "update-api",
+    "update-aj",
+    "upload-blks-api",
+    "upload-raw-blks-api",
+    "client-sso",
+    "client-login",
+    "client-sso-link",
+];
+
+/// Replace capability-token path segments with `{token}` for logging.
+///
+/// The query string is dropped by the caller; it may carry a share-link
+/// password or other credentials.
+fn redact_request_path(path: &str) -> String {
+    let segs: Vec<&str> = path.split('/').collect();
+    let mut out = String::with_capacity(path.len());
+    for (i, seg) in segs.iter().enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        let prev = if i > 0 { segs[i - 1] } else { "" };
+        if !seg.is_empty() && TOKEN_PATH_PREFIXES.contains(&prev) {
+            out.push_str("{token}");
+        } else {
+            out.push_str(seg);
+        }
+    }
+    out
+}
+
 /// Add baseline security headers to every response.
 ///
 /// `script-src 'self' 'unsafe-inline'` keeps the inline dark-mode guard,
@@ -188,6 +233,20 @@ fn main() -> anyhow::Result<()> {
     );
     if let Some(reason) = headless_reason {
         tracing::info!("{reason}");
+    }
+
+    // ── Absolute-URL host trust ────────────────────────────────────────
+    // While `site_url` is unconfigured the request Host is echoed into
+    // download/block URLs so LAN clients get a reachable address. That value is
+    // client-supplied, so an attacker who can make a client use their hostname
+    // (DNS rebinding, wildcard vhost) receives the client's capability token.
+    if config.server.site_url_is_default() && config.server.allowed_hosts.is_empty() {
+        tracing::warn!(
+            "site_url is still the built-in default and server.allowed_hosts is empty: \
+             download/block URLs will echo the request Host header verbatim. Set \
+             server.site_url to the address clients use, or restrict \
+             server.allowed_hosts."
+        );
     }
 
     // ── Server secret key ──────────────────────────────────────────────
@@ -415,7 +474,7 @@ async fn run_server(
     };
 
     // Upload-capable route groups accept bodies up to `max_upload_size_mb`.
-    // The app-wide default below is the much smaller JSON/Form cap (L-3).
+    // The app-wide default below is the much smaller JSON/Form cap.
     let upload_body_limit = server::body_limit::upload_limit();
     let sync_routes =
         server::handler::sync::sync_routes().layer(DefaultBodyLimit::max(upload_body_limit));
@@ -451,6 +510,18 @@ async fn run_server(
         ))
         .layer(
             tower_http::trace::TraceLayer::new_for_http()
+                // Log a redacted path (no query string, token segments masked)
+                // rather than the default full URI, which would put share,
+                // upload, download and SSO capability tokens into the log.
+                .make_span_with(|req: &axum::http::Request<axum::body::Body>| {
+                    tracing::info_span!(
+                        "request",
+                        method = %req.method(),
+                        path = %redact_request_path(req.uri().path()),
+                        latency = tracing::field::Empty,
+                        status = tracing::field::Empty,
+                    )
+                })
                 .on_request(tower_http::trace::DefaultOnRequest::new().level(tracing::Level::INFO))
                 .on_response(
                     tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),

@@ -276,11 +276,22 @@ pub async fn dir_shared_items(
     }))
 }
 
+/// GET /api2/repos/{repo_id}/dir/sub_repo/ — create a library from a folder.
+///
+/// Registered on `GET` for historical client compatibility, but it mutates
+/// state (it inserts a repository). `AuthUser` skips CSRF for safe methods, so
+/// a browser cookie session would otherwise be enough for a cross-site
+/// `<img src=...>` to create a library in the victim's account. Require the
+/// CSRF token from cookie-authenticated callers; bearer-token callers cannot be
+/// reached cross-site and are unaffected.
 pub async fn create_sub_repo(
     access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<DirQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::middleware::require_csrf_for_cookie_session(&headers, &state.csrf_secret)?;
+
     let repo_id = &access.repo_id;
 
     let path = safe_normalize_path(

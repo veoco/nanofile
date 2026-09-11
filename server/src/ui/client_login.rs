@@ -20,8 +20,24 @@ const TOKEN_TTL_SECS: i64 = 30;
 
 pub async fn client_token_login(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
+    // This handler signs the browser in as the token's owner, and it is reached
+    // by a top-level GET navigation (the desktop client opens it in a browser),
+    // so it must not be usable as a login-CSRF vector: a third-party page could
+    // otherwise navigate a victim into a session for the attacker's account.
+    //
+    // `validate_origin` accepts a request with neither `Origin` nor `Referer`,
+    // which is exactly the shape of an external browser open, so the desktop
+    // flow keeps working while a cross-site navigation is rejected.
+    if !crate::service::auth::csrf::validate_origin(
+        &headers,
+        &state.config.server.site_url_origin(),
+    ) {
+        return Ok(Redirect::to("/libraries/").into_response());
+    }
+
     let token_str = match params.get("token") {
         Some(t) if t.len() == 32 => t,
         _ => {
