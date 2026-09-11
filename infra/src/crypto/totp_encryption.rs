@@ -16,6 +16,7 @@
 use aes_gcm_siv::aead::{Aead, KeyInit};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
 use rand::Rng;
+use zeroize::Zeroize;
 
 /// Marker prepended to encrypted TOTP seeds.
 pub const TOTP_CIPHER_PREFIX: &str = "totp1:";
@@ -51,10 +52,12 @@ impl TotpCipher {
         let mut dek = [0u8; DEK_LEN];
         hkdf.expand(HKDF_INFO_TOTP_DEK, &mut dek)
             .expect("DEK length is within HKDF output bound");
-        Self {
-            cipher: Aes256GcmSiv::new_from_slice(&dek)
-                .expect("32-byte key is valid for AES-256-GCM-SIV"),
-        }
+        let cipher =
+            Aes256GcmSiv::new_from_slice(&dek).expect("32-byte key is valid for AES-256-GCM-SIV");
+        // The key schedule inside `Aes256GcmSiv` cannot be scrubbed, but the
+        // raw DEK buffer should not linger on the stack either.
+        dek.zeroize();
+        Self { cipher }
     }
 
     /// Encrypt a base32 seed into its stored form.

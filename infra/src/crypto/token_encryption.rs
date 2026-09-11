@@ -19,6 +19,7 @@
 
 use aes_gcm_siv::aead::{Aead, KeyInit};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
+use zeroize::Zeroize;
 
 /// Marker prepended to encrypted token values.
 pub const TOKEN_CIPHER_PREFIX: &str = "enc1:";
@@ -54,10 +55,12 @@ impl TokenCipher {
         let mut dek = [0u8; DEK_LEN];
         hkdf.expand(HKDF_INFO_TOKEN_DEK, &mut dek)
             .expect("DEK length is within HKDF output bound");
-        Self {
-            cipher: Aes256GcmSiv::new_from_slice(&dek)
-                .expect("32-byte key is valid for AES-256-GCM-SIV"),
-        }
+        let cipher =
+            Aes256GcmSiv::new_from_slice(&dek).expect("32-byte key is valid for AES-256-GCM-SIV");
+        // The key schedule inside `Aes256GcmSiv` cannot be scrubbed, but the
+        // raw DEK buffer should not linger on the stack either.
+        dek.zeroize();
+        Self { cipher }
     }
 
     /// Deterministically encrypt a raw token into its stored form.
