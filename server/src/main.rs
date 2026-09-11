@@ -9,7 +9,6 @@
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::http::header::HeaderValue;
 use axum::http::{Method, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -141,47 +140,6 @@ fn redact_request_path(path: &str) -> String {
         }
     }
     out
-}
-
-/// Add baseline security headers to every response.
-///
-/// `script-src 'self' 'unsafe-inline'` keeps the inline dark-mode guard,
-/// view-mode probe and `window.__T` i18n injection in `base.html` working,
-/// while still blocking remote / third-party script, image, frame and font
-/// loading (`default-src 'self'` — no fallback to `*`). `style-src
-/// 'unsafe-inline'` is needed for the inline `<style>` block and `style=""`
-/// attributes. A strict nonce-based `script-src` (dropping `'unsafe-inline'`)
-/// is a possible follow-up.
-async fn security_headers(
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let mut response = next.run(req).await;
-    let headers = response.headers_mut();
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    headers.insert(
-        header::REFERRER_POLICY,
-        HeaderValue::from_static("same-origin"),
-    );
-    headers.insert(
-        header::HeaderName::from_static("permissions-policy"),
-        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
-    );
-    headers.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; \
-             style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
-             font-src 'self'; connect-src 'self' ws: wss:; \
-             object-src 'none'; frame-ancestors 'none'; base-uri 'self'; \
-             form-action 'self'",
-        ),
-    );
-    response
 }
 
 /// Whether a configured secret has adequate length/entropy.
@@ -593,7 +551,10 @@ async fn run_server(
             StatusCode::REQUEST_TIMEOUT,
             std::time::Duration::from_secs(config.server.request_timeout_secs),
         ))
-        .layer(axum::middleware::from_fn(security_headers))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            server::middleware::security_headers,
+        ))
         .with_state(state.clone());
 
     // Optionally bound how long a client may take to send the request body.

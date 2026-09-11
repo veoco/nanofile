@@ -8,6 +8,64 @@ use std::net::SocketAddr;
 use crate::AppState;
 use base::error::AppError;
 
+use axum::http::{HeaderValue, header};
+
+/// Add baseline security headers to every response.
+///
+/// `script-src` and `style-src` allow `'unsafe-inline'` while the templates
+/// still carry inline scripts and `style=""` attributes; everything else is
+/// locked to `'self'` (no fallback to `*`), so remote script, frame, font and
+/// object loading is blocked.
+///
+/// `Strict-Transport-Security` is only sent when `site_url` is HTTPS: a
+/// plain-HTTP LAN deployment must not be pinned to HTTPS by its own server.
+pub async fn security_headers(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(req).await;
+    apply_security_headers(response.headers_mut(), state.config.server.secure_cookies());
+    response
+}
+
+/// Insert the baseline security headers.
+///
+/// `secure` is `site_url` being HTTPS; only then is `Strict-Transport-Security`
+/// added, because a plain-HTTP deployment must not pin clients to a scheme its
+/// own links do not use.
+fn apply_security_headers(headers: &mut axum::http::HeaderMap, secure: bool) {
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        header::HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; \
+             style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+             font-src 'self'; connect-src 'self' ws: wss:; \
+             object-src 'none'; frame-ancestors 'none'; base-uri 'self'; \
+             form-action 'self'",
+        ),
+    );
+    if secure {
+        headers.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000"),
+        );
+    }
+}
+
 /// Enforce CSRF protection for a state-changing handler registered on `GET`.
 ///
 /// [`AuthUser`](auth::AuthUser) deliberately skips its CSRF check for safe
@@ -89,4 +147,40 @@ pub fn effective_client_ip(
     // Every hop was one of our own proxies (or the header was empty): fall back
     // to the peer rather than to an attacker-supplied value.
     peer
+}
+
+#[cfg(test)]
+mod security_header_tests {
+    use super::apply_security_headers;
+
+    fn headers(secure: bool) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        apply_security_headers(&mut headers, secure);
+        headers
+    }
+
+    /// HSTS is only meaningful over HTTPS: sending it from a plain-HTTP LAN
+    /// deployment would pin clients to a scheme the server cannot serve.
+    #[test]
+    fn hsts_follows_the_site_scheme() {
+        assert_eq!(
+            headers(true).get("strict-transport-security").unwrap(),
+            "max-age=31536000"
+        );
+        assert!(
+            headers(false).get("strict-transport-security").is_none(),
+            "plain-HTTP deployments must not receive HSTS"
+        );
+    }
+
+    /// The baseline headers are always present.
+    #[test]
+    fn baseline_headers_are_always_sent() {
+        let headers = headers(false);
+        assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+        assert_eq!(headers.get("x-frame-options").unwrap(), "DENY");
+        assert_eq!(headers.get("referrer-policy").unwrap(), "same-origin");
+        let csp = headers.get("content-security-policy").unwrap();
+        assert!(csp.to_str().unwrap().contains("default-src 'self'"));
+    }
 }
