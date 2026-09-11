@@ -125,7 +125,7 @@ sys-locale = { version = "0.3", optional = true }
 notify-rust = { version = "4", optional = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = { version = "0.55", optional = true }
-windows-sys = { version = "0.59", optional = true, features = [
+windows-sys = { version = "0.61", optional = true, features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Security",
