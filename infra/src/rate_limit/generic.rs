@@ -3,6 +3,11 @@
 ///
 /// Tracks attempts per key within a fixed time window.
 /// Returns a human-readable message when rate-limited.
+///
+/// `max_attempts == 0` disables the limiter entirely, matching the documented
+/// "(0 = unlimited)" contract of every config field that feeds it. Callers must
+/// not silently turn 0 into 1: that would make "unlimited" mean "the first
+/// request is already rejected".
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,6 +27,11 @@ impl GenericRateLimiter {
         }
     }
 
+    /// Whether this limiter is disabled (`0 = unlimited`).
+    fn disabled(&self) -> bool {
+        self.max_attempts == 0
+    }
+
     fn now() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -36,6 +46,9 @@ impl GenericRateLimiter {
 
     /// Record an attempt for the given key.
     pub fn record_attempt(&self, key: &str) {
+        if self.disabled() {
+            return;
+        }
         let now = Self::now();
         let mut map = self.lock();
         let timestamps = map.entry(key.to_string()).or_default();
@@ -46,6 +59,9 @@ impl GenericRateLimiter {
 
     /// Check if the given key has exceeded the rate limit.
     pub fn is_limited(&self, key: &str) -> bool {
+        if self.disabled() {
+            return false;
+        }
         let now = Self::now();
         let cutoff = now - self.window_secs;
         let mut map = self.lock();
@@ -73,5 +89,36 @@ impl GenericRateLimiter {
     pub fn clear(&self, key: &str) {
         let mut map = self.lock();
         map.remove(key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GenericRateLimiter;
+
+    #[test]
+    fn zero_attempts_means_unlimited() {
+        let limiter = GenericRateLimiter::new(0, 3600);
+        for _ in 0..100 {
+            limiter.record_attempt("k");
+        }
+        assert!(
+            !limiter.is_limited("k"),
+            "0 must mean unlimited, not 'the first request is rejected'"
+        );
+        // Nothing is recorded either, so the map cannot grow for a disabled
+        // limiter.
+        assert!(limiter.attempts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn positive_limit_still_applies() {
+        let limiter = GenericRateLimiter::new(2, 3600);
+        limiter.record_attempt("k");
+        assert!(!limiter.is_limited("k"));
+        limiter.record_attempt("k");
+        assert!(limiter.is_limited("k"));
+        limiter.clear("k");
+        assert!(!limiter.is_limited("k"));
     }
 }

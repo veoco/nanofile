@@ -63,6 +63,11 @@ impl LoginRateLimiter {
         }
     }
 
+    /// Whether the failed-attempt lockout is disabled (`0`).
+    fn lockout_disabled(&self) -> bool {
+        self.max_attempts == 0
+    }
+
     fn now() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -79,6 +84,9 @@ impl LoginRateLimiter {
 
     /// Record a failed login attempt for the given key.
     pub fn record_failure(&self, key: &str) {
+        if self.lockout_disabled() {
+            return;
+        }
         let now = Self::now();
         let mut map = self.lock();
         let timestamps = map.entry(key.to_string()).or_default();
@@ -90,6 +98,11 @@ impl LoginRateLimiter {
 
     /// Check if the given key is currently locked out.
     pub fn is_locked(&self, key: &str) -> bool {
+        // Without this early return the `len() >= max_attempts` comparison
+        // below would reject every login on the instance.
+        if self.lockout_disabled() {
+            return false;
+        }
         let now = Self::now();
         let cutoff = now - self.lockout_secs;
         let mut map = self.lock();
@@ -116,6 +129,9 @@ impl LoginRateLimiter {
     /// Check whether any of the given keys is currently locked out, using a
     /// single lock acquisition for all keys.
     pub fn is_any_locked(&self, keys: &[&str]) -> bool {
+        if self.lockout_disabled() {
+            return false;
+        }
         let now = Self::now();
         let cutoff = now - self.lockout_secs;
         let mut map = self.lock();
@@ -141,6 +157,9 @@ impl LoginRateLimiter {
 
     /// Record failed attempts for several keys in a single lock acquisition.
     pub fn record_failures(&self, keys: &[&str]) {
+        if self.lockout_disabled() {
+            return;
+        }
         let now = Self::now();
         let cutoff = now - self.lockout_secs;
         let mut map = self.lock();

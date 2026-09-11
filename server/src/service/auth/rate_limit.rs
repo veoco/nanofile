@@ -33,35 +33,97 @@ impl AuthRateLimiters {
                 cfg.max_distinct_usernames_per_ip,
             )),
             password_reset: Arc::new(GenericRateLimiter::new(
-                cfg.password_reset_max_per_hour.max(1),
+                cfg.password_reset_max_per_hour,
                 3600,
             )),
-            registration: Arc::new(GenericRateLimiter::new(
-                cfg.registration_max_per_hour.max(1),
-                3600,
-            )),
-            totp: Arc::new(GenericRateLimiter::new(cfg.totp_max_attempts.max(1), 300)),
-            disable_2fa: Arc::new(GenericRateLimiter::new(cfg.totp_max_attempts.max(1), 300)),
+            registration: Arc::new(GenericRateLimiter::new(cfg.registration_max_per_hour, 3600)),
+            totp: Arc::new(GenericRateLimiter::new(cfg.totp_max_attempts, 300)),
+            disable_2fa: Arc::new(GenericRateLimiter::new(cfg.totp_max_attempts, 300)),
             link_password: Arc::new(GenericRateLimiter::new(
-                cfg.link_password_max_per_hour.max(1),
+                cfg.link_password_max_per_hour,
                 3600,
             )),
             repo_password: Arc::new(GenericRateLimiter::new(
-                cfg.repo_password_max_per_hour.max(1),
+                cfg.repo_password_max_per_hour,
                 3600,
             )),
             share_download: Arc::new(GenericRateLimiter::new(
-                cfg.share_download_max_per_minute.max(1),
+                cfg.share_download_max_per_minute,
                 60,
             )),
-            reindex: Arc::new(GenericRateLimiter::new(
-                cfg.reindex_max_per_hour.max(1),
-                3600,
-            )),
-            search: Arc::new(GenericRateLimiter::new(
-                cfg.search_max_per_minute.max(1),
-                60,
-            )),
+            reindex: Arc::new(GenericRateLimiter::new(cfg.reindex_max_per_hour, 3600)),
+            search: Arc::new(GenericRateLimiter::new(cfg.search_max_per_minute, 60)),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuthRateLimiters;
+    use infra::config::AuthConfig;
+    use infra::rate_limit::LoginKeys;
+
+    /// Every field documented as "(0 = unlimited)" must really disable its
+    /// limiter. The config used to be clamped with `.max(1)` on construction,
+    /// which turned "unlimited" into "reject the first request".
+    #[test]
+    fn zero_config_disables_every_limiter() {
+        let cfg = AuthConfig {
+            max_login_attempts: 0,
+            max_distinct_usernames_per_ip: 0,
+            password_reset_max_per_hour: 0,
+            registration_max_per_hour: 0,
+            totp_max_attempts: 0,
+            link_password_max_per_hour: 0,
+            repo_password_max_per_hour: 0,
+            share_download_max_per_minute: 0,
+            reindex_max_per_hour: 0,
+            search_max_per_minute: 0,
+            ..Default::default()
+        };
+        let limiters = AuthRateLimiters::new(&cfg);
+
+        let keys = LoginKeys::new("203.0.113.9", "user@example.com");
+        for _ in 0..10 {
+            limiters.login.record_login_failure(&keys);
+        }
+        assert!(
+            !limiters.login.is_login_blocked(&keys),
+            "0 attempts must disable the login lockout instead of locking everyone out"
+        );
+
+        for limiter in [
+            &limiters.password_reset,
+            &limiters.registration,
+            &limiters.totp,
+            &limiters.disable_2fa,
+            &limiters.link_password,
+            &limiters.repo_password,
+            &limiters.share_download,
+            &limiters.reindex,
+            &limiters.search,
+        ] {
+            for _ in 0..10 {
+                limiter.record_attempt("k");
+            }
+            assert!(!limiter.is_limited("k"));
+        }
+    }
+
+    /// The shipped defaults must still throttle.
+    #[test]
+    fn default_config_throttles() {
+        let cfg = AuthConfig::default();
+        let limiters = AuthRateLimiters::new(&cfg);
+        for _ in 0..cfg.search_max_per_minute {
+            limiters.search.record_attempt("k");
+        }
+        assert!(limiters.search.is_limited("k"));
+
+        let keys = LoginKeys::new("203.0.113.9", "user@example.com");
+        for _ in 0..cfg.max_login_attempts {
+            limiters.login.record_login_failure(&keys);
+        }
+        assert!(limiters.login.is_login_blocked(&keys));
     }
 }

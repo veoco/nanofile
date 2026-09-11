@@ -181,6 +181,8 @@ max_tree_visits = 1000000
 password_hash_iterations = 600000
 api_token_ttl_days = 180
 sync_token_ttl_days = 365
+# Max failed logins per client address before it is locked out, and how long
+# the lockout (and failure window) lasts. 0 disables the lockout entirely.
 max_login_attempts = 5
 lockout_duration_secs = 900
 # Max distinct accounts one client address may fail to log in to within

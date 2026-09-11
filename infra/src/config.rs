@@ -689,8 +689,13 @@ pub struct AuthConfig {
     pub api_token_ttl_days: u64,
     #[serde(default = "default_sync_token_ttl_days")]
     pub sync_token_ttl_days: u64,
+    /// Max failed login attempts before the client address (and the
+    /// address/account pair) is locked out (0 = disable the failed-attempt
+    /// lockout). Counted over `lockout_duration_secs`.
     #[serde(default = "default_five")]
     pub max_login_attempts: u32,
+    /// How long a login lockout lasts, and the window over which failures are
+    /// counted.
     #[serde(default = "default_lockout_duration_secs")]
     pub lockout_duration_secs: u64,
     /// Max distinct account names one client address may fail to log in to
