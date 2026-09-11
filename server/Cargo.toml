@@ -165,5 +165,5 @@ resvg = { version = "0.45", optional = true, default-features = false, features 
     "text",
     "system-fonts",
 ] }
-tiny-skia = { version = "0.11", optional = true }
+tiny-skia = { version = "0.12", optional = true }
 winresource = { version = "0.1", optional = true }
