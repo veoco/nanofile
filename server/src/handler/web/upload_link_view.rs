@@ -41,13 +41,22 @@ struct ShareAccessValidationTemplate {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-/// Cookie value marking that this browser session has supplied the correct
-/// upload-link password. Mirrors seahub's `visited_ufs_{token}` session flag,
-/// but the value is an HMAC signature over the token (not a plaintext `1`) so
-/// it cannot be forged by a client that never entered the password.
-fn upload_link_cookie(secret: &[u8], token: &str) -> String {
-    let sig = crate::service::auth::csrf::generate_csrf_token(secret, token);
-    format!("visited_ufs_{token}={sig}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax")
+/// Cookie marking that this browser session has supplied the correct
+/// upload-link password.
+///
+/// Delegates to the shared link-unlock helper so the upload-link and
+/// share-link paths cannot drift: both sign an HMAC over the token (a
+/// plaintext `1` is rejected) and both gain the `Secure` attribute when
+/// `server.site_url` is HTTPS — a cookie that unlocks a password-protected
+/// link must never travel over plaintext.
+fn upload_link_cookie(state: &AppState, token: &str) -> String {
+    use crate::service::auth::csrf::{link_unlock_cookie, upload_link_cookie_name};
+    link_unlock_cookie(
+        &upload_link_cookie_name(token),
+        token,
+        &state.csrf_secret,
+        state.config.server.secure_cookies(),
+    )
 }
 
 /// Validate the upload link: check it exists, not expired, repo exists.
@@ -195,8 +204,7 @@ pub async fn upload_link_view(
     let mut resp = Html(html).into_response();
     if link.password.is_some()
         && pw_ok
-        && let Ok(value) =
-            axum::http::HeaderValue::from_str(&upload_link_cookie(&state.csrf_secret, &token))
+        && let Ok(value) = axum::http::HeaderValue::from_str(&upload_link_cookie(&state, &token))
     {
         resp.headers_mut()
             .append(axum::http::header::SET_COOKIE, value);
@@ -255,9 +263,7 @@ pub async fn upload_link_view_post(
     }
 
     let mut resp = (StatusCode::FOUND, [("Location", format!("/u/{}/", token))]).into_response();
-    if let Ok(value) =
-        axum::http::HeaderValue::from_str(&upload_link_cookie(&state.csrf_secret, &token))
-    {
+    if let Ok(value) = axum::http::HeaderValue::from_str(&upload_link_cookie(&state, &token)) {
         resp.headers_mut()
             .append(axum::http::header::SET_COOKIE, value);
     }

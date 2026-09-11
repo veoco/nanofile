@@ -316,6 +316,41 @@ mod tests {
         );
     }
 
+    /// Both share-link and upload-link unlock cookies must gain `Secure` when
+    /// the site is served over HTTPS, and must stay usable over plain HTTP for
+    /// local/LAN deployments. The upload-link handler delegates here, so this
+    /// one test covers both link types.
+    #[test]
+    fn test_link_unlock_cookie_secure_follows_site_scheme() {
+        let secret = b"test-secret-key-12345678";
+        for cookie_name in [
+            share_link_cookie_name("tok"),
+            upload_link_cookie_name("tok"),
+        ] {
+            let plain = link_unlock_cookie(&cookie_name, "tok", secret, false);
+            let secure = link_unlock_cookie(&cookie_name, "tok", secret, true);
+            assert!(
+                !plain.contains("Secure"),
+                "plain-HTTP link cookie must not carry Secure: {plain}"
+            );
+            assert!(
+                secure.ends_with("; Secure"),
+                "HTTPS link cookie must carry Secure: {secure}"
+            );
+            assert!(
+                plain.contains("HttpOnly") && plain.contains("SameSite=Lax"),
+                "link cookie must stay HttpOnly + SameSite=Lax: {plain}"
+            );
+            // The only difference between the two modes is the Secure attribute.
+            assert_eq!(secure.trim_end_matches("; Secure"), plain);
+        }
+        // The names differ per link type; only the flags were unified.
+        assert_ne!(
+            share_link_cookie_name("tok"),
+            upload_link_cookie_name("tok")
+        );
+    }
+
     #[test]
     fn test_validate_csrf_header_matches() {
         let secret = b"test-secret-key-12345678";
