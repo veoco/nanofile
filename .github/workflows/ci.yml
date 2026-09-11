@@ -54,6 +54,18 @@ jobs:
         run: npm install --silent tailwindcss @tailwindcss/cli esbuild
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      # Comments must explain the invariant, not cite an external audit item
+      # number: those references are meaningless to a reader who does not have
+      # the report, and they go stale as soon as the code moves.
+      - name: Reject dangling audit-item markers in comments
+        run: |
+          if grep -rnE '\b[CHML]-[0-9]+\b' \
+              --include='*.rs' --include='*.toml' \
+              base infra server migration config.toml.example \
+            | grep -vE 'CRC-32|INC-'; then
+            echo "::error::Replace audit-item markers with the invariant they refer to."
+            exit 1
+          fi
 
   # ── Optional tray feature (compiled out by default; keep it healthy) ──
   tray-check:
