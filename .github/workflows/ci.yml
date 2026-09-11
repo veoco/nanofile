@@ -41,6 +41,10 @@ jobs:
               # a dependency bump is a build change.
               - 'package.json'
               - 'package-lock.json'
+              # Editing CI itself must run CI: otherwise a workflow-only commit
+              # reports success with every job skipped (which is how an earlier
+              # audit-job change went unverified).
+              - '.github/workflows/**'
             frontend:
               - 'server/frontend/**'
               - 'server/static/**'
