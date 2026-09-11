@@ -1,10 +1,34 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::entity::{commit, repo};
 use base::AppError;
 use base::common::DirEntryData;
+
+/// Create `dir` (and its parents) and, on Unix, restrict `dir` to its owner.
+///
+/// Every directory nanofile writes private data into — file blocks, resumable
+/// uploads, generated thumbnails, avatars, the search index and the log file —
+/// is created through this helper so the mode does not depend on the
+/// operator's umask. Without it a default `022` umask leaves those trees
+/// world-readable, which exposes thumbnails, avatars and indexed document text
+/// to any other local user on the host.
+///
+/// Only `dir` itself is chmod'ed (parents created by `create_dir_all` keep the
+/// default mode); the leaf is what gates traversal into the data. Existing
+/// directories are chmod'ed too: nanofile may be upgrading a data directory
+/// first created by an older build.
+pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
 
 /// Extract a field from a POST body probing JSON, form-urlencoded,
 /// then multipart/form-data in order.
@@ -163,7 +187,34 @@ pub fn generate_unique_filename(existing: &[DirEntryData], name: &str) -> String
 
 #[cfg(test)]
 mod tests {
-    use super::format_size;
+    use super::{ensure_private_dir, format_size};
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_dir_restricts_to_owner() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("nanofile-private-dir-{}", std::process::id()));
+        let nested = root.join("blocks");
+        let _ = std::fs::remove_dir_all(&root);
+
+        // The leaf directory is created and restricted; parents created along
+        // the way keep the process default (the leaf is what gates traversal).
+        ensure_private_dir(&nested).unwrap();
+        assert!(nested.is_dir());
+        let mode = std::fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "new dir should be 0700, got {mode:o}");
+
+        // A pre-existing directory with a loose mode is tightened as well,
+        // since nanofile may adopt a data directory created by an older build.
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ensure_private_dir(&nested).unwrap();
+        let mode = std::fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "existing dir should be tightened to 0700");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn format_size_uses_decimal_units() {

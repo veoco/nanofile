@@ -408,15 +408,18 @@ async fn run_server(
         config.server.port
     );
 
-    // Ensure data directories exist with restrictive permissions so
-    // other local users cannot read the SQLite DB or file blocks.
-    for dir in [&config.storage.block_dir, &config.storage.temp_dir] {
-        std::fs::create_dir_all(dir)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        }
+    // Ensure every private data directory exists with owner-only permissions.
+    // `ensure_private_dir` is also used for the log directory (which is created
+    // earlier, during `logging::init`), so all of them are covered regardless
+    // of the operator's umask.
+    for dir in [
+        &config.storage.block_dir,
+        &config.storage.temp_dir,
+        &config.storage.thumbnail_dir,
+        &config.storage.avatar_dir,
+        &config.index.index_dir,
+    ] {
+        infra::common::util::ensure_private_dir(dir)?;
     }
 
     let temp_file_manager = server::handler::web::temp_file::TempFileManager::new(

@@ -228,7 +228,10 @@ impl RotatingLog {
         if let Some(dir) = path.parent()
             && !dir.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(dir)?;
+            // Logs carry request metadata and error details; create the
+            // directory owner-only rather than inheriting the umask. This runs
+            // before `run_server`, so it cannot rely on that startup loop.
+            infra::common::util::ensure_private_dir(dir)?;
         }
         let file = OpenOptions::new().create(true).append(true).open(path)?;
         let written = file.metadata().map(|m| m.len()).unwrap_or(0);
