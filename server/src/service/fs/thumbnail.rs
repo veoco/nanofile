@@ -12,6 +12,33 @@ use crate::repository::Repositories;
 use base::common::{EMPTY_SHA1, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 
+/// Cap on how many thumbnails are generated concurrently across the server.
+///
+/// A cache miss either decodes a large image in-process (up to 32 MiB of source)
+/// or spawns an `ffmpeg` child that may read a 512 MiB media file, so a burst of
+/// requests for distinct files would otherwise start unbounded subprocesses and
+/// saturate CPU, memory and file descriptors. Matches the zip archive cap: a
+/// hardcoded constant rather than a config knob, so it cannot be set to
+/// "unlimited" by accident.
+const MAX_CONCURRENT_THUMBNAILS: usize = 4;
+
+static THUMBNAIL_CONCURRENCY: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+fn thumbnail_semaphore() -> &'static Arc<tokio::sync::Semaphore> {
+    THUMBNAIL_CONCURRENCY
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_THUMBNAILS)))
+}
+
+/// Acquire a permit covering one thumbnail generation. Callers queue rather
+/// than fail, preserving the previous behaviour for a normal burst.
+async fn acquire_thumbnail_permit() -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+    thumbnail_semaphore()
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| AppError::Internal(format!("thumbnail concurrency gate failed: {e}")))
+}
+
 pub struct ThumbnailService {
     repos: Arc<Repositories>,
     block_store: infra::storage::DynBlockStorage,
@@ -147,6 +174,11 @@ impl ThumbnailService {
             // Stale — fall through to regenerate
         }
 
+        // Every path below is expensive (decode or a child process). Queue on
+        // the global gate *after* the cache check so cached thumbnails stay
+        // free, and hold the permit until the result has been written.
+        let _permit = acquire_thumbnail_permit().await?;
+
         // Supported sources are images (decoded in-process, or via ffmpeg for
         // HEIC/HEIF/AVIF) and audio/video (a frame or embedded cover art
         // extracted via ffmpeg). Anything else has no thumbnail.
@@ -266,10 +298,13 @@ impl ThumbnailService {
         tokio::fs::create_dir_all(&scratch_dir)
             .await
             .map_err(|e| AppError::Internal(format!("create scratch dir failed: {e}")))?;
+        // Unique per request: two concurrent misses for the same path used to
+        // share this filename and truncate each other's source stream mid-write.
         let scratch_media = scratch_dir.join(format!(
-            "{}_{}.bin",
+            "{}_{}_{}.bin",
             thumbnail_dir_name(repo_id),
-            thumbnail_key(repo_id, normalized_path)
+            thumbnail_key(repo_id, normalized_path),
+            uuid::Uuid::new_v4()
         ));
         let scratch_png = scratch_media.with_extension("png");
 
@@ -714,5 +749,43 @@ mod tests {
         assert!(is_thumbnail_image_ext("heic"));
         assert!(is_thumbnail_image_ext("avif"));
         assert!(!is_thumbnail_image_ext("svg"));
+    }
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::{MAX_CONCURRENT_THUMBNAILS, acquire_thumbnail_permit};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The gate is process-global (`thumbnail_service()` builds a fresh service
+    /// per request), so permits acquired from unrelated call sites must still
+    /// share one cap.
+    #[tokio::test]
+    async fn concurrent_generations_are_capped() {
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+
+        let mut tasks = Vec::new();
+        for _ in 0..(MAX_CONCURRENT_THUMBNAILS * 3) {
+            let in_flight = in_flight.clone();
+            let peak = peak.clone();
+            tasks.push(tokio::spawn(async move {
+                let _permit = acquire_thumbnail_permit().await.unwrap();
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            MAX_CONCURRENT_THUMBNAILS,
+            "the gate should admit exactly the configured number of generators"
+        );
     }
 }
