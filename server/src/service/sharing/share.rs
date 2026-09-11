@@ -159,8 +159,11 @@ pub async fn list_share_links_for_path(
     Ok(infos)
 }
 
-/// Shared implementation for creating a share link (used by both v2 and v2.1).
-async fn create_share_link_impl(
+/// Shared implementation for creating a share link (used by v2, v2.1 and the
+/// web UI form handler). Routing every creation path through this one function
+/// is what keeps the encrypted-library block, the membership check and the
+/// path validation from being bypassed by a caller that forgets them.
+pub(crate) async fn create_share_link_impl(
     repos: &Repositories,
     config: &Config,
     repo_id: &str,

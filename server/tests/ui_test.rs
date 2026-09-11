@@ -745,6 +745,68 @@ async fn test_delete_share_link_works() {
     assert!(!list_body.is_empty(), "shares page should have content");
 }
 
+/// The web-UI share-creation form must enforce repository access.
+///
+/// It previously inserted the `share_link` row directly, with only the global
+/// feature switch and the caller's own CSRF token checked — so any signed-in
+/// user who knew a repository id could mint an unauthenticated, permanent,
+/// non-expiring link to it.
+#[tokio::test]
+async fn test_create_share_link_requires_repo_access() {
+    let fixture = TestFixture::new().await;
+    let _outsider = create_test_user(&fixture.server.db, "outsider@example.com", "password").await;
+
+    // Sign the outsider in and collect their own CSRF token.
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let login = client
+        .post(format!("{}/accounts/login/", fixture.server.base_url))
+        .form(&[("email", "outsider@example.com"), ("password", "password")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 302, "outsider login");
+
+    let csrf = settings_csrf_token(&client, &fixture.server.base_url).await;
+    assert!(!csrf.is_empty(), "outsider should receive a CSRF token");
+
+    // Try to create a link for a repository the outsider has no access to.
+    let resp = client
+        .post(format!("{}/shares/create/", fixture.server.base_url))
+        .form(&[
+            ("repo_id", fixture.repo_id.as_str()),
+            ("path", "/"),
+            ("csrf_token", csrf.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "share creation must require repo access"
+    );
+
+    // And nothing may have been persisted for that repository.
+    let resp = fixture
+        .client
+        .get(
+            &format!("/api/v2.1/share-links/?repo_id={}", fixture.repo_id),
+            Some(&fixture.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let links: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        links.as_array().map(|a| a.len()),
+        Some(0),
+        "no share link may be created for a repo the caller cannot read"
+    );
+}
+
 // ============================================================================
 // Phase 5: Settings + 2FA
 // ============================================================================

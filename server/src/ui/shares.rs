@@ -5,16 +5,13 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse},
 };
-use sea_orm::Set;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
-use crate::service::auth::token::generate_share_link_token;
 use base::error::AppError;
-use infra::entity::share_link;
 
 use super::auth_extractor::WebUser;
 use super::{format_ts, format_ts_opt};
@@ -202,7 +199,11 @@ pub async fn list_shares(
     Ok(Html(html))
 }
 
-/// POST /share/create — create a new share link.
+/// POST /shares/create/ — create a new share link from the web UI form.
+///
+/// Delegates to the same service function the v2/v2.1 API uses so the
+/// encrypted-library block, the repo read-permission check and the entry-path
+/// validation cannot diverge between the two creation surfaces.
 pub async fn create_share(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -214,32 +215,19 @@ pub async fn create_share(
         &user.session_token,
         form.csrf_token.as_deref(),
     )?;
-    let now = chrono::Utc::now().timestamp();
 
-    // Determine s_type by walking the FS tree
-    let s_type = crate::service::sharing::share::resolve_entry_type_raw(
+    crate::service::sharing::share::create_share_link_impl(
         &state.repos,
+        &state.config,
         &form.repo_id,
         &form.path,
+        None,
+        None,
+        None,
+        user.user_id,
     )
-    .await
-    .unwrap_or_else(|_| "f".to_string());
+    .await?;
 
-    let link = share_link::ActiveModel {
-        id: sea_orm::NotSet,
-        repo_id: Set(form.repo_id),
-        creator_id: Set(user.user_id),
-        path: Set(form.path),
-        token: Set(generate_share_link_token()),
-        password: Set(None),
-        expires_at: Set(None),
-        created_at: Set(now),
-        s_type: Set(s_type),
-        view_cnt: Set(0i64),
-        description: Set(None),
-    };
-
-    state.repos.share_link.insert(link).await?;
     Ok((StatusCode::FOUND, [("Location", "/shares/")]).into_response())
 }
 
