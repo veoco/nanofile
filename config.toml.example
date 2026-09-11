@@ -173,6 +173,7 @@ max_tree_visits = 1000000
 #   NANOFILE_AUTH_SYNC_TOKEN_TTL_DAYS
 #   NANOFILE_AUTH_MAX_LOGIN_ATTEMPTS
 #   NANOFILE_AUTH_LOCKOUT_DURATION_SECS
+#   NANOFILE_AUTH_MAX_DISTINCT_USERNAMES_PER_IP
 #   NANOFILE_AUTH_ENABLE_INVITATIONS
 #   NANOFILE_AUTH_ENABLE_PASSWORD_RESET
 #   NANOFILE_AUTH_PASSWORD_MIN_LENGTH
@@ -182,6 +183,11 @@ api_token_ttl_days = 180
 sync_token_ttl_days = 365
 max_login_attempts = 5
 lockout_duration_secs = 900
+# Max distinct accounts one client address may fail to log in to within
+# lockout_duration_secs before that address is blocked (0 = unlimited).
+# This counter is NOT reset by a successful login, so an attacker holding one
+# valid account cannot spray forever by logging into it between guesses.
+max_distinct_usernames_per_ip = 20
 enable_invitations = true
 enable_password_reset = true
 password_min_length = 8

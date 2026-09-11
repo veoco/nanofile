@@ -195,17 +195,14 @@ pub async fn login(
         &state.config.server.trusted_proxies,
     );
 
-    // Composite keys: per-IP + per-username. No global key — a global lockout
-    // would be a trivial denial-of-service against every user.
-    let rate_limit_key_ip = format!("login:ip:{}", client_ip);
-    let rate_limit_key_user = format!("login:user:{}", form.email);
+    // Throttle keys for this attempt: the client address, the (address,
+    // account) pair, and — inside the limiter — how many distinct accounts
+    // this address has failed on. There is deliberately no username-only key:
+    // that would let anyone lock a victim out of their own account.
+    let login_keys = infra::rate_limit::LoginKeys::new(&client_ip, &form.email);
 
     // Check rate limit before any DB or password work.
-    if state
-        .auth_limiters
-        .login
-        .is_any_locked(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()])
-    {
+    if state.auth_limiters.login.is_login_blocked(&login_keys) {
         return render_login_page(
             &state,
             &headers,
@@ -223,10 +220,7 @@ pub async fn login(
     let user_record = match state.repos.user.find_by_email(&form.email).await? {
         Some(u) => u,
         None => {
-            state
-                .auth_limiters
-                .login
-                .record_failures(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()]);
+            state.auth_limiters.login.record_login_failure(&login_keys);
             // Run PBKDF2 against a dummy hash so a "user not found" response
             // takes as long as a wrong-password response, avoiding username
             // enumeration via a response-time side channel.
@@ -253,10 +247,7 @@ pub async fn login(
 
     if !user_record.is_active {
         // Use the same generic error to avoid user-enumeration attacks (matching seahub).
-        state
-            .auth_limiters
-            .login
-            .record_failures(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()]);
+        state.auth_limiters.login.record_login_failure(&login_keys);
         return render_login_page(
             &state,
             &headers,
@@ -278,10 +269,7 @@ pub async fn login(
     )
     .await
     {
-        state
-            .auth_limiters
-            .login
-            .record_failures(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()]);
+        state.auth_limiters.login.record_login_failure(&login_keys);
         return render_login_page(
             &state,
             &headers,
@@ -296,9 +284,9 @@ pub async fn login(
         .map(|html| (StatusCode::OK, Html(html)).into_response());
     }
 
-    // Successful login — clear rate limit for this IP and user.
-    state.auth_limiters.login.clear(&rate_limit_key_ip);
-    state.auth_limiters.login.clear(&rate_limit_key_user);
+    // Successful login — forgive this address/pair, but keep the
+    // distinct-account spray history.
+    state.auth_limiters.login.clear_login_failure(&login_keys);
 
     // ── Check for 2FA ─────────────────────────────────────────────────
     let two_fa = state.repos.user_2fa.find_by_user_id(user_record.id).await?;

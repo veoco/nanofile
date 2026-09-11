@@ -30,6 +30,7 @@ impl AuthRateLimiters {
             login: Arc::new(LoginRateLimiter::new(
                 cfg.max_login_attempts,
                 cfg.lockout_duration_secs,
+                cfg.max_distinct_usernames_per_ip,
             )),
             password_reset: Arc::new(GenericRateLimiter::new(
                 cfg.password_reset_max_per_hour.max(1),

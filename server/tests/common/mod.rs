@@ -409,6 +409,7 @@ impl TestServer {
                 sync_token_ttl_days: 180,
                 max_login_attempts: 5,
                 lockout_duration_secs: 300,
+                max_distinct_usernames_per_ip: 20,
                 enable_invitations: true,
                 enable_password_reset: true,
                 password_min_length: 8,

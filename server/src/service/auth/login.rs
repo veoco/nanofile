@@ -6,7 +6,7 @@ use crate::service::auth::s2fa::{S2FA_TTL_SECONDS, generate_s2fa_token};
 use crate::service::auth::token::generate_api_token;
 use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
-use infra::rate_limit::LoginRateLimiter;
+use infra::rate_limit::{LoginKeys, LoginRateLimiter};
 
 /// Represents all possible outcomes of a login attempt.
 pub enum LoginResult {
@@ -75,22 +75,19 @@ impl LoginService {
         client_version: Option<String>,
     ) -> Result<LoginResult, AppError> {
         // ── Rate limit keys ──────────────────────────────────────────────
-        // Per-IP + per-username. Deliberately NO global key: a global lockout
-        // would let anyone DoS the whole instance with a handful of bad logins.
-        let rate_limit_key_ip = format!("login:ip:{client_ip}");
-        let rate_limit_key_user = format!("login:user:{username}");
+        // Client address, (address, account) pair, and the limiter's
+        // distinct-account spray counter. Deliberately NO username-only key:
+        // that would let anyone lock a victim out of their own account from an
+        // unrelated address.
+        let login_keys = LoginKeys::new(client_ip, username);
 
-        if self
-            .login_rate_limiter
-            .is_any_locked(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()])
-        {
+        if self.login_rate_limiter.is_login_blocked(&login_keys) {
             return Ok(LoginResult::RateLimited);
         }
 
         // ── Record failure helper ─────────────────────────────────────────
         let record_failure = || {
-            self.login_rate_limiter
-                .record_failures(&[rate_limit_key_ip.as_str(), rate_limit_key_user.as_str()]);
+            self.login_rate_limiter.record_login_failure(&login_keys);
         };
 
         // ── Find user ─────────────────────────────────────────────────────
@@ -197,8 +194,7 @@ impl LoginService {
         }
 
         // ── Login succeeded — create API token ─────────────────────────────
-        self.login_rate_limiter.clear(&rate_limit_key_ip);
-        self.login_rate_limiter.clear(&rate_limit_key_user);
+        self.login_rate_limiter.clear_login_failure(&login_keys);
 
         let token_value = generate_api_token();
         let now = chrono::Utc::now().timestamp();

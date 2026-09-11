@@ -693,6 +693,15 @@ pub struct AuthConfig {
     pub max_login_attempts: u32,
     #[serde(default = "default_lockout_duration_secs")]
     pub lockout_duration_secs: u64,
+    /// Max distinct account names one client address may fail to log in to
+    /// within `lockout_duration_secs` before that address is blocked
+    /// (0 = unlimited).
+    ///
+    /// This is the counter a successful login cannot reset: without it an
+    /// attacker holding one valid account could clear their per-address budget
+    /// after every few guesses and spray forever.
+    #[serde(default = "default_spray_distinct_usernames")]
+    pub max_distinct_usernames_per_ip: u32,
     /// Whether to show the "Create Account" link on the login page and
     /// allow invitation-code-based registration.
     #[serde(default = "default_true")]
@@ -744,6 +753,7 @@ impl Default for AuthConfig {
             sync_token_ttl_days: default_sync_token_ttl_days(),
             max_login_attempts: default_five(),
             lockout_duration_secs: default_lockout_duration_secs(),
+            max_distinct_usernames_per_ip: default_spray_distinct_usernames(),
             enable_invitations: default_true(),
             enable_password_reset: default_true(),
             password_min_length: default_password_min_length(),
@@ -783,6 +793,9 @@ fn default_true() -> bool {
 }
 fn default_five() -> u32 {
     5
+}
+fn default_spray_distinct_usernames() -> u32 {
+    20
 }
 fn default_share_download_max_per_minute() -> u32 {
     30
@@ -1075,6 +1088,10 @@ impl Config {
         env_parse!(
             "NANOFILE_AUTH_LOCKOUT_DURATION_SECS",
             self.auth.lockout_duration_secs
+        );
+        env_parse!(
+            "NANOFILE_AUTH_MAX_DISTINCT_USERNAMES_PER_IP",
+            self.auth.max_distinct_usernames_per_ip
         );
         env_parse!(
             "NANOFILE_AUTH_ENABLE_INVITATIONS",
