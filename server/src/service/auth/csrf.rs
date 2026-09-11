@@ -96,20 +96,29 @@ pub fn validate_csrf_header(headers: &HeaderMap, secret: &[u8], session_token: &
     validate_csrf_token(secret, session_token, header_val)
 }
 
-/// Check whether a Cookie header contains a valid `visited_ufs_{token}` upload-link
-/// unlock cookie.
+/// Cookie name holding the upload-link password unlock.
+pub fn upload_link_cookie_name(token: &str) -> String {
+    format!("visited_ufs_{token}")
+}
+
+/// Cookie name holding the share-link password unlock.
+pub fn share_link_cookie_name(token: &str) -> String {
+    format!("visited_sl_{token}")
+}
+
+/// Check whether a Cookie header carries a valid password-unlock cookie.
 ///
-/// The cookie value is an HMAC signature over the upload-link token (see
+/// The cookie value is an HMAC signature over the link token (see
 /// [`generate_csrf_token`]), proving the password was previously verified by the
-/// web form. A plaintext `visited_ufs_{token}=1` value is rejected — this is what
-/// prevents an attacker from forging the cookie to bypass a password-protected
-/// upload link.
-pub fn has_valid_upload_link_cookie(
+/// web form. A plaintext `=1` value is rejected — that is what stops a client
+/// which never entered the password from minting the cookie itself.
+pub fn has_link_unlock_cookie(
     cookie_header: Option<&str>,
+    cookie_name: &str,
     token: &str,
     secret: &[u8],
 ) -> bool {
-    let prefix = format!("visited_ufs_{token}=");
+    let prefix = format!("{cookie_name}=");
     let Some(cookie) = cookie_header else {
         return false;
     };
@@ -122,6 +131,37 @@ pub fn has_valid_upload_link_cookie(
         return false;
     };
     validate_csrf_token(secret, token, value)
+}
+
+/// `Set-Cookie` value that unlocks a password-protected link for this browser.
+///
+/// Passing the password through a signed cookie instead of the URL keeps it out
+/// of page links, browser history and request logs.
+pub fn link_unlock_cookie(cookie_name: &str, token: &str, secret: &[u8], secure: bool) -> String {
+    let sig = generate_csrf_token(secret, token);
+    let mut cookie = format!("{cookie_name}={sig}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+/// Check whether a Cookie header contains a valid `visited_ufs_{token}` upload-link
+/// unlock cookie.
+///
+/// See [`has_link_unlock_cookie`]; the value is an HMAC over the link token, so
+/// it cannot be forged by a client that never entered the password.
+pub fn has_valid_upload_link_cookie(
+    cookie_header: Option<&str>,
+    token: &str,
+    secret: &[u8],
+) -> bool {
+    has_link_unlock_cookie(
+        cookie_header,
+        &upload_link_cookie_name(token),
+        token,
+        secret,
+    )
 }
 
 /// Validate Origin/Referer header against the configured site URL origin.

@@ -134,11 +134,33 @@ async fn test_share_link_with_password() {
         "should show password form"
     );
 
-    // Download with WRONG password → should return 200 (password form with error)
-    let wrong = f
+    // The password is never taken from the query string: `?password=` is
+    // ignored, so it cannot grant access (and never lands in URLs or logs).
+    let ignored = f
         .client
-        .get(&format!("/f/{}/?password=wrongpass", token), None)
+        .get(&format!("/f/{}/?dl=1&password=mypassword", token), None)
         .await;
+    assert_eq!(
+        ignored.status(),
+        200,
+        "ignoring the query parameter still renders the form"
+    );
+    let ignored_body = ignored.text().await.unwrap();
+    assert!(
+        ignored_body.contains("Password Required"),
+        "a query-string password must not unlock the link"
+    );
+
+    // Download with WRONG password via the header → password form with error.
+    let wrong = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("{}/f/{}/", f.server.base_url, token))
+        .header("X-Seafile-Sharelink-Password", "wrongpass")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(wrong.status(), 200, "must return 200 with error");
     let body = wrong.text().await.unwrap();
     assert!(
@@ -146,24 +168,87 @@ async fn test_share_link_with_password() {
         "should show error message"
     );
 
-    // Download with CORRECT password via query parameter (?dl=1) → should succeed
-    let ok = f
-        .client
-        .get(&format!("/f/{}/?dl=1&password=mypassword", token), None)
-        .await;
-    assert_eq!(ok.status(), 200, "should succeed with correct password");
-    let content = ok.bytes().await.unwrap();
-    assert_eq!(&content[..], b"secret data");
-
-    // Download with CORRECT password via HTTP header (?dl=1) → should also succeed
+    // Download with CORRECT password via the header (?dl=1) → should succeed
     let raw_client = reqwest::Client::builder().no_proxy().build().unwrap();
-    let ok2 = raw_client
+    let ok = raw_client
         .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
         .header("X-Seafile-Sharelink-Password", "mypassword")
         .send()
         .await
         .unwrap();
-    assert_eq!(ok2.status(), 200, "should succeed with header password");
+    assert_eq!(ok.status(), 200, "should succeed with correct password");
+    let content = ok.bytes().await.unwrap();
+    assert_eq!(&content[..], b"secret data");
+}
+
+/// The password form must unlock via a signed cookie, and the redirect must not
+/// carry the password in the URL (that is what used to leak it into browser
+/// history, referrers and access logs).
+#[tokio::test]
+async fn test_share_link_password_form_sets_cookie_not_url() {
+    let f = TestFixture::new().await;
+
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "cookie.txt", b"secret data")
+        .await;
+    assert!(up.status().is_success(), "upload failed");
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/cookie.txt",
+                "password": "mypassword",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let token = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let browser = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .cookie_store(true)
+        .build()
+        .unwrap();
+
+    // Submitting the form posts the password in the body, not the URL.
+    let post = browser
+        .post(format!("{}/f/{}/", f.server.base_url, token))
+        .form(&[("password", "mypassword")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(post.status(), 302, "successful password POST redirects");
+
+    let location = post
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        !location.contains("password"),
+        "redirect must not carry the password: {location}"
+    );
+    assert!(
+        post.headers().get(reqwest::header::SET_COOKIE).is_some(),
+        "the unlock must be handed over as a cookie"
+    );
+
+    // The stored cookie alone unlocks the download.
+    let dl = browser
+        .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dl.status(), 200, "cookie must unlock the link");
+    assert_eq!(&dl.bytes().await.unwrap()[..], b"secret data");
 }
 
 /// Security: password attempts on a share link are rate limited per IP.
@@ -257,21 +342,26 @@ async fn test_share_link_password_limited_by_token_on_get() {
 
     // link_password_max_per_hour = 10 in the test config; the 11th failed GET
     // attempt should be rejected with 429.
+    let raw_client = reqwest::Client::builder().no_proxy().build().unwrap();
     for _ in 0..10 {
-        let resp = f
-            .client
-            .get(&format!("/f/{}/?password=wrongpass", token), None)
-            .await;
+        let resp = raw_client
+            .get(format!("{}/f/{}/", f.server.base_url, token))
+            .header("X-Seafile-Sharelink-Password", "wrongpass")
+            .send()
+            .await
+            .unwrap();
         assert_ne!(
             resp.status(),
             429,
             "should not be rate limited before exceeding the threshold"
         );
     }
-    let resp = f
-        .client
-        .get(&format!("/f/{}/?password=wrongpass", token), None)
-        .await;
+    let resp = raw_client
+        .get(format!("{}/f/{}/", f.server.base_url, token))
+        .header("X-Seafile-Sharelink-Password", "wrongpass")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(
         resp.status(),
         429,
@@ -280,10 +370,12 @@ async fn test_share_link_password_limited_by_token_on_get() {
 
     // A correct password still works — successful requests must not be
     // throttled even after the earlier failures.
-    let ok = f
-        .client
-        .get(&format!("/f/{}/?dl=1&password=mypassword", token), None)
-        .await;
+    let ok = raw_client
+        .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
+        .header("X-Seafile-Sharelink-Password", "mypassword")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(ok.status(), 200, "correct password must still succeed");
 }
 
@@ -643,11 +735,14 @@ async fn test_share_link_update_password() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // Verify old password works
-    let ok = f
-        .client
-        .get(&format!("/f/{}/?dl=1&password=oldpass", token), None)
-        .await;
+    // Verify old password works (header, since the query string is ignored)
+    let raw_client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let ok = raw_client
+        .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
+        .header("X-Seafile-Sharelink-Password", "oldpass")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(ok.status(), 200);
 
     // PUT update to new password
@@ -662,10 +757,12 @@ async fn test_share_link_update_password() {
     assert_eq!(upd.status(), 200, "update password should succeed");
 
     // Old password should no longer work
-    let old = f
-        .client
-        .get(&format!("/f/{}/?dl=1&password=oldpass", token), None)
-        .await;
+    let old = raw_client
+        .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
+        .header("X-Seafile-Sharelink-Password", "oldpass")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(old.status(), 200, "wrong password shows form");
     let body_text = old.text().await.unwrap();
     assert!(
@@ -674,10 +771,12 @@ async fn test_share_link_update_password() {
     );
 
     // New password should work
-    let ok = f
-        .client
-        .get(&format!("/f/{}/?dl=1&password=newpass", token), None)
-        .await;
+    let ok = raw_client
+        .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
+        .header("X-Seafile-Sharelink-Password", "newpass")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(ok.status(), 200);
     let content = ok.bytes().await.unwrap();
     assert_eq!(&content[..], b"pw update");

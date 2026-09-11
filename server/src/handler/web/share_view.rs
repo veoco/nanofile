@@ -18,6 +18,33 @@ use crate::ui::format_size;
 use base::common::FsFileData;
 use base::error::AppError;
 use infra::common::S_IFDIR;
+use infra::entity::share_link;
+
+/// Resolve a client-supplied sub-path against a share link's root path.
+///
+/// `safe_join_path` alone only clamps `..` to the **repo** root, so `?p=../../`
+/// could climb above the shared directory. This additionally requires the
+/// resolved path to stay inside the shared subtree (delegating the whole repo
+/// link, whose root is `/`, keeps every path inside).
+///
+/// Every share handler that turns client input into a repo path must go through
+/// this function — resolving via ad-hoc string concatenation is what allowed a
+/// `..` dirent to escape a directory share.
+fn resolve_share_subpath(link: &share_link::Model, requested: &str) -> Result<String, AppError> {
+    let resolved = base::sanitize::safe_join_path(&link.path, requested)
+        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+
+    let share_root =
+        base::sanitize::safe_normalize_path(&link.path).unwrap_or_else(|_| "/".to_string());
+    if share_root != "/"
+        && resolved != share_root
+        && !resolved.starts_with(&format!("{}/", share_root.trim_end_matches('/')))
+    {
+        return Err(AppError::BadRequest("Invalid path".into()));
+    }
+
+    Ok(resolved)
+}
 
 // ── Templates ─────────────────────────────────────────────────────────────
 
@@ -68,13 +95,44 @@ fn check_share_download_rate(
 /// rather than client IP. The IP-based limiter (in the POST handler) can be
 /// bypassed by spreading attempts across many IPs; a per-token cap stops a
 /// distributed brute force against a single link.
-fn record_link_password_failure(state: &Arc<AppState>, token: &str) -> Result<(), AppError> {
+///
+/// Every password-protected entry point must call this on a wrong password —
+/// it is shared with the upload-link view so the cap cannot be bypassed by
+/// switching to another endpoint that accepts the same password.
+pub(super) fn record_link_password_failure(
+    state: &Arc<AppState>,
+    token: &str,
+) -> Result<(), AppError> {
     let key = format!("link_password_token:{token}");
     if state.auth_limiters.link_password.is_limited(&key) {
         return Err(AppError::TooManyRequests);
     }
     state.auth_limiters.link_password.record_attempt(&key);
     Ok(())
+}
+
+/// Whether a password-protected share link is unlocked for this request.
+///
+/// Accepts either the password itself (via the `X-Seafile-Sharelink-Password`
+/// header or `?password=`, both of which predate the cookie) or the signed
+/// unlock cookie issued after a successful password POST. The cookie is what
+/// lets the server stop putting the password into page links and redirects.
+fn share_link_unlocked(
+    state: &Arc<AppState>,
+    token: &str,
+    headers: &HeaderMap,
+    password_ok: bool,
+) -> bool {
+    if password_ok {
+        return true;
+    }
+    let cookie_name = crate::service::auth::csrf::share_link_cookie_name(token);
+    crate::service::auth::csrf::has_link_unlock_cookie(
+        headers.get("cookie").and_then(|v| v.to_str().ok()),
+        &cookie_name,
+        token,
+        &state.csrf_secret,
+    )
 }
 
 /// Resolve file metadata from the repo.
@@ -101,11 +159,14 @@ pub async fn shared_file_view(
     crate::middleware::ensure_share_links_enabled(&state)?;
     let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
 
-    // Password check
+    // Password check. The password is accepted only from the
+    // `X-Seafile-Sharelink-Password` header or the signed unlock cookie the
+    // password form sets — never from the query string, which would put the
+    // password into browser history, referrers and request logs. A `?password=`
+    // parameter is therefore ignored entirely.
     let provided_pwd = headers
         .get("X-Seafile-Sharelink-Password")
-        .and_then(|v| v.to_str().ok())
-        .or_else(|| params.get("password").map(|s| s.as_str()));
+        .and_then(|v| v.to_str().ok());
     let pw_ok = crate::service::sharing::share::check_share_link_password(
         &link,
         provided_pwd,
@@ -114,15 +175,16 @@ pub async fn shared_file_view(
     .await?;
 
     // If password is required but not provided, show password form
-    if link.password.is_some() && !pw_ok {
-        // Only count genuinely-failed attempts (successful refreshes carry the
-        // password in the URL and must not be throttled). The password may be
-        // delivered via the X-Seafile-Sharelink-Password header or ?password=.
+    let unlocked = share_link_unlocked(&state, &token, &headers, pw_ok);
+    if link.password.is_some() && !unlocked {
+        // Only count genuine failures — a request that supplies no password is
+        // just the initial render of the form.
         if provided_pwd.is_some() {
             record_link_password_failure(&state, &token)?;
         }
-        // Check if this is a POST-back with wrong password
-        let error = if params.contains_key("password") {
+        // A wrong password supplied via the header gets the form back with the
+        // error; a plain GET just gets the form.
+        let error = if provided_pwd.is_some() {
             Some("Incorrect password".to_string())
         } else {
             None
@@ -188,11 +250,10 @@ pub async fn shared_file_view(
         .unwrap_or_else(|| "?".to_string());
     let file_size = _file_data.size;
 
-    let mut download_url = format!("/f/{}/?dl=1", link.token);
-    // Pass password through to download URL if provided
-    if let Some(pwd) = params.get("password") {
-        download_url.push_str(&format!("&password={}", pwd));
-    }
+    // Deliberately no password in the download URL: the browser carries the
+    // signed unlock cookie instead, so the password never lands in page links,
+    // history or logs.
+    let download_url = format!("/f/{}/?dl=1", link.token);
 
     let tpl = ShareViewTemplate {
         t: I18n::from_headers(&headers, &state.config.ui.default_language),
@@ -265,9 +326,23 @@ pub async fn shared_file_view_post(
         return Ok(Html(html).into_response());
     }
 
-    // Redirect to GET with password in query param
-    let redirect = format!("/f/{}/?password={}", token, urlencoding(password));
-    Ok((StatusCode::FOUND, [("Location", redirect.as_str())]).into_response())
+    // Hand the browser a signed unlock cookie instead of echoing the password
+    // back in the URL.
+    let cookie = crate::service::auth::csrf::link_unlock_cookie(
+        &crate::service::auth::csrf::share_link_cookie_name(&token),
+        &token,
+        &state.csrf_secret,
+        state.config.server.secure_cookies(),
+    );
+    let redirect = format!("/f/{}/", token);
+    Ok((
+        StatusCode::FOUND,
+        [
+            ("Location", redirect.as_str()),
+            ("Set-Cookie", cookie.as_str()),
+        ],
+    )
+        .into_response())
 }
 
 // ── Directory share ──────────────────────────────────────────────────
@@ -286,7 +361,6 @@ struct SharedDirViewTemplate {
     pub created_at_ts: i64,
     pub expires_at_ts: Option<i64>,
     pub download_url: String,
-    pub password_query: String,
     pub description: Option<String>,
     pub page: u32,
     pub total_pages: usize,
@@ -318,11 +392,11 @@ pub async fn shared_dir_view(
         return Err(AppError::NotFound("Not a directory share link".into()));
     }
 
-    // Password check (same as file share)
+    // Password check (same as file share): header or signed cookie only, never
+    // the query string.
     let provided_pwd = headers
         .get("X-Seafile-Sharelink-Password")
-        .and_then(|v| v.to_str().ok())
-        .or_else(|| params.get("password").map(|s| s.as_str()));
+        .and_then(|v| v.to_str().ok());
     let pw_ok = crate::service::sharing::share::check_share_link_password(
         &link,
         provided_pwd,
@@ -330,8 +404,14 @@ pub async fn shared_dir_view(
     )
     .await?;
 
-    if link.password.is_some() && !pw_ok {
-        let error = if params.contains_key("password") {
+    let unlocked = share_link_unlocked(&state, &token, &headers, pw_ok);
+    if link.password.is_some() && !unlocked {
+        // Count only genuine failures: a request that supplies no password is
+        // just the initial render of the password form.
+        if provided_pwd.is_some() {
+            record_link_password_failure(&state, &token)?;
+        }
+        let error = if provided_pwd.is_some() {
             Some("Incorrect password".to_string())
         } else {
             None
@@ -416,23 +496,10 @@ pub async fn shared_dir_view(
 
     crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
-    // Resolve the current directory path using safe path joining
-    // to prevent path traversal attacks (e.g., ?p=../other-dir)
+    // Resolve the current directory path, clamped to the shared subtree
+    // (guards against `?p=../other-dir` leaving the share).
     let sub_path = params.get("p").map(|s| s.as_str()).unwrap_or("/");
-    let current_path = base::sanitize::safe_join_path(&link.path, sub_path)
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-
-    // `safe_join_path` only clamps traversal to the repo root, so `?p=../../`
-    // could climb above the shared directory. Keep the resolved path inside the
-    // shared subtree (unless the whole repo is shared).
-    let share_root =
-        base::sanitize::safe_normalize_path(&link.path).unwrap_or_else(|_| "/".to_string());
-    if share_root != "/"
-        && current_path != share_root
-        && !current_path.starts_with(&format!("{}/", share_root.trim_end_matches('/')))
-    {
-        return Err(AppError::BadRequest("Invalid path".into()));
-    }
+    let current_path = resolve_share_subpath(&link, sub_path)?;
 
     let dir_id = resolve_fs_id(
         &state.repos,
@@ -534,21 +601,9 @@ pub async fn shared_dir_view(
 
     let item_count = total;
 
-    let pw_query = if let Some(pwd) = params.get("password") {
-        format!("&password={}", pwd)
-    } else {
-        String::new()
-    };
-
-    let download_url = format!(
-        "/d/{}/?dl=1{}",
-        link.token,
-        if pw_query.is_empty() {
-            String::new()
-        } else {
-            format!("&{}", &pw_query[1..])
-        }
-    );
+    // No password in any generated URL: the signed unlock cookie carries the
+    // authorisation, so links stay clean (and out of logs/history).
+    let download_url = format!("/d/{}/?dl=1", link.token);
     let tpl = SharedDirViewTemplate {
         t: I18n::from_headers(&headers, &state.config.ui.default_language),
         token: link.token.clone(),
@@ -561,7 +616,6 @@ pub async fn shared_dir_view(
         created_at_ts: link.created_at,
         expires_at_ts: link.expires_at,
         download_url,
-        password_query: pw_query,
         description: link.description.clone(),
         page,
         total_pages,
@@ -575,12 +629,15 @@ pub async fn shared_dir_view(
 }
 
 /// GET /d/{token}/files/{*path} — download a file from a shared directory.
+///
+/// Query parameters are deliberately not extracted: the password must arrive
+/// via the `X-Seafile-Sharelink-Password` header or the signed unlock cookie,
+/// never the URL.
 pub async fn shared_dir_file_view(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path((token, file_path)): Path<(String, String)>,
     headers: HeaderMap,
-    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     crate::middleware::ensure_share_links_enabled(&state)?;
     let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
@@ -589,19 +646,22 @@ pub async fn shared_dir_file_view(
         return Err(AppError::NotFound("Not a directory share link".into()));
     }
 
-    // Password check
+    // Password check: header or signed cookie only, never the query string.
     let provided_pwd = headers
         .get("X-Seafile-Sharelink-Password")
-        .and_then(|v| v.to_str().ok())
-        .or_else(|| params.get("password").map(|s| s.as_str()));
+        .and_then(|v| v.to_str().ok());
     let pw_ok = crate::service::sharing::share::check_share_link_password(
         &link,
         provided_pwd,
         state.config.auth.password_hash_iterations,
     )
     .await?;
-    if link.password.is_some() && !pw_ok {
-        return if params.contains_key("password") {
+    let unlocked = share_link_unlocked(&state, &token, &headers, pw_ok);
+    if link.password.is_some() && !unlocked {
+        if provided_pwd.is_some() {
+            record_link_password_failure(&state, &token)?;
+        }
+        return if provided_pwd.is_some() {
             Err(AppError::Forbidden)
         } else {
             Err(AppError::BadRequest("password required".into()))
@@ -610,12 +670,10 @@ pub async fn shared_dir_file_view(
 
     check_share_download_rate(&state, &addr, &headers)?;
 
-    // Combine share path with requested file path
-    let full_path = if file_path.starts_with('/') {
-        format!("{}{}", link.path.trim_end_matches('/'), file_path)
-    } else {
-        format!("{}/{}", link.path.trim_end_matches('/'), file_path)
-    };
+    // Combine the share path with the requested file path, clamped to the
+    // shared subtree. A plain string join would let `..` (or an absolute path)
+    // escape the shared directory once the tree contains such a dirent.
+    let full_path = resolve_share_subpath(&link, &file_path)?;
 
     let (file_data, block_ids) = resolve_file_meta(&state.repos, &link.repo_id, &full_path).await?;
 
@@ -690,23 +748,21 @@ pub async fn shared_dir_view_post(
         return Ok(Html(html).into_response());
     }
 
-    let redirect = format!("/d/{}/?password={}", token, urlencoding(password));
-    Ok((StatusCode::FOUND, [("Location", redirect.as_str())]).into_response())
-}
-
-/// Simple URL encoding for password (only encode the special chars).
-fn urlencoding(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            b' ' => out.push_str("%20"),
-            _ => {
-                out.push_str(&format!("%{:02X}", b));
-            }
-        }
-    }
-    out
+    // Hand the browser a signed unlock cookie instead of echoing the password
+    // back in the URL.
+    let cookie = crate::service::auth::csrf::link_unlock_cookie(
+        &crate::service::auth::csrf::share_link_cookie_name(&token),
+        &token,
+        &state.csrf_secret,
+        state.config.server.secure_cookies(),
+    );
+    let redirect = format!("/d/{}/", token);
+    Ok((
+        StatusCode::FOUND,
+        [
+            ("Location", redirect.as_str()),
+            ("Set-Cookie", cookie.as_str()),
+        ],
+    )
+        .into_response())
 }

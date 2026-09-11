@@ -83,6 +83,89 @@ async fn test_upload_link_create_with_password() {
     );
 }
 
+/// The upload-link password is never taken from the query string: `?password=`
+/// must not unlock the page (it would otherwise leak into browser history,
+/// referrers and access logs), while the header does unlock it.
+#[tokio::test]
+async fn test_upload_link_password_ignores_query_string() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/",
+                "password": "uploadpass",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "create upload link with password");
+    let token = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let raw = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    // Correct password in the query string is ignored → still the form.
+    let ignored = raw
+        .get(format!(
+            "{}/u/{}/?password=uploadpass",
+            f.server.base_url, token
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ignored.status(), 200);
+    let body = ignored.text().await.unwrap();
+    assert!(
+        body.contains("Password Required"),
+        "a query-string password must not unlock the upload link"
+    );
+
+    // The header does unlock it, and marks the session with a cookie so the
+    // upload-URL API subsequently grants a token.
+    let browser = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let ok = browser
+        .get(format!("{}/u/{}/", f.server.base_url, token))
+        .header("X-Seafile-Sharelink-Password", "uploadpass")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200);
+    assert!(
+        ok.headers().get(reqwest::header::SET_COOKIE).is_some(),
+        "a valid header password must set the unlock cookie"
+    );
+    let body = ok.text().await.unwrap();
+    assert!(
+        !body.contains("Password Required"),
+        "the header password must unlock the upload link"
+    );
+
+    // With the cookie stored, the upload-URL API hands out a token.
+    let url_resp = browser
+        .get(format!(
+            "{}/api/v2.1/upload-links/{}/upload/",
+            f.server.base_url, token
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        url_resp.status(),
+        200,
+        "the unlock cookie must authorise the upload URL"
+    );
+}
+
 /// U.3 — POST /api/v2.1/upload-links/ with description
 #[tokio::test]
 async fn test_upload_link_create_with_description() {
@@ -700,7 +783,7 @@ async fn test_web_upload_rejects_non_member() {
         .unwrap();
     assert_eq!(resp.status(), 403, "non-member upload must be rejected");
 
-    // H-4: the rejected bytes must never reach the global block store. The
+    // the rejected bytes must never reach the global block store. The
     // handler stages the body on disk and only ingests it after authorization.
     let expected_id = infra::crypto::fs_id::sha1_hex(b"hello");
     let block_path = server.block_dir.join(&expected_id[..2]).join(&expected_id);

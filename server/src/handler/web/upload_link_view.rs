@@ -1,6 +1,6 @@
 use askama::Template;
 use axum::{
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
 };
@@ -77,10 +77,14 @@ async fn validate_upload_link(
     Ok(link)
 }
 
-/// Check whether the password in the request matches the stored hash.
+/// Check whether the supplied password matches the stored hash.
+///
+/// The password arrives either in the `X-Seafile-Sharelink-Password` header or
+/// as a form field on the POST; it is deliberately never read from the query
+/// string, which would put it into browser history, referrers and request logs.
 async fn check_password(
     link: &infra::entity::upload_link::Model,
-    params: &HashMap<String, String>,
+    provided: Option<&str>,
     password_hash_iterations: u32,
 ) -> bool {
     let stored_hash = match link.password {
@@ -88,12 +92,10 @@ async fn check_password(
         None => return true, // no password required
     };
 
-    let provided = params.get("password");
-
     match provided {
         Some(pwd) => {
             crate::service::auth::password::verify_password_async(
-                pwd.clone(),
+                pwd.to_string(),
                 stored_hash.clone(),
                 password_hash_iterations,
             )
@@ -106,17 +108,28 @@ async fn check_password(
 // ── Main GET handler ──────────────────────────────────────────────────────
 
 /// GET /u/{token}/ — show the public upload page.
+///
+/// Query parameters are deliberately not extracted: the password must arrive
+/// via the `X-Seafile-Sharelink-Password` header, the password form POST, or
+/// the signed unlock cookie — never the URL.
 pub async fn upload_link_view(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(token): Path<String>,
-    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     crate::middleware::ensure_share_links_enabled(&state)?;
     let link = validate_upload_link(&state, &token).await?;
 
-    // Password check
-    let pw_ok = check_password(&link, &params, state.config.auth.password_hash_iterations).await;
+    // Password check: header or signed cookie only, never the query string.
+    let provided_pwd = headers
+        .get("X-Seafile-Sharelink-Password")
+        .and_then(|v| v.to_str().ok());
+    let pw_ok = check_password(
+        &link,
+        provided_pwd,
+        state.config.auth.password_hash_iterations,
+    )
+    .await;
     // The password form POST sets `visited_ufs_{token}`; accept that cookie as
     // an unlock too, so the redirect back to /u/{token}/ isn't bounced to the
     // form again.
@@ -130,7 +143,13 @@ pub async fn upload_link_view(
 
     // If password is required but not satisfied, show password form
     if !unlocked {
-        let error = if params.contains_key("password") {
+        // Throttle wrong-password attempts here too: the POST handler has an
+        // IP-keyed limiter, but this GET path can also be handed a password
+        // directly and would otherwise be an unthrottled way to test guesses.
+        if provided_pwd.is_some() {
+            super::share_view::record_link_password_failure(&state, &token)?;
+        }
+        let error = if provided_pwd.is_some() {
             Some("Incorrect password".to_string())
         } else {
             None

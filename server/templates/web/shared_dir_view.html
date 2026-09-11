@@ -211,7 +211,7 @@
         <hr class="divider">
 
         <div class="breadcrumb">
-            <a href="/d/{{ token }}/{% if !password_query.is_empty() %}?{{ password_query }}{% endif %}">{{ t.tr("pub.root") }}</a>
+            <a href="/d/{{ token }}/">{{ t.tr("pub.root") }}</a>
             {% if dir_path != "/" %}
             <span>/</span>
             <span>{{ dir_path }}</span>
@@ -222,7 +222,7 @@
         <div class="empty">{{ t.tr("pub.empty_folder") }}</div>
         {% else %}
             {% if let Some(parent) = parent_path %}
-            <a href="/d/{{ token }}/?p={{ parent }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry">
+            <a href="/d/{{ token }}/?p={{ parent }}" class="entry">
                 <div class="entry-icon" style="background:#f3f4f6;">
                     <svg width="12" height="12" fill="none" stroke="#9ca3af" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
@@ -234,7 +234,7 @@
 
             {% for entry in entries %}
                 {% if entry.is_dir %}
-                <a href="/d/{{ token }}/?p={{ entry.full_path }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry">
+                <a href="/d/{{ token }}/?p={{ entry.full_path }}" class="entry">
                     <div class="entry-icon" style="background:#fef3c7;">
                         <svg width="12" height="12" fill="#d97706" viewBox="0 0 24 24">
                             <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
@@ -244,7 +244,7 @@
                     <span class="entry-size">-</span>
                 </a>
                 {% else %}
-                <a href="/d/{{ token }}/files{{ entry.full_path }}?dl=1{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry">
+                <a href="/d/{{ token }}/files{{ entry.full_path }}?dl=1" class="entry">
                     <div class="entry-icon" style="background:#f3f4f6;color:#6366f1;">{{ entry.ext|truncate(4) }}</div>
                     <span class="entry-name">{{ entry.name }}</span>
                     <span class="entry-size">{{ entry.size }}</span>
@@ -256,13 +256,13 @@
         {% if has_more || page > 1 %}
         <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-top:0.75rem;">
             {% if page > 1 %}
-            <a href="/d/{{ token }}/?{% if dir_path != "/" %}p={{ dir_path }}&{% endif %}page={{ page - 1 }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry" style="display:inline-flex;width:auto;">{{ t.tr("common.previous") }}</a>
+            <a href="/d/{{ token }}/?{% if dir_path != "/" %}p={{ dir_path }}&{% endif %}page={{ page - 1 }}" class="entry" style="display:inline-flex;width:auto;">{{ t.tr("common.previous") }}</a>
             {% else %}
             <span></span>
             {% endif %}
             <span style="font-size:0.75rem;color:#9ca3af;">{{ t.trf("common.page_of", [("page", &page.to_string()), ("total", &total_pages.to_string())]) }}</span>
             {% if has_more %}
-            <a href="/d/{{ token }}/?{% if dir_path != "/" %}p={{ dir_path }}&{% endif %}page={{ page + 1 }}{% if !password_query.is_empty() %}&{{ password_query }}{% endif %}" class="entry" style="display:inline-flex;width:auto;">{{ t.tr("common.next") }}</a>
+            <a href="/d/{{ token }}/?{% if dir_path != "/" %}p={{ dir_path }}&{% endif %}page={{ page + 1 }}" class="entry" style="display:inline-flex;width:auto;">{{ t.tr("common.next") }}</a>
             {% endif %}
         </div>
         {% endif %}
