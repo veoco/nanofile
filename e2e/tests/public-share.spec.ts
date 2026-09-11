@@ -69,3 +69,18 @@ test("path traversal in a directory share is rejected", async ({ page }) => {
   const resp = await page.request.get(`/d/${dirToken}/?p=/../../..`);
   expect(resp.status()).toBe(400);
 });
+
+// The share pages do not load the authenticated UI bundle; their timestamp
+// formatting now comes from the shared public-share bundle instead of an inline
+// <script> (which is what let script-src drop 'unsafe-inline').
+test("directory share formats timestamps without inline scripts", async ({ page }) => {
+  await page.goto(`/d/${dirToken}/`);
+  await expect(page.locator("[data-ts]").first()).not.toHaveText("");
+
+  const inline = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("script"))
+      .filter((s) => !s.src && s.type !== "application/json")
+      .map((s) => s.textContent || ""),
+  );
+  expect(inline.join("").trim()).toBe("");
+});

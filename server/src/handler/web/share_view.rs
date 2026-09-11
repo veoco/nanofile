@@ -52,6 +52,7 @@ fn resolve_share_subpath(link: &share_link::Model, requested: &str) -> Result<St
 #[template(path = "web/share_view.html")]
 struct ShareViewTemplate {
     pub t: &'static I18n,
+    pub urls: &'static crate::static_assets::TemplateUrls,
     pub file_name: String,
     pub file_ext: String,
     pub file_size: String,
@@ -257,6 +258,7 @@ pub async fn shared_file_view(
 
     let tpl = ShareViewTemplate {
         t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        urls: crate::static_assets::template_urls(),
         file_name: file_name.clone(),
         file_ext,
         file_size: format_size(file_size),
@@ -351,6 +353,7 @@ pub async fn shared_file_view_post(
 #[template(path = "web/shared_dir_view.html")]
 struct SharedDirViewTemplate {
     pub t: &'static I18n,
+    pub urls: &'static crate::static_assets::TemplateUrls,
     pub token: String,
     pub dir_name: String,
     pub dir_path: String,
@@ -606,6 +609,7 @@ pub async fn shared_dir_view(
     let download_url = format!("/d/{}/?dl=1", link.token);
     let tpl = SharedDirViewTemplate {
         t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        urls: crate::static_assets::template_urls(),
         token: link.token.clone(),
         dir_name,
         dir_path: sub_path.to_string(),

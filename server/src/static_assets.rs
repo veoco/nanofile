@@ -110,6 +110,20 @@ asset_data!(
     FP_PUBLIC_UPLOAD_JS,
     "js/public-upload.bundle.js"
 );
+asset_data!(
+    THEME_INIT_JS_HASH,
+    THEME_INIT_JS_LM,
+    ETAG_THEME_INIT_JS,
+    FP_THEME_INIT_JS,
+    "js/theme-init.bundle.js"
+);
+asset_data!(
+    PUBLIC_SHARE_JS_HASH,
+    PUBLIC_SHARE_JS_LM,
+    ETAG_PUBLIC_SHARE_JS,
+    FP_PUBLIC_SHARE_JS,
+    "js/public-share.bundle.js"
+);
 
 // ─── Template URLs (for Askama templates, fingerprinted filenames) ──────────
 
@@ -123,6 +137,11 @@ pub struct TemplateUrls {
     pub common_js: &'static str,
     pub file_browser_js: &'static str,
     pub public_upload_js: &'static str,
+    /// Blocking `<head>` script restoring the saved theme/view-mode before the
+    /// first paint (kept out of the inline CSP).
+    pub theme_init_js: &'static str,
+    /// Timestamp formatting for the public share pages.
+    pub public_share_js: &'static str,
     pub favicon: &'static str,
     pub version: &'static str,
 }
@@ -134,6 +153,8 @@ pub fn template_urls() -> &'static TemplateUrls {
         common_js: Box::leak(format!("/static/{}", *FP_COMMON_JS).into_boxed_str()),
         file_browser_js: Box::leak(format!("/static/{}", *FP_FB_JS).into_boxed_str()),
         public_upload_js: Box::leak(format!("/static/{}", *FP_PUBLIC_UPLOAD_JS).into_boxed_str()),
+        theme_init_js: Box::leak(format!("/static/{}", *FP_THEME_INIT_JS).into_boxed_str()),
+        public_share_js: Box::leak(format!("/static/{}", *FP_PUBLIC_SHARE_JS).into_boxed_str()),
         favicon: Box::leak(format!("/static/{}", *FP_FAVICON).into_boxed_str()),
         version: env!("CARGO_PKG_VERSION"),
     });
@@ -171,6 +192,18 @@ fn resolve_asset(path: &str) -> Option<(&'static str, &'static str, &'static str
             "js/public-upload.bundle.js",
             &*ETAG_PUBLIC_UPLOAD_JS,
             &*PUBLIC_UPLOAD_JS_LM,
+        ))
+    } else if path == "js/theme-init.bundle.js" || path == *FP_THEME_INIT_JS {
+        Some((
+            "js/theme-init.bundle.js",
+            &*ETAG_THEME_INIT_JS,
+            &*THEME_INIT_JS_LM,
+        ))
+    } else if path == "js/public-share.bundle.js" || path == *FP_PUBLIC_SHARE_JS {
+        Some((
+            "js/public-share.bundle.js",
+            &*ETAG_PUBLIC_SHARE_JS,
+            &*PUBLIC_SHARE_JS_LM,
         ))
     } else if path == "img/favicon.svg" || path == *FP_FAVICON {
         Some(("img/favicon.svg", &*ETAG_FAVICON, &*FAVICON_LM))

@@ -2,7 +2,7 @@
 <!DOCTYPE html>
 <html lang="{{ t.lang }}" class="h-full bg-surface-50 dark:bg-surface-900">
 <head>
-    <script>(function(){if(localStorage.getItem("darkMode")==="true")document.documentElement.classList.add("dark");})();</script>
+    <script src="{{ urls.theme_init_js }}"></script>
     <style>
         :where(html) { background-color: #f8fafc; }
         :where(html.dark) { background-color: #0f172a; }
@@ -14,7 +14,6 @@
     <link rel="icon" type="image/svg+xml" href="{{ urls.favicon }}">
     <link rel="stylesheet" href="{{ urls.css }}">
     {% block head_meta %}{% endblock %}
-    <script>(function(){var v=localStorage.getItem("fileViewMode");if(v==="grid"||v==="gallery")document.documentElement.dataset.view=v;})();</script>
 </head>
 <body class="h-full">
     <!-- Global loading bar (hidden by default) -->
@@ -69,7 +68,10 @@
         </div>
     </nav>
 
-    <script>window.__T = {{ t.js_dict()|safe }};</script>
+    {# Translation table as a JSON data block: not executable, so it needs no
+       nonce and keeps script-src free of 'unsafe-inline'. The bundle publishes
+       it as window.__T. #}
+    <script type="application/json" id="__i18n">{{ t.js_dict()|safe }}</script>
     <script src="{{ urls.common_js }}"></script>
     {% block scripts %}{% endblock %}
 </body>

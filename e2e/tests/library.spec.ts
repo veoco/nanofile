@@ -96,3 +96,44 @@ test("renders folder icon for normal and lock icon for encrypted libraries", asy
   await expect(encRow.locator("a svg")).toHaveCount(1);
   await expect(encRow).toContainText("Encrypted");
 });
+
+// The pre-paint preference guard and the translation table used to be inline
+// <script> blocks. They are now an external bundle plus a JSON data block so
+// the Content-Security-Policy can drop 'unsafe-inline' from script-src; these
+// tests pin that they still work.
+test("saved preferences are applied before paint", async ({ page }) => {
+  await openLibraries(page);
+
+  await page.evaluate(() => {
+    localStorage.setItem("darkMode", "true");
+    localStorage.setItem("fileViewMode", "gallery");
+  });
+  await page.reload();
+  await page.waitForSelector('ul[role="list"] li');
+
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await expect(page.locator("html")).toHaveAttribute("data-view", "gallery");
+
+  // Leave the browser state clean for later tests.
+  await page.evaluate(() => {
+    localStorage.removeItem("darkMode");
+    localStorage.removeItem("fileViewMode");
+  });
+});
+
+test("the translation table is published from the JSON data block", async ({ page }) => {
+  await openLibraries(page);
+
+  const dict = await page.evaluate(() => (window as unknown as { __T?: Record<string, string> }).__T);
+  expect(dict).toBeTruthy();
+  expect(dict!["app.name"]).toBeTruthy();
+
+  // No inline executable script remains: every script is either external or a
+  // non-executable JSON block.
+  const inline = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("script"))
+      .filter((s) => !s.src && s.type !== "application/json")
+      .map((s) => s.textContent || ""),
+  );
+  expect(inline.join("").trim()).toBe("");
+});

@@ -1,6 +1,11 @@
 // common entry — loaded on every page. Bundles the core layer and all
 // page-scoped modules; each module registers its own delegated event handlers
 // (no window globals).
+//
+// i18n-init must be imported first: it publishes `window.__T` from the
+// server-rendered JSON block, and ES module dependencies evaluate in import
+// order, so every later module sees the dictionary.
+import "../core/i18n-init.js";
 import "../core/nav.js";
 import "../core/pages.js";
 import "../core/modal.js";

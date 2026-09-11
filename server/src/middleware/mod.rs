@@ -12,10 +12,18 @@ use axum::http::{HeaderValue, header};
 
 /// Add baseline security headers to every response.
 ///
-/// `script-src` and `style-src` allow `'unsafe-inline'` while the templates
-/// still carry inline scripts and `style=""` attributes; everything else is
-/// locked to `'self'` (no fallback to `*`), so remote script, frame, font and
-/// object loading is blocked.
+/// `script-src 'self'` — no `'unsafe-inline'`: the pre-paint preference guards
+/// load as a blocking external script, the share pages share one bundle, and
+/// the translation table travels as a `type="application/json"` data block,
+/// which is not executable and therefore not subject to `script-src`.
+///
+/// `style-src` still allows `'unsafe-inline'`: the public share pages carry
+/// their own inline `<style>` block, and tag colours are runtime data rendered
+/// as `style="background-color: ..."` attributes. Tightening it needs those
+/// moved to CSS classes first.
+///
+/// Everything else is locked to `'self'` (no fallback to `*`), so remote
+/// script, frame, font and object loading is blocked.
 ///
 /// `Strict-Transport-Security` is only sent when `site_url` is HTTPS: a
 /// plain-HTTP LAN deployment must not be pinned to HTTPS by its own server.
@@ -51,7 +59,7 @@ fn apply_security_headers(headers: &mut axum::http::HeaderMap, secure: bool) {
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; \
+            "default-src 'self'; script-src 'self'; \
              style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
              font-src 'self'; connect-src 'self' ws: wss:; \
              object-src 'none'; frame-ancestors 'none'; base-uri 'self'; \
@@ -181,6 +189,15 @@ mod security_header_tests {
         assert_eq!(headers.get("x-frame-options").unwrap(), "DENY");
         assert_eq!(headers.get("referrer-policy").unwrap(), "same-origin");
         let csp = headers.get("content-security-policy").unwrap();
-        assert!(csp.to_str().unwrap().contains("default-src 'self'"));
+        let csp = csp.to_str().unwrap();
+        assert!(csp.contains("default-src 'self'"));
+        // Inline scripts must stay rejected: every inline <script> was moved to
+        // an external bundle or a JSON data block.
+        let script_src = csp
+            .split(';')
+            .find(|d| d.trim_start().starts_with("script-src"))
+            .expect("script-src directive");
+        assert_eq!(script_src.trim(), "script-src 'self'");
+        assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
     }
 }

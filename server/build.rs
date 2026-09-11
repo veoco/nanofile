@@ -119,6 +119,8 @@ fn run_esbuild_with(cmd: &str, extra_args: &[&str]) -> bool {
     args.push("frontend/entries/common.js");
     args.push("frontend/entries/file-browser.js");
     args.push("frontend/entries/public-upload.js");
+    args.push("frontend/entries/theme-init.js");
+    args.push("frontend/entries/public-share.js");
     args.push("--bundle");
     args.push("--minify");
     args.push("--format=iife");
