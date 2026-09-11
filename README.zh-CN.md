@@ -90,7 +90,7 @@ npm install
 cargo build --release -p server
 
 # 3. 配置
-cp config.toml .   # 按需编辑——见下方"配置"
+cp config.toml.example config.toml   # 按需编辑——见下方"配置"
 
 # 4. 运行
 ./target/release/nanofile

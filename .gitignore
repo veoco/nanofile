@@ -1,6 +1,10 @@
 /target
 /data
 server/data/
+# The live config holds the master secret_key (and optionally admin_init /
+# notification / encryption keys), so it is not tracked. `config.toml.example`
+# is the shipped, documented template.
+/config.toml
 config.toml.bak
 config.toml.*.tmp
 *.db

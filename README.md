@@ -105,7 +105,7 @@ npm install
 cargo build --release -p server
 
 # 3. Configure
-cp config.toml .   # edit to suit — see Configuration below
+cp config.toml.example config.toml   # edit to suit — see Configuration below
 
 # 4. Run
 ./target/release/nanofile
@@ -129,9 +129,13 @@ Settings are read from `config.toml` in the working directory. Override the path
 `--config <path>` (highest priority) or the `NANOFILE_CONFIG` environment variable. If the file is
 missing, the server falls back to built-in defaults, so it can start with zero config — supply
 whatever you need via `NANOFILE_*` environment variables. Every key can also be overridden with
-a `NANOFILE_*` environment variable — the shipped `config.toml` lists the exact variable name in a
-comment above each key (e.g. `NANOFILE_DATABASE_URL`, `NANOFILE_SERVER_PORT`). Environment variables
-always win at runtime and are never written into the file.
+a `NANOFILE_*` environment variable — the shipped `config.toml.example` lists the exact variable name
+in a comment above each key (e.g. `NANOFILE_DATABASE_URL`, `NANOFILE_SERVER_PORT`). Environment
+variables always win at runtime and are never written into the file.
+
+The live `config.toml` is deliberately not tracked by git: it holds the master `secret_key` (and
+optionally the admin-init, notification and storage-encryption keys). Copy the example, keep your
+own copy out of version control.
 
 On upgrade to a newer release, `config.toml` is automatically migrated in place (comments preserved)
 when the config format changed, backed up as `config.toml.bak` first; on a read-only mount the

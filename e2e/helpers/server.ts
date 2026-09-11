@@ -70,8 +70,26 @@ export async function startServer(
 
   // Pass the config path explicitly via --config so the server does not depend
   // on the working directory. binaryPath is {repoRoot}/target/debug/nanofile.
+  //
+  // The live `config.toml` is gitignored (it holds the master secret), so a
+  // fresh checkout only has `config.toml.example`. Prefer the former when it
+  // exists — a developer may have tuned it — and fall back to the template.
   const repoRoot = path.resolve(path.dirname(binaryPath), "..", "..");
-  const child = spawn(binaryPath, ["--config", path.join(repoRoot, "config.toml")], {
+  const localConfig = path.join(repoRoot, "config.toml");
+  const exampleConfig = path.join(repoRoot, "config.toml.example");
+  const configPath = fs.existsSync(localConfig)
+    ? localConfig
+    : (() => {
+        if (!fs.existsSync(exampleConfig)) {
+          throw new Error(
+            `neither config.toml nor config.toml.example found in ${repoRoot}`,
+          );
+        }
+        const generated = path.join(tmpRoot, "config.toml");
+        fs.copyFileSync(exampleConfig, generated);
+        return generated;
+      })();
+  const child = spawn(binaryPath, ["--config", configPath], {
     cwd: repoRoot,
     env,
     stdio: ["ignore", "pipe", "pipe"],

@@ -32,7 +32,7 @@ site_url = "http://127.0.0.1:8082"
 max_upload_size_mb = 4096
 # Cap for JSON/Form request bodies (MiB). Applied app-wide; upload routes use
 # max_upload_size_mb instead, so a single JSON request cannot buffer gigabytes
-# into memory (L-3). Env: NANOFILE_SERVER_MAX_JSON_BODY_MB
+# into memory. Env: NANOFILE_SERVER_MAX_JSON_BODY_MB
 max_json_body_mb = 64
 # Per-chunk cap for resumable (Content-Range) uploads. Enforced before the chunk
 # body is read: an oversized chunk is rejected from the header alone, and the
@@ -65,6 +65,15 @@ share_link_enabled = true
 # honored for rate limiting when the TCP peer is one of these. Keep empty when
 # the server is exposed directly.
 trusted_proxies = []
+# Hosts allowed in generated absolute URLs (download / block links) while
+# `site_url` above is still the built-in default. In that state the request
+# Host header is echoed into those URLs so LAN clients get a reachable address,
+# but a Host the server did not choose is attacker-influenced (DNS rebinding,
+# wildcard vhost) and a client following the URL would send its token there.
+# When this list is non-empty only these values are accepted; anything else
+# falls back to `site_url`. Simplest alternative: set `site_url` to the address
+# clients actually use. Env: NANOFILE_SERVER_ALLOWED_HOSTS
+allowed_hosts = []
 # System tray icon (only exists in binaries built with `--features tray`;
 # plain builds have no tray code at all). Set to false (or NANOFILE_SERVER_TRAY=false)
 # to run headless even in a desktop session — e.g. for an auto-started instance
@@ -152,7 +161,7 @@ block_encryption_mode = "off"
 #   "off" skips the check. The official server does not verify, but every
 #   legitimate repo-v1 client sends a matching id.
 verify_fs_objects = "strict"
-# Cycle/DoS guard for directory-tree walks (see H-5): maximum BFS depth and
+# Cycle/DoS guard for directory-tree walks: maximum BFS depth and
 # total nodes visited per walk. Defaults are far above any real tree.
 max_tree_depth = 512
 max_tree_visits = 1000000
@@ -185,6 +194,10 @@ registration_max_per_hour = 5
 totp_max_attempts = 5
 # Max password attempts for password-protected share/upload links per IP per hour (0 = unlimited)
 link_password_max_per_hour = 5
+# Max failed encrypted-library password checks per (user, library) per hour
+# (0 = unlimited). The library KDF iteration count is fixed by the Seafile wire
+# protocol, so this throttling is the control against online guessing.
+repo_password_max_per_hour = 5
 # Max anonymous share-link downloads per IP per minute (0 = unlimited)
 share_download_max_per_minute = 30
 reindex_max_per_hour = 5
@@ -277,6 +290,12 @@ private_key = ""
 # ^ When empty, derived from [server] secret_key automatically.
 #   Set explicitly if you need a different key for notification JWTs
 #   (e.g., when notification events are posted by external services).
+# Subscription tokens (handed to every library member) and event tokens
+# (which may publish to any library) are signed with separate subkeys derived
+# from the value above, so a member's token is never accepted by
+# /notification/events. Set to true only to keep an external publisher that
+# still signs event tokens with the undivided key working.
+accept_legacy_event_tokens = false
 # Seconds between WebSocket Ping frames (0 = disable keepalive).
 ping_interval = 30
 # Seconds without a Pong after which the connection is dropped.

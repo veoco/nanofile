@@ -278,7 +278,7 @@ jobs:
             cp "$dir/$bin" "${archive_dir}/$bin"
             cp README.md "${archive_dir}/" 2>/dev/null || true
             cp LICENSE "${archive_dir}/" 2>/dev/null || true
-            cp config.toml "${archive_dir}/" 2>/dev/null || true
+            cp config.toml.example "${archive_dir}/" 2>/dev/null || true
 
             if [ "$ext" = ".zip" ]; then
               (cd "${archive_dir}" && 7z a "../release-assets/${archive_dir}.zip" ./* >/dev/null)
