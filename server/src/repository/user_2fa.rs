@@ -19,20 +19,49 @@ pub trait User2faRepository: Send + Sync {
 
 pub struct DbUser2faRepository {
     db: Arc<DatabaseConnection>,
+    /// Encrypts the TOTP seed at rest. The seed is password-equivalent: anyone
+    /// who reads it can mint valid codes, so a leaked database must not yield
+    /// usable second factors.
+    cipher: Arc<infra::crypto::totp_encryption::TotpCipher>,
 }
 
 impl DbUser2faRepository {
-    pub fn new(db: Arc<DatabaseConnection>) -> Self {
-        Self { db }
+    pub fn new(
+        db: Arc<DatabaseConnection>,
+        cipher: Arc<infra::crypto::totp_encryption::TotpCipher>,
+    ) -> Self {
+        Self { db, cipher }
+    }
+
+    /// Decrypt a stored seed.
+    ///
+    /// An encrypted value that cannot be decrypted (e.g. the server secret was
+    /// rotated) is a hard error: 2FA verification must fail closed rather than
+    /// fall back to a seed nobody can vouch for.
+    fn decrypt_secret(&self, model: user_2fa::Model) -> Result<user_2fa::Model, AppError> {
+        let decrypted = self.cipher.decrypt(&model.totp_secret).ok_or_else(|| {
+            AppError::Internal(format!(
+                "TOTP seed for user {} could not be decrypted; the server secret may have changed",
+                model.user_id
+            ))
+        })?;
+        Ok(user_2fa::Model {
+            totp_secret: decrypted,
+            ..model
+        })
     }
 }
 
 #[async_trait]
 impl User2faRepository for DbUser2faRepository {
     async fn find_by_user_id(&self, user_id: i32) -> Result<Option<user_2fa::Model>, AppError> {
-        Ok(user_2fa::Entity::find_by_id(user_id)
+        match user_2fa::Entity::find_by_id(user_id)
             .one(self.db.as_ref())
-            .await?)
+            .await?
+        {
+            Some(model) => Ok(Some(self.decrypt_secret(model)?)),
+            None => Ok(None),
+        }
     }
 
     async fn get_or_create(
@@ -44,18 +73,25 @@ impl User2faRepository for DbUser2faRepository {
             .one(self.db.as_ref())
             .await?;
         if let Some(model) = existing {
-            Ok(model)
+            self.decrypt_secret(model)
         } else {
+            // Store the seed encrypted; callers keep working with the plaintext
+            // base32 value they passed in.
+            let stored = self.cipher.encrypt(&totp_secret);
             let model = user_2fa::ActiveModel {
                 user_id: Set(user_id),
-                totp_secret: Set(totp_secret),
+                totp_secret: Set(stored),
                 algorithm: Set("SHA1".to_string()),
                 digits: Set(6i16),
                 period: Set(30i16),
                 enabled: Set(false),
                 enabled_at: Set(None),
             };
-            Ok(model.insert(self.db.as_ref()).await?)
+            let inserted = model.insert(self.db.as_ref()).await?;
+            Ok(user_2fa::Model {
+                totp_secret,
+                ..inserted
+            })
         }
     }
 

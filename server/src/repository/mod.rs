@@ -126,6 +126,7 @@ impl Repositories {
     pub fn new(
         db: Arc<DatabaseConnection>,
         token_cipher: Arc<infra::crypto::token_encryption::TokenCipher>,
+        totp_cipher: Arc<infra::crypto::totp_encryption::TotpCipher>,
     ) -> Self {
         Self {
             user: Arc::new(DbUserRepository::new(db.clone())),
@@ -151,7 +152,7 @@ impl Repositories {
                 DbApiTokenRepository::new(db.clone()),
             ))),
             s2fa_token: Arc::new(DbS2faTokenRepository::new(db.clone())),
-            user_2fa: Arc::new(DbUser2faRepository::new(db.clone())),
+            user_2fa: Arc::new(DbUser2faRepository::new(db.clone(), totp_cipher)),
             sso_login_token: Arc::new(DbSsoLoginTokenRepository::new(db.clone())),
             client_login_token: Arc::new(DbClientLoginTokenRepository::new(db.clone())),
             metadata_config: Arc::new(DbMetadataConfigRepository::new(db.clone())),
@@ -169,14 +170,17 @@ impl Repositories {
         }
     }
 
-    /// Test-only constructor: derives the sync-token cipher from an empty
-    /// master key. Production must call [`Repositories::new`] with a cipher
+    /// Test-only constructor: derives the repository ciphers from an empty
+    /// master key. Production must call [`Repositories::new`] with ciphers
     /// derived from the configured server secret.
     #[cfg(test)]
     pub fn new_for_tests(db: Arc<DatabaseConnection>) -> Self {
         Self::new(
             db,
             Arc::new(infra::crypto::token_encryption::TokenCipher::from_master_key(b"")),
+            Arc::new(infra::crypto::totp_encryption::TotpCipher::from_master_key(
+                b"",
+            )),
         )
     }
 

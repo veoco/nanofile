@@ -198,9 +198,15 @@ impl AppState {
         );
 
         let db = Arc::new(db);
+        // TOTP seeds are password-equivalent, so they are encrypted at rest
+        // under a key domain-separated from the server secret.
+        let totp_cipher = Arc::new(infra::crypto::totp_encryption::TotpCipher::from_master_key(
+            config.server.secret_key.as_bytes(),
+        ));
         let repos = Arc::new(crate::repository::Repositories::new(
             db.clone(),
             token_cipher.clone(),
+            totp_cipher,
         ));
 
         // Apply sync-protocol hardening knobs (process-wide).
@@ -209,7 +215,7 @@ impl AppState {
             config.sync.max_tree_visits,
         );
         crate::service::sync::configure_fs_object_verification(&config.sync.verify_fs_objects);
-        // Upload-route body limit (L-3); the JSON default is applied in main.rs.
+        // Upload-route body limit; the JSON default is applied in main.rs.
         crate::body_limit::configure(config.server.max_upload_size_mb);
 
         // Full-text indexer (its commit task is registered below alongside the
