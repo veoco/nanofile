@@ -151,7 +151,7 @@ reqwest = { version = "0.13", features = ["json", "multipart", "cookies", "form"
 image = { version = "0.25", features = ["tiff"] }
 tempfile = "3"
 tokio-tungstenite = "0.29"
-zip = "2"
+zip = "8"
 
 [[bin]]
 name = "nanofile"
