@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use crate::repository::Repositories;
-use crate::service::auth::password::{DUMMY_PASSWORD_HASH, verify_password_async};
+use crate::service::auth::password::{
+    dummy_password_hash, hash_password_async, needs_rehash, verify_password_async,
+};
 use crate::service::auth::s2fa::{S2FA_TTL_SECONDS, generate_s2fa_token};
 use crate::service::auth::token::generate_api_token;
 use crate::service::auth::totp::TotpManager;
@@ -100,7 +102,7 @@ impl LoginService {
                 // enumeration via response-time side channel.
                 let _ = verify_password_async(
                     password.to_string(),
-                    DUMMY_PASSWORD_HASH.to_string(),
+                    dummy_password_hash(self.password_hash_iterations),
                     self.password_hash_iterations,
                 )
                 .await;
@@ -195,6 +197,25 @@ impl LoginService {
 
         // ── Login succeeded — create API token ─────────────────────────────
         self.login_rate_limiter.clear_login_failure(&login_keys);
+
+        // Upgrade the stored hash if it predates the embedded cost or was
+        // written with a different one. Best-effort: a failed write must not
+        // block a correct password.
+        if needs_rehash(&user_record.password_hash, self.password_hash_iterations) {
+            let upgraded =
+                hash_password_async(password.to_string(), self.password_hash_iterations).await;
+            if let Err(e) = self
+                .repos
+                .user
+                .update_password(user_record.id, upgraded)
+                .await
+            {
+                tracing::warn!(
+                    "failed to upgrade password hash for user {}: {e}",
+                    user_record.id
+                );
+            }
+        }
 
         let token_value = generate_api_token();
         let now = chrono::Utc::now().timestamp();

@@ -568,3 +568,60 @@ async fn test_backup_code_verify_and_consume() {
             .unwrap()
     );
 }
+
+/// A hash written before the iteration count was embedded
+/// (`hex(salt):hex(hash)`) must still verify, and a successful login must
+/// upgrade it to the versioned format — otherwise a later change to
+/// `auth.password_hash_iterations` would silently lock the user out.
+#[tokio::test]
+async fn test_legacy_password_hash_verifies_and_is_upgraded() {
+    let server = TestServer::start().await;
+
+    // Reproduce the old format at the fixture's configured cost (1000).
+    let password = "legacy-pass-123";
+    let salt = [9u8; 16];
+    let legacy = {
+        let mut key = [0u8; 32];
+        pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password.as_bytes(), &salt, 1000, &mut key);
+        format!("{}:{}", hex::encode(salt), hex::encode(key))
+    };
+    assert!(!legacy.contains('$'));
+
+    let now = chrono::Utc::now().timestamp();
+    infra::entity::user::ActiveModel {
+        id: sea_orm::NotSet,
+        email: sea_orm::Set("legacy@example.com".to_string()),
+        password_hash: sea_orm::Set(legacy.clone()),
+        is_active: sea_orm::Set(true),
+        is_admin: sea_orm::Set(false),
+        created_at: sea_orm::Set(now),
+        last_login_at: sea_orm::NotSet,
+        invited_by: sea_orm::Set(None),
+        storage_quota: sea_orm::NotSet,
+        name: sea_orm::NotSet,
+        display_name: sea_orm::NotSet,
+        language: sea_orm::NotSet,
+    }
+    .insert(server.db.as_ref())
+    .await
+    .unwrap();
+
+    // The legacy hash verifies and the login succeeds.
+    let client = server.client();
+    let resp = client.login("legacy@example.com", password).await;
+    assert_eq!(resp.status(), 200, "legacy hash must still authenticate");
+
+    // …and the stored value was upgraded in place.
+    let stored = server
+        .repos
+        .user
+        .find_by_email("legacy@example.com")
+        .await
+        .unwrap()
+        .expect("user still exists")
+        .password_hash;
+    assert!(
+        stored.starts_with("pbkdf2_sha256$1000$"),
+        "hash should be upgraded to the versioned format, got {stored}"
+    );
+}

@@ -12,7 +12,9 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::i18n::I18n;
 use crate::repository::api_token::CreateSessionTokenParams;
-use crate::service::auth::password::{DUMMY_PASSWORD_HASH, verify_password_async};
+use crate::service::auth::password::{
+    dummy_password_hash, hash_password_async, needs_rehash, verify_password_async,
+};
 use crate::service::auth::password_reset::PasswordResetService;
 use crate::service::auth::registration::{RegistrationParams, RegistrationService};
 use crate::service::auth::token::generate_api_token;
@@ -226,7 +228,7 @@ pub async fn login(
             // enumeration via a response-time side channel.
             let _ = verify_password_async(
                 form.password.clone(),
-                DUMMY_PASSWORD_HASH.to_string(),
+                dummy_password_hash(state.config.auth.password_hash_iterations),
                 state.config.auth.password_hash_iterations,
             )
             .await;
@@ -287,6 +289,31 @@ pub async fn login(
     // Successful login — forgive this address/pair, but keep the
     // distinct-account spray history.
     state.auth_limiters.login.clear_login_failure(&login_keys);
+
+    // Upgrade the stored hash if it predates the embedded cost or was written
+    // with a different one. Best-effort: a failed write must not block a
+    // correct password.
+    if needs_rehash(
+        &user_record.password_hash,
+        state.config.auth.password_hash_iterations,
+    ) {
+        let upgraded = hash_password_async(
+            form.password.clone(),
+            state.config.auth.password_hash_iterations,
+        )
+        .await;
+        if let Err(e) = state
+            .repos
+            .user
+            .update_password(user_record.id, upgraded)
+            .await
+        {
+            tracing::warn!(
+                "failed to upgrade password hash for user {}: {e}",
+                user_record.id
+            );
+        }
+    }
 
     // ── Check for 2FA ─────────────────────────────────────────────────
     let two_fa = state.repos.user_2fa.find_by_user_id(user_record.id).await?;
