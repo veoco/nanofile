@@ -117,7 +117,7 @@ pub async fn zip_task_handler(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
-    Json(payload): Json<ZipTaskRequest>,
+    Json(mut payload): Json<ZipTaskRequest>,
 ) -> Result<JsonResponse<ZipTaskResponse>, AppError> {
     // Verify read permission
     crate::domain::permission::check_repo_read_permission(
@@ -126,6 +126,12 @@ pub async fn zip_task_handler(
         auth.user_id,
     )
     .await?;
+
+    // Bound and de-duplicate the requested names before any tree walk: each
+    // directory name triggers a full recursive traversal while holding one of
+    // the (few) global ZIP permits, so an unbounded list is a memory and
+    // availability hazard, not just wasted work.
+    crate::handler::sanitize_dirent_list(&mut payload.dirents)?;
 
     if payload.dirents.is_empty() {
         return Err(AppError::BadRequest(

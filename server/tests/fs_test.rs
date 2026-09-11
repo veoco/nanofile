@@ -237,6 +237,60 @@ async fn test_recv_fs_invalid_obj_id() {
     assert_eq!(resp.status(), 500);
 }
 
+/// A directory object must be rejected when it does not declare `type: 3`.
+///
+/// The object type used to be taken from the client-supplied `type` field, so
+/// dropping that field (or setting it to 1) skipped dirent-name validation
+/// while the tree readers still parsed the object as a directory — letting a
+/// writable member plant `..`, `/` or control characters.
+#[tokio::test]
+async fn test_recv_fs_dir_without_dir_type_rejected() {
+    let (server, _api_token, repo_id, sync_token) = setup_repo().await;
+    let client = server.client();
+
+    // Has `dirents` (so it is structurally a directory) but claims to be a file.
+    let payload = serde_json::json!({
+        "dirents": [{"id": random_hex_id(), "mode": 33188, "mtime": 0, "name": ".."}],
+        "type": 1,
+        "version": 1,
+    });
+    let (fs_id, compressed) = make_fs_entry(&payload);
+    let resp = client
+        .recv_fs(
+            &sync_token,
+            &repo_id,
+            pack_fs_entries(&[(fs_id, compressed)]),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "mismatched object type must be rejected"
+    );
+}
+
+/// A directory object may not contain an illegal dirent name.
+#[tokio::test]
+async fn test_recv_fs_dir_with_traversal_name_rejected() {
+    let (server, _api_token, repo_id, sync_token) = setup_repo().await;
+    let client = server.client();
+
+    let payload = serde_json::json!({
+        "dirents": [{"id": random_hex_id(), "mode": 16384, "mtime": 0, "name": ".."}],
+        "type": 3,
+        "version": 1,
+    });
+    let (fs_id, compressed) = make_fs_entry(&payload);
+    let resp = client
+        .recv_fs(
+            &sync_token,
+            &repo_id,
+            pack_fs_entries(&[(fs_id, compressed)]),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "`..` dirent name must be rejected");
+}
+
 #[tokio::test]
 async fn test_recv_fs_truncated_body() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;

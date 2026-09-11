@@ -64,6 +64,82 @@ async fn test_beshare_repo_requires_write_permission() {
     assert_eq!(members[0]["email"], "test@example.com");
 }
 
+/// `?op=setpassword` must require access to the library.
+///
+/// It verifies the supplied password against the stored `magic` and reports the
+/// outcome through the status code, so without a membership check it is a
+/// password oracle for any signed-in user who knows a library id.
+#[tokio::test]
+async fn test_set_repo_password_requires_repo_access() {
+    let f = TestFixture::new().await;
+
+    let _uid2 = create_test_user(&f.server.db, "outsider@test.com", "password").await;
+    let resp = f.client.login("outsider@test.com", "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let outsider_token = body["token"].as_str().unwrap().to_string();
+
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/?op=setpassword", f.repo_id),
+            Some(&outsider_token),
+            &[("password", "guess")],
+        )
+        .await;
+
+    assert_eq!(
+        resp.status(),
+        403,
+        "a non-member must not be able to probe a library password"
+    );
+}
+
+/// The async batch endpoints must reject an empty dirent list rather than
+/// indexing into it, and must bound the list they accept.
+#[tokio::test]
+async fn test_async_batch_rejects_empty_and_oversized_dirents() {
+    let f = TestFixture::new().await;
+
+    // Empty list: previously indexed `src_dirents[0]` and panicked.
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/repos/async-batch-copy-item/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "src_repo_id": f.repo_id,
+                "src_parent_dir": "/",
+                "src_dirents": [],
+                "dst_repo_id": f.repo_id,
+                "dst_parent_dir": "/",
+            }),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "empty dirent list must be a client error"
+    );
+
+    // Oversized list: bounded independently of the body limit.
+    let many: Vec<String> = (0..1500).map(|i| format!("f{i}.txt")).collect();
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/repos/async-batch-copy-item/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "src_repo_id": f.repo_id,
+                "src_parent_dir": "/",
+                "src_dirents": many,
+                "dst_repo_id": f.repo_id,
+                "dst_parent_dir": "/",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "oversized dirent list must be rejected");
+}
+
 #[tokio::test]
 async fn test_beshare_repo_readonly_member_cannot_share() {
     let f = TestFixture::new().await;
@@ -114,7 +190,7 @@ async fn test_beshare_repo_readonly_member_cannot_share() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// M-1: Member management is owner-only — an rw member (a shared
+// Member management is owner-only — an rw member (a shared
 // collaborator) must not be able to add / modify / remove members,
 // which would let them impersonate the owner.
 // ─────────────────────────────────────────────────────────────────────
@@ -843,7 +919,7 @@ async fn test_upload_file_normal_name_succeeds() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// M-7: expired token cleanup removes stale rows.
+// expired token cleanup removes stale rows.
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]

@@ -44,7 +44,9 @@ impl Downloader {
     ) -> Result<Vec<u8>, AppError> {
         let (file_data, block_ids) = Self::download_file_stream(repos, repo_id, path).await?;
 
-        let mut out = Vec::with_capacity(file_data.size.min(max_bytes as i64) as usize);
+        // Clamp from below before the cast: a negative `size` would otherwise
+        // wrap to `usize::MAX` and abort the request with a capacity overflow.
+        let mut out = Vec::with_capacity(file_data.size.max(0).min(max_bytes as i64) as usize);
         for block_id in &block_ids {
             if out.len() >= max_bytes {
                 break;
@@ -81,7 +83,9 @@ impl Downloader {
         dec_key: Option<(&[u8], &[u8])>,
         max_bytes: usize,
     ) -> Result<Vec<u8>, AppError> {
-        let mut out = Vec::with_capacity(size.min(max_bytes as i64) as usize);
+        // See `download_file_limited`: clamp before casting so a negative size
+        // cannot wrap into a `usize::MAX` capacity hint.
+        let mut out = Vec::with_capacity(size.max(0).min(max_bytes as i64) as usize);
         for block_id in block_ids {
             if out.len() >= max_bytes {
                 break;

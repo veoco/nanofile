@@ -219,6 +219,13 @@ pub async fn collect_selected_entries(
         } else {
             pending_files.push((entry.id.clone(), name.clone()));
         }
+
+        // Re-check the aggregate budget on **every** iteration, not just after
+        // the loop: each directory name expands to a full subtree, so without
+        // this the accumulated entry list can grow without bound (and the
+        // single post-loop check would only run once the memory was already
+        // committed).
+        check_zip_limits(all_files.len() + pending_files.len(), total_bytes, limits)?;
     }
 
     // Fetch all selected file block IDs in one batched query.

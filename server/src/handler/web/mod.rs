@@ -64,7 +64,12 @@ pub fn web_routes() -> Router<Arc<AppState>> {
         .route("/idx_progress", get(progress::idx_progress))
         .route(
             "/api/v2.1/repos/{repo_id}/zip-task/",
-            post(zip_download::zip_task_handler),
+            // Pure metadata: a parent dir plus a bounded list of names. Cap the
+            // body far below the app-wide JSON limit so a request cannot make
+            // the handler buffer megabytes of names it will only reject.
+            post(zip_download::zip_task_handler).layer(axum::extract::DefaultBodyLimit::max(
+                crate::handler::MAX_SMALL_BODY_BYTES,
+            )),
         )
         .route("/zip/{token}", get(zip_download::zip_download_handler))
 }

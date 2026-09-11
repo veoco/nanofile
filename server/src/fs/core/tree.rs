@@ -28,6 +28,14 @@ pub async fn read_fs_dir_data(
         .find_by_repo_and_fs_id(repo_id, fs_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("fs_object not found: {fs_id}")))?;
+    // Reject a type mismatch rather than parsing by shape alone: this keeps the
+    // single-object reader consistent with `read_fs_dir_data_batch`, which
+    // already filters on `obj_type`.
+    if obj.obj_type != SEAF_METADATA_TYPE_DIR as i8 {
+        return Err(AppError::NotFound(format!(
+            "fs_object {fs_id} is not a directory"
+        )));
+    }
     let data: FsDirData =
         serde_json::from_str(&obj.data).map_err(|e| AppError::internal(e.to_string()))?;
     Ok(data)
@@ -44,6 +52,13 @@ pub async fn read_fs_file_data(
         .find_by_repo_and_fs_id(repo_id, fs_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("fs_object not found: {fs_id}")))?;
+    // See `read_fs_dir_data`: `read_fs_file_data_batch` filters on `obj_type`,
+    // so the single-object reader must too.
+    if obj.obj_type != SEAF_METADATA_TYPE_FILE as i8 {
+        return Err(AppError::NotFound(format!(
+            "fs_object {fs_id} is not a file"
+        )));
+    }
     let data: FsFileData =
         serde_json::from_str(&obj.data).map_err(|e| AppError::internal(e.to_string()))?;
     Ok(data)

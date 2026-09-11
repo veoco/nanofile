@@ -20,11 +20,13 @@ pub struct BatchMoveRequest {
 pub async fn batch_move_items(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    req: Json<BatchMoveRequest>,
+    mut req: Json<BatchMoveRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if req.src_repo_id != req.dst_repo_id {
         return Err(AppError::BadRequest("cross-repo move not supported".into()));
     }
+
+    crate::handler::sanitize_dirent_list(&mut req.src_dirents)?;
 
     let repo_id = &req.src_repo_id;
 
@@ -71,11 +73,13 @@ pub struct SyncBatchCopyRequest {
 pub async fn sync_batch_copy_item(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<SyncBatchCopyRequest>,
+    mut body: Json<SyncBatchCopyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if body.src_repo_id != body.dst_repo_id {
         return Err(AppError::BadRequest("cross-repo copy not supported".into()));
     }
+
+    crate::handler::sanitize_dirent_list(&mut body.src_dirents)?;
 
     let repo_id = &body.src_repo_id;
 
@@ -117,8 +121,10 @@ pub struct BatchDeleteRequest {
 pub async fn batch_delete_item(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<BatchDeleteRequest>,
+    mut body: Json<BatchDeleteRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::handler::sanitize_dirent_list(&mut body.dirents)?;
+
     if body.dirents.is_empty() {
         return Ok(ok_json());
     }

@@ -8,7 +8,9 @@ use sea_orm::DatabaseConnection;
 
 use crate::indexer::TextIndexer;
 use crate::repository::Repositories;
-use base::common::{EMPTY_SHA1, FsDirData, S_IFDIR, SEAF_METADATA_TYPE_DIR};
+use base::common::{
+    EMPTY_SHA1, FsDirData, FsFileData, S_IFDIR, SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE,
+};
 use base::error::AppError;
 use base::sanitize::validate_filename;
 use infra::crypto::fs_id::sha1_hex;
@@ -52,6 +54,19 @@ fn fs_object_verify_mode() -> FsObjectVerifyMode {
 /// of a large repo, or a batch copy of many files) could saturate CPU and disk.
 /// Callers queue on the semaphore; the permit is released when the task ends.
 const MAX_CONCURRENT_REINDEX: usize = 4;
+
+/// Cap on the number of FS objects accepted in a single `recv-fs` pack.
+/// The request body is already bounded, but the entry count drives how many
+/// objects are parsed and inserted, so it is bounded independently.
+const MAX_FS_PACK_ENTRIES: usize = 4096;
+
+/// Cap on the **total** decompressed size of a single `recv-fs` pack.
+///
+/// `pack_fs` caps one object at 64 MiB, but without an aggregate cap a pack of
+/// many highly-compressible objects can expand a few MiB of body into gigabytes
+/// of resident memory: every object is decompressed and materialised before the
+/// single batched insert.
+const MAX_FS_PACK_DECOMPRESSED_BYTES: u64 = 128 * 1024 * 1024;
 
 static REINDEX_CONCURRENCY: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
@@ -213,32 +228,61 @@ impl SyncService {
         repo_id: &str,
         token: &str,
     ) -> Result<FolderPermResult, AppError> {
+        // Same validity rules as `SyncAuth`: repo binding, expiry and an active
+        // owner. This endpoint carries the token in the body, so it does not go
+        // through the middleware and must apply them itself.
+        if !crate::service::auth::token::verify_body_sync_token(&self.repos, repo_id, token).await?
+        {
+            return Ok(FolderPermResult {
+                valid: false,
+                permission: String::new(),
+            });
+        }
+
         let token_record = self
             .repos
             .sync_token
             .find_by_token_and_repo(token, repo_id)
             .await?;
+        let Some(record) = token_record else {
+            return Ok(FolderPermResult {
+                valid: false,
+                permission: String::new(),
+            });
+        };
 
-        if let Some(record) = token_record {
-            // Look up the token holder's own permission with a targeted query
-            // instead of loading every repo member and taking the first.
-            let permission = self
-                .repos
+        // The permission is the token holder's own membership. The repo owner
+        // has no `repo_members` row, so ownership must be detected explicitly —
+        // defaulting a missing row to "rw" would report rw for a member whose
+        // membership was revoked while they kept a valid token.
+        let owner_id = self
+            .repos
+            .repo
+            .find_by_id(repo_id)
+            .await?
+            .map(|r| r.owner_id);
+        let permission = if owner_id == Some(record.user_id) {
+            "rw".to_string()
+        } else {
+            self.repos
                 .member
                 .find_by_repo_and_user(repo_id, record.user_id)
                 .await?
                 .map(|m| m.permission)
-                .unwrap_or_else(|| "rw".to_string());
-            Ok(FolderPermResult {
-                valid: true,
-                permission,
-            })
-        } else {
-            Ok(FolderPermResult {
+                .unwrap_or_default()
+        };
+
+        if permission.is_empty() {
+            return Ok(FolderPermResult {
                 valid: false,
                 permission: String::new(),
-            })
+            });
         }
+
+        Ok(FolderPermResult {
+            valid: true,
+            permission,
+        })
     }
 
     /// Get head commits for a list of repo IDs.
@@ -468,9 +512,25 @@ impl SyncService {
         entries: Vec<(String, Vec<u8>)>,
     ) -> Result<(), AppError> {
         let repo_id = repo_id.to_string();
+
+        // Bound the entry count before parsing anything: the compressed body is
+        // already capped, but a huge number of tiny objects would still drive
+        // one parse + insert each.
+        if entries.len() > MAX_FS_PACK_ENTRIES {
+            return Err(AppError::BadRequest(format!(
+                "too many fs objects in pack: {} (max {MAX_FS_PACK_ENTRIES})",
+                entries.len()
+            )));
+        }
+
         // Decompression, JSON parsing, and filename validation are CPU-bound;
         // offload to the blocking pool so the async runtime is not stalled.
         let models = tokio::task::spawn_blocking(move || {
+            // Running total of decompressed bytes across the whole pack; a pack
+            // of many high-ratio objects must not be able to expand into
+            // gigabytes of resident memory before the batched insert.
+            let mut total_decompressed: u64 = 0;
+
             entries
                 .into_iter()
                 .map(
@@ -479,11 +539,20 @@ impl SyncService {
                             AppError::BadRequest(format!("decompress fs object: {e}"))
                         })?;
 
+                        total_decompressed =
+                            total_decompressed.saturating_add(decompressed.len() as u64);
+                        if total_decompressed > MAX_FS_PACK_DECOMPRESSED_BYTES {
+                            return Err(AppError::BadRequest(format!(
+                                "fs object pack too large after decompression (max \
+                                 {MAX_FS_PACK_DECOMPRESSED_BYTES} bytes)"
+                            )));
+                        }
+
                         // The object id is sha1 over the *uncompressed* JSON, so
                         // hash the bytes exactly as received rather than any
                         // re-serialization. Every legitimate repo-v1 client sends
                         // a matching id; rejecting a mismatch stops a rogue client
-                        // from storing arbitrary bytes under a chosen id (H-5).
+                        // from storing arbitrary bytes under a chosen id.
                         if fs_id != EMPTY_SHA1 {
                             let computed = sha1_hex(&decompressed);
                             if computed != fs_id {
@@ -510,16 +579,31 @@ impl SyncService {
                             serde_json::from_str(&json_str).map_err(|e| {
                                 AppError::BadRequest(format!("invalid json in fs object: {e}"))
                             })?;
-                        let obj_type =
-                            json_val.get("type").and_then(|v| v.as_i64()).unwrap_or(1) as i8;
 
-                        // Validate dirent names in directory objects to prevent Zip Slip
-                        // and other downstream injection via malicious names.
-                        if obj_type == SEAF_METADATA_TYPE_DIR as i8 {
+                        // Classify by the JSON **structure**, never by the
+                        // client-declared `type` field alone. Trusting `type`
+                        // let a client send `{"dirents": [...]}` without a dir
+                        // `type` and skip dirent-name validation entirely, while
+                        // the tree readers still parsed it as a directory —
+                        // planting `..`, `/` or control characters in the tree
+                        // that later reach listings, hrefs and ZIP entry names.
+                        let obj_type = if json_val.get("dirents").is_some() {
                             let dir_data: FsDirData =
                                 serde_json::from_str(&json_str).map_err(|e| {
                                     AppError::BadRequest(format!("invalid dir object: {e}"))
                                 })?;
+                            if dir_data.obj_type != SEAF_METADATA_TYPE_DIR {
+                                return Err(AppError::BadRequest(format!(
+                                    "fs object has dirents but type {} (expected {})",
+                                    dir_data.obj_type, SEAF_METADATA_TYPE_DIR
+                                )));
+                            }
+                            if dir_data.version < 1 {
+                                return Err(AppError::BadRequest(format!(
+                                    "dir object version must be >= 1, got {}",
+                                    dir_data.version
+                                )));
+                            }
                             for dirent in &dir_data.dirents {
                                 validate_filename(&dirent.name).map_err(|e| {
                                     AppError::BadRequest(format!(
@@ -528,7 +612,34 @@ impl SyncService {
                                     ))
                                 })?;
                             }
-                        }
+                            SEAF_METADATA_TYPE_DIR as i8
+                        } else {
+                            let file_data: FsFileData =
+                                serde_json::from_str(&json_str).map_err(|e| {
+                                    AppError::BadRequest(format!("invalid file object: {e}"))
+                                })?;
+                            if file_data.obj_type != SEAF_METADATA_TYPE_FILE {
+                                return Err(AppError::BadRequest(format!(
+                                    "fs object has no dirents but type {} (expected {})",
+                                    file_data.obj_type, SEAF_METADATA_TYPE_FILE
+                                )));
+                            }
+                            if file_data.version < 1 {
+                                return Err(AppError::BadRequest(format!(
+                                    "file object version must be >= 1, got {}",
+                                    file_data.version
+                                )));
+                            }
+                            // A negative size would later be cast to `usize`
+                            // for a capacity hint, wrapping to `usize::MAX`.
+                            if file_data.size < 0 {
+                                return Err(AppError::BadRequest(format!(
+                                    "file object size must be >= 0, got {}",
+                                    file_data.size
+                                )));
+                            }
+                            SEAF_METADATA_TYPE_FILE as i8
+                        };
 
                         Ok(infra::entity::fs_object::ActiveModel {
                             id: sea_orm::NotSet,
@@ -944,7 +1055,7 @@ impl SyncService {
             .await?
             .ok_or_else(|| AppError::Internal("commit not found".into()))?;
 
-        // Root validation (H-5) must happen here, not at `PUT /commit/{id}`:
+        // Root validation must happen here, not at `PUT /commit/{id}`:
         // seaf-daemon uploads the commit object *before* the FS objects it
         // references (daemon/http-tx-mgr.c: send_commit_object → recv-fs →
         // blocks → update_branch), so rejecting a dangling root at commit-write

@@ -14,7 +14,7 @@ use base::sanitize::safe_normalize_path;
 pub async fn async_batch_copy_item(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<super::batch::SyncBatchCopyRequest>,
+    Json(mut body): Json<super::batch::SyncBatchCopyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
@@ -22,6 +22,13 @@ pub async fn async_batch_copy_item(
         auth.user_id,
     )
     .await?;
+
+    crate::handler::sanitize_dirent_list(&mut body.src_dirents)?;
+    // The description below indexes `src_dirents[0]`, so an empty list must be
+    // rejected here rather than panicking inside the handler.
+    if body.src_dirents.is_empty() {
+        return Err(AppError::BadRequest("no dirents specified".into()));
+    }
 
     let src_dir = safe_normalize_path(&body.src_parent_dir)
         .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
@@ -96,7 +103,7 @@ async fn run_copy_task(
 pub async fn async_batch_move_item(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<super::batch::BatchMoveRequest>,
+    Json(mut body): Json<super::batch::BatchMoveRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
@@ -104,6 +111,12 @@ pub async fn async_batch_move_item(
         auth.user_id,
     )
     .await?;
+
+    crate::handler::sanitize_dirent_list(&mut body.src_dirents)?;
+    // See `async_batch_copy_item`: the description indexes `src_dirents[0]`.
+    if body.src_dirents.is_empty() {
+        return Err(AppError::BadRequest("no dirents specified".into()));
+    }
 
     let src_dir = safe_normalize_path(&body.src_parent_dir)
         .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;

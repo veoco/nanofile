@@ -22,6 +22,34 @@ pub const MAX_SMALL_BODY_BYTES: usize = 1024 * 1024;
 /// mobile upload-blks-api paths.
 pub const MAX_BLOCK_UPLOAD_BYTES: usize = 12 * 1024 * 1024;
 
+/// Upper bound on the number of dirent names accepted in one request.
+///
+/// Several endpoints accept a list of names and then do per-name work over the
+/// repository tree (a recursive walk for `zip-task`, a linear scan of the
+/// parent directory for the batch endpoints). A 64 MiB JSON body holds well
+/// over a million short names, so the list must be bounded independently of the
+/// body limit. A real client sends at most a handful — the selection made in
+/// the file browser — so this is far above legitimate use.
+pub const MAX_REQUEST_DIRENTS: usize = 1000;
+
+/// Validate and normalise a client-supplied list of dirent names.
+///
+/// Caps the count and removes duplicates in place. Duplicates matter beyond the
+/// wasted work: every operation here is "for each name, find the entry and add
+/// it to the result", so a repeated name would otherwise be applied N times
+/// (e.g. writing the same entry into a directory object many times).
+pub fn sanitize_dirent_list(names: &mut Vec<String>) -> Result<(), AppError> {
+    if names.len() > MAX_REQUEST_DIRENTS {
+        return Err(AppError::BadRequest(format!(
+            "too many dirents: {} (max {MAX_REQUEST_DIRENTS})",
+            names.len()
+        )));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(names.len());
+    names.retain(|n| seen.insert(n.clone()));
+    Ok(())
+}
+
 /// Read a request body with a hard size cap; oversized bodies map to 413.
 pub async fn read_body_limited(
     body: axum::body::Body,

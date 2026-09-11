@@ -5,6 +5,39 @@ use base::error::AppError;
 
 const TOKEN_LEN: usize = 40;
 
+/// Verify a sync token that the client supplied in the request **body**.
+///
+/// A few sync endpoints (`folder-perm`, `locked-files`) carry the token in
+/// their JSON payload rather than in a header, so they never go through
+/// `SyncAuth`. They must still apply the same rules: the token has to belong to
+/// the requested repo, be unexpired, and belong to a user that still exists and
+/// is active. Checking only "the row exists" would let an expired token — or one
+/// whose owner was deactivated — keep working until the hourly cleanup pass
+/// happened to delete it.
+pub async fn verify_body_sync_token(
+    repos: &crate::repository::Repositories,
+    repo_id: &str,
+    token: &str,
+) -> Result<bool, AppError> {
+    let Some(record) = repos
+        .sync_token
+        .find_by_token_and_repo(token, repo_id)
+        .await?
+    else {
+        return Ok(false);
+    };
+
+    if matches!(record.expires_at, Some(exp) if chrono::Utc::now().timestamp() > exp) {
+        return Ok(false);
+    }
+
+    Ok(repos
+        .user
+        .find_by_id(record.user_id)
+        .await?
+        .is_some_and(|u| u.is_active))
+}
+
 /// Return the existing sync token for a repo/user, or create a new one.
 ///
 /// Requires read permission on the repo (a sync token grants repo access).

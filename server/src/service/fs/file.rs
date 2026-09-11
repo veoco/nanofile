@@ -995,12 +995,21 @@ impl FileService {
         repo_id: &str,
         token: &str,
     ) -> Result<(Vec<(String, i32)>, i64), AppError> {
-        let token_record = self.repos.sync_token.find_by_token(token).await?;
-        let token_valid = token_record
-            .as_ref()
-            .map(|t| t.repo_id == repo_id)
-            .unwrap_or(false);
-        let token_user_id = token_record.as_ref().map(|t| t.user_id);
+        // The token arrives in the request body here, so this path never sees
+        // `SyncAuth`; apply the same rules (repo binding, expiry, active user)
+        // instead of merely checking that a row exists.
+        let token_valid =
+            crate::service::auth::token::verify_body_sync_token(&self.repos, repo_id, token)
+                .await?;
+        let token_user_id = if token_valid {
+            self.repos
+                .sync_token
+                .find_by_token_and_repo(token, repo_id)
+                .await?
+                .map(|t| t.user_id)
+        } else {
+            None
+        };
 
         let lock_ts = if token_valid {
             self.repos
