@@ -128,13 +128,19 @@ jobs:
       - name: Install zig (cross-compilation)
         if: matrix.cross
         run: |
-          curl -sL --retry 3 --retry-delay 2 https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz \
+          curl -sL --retry 3 --retry-delay 2 https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz \
             -o /tmp/zig.tar.xz
+          # zig 0.16.0 is the current release and is what cargo-zigbuild 0.23.4
+          # tests against (0.14 predates its support matrix). Note that zig 0.15+
+          # raises the baseline of the binaries it emits to glibc 2.31 / Linux
+          # 5.10 (0.14 emitted glibc 2.28 / Linux 4.19); add a suffix such as
+          # `--target aarch64-unknown-linux-gnu.2.28` if older hosts must keep
+          # working.
           # Pin the archive to its published SHA-256 so a compromised CDN or a
           # silently replaced tarball cannot inject a toolchain into the build.
-          echo "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982  /tmp/zig.tar.xz" | sha256sum -c -
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
           tar xf /tmp/zig.tar.xz -C /tmp
-          echo "/tmp/zig-linux-x86_64-0.14.0" >> $GITHUB_PATH
+          echo "/tmp/zig-x86_64-linux-0.16.0" >> $GITHUB_PATH
 
       - name: Install Tailwind CSS
         run: npm ci
