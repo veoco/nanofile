@@ -41,7 +41,10 @@ export default async function globalSetup() {
     await browser.close();
 
     // Persist shared state for tests.
-    const state = { baseURL: BASE_URL, adminEmail: ADMIN_EMAIL, adminPassword: ADMIN_PASSWORD, adminToken };
+    // Deliberately no adminPassword: the password is a repository constant in
+    // helpers/server.ts, and writing it to test-results/ just spreads it into
+    // artifacts that people attach to bug reports.
+    const state = { baseURL: BASE_URL, adminEmail: ADMIN_EMAIL, adminToken };
     fs.writeFileSync(
       path.join(process.cwd(), "test-results", ".e2e-state.json"),
       JSON.stringify(state, null, 2),

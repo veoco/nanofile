@@ -169,6 +169,46 @@ Generate a unique one for production with `openssl rand -hex 32` and set it via
 `NANOFILE_SERVER_SECRET_KEY` (an empty value auto-generates a random key on startup, which invalidates
 sessions on restart).
 
+## Security
+
+The server ships secure defaults for a single-node deployment, but a few things depend on how you
+run it:
+
+- **Terminate TLS in front of nanofile and set `site_url` to the HTTPS URL.** That one setting
+  drives `Secure` on session/link cookies and enables `Strict-Transport-Security`; left as plain
+  HTTP, neither is sent (a LAN deployment must not be pinned to HTTPS it cannot serve). Sessions,
+  share-link passwords and API tokens are bearer credentials.
+- **`addr = "0.0.0.0"` is the default** so the server is reachable on the host's interfaces. Bind
+  `127.0.0.1` when a reverse proxy is the only intended entry point, and firewall the port otherwise.
+- **Behind a reverse proxy, set `trusted_proxies`.** `X-Forwarded-For` is only honoured when the TCP
+  peer is listed there, so client-IP rate limiting cannot be spoofed from outside.
+- **`share_link_enabled = false`** turns off anonymous share/upload links entirely (existing links
+  stop resolving). `allowed_hosts` pins the host names used to build absolute download URLs when
+  `site_url` is unset.
+- **Tighten the example's finite caps if you serve many users** (`max_zip_bytes`,
+  `max_temp_upload_bytes`); `0` means unlimited.
+
+Deliberate, documented trade-offs (no code path is unprotected — each is bounded by something else):
+
+- **Encrypted-library passwords.** The key-derivation iteration count for encrypted libraries is
+  fixed at 1000 by the sync protocol: the official clients derive the data key themselves, so
+  changing it would make their libraries unreadable. `encrypted_library_pwd_hash_algo` /
+  `encrypted_library_pwd_hash_params` can raise the cost of the *server-side verification* hash for
+  newly created libraries (the desktop client reads those fields; mobile clients only support
+  protocol version ≤ 2), but the defaults stay compatible. Online guessing is bounded by
+  `repo_password_max_per_hour` instead.
+- **Zip downloads (`/zip/{token}`) are capability URLs**, exactly like upstream's file-server
+  tokens: single-use, expiring, unguessable, redacted from the logs, and never re-authorized — the
+  token *is* the authorization. Treat a zip URL like a password.
+- **`head-commits-multi` and `check_blocks`** answer anonymous/authenticated callers the same way
+  upstream does (library metadata and block existence). They are required by the sync protocol;
+  rate limiting bounds the request rate.
+- **Configuration secrets are held in memory as ordinary strings** (server secret, notification
+  key, at-rest encryption key, database URL, admin password) and are not zeroed on drop; the
+  derived AEAD keys used by the token/TOTP/block ciphers are cleared. Scrubbing the live
+  configuration would need a secret-typed config throughout and buys little against the threat
+  model (an attacker reading process memory already has the running server).
+
 ## Logging
 
 Headless runs (servers, Docker, CLI subcommands) log to stdout as before, controlled by
@@ -237,8 +277,10 @@ at compile time — no image assets are shipped in the repository.
 ## Docker
 
 The release image is a `scratch` container holding only the `nanofile` binary — no config file or
-data directory. Mount a config file and a persistent data volume, and point the data paths at the
-volume:
+data directory. It runs as uid/gid `1000:1000`, so the data volume must be writable by that user
+(`chown -R 1000:1000 ./data` when upgrading an older deployment, or pass
+`--user "$(id -u):$(id -g)"` to match your own account). Mount a config file and a persistent data
+volume, and point the data paths at the volume:
 
 ```bash
 mkdir -p data

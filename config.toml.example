@@ -131,6 +131,8 @@ temp_dir = "data/temp"
 thumbnail_dir = "data/thumbnails"
 # Avatar storage directory.
 avatar_dir = "data/avatars"
+# Global cap on total stored bytes across all libraries (0 = unlimited; per-user
+# quotas in the admin UI are the usual way to bound usage).
 max_storage_bytes = 0
 # ffmpeg binary used to generate video thumbnails. Video files keep showing a
 # play-icon placeholder when this binary isn't installed. Playback works without it.
@@ -138,14 +140,16 @@ ffmpeg_path = "ffmpeg"
 # Max concurrent in-flight resumable (Content-Range) uploads tracked by the temp
 # manager (0 = unlimited). Prevents abandoned chunked uploads from exhausting memory.
 max_temp_uploads = 1000
-# Max total declared bytes across active temp uploads (0 = unlimited).
-max_temp_upload_bytes = 0
+# Max total declared bytes across active temp uploads (0 = unlimited; the
+# example sets a finite 32 GiB so a busy or abusive client cannot fill the disk).
+max_temp_upload_bytes = 34359738368
 # Hours an abandoned resumable-upload temp file is retained before cleanup (0 = disable).
 temp_upload_ttl_hours = 24
 # Max files in a single zip archive download (0 = unlimited).
 max_zip_entries = 10000
-# Max total uncompressed bytes in a single zip archive (0 = unlimited).
-max_zip_bytes = 0
+# Max total uncompressed bytes in a single zip archive (0 = unlimited; the
+# example sets a finite 8 GiB so one "download as zip" cannot exhaust memory).
+max_zip_bytes = 8589934592
 # Server-side transparent at-rest encryption for file blocks:
 #   "off"  - blocks are stored exactly as received (legacy plaintext).
 #   "on"   - every new write is encrypted, every read is decrypted; requires encryption_key.

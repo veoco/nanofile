@@ -7,4 +7,12 @@ ARG TARGETARCH
 LABEL org.opencontainers.image.description="nanofile - A Rust-based Seafile-compatible server"
 COPY nanofile-${TARGETOS}-${TARGETARCH} /nanofile
 EXPOSE 8082
+
+# Run unprivileged: the server needs no elevated capability, and a bind-mounted
+# data directory is normally owned by uid 1000 (the usual first host user).
+# `scratch` has no /etc/passwd, so use a numeric id; pass `--user` to override.
+# Upgrading an existing deployment needs `chown -R 1000:1000 <data dir>` —
+# see the README.
+USER 1000:1000
+
 ENTRYPOINT ["/nanofile"]

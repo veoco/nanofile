@@ -147,6 +147,39 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
 `openssl rand -hex 32` 生成唯一值，并通过 `NANOFILE_SERVER_SECRET_KEY` 设置（空值会在启动时
 自动生成随机密钥，这会使重启后会话失效）。
 
+## 安全
+
+单机部署下服务器已给出安全默认值，但有几项取决于你的运行方式：
+
+- **在 nanofile 前面终止 TLS，并把 `site_url` 设为 HTTPS 地址。** 这一个设置同时决定会话/链接
+  cookie 的 `Secure` 属性和 `Strict-Transport-Security`；保持纯 HTTP 时两者都不会下发（局域网
+  部署不应被钉死在它无法提供的 HTTPS 上）。会话、分享链接口令与 API token 都是持有即有效的凭据。
+- **`addr = "0.0.0.0"` 是默认值**，因此监听主机的所有接口。若只有反向代理需要访问，请改为
+  `127.0.0.1` 并用防火墙关闭端口。
+- **放在反向代理后请设置 `trusted_proxies`。** 只有当 TCP 对端在列表内时才会采信
+  `X-Forwarded-For`，否则外部无法伪造客户端 IP 绕过按 IP 限流。
+- **`share_link_enabled = false`** 可完全关闭匿名分享/上传链接（既有链接立即失效）。
+  `site_url` 未设置时，`allowed_hosts` 用于固定生成绝对下载 URL 的 Host。
+- **用户较多时请收紧示例中的有限上限**（`max_zip_bytes`、`max_temp_upload_bytes`）；`0` 表示
+  不限制。
+
+以下是刻意保留并写入文档的取舍（每条都有其他机制兜底，并非无人看管）：
+
+- **加密资料库口令。** 加密资料库的密钥派生迭代次数由同步协议固定为 1000：官方客户端自行派生
+  数据密钥，改动会导致它们的资料库无法解密。`encrypted_library_pwd_hash_algo` /
+  `encrypted_library_pwd_hash_params` 可以对新资料库提高**服务端校验哈希**的代价（桌面端会读
+  取这两个字段；移动端只支持协议版本 ≤ 2），但默认值保持兼容。在线猜测由
+  `repo_password_max_per_hour` 限制。
+- **zip 下载（`/zip/{token}`）属于 capability URL**，与上游 fileserver token 模型一致：一次性、
+  有 TTL、不可猜测、日志中已脱敏，且下载时不再重新鉴权——token 本身就是授权。请把 zip 链接当作
+  口令对待。
+- **`head-commits-multi` 与 `check_blocks`** 对匿名/已认证调用方的响应与上游一致（资料库元数据
+  与块存在性）。它们是同步协议必需的，仅通过限流约束请求速率。
+- **配置中的密钥在内存里是普通字符串**（服务器主密钥、通知密钥、静态加密密钥、数据库 URL、
+  管理员口令），进程退出前不做清零；而 token/TOTP/块加密所用的派生密钥会被清零。要清理常驻
+  配置需要把密钥类型贯穿整个配置结构，在威胁模型下收益有限（能读进程内存的攻击者已经拿下了
+  运行中的服务器）。
+
 ## 日志
 
 无头运行（服务器、Docker、CLI 子命令）照常输出到 stdout，由 `[logging] level`（或
@@ -210,7 +243,9 @@ cargo build --release -p server --features tray
 
 ## Docker
 
-发布镜像是一个 `scratch` 容器，只包含 `nanofile` 二进制——没有配置文件或数据目录。挂载一个
+发布镜像是一个 `scratch` 容器，只包含 `nanofile` 二进制——没有配置文件或数据目录。容器以
+`1000:1000` 运行，因此数据卷必须对该用户可写（从旧版本升级时执行
+`chown -R 1000:1000 ./data`，或用 `--user "$(id -u):$(id -g)"` 对齐你自己的账号）。挂载一个
 配置文件和一个持久化数据卷，并将数据路径指向该卷：
 
 ```bash

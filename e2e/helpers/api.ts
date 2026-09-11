@@ -5,7 +5,6 @@ import type { Page } from "@playwright/test";
 export interface E2EState {
   baseURL: string;
   adminEmail: string;
-  adminPassword: string;
   adminToken: string;
 }
 

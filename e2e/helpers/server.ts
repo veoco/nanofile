@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,15 @@ export const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 export const ADMIN_EMAIL = "e2e-admin@test.local";
 export const ADMIN_PASSWORD = "e2e-password-123";
+
+/**
+ * Server secret for this run.
+ *
+ * Generated per run rather than committed as a fixture: the value derives the
+ * token, TOTP and at-rest block keys, so a fixed one in the repository would
+ * make every e2e instance share keys (and invite copy/paste into production).
+ */
+export const SERVER_SECRET_KEY = crypto.randomBytes(32).toString("hex");
 
 export interface ServerHandle {
   child: ChildProcess;
@@ -62,8 +72,7 @@ export async function startServer(
     NANOFILE_ADMIN_INIT_EMAIL: ADMIN_EMAIL,
     NANOFILE_ADMIN_INIT_PASSWORD: ADMIN_PASSWORD,
     NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS: "1000",
-    NANOFILE_SERVER_SECRET_KEY:
-      "e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0",
+    NANOFILE_SERVER_SECRET_KEY: SERVER_SECRET_KEY,
     NANOFILE_LOG_LEVEL: process.env.E2E_LOG_LEVEL || "info",
     ...opts.env,
   };
