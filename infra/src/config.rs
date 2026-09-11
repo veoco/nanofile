@@ -9,7 +9,7 @@ pub const CONFIG_PATH_ENV: &str = "NANOFILE_CONFIG";
 /// Default config path when neither `--config` nor `NANOFILE_CONFIG` is set.
 pub const DEFAULT_CONFIG_PATH: &str = "config.toml";
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Deserialize, Serialize, Clone, Default)]
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
@@ -143,7 +143,7 @@ pub struct EmailConfig {
     pub enabled: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct NotificationConfig {
     pub enabled: bool,
     pub private_key: String,
@@ -231,7 +231,7 @@ impl Default for TaskConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct ServerConfig {
     #[serde(default = "default_addr")]
     pub addr: String,
@@ -537,7 +537,7 @@ impl ServerConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct DatabaseConfig {
     #[serde(default = "default_db_url")]
     pub url: String,
@@ -564,7 +564,7 @@ impl Default for DatabaseConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct StorageConfig {
     #[serde(default = "default_block_dir")]
     pub block_dir: PathBuf,
@@ -800,7 +800,7 @@ impl Default for AuthConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Deserialize, Serialize, Clone, Default)]
 pub struct AdminInitConfig {
     pub email: Option<String>,
     pub password: Option<String>,
@@ -1479,6 +1479,41 @@ request_timeout_secs = 600
         );
     }
 
+    /// Secrets must never appear in `Debug` output: `{:?}` on a config is the
+    /// obvious thing to do when diagnosing a startup problem, and the config is
+    /// cloned into `AppState` where it lives for the process lifetime.
+    #[test]
+    fn debug_output_does_not_leak_secrets() {
+        let mut config = Config::default();
+        config.server.secret_key = "super-secret-master-key-value-0123456789".to_string();
+        config.notification.private_key = "notification-key-value-0123456789".to_string();
+        config.storage.encryption_key = Some("storage-key-value-0123456789".to_string());
+        config.database.url = "sqlite://user:hunter2@localhost/nanofile.db".to_string();
+        config.admin_init.password = Some("admin-password-value".to_string());
+
+        let rendered = format!("{config:?}");
+        for secret in [
+            "super-secret-master-key-value-0123456789",
+            "notification-key-value-0123456789",
+            "storage-key-value-0123456789",
+            "hunter2",
+            "admin-password-value",
+        ] {
+            assert!(
+                !rendered.contains(secret),
+                "Debug leaked a secret: {rendered}"
+            );
+        }
+        // The sub-structs are redacted on their own too.
+        assert!(!format!("{:?}", config.server).contains("super-secret"));
+        assert!(!format!("{:?}", config.storage).contains("storage-key"));
+        assert!(!format!("{:?}", config.database).contains("hunter2"));
+        assert!(
+            !format!("{:?}", config.notification).contains("notification-key"),
+            "notification key leaked"
+        );
+    }
+
     #[test]
     fn default_site_url_without_host_header() {
         // No Host header at all: fall back to site_url itself.
@@ -1676,3 +1711,33 @@ request_timeout_secs = 600
         assert!(dir.path().join("config.toml.bak").exists());
     }
 }
+
+// ─── Redacting Debug ────────────────────────────────────────────────────────
+//
+// `Config` derives `Debug` so a whole configuration can be logged, but several
+// fields are secrets: `server.secret_key` (master key, from which the token,
+// TOTP and block keys are derived), `notification.private_key`,
+// `storage.encryption_key`, `database.url` (may embed credentials) and
+// `admin_init.password`. These impls deliberately print no fields at all, so a
+// `{:?}` cannot leak a secret and a newly added field cannot start leaking one
+// by accident. Use the individual accessors when a value is needed.
+macro_rules! redacting_debug {
+    ($($ty:ident),+ $(,)?) => {
+        $(
+            impl std::fmt::Debug for $ty {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.debug_struct(stringify!($ty)).finish_non_exhaustive()
+                }
+            }
+        )+
+    };
+}
+
+redacting_debug!(
+    Config,
+    NotificationConfig,
+    ServerConfig,
+    DatabaseConfig,
+    StorageConfig,
+    AdminInitConfig,
+);
