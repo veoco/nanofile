@@ -1,0 +1,21 @@
+# Configuration for `cargo audit` (run in CI and locally).
+#
+# cargo-audit reads this file from `.cargo/audit.toml`.
+#
+# Warnings (unmaintained / unsound crates in the dependency tree) do not fail
+# the run; only vulnerabilities do. Entries below are advisories that cannot be
+# fixed by an upgrade, with the reason they are not reachable.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — "Marvin Attack: potential key recovery through timing
+    # sidechannels" in `rsa` 0.9.10.
+    #
+    # `rsa` is pulled in by jsonwebtoken's `rust_crypto` feature, which bundles
+    # every algorithm, but nanofile only ever signs and verifies HS256
+    # (HMAC-SHA256) tokens for the sync and notification endpoints — no RSA
+    # operation runs. Upstream reports "No fixed upgrade is available", so the
+    # only alternative would be dropping jsonwebtoken for a hand-rolled HS256
+    # implementation, which would risk the wire format for no reachable gain.
+    "RUSTSEC-2023-0071",
+]

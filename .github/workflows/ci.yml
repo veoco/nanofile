@@ -18,8 +18,8 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
         with:
           filters: |
@@ -31,10 +31,16 @@ jobs:
               - 'server/static/**'
               - 'server/templates/**'
               - 'server/frontend/**'
+              # build.rs shells out to the pinned esbuild/tailwind versions, so
+              # a dependency bump is a build change.
+              - 'package.json'
+              - 'package-lock.json'
             frontend:
               - 'server/frontend/**'
               - 'server/static/**'
               - 'server/templates/**'
+              - 'package.json'
+              - 'package-lock.json'
 
   # ── Formatting + linting (single job to reuse checkout/toolchain) ────
   lint:
@@ -43,15 +49,15 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           shared-key: "nanofile"
       - name: Install Tailwind CSS
-        run: npm install --silent tailwindcss @tailwindcss/cli esbuild
+        run: npm ci
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       # Comments must explain the invariant, not cite an external audit item
@@ -74,15 +80,15 @@ jobs:
     needs: [changes, lint]
     if: needs.changes.outputs.rust == 'true'
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           shared-key: "nanofile"
       - name: Install tray system dependencies
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
       - name: Install Tailwind CSS
-        run: npm install --silent tailwindcss @tailwindcss/cli esbuild
+        run: npm ci
       - name: Test with tray feature
         run: cargo test -p server --features tray --bin nanofile -- --nocapture
 
@@ -93,8 +99,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
       - run: node --test --experimental-test-coverage "server/frontend/**/*.test.js"
@@ -106,29 +112,47 @@ jobs:
     needs: [changes, lint]
     if: needs.changes.outputs.rust == 'true'
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
       - name: Install Tailwind CSS
-        run: npm install --silent tailwindcss @tailwindcss/cli esbuild
+        run: npm ci
       - name: Build nanofile binary
         run: cargo build --bin nanofile
       - name: Install e2e deps
-        run: npm install --prefix e2e
+        run: npm ci --prefix e2e
       - name: Install Playwright browsers
         run: npx --prefix e2e playwright install --with-deps chromium
       - name: Run e2e tests
         run: npm run --prefix e2e test
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure()
         with:
           name: e2e-failure-artifacts
           path: |
             e2e/playwright-report/
             e2e/test-results/server.log
+
+  # ── Dependency advisories ───────────────────────────────────────────
+  audit:
+    name: Crate audit
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      # Prebuilt binary: compiling cargo-audit on every run would cost minutes.
+      - uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2
+        with:
+          tool: cargo-audit
+      # Fails on vulnerabilities only; unmaintained/unsound crates are
+      # reported as warnings. Unfixable advisories are listed with their
+      # rationale in .cargo/audit.toml.
+      - name: Check for known vulnerabilities
+        run: cargo audit
 
   # ── Tests (linux only, fastest) ─────────────────────────────────────
   test:
@@ -137,15 +161,15 @@ jobs:
     needs: [changes, lint]
     if: needs.changes.outputs.rust == 'true'
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           shared-key: "nanofile"
 
       - name: Install Tailwind CSS
-        run: npm install --silent tailwindcss @tailwindcss/cli esbuild
+        run: npm ci
 
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
