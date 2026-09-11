@@ -1,5 +1,11 @@
 name: CI
 
+# Actions are pinned to full commit SHAs (tag kept in a trailing comment) so a
+# moved or hijacked tag cannot inject code into CI. Dependabot is deliberately
+# not enabled on this repository: refresh a pin by resolving the new tag
+# (`gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq .object.sha`) and
+# updating every occurrence.
+
 on:
   push:
     branches: [main, master, develop]
@@ -148,11 +154,14 @@ jobs:
       - uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2
         with:
           tool: cargo-audit
-      # Fails on vulnerabilities only; unmaintained/unsound crates are
-      # reported as warnings. Unfixable advisories are listed with their
-      # rationale in .cargo/audit.toml.
+      # Fails on vulnerabilities only; unmaintained/unsound crates are reported
+      # as warnings. The one ignored advisory is unreachable here:
+      # RUSTSEC-2023-0071 (Marvin attack) is in `rsa`, which jsonwebtoken pulls
+      # in with its rust_crypto feature, but nanofile only signs and verifies
+      # HS256 (HMAC-SHA256) tokens and upstream has no fixed release. Re-check
+      # this ignore when jsonwebtoken gains algorithm-level features.
       - name: Check for known vulnerabilities
-        run: cargo audit
+        run: cargo audit --ignore RUSTSEC-2023-0071
 
   # ── Tests (linux only, fastest) ─────────────────────────────────────
   test:

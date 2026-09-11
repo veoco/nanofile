@@ -1,5 +1,11 @@
 name: Release
 
+# Actions are pinned to full commit SHAs (tag kept in a trailing comment) so a
+# moved or hijacked tag cannot inject code into CI. Dependabot is deliberately
+# not enabled on this repository: refresh a pin by resolving the new tag
+# (`gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq .object.sha`) and
+# updating every occurrence.
+
 on:
   push:
     tags:
