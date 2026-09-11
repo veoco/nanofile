@@ -96,8 +96,17 @@ pub async fn search(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>, AppError> {
     let q = query.q.unwrap_or_default().trim().to_string();
-    let per_page = query.per_page.unwrap_or(10).max(1);
-    let page = query.page.unwrap_or(1).max(1);
+    // Clamp both bounds: `per_page` is client-controlled and feeds an SQL
+    // LIMIT-looking offset calculation, so an unbounded value is a cheap way to
+    // make the server do the most work it can for one request.
+    let per_page = query
+        .per_page
+        .unwrap_or(10)
+        .clamp(1, crate::service::fs::search::MAX_SEARCH_PER_PAGE);
+    let page = query
+        .page
+        .unwrap_or(1)
+        .clamp(1, crate::service::fs::search::MAX_SEARCH_PAGE);
     let search_filename_only = query.search_filename_only.unwrap_or(false);
 
     let rl_key = format!("search:{}", auth.user_id);

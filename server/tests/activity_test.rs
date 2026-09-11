@@ -1742,3 +1742,42 @@ async fn test_activity_webdav_upload_overwrite() {
     );
     assert_eq!(file_events[0]["name"], "editme.txt");
 }
+
+/// A huge `per_page` must be clamped: it is passed straight to SQL as the
+/// LIMIT, so an unbounded value pulls the whole filtered activity table into
+/// memory for a single authenticated request.
+#[tokio::test]
+async fn test_activity_pagination_is_clamped() {
+    let f = TestFixture::new().await;
+    for i in 1..=3 {
+        create_file(&f, &format!("/clamp{i}.txt")).await;
+    }
+
+    let resp = f
+        .client
+        .get(
+            "/api/v2.1/activities/?page=1&per_page=4294967295",
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let events = body["events"].as_array().unwrap();
+    assert!(
+        events.len() <= 100,
+        "per_page must be clamped to 100, got {}",
+        events.len()
+    );
+
+    // A page number beyond the cap must not fail or overflow.
+    let resp = f
+        .client
+        .get(
+            "/api/v2.1/activities/?page=4294967295&per_page=50",
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert!(body["events"].as_array().unwrap().is_empty());
+}

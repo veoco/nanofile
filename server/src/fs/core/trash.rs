@@ -309,7 +309,9 @@ pub async fn list_trash2(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    let offset = ((page - 1) * per_page) as u64;
+    // Widen before multiplying: `page * per_page` in `u32` would overflow for
+    // large page numbers (panic in debug builds, wrapped offset in release).
+    let offset = u64::from(page - 1) * u64::from(per_page);
 
     // Count total
     let total_count = repos.file_trash.count_by_repo(repo_id).await?;
@@ -344,7 +346,9 @@ pub async fn search_trash(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    let offset = ((page - 1) * per_page) as u64;
+    // Widen before multiplying: `page * per_page` in `u32` would overflow for
+    // large page numbers (panic in debug builds, wrapped offset in release).
+    let offset = u64::from(page - 1) * u64::from(per_page);
 
     let condition = build_trash_condition(
         Condition::all().add(file_trash::Column::RepoId.eq(repo_id.to_owned())),
@@ -776,7 +780,9 @@ pub async fn list_trash_for_user(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    let offset = ((page - 1) * per_page) as u64;
+    // Widen before multiplying: `page * per_page` in `u32` would overflow for
+    // large page numbers (panic in debug builds, wrapped offset in release).
+    let offset = u64::from(page - 1) * u64::from(per_page);
 
     let repo_ids = gather_user_repo_ids(repos, user_id).await?;
 
@@ -830,7 +836,9 @@ pub async fn search_trash_for_user(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    let offset = ((page - 1) * per_page) as u64;
+    // Widen before multiplying: `page * per_page` in `u32` would overflow for
+    // large page numbers (panic in debug builds, wrapped offset in release).
+    let offset = u64::from(page - 1) * u64::from(per_page);
 
     let repo_ids = gather_user_repo_ids(repos, user_id).await?;
 

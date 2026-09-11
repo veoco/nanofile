@@ -806,3 +806,43 @@ async fn test_uppercase_search_scope_is_accepted() {
     let scoped = search_results_with_repo(&f, token, "zzqquu", Some(f.repo_id.as_str())).await;
     assert!(!scoped.is_empty(), "repo-id scoping must still work");
 }
+
+/// Absurd `page`/`per_page` values must be clamped rather than overflow.
+///
+/// `(page - 1) * per_page` was computed in `i32`, so a client could panic the
+/// handler in debug/test builds (overflow check) or get a wrapped, meaningless
+/// offset in release builds.
+#[tokio::test]
+async fn test_search_pagination_is_clamped() {
+    let f = common::TestFixture::new_with_index().await;
+
+    for query in [
+        "?q=no-such-file-anywhere&page=1000000&per_page=10000000",
+        "?q=no-such-file-anywhere&page=2147483647&per_page=2147483647",
+        "?q=no-such-file-anywhere&page=0&per_page=0",
+    ] {
+        let resp = f
+            .client
+            .get(&format!("/api2/search/{query}"), Some(&f.api_token))
+            .await;
+        assert_eq!(resp.status(), 200, "query {query} should not fail");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(
+            body["results"].as_array().unwrap().is_empty(),
+            "no results expected for {query}"
+        );
+    }
+
+    // A normal page still returns the normal envelope.
+    let body: serde_json::Value = f
+        .client
+        .get(
+            "/api2/search/?q=no-such-file-anywhere&page=1&per_page=10",
+            Some(&f.api_token),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(body["results"].is_array());
+}

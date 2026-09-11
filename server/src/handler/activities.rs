@@ -26,12 +26,22 @@ pub async fn get_activities(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ActivitiesQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Clamp at the boundary; the service clamps again defensively because
+    // `per_page` becomes the SQL LIMIT.
+    let page = query
+        .page
+        .unwrap_or(1)
+        .clamp(1, crate::service::activity::MAX_ACTIVITY_PAGE);
+    let per_page = query
+        .per_page
+        .unwrap_or(25)
+        .clamp(1, crate::service::activity::MAX_ACTIVITY_PER_PAGE);
     let result = ActivityService::get_activities(
         &state.repos,
         &state.config.server.site_url_origin(),
         auth.user_id,
-        query.page.unwrap_or(1),
-        query.per_page.unwrap_or(25),
+        page,
+        per_page,
         query.repo_id.as_deref(),
         query.op_user.as_deref(),
     )

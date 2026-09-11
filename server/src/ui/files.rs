@@ -17,6 +17,11 @@ use infra::common::util::{basename, parent_path_from};
 
 use super::auth_extractor::WebUser;
 
+/// Largest page number the file browser accepts. `page * per_page` is used as
+/// a slice offset, so the value must stay far away from `usize` overflow on
+/// 32-bit targets while still being unreachable in practice.
+const MAX_BROWSER_PAGE: u32 = 10_000;
+
 // ─── Templates ───────────────────────────────────────────────────────────────
 
 #[derive(Template)]
@@ -708,9 +713,11 @@ async fn file_browser_inner(
     };
 
     // Pagination / view state must be known before deciding how wide the tag
-    // and star lookups need to be.
-    let per_page = query.per_page.unwrap_or(200).min(500) as usize;
-    let page = query.page.unwrap_or(1).max(1) as usize;
+    // and star lookups need to be. Both bounds are clamped: `page` is
+    // multiplied by `per_page` below, so an unbounded value is one request away
+    // from an overflow (panic in debug, absurd OFFSET in release).
+    let per_page = query.per_page.unwrap_or(200).clamp(1, 500) as usize;
+    let page = query.page.unwrap_or(1).clamp(1, MAX_BROWSER_PAGE) as usize;
 
     // Full-page loads always render all three views so view switching is a pure
     // client-side class toggle with no network round-trip. Partial reloads

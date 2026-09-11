@@ -10,6 +10,17 @@ use infra::serialization::S_IFDIR;
 /// share this budget; once it is reached the remaining phases are skipped.
 const MAX_SEARCH_RESULTS: usize = 200;
 
+/// Largest page size the search endpoint accepts.
+///
+/// 100 matches the official clients: the iOS app requests `per_page=100` and
+/// the Android app 20, and neither expects the server to return more than it
+/// was asked for, so clamping here cannot truncate a client-visible page.
+pub const MAX_SEARCH_PER_PAGE: i32 = 100;
+
+/// Largest page number the search endpoint accepts. Only exists to keep the
+/// computed offset inside `i64`; no real page approaches it.
+pub const MAX_SEARCH_PAGE: i32 = 10_000;
+
 /// A single file search result entry.
 #[derive(serde::Serialize, Clone)]
 pub struct FileSearchResult {
@@ -55,8 +66,10 @@ impl SearchService {
             return Ok((Vec::new(), 0, false));
         }
 
-        let per_page = per_page.max(1);
-        let page = page.max(1);
+        // Clamp defensively here as well as at the handler: every caller must
+        // get bounded pagination, and the offset below must not overflow.
+        let per_page = per_page.clamp(1, MAX_SEARCH_PER_PAGE);
+        let page = page.clamp(1, MAX_SEARCH_PAGE);
         let repo_ids = self.get_accessible_repo_ids(user_id, search_repo).await?;
         // No accessible repo ⇒ nothing to search. `repo_ids` is the caller's
         // access-control allow-list: an empty list must never be handed to the
@@ -214,10 +227,14 @@ impl SearchService {
         all_results.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
 
         let total = all_results.len() as i32;
-        let offset = ((page - 1) * per_page) as usize;
+        // Both operands are already clamped, but compute in `i64` anyway so a
+        // future change to the clamps cannot silently overflow `i32` (a panic
+        // in debug/test builds, a wrapped offset in release).
+        let offset = (i64::from(page) - 1).saturating_mul(i64::from(per_page)) as usize;
+        let page_end = offset.saturating_add(per_page as usize);
 
         let results: Vec<serde_json::Value> = if offset < all_results.len() {
-            let end = (offset + per_page as usize).min(all_results.len());
+            let end = page_end.min(all_results.len());
             all_results[offset..end]
                 .iter()
                 .map(|r| serde_json::json!(r))
@@ -226,7 +243,7 @@ impl SearchService {
             Vec::new()
         };
 
-        let has_more = (offset + per_page as usize) < all_results.len();
+        let has_more = page_end < all_results.len();
 
         Ok((results, total, has_more))
     }

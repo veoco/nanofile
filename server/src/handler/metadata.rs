@@ -91,6 +91,14 @@ pub struct TagsQuery {
     pub limit: Option<u32>,
 }
 
+/// Largest `limit` the tag endpoints accept. Mobile clients ask for 1000, so
+/// the cap sits exactly there: it bounds one request's memory without
+/// truncating a client-visible page.
+const MAX_TAG_LIMIT: u32 = 1000;
+/// Largest `start` offset the tag endpoints accept. Only exists so the value
+/// cannot reach SQL as an absurd OFFSET.
+const MAX_TAG_START: u32 = 10_000_000;
+
 /// GET /metadata/tags/ — list all repo tags (mobile clients pass
 /// `start=0&limit=1000`).
 pub async fn get_repo_tags(
@@ -99,8 +107,9 @@ pub async fn get_repo_tags(
     Query(query): Query<TagsQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let repo_id = path.repo_id;
-    let start = query.start.unwrap_or(0) as usize;
-    let limit = query.limit.unwrap_or(1000) as usize;
+    // `limit = 0` keeps its original "no rows" meaning; only the ceiling is new.
+    let start = query.start.unwrap_or(0).min(MAX_TAG_START) as usize;
+    let limit = query.limit.unwrap_or(1000).min(MAX_TAG_LIMIT) as usize;
     let svc = state.metadata_service();
     let result = svc.list_repo_tags(&repo_id, start, limit).await?;
     Ok(Json(result))
@@ -192,8 +201,9 @@ pub async fn get_tag_files(
         .parse::<i32>()
         .map_err(|_| AppError::BadRequest("invalid tag id".into()))?;
     let svc = state.metadata_service();
-    let start = query.start.map(|s| s as usize);
-    let limit = query.limit.map(|l| l as usize);
+    // Same caps as the tag list; `Some(0)` keeps meaning "no rows".
+    let start = query.start.map(|s| s.min(MAX_TAG_START) as usize);
+    let limit = query.limit.map(|l| l.min(MAX_TAG_LIMIT) as usize);
     let result = svc.get_tag_files(&repo_id, tag_id, start, limit).await?;
     Ok(Json(result))
 }

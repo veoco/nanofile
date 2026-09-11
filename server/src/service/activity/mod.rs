@@ -4,6 +4,14 @@ use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::util::timestamp_rfc3339;
 
+/// Largest page size the activity list accepts. The endpoint's own Web UI asks
+/// for 25; the ceiling only exists so one authenticated request cannot ask the
+/// database for the entire activity table.
+pub const MAX_ACTIVITY_PER_PAGE: u32 = 100;
+
+/// Largest page number the activity list accepts.
+pub const MAX_ACTIVITY_PAGE: u32 = 10_000;
+
 /// Service for activity-related operations.
 pub struct ActivityService;
 
@@ -21,7 +29,11 @@ impl ActivityService {
         repo_id: Option<&str>,
         op_user: Option<&str>,
     ) -> Result<serde_json::Value, AppError> {
-        let offset = ((page.saturating_sub(1)) * per_page) as u64;
+        // Clamp defensively: `per_page` becomes the SQL LIMIT, so an unbounded
+        // value pulls the whole filtered table into memory.
+        let page = page.clamp(1, MAX_ACTIVITY_PAGE);
+        let per_page = per_page.clamp(1, MAX_ACTIVITY_PER_PAGE);
+        let offset = u64::from(page - 1) * u64::from(per_page);
 
         // Build list of accessible repo IDs (owned + shared).
         let mut repo_ids: Vec<String> = repos
