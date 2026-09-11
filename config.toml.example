@@ -39,7 +39,15 @@ max_json_body_mb = 64
 # bytes actually read are also capped, so one request can never buffer more than
 # this amount (0 disables the cap).
 max_chunk_size_mb = 256
+# Total time a request handler (including reading its body) may run before the
+# connection is answered with 408.
 request_timeout_secs = 600
+# How long a client may take to send the request headers. Without this a client
+# that dribbles headers can hold a connection open indefinitely (0 disables it).
+header_read_timeout_secs = 30
+# Optional extra deadline for sending the request body (0 = only bounded by
+# request_timeout_secs above).
+body_timeout_secs = 0
 cors_allowed_origins = []
 cors_max_age_secs = 86400
 webdav_enabled = true

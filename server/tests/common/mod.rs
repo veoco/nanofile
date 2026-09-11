@@ -369,6 +369,8 @@ impl TestServer {
                 max_json_body_mb: 64,
                 max_chunk_size_mb: 256,
                 request_timeout_secs: 36000,
+                header_read_timeout_secs: 30,
+                body_timeout_secs: 0,
                 cors_allowed_origins: vec![],
                 cors_max_age_secs: 86400,
                 secret_key: String::new(),
@@ -502,14 +504,15 @@ impl TestServer {
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
+        // Use the same connection loop the binary ships (timer + header-read
+        // timeout + connect info + upgrade support) so tests cover it.
         tokio::spawn(async move {
-            axum::serve(
+            server::serve::serve_with_timeouts(
                 listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                app,
+                shutdown_rx,
+                Some(std::time::Duration::from_secs(30)),
             )
-            .with_graceful_shutdown(async move {
-                let _ = shutdown_rx.await;
-            })
             .await
             .expect("server failed");
         });

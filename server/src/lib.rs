@@ -21,6 +21,7 @@ pub mod repository;
 pub mod routes;
 pub mod scheduler;
 pub mod scheduler_setup;
+pub mod serve;
 pub mod service;
 pub mod static_assets;
 pub mod thumbnail_util;

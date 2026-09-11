@@ -264,8 +264,20 @@ pub struct ServerConfig {
     /// cap. Env: NANOFILE_SERVER_MAX_CHUNK_SIZE_MB
     #[serde(default = "default_max_chunk_size_mb")]
     pub max_chunk_size_mb: u64,
+    /// Total time a request handler (including reading its body) may run before
+    /// the connection is answered with 408. Env: NANOFILE_SERVER_REQUEST_TIMEOUT_SECS
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
+    /// How long a client may take to send the request headers (slowloris
+    /// guard). 0 disables the deadline.
+    /// Env: NANOFILE_SERVER_HEADER_READ_TIMEOUT_SECS
+    #[serde(default = "default_header_read_timeout_secs")]
+    pub header_read_timeout_secs: u64,
+    /// How long a client may take to send the request body before the server
+    /// answers 408 (0 = only bounded by `request_timeout_secs`).
+    /// Env: NANOFILE_SERVER_BODY_TIMEOUT_SECS
+    #[serde(default)]
+    pub body_timeout_secs: u64,
     /// Allowed CORS origins. When empty, defaults to the origin of `site_url`.
     /// Set to a comma-separated list for multiple origins (e.g. for API clients).
     #[serde(default)]
@@ -379,6 +391,9 @@ fn default_max_json_body_mb() -> u64 {
 fn default_max_chunk_size_mb() -> u64 {
     256
 }
+fn default_header_read_timeout_secs() -> u64 {
+    30
+}
 fn default_request_timeout_secs() -> u64 {
     600
 }
@@ -403,6 +418,8 @@ impl Default for ServerConfig {
             max_json_body_mb: default_max_json_body_mb(),
             max_chunk_size_mb: default_max_chunk_size_mb(),
             request_timeout_secs: default_request_timeout_secs(),
+            header_read_timeout_secs: default_header_read_timeout_secs(),
+            body_timeout_secs: 0,
             cors_allowed_origins: Vec::new(),
             secret_key: String::new(),
             cors_max_age_secs: default_cors_max_age(),
@@ -1022,6 +1039,14 @@ impl Config {
         env_parse!(
             "NANOFILE_SERVER_REQUEST_TIMEOUT_SECS",
             self.server.request_timeout_secs
+        );
+        env_parse!(
+            "NANOFILE_SERVER_HEADER_READ_TIMEOUT_SECS",
+            self.server.header_read_timeout_secs
+        );
+        env_parse!(
+            "NANOFILE_SERVER_BODY_TIMEOUT_SECS",
+            self.server.body_timeout_secs
         );
         env_str!("NANOFILE_DATABASE_URL", self.database.url);
         env_parse!(

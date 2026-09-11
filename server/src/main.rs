@@ -596,6 +596,17 @@ async fn run_server(
         .layer(axum::middleware::from_fn(security_headers))
         .with_state(state.clone());
 
+    // Optionally bound how long a client may take to send the request body.
+    // Off by default: `request_timeout_secs` already caps the whole handler,
+    // including body reads.
+    let app = if config.server.body_timeout_secs > 0 {
+        app.layer(tower_http::timeout::RequestBodyTimeoutLayer::new(
+            std::time::Duration::from_secs(config.server.body_timeout_secs),
+        ))
+    } else {
+        app
+    };
+
     let addr = format!("{}:{}", config.server.addr, config.server.port);
     tracing::info!("listening on {}", addr);
 
@@ -607,16 +618,13 @@ async fn run_server(
     // ConnectInfo exposes the TCP peer address to handlers so rate
     // limiting can use the real client IP instead of the spoofable
     // X-Forwarded-For header.
-    let serve_fut = axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(async {
-        let _ = shutdown_rx.await;
+    let header_read_timeout = match config.server.header_read_timeout_secs {
+        0 => None,
+        secs => Some(std::time::Duration::from_secs(secs)),
+    };
+    let server_handle = tokio::spawn(async move {
+        server::serve::serve_with_timeouts(listener, app, shutdown_rx, header_read_timeout).await
     });
-
-    // Spawn the server in the background so it starts accepting immediately.
-    let server_handle = tokio::spawn(async move { serve_fut.await });
 
     // ── Wait for Ctrl+C, SIGTERM or a tray quit request ─────────────
     let ctrl_c = tokio::signal::ctrl_c();

@@ -40,6 +40,18 @@ async-trait = "0.1"
 axum = { version = "0.8.9", features = ["multipart", "ws"] }
 axum-extra = { version = "0.12.6", features = ["typed-header"] }
 tower-http = { version = "0.7.0", features = ["cors", "trace", "limit", "normalize-path", "timeout"] }
+# The HTTP server is driven directly (not via `axum::serve`) so hyper-level
+# timeouts can be configured; see `serve_with_timeouts` in `main.rs`.
+hyper = { version = "1", features = ["http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = [
+    "http1",
+    "http2",
+    "server",
+    "server-auto",
+    "service",
+    "tokio",
+] }
+tower = "0.5"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io", "compat"] }
 async_zip = { version = "0.0", features = ["tokio", "deflate"] }
