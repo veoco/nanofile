@@ -1835,3 +1835,65 @@ async fn test_copy_move_progress_is_owner_only() {
         .await;
     assert_eq!(resp.status(), 404);
 }
+
+/// Failed WebDAV authentications are throttled per client address, and a
+/// successful request clears the counter so a working client is never locked
+/// out by its own occasional typos.
+#[tokio::test]
+async fn test_webdav_failed_auth_is_throttled() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http_client();
+    let key = gen_webdav_key(&client, base, &f.api_token, &f.repo_id).await;
+
+    let bad_put = |path: &'static str| {
+        let client = client.clone();
+        let base = base.clone();
+        let repo_id = f.repo_id.clone();
+        let email = f.email.clone();
+        async move {
+            let m = Method::from_bytes(b"PUT").unwrap();
+            client
+                .request(m, dav_url(&base, &repo_id, path))
+                .basic_auth(&email, Some("not-a-valid-webdav-key"))
+                .body(b"x".to_vec())
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    // A successful request first, to show it is not counted.
+    let resp = webdav_put(&client, base, &f.repo_id, "/ok.txt", &f.email, &key, b"ok").await;
+    assert_eq!(resp.status(), 201);
+
+    // The fixture configures 30 failures per 5 minutes.
+    for i in 0..30 {
+        let resp = bad_put("/denied.txt").await;
+        assert_eq!(
+            resp.status(),
+            401,
+            "failure {i} should be an auth rejection"
+        );
+    }
+    let resp = bad_put("/denied.txt").await;
+    assert_eq!(
+        resp.status(),
+        429,
+        "the address should be throttled after 30 failures"
+    );
+
+    // Correct credentials from the same address are throttled too — the limit
+    // is per address, and only a *successful* request clears it.
+    let resp = webdav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/later.txt",
+        &f.email,
+        &key,
+        b"x",
+    )
+    .await;
+    assert_eq!(resp.status(), 429);
+}

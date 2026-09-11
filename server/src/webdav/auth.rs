@@ -28,6 +28,8 @@ pub enum WebDavAuthError {
     Unauthorized,
     Forbidden,
     NotFound,
+    /// Too many failed authentication attempts from this client address.
+    TooManyRequests,
 }
 
 impl IntoResponse for WebDavAuthError {
@@ -43,6 +45,7 @@ impl IntoResponse for WebDavAuthError {
             }
             WebDavAuthError::Forbidden => StatusCode::FORBIDDEN.into_response(),
             WebDavAuthError::NotFound => StatusCode::NOT_FOUND.into_response(),
+            WebDavAuthError::TooManyRequests => StatusCode::TOO_MANY_REQUESTS.into_response(),
         }
     }
 }
@@ -84,6 +87,50 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
         let creds = String::from_utf8(decoded).map_err(|_| WebDavAuthError::Unauthorized)?;
         let (email, key) = creds.split_once(':').ok_or(WebDavAuthError::Unauthorized)?;
 
+        // Throttle failed attempts by client address before doing any database
+        // work. Successful requests are never counted, so a working WebDAV
+        // client cannot trip this even at high request rates.
+        let peer = parts
+            .extensions
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|ci| ci.0);
+        let client_ip = match peer {
+            Some(addr) => crate::middleware::effective_client_ip(
+                &addr,
+                &parts.headers,
+                &state.config.server.trusted_proxies,
+            ),
+            // Without connect info every such request shares one bucket: that
+            // throttles more aggressively, never less.
+            None => "unknown".to_string(),
+        };
+        let rate_limit_key = format!("webdav:{client_ip}");
+        if state.auth_limiters.webdav_auth.is_limited(&rate_limit_key) {
+            return Err(WebDavAuthError::TooManyRequests);
+        }
+
+        let result = Self::authenticate(state, &repo_id, email, key).await;
+        if matches!(result, Err(WebDavAuthError::Unauthorized)) {
+            state
+                .auth_limiters
+                .webdav_auth
+                .record_attempt(&rate_limit_key);
+        } else if result.is_ok() {
+            state.auth_limiters.webdav_auth.clear(&rate_limit_key);
+        }
+        result
+    }
+}
+
+impl WebDavAuth {
+    /// Resolve the user, repo and key. Split out so the caller can account for
+    /// failures (and clear them on success) in one place.
+    async fn authenticate(
+        state: &Arc<AppState>,
+        repo_id: &str,
+        email: &str,
+        key: &str,
+    ) -> Result<Self, WebDavAuthError> {
         // User must exist and be active.
         let user = state
             .repos
@@ -101,7 +148,7 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
         let repo = state
             .repos
             .repo
-            .find_by_id(&repo_id)
+            .find_by_id(repo_id)
             .await
             .map_err(|_| WebDavAuthError::NotFound)?
             .ok_or(WebDavAuthError::NotFound)?;
@@ -113,7 +160,7 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
         let row = state
             .repos
             .member
-            .find_repo_owner_and_permission(&repo_id, user.id)
+            .find_repo_owner_and_permission(repo_id, user.id)
             .await
             .map_err(|_| WebDavAuthError::Unauthorized)?;
         let permission = match row {
@@ -129,7 +176,7 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
         let key_model = state
             .repos
             .webdav_key
-            .find_by_repo_user_hash(&repo_id, user.id, &key_hash)
+            .find_by_repo_user_hash(repo_id, user.id, &key_hash)
             .await
             .map_err(|_| WebDavAuthError::Unauthorized)?
             .ok_or(WebDavAuthError::Unauthorized)?;
@@ -164,7 +211,7 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
         Ok(WebDavAuth {
             user_id: user.id,
             email: user.email,
-            repo_id,
+            repo_id: repo_id.to_string(),
             permission: permission.to_string(),
         })
     }

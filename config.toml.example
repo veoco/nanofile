@@ -208,6 +208,9 @@ link_password_max_per_hour = 5
 repo_password_max_per_hour = 5
 # Max anonymous share-link downloads per IP per minute (0 = unlimited)
 share_download_max_per_minute = 30
+# Max failed WebDAV authentications per IP per 5 minutes (0 = unlimited).
+# Successful requests are never counted, so a working client is unaffected.
+webdav_max_failures_per_5min = 30
 reindex_max_per_hour = 5
 # Max search requests per user per minute (0 = unlimited)
 search_max_per_minute = 60

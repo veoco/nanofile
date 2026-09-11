@@ -20,6 +20,9 @@ pub struct AuthRateLimiters {
     /// only available control against offline-fast guessing online.
     pub repo_password: Arc<GenericRateLimiter>,
     pub share_download: Arc<GenericRateLimiter>,
+    /// Failed WebDAV Basic-auth attempts, keyed by client IP. Successful
+    /// requests are never counted, so a working client cannot trip this.
+    pub webdav_auth: Arc<GenericRateLimiter>,
     pub reindex: Arc<GenericRateLimiter>,
     pub search: Arc<GenericRateLimiter>,
 }
@@ -51,6 +54,10 @@ impl AuthRateLimiters {
                 cfg.share_download_max_per_minute,
                 60,
             )),
+            webdav_auth: Arc::new(GenericRateLimiter::new(
+                cfg.webdav_max_failures_per_5min,
+                300,
+            )),
             reindex: Arc::new(GenericRateLimiter::new(cfg.reindex_max_per_hour, 3600)),
             search: Arc::new(GenericRateLimiter::new(cfg.search_max_per_minute, 60)),
         })
@@ -77,6 +84,7 @@ mod tests {
             link_password_max_per_hour: 0,
             repo_password_max_per_hour: 0,
             share_download_max_per_minute: 0,
+            webdav_max_failures_per_5min: 0,
             reindex_max_per_hour: 0,
             search_max_per_minute: 0,
             ..Default::default()
@@ -100,6 +108,7 @@ mod tests {
             &limiters.link_password,
             &limiters.repo_password,
             &limiters.share_download,
+            &limiters.webdav_auth,
             &limiters.reindex,
             &limiters.search,
         ] {

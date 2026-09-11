@@ -742,6 +742,13 @@ pub struct AuthConfig {
     /// Max anonymous share-link downloads per IP per minute (0 = unlimited).
     #[serde(default = "default_share_download_max_per_minute")]
     pub share_download_max_per_minute: u32,
+    /// Max failed WebDAV authentications per IP per 5 minutes (0 = unlimited).
+    ///
+    /// WebDAV keys are server-generated and high-entropy, so guessing one is
+    /// infeasible; this only bounds the work an unauthenticated client can
+    /// force, and successful requests are never counted.
+    #[serde(default = "default_webdav_failures")]
+    pub webdav_max_failures_per_5min: u32,
     /// Max reindex requests per user per hour (0 = unlimited).
     #[serde(default = "default_five")]
     pub reindex_max_per_hour: u32,
@@ -769,6 +776,7 @@ impl Default for AuthConfig {
             link_password_max_per_hour: default_five(),
             repo_password_max_per_hour: default_five(),
             share_download_max_per_minute: default_share_download_max_per_minute(),
+            webdav_max_failures_per_5min: default_webdav_failures(),
             reindex_max_per_hour: default_five(),
             search_max_per_minute: default_search_max_per_minute(),
         }
@@ -801,6 +809,9 @@ fn default_five() -> u32 {
 }
 fn default_spray_distinct_usernames() -> u32 {
     20
+}
+fn default_webdav_failures() -> u32 {
+    30
 }
 fn default_share_download_max_per_minute() -> u32 {
     30
@@ -1097,6 +1108,10 @@ impl Config {
         env_parse!(
             "NANOFILE_AUTH_MAX_DISTINCT_USERNAMES_PER_IP",
             self.auth.max_distinct_usernames_per_ip
+        );
+        env_parse!(
+            "NANOFILE_AUTH_WEBDAV_MAX_FAILURES_PER_5MIN",
+            self.auth.webdav_max_failures_per_5min
         );
         env_parse!(
             "NANOFILE_AUTH_ENABLE_INVITATIONS",

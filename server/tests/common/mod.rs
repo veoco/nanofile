@@ -422,6 +422,7 @@ impl TestServer {
                 share_download_max_per_minute: auth_limits
                     .unwrap_or_default()
                     .share_download_max_per_minute,
+                webdav_max_failures_per_5min: 30,
                 reindex_max_per_hour: 5,
                 search_max_per_minute: 60,
             },
