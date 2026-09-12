@@ -1381,6 +1381,15 @@ pub fn requires_sync_write(method: &Method, path: &str) -> bool {
         .any(|suffix| trimmed.ends_with(suffix))
 }
 
+/// Whether a WebDAV method mutates repository state.
+///
+/// `PROPFIND`/`REPORT` are reads that a plain method check would miss; every
+/// other method — including ones this server does not implement — counts as a
+/// write, so a read-only key fails closed.
+pub fn webdav_requires_write(method: &str) -> bool {
+    !matches!(method, "GET" | "HEAD" | "OPTIONS" | "PROPFIND" | "REPORT")
+}
+
 /// A named starting point offered by the management UI.
 pub struct Preset {
     pub id: &'static str,

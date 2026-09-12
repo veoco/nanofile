@@ -70,6 +70,9 @@ pub trait ApiKeyRepository: Send + Sync {
         key_id: i32,
         user_id: i32,
     ) -> Result<Option<api_key::Model>, AppError>;
+    /// Load a key regardless of owner (repo owners and admins manage keys they
+    /// did not create).
+    async fn find_by_id(&self, key_id: i32) -> Result<Option<api_key::Model>, AppError>;
     async fn find_by_user(&self, user_id: i32) -> Result<Vec<api_key::Model>, AppError>;
     async fn create(&self, params: CreateApiKeyParams) -> Result<api_key::Model, AppError>;
     /// Apply metadata changes. Returns whether a row matched.
@@ -81,6 +84,8 @@ pub trait ApiKeyRepository: Send + Sync {
     ) -> Result<bool, AppError>;
     /// Revoke a key. Returns whether a row was deleted.
     async fn delete_by_id_and_user(&self, key_id: i32, user_id: i32) -> Result<bool, AppError>;
+    /// Revoke a key regardless of owner. Callers check authorization first.
+    async fn delete_by_id(&self, key_id: i32) -> Result<bool, AppError>;
     /// Revoke every key a user holds (password change / reset).
     async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError>;
     async fn list_bindings(&self, key_id: i32) -> Result<Vec<api_key_repo::Model>, AppError>;
@@ -166,6 +171,13 @@ impl ApiKeyRepository for DbApiKeyRepository {
             .await?)
     }
 
+    async fn find_by_id(&self, key_id: i32) -> Result<Option<api_key::Model>, AppError> {
+        Ok(api_key::Entity::find()
+            .filter(api_key::Column::Id.eq(key_id))
+            .one(self.db.as_ref())
+            .await?)
+    }
+
     async fn find_by_user(&self, user_id: i32) -> Result<Vec<api_key::Model>, AppError> {
         Ok(api_key::Entity::find()
             .filter(api_key::Column::UserId.eq(user_id))
@@ -242,6 +254,14 @@ impl ApiKeyRepository for DbApiKeyRepository {
         let result = api_key::Entity::delete_many()
             .filter(api_key::Column::Id.eq(key_id))
             .filter(api_key::Column::UserId.eq(user_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected > 0)
+    }
+
+    async fn delete_by_id(&self, key_id: i32) -> Result<bool, AppError> {
+        let result = api_key::Entity::delete_many()
+            .filter(api_key::Column::Id.eq(key_id))
             .exec(self.db.as_ref())
             .await?;
         Ok(result.rows_affected > 0)

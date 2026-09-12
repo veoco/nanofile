@@ -74,6 +74,7 @@ migrations!(
     m20260901_000001_create_deleted_repo_archive,
     m20260902_000001_unique_webdav_key_hash,
     m20260910_000001_create_api_keys,
+    m20260912_000001_migrate_webdav_keys_into_api_keys,
 );
 
 #[cfg(test)]

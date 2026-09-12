@@ -40,7 +40,6 @@ pub mod user;
 pub mod user_2fa;
 pub mod user_2fa_backup_code;
 pub mod user_contact;
-pub mod webdav_key;
 
 use std::sync::Arc;
 
@@ -78,7 +77,6 @@ use crate::repository::user::*;
 use crate::repository::user_2fa::*;
 use crate::repository::user_2fa_backup_code::*;
 use crate::repository::user_contact::*;
-use crate::repository::webdav_key::*;
 
 use base::error::AppError;
 
@@ -116,7 +114,6 @@ pub struct Repositories {
     pub password_reset_token: Arc<dyn PasswordResetTokenRepository>,
     pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
     pub file_lock_timestamp: Arc<dyn FileLockTimestampRepository>,
-    pub webdav_key: Arc<dyn WebdavKeyRepository>,
     /// Per-server quota accounting state (committed-usage snapshots and
     /// uncommitted-block reservations). Owned here rather than kept in
     /// process-global statics so it always describes this database; several
@@ -178,9 +175,6 @@ impl Repositories {
             password_reset_token: Arc::new(DbPasswordResetTokenRepository::new(db.clone())),
             user_2fa_backup_code: Arc::new(DbUser2faBackupCodeRepository::new(db.clone())),
             file_lock_timestamp: Arc::new(DbFileLockTimestampRepository::new(db.clone())),
-            webdav_key: Arc::new(auth_cache::CachingWebdavKeyRepository::new(Arc::new(
-                DbWebdavKeyRepository::new(db.clone()),
-            ))),
             quota_cache: Arc::new(infra::quota_cache::QuotaCache::new()),
         }
     }

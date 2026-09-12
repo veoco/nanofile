@@ -7,7 +7,8 @@ use base64::Engine;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::service::repo::webdav_key::hash_webdav_key;
+use crate::domain::api_key::KeyAuthority;
+use crate::domain::capability::{Capability, webdav_requires_write};
 
 /// Authenticated WebDAV request identity.
 ///
@@ -109,7 +110,7 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
             return Err(WebDavAuthError::TooManyRequests);
         }
 
-        let result = Self::authenticate(state, &repo_id, email, key).await;
+        let result = Self::authenticate(state, &repo_id, email, key, &parts.method).await;
         if matches!(result, Err(WebDavAuthError::Unauthorized)) {
             state
                 .auth_limiters
@@ -130,6 +131,7 @@ impl WebDavAuth {
         repo_id: &str,
         email: &str,
         key: &str,
+        method: &axum::http::Method,
     ) -> Result<Self, WebDavAuthError> {
         // User must exist and be active.
         let user = state
@@ -170,41 +172,60 @@ impl WebDavAuth {
             _ => return Err(WebDavAuthError::Unauthorized),
         };
 
-        // The key must exist for this repo + user. Keys are stored as a
-        // SHA-256 hash, so we hash the presented key and look it up.
-        let key_hash = hash_webdav_key(key);
-        let key_model = state
+        // The presented secret must be a unified API key that belongs to this
+        // user, carries WebDAV access and covers this library. Keys are stored
+        // as a SHA-256 hash, so only the hash is ever compared.
+        let lookup = state
             .repos
-            .webdav_key
-            .find_by_repo_user_hash(repo_id, user.id, &key_hash)
+            .api_key
+            .find_by_presented(key)
             .await
             .map_err(|_| WebDavAuthError::Unauthorized)?
             .ok_or(WebDavAuthError::Unauthorized)?;
+        if lookup.key.user_id != user.id {
+            return Err(WebDavAuthError::Unauthorized);
+        }
+        let authority =
+            KeyAuthority::from_lookup(&lookup).map_err(|_| WebDavAuthError::Unauthorized)?;
+        if !authority.has(Capability::WebdavRead) {
+            return Err(WebDavAuthError::Unauthorized);
+        }
+        let needs_write = webdav_requires_write(method.as_str());
+        if needs_write && !authority.has(Capability::WebdavWrite) {
+            return Err(WebDavAuthError::Forbidden);
+        }
+        if !authority.allows_repo(repo_id, needs_write) {
+            return Err(WebDavAuthError::Forbidden);
+        }
 
-        // Effective permission is the stricter of the membership permission
-        // and the key's own permission — a read-only key stays read-only even
-        // for an rw member, and a read-only member stays read-only even with
-        // an rw key.
-        let permission = if permission == "r" || key_model.permission == "r" {
-            "r"
-        } else {
+        // Effective permission is the stricter of the membership permission and
+        // what the key allows — a read-only key stays read-only even for an rw
+        // member, and a read-only member stays read-only even with an rw key.
+        let key_allows_write =
+            authority.has(Capability::WebdavWrite) && authority.allows_repo(repo_id, true);
+        let permission = if permission == "rw" && key_allows_write {
             "rw"
+        } else {
+            "r"
         };
+        if needs_write && permission != "rw" {
+            return Err(WebDavAuthError::Forbidden);
+        }
 
         // Best-effort last_used_at update (fire-and-forget), throttled to once
         // per hour per key so high-frequency WebDAV traffic does not write on
         // every request.
         let now = chrono::Utc::now().timestamp();
         const THROTTLE_SECS: i64 = 60 * 60;
-        let needs_update = match key_model.last_used_at {
+        let needs_update = match lookup.key.last_used_at {
             Some(ts) => now - ts >= THROTTLE_SECS,
             None => true,
         };
         if needs_update {
-            let repo = state.repos.webdav_key.clone();
-            let key_id = key_model.id;
+            let keys = state.repos.api_key.clone();
+            let key_id = lookup.key.id;
             tokio::spawn(async move {
-                let _ = repo.update_last_used_at(key_id, now).await;
+                let _ = keys.touch_last_used(key_id, now).await;
             });
         }
 
