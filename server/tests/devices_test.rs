@@ -3,8 +3,10 @@ mod common;
 use common::{TestServer, create_test_user};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
 
+/// The listing is the whole credential inventory, so a user is never empty:
+/// the token they are calling with is itself one of the credentials.
 #[tokio::test]
-async fn test_list_devices_empty() {
+async fn test_list_devices_reports_the_calling_login() {
     let server = TestServer::start().await;
     let client = server.client();
 
@@ -18,11 +20,14 @@ async fn test_list_devices_empty() {
     assert_eq!(resp.status(), 200);
 
     let devices: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert!(
-        devices.is_empty(),
-        "empty user should have no devices: {:?}",
-        devices
-    );
+    assert_eq!(devices.len(), 1, "the calling session: {devices:?}");
+    assert_eq!(devices[0]["kind"], "client");
+    // The plain login sends no device details, and used to be dropped here.
+    // The client fields stay strings, as they always were on this endpoint, so
+    // an unidentified device is empty rather than null.
+    assert_eq!(devices[0]["platform"], "");
+    assert_eq!(devices[0]["device_id"], "");
+    assert_eq!(devices[0]["key"], ":");
 }
 
 #[tokio::test]
@@ -68,11 +73,18 @@ async fn test_list_devices_with_data() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token2 = body["token"].as_str().unwrap();
 
-    // List devices — should see both
+    // List devices — should see both. The response is the whole inventory, so
+    // select the client entries before counting.
     let resp = client.get("/api2/devices/", Some(token1)).await;
     assert_eq!(resp.status(), 200);
 
-    let devices: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let devices: Vec<serde_json::Value> = resp
+        .json::<Vec<serde_json::Value>>()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry["kind"] == "client")
+        .collect();
     assert_eq!(devices.len(), 2, "should have 2 devices");
 
     let platforms: Vec<&str> = devices
@@ -182,10 +194,16 @@ async fn test_list_devices_with_data() {
         "unlinked device token should be invalid"
     );
 
-    // List devices again — should only see windows
+    // List devices again — only the windows client should remain
     let resp = client.get("/api2/devices/", Some(token1)).await;
     assert_eq!(resp.status(), 200);
-    let devices: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let devices: Vec<serde_json::Value> = resp
+        .json::<Vec<serde_json::Value>>()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry["kind"] == "client")
+        .collect();
     assert_eq!(devices.len(), 1, "should only have 1 device after unlink");
     assert_eq!(devices[0]["platform"], "windows");
 }

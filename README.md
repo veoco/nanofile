@@ -35,8 +35,9 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   reach the account — client sessions, browser sessions (labelled from their `User-Agent`), repository
   sync tokens, and the devices that skip two-factor — and revokes any one of them. API keys keep their
   own page. The same data is available as `GET /api2/credentials/` (needs `device.read`) and
-  `DELETE /api2/credentials/{kind}/{id}/` (needs `device.write`); sync-token *values* are never part of
-  it, only their metadata.
+  `DELETE /api2/credentials/{kind}/{id}/` (needs `device.write`), and `GET /api2/devices/` — the
+  Seafile-compatible surface — now returns the same inventory with a `kind` tag on each entry, keeping
+  the field names it always had. Sync-token *values* are never part of any of them, only metadata.
 - **WebDAV** (`/dav/...`) authenticated with those keys (`webdav.*` capabilities), gated by
   `webdav_enabled`.
 - **Web UI**: file browser with previews and thumbnails, starred files, activity feed, trash,

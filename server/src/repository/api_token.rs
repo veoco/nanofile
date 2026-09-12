@@ -31,10 +31,6 @@ pub struct CreateSessionTokenParams {
 #[async_trait]
 pub trait ApiTokenRepository: Send + Sync {
     async fn find_by_token(&self, token: &str) -> Result<Option<api_token::Model>, AppError>;
-    async fn find_by_user_id_with_platform(
-        &self,
-        user_id: i32,
-    ) -> Result<Vec<api_token::Model>, AppError>;
     /// Every session a user holds, newest first.
     ///
     /// The inventory needs all of them, not only the ones carrying a
@@ -98,18 +94,6 @@ impl ApiTokenRepository for DbApiTokenRepository {
         Ok(api_token::Entity::find()
             .filter(api_token::Column::Token.eq(crate::service::auth::token::hash_token(token)))
             .one(self.db.as_ref())
-            .await?)
-    }
-
-    async fn find_by_user_id_with_platform(
-        &self,
-        user_id: i32,
-    ) -> Result<Vec<api_token::Model>, AppError> {
-        Ok(api_token::Entity::find()
-            .filter(api_token::Column::UserId.eq(user_id))
-            .filter(api_token::Column::Platform.is_not_null())
-            .order_by_desc(api_token::Column::CreatedAt)
-            .all(self.db.as_ref())
             .await?)
     }
 

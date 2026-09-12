@@ -266,13 +266,6 @@ impl ApiTokenRepository for CachingApiTokenRepository {
         Ok(result)
     }
 
-    async fn find_by_user_id_with_platform(
-        &self,
-        user_id: i32,
-    ) -> Result<Vec<api_token::Model>, AppError> {
-        self.inner.find_by_user_id_with_platform(user_id).await
-    }
-
     async fn delete_many_by_device(&self, device_id: &str) -> Result<(), AppError> {
         let result = self.inner.delete_many_by_device(device_id).await;
         self.cache.clear();

@@ -29,8 +29,9 @@ Nanofile 实现了 Seafile 同步协议和 REST API，因此官方 Seafile 桌�
 - **凭据清单**：*设置 → 会话与凭据* 列出所有能长期访问本账号的凭据——客户端会话、浏览器会话
   （由 `User-Agent` 生成标签）、资料库同步令牌，以及免二次验证的设备——并可逐个吊销。API 密钥仍
   有自己的页面。同样的数据也可通过 `GET /api2/credentials/`（需要 `device.read`）与
-  `DELETE /api2/credentials/{kind}/{id}/`（需要 `device.write`）取得；同步令牌的**值**从不包含在
-  内，只有元数据。
+  `DELETE /api2/credentials/{kind}/{id}/`（需要 `device.write`）取得；Seafile 兼容的
+  `GET /api2/devices/` 现在也返回同一份清单，每个条目带 `kind` 标记，并保留原有字段名。以上任何
+  一个都不包含同步令牌的**值**，只有元数据。
 - **WebDAV**（`/dav/...`）：使用上述密钥中的 `webdav.*` 能力认证，由 `webdav_enabled` 控制。
 - **Web UI**：带预览和缩略图的文件浏览器、星标文件、动态流、回收站、设置（个人资料、会话与
   凭据、2FA、邀请、API 密钥），以及**系统管理后台**（用户、分享、后台任务）。支持中英文界面。

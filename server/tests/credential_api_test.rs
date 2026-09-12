@@ -213,16 +213,92 @@ async fn the_inventory_follows_the_device_capabilities() {
     assert_eq!(resp.status(), 403);
 }
 
-/// The legacy device list keeps its narrower answer: the official clients read
-/// it, and browser sessions are not devices.
+/// `/api2/devices/` answers with the same inventory, tagged by `kind`, so a
+/// caller can get everything from the endpoint it already used.
 #[tokio::test]
-async fn the_device_list_still_answers_only_about_devices() {
+async fn the_device_list_is_the_whole_inventory() {
     let f = TestFixture::new().await;
     let resp = f.client.get("/api2/devices/", Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
-    let devices: Value = resp.json().await.unwrap();
+    let body = resp.text().await.unwrap();
     assert!(
-        devices.as_array().expect("array").is_empty(),
-        "the fixture's login reports no device details, so the legacy list is empty"
+        !body.contains("enc1:"),
+        "the device list must not carry sync-token values either"
     );
+
+    let entries: Vec<Value> = serde_json::from_str(&body).expect("array");
+    let kinds: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().expect("kind"))
+        .collect();
+    assert!(kinds.contains(&"client"), "the calling session: {kinds:?}");
+    assert!(kinds.contains(&"sync_token"), "{kinds:?}");
+
+    // The sync-token entry names its library and carries no value.
+    let token = entries
+        .iter()
+        .find(|entry| entry["kind"] == "sync_token")
+        .expect("a sync token entry");
+    assert_eq!(token["repo_name"], "test-repo");
+    assert!(token["key"].as_str().unwrap().starts_with("sync_token:"));
+    assert!(token.get("token").is_none());
+}
+
+/// A browser session and a device trust have no device identity, so they are
+/// revoked by `kind` + `id` through the device endpoint.
+#[tokio::test]
+async fn the_device_endpoint_revokes_by_kind_too() {
+    let f = TestFixture::new().await;
+    let trust = f
+        .server
+        .repos
+        .s2fa_token
+        .create_s2fa_token(server::repository::s2fa_token::CreateS2faTokenParams {
+            user_id: f.user_id,
+            token: server::service::auth::token::generate_api_token(),
+            device_id: Some("trusted".into()),
+            device_name: None,
+            created_at: 1,
+            expires_at: 2,
+        })
+        .await
+        .expect("create trust token");
+
+    let resp = f
+        .client
+        .delete_form(
+            "/api2/devices/",
+            Some(&f.api_token),
+            &[("kind", "device_trust"), ("id", &trust.id.to_string())],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        f.server
+            .repos
+            .s2fa_token
+            .list_for_user(f.user_id)
+            .await
+            .expect("list")
+            .is_empty()
+    );
+}
+
+/// A body that names neither a device nor a kind is a client error rather than
+/// a silent no-op, and `platform` alone is not enough to mean "the device with
+/// an empty id".
+#[tokio::test]
+async fn an_incomplete_unlink_request_is_rejected() {
+    let f = TestFixture::new().await;
+    for fields in [
+        vec![],
+        vec![("platform", "android")],
+        vec![("kind", "browser")],
+    ] {
+        let resp = f
+            .client
+            .delete_form("/api2/devices/", Some(&f.api_token), &fields)
+            .await;
+        assert_eq!(resp.status(), 400, "fields: {fields:?}");
+    }
 }

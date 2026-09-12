@@ -6,10 +6,11 @@
 //! * **Sync tokens are described, never revealed.** Their row holds a
 //!   ciphertext this server can decrypt, so returning the model would hand out
 //!   the same power as the credential. Only metadata crosses this boundary.
-//! * **`GET /api2/devices/` is left alone.** It is the Seafile-compatible
-//!   surface the official clients read, and it answers a narrower question
-//!   ("devices that identified themselves"). The complete inventory lives here
-//!   rather than as extra entries in a response those clients iterate.
+//! * **`GET /api2/devices/` answers the same question.** It is the
+//!   Seafile-compatible surface, so it keeps the field names it always had and
+//!   gained a `kind` tag per entry: a client that ignores `kind` sees the extra
+//!   credentials rather than a changed shape. This endpoint exists as the
+//!   versioned, self-describing form of the same data.
 
 use axum::{
     Json,
