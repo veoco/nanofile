@@ -465,6 +465,8 @@ impl TestServer {
                 webdav_max_failures_per_5min: 30,
                 reindex_max_per_hour: 5,
                 search_max_per_minute: 60,
+                api_key_ttl_presets_days: vec![7, 30, 90, 180, 365],
+                api_key_max_ttl_days: 0,
             },
             logging: infra::config::LoggingConfig {
                 level: "debug".to_string(),

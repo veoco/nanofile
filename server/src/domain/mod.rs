@@ -10,6 +10,7 @@
 //! This module intentionally avoids infrastructure concerns (DB access,
 //! HTTP, etc.) — it's pure domain logic.
 
+pub mod api_key;
 pub mod capability;
 pub mod commit;
 pub mod fs;

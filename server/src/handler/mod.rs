@@ -98,6 +98,7 @@ pub async fn read_multipart_field_limited(
 
 pub mod account;
 pub mod activities;
+pub mod api_key;
 pub mod async_batch;
 pub mod avatar;
 pub mod batch;

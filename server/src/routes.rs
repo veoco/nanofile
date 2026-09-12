@@ -73,6 +73,21 @@ fn v1_routes() -> Router<Arc<AppState>> {
             delete(crate::handler::webdav_key::delete_webdav_key),
         )
         .route(
+            "/api2/api-keys/",
+            get(crate::handler::api_key::list_api_keys)
+                .post(crate::handler::api_key::create_api_key),
+        )
+        .route(
+            "/api2/api-keys/catalog/",
+            get(crate::handler::api_key::api_key_catalog),
+        )
+        .route(
+            "/api2/api-keys/{key_id}/",
+            get(crate::handler::api_key::get_api_key)
+                .put(crate::handler::api_key::update_api_key)
+                .delete(crate::handler::api_key::delete_api_key),
+        )
+        .route(
             "/api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/",
             get(crate::handler::file::get_block_download_link),
         )

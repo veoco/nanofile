@@ -173,6 +173,13 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api2/admin/users/"),
     ("PUT",    "/api2/admin/users/{user_id}/"),
     ("DELETE", "/api2/admin/users/{user_id}/"),
+    // Unified API-key management (session-only).
+    ("GET",    "/api2/api-keys/"),
+    ("POST",   "/api2/api-keys/"),
+    ("GET",    "/api2/api-keys/catalog/"),
+    ("GET",    "/api2/api-keys/{key_id}/"),
+    ("PUT",    "/api2/api-keys/{key_id}/"),
+    ("DELETE", "/api2/api-keys/{key_id}/"),
     // Legacy per-library WebDAV key management (removed with the unified API).
     ("GET",    "/api2/repos/{repo_id}/webdav-keys/"),
     ("POST",   "/api2/repos/{repo_id}/webdav-keys/"),

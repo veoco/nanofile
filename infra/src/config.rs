@@ -939,6 +939,19 @@ pub struct AuthConfig {
     /// Max search requests per user per minute (0 = unlimited).
     #[serde(default = "default_search_max_per_minute")]
     pub search_max_per_minute: u32,
+    /// Lifetimes, in days, offered as presets when creating an API key.
+    ///
+    /// Presentation only: the service accepts any lifetime up to
+    /// [`Self::api_key_max_ttl_days`]. Env:
+    /// `NANOFILE_AUTH_API_KEY_TTL_PRESETS_DAYS` (comma-separated).
+    #[serde(default = "default_api_key_ttl_presets_days")]
+    pub api_key_ttl_presets_days: Vec<u64>,
+    /// Upper bound on an API key's lifetime, in days (0 = no bound).
+    ///
+    /// When set, a key may neither outlive this horizon nor be created without
+    /// an expiry. Env: `NANOFILE_AUTH_API_KEY_MAX_TTL_DAYS`.
+    #[serde(default)]
+    pub api_key_max_ttl_days: u64,
 }
 
 impl Default for AuthConfig {
@@ -964,6 +977,8 @@ impl Default for AuthConfig {
             webdav_max_failures_per_5min: default_webdav_failures(),
             reindex_max_per_hour: default_five(),
             search_max_per_minute: default_search_max_per_minute(),
+            api_key_ttl_presets_days: default_api_key_ttl_presets_days(),
+            api_key_max_ttl_days: 0,
         }
     }
 }
@@ -982,6 +997,9 @@ fn default_api_token_ttl_days() -> u64 {
 }
 fn default_sync_token_ttl_days() -> u64 {
     365
+}
+fn default_api_key_ttl_presets_days() -> Vec<u64> {
+    vec![7, 30, 90, 180, 365]
 }
 fn default_lockout_duration_secs() -> u64 {
     900
@@ -1368,6 +1386,10 @@ impl Config {
             self.auth.sync_token_ttl_days
         );
         env_parse!(
+            "NANOFILE_AUTH_API_KEY_MAX_TTL_DAYS",
+            self.auth.api_key_max_ttl_days
+        );
+        env_parse!(
             "NANOFILE_AUTH_MAX_LOGIN_ATTEMPTS",
             self.auth.max_login_attempts
         );
@@ -1520,6 +1542,16 @@ impl Config {
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
+                .collect();
+        }
+
+        // Comma-separated API-key lifetime presets (days). Entries that do not
+        // parse are dropped rather than failing startup; an empty result means
+        // "no presets", and the API still accepts any bounded lifetime.
+        if let Ok(v) = std::env::var("NANOFILE_AUTH_API_KEY_TTL_PRESETS_DAYS") {
+            self.auth.api_key_ttl_presets_days = v
+                .split(',')
+                .filter_map(|s| s.trim().parse::<u64>().ok())
                 .collect();
         }
     }

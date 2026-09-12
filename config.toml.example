@@ -215,6 +215,8 @@ max_tree_visits = 1000000
 #   NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS
 #   NANOFILE_AUTH_API_TOKEN_TTL_DAYS
 #   NANOFILE_AUTH_SYNC_TOKEN_TTL_DAYS
+#   NANOFILE_AUTH_API_KEY_TTL_PRESETS_DAYS    (comma-separated list)
+#   NANOFILE_AUTH_API_KEY_MAX_TTL_DAYS
 #   NANOFILE_AUTH_MAX_LOGIN_ATTEMPTS
 #   NANOFILE_AUTH_LOCKOUT_DURATION_SECS
 #   NANOFILE_AUTH_MAX_DISTINCT_USERNAMES_PER_IP
@@ -228,6 +230,13 @@ password_hash_iterations = 600000
 # immediately"), so a 0 here is a permanent bearer credential.
 api_token_ttl_days = 180
 sync_token_ttl_days = 365
+# Lifetimes offered as presets when creating a unified API key. Presentation
+# only: any lifetime up to api_key_max_ttl_days is accepted.
+api_key_ttl_presets_days = [7, 30, 90, 180, 365]
+# Upper bound on an API key's lifetime, in days. 0 (the default) permits keys
+# that never expire; a non-zero value rejects both "never" and any longer
+# lifetime, which is what a deployment with a credential-rotation policy wants.
+api_key_max_ttl_days = 0
 # Max failed logins per client address before it is locked out, and how long
 # the lockout (and failure window) lasts. 0 disables the lockout entirely.
 max_login_attempts = 5
