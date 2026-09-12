@@ -1448,3 +1448,159 @@ async fn test_share_link_disabled_blocks_existing_links() {
         "existing share link should be inaccessible"
     );
 }
+
+// ==================== Security: link revocation follows its creator ====================
+
+/// A share/upload link acts **as its creator**, so it must stop resolving the
+/// moment that user loses access to the library (member removed) or can no
+/// longer authenticate (account deactivated).
+///
+/// Before this, a link kept working after its creator was removed, so a removed
+/// collaborator's link — or a link they had handed to a third party — kept
+/// reading the library indefinitely.
+#[tokio::test]
+async fn test_links_are_revoked_when_their_creator_loses_access() {
+    let f = TestFixture::new().await;
+    let content = b"revocable content".to_vec();
+
+    assert!(
+        f.client
+            .upload_file(&f.api_token, &f.repo_id, "/", "revoked.txt", &content)
+            .await
+            .status()
+            .is_success()
+    );
+
+    // A second user with write access creates both link types.
+    let member_token = shared_member_token(&f, "member@example.com", "rw").await;
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&member_token),
+            &serde_json::json!({"repo_id": f.repo_id, "path": "/revoked.txt"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "member share-link creation failed");
+    let share_token = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&member_token),
+            &serde_json::json!({"repo_id": f.repo_id, "path": "/"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "member upload-link creation failed");
+    let upload_token = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Baseline: both links work while the creator has access.
+    let dl = f
+        .client
+        .get(&format!("/f/{}/?dl=1", share_token), None)
+        .await;
+    assert_eq!(dl.status(), 200);
+    assert_eq!(dl.bytes().await.unwrap().to_vec(), content);
+    assert_eq!(
+        f.client
+            .get(&format!("/u/{}/", upload_token), None)
+            .await
+            .status(),
+        200
+    );
+
+    // The owner removes the member.
+    let resp = f
+        .client
+        .delete_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({"share_type": "personal", "user": "member@example.com"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "removing the member failed");
+
+    // Both links are dead *immediately* — not after a cache TTL.
+    let dl = f
+        .client
+        .get(&format!("/f/{}/?dl=1", share_token), None)
+        .await;
+    assert_eq!(
+        dl.status(),
+        404,
+        "a share link must stop resolving once its creator lost access"
+    );
+    assert_eq!(
+        f.client
+            .get(&format!("/f/{}/", share_token), None)
+            .await
+            .status(),
+        404
+    );
+    assert_eq!(
+        f.client
+            .get(&format!("/u/{}/", upload_token), None)
+            .await
+            .status(),
+        404,
+        "an upload link must stop resolving once its creator lost access"
+    );
+}
+
+/// Deactivating the account that created a link revokes the link too, through
+/// the same creator-access check (here via the admin service, which is what the
+/// sysadmin UI and API call).
+#[tokio::test]
+async fn test_links_are_revoked_when_the_creator_is_deactivated() {
+    let f = TestFixture::new().await;
+    assert!(
+        f.client
+            .upload_file(&f.api_token, &f.repo_id, "/", "deactivated.txt", b"x")
+            .await
+            .status()
+            .is_success()
+    );
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({"repo_id": f.repo_id, "path": "/deactivated.txt"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let token = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        f.client
+            .get(&format!("/f/{}/?dl=1", token), None)
+            .await
+            .status(),
+        200
+    );
+
+    // Deactivate the owner's account.
+    let svc = server::service::admin::AdminUserService::new(f.server.repos.clone());
+    svc.update_user(f.user_id, false, false, None)
+        .await
+        .expect("deactivation succeeds");
+
+    assert_eq!(
+        f.client
+            .get(&format!("/f/{}/?dl=1", token), None)
+            .await
+            .status(),
+        404,
+        "a deactivated account's links must stop resolving"
+    );
+}

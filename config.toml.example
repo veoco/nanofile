@@ -82,6 +82,21 @@ trusted_proxies = []
 # falls back to `site_url`. Simplest alternative: set `site_url` to the address
 # clients actually use. Env: NANOFILE_SERVER_ALLOWED_HOSTS
 allowed_hosts = []
+# Whether to honour a syntactically valid request Host header when `site_url` is
+# still the built-in default (LAN convenience). Set to false to always use
+# `site_url` — recommended behind a proxy or a wildcard vhost.
+# Env: NANOFILE_SERVER_TRUST_REQUEST_HOST
+trust_request_host = true
+# Maximum resources one WebDAV PROPFIND may return (0 = unlimited). An absent
+# Depth header means "infinity" per RFC 4918, so this bounds the in-memory
+# multistatus document; over the cap the request is answered 507 and the client
+# should retry with Depth: 1.
+# Env: NANOFILE_SERVER_MAX_PROPFIND_ENTRIES
+max_propfind_entries = 100000
+# Add `includeSubDomains` to the HSTS header (HTTPS deployments only). Off by
+# default, so sibling host names are not pinned.
+# Env: NANOFILE_SERVER_HSTS_INCLUDE_SUBDOMAINS
+hsts_include_subdomains = false
 # System tray icon (only exists in binaries built with `--features tray`;
 # plain builds have no tray code at all). Set to false (or NANOFILE_SERVER_TRAY=false)
 # to run headless even in a desktop session — e.g. for an auto-started instance
@@ -125,6 +140,17 @@ max_connections = 5
 #   NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE
 #   NANOFILE_STORAGE_ENCRYPTION_KEY        (discouraged: visible in process listings)
 #   NANOFILE_STORAGE_ENCRYPTION_KEY_FILE   (read key from file, safer)
+# Block storage root. Blocks are namespaced per library:
+#   {block_dir}/repos/<sha1(repo_id)>/<2hex>/<block_id>
+# so a block id only grants access through a library the caller is a member of.
+# Upgrading from a build that used the old flat layout
+# ({block_dir}/<2hex>/<block_id>): the migration runs automatically at startup,
+# before the first request is served — it copies every referenced block into its
+# library's directory and then removes the old tree. Run
+# `nanofile migrate-blocks --dry-run` first to see how much would be copied;
+# `nanofile migrate-blocks` runs it explicitly with the server stopped. Back up
+# this directory before upgrading if you want a rollback path. Deduplication is
+# per library, so content duplicated across libraries is stored once per library.
 block_dir = "data/blocks"
 temp_dir = "data/temp"
 # Thumbnail cache directory.
@@ -191,6 +217,9 @@ max_tree_visits = 1000000
 #   NANOFILE_AUTH_PASSWORD_MIN_LENGTH
 #   NANOFILE_AUTH_REQUIRE_STRONG_PASSWORD
 password_hash_iterations = 600000
+# Lifetime of API/session and sync tokens, in days. NOTE: 0 means the token
+# NEVER expires on the API login path (the web-UI path reads 0 as "expire
+# immediately"), so a 0 here is a permanent bearer credential.
 api_token_ttl_days = 180
 sync_token_ttl_days = 365
 # Max failed logins per client address before it is locked out, and how long

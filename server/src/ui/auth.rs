@@ -219,36 +219,38 @@ pub async fn login(
         .map(|html| (StatusCode::TOO_MANY_REQUESTS, Html(html)).into_response());
     }
 
-    let user_record = match state.repos.user.find_by_email(&form.email).await? {
-        Some(u) => u,
+    let user_record = state.repos.user.find_by_email(&form.email).await?;
+
+    // Verify the password **before** looking at `is_active`, and verify against
+    // a cost-matched dummy hash when the row is missing. Returning early for a
+    // disabled account (with no PBKDF2 work at all) used to answer in ~1ms while
+    // every other failure spends ~100-300ms at the default 600k iterations —
+    // a reliable "this email exists but is disabled" oracle. Active, disabled
+    // and unknown accounts now all pay the same PBKDF2 cost and get the same
+    // generic message.
+    let password_ok = match &user_record {
+        Some(u) => {
+            verify_password_async(
+                form.password.clone(),
+                u.password_hash.clone(),
+                state.config.auth.password_hash_iterations,
+            )
+            .await
+        }
         None => {
-            state.auth_limiters.login.record_login_failure(&login_keys);
-            // Run PBKDF2 against a dummy hash so a "user not found" response
-            // takes as long as a wrong-password response, avoiding username
-            // enumeration via a response-time side channel.
             let _ = verify_password_async(
                 form.password.clone(),
                 dummy_password_hash(state.config.auth.password_hash_iterations),
                 state.config.auth.password_hash_iterations,
             )
             .await;
-            return render_login_page(
-                &state,
-                &headers,
-                Some(
-                    I18n::from_headers(&headers, &state.config.ui.default_language)
-                        .tr("auth.incorrect_credentials")
-                        .to_string(),
-                ),
-                &next,
-            )
-            .await
-            .map(|html| (StatusCode::OK, Html(html)).into_response());
+            false
         }
     };
 
-    if !user_record.is_active {
-        // Use the same generic error to avoid user-enumeration attacks (matching seahub).
+    // Use the same generic error for wrong password, disabled account and
+    // unknown email to avoid user-enumeration attacks (matching seahub).
+    let Some(user_record) = user_record.filter(|u| password_ok && u.is_active) else {
         state.auth_limiters.login.record_login_failure(&login_keys);
         return render_login_page(
             &state,
@@ -262,29 +264,7 @@ pub async fn login(
         )
         .await
         .map(|html| (StatusCode::OK, Html(html)).into_response());
-    }
-
-    if !verify_password_async(
-        form.password.clone(),
-        user_record.password_hash.clone(),
-        state.config.auth.password_hash_iterations,
-    )
-    .await
-    {
-        state.auth_limiters.login.record_login_failure(&login_keys);
-        return render_login_page(
-            &state,
-            &headers,
-            Some(
-                I18n::from_headers(&headers, &state.config.ui.default_language)
-                    .tr("auth.incorrect_credentials")
-                    .to_string(),
-            ),
-            &next,
-        )
-        .await
-        .map(|html| (StatusCode::OK, Html(html)).into_response());
-    }
+    };
 
     // Successful login — forgive this address/pair, but keep the
     // distinct-account spray history.
@@ -567,7 +547,8 @@ pub async fn two_factor_auth(
     let totp = TotpManager::create_totp(&two_fa.totp_secret, &user_record.email, "Nanofile")
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let code_valid = TotpManager::verify_code(&totp, &form.code);
+    let code_valid =
+        TotpManager::verify_and_consume(&state.repos, user_id, &totp, &form.code).await;
 
     // Try backup code if TOTP failed
     let backup_valid = if !code_valid {
@@ -681,6 +662,24 @@ pub async fn logout(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
+    // Logging out is a state change served on GET, so a cross-site
+    // `<img src="/accounts/logout/">` could force it. Any browser navigation
+    // carries `Sec-Fetch-Site`, and a cross-site one is refused; the token is
+    // simply left in place (no error page, so nothing is disclosed). Keep GET so
+    // existing links and bookmarks keep working.
+    if headers
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|site| !matches!(site, "none" | "same-origin"))
+    {
+        let mut resp = axum::response::Redirect::to("/libraries/").into_response();
+        resp.headers_mut().insert(
+            axum::http::header::LOCATION,
+            axum::http::HeaderValue::from_static("/libraries/"),
+        );
+        return Ok(resp);
+    }
+
     if let Some(cookie_str) = headers.get("Cookie").and_then(|v| v.to_str().ok())
         && let Some(token) = cookie_str
             .split(';')

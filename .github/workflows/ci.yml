@@ -12,6 +12,12 @@ on:
   pull_request:
     branches: [main, master, develop]
 
+# Least privilege: the workflow only reads the repository. Paired with the
+# full-SHA action pins, a compromised action or a malicious PR cannot push,
+# comment on issues, or read secrets beyond what a read token allows.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 

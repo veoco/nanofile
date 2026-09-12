@@ -86,6 +86,9 @@ admin.global_quota = "{size}(全局)"
 
 # 认证
 auth.invalid_origin = "请求来源无效。"
+auth.login_to_client = "登录到桌面客户端"
+auth.client_login_confirm_desc = "某个客户端请求在浏览器中打开此页面。请仅在你刚刚于本机启动该客户端时才继续。"
+auth.client_login_confirm_warning = "继续后，此浏览器将以发起该链接的账号登录。若并非你本人发起，请关闭此页面。"
 auth.too_many_attempts = "登录尝试次数过多,请稍后再试。"
 auth.incorrect_credentials = "邮箱或密码不正确。"
 auth.session_expired = "登录会话已过期,请重新登录。"

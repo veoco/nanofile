@@ -33,7 +33,11 @@ pub async fn security_headers(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let mut response = next.run(req).await;
-    apply_security_headers(response.headers_mut(), state.config.server.secure_cookies());
+    apply_security_headers(
+        response.headers_mut(),
+        state.config.server.secure_cookies(),
+        state.config.server.hsts_include_subdomains,
+    );
     response
 }
 
@@ -41,8 +45,14 @@ pub async fn security_headers(
 ///
 /// `secure` is `site_url` being HTTPS; only then is `Strict-Transport-Security`
 /// added, because a plain-HTTP deployment must not pin clients to a scheme its
-/// own links do not use.
-fn apply_security_headers(headers: &mut axum::http::HeaderMap, secure: bool) {
+/// own links do not use. `hsts_include_subdomains` extends that pin to
+/// subdomains and is opt-in, since a deployment may serve unrelated plain-HTTP
+/// sites on sibling host names.
+fn apply_security_headers(
+    headers: &mut axum::http::HeaderMap,
+    secure: bool,
+    hsts_include_subdomains: bool,
+) {
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -56,20 +66,33 @@ fn apply_security_headers(headers: &mut axum::http::HeaderMap, secure: bool) {
         header::HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
+    // Nothing here is meant to be embedded by another origin (X-Frame-Options
+    // and `frame-ancestors` already cover framing; this also blocks subresource
+    // embedding of authenticated responses).
+    headers.insert(
+        header::HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
             "default-src 'self'; script-src 'self'; \
              style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
-             font-src 'self'; connect-src 'self' ws: wss:; \
+             font-src 'self'; connect-src 'self'; \
              object-src 'none'; frame-ancestors 'none'; base-uri 'self'; \
              form-action 'self'",
         ),
     );
     if secure {
+        // `includeSubDomains` is opt-in: a deployment may serve unrelated
+        // plain-HTTP sites on sibling host names.
         headers.insert(
             header::STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static("max-age=31536000"),
+            HeaderValue::from_static(if hsts_include_subdomains {
+                "max-age=31536000; includeSubDomains"
+            } else {
+                "max-age=31536000"
+            }),
         );
     }
 }
@@ -162,8 +185,15 @@ mod security_header_tests {
     use super::apply_security_headers;
 
     fn headers(secure: bool) -> axum::http::HeaderMap {
+        headers_with_subdomains(secure, false)
+    }
+
+    fn headers_with_subdomains(
+        secure: bool,
+        hsts_include_subdomains: bool,
+    ) -> axum::http::HeaderMap {
         let mut headers = axum::http::HeaderMap::new();
-        apply_security_headers(&mut headers, secure);
+        apply_security_headers(&mut headers, secure, hsts_include_subdomains);
         headers
     }
 
@@ -179,6 +209,19 @@ mod security_header_tests {
             headers(false).get("strict-transport-security").is_none(),
             "plain-HTTP deployments must not receive HSTS"
         );
+        // `includeSubDomains` is opt-in and only ever added to an HTTPS pin.
+        assert_eq!(
+            headers_with_subdomains(true, true)
+                .get("strict-transport-security")
+                .unwrap(),
+            "max-age=31536000; includeSubDomains"
+        );
+        assert!(
+            headers_with_subdomains(false, true)
+                .get("strict-transport-security")
+                .is_none(),
+            "a plain-HTTP deployment must not receive HSTS even when opted in"
+        );
     }
 
     /// The baseline headers are always present.
@@ -191,6 +234,16 @@ mod security_header_tests {
         let csp = headers.get("content-security-policy").unwrap();
         let csp = csp.to_str().unwrap();
         assert!(csp.contains("default-src 'self'"));
+        // Same-origin sockets stay allowed through `'self'`, but an
+        // attacker-chosen `wss://` endpoint must not be.
+        assert!(
+            !csp.contains("ws:") && !csp.contains("wss:"),
+            "connect-src must not allow arbitrary websocket origins: {csp}"
+        );
+        assert_eq!(
+            headers.get("cross-origin-resource-policy").unwrap(),
+            "same-origin"
+        );
         // Inline scripts must stay rejected: every inline <script> was moved to
         // an external bundle or a JSON data block.
         let script_src = csp

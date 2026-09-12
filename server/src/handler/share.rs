@@ -154,6 +154,7 @@ pub async fn delete_share(
     share::delete_share(
         &state.repos,
         state.notification_manager.as_ref(),
+        Some(&state.password_manager),
         &repo_id,
         auth.user_id,
         &req.user,

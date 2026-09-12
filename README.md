@@ -52,12 +52,23 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
     magic/random_key format on creation. Known limitation: the `/api2/repos/` create API has no
     `salt` field, so a library created through it derives as if v2 — real per-library v4 salts are
     created through the sync protocol.
-- **Storage & versioning**: per-user quotas, content-addressed block store, full history with
-  revision browse / restore, per-repo history limits and TTL, garbage collection (history pruning +
-  unreachable FS-object cleanup), trash with revert, deleted-library restore. Optional transparent
-  at-rest encryption for file blocks (`block_encryption_mode`: `off` / `on` / `lazy`), with the
-  block id (SHA-1 of logical bytes) unchanged so Seafile clients and content-addressed dedup keep
-  working.
+- **Storage & versioning**: per-user quotas, content-addressed block store **namespaced per
+  library** (`data/blocks/repos/<sha1(repo_id)>/…`), full history with revision browse / restore,
+  per-repo history limits and TTL, garbage collection (history pruning + unreachable FS-object
+  cleanup), trash with revert, deleted-library restore. Optional transparent at-rest encryption for
+  file blocks (`block_encryption_mode`: `off` / `on` / `lazy`), with the block id (SHA-1 of logical
+  bytes) unchanged so Seafile clients and content-addressed dedup keep working.
+  - **Upgrading from an older build**: blocks used to live in one flat, server-wide tree
+    (`data/blocks/<2hex>/<id>`). That layout keyed blocks only by content id, so any authenticated
+    user could read any library's block by naming it through a library they *were* a member of.
+    The server now copies each referenced block into the library that owns it, then removes the old
+    tree — automatically at startup, before the first request is served. Use
+    `nanofile migrate-blocks --dry-run` to pre-flight the copy volume (it prints repositories,
+    blocks, and bytes) and `nanofile migrate-blocks` to run it explicitly with the server stopped.
+    The migration copies (never hard-links), is resumable, and only deletes the old tree after every
+    referenced block is confirmed in its new location; back up `data/blocks` first if you want a
+    rollback path. Because deduplication is now per library, content duplicated across libraries is
+    stored once per library — expect disk usage to grow accordingly.
 - **Full-text search**: built-in Tantivy index with a jieba Chinese tokenizer; filename and content
   search across libraries.
 - **Real-time notifications**: WebSocket push for repo updates, file locks, folder permissions and
@@ -178,6 +189,11 @@ run it:
   drives `Secure` on session/link cookies and enables `Strict-Transport-Security`; left as plain
   HTTP, neither is sent (a LAN deployment must not be pinned to HTTPS it cannot serve). Sessions,
   share-link passwords and API tokens are bearer credentials.
+- **File blocks are stored per library** (`data/blocks/repos/<sha1(repo_id)>/…`), and every block
+  read/write names the library it belongs to. A block id therefore only grants access through a
+  library the caller is a member of: a removed collaborator who still has another library on the
+  server cannot read the blocks their client cached from the one they lost. This also means
+  deduplication is per library rather than server-wide.
 - **`addr = "0.0.0.0"` is the default** so the server is reachable on the host's interfaces. Bind
   `127.0.0.1` when a reverse proxy is the only intended entry point, and firewall the port otherwise.
 - **Behind a reverse proxy, set `trusted_proxies`.** `X-Forwarded-For` is only honoured when the TCP
@@ -185,6 +201,10 @@ run it:
 - **`share_link_enabled = false`** turns off anonymous share/upload links entirely (existing links
   stop resolving). `allowed_hosts` pins the host names used to build absolute download URLs when
   `site_url` is unset.
+- **Run the server with a minimal `PATH`.** Helper binaries (`ffmpeg` for video thumbnails,
+  `xdg-open`/`launchctl` for tray actions) are looked up through `PATH`; point
+  `storage.ffmpeg_path` at an absolute path and keep untrusted directories (a world-writable
+  working directory, `node_modules/.bin`) out of the server's `PATH`.
 - **Tighten the example's finite caps if you serve many users** (`max_zip_bytes`,
   `max_temp_upload_bytes`); `0` means unlimited.
 
@@ -198,8 +218,10 @@ Deliberate, documented trade-offs (no code path is unprotected — each is bound
   protocol version ≤ 2), but the defaults stay compatible. Online guessing is bounded by
   `repo_password_max_per_hour` instead.
 - **Zip downloads (`/zip/{token}`) are capability URLs**, exactly like upstream's file-server
-  tokens: single-use, expiring, unguessable, redacted from the logs, and never re-authorized — the
-  token *is* the authorization. Treat a zip URL like a password.
+  tokens: single-use, expiring, unguessable and redacted from the logs. Unlike upstream, the
+  requester's library permission is re-checked when the token is consumed, so a user whose access
+  was revoked (or whose account was deactivated) inside the token's one-hour TTL cannot still pull
+  the archive. Treat a zip URL like a password anyway.
 - **`head-commits-multi` and `check_blocks`** answer anonymous/authenticated callers the same way
   upstream does (library metadata and block existence). They are required by the sync protocol;
   rate limiting bounds the request rate.
@@ -282,18 +304,28 @@ data directory. It runs as uid/gid `1000:1000`, so the data volume must be writa
 `--user "$(id -u):$(id -g)"` to match your own account). Mount a config file and a persistent data
 volume, and point the data paths at the volume:
 
+**Create the master secret once and keep it.** It derives the session/CSRF keys, the notification
+JWT keys, the sync-token encryption key and the at-rest storage key, so generating a new one on every
+start logs everybody out, breaks every sync client and makes existing 2FA enrolments and at-rest
+encrypted blocks undecryptable:
+
 ```bash
 mkdir -p data
+# One-time, persisted (mode 0600): rotating this value is a destructive operation.
+openssl rand -hex 32 > nanofile-secret
+chmod 600 nanofile-secret
+
 docker run -d --name nanofile \
   -p 8082:8082 \
   -v "$PWD/data:/data" \
   -v "$PWD/config.toml:/etc/nanofile/config.toml:ro" \
+  -v "$PWD/nanofile-secret:/run/secrets/nanofile-secret:ro" \
   -e NANOFILE_CONFIG=/etc/nanofile/config.toml \
   -e NANOFILE_DATABASE_URL='sqlite:/data/nanofile.db?mode=rwc' \
   -e NANOFILE_STORAGE_BLOCK_DIR=/data/blocks \
   -e NANOFILE_STORAGE_TEMP_DIR=/data/temp \
   -e NANOFILE_INDEX_INDEX_DIR=/data/index \
-  -e NANOFILE_SERVER_SECRET_KEY="$(openssl rand -hex 32)" \
+  -e NANOFILE_SERVER_SECRET_KEY="$(cat nanofile-secret)" \
   ghcr.io/<owner>/nanofile:latest
 ```
 
@@ -307,9 +339,11 @@ docker run -d --name nanofile \
   -e NANOFILE_DATABASE_URL='sqlite:/data/nanofile.db?mode=rwc' \
   -e NANOFILE_STORAGE_BLOCK_DIR=/data/blocks \
   -e NANOFILE_STORAGE_TEMP_DIR=/data/temp \
-  -e NANOFILE_SERVER_SECRET_KEY="$(openssl rand -hex 32)" \
+  -e NANOFILE_SERVER_SECRET_KEY="$(cat nanofile-secret)" \
   ghcr.io/<owner>/nanofile:latest
 ```
+
+(`nanofile-secret` is the persisted value created above — never regenerate it per start.)
 
 ## CLI
 
@@ -318,6 +352,10 @@ nanofile [--config <path>]           Start the server (default)
 nanofile [--config <path>] adduser   Create a user (admin by default; --regular for a normal user)
                                      Password: interactive prompt by default, or
                                      --password-stdin / --password-file <path>
+nanofile [--config <path>] migrate-blocks [--dry-run]
+                                     Move blocks from the legacy flat layout to the per-library
+                                     layout (normally done automatically at startup; --dry-run only
+                                     reports what would be copied)
 ```
 
 ## Data Layout
@@ -328,7 +366,7 @@ All state lives under the working directory (defaults shown):
 data/
 ├── nanofile.db        # SQLite database (WAL mode, file mode 0600)
 ├── nanofile.db-wal    # WAL journal
-├── blocks/            # content-addressed block store: {2-hex prefix}/{40-hex SHA-1}
+├── blocks/            # block store: repos/{sha1(repo_id)}/{2-hex prefix}/{40-hex SHA-1}
 ├── temp/              # resumable / chunked upload staging
 ├── thumbnails/        # generated image / video thumbnail cache
 ├── avatars/           # user avatar images

@@ -24,6 +24,13 @@ pub trait User2faBackupCodeRepository: Send + Sync {
     async fn delete_by_user(&self, user_id: i32) -> Result<(), AppError>;
     async fn insert(&self, model: user_2fa_backup_code::ActiveModel) -> Result<(), AppError>;
     async fn mark_as_used(&self, code_hash: &str, used_at: i64) -> Result<(), AppError>;
+    /// Atomically consume a backup code: mark it used **only if it is still
+    /// unused**, returning whether this call is the one that consumed it.
+    ///
+    /// A read-then-write pair (find an unused row, then set `used`) lets two
+    /// concurrent submissions of the same code both authenticate; the answer has
+    /// to come from a single conditional UPDATE's affected-row count.
+    async fn consume_code(&self, code_hash: &str, used_at: i64) -> Result<bool, AppError>;
     async fn create_backup_code(
         &self,
         params: CreateBackupCodeParams,
@@ -88,6 +95,20 @@ impl User2faBackupCodeRepository for DbUser2faBackupCodeRepository {
             created_at: Set(params.created_at),
         };
         Ok(model.insert(self.db.as_ref()).await?)
+    }
+
+    async fn consume_code(&self, code_hash: &str, used_at: i64) -> Result<bool, AppError> {
+        let result = user_2fa_backup_code::Entity::update_many()
+            .filter(user_2fa_backup_code::Column::CodeHash.eq(code_hash))
+            .filter(user_2fa_backup_code::Column::Used.eq(false))
+            .set(user_2fa_backup_code::ActiveModel {
+                used: Set(true),
+                used_at: Set(Some(used_at)),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected == 1)
     }
 
     async fn mark_as_used(&self, code_hash: &str, used_at: i64) -> Result<(), AppError> {

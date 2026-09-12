@@ -546,3 +546,107 @@ async fn test_ui_unstar_form() {
         .unwrap();
     assert!(body["starred_item_list"].as_array().unwrap().is_empty());
 }
+
+/// Starred rows are the user's own bookkeeping and outlive membership, so the
+/// listing must intersect them with the libraries the caller can still access.
+///
+/// Without this, a member who was removed from a library keeps an ongoing oracle
+/// on it: the response reports the library's name, encryption flag, per-file
+/// path, modification time and whether the file still exists.
+#[tokio::test]
+async fn test_starred_items_are_filtered_by_current_access() {
+    let f = TestFixture::new().await;
+    upload_file(&f, "shared-star.txt").await;
+
+    // The owner stars the file as well, so both views can be compared.
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/starred-items/",
+            Some(&f.api_token),
+            &serde_json::json!({"repo_id": f.repo_id, "path": "/shared-star.txt"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "owner star failed");
+
+    // A second user with write access who stars the same file.
+    common::create_test_user(f.server.db.as_ref(), "starrer@example.com", "password").await;
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "starrer@example.com",
+                "permission": "rw",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "sharing failed");
+    let resp = f.client.login("starrer@example.com", "password").await;
+    let member_token = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/starred-items/",
+            Some(&member_token),
+            &serde_json::json!({"repo_id": f.repo_id, "path": "/shared-star.txt"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "starring failed");
+
+    let starred_repos = |token: &str| {
+        let base = f.server.base_url.clone();
+        let token = token.to_string();
+        async move {
+            let client = reqwest::Client::new();
+            let resp = client
+                .get(format!("{base}/api/v2.1/starred-items/"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            let body: serde_json::Value = resp.json().await.unwrap();
+            body["starred_item_list"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|i| i["repo_id"].as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        }
+    };
+
+    // Baseline: the member sees the entry while they have access.
+    assert!(
+        starred_repos(&member_token).await.contains(&f.repo_id),
+        "the member must see the library while they are a member"
+    );
+
+    // The owner removes the member.
+    let resp = f
+        .client
+        .delete_json(
+            &format!("/api2/beshared-repos/{}/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({"share_type": "personal", "user": "starrer@example.com"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "removing the member failed");
+
+    // The removed member no longer sees the entry…
+    assert!(
+        !starred_repos(&member_token).await.contains(&f.repo_id),
+        "a removed member must not keep seeing the library in their starred items"
+    );
+    // …while the owner (who still has access) keeps seeing it.
+    assert!(
+        starred_repos(&f.api_token).await.contains(&f.repo_id),
+        "the owner's starred view must be unaffected"
+    );
+}

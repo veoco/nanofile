@@ -23,8 +23,48 @@ impl TotpManager {
         Ok(totp)
     }
 
-    pub fn verify_code(totp: &Totp, code: &str) -> bool {
-        totp.check_current(code).is_some()
+    /// Verify a code, returning the matched TOTP time step.
+    ///
+    /// The step is what makes a code single-use: `totp-rs` accepts the previous,
+    /// current and next step (±30s of clock skew), so a code observed by an
+    /// attacker would otherwise stay valid for up to ~90 seconds. Callers should
+    /// prefer [`Self::verify_and_consume`], which also records the step.
+    pub fn verify_code(totp: &Totp, code: &str) -> Option<u64> {
+        totp.check_current(code)
+    }
+
+    /// Verify a code and record its time step, rejecting any step already used.
+    ///
+    /// The skew tolerance stays in place for honest clients; only a *replayed*
+    /// code (same or earlier step) is refused. Recording is best effort: a
+    /// failed write must not lock a user out, so a storage error is logged and
+    /// the code is accepted (the database being unwritable is a bigger problem
+    /// than this check).
+    pub async fn verify_and_consume(
+        repos: &crate::repository::Repositories,
+        user_id: i32,
+        totp: &Totp,
+        code: &str,
+    ) -> bool {
+        let Some(step) = Self::verify_code(totp, code) else {
+            return false;
+        };
+        let step = step as i64;
+        let already_used = repos
+            .user_2fa
+            .find_by_user_id(user_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|m| m.last_used_step)
+            .is_some_and(|last| step <= last);
+        if already_used {
+            return false;
+        }
+        if let Err(e) = repos.user_2fa.set_last_used_step(user_id, step).await {
+            tracing::warn!(user_id, "could not record the used TOTP step: {e}");
+        }
+        true
     }
 
     pub fn get_otpauth_url(totp: &Totp) -> String {

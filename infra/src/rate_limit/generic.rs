@@ -12,6 +12,17 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Upper bound on tracked keys.
+///
+/// Keys are derived from client-controlled values (per-IP, per-link-token) on
+/// unauthenticated endpoints, so a flood of distinct keys — e.g. a routed IPv6
+/// /64 or a swarm of share tokens — could otherwise grow this map without
+/// bound: window expiry only drops a key when that same key is looked up again.
+/// Once the cap is reached the least recently active keys are evicted, which
+/// fails open (a throttled attacker may regain budget) rather than growing
+/// memory until the process dies.
+const MAX_KEYS: usize = 50_000;
+
 pub struct GenericRateLimiter {
     attempts: Mutex<HashMap<String, Vec<i64>>>,
     max_attempts: u32,
@@ -44,6 +55,27 @@ impl GenericRateLimiter {
         self.attempts.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Bound the map by evicting its least recently active keys.
+    ///
+    /// Only runs once [`MAX_KEYS`] is exceeded, so the common path stays a
+    /// couple of hash operations.
+    fn shrink(map: &mut HashMap<String, Vec<i64>>) {
+        let Some(excess) = map.len().checked_sub(MAX_KEYS) else {
+            return;
+        };
+        if excess == 0 {
+            return;
+        }
+        let mut by_age: Vec<(i64, String)> = map
+            .iter()
+            .map(|(key, ts)| (ts.iter().copied().max().unwrap_or(i64::MIN), key.clone()))
+            .collect();
+        by_age.sort_unstable();
+        for (_, key) in by_age.into_iter().take(excess) {
+            map.remove(&key);
+        }
+    }
+
     /// Record an attempt for the given key.
     pub fn record_attempt(&self, key: &str) {
         if self.disabled() {
@@ -55,6 +87,7 @@ impl GenericRateLimiter {
         timestamps.push(now);
         let cutoff = now - self.window_secs;
         timestamps.retain(|&t| t > cutoff);
+        Self::shrink(&mut map);
     }
 
     /// Check if the given key has exceeded the rate limit.
@@ -94,7 +127,7 @@ impl GenericRateLimiter {
 
 #[cfg(test)]
 mod tests {
-    use super::GenericRateLimiter;
+    use super::{GenericRateLimiter, MAX_KEYS};
 
     #[test]
     fn zero_attempts_means_unlimited() {
@@ -120,5 +153,35 @@ mod tests {
         assert!(limiter.is_limited("k"));
         limiter.clear("k");
         assert!(!limiter.is_limited("k"));
+    }
+
+    /// A flood of distinct keys must not grow the map without bound: eviction
+    /// keeps the least recently active keys out.
+    #[test]
+    fn shrink_bounds_the_map_and_drops_the_oldest_keys() {
+        let limiter = GenericRateLimiter::new(5, 3600);
+        {
+            let mut map = limiter.attempts.lock().unwrap();
+            for i in 0..(MAX_KEYS + 5) {
+                map.insert(format!("k{i}"), vec![i as i64]);
+            }
+        }
+        // A normal attempt triggers the shrink without changing the ordering:
+        // its timestamp is "now", far newer than every injected one.
+        limiter.record_attempt("trigger");
+
+        let guard = limiter.attempts.lock().unwrap();
+        assert!(
+            guard.len() <= MAX_KEYS,
+            "map must stay capped, len={}",
+            guard.len()
+        );
+        for i in 0..5 {
+            assert!(
+                !guard.contains_key(&format!("k{i}")),
+                "k{i} is the oldest and must be evicted"
+            );
+        }
+        assert!(guard.contains_key("trigger"));
     }
 }

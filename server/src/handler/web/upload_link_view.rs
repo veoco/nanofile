@@ -83,6 +83,21 @@ async fn validate_upload_link(
         return Err(AppError::NotFound("Upload link not found".into()));
     }
 
+    // The link acts as its creator, so it must stop resolving once the creator
+    // loses access to the library (member removed, account deactivated). The
+    // actual upload path re-checks write permission on the token, but the view
+    // page itself lists directory entries and must not outlive access either.
+    if !crate::service::sharing::share::link_creator_may_access(
+        &state.repos,
+        link.creator_id,
+        &link.repo_id,
+        false,
+    )
+    .await
+    {
+        return Err(AppError::NotFound("Upload link not found".into()));
+    }
+
     Ok(link)
 }
 
@@ -250,6 +265,9 @@ pub async fn upload_link_view_post(
     .await;
 
     if !valid {
+        // Same per-token cap as the share-link POST path: the IP limiter alone
+        // does not bound a distributed brute force against one link token.
+        crate::handler::web::share_view::record_link_password_failure(&state, &token)?;
         let tpl = ShareAccessValidationTemplate {
             t: I18n::from_headers(&headers, &state.config.ui.default_language),
             token: token.clone(),

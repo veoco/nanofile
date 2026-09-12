@@ -736,6 +736,7 @@ async fn enable_2fa_row(f: &TestFixture) {
         period: sea_orm::Set(30),
         enabled: sea_orm::Set(true),
         enabled_at: sea_orm::NotSet,
+        last_used_step: sea_orm::NotSet,
     };
     user_2fa.insert(f.server.db.as_ref()).await.unwrap();
 }

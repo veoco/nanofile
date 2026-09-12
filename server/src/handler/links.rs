@@ -559,6 +559,20 @@ pub async fn get_upload_link_upload_url_v21(
         .await?
         .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
 
+    // The uploaded token acts as the link's creator, so minting it requires that
+    // the creator still has write access (defence in depth: the token endpoint
+    // re-checks this as well).
+    if !crate::service::sharing::share::link_creator_may_access(
+        &state.repos,
+        link.creator_id,
+        &link.repo_id,
+        true,
+    )
+    .await
+    {
+        return Err(AppError::Forbidden);
+    }
+
     // Get the creator's username for the token
     let creator = state
         .repos

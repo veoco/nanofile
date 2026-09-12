@@ -190,7 +190,8 @@ pub async fn verify_2fa(
     let totp = TotpManager::create_totp(&two_fa.totp_secret, &user.email, "Nanofile")
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let code_valid = TotpManager::verify_code(&totp, &form.code);
+    let code_valid =
+        TotpManager::verify_and_consume(&state.repos, user.user_id, &totp, &form.code).await;
     let backup_valid = if !code_valid {
         crate::service::auth::backup_codes::BackupCodeManager::verify_code(
             &state.repos,

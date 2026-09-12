@@ -4,8 +4,33 @@
 //! The actual data retrieval is delegated to `MemberRepository` via trait,
 //! keeping this module free of infrastructure concerns.
 
+use crate::repository::Repositories;
 use crate::repository::member::MemberRepository;
 use base::AppError;
+
+/// Repo ids `user_id` can currently access: the libraries they own plus every
+/// library a membership row grants them.
+///
+/// Used by the listing endpoints (starred items, activities, search) to
+/// intersect a user-specific table with live access, so a row that refers to a
+/// library the user has since been removed from does not keep leaking its name,
+/// paths or modification times.
+pub async fn accessible_repo_ids(
+    repos: &Repositories,
+    user_id: i32,
+) -> Result<std::collections::HashSet<String>, AppError> {
+    let mut ids: std::collections::HashSet<String> = repos
+        .repo
+        .find_by_owner_id(user_id)
+        .await?
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    for member in repos.member.find_by_user_id(user_id).await? {
+        ids.insert(member.repo_id);
+    }
+    Ok(ids)
+}
 
 /// Check if `user_id` has write (`rw`) permission on the repo.
 ///

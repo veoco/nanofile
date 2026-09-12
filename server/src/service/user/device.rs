@@ -30,8 +30,18 @@ impl DeviceService {
                     token.platform.as_deref(),
                     Some("windows") | Some("linux") | Some("mac")
                 );
+                // The row's `token` column holds the SHA-256 *digest* of the
+                // session token; echoing it (as this used to) hands out
+                // bearer-credential material for no reason. Clients identify a
+                // device by `platform` + `device_id` (that is what the unlink
+                // endpoint takes), so expose a stable, non-secret key instead.
+                let key = format!(
+                    "{}:{}",
+                    token.platform.as_deref().unwrap_or(""),
+                    token.device_id.as_deref().unwrap_or("")
+                );
                 devices.push(serde_json::json!({
-                    "key": token.token,
+                    "key": key,
                     "platform": token.platform,
                     "device_id": token.device_id,
                     "device_name": token.device_name,

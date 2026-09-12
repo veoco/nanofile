@@ -1269,6 +1269,8 @@ async fn test_client_login_expired_token_redirects() {
             "{}/client-login/?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&next=/libraries/",
             fixture.server.base_url
         ))
+        // The normal browser flow: a navigation the browser itself initiated.
+        .header("sec-fetch-site", "none")
         .send()
         .await
         .unwrap();
@@ -1299,6 +1301,7 @@ async fn test_client_login_invalid_token_redirects() {
             "{}/client-login/?token=nonexistenttoken1234567890abcdef&next=/libraries/",
             fixture.server.base_url
         ))
+        .header("sec-fetch-site", "none")
         .send()
         .await
         .unwrap();

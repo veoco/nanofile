@@ -14,6 +14,8 @@ pub trait User2faRepository: Send + Sync {
         totp_secret: String,
     ) -> Result<user_2fa::Model, AppError>;
     async fn set_enabled(&self, user_id: i32, enabled: bool, now: i64) -> Result<(), AppError>;
+    /// Record the highest TOTP time step accepted for this user (replay guard).
+    async fn set_last_used_step(&self, user_id: i32, step: i64) -> Result<(), AppError>;
     async fn delete_by_user_id(&self, user_id: i32) -> Result<(), AppError>;
 }
 
@@ -86,6 +88,7 @@ impl User2faRepository for DbUser2faRepository {
                 period: Set(30i16),
                 enabled: Set(false),
                 enabled_at: Set(None),
+                last_used_step: Set(None),
             };
             let inserted = model.insert(self.db.as_ref()).await?;
             Ok(user_2fa::Model {
@@ -108,6 +111,18 @@ impl User2faRepository for DbUser2faRepository {
         if result.rows_affected == 0 {
             return Err(AppError::BadRequest("2FA not set up".into()));
         }
+        Ok(())
+    }
+
+    async fn set_last_used_step(&self, user_id: i32, step: i64) -> Result<(), AppError> {
+        user_2fa::Entity::update_many()
+            .filter(user_2fa::Column::UserId.eq(user_id))
+            .set(user_2fa::ActiveModel {
+                last_used_step: Set(Some(step)),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
         Ok(())
     }
 

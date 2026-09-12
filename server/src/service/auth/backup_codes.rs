@@ -59,11 +59,13 @@ impl BackupCodeManager {
         match record {
             Some(model) => {
                 let now = chrono::Utc::now().timestamp();
+                // Consume atomically: the conditional UPDATE is what enforces
+                // single use, so two concurrent submissions of the same code
+                // cannot both succeed.
                 repos
                     .user_2fa_backup_code
-                    .mark_as_used(&model.code_hash, now)
-                    .await?;
-                Ok(true)
+                    .consume_code(&model.code_hash, now)
+                    .await
             }
             None => Ok(false),
         }

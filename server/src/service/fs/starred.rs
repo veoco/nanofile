@@ -63,13 +63,20 @@ impl StarredService {
 
         let entries = self.repos.starred.find_by_user_id(user_id).await?;
 
+        // Starred rows are user-owned bookkeeping and outlive membership: a row
+        // for a library the user has been removed from must not keep reporting
+        // that library's name, paths, timestamps or "deleted" state. Intersect
+        // with the repositories the user can currently access (fail closed).
+        let accessible =
+            crate::domain::permission::accessible_repo_ids(&self.repos, user_id).await?;
+
         // Batch-load the distinct repos and their head commits in two queries
         // instead of one repo + one commit lookup per starred repo.
         let mut distinct_repo_ids: Vec<String> = Vec::new();
         {
             let mut seen = HashSet::new();
             for entry in &entries {
-                if seen.insert(entry.repo_id.clone()) {
+                if accessible.contains(&entry.repo_id) && seen.insert(entry.repo_id.clone()) {
                     distinct_repo_ids.push(entry.repo_id.clone());
                 }
             }
@@ -116,6 +123,13 @@ impl StarredService {
             batch_resolve_mtime_deleted(&self.repos, &entries, &repo_cache, &head_cache).await;
 
         for entry in &entries {
+            // Rows for libraries the caller can no longer access are skipped
+            // entirely: emitting them (even with an empty name and
+            // `deleted: true`) would still disclose the library id, the path and
+            // the fact that the item exists.
+            if !accessible.contains(&entry.repo_id) {
+                continue;
+            }
             let repo_opt = repo_cache.get(&entry.repo_id).and_then(|o| o.as_ref());
             let (mtime, deleted) = if entry.path == "/" {
                 let m = repo_opt.map(|r| r.updated_at).unwrap_or(0);

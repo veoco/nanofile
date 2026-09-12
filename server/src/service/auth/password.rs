@@ -108,10 +108,21 @@ pub async fn verify_password_async(
 }
 
 /// Async wrapper around [`hash_password`]; see [`verify_password_async`].
+///
+/// A `spawn_blocking` join error (panic in the task, or a shutting-down
+/// runtime) must not degrade into an empty hash: that would write a credential
+/// nobody can ever verify, locking the account out — and the login path uses
+/// this to re-hash a legacy password on a *successful* login. Fall back to
+/// hashing inline instead; the work is identical, only the thread differs.
 pub async fn hash_password_async(password: String, iterations: u32) -> String {
-    tokio::task::spawn_blocking(move || hash_password(&password, iterations))
-        .await
-        .unwrap_or_default()
+    let inline = password.clone();
+    match tokio::task::spawn_blocking(move || hash_password(&password, iterations)).await {
+        Ok(hash) => hash,
+        Err(e) => {
+            tracing::error!("password hashing task failed ({e}); hashing inline");
+            hash_password(&inline, iterations)
+        }
+    }
 }
 
 /// Verify a password against a stored hash using constant-time comparison.

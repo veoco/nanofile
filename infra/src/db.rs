@@ -15,7 +15,46 @@ fn sqlite_file_path(url: &str) -> Option<&str> {
     Some(path)
 }
 
+/// Restrict the SQLite database file and its `-wal` / `-shm` sidecars to the
+/// owning user.
+///
+/// The main file is created first (with `0600`) so SQLite derives the sidecar
+/// modes from it, and all three are restricted again afterwards because the
+/// sidecars are created lazily on the first write — after any permission change
+/// that only touched the main file. The WAL can contain password hashes,
+/// session-token hashes and plaintext share tokens, so none of them may be
+/// group- or world-readable.
+#[cfg(unix)]
+fn restrict_sqlite_files(url: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(path) = sqlite_file_path(url) else {
+        return;
+    };
+    if !std::path::Path::new(path).exists() {
+        // Best effort: if this fails (read-only mount, `mode=ro`) SQLite will
+        // report the real error when connecting.
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path);
+    }
+    for candidate in [
+        path.to_string(),
+        format!("{path}-wal"),
+        format!("{path}-shm"),
+    ] {
+        let _ = std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o600));
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_sqlite_files(_url: &str) {}
+
 pub async fn establish_connection(config: &DatabaseConfig) -> anyhow::Result<DatabaseConnection> {
+    // Before connecting, so the `-wal` / `-shm` files SQLite creates inherit a
+    // private mode rather than the process umask.
+    restrict_sqlite_files(&config.url);
+
     // Build the pool with the per-connection SQLite options attached via
     // `map_sqlx_sqlite_opts` so the PRAGMAs below apply to EVERY connection the
     // pool opens (not just the first). `journal_mode`/`synchronous` are
@@ -35,14 +74,10 @@ pub async fn establish_connection(config: &DatabaseConfig) -> anyhow::Result<Dat
         });
     let db = Database::connect(opts).await?;
 
-    // Restrict the SQLite database file to the owning user so other local
-    // users cannot read it (default umask may leave it world-readable).
-    #[cfg(unix)]
+    // Restrict the database files again: the sidecars may have been created by
+    // the connection above.
     if db.get_database_backend() == DatabaseBackend::Sqlite {
-        use std::os::unix::fs::PermissionsExt;
-        if let Some(path) = sqlite_file_path(&config.url) {
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-        }
+        restrict_sqlite_files(&config.url);
     }
 
     Ok(db)

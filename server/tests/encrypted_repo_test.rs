@@ -10,6 +10,23 @@ fn make_encrypted_params(repo_id: &str, password: &str) -> (String, String) {
     (magic, random_key)
 }
 
+/// Whether `token`'s session currently holds a cached decryption key for the
+/// library, as reported by the `check-password` operation. This is the
+/// client-visible view of the server-side key cache.
+async fn cached_key_is_set(f: &TestFixture, token: &str, repo_id: &str) -> bool {
+    let resp = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/repos/{repo_id}/set-password/?operation=check-password"),
+            Some(token),
+            &serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "check-password failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    body["is_set"].as_bool().unwrap_or(false)
+}
+
 /// Create an encrypted repo and return its repo_id.
 async fn create_encrypted_repo(f: &TestFixture, name: &str, password: &str) -> String {
     let repo_id = uuid::Uuid::new_v4().to_string();
@@ -444,4 +461,193 @@ async fn test_create_encrypted_repo_v4_requires_salt() {
         .create_encrypted_repo(&f.api_token, "v4-no-salt", &repo_id, &magic, &random_key, 4)
         .await;
     assert_eq!(resp.status(), 400, "v4 without salt must be rejected");
+}
+
+// ─── Brute-force metering (security) ─────────────────────────────────────────
+
+/// Failed library-password checks are metered per (user, repo), and the budget
+/// is shared by **every** endpoint that verifies the password or its magic.
+///
+/// The library KDF iteration count is fixed at 1000 by the Seafile wire
+/// protocol, so this limiter is the only control against online guessing. Two
+/// of the verification endpoints used to be unmetered, which made the cap
+/// irrelevant: an attacker simply switched endpoints.
+#[tokio::test]
+async fn library_password_guessing_is_metered_across_every_endpoint() {
+    /// Must match `repo_password_max_per_hour` in `server/tests/common/mod.rs`.
+    const LIMIT: u32 = 10;
+
+    let f = TestFixture::new().await;
+    let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "test-password").await;
+    let (magic, _) = make_encrypted_params(&enc_repo_id, "test-password");
+
+    // Spend the budget through the v2.1 endpoint (the one the Android client
+    // calls with its cached password before every download).
+    for attempt in 0..LIMIT {
+        let resp = f
+            .client
+            .set_repo_password_v21(&f.api_token, &enc_repo_id, "wrong-password")
+            .await;
+        assert_eq!(
+            resp.status(),
+            440,
+            "guess {attempt} must be verified, not throttled yet"
+        );
+    }
+
+    // The next guess is rejected before any KDF work.
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &enc_repo_id, "wrong-password")
+        .await;
+    assert_eq!(resp.status(), 429, "v2.1 set-password must be metered");
+
+    // Switching endpoints must not hand the attacker a fresh budget.
+    let resp = f
+        .client
+        .set_repo_password_v2(&f.api_token, &enc_repo_id, "wrong-password")
+        .await;
+    assert_eq!(resp.status(), 429, "?op=setpassword shares the meter");
+
+    let resp = f
+        .client
+        .check_repo_password_v2(&f.api_token, &enc_repo_id, &magic)
+        .await;
+    assert_eq!(resp.status(), 429, "?op=checkpassword shares the meter");
+
+    // The change-password operation verifies the old password as well.
+    let resp = f
+        .client
+        .change_repo_password(&f.api_token, &enc_repo_id, "wrong-password", "new-password")
+        .await;
+    assert_eq!(resp.status(), 429, "change-password shares the meter");
+}
+
+/// Only failures may consume budget: a client re-submitting its own correct
+/// password (Android does this before every download) must never be throttled,
+/// and a success clears previously recorded failures.
+#[tokio::test]
+async fn correct_library_password_never_consumes_the_failure_budget() {
+    /// Must match `repo_password_max_per_hour` in `server/tests/common/mod.rs`.
+    const LIMIT: u32 = 10;
+
+    let f = TestFixture::new().await;
+    let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "test-password").await;
+
+    // More successful submissions than the whole failure budget.
+    for _ in 0..(LIMIT + 5) {
+        let resp = f
+            .client
+            .set_repo_password_v21(&f.api_token, &enc_repo_id, "test-password")
+            .await;
+        assert_eq!(
+            resp.status(),
+            200,
+            "a correct password must always be accepted"
+        );
+    }
+
+    // A success clears recorded failures: three wrong guesses followed by a
+    // success leave a full budget again.
+    for _ in 0..3 {
+        let resp = f
+            .client
+            .set_repo_password_v21(&f.api_token, &enc_repo_id, "wrong-password")
+            .await;
+        assert_eq!(resp.status(), 440);
+    }
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &enc_repo_id, "test-password")
+        .await;
+    assert_eq!(resp.status(), 200, "success must be accepted");
+    for attempt in 0..LIMIT {
+        let resp = f
+            .client
+            .set_repo_password_v21(&f.api_token, &enc_repo_id, "wrong-password")
+            .await;
+        assert_eq!(
+            resp.status(),
+            440,
+            "guess {attempt} must see a budget cleared by the earlier success"
+        );
+    }
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &enc_repo_id, "wrong-password")
+        .await;
+    assert_eq!(resp.status(), 429);
+}
+
+/// Rotating a library password must invalidate **every** cached decryption key,
+/// not just the caller's.
+///
+/// Otherwise a member who knew the old password keeps decrypting the library
+/// from the in-memory key cache for up to its TTL (1 hour), so revoking a
+/// password never really takes effect for them.
+#[tokio::test]
+async fn test_password_rotation_evicts_every_cached_key() {
+    let f = TestFixture::new().await;
+    let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "old-password").await;
+
+    // A second member with write access.
+    create_test_user(f.server.db.as_ref(), "member@example.com", "password").await;
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/beshared-repos/{}/", enc_repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({
+                "share_type": "personal",
+                "user": "member@example.com",
+                "permission": "rw",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "sharing the library failed");
+    let resp = f.client.login("member@example.com", "password").await;
+    let member_token = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The member caches the key by supplying the correct library password.
+    let resp = f
+        .client
+        .set_repo_password_v21(&member_token, &enc_repo_id, "old-password")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        cached_key_is_set(&f, &member_token, &enc_repo_id).await,
+        "the member must hold a cached key after supplying the password"
+    );
+
+    // The owner rotates the password.
+    let resp = f
+        .client
+        .change_repo_password(&f.api_token, &enc_repo_id, "old-password", "new-password")
+        .await;
+    assert_eq!(resp.status(), 200, "rotation failed");
+
+    // Every other session's cached key is gone.
+    assert!(
+        !cached_key_is_set(&f, &member_token, &enc_repo_id).await,
+        "rotation must evict other members' cached decryption keys"
+    );
+
+    // And the new password is the only one that works for the member.
+    assert_eq!(
+        f.client
+            .set_repo_password_v21(&member_token, &enc_repo_id, "new-password")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        f.client
+            .set_repo_password_v21(&member_token, &enc_repo_id, "old-password")
+            .await
+            .status(),
+        440
+    );
 }

@@ -531,9 +531,14 @@ pub async fn modify_share_permission(
 }
 
 /// Remove a user's share from a repo.
+///
+/// `password_manager`, when supplied, also drops the removed member's cached
+/// library key. Every read path re-checks membership before using that cache, so
+/// this is defence in depth rather than the primary control.
 pub async fn delete_share(
     repos: &Repositories,
     notification_manager: Option<&crate::notification::manager::NotificationManager>,
+    password_manager: Option<&infra::crypto::password_manager::PasswordManager>,
     repo_id: &str,
     caller_user_id: i32,
     user_email: &str,
@@ -556,6 +561,15 @@ pub async fn delete_share(
         .delete_by_repo_and_user(repo_id, target_user.id)
         .await?;
 
+    // The member's share/upload links must stop resolving at once, not after the
+    // creator-access cache expires.
+    invalidate_link_creator_cache(target_user.id, Some(repo_id));
+
+    // Likewise for the decrypted library key cached for the removed member.
+    if let Some(pm) = password_manager {
+        pm.remove_password(repo_id, target_user.id).await;
+    }
+
     // Send WebSocket notification about the share deletion.
     if let Some(mgr) = notification_manager {
         let event = FolderPermEvent {
@@ -573,7 +587,100 @@ pub async fn delete_share(
     Ok(())
 }
 
-/// Look up a share link, check expiry, return the link model or error.
+/// How long the "may the creator still act on this library" answer is cached.
+///
+/// This is checked on every anonymous link request, and the answer only changes
+/// when an administrator revokes access — so a short TTL keeps the common path
+/// free of two extra queries while bounding the window in which a revoked
+/// member's links still resolve.
+const LINK_CREATOR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Hard cap on the cache, so a flood of distinct links cannot grow it forever.
+const LINK_CREATOR_CACHE_MAX: usize = 10_000;
+
+type LinkCreatorCache =
+    std::sync::Mutex<std::collections::HashMap<(i32, String, bool), (bool, std::time::Instant)>>;
+
+static LINK_CREATOR_CACHE: std::sync::LazyLock<LinkCreatorCache> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Whether the user who created a link may still act on `repo_id`.
+///
+/// A share/upload link is a capability handed to third parties, but it acts
+/// **as its creator**: it exposes library content (share link) or accepts new
+/// content (upload link) in a library the creator may since have been removed
+/// from, or whose account may have been deactivated. Resolving a link therefore
+/// re-checks the creator rather than trusting the link alone — the same rule the
+/// download and upload tokens already apply, where "the token outlives
+/// membership".
+///
+/// Results are cached for [`LINK_CREATOR_CACHE_TTL`] because this runs on every
+/// anonymous request; the revocation window is therefore at most that long.
+pub async fn link_creator_may_access(
+    repos: &Repositories,
+    creator_id: i32,
+    repo_id: &str,
+    need_write: bool,
+) -> bool {
+    let key = (creator_id, repo_id.to_string(), need_write);
+    {
+        let cache = LINK_CREATOR_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((allowed, checked_at)) = cache.get(&key)
+            && checked_at.elapsed() < LINK_CREATOR_CACHE_TTL
+        {
+            return *allowed;
+        }
+    }
+
+    let allowed = match repos.user.find_by_id(creator_id).await {
+        Ok(Some(user)) if user.is_active => {
+            let member = repos.member.as_ref();
+            if need_write {
+                crate::domain::permission::check_repo_write_permission(member, repo_id, creator_id)
+                    .await
+                    .is_ok()
+            } else {
+                crate::domain::permission::check_repo_read_permission(member, repo_id, creator_id)
+                    .await
+                    .is_ok()
+            }
+        }
+        // Deactivated or deleted creator: the link stops working.
+        _ => false,
+    };
+
+    let mut cache = LINK_CREATOR_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.len() >= LINK_CREATOR_CACHE_MAX {
+        cache.retain(|_, (_, checked_at)| checked_at.elapsed() < LINK_CREATOR_CACHE_TTL);
+        if cache.len() >= LINK_CREATOR_CACHE_MAX {
+            cache.clear();
+        }
+    }
+    cache.insert(key, (allowed, std::time::Instant::now()));
+    allowed
+}
+
+/// Drop cached "creator may access" decisions.
+///
+/// Called whenever membership or account state changes so that revoking access
+/// takes effect immediately instead of after [`LINK_CREATOR_CACHE_TTL`]. Passing
+/// `repo_id = None` drops every entry for that user (account-level changes such
+/// as deactivation).
+pub fn invalidate_link_creator_cache(user_id: i32, repo_id: Option<&str>) {
+    let mut cache = LINK_CREATOR_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.retain(|(creator_id, cached_repo, _), _| {
+        if *creator_id != user_id {
+            return true;
+        }
+        match repo_id {
+            Some(repo) => cached_repo != repo,
+            None => false,
+        }
+    });
+}
+
+/// Look up a share link, check expiry and that its creator still has access,
+/// return the link model or error.
 pub async fn resolve_share_link(
     repos: &Repositories,
     token: &str,
@@ -588,6 +695,13 @@ pub async fn resolve_share_link(
         && chrono::Utc::now().timestamp() > expires_at
     {
         return Err(AppError::NotFound("Link has expired".into()));
+    }
+
+    // The link acts as its creator, so it must stop resolving once the creator
+    // loses access (member removed, account deactivated). "Not found" keeps the
+    // response indistinguishable from an unknown token.
+    if !link_creator_may_access(repos, link.creator_id, &link.repo_id, false).await {
+        return Err(AppError::NotFound("Link not found".into()));
     }
 
     Ok(link)

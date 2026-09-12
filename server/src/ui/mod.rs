@@ -63,7 +63,10 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             get(auth::password_reset_complete),
         )
         // Client-login — auto-login from desktop client
-        .route("/client-login/", get(client_login::client_token_login))
+        .route(
+            "/client-login/",
+            get(client_login::client_token_login).post(client_login::client_token_login_confirm),
+        )
         // SSO local-browser — browser entry + confirm pages
         .route("/client-sso/{token}/", get(sso::client_sso))
         .route(

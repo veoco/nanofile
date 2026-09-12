@@ -64,6 +64,42 @@ impl AuthRateLimiters {
     }
 }
 
+impl AuthRateLimiters {
+    /// Rate-limit key for failed encrypted-library password checks, scoped to
+    /// one (user, repo) pair.
+    ///
+    /// **Every** endpoint that verifies a library password or magic must use
+    /// this key. The library KDF iteration count is fixed at 1000 by the
+    /// Seafile wire protocol, so this limiter is the only control against
+    /// online guessing; a second endpoint using a different key would hand the
+    /// attacker an unmetered oracle.
+    pub fn repo_password_key(user_id: i32, repo_id: &str) -> String {
+        format!("repo_pw:{user_id}:{repo_id}")
+    }
+
+    /// Whether this (user, repo) pair has exhausted its failed-attempt budget.
+    pub fn is_repo_password_limited(&self, user_id: i32, repo_id: &str) -> bool {
+        self.repo_password
+            .is_limited(&Self::repo_password_key(user_id, repo_id))
+    }
+
+    /// Count one failed library password/magic guess.
+    pub fn record_repo_password_failure(&self, user_id: i32, repo_id: &str) {
+        self.repo_password
+            .record_attempt(&Self::repo_password_key(user_id, repo_id));
+    }
+
+    /// Clear the failure budget after a successful verification.
+    ///
+    /// Only failures may ever be counted: the Android client re-submits its own
+    /// cached password before every download, so counting successes would lock
+    /// a legitimate user out of their own library.
+    pub fn clear_repo_password_failures(&self, user_id: i32, repo_id: &str) {
+        self.repo_password
+            .clear(&Self::repo_password_key(user_id, repo_id));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::AuthRateLimiters;

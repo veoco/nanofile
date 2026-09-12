@@ -147,8 +147,12 @@ impl PasswordService {
             .update_repo_keys(repo_id, Some(new_magic), Some(new_random_key_hex))
             .await?;
 
-        // Remove cached old password
-        password_manager.remove_password(repo_id, user_id).await;
+        // Drop every cached key for this library, not just the caller's:
+        // rotation rewrites the repo-wide `magic`/`random_key`, so any other
+        // session still holding the old key must stop being able to decrypt.
+        // (`user_id` is intentionally unused here now.)
+        let _ = user_id;
+        password_manager.remove_repo(repo_id).await;
 
         Ok(())
     }

@@ -165,7 +165,17 @@ impl LoginService {
                             TotpManager::create_totp(&tfa.totp_secret, &user_record.email, "")
                                 .map_err(|e| AppError::Internal(e.to_string()))?;
 
-                        if !TotpManager::verify_code(&totp, otp_code) {
+                        // Verify and consume the time step, so a code observed
+                        // by someone else cannot be replayed inside the ±1-step
+                        // skew window.
+                        if !TotpManager::verify_and_consume(
+                            &self.repos,
+                            user_record.id,
+                            &totp,
+                            otp_code,
+                        )
+                        .await
+                        {
                             record_failure();
                             return Ok(LoginResult::TwoFactorInvalid);
                         }

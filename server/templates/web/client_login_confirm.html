@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="{{ t.lang }}" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ t.tr("auth.login_to_client") }} | Nanofile</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #f0f5ff 0%, #ffffff 50%, #f5f0ff 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+            color: #1f2937;
+        }
+        .card {
+            background: white;
+            border-radius: 1rem;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+            padding: 2rem;
+            width: 100%;
+            max-width: 420px;
+            text-align: center;
+        }
+        .icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: #eef2ff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+        }
+        h1 { font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem; }
+        p { font-size: 0.875rem; color: #6b7280; margin-bottom: 1.25rem; line-height: 1.5; }
+        .warning {
+            background: #fffbeb;
+            color: #92400e;
+            border: 1px solid #fde68a;
+            padding: 0.625rem 0.75rem;
+            border-radius: 0.5rem;
+            font-size: 0.8125rem;
+            margin-bottom: 1.25rem;
+            text-align: left;
+        }
+        button {
+            width: 100%;
+            padding: 0.75rem;
+            background: #6366f1;
+            color: white;
+            border: none;
+            border-radius: 0.75rem;
+            font-size: 0.9375rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        button:hover { background: #4f46e5; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">
+            <svg width="24" height="24" fill="none" stroke="#4f46e5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622C17.176 19.29 21 14.591 21 9c0-1.042-.133-2.052-.382-3.016z"/>
+            </svg>
+        </div>
+        <h1>{{ t.tr("auth.login_to_client") }}</h1>
+        <p>{{ t.tr("auth.client_login_confirm_desc") }}</p>
+        <div class="warning">{{ t.tr("auth.client_login_confirm_warning") }}</div>
+        <form action="/client-login/" method="POST">
+            <input type="hidden" name="token" value="{{ token }}">
+            {% if let Some(n) = next %}<input type="hidden" name="next" value="{{ n }}">{% endif %}
+            <button type="submit">{{ t.tr("auth.login_to_client") }}</button>
+        </form>
+    </div>
+</body>
+</html>

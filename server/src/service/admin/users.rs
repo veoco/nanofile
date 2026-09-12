@@ -96,11 +96,17 @@ impl AdminUserService {
             .user
             .update_storage_quota(user_id, storage_quota)
             .await?;
+        // Deactivating an account must revoke the anonymous links it created
+        // immediately, not after the creator-access cache expires.
+        crate::service::sharing::share::invalidate_link_creator_cache(user_id, None);
         Ok(())
     }
 
     /// Delete a user by ID.
     pub async fn delete_user(&self, user_id: i32) -> Result<(), AppError> {
+        // Drop any cached link-authorization decisions for this account before
+        // its rows disappear.
+        crate::service::sharing::share::invalidate_link_creator_cache(user_id, None);
         self.repos.user.delete_user(user_id).await?;
         Ok(())
     }

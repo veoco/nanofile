@@ -42,6 +42,13 @@ pub async fn propfind(
         return StatusCode::BAD_REQUEST.into_response();
     }
 
+    // The multistatus is built in memory, and an absent `Depth` header means
+    // `infinity`, so bound what one request may materialise. Over the cap the
+    // client is told to retry with a shallower depth instead of being served a
+    // truncated (and thus wrong) listing.
+    let limit = state.config.server.max_propfind_entries;
+    let exceeds_limit = |count: usize| limit > 0 && count > limit;
+
     let mut responses = Vec::new();
 
     let displayname = if path == "/" {
@@ -82,6 +89,9 @@ pub async fn propfind(
                 if let Ok((_, entries)) =
                     list_dir_from_root(&state.repos, &auth.repo_id, &head.root_id, &path).await
                 {
+                    if exceeds_limit(entries.len() + responses.len()) {
+                        return StatusCode::INSUFFICIENT_STORAGE.into_response();
+                    }
                     for e in entries {
                         let child = join_path(&path, &e.name);
                         push_entry(&mut responses, &auth.repo_id, &child, &e);
@@ -98,6 +108,9 @@ pub async fn propfind(
                 )
                 .await
                 {
+                    if exceeds_limit(entries.len() + responses.len()) {
+                        return StatusCode::INSUFFICIENT_STORAGE.into_response();
+                    }
                     for e in entries {
                         let parent = e.parent_dir.as_deref().unwrap_or(&path);
                         let child = join_path(parent, &e.name);

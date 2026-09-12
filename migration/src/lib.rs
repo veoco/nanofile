@@ -70,6 +70,7 @@ migrations!(
     m20260816_000002_add_api_token_pending,
     m20260823_000001_hash_short_lived_tokens,
     m20260829_000001_add_permission_to_webdav_keys,
+    m20260830_000001_add_last_used_step_to_user_2fa,
 );
 
 #[cfg(test)]

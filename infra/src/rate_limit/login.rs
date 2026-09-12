@@ -39,6 +39,16 @@ impl LoginKeys {
 /// Once full, the address with the oldest failure is evicted.
 const MAX_SPRAY_IPS: usize = 4096;
 
+/// Upper bound on the failed-attempt map.
+///
+/// Keys combine a client-supplied address with a client-supplied account name,
+/// and one attempt records two keys (address + pair). Window-based trimming
+/// cannot bound the map when every attempt uses a fresh address — a routed IPv6
+/// /64 alone provides effectively unlimited addresses — so the oldest keys are
+/// evicted once this cap is reached. Evicting throttling state fails open, which
+/// is the right trade-off against unbounded memory growth.
+const MAX_ATTEMPT_KEYS: usize = 50_000;
+
 pub struct LoginRateLimiter {
     attempts: Mutex<HashMap<String, Vec<i64>>>,
     /// Distinct account names that failed from each address within the window
@@ -82,6 +92,27 @@ impl LoginRateLimiter {
         self.attempts.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Bound the failed-attempt map by evicting its least recently active keys.
+    ///
+    /// Only runs once [`MAX_ATTEMPT_KEYS`] is exceeded, so the common path stays
+    /// a couple of hash operations.
+    fn shrink_attempts(map: &mut HashMap<String, Vec<i64>>) {
+        let Some(excess) = map.len().checked_sub(MAX_ATTEMPT_KEYS) else {
+            return;
+        };
+        if excess == 0 {
+            return;
+        }
+        let mut by_age: Vec<(i64, String)> = map
+            .iter()
+            .map(|(key, ts)| (ts.iter().copied().max().unwrap_or(i64::MIN), key.clone()))
+            .collect();
+        by_age.sort_unstable();
+        for (_, key) in by_age.into_iter().take(excess) {
+            map.remove(&key);
+        }
+    }
+
     /// Record a failed login attempt for the given key.
     pub fn record_failure(&self, key: &str) {
         if self.lockout_disabled() {
@@ -94,6 +125,7 @@ impl LoginRateLimiter {
         // Trim entries older than the lockout window to bound memory.
         let cutoff = now - self.lockout_secs;
         timestamps.retain(|&t| t > cutoff);
+        Self::shrink_attempts(&mut map);
     }
 
     /// Check if the given key is currently locked out.
@@ -168,6 +200,7 @@ impl LoginRateLimiter {
             timestamps.push(now);
             timestamps.retain(|&t| t > cutoff);
         }
+        Self::shrink_attempts(&mut map);
     }
 
     /// Clear all recorded attempts for a key (called on successful login).
@@ -419,5 +452,36 @@ mod tests {
         }
         assert!(!limiter.is_login_blocked(&LoginKeys::new("203.0.113.9", "c@example.com")));
         assert!(!limiter.spray.lock().unwrap().contains_key("203.0.113.9"));
+    }
+
+    /// A flood of distinct (address, account) keys must not grow the
+    /// failed-attempt map without bound: the oldest keys are evicted.
+    #[test]
+    fn failed_attempt_map_is_capped() {
+        let limiter = LoginRateLimiter::new(5, 3600, 0);
+        {
+            let mut map = limiter.attempts.lock().unwrap();
+            for i in 0..(MAX_ATTEMPT_KEYS + 5) {
+                map.insert(format!("k{i}"), vec![i as i64]);
+            }
+        }
+        // A normal failure record triggers the shrink. Its own timestamp is
+        // "now", far newer than every injected one, so the injected keys are
+        // what gets evicted from the front.
+        limiter.record_failure("trigger");
+
+        let guard = limiter.attempts.lock().unwrap();
+        assert!(
+            guard.len() <= MAX_ATTEMPT_KEYS,
+            "map must stay capped, len={}",
+            guard.len()
+        );
+        for i in 0..5 {
+            assert!(
+                !guard.contains_key(&format!("k{i}")),
+                "k{i} is the oldest and must be evicted"
+            );
+        }
+        assert!(guard.contains_key("trigger"));
     }
 }

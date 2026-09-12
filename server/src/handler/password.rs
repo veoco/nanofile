@@ -29,24 +29,54 @@ pub struct ChangePasswordRequest {
 /// POST /api/v2.1/repos/{repo_id}/set-password/
 ///
 /// Set the password for an encrypted repo.
+///
+/// This is the endpoint the Android client uses before downloading from an
+/// encrypted library, so it verifies the same password as
+/// `POST /api2/repos/{id}/?op=setpassword` and must share that endpoint's
+/// per-(user, repo) failed-attempt meter. Skipping it here would leave an
+/// unmetered oracle against a KDF whose iteration count is fixed at 1000 by the
+/// Seafile wire protocol.
 pub async fn set_password_v21(
     path: RepoPathRead,
     State(state): State<Arc<AppState>>,
     Json(body): Json<SetPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let repo_id = &path.repo_id;
+    let user_id = path.user.user_id;
+
+    if state
+        .auth_limiters
+        .is_repo_password_limited(user_id, repo_id)
+    {
+        return Err(AppError::TooManyRequests);
+    }
+
     let password = body
         .password
         .ok_or_else(|| AppError::BadRequest("password required".into()))?;
 
-    PasswordService::set_password(
+    if let Err(e) = PasswordService::set_password(
         &state.password_manager,
         &state.repos,
         repo_id,
-        path.user.user_id,
+        user_id,
         &password,
     )
-    .await?;
+    .await
+    {
+        // Only a wrong password is a guess. Client retries with their own
+        // correct password are cleared below and never consume budget.
+        if matches!(e, base::error::AppError::RepoPasswdRequired) {
+            state
+                .auth_limiters
+                .record_repo_password_failure(user_id, repo_id);
+        }
+        return Err(e);
+    }
+
+    state
+        .auth_limiters
+        .clear_repo_password_failures(user_id, repo_id);
 
     Ok(ok_json())
 }
@@ -84,7 +114,17 @@ pub async fn change_password_v21(
                 .new_password
                 .ok_or_else(|| AppError::BadRequest("new_password required".into()))?;
 
-            PasswordService::change_password(
+            // The old password is verified against the stored magic, so this is
+            // a fourth verification path and shares the same per-(user, repo)
+            // meter (a successful rotation clears it).
+            if state
+                .auth_limiters
+                .is_repo_password_limited(auth.user_id, &repo_id)
+            {
+                return Err(AppError::TooManyRequests);
+            }
+
+            match PasswordService::change_password(
                 &state.password_manager,
                 &state.repos,
                 &repo_id,
@@ -93,7 +133,22 @@ pub async fn change_password_v21(
                 &new_password,
             )
             .await
-            .map(|_| ok_json())
+            {
+                Ok(()) => {
+                    state
+                        .auth_limiters
+                        .clear_repo_password_failures(auth.user_id, &repo_id);
+                    Ok(ok_json())
+                }
+                Err(e) => {
+                    if matches!(e, base::error::AppError::RepoPasswdRequired) {
+                        state
+                            .auth_limiters
+                            .record_repo_password_failure(auth.user_id, &repo_id);
+                    }
+                    Err(e)
+                }
+            }
         }
         Some("check-password") => {
             let is_set = state

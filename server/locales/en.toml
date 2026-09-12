@@ -86,6 +86,9 @@ admin.global_quota = "{size} (global)"
 
 # Auth
 auth.invalid_origin = "Invalid request origin."
+auth.login_to_client = "Log in to the desktop client"
+auth.client_login_confirm_desc = "A client asked to open this page in your browser. Continue only if you just started that client on this device."
+auth.client_login_confirm_warning = "Continuing signs this browser in as the account that requested the link. If you did not start it, close this page."
 auth.too_many_attempts = "Too many login attempts. Please try again later."
 auth.incorrect_credentials = "Incorrect email or password."
 auth.session_expired = "Authentication session expired. Please log in again."

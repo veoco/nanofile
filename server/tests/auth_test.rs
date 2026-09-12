@@ -184,6 +184,7 @@ async fn test_login_2fa_required_no_otp() {
         period: sea_orm::Set(30),
         enabled: sea_orm::Set(true),
         enabled_at: sea_orm::NotSet,
+        last_used_step: sea_orm::NotSet,
     };
     user_2fa.insert(server.db.as_ref()).await.unwrap();
 
@@ -217,6 +218,7 @@ async fn test_login_2fa_invalid_otp() {
         period: sea_orm::Set(30),
         enabled: sea_orm::Set(true),
         enabled_at: sea_orm::NotSet,
+        last_used_step: sea_orm::NotSet,
     };
     user_2fa.insert(server.db.as_ref()).await.unwrap();
 
@@ -274,6 +276,7 @@ async fn enable_2fa(db: &sea_orm::DatabaseConnection, user_id: i32) {
         period: sea_orm::Set(30),
         enabled: sea_orm::Set(true),
         enabled_at: sea_orm::NotSet,
+        last_used_step: sea_orm::NotSet,
     };
     user_2fa.insert(db).await.unwrap();
 }
@@ -623,5 +626,61 @@ async fn test_legacy_password_hash_verifies_and_is_upgraded() {
     assert!(
         stored.starts_with("pbkdf2_sha256$1000$"),
         "hash should be upgraded to the versioned format, got {stored}"
+    );
+}
+
+/// A TOTP code must be single-use.
+///
+/// `totp-rs` accepts the previous, current and next 30-second step so that
+/// honest clients tolerate clock skew, which also means an observed code stays
+/// valid for ~90 seconds. Recording the consumed step and refusing any step that
+/// is not newer is what makes the code one-shot, while keeping the skew
+/// tolerance for a first use.
+#[tokio::test]
+async fn test_totp_code_cannot_be_replayed() {
+    let server = TestServer::start().await;
+    let client = server.client();
+
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+    enable_2fa(server.db.as_ref(), 1).await;
+
+    let code = generate_valid_totp();
+
+    let resp = client
+        .login_with_otp("test@example.com", "password123", &code)
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the first use of a fresh code must succeed"
+    );
+
+    let resp = client
+        .login_with_otp("test@example.com", "password123", &code)
+        .await;
+    assert_ne!(
+        resp.status(),
+        200,
+        "the same code must not authenticate a second time"
+    );
+
+    // A code for a *newer* step still works, so the guard removes replay
+    // without removing the ±1-step skew tolerance honest clients rely on.
+    let totp = server::service::auth::totp::TotpManager::create_totp(
+        totp_secret(),
+        "test@example.com",
+        "",
+    )
+    .unwrap();
+    let next_step_code = totp
+        .generate(totp.next_step(chrono::Utc::now().timestamp() as u64))
+        .to_string();
+    let resp = client
+        .login_with_otp("test@example.com", "password123", &next_step_code)
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "a code for a later step must still be accepted"
     );
 }

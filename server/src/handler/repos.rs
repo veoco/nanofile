@@ -311,8 +311,10 @@ pub async fn set_repo_password_v2(
     )
     .await?;
 
-    let limiter_key = format!("repo_pw:{}:{}", auth.user_id, repo_id);
-    if state.auth_limiters.repo_password.is_limited(&limiter_key) {
+    if state
+        .auth_limiters
+        .is_repo_password_limited(auth.user_id, &repo_id)
+    {
         return Err(AppError::TooManyRequests);
     }
 
@@ -335,11 +337,17 @@ pub async fn set_repo_password_v2(
         if matches!(e, base::error::AppError::RepoPasswdRequired) {
             state
                 .auth_limiters
-                .repo_password
-                .record_attempt(&limiter_key);
+                .record_repo_password_failure(auth.user_id, &repo_id);
         }
         return Err(e);
     }
+
+    // A correct password clears the budget: clients re-submit the cached
+    // password repeatedly (Android's download worker does so per download), so
+    // successes must never accumulate.
+    state
+        .auth_limiters
+        .clear_repo_password_failures(auth.user_id, &repo_id);
 
     Ok(ok_json())
 }
@@ -347,6 +355,11 @@ pub async fn set_repo_password_v2(
 /// `POST /api2/repos/{repo_id}/?op=checkpassword`
 ///
 /// Check if a password is valid for an encrypted repo (v2 API).
+///
+/// This endpoint verifies a caller-supplied `magic` (the password-equivalent
+/// value the client derives locally), so it is a password oracle and is metered
+/// with the same per-(user, repo) limiter as `?op=setpassword` and the v2.1
+/// `set-password` endpoint.
 pub async fn check_repo_password_v2(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -360,6 +373,13 @@ pub async fn check_repo_password_v2(
         auth.user_id,
     )
     .await?;
+
+    if state
+        .auth_limiters
+        .is_repo_password_limited(auth.user_id, &repo_id)
+    {
+        return Err(AppError::TooManyRequests);
+    }
 
     let (_parts, body) = req.into_parts();
     let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
@@ -385,8 +405,16 @@ pub async fn check_repo_password_v2(
 
     use infra::crypto::verify::verify_magic;
     if verify_magic(stored_magic, &magic) {
+        state
+            .auth_limiters
+            .clear_repo_password_failures(auth.user_id, &repo_id);
         Ok(ok_json())
     } else {
+        // Only a wrong magic is a guess; "not encrypted"/"no magic" above are
+        // configuration errors and must not consume the budget.
+        state
+            .auth_limiters
+            .record_repo_password_failure(auth.user_id, &repo_id);
         Err(AppError::RepoPasswdMagicRequired)
     }
 }

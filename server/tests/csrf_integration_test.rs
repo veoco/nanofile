@@ -406,6 +406,7 @@ async fn test_form_pages_include_csrf_tokens() {
         period: Set(30),
         enabled: Set(false),
         enabled_at: Set(None),
+        last_used_step: sea_orm::NotSet,
     }
     .insert(db)
     .await
@@ -726,5 +727,256 @@ async fn test_two_factor_disable_requires_csrf() {
         resp.status(),
         200,
         "valid csrf_token should pass the CSRF check (wrong password renders the page)"
+    );
+}
+
+// ==================== client-login forced-login defence ====================
+
+/// Mint a one-time client-login token for the account behind `api_token`.
+async fn mint_client_login_token(base_url: &str, api_token: &str) -> String {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base_url}/api2/client-login/"))
+        .bearer_auth(api_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "client-login token request failed");
+    resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// A cross-site navigation must never silently sign the browser in.
+///
+/// `validate_origin` accepts a request with neither `Origin` nor `Referer`, so
+/// an attacker could otherwise mint a token for their own account and have a
+/// victim's browser switch to it with a referrer-suppressed link — the victim's
+/// subsequent uploads would land in the attacker's account.
+#[tokio::test]
+async fn client_login_cross_site_navigation_is_not_silent() {
+    let f = common::TestFixture::new().await;
+    let base_url = f.server.base_url.clone();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let token = mint_client_login_token(&base_url, &f.api_token).await;
+
+    // A cross-site top-level navigation, with the referrer suppressed exactly
+    // like an attacker page would.
+    let resp = client
+        .get(format!("{}/client-login/?token={}", base_url, token))
+        .header("sec-fetch-site", "cross-site")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "the confirmation page is rendered");
+    let cookies: Vec<String> = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !cookies.iter().any(|c| c.starts_with("seahub-session=")),
+        "a cross-site navigation must not receive a session: {cookies:?}"
+    );
+
+    // `Sec-Fetch-Site: cross-site` is honoured even with no Origin/Referer at
+    // all (the referrer-suppressed case).
+    let resp = client
+        .get(format!("{}/client-login/?token={}", base_url, token))
+        .header("sec-fetch-site", "cross-site")
+        .header("referer", "")
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        !resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .any(|v| v.to_str().unwrap().starts_with("seahub-session=")),
+        "a referrer-suppressed cross-site navigation must not receive a session"
+    );
+
+    // The token survived (the confirmation page does not consume it), but a
+    // cross-site *form* POST is rejected because browsers always send `Origin`
+    // on cross-site POSTs and it cannot be suppressed.
+    let resp = client
+        .post(format!("{}/client-login/", base_url))
+        .header("origin", "https://evil.example")
+        .form(&[("token", &token)])
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        !resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .any(|v| v.to_str().unwrap().starts_with("seahub-session=")),
+        "a cross-site confirmation POST must not receive a session"
+    );
+
+    // A browser-initiated navigation (`Sec-Fetch-Site: none`, e.g. the desktop
+    // client opening the URL) still logs in silently — the compatibility path.
+    let resp = client
+        .get(format!("{}/client-login/?token={}", base_url, token))
+        .header("sec-fetch-site", "none")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302);
+    let cookies: Vec<String> = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        cookies.iter().any(|c| c.starts_with("seahub-session=")),
+        "a browser-initiated navigation must still log in: {cookies:?}"
+    );
+    assert!(
+        cookies.iter().any(|c| c.starts_with("sfcsrftoken=")),
+        "the CSRF cookie must be issued alongside the session"
+    );
+}
+
+/// The confirmation page's POST works when it comes from the site itself.
+#[tokio::test]
+async fn client_login_confirmation_post_from_site_logs_in() {
+    let f = common::TestFixture::new().await;
+    let base_url = f.server.base_url.clone();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let token = mint_client_login_token(&base_url, &f.api_token).await;
+
+    let resp = client
+        .post(format!("{}/client-login/", base_url))
+        .header("origin", base_url.as_str())
+        .header("sec-fetch-site", "same-origin")
+        .form(&[("token", &token), ("next", &"/libraries/".to_string())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302);
+    assert_eq!(
+        resp.headers().get("location").unwrap().to_str().unwrap(),
+        "/libraries/"
+    );
+    assert!(
+        resp.headers()
+            .get_all("set-cookie")
+            .iter()
+            .any(|v| v.to_str().unwrap().starts_with("seahub-session=")),
+        "a same-site confirmation must issue the session"
+    );
+}
+
+/// An attacker must not be able to point the post-login redirect off-site.
+#[tokio::test]
+async fn client_login_next_is_restricted_to_safe_paths() {
+    let f = common::TestFixture::new().await;
+    let base_url = f.server.base_url.clone();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let token = mint_client_login_token(&base_url, &f.api_token).await;
+
+    let resp = client
+        .get(format!(
+            "{}/client-login/?token={}&next=https://evil.example/",
+            base_url, token
+        ))
+        .header("sec-fetch-site", "none")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302);
+    assert_eq!(
+        resp.headers().get("location").unwrap().to_str().unwrap(),
+        "/libraries/",
+        "an off-site `next` must fall back to the library list"
+    );
+}
+
+/// Logout is a state change served on `GET`, so a cross-site `<img
+/// src="/accounts/logout/">` used to be able to force it. The request is now
+/// refused (with a harmless redirect) while same-site logouts keep working.
+#[tokio::test]
+async fn logout_is_not_triggerable_cross_site() {
+    let f = common::TestFixture::new().await;
+    let base_url = f.server.base_url.clone();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let resp = client
+        .post(format!("{base_url}/accounts/login/"))
+        .form(&[("email", "test@example.com"), ("password", "password")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "login should succeed");
+    let session_cookie = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .find_map(|v| {
+            let value = v.to_str().unwrap();
+            value
+                .starts_with("seahub-session=")
+                .then(|| value.split(';').next().unwrap().to_string())
+        })
+        .expect("session cookie");
+
+    let clears_session = |resp: &reqwest::Response| {
+        resp.headers().get_all("set-cookie").iter().any(|v| {
+            let value = v.to_str().unwrap();
+            value.starts_with("seahub-session=;")
+        })
+    };
+
+    // A cross-site navigation must not clear the session.
+    let resp = client
+        .get(format!("{base_url}/accounts/logout/"))
+        .header("sec-fetch-site", "cross-site")
+        .header("Cookie", &session_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        !clears_session(&resp),
+        "a cross-site navigation must not be able to force a logout"
+    );
+
+    // The session is still valid.
+    let resp = client
+        .get(format!("{base_url}/libraries/"))
+        .header("Cookie", &session_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "the session must survive");
+
+    // A same-origin logout still works.
+    let resp = client
+        .get(format!("{base_url}/accounts/logout/"))
+        .header("sec-fetch-site", "same-origin")
+        .header("Cookie", &session_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        clears_session(&resp),
+        "a same-origin logout must clear the session"
     );
 }
