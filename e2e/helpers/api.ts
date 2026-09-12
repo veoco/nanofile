@@ -40,6 +40,15 @@ export async function createRepo(baseURL: string, token: string, name: string): 
   return data.id;
 }
 
+/** DELETE /api2/repos/{repo_id}/ → move a library to the trash. */
+export async function deleteRepo(baseURL: string, token: string, repoId: string): Promise<void> {
+  const res = await fetch(`${baseURL}/api2/repos/${repoId}/`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`delete repo failed: ${res.status} ${await res.text()}`);
+}
+
 /**
  * Create an encrypted repo (enc_version 2) and return its repo id.
  *

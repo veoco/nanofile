@@ -64,6 +64,8 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
     on disk. `POST /api/v2.1/deleted-repos/` restores the library with its files, history and head
     commit; `DELETE /api/v2.1/deleted-repos/{repo_id}/` purges one library and
     `DELETE /api/v2.1/deleted-repos/` empties the trash, in both cases reclaiming the blocks.
+    The trash page has a **Deleted Libraries** tab for this (restore / delete permanently / empty
+    the trash), next to the deleted-files tab.
     Libraries deleted *before* this build were never archived: their trash entries still restore, but
     the library comes back empty and the server logs why.
   - **Upgrading from an older build**: blocks used to live in one flat, server-wide tree

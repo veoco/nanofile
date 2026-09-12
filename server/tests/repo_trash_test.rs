@@ -59,6 +59,93 @@ async fn upload_and_head(f: &TestFixture, name: &str, content: &[u8]) -> Value {
     repo["head_commit_id"].clone()
 }
 
+/// A cookie-authenticated Web UI client, the way the browser behaves.
+async fn ui_login(server: &common::TestServer) -> reqwest::Client {
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let resp = client
+        .post(format!("{}/accounts/login/", server.base_url))
+        .form(&[("email", "test@example.com"), ("password", "password")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "UI login should redirect");
+
+    // Trigger a GET so the Set-Cookie headers are stored.
+    let _ = client
+        .get(format!("{}/libraries/", server.base_url))
+        .send()
+        .await;
+    client
+}
+
+/// The trash page has a Deleted Libraries tab that lists the trashed library and
+/// offers both actions, and the Files tab is the one shown by default.
+#[tokio::test]
+async fn trash_page_lists_deleted_libraries() {
+    let f = TestFixture::new().await;
+    let ui = ui_login(&f.server).await;
+
+    // Nothing deleted yet: the tab exists and reports an empty trash.
+    let html = ui
+        .get(format!("{}/trash/?tab=libraries", f.server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(html.contains("data-tab=\"files\""), "files tab missing");
+    assert!(
+        html.contains("data-tab=\"libraries\""),
+        "libraries tab missing"
+    );
+    assert!(
+        html.contains("No deleted libraries."),
+        "the empty libraries tab must say so"
+    );
+
+    upload_and_head(&f, "ui.txt", b"ui").await;
+    let resp = f.client.delete_repo(&f.api_token, &f.repo_id).await;
+    assert!(resp.status().is_success());
+
+    // The default page opens on the files tab.
+    let default_page = ui
+        .get(format!("{}/trash/", f.server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        default_page.contains("id=\"tab-libraries\" class=\"tab-content hidden\""),
+        "the libraries tab must start hidden"
+    );
+
+    let html = ui
+        .get(format!("{}/trash/?tab=libraries", f.server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        !html.contains("id=\"tab-libraries\" class=\"tab-content hidden\""),
+        "?tab=libraries must open that tab"
+    );
+    assert!(html.contains("test-repo"), "the deleted library is listed");
+    assert!(html.contains(&format!("data-repo-id=\"{}\"", f.repo_id)));
+    assert!(html.contains("data-action=\"restore-lib\""));
+    assert!(html.contains("data-action=\"delete-lib\""));
+    assert!(html.contains("data-action=\"delete-all-libs\""));
+}
+
 /// The whole point of the trash: a library that is deleted and restored comes
 /// back with its files, its history and its head commit.
 #[tokio::test]

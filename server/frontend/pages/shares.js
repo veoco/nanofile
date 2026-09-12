@@ -4,35 +4,14 @@
 // templates/adminshares/list.html (which duplicated switchTab).
 import { __t } from "../core/i18n.js";
 import { apiFetch } from "../core/api.js";
+import { switchTab } from "../core/tabs.js";
 
 // ─── Tab switching ─────────────────────────────────────────────────────
-function switchTab(name) {
-    document.querySelectorAll('.tab-content').forEach(function (el) {
-        el.classList.add('hidden');
-    });
-    document.querySelectorAll('.tab-btn').forEach(function (el) {
-        el.classList.remove('tab-btn--active', 'text-brand-600', 'dark:text-brand-400', 'border-brand-600', 'dark:border-brand-400');
-        el.classList.add('text-gray-500', 'dark:text-gray-400', 'border-transparent');
-    });
-    document.getElementById('tab-' + name).classList.remove('hidden');
-    var btn = document.querySelector('[data-tab="' + name + '"]');
-    if (btn) {
-        btn.classList.remove('text-gray-500', 'dark:text-gray-400', 'border-transparent');
-        btn.classList.add('tab-btn--active', 'text-brand-600', 'dark:text-brand-400', 'border-brand-600', 'dark:border-brand-400');
-    }
+function selectTab(name) {
+    switchTab(name, 'share-links');
 
-    // Update URL query param to persist tab state across reloads
-    var params = new URLSearchParams(window.location.search);
-    if (name === 'upload-links') {
-        params.set('tab', 'upload-links');
-    } else {
-        params.delete('tab');
-    }
-    var newSearch = params.toString();
-    var newUrl = newSearch ? window.location.pathname + '?' + newSearch : window.location.pathname;
-    window.history.replaceState(null, '', newUrl);
-
-    // Keep delete form hidden inputs in sync
+    // Keep delete form hidden inputs in sync, so a delete reloads the tab the
+    // user was looking at.
     document.querySelectorAll('.delete-form input[name="tab"]').forEach(function (input) {
         input.value = name === 'upload-links' ? 'upload-links' : '';
     });
@@ -41,7 +20,7 @@ function switchTab(name) {
 document.addEventListener("click", function (e) {
     var el = e.target.closest('[data-action="tab"]');
     if (!el) return;
-    switchTab(el.dataset.tab);
+    selectTab(el.dataset.tab);
 });
 
 // ─── Edit share link dialog ──────────────────────────────────────────

@@ -20,9 +20,13 @@ pub struct TrashQuery {
     pub page: Option<u32>,
     pub per_page: Option<u32>,
     pub q: Option<String>,
+    pub tab: Option<String>,
     pub restored: Option<usize>,
     pub failed: Option<usize>,
     pub cleaned: Option<bool>,
+    pub lib_restored: Option<bool>,
+    pub lib_deleted: Option<bool>,
+    pub libs_deleted: Option<bool>,
 }
 
 // ─── Template ────────────────────────────────────────────────────────────
@@ -35,6 +39,8 @@ pub struct TrashListTemplate {
     pub user_email: String,
     pub is_admin: bool,
     pub items: Vec<TrashEntryView>,
+    /// Libraries in the caller's trash, newest deletion first.
+    pub deleted_repos: Vec<DeletedRepoView>,
     pub total_count: i64,
     pub current_page: u32,
     pub per_page: u32,
@@ -43,7 +49,11 @@ pub struct TrashListTemplate {
     pub restored: usize,
     pub failed: usize,
     pub cleaned: bool,
+    pub lib_restored: bool,
+    pub lib_deleted: bool,
+    pub libs_deleted: bool,
     pub active_page: &'static str,
+    pub active_tab: String,
     pub csrf_token: String,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
@@ -59,6 +69,13 @@ pub struct TrashEntryView {
     pub size_display: String,
     pub repo_id: String,
     pub repo_name: String,
+}
+
+pub struct DeletedRepoView {
+    pub repo_id: String,
+    pub repo_name: String,
+    pub size_display: String,
+    pub deleted_time_ts: i64,
 }
 
 // ─── Handlers ───────────────────────────────────────────────────────────
@@ -126,6 +143,24 @@ pub async fn trash_list_page(
     let failed = query.failed.unwrap_or(0);
     let cleaned = query.cleaned.unwrap_or(false);
 
+    // Deleted libraries live in their own tab; the list is per owner and short
+    // (one row per deleted library), so it is always loaded for the tab count.
+    let deleted_repos: Vec<DeletedRepoView> = trash::list_deleted_repos(&state.repos, user.user_id)
+        .await?
+        .into_iter()
+        .map(|r| DeletedRepoView {
+            repo_id: r.repo_id,
+            repo_name: r.repo_name,
+            size_display: format_size(r.size),
+            deleted_time_ts: r.del_time,
+        })
+        .collect();
+
+    let active_tab = query
+        .tab
+        .filter(|t| t == "libraries")
+        .unwrap_or_else(|| "files".to_string());
+
     let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
 
     let tpl = TrashListTemplate {
@@ -134,6 +169,7 @@ pub async fn trash_list_page(
         user_email: ctx.user_email,
         is_admin: ctx.is_admin,
         items,
+        deleted_repos,
         total_count,
         current_page: page,
         per_page,
@@ -142,7 +178,11 @@ pub async fn trash_list_page(
         restored,
         failed,
         cleaned,
+        lib_restored: query.lib_restored.unwrap_or(false),
+        lib_deleted: query.lib_deleted.unwrap_or(false),
+        libs_deleted: query.libs_deleted.unwrap_or(false),
         active_page: "trash",
+        active_tab,
         csrf_token: ctx.csrf_token,
         left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
