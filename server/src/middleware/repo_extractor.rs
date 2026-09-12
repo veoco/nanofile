@@ -71,9 +71,7 @@ impl FromRequestParts<Arc<AppState>> for RepoPathRead {
 
         // A unified API key adds a library-scope ceiling on top of membership:
         // the key must be bound to this library (or bound to all of them).
-        if let Some(authority) = &user.key
-            && !authority.allows_repo(&repo_id, false)
-        {
+        if !user.credential.allows_repo(&repo_id, false) {
             return Err(AppError::Forbidden);
         }
 
@@ -111,9 +109,7 @@ impl FromRequestParts<Arc<AppState>> for RepoPathWrite {
 
         // A unified API key adds a library-scope ceiling: a read ceiling on this
         // library blocks the write even when the member's permission allows it.
-        if let Some(authority) = &user.key
-            && !authority.allows_repo(&repo_id, true)
-        {
+        if !user.credential.allows_repo(&repo_id, true) {
             return Err(AppError::Forbidden);
         }
 

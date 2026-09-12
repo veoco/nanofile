@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use crate::AppState;
 use crate::domain::api_key::KeyAuthority;
 use crate::domain::capability::{RouteAccess, required_access};
+use crate::domain::credential::Credential;
 use crate::domain::permission::RepoScope;
 use crate::domain::repo_path;
 use crate::repository::Repositories;
@@ -18,20 +19,17 @@ use base::error::AppError;
 pub struct AuthUser {
     pub user_id: i32,
     pub email: String,
-    /// Set when the request authenticated with a unified API key. `None` means
-    /// an ordinary session, which carries no capability or library limits.
-    pub key: Option<KeyAuthority>,
+    /// What authenticated the request.
+    ///
+    /// Never [`Credential::SyncToken`]: repository-scoped tokens are accepted
+    /// only by the sync protocol (see [`SyncAuth`]).
+    pub credential: Credential,
 }
 
 impl AuthUser {
     /// The libraries an account-wide query may return.
     pub fn repo_scope(&self) -> RepoScope {
-        match &self.key {
-            Some(authority) if !authority.all_repos => {
-                RepoScope::only(authority.bound_repo_ids().map(str::to_string))
-            }
-            _ => RepoScope::all(),
-        }
+        self.credential.repo_scope()
     }
 
     /// Enforce a key's library scope for a repo id the path guard cannot see.
@@ -39,13 +37,12 @@ impl AuthUser {
     /// Some endpoints carry the library in a query parameter or a JSON body
     /// (`repo-tokens`, the batch copy/move handlers, `search-file`), so callers
     /// apply this next to the membership check for those ids. Sessions are
-    /// unaffected.
+    /// unaffected: they carry no ceiling.
     pub fn ensure_repo_allowed(&self, repo_id: &str, need_write: bool) -> Result<(), AppError> {
-        match &self.key {
-            Some(authority) if !authority.allows_repo(repo_id, need_write) => {
-                Err(AppError::Forbidden)
-            }
-            _ => Ok(()),
+        if self.credential.allows_repo(repo_id, need_write) {
+            Ok(())
+        } else {
+            Err(AppError::Forbidden)
         }
     }
 }
@@ -54,20 +51,15 @@ impl AuthUser {
 pub struct SyncAuth {
     pub user_id: i32,
     pub repo_id: String,
-    /// Set when the request authenticated with a unified API key rather than a
-    /// repository sync token or a session.
-    pub key: Option<KeyAuthority>,
+    /// What authenticated the request: a repository sync token, an account
+    /// token, or a unified API key.
+    pub credential: Credential,
 }
 
 impl SyncAuth {
     /// The libraries an account-wide sync query may return.
     pub fn repo_scope(&self) -> RepoScope {
-        match &self.key {
-            Some(authority) if !authority.all_repos => {
-                RepoScope::only(authority.bound_repo_ids().map(str::to_string))
-            }
-            _ => RepoScope::all(),
-        }
+        self.credential.repo_scope()
     }
 }
 
@@ -163,7 +155,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             return Ok(SyncAuth {
                 user_id,
                 repo_id,
-                key: None,
+                credential: Credential::SyncToken,
             });
         }
 
@@ -267,7 +259,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         let key_lookup = key_lookup.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let api_record = api_record.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let (user_id, key) = if let Some(lookup) = key_lookup {
+        let (user_id, credential) = if let Some(lookup) = key_lookup {
             if is_token_expired(lookup.key.expires_at) {
                 return Err(StatusCode::UNAUTHORIZED);
             }
@@ -277,8 +269,9 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
                 tracing::warn!(key_id = lookup.key.id, %error, "rejecting API key with an unreadable capability set");
                 StatusCode::UNAUTHORIZED
             })?;
-            enforce_route_access(&authority, parts)?;
-            (lookup.key.user_id, Some(authority))
+            let credential = Credential::Key(authority);
+            enforce_route_access(&credential, parts)?;
+            (lookup.key.user_id, credential)
         } else if let Some(token_record) = api_record {
             // Check API token expiration.
             if is_token_expired(token_record.expires_at) {
@@ -288,7 +281,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             if token_record.is_pending {
                 return Err(StatusCode::UNAUTHORIZED);
             }
-            (token_record.user_id, None)
+            (token_record.user_id, Credential::Session)
         } else {
             return Err(StatusCode::UNAUTHORIZED);
         };
@@ -307,12 +300,12 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         Ok(AuthUser {
             user_id: user_record.id,
             email: user_record.email,
-            key,
+            credential,
         })
     }
 }
 
-/// Apply a unified API key's capability and library limits to a request.
+/// Apply a credential's capability and library limits to a request.
 ///
 /// Sessions never reach this: only key callers are classified, so the behaviour
 /// of a login token is unchanged. An unclassified route is denied, which is what
@@ -324,40 +317,35 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
 /// so the raw path is `/{repo_id}/dir/` where the template is
 /// `/api2/repos/{repo_id}/dir/`. Library binding is checked against the raw path
 /// instead, because that is where the concrete id lives.
-fn enforce_route_access(authority: &KeyAuthority, parts: &Parts) -> Result<(), StatusCode> {
+fn enforce_route_access(credential: &Credential, parts: &Parts) -> Result<(), StatusCode> {
     let matched = parts
         .extensions
         .get::<axum::extract::MatchedPath>()
         .map(axum::extract::MatchedPath::as_str);
     let route = matched.unwrap_or_else(|| parts.uri.path());
 
-    match required_access(&parts.method, route) {
-        None => {
-            tracing::warn!(
-                method = %parts.method,
-                path = parts.uri.path(),
-                "API key used on an unclassified route"
-            );
-            Err(StatusCode::FORBIDDEN)
-        }
-        Some(RouteAccess::Public | RouteAccess::AnyAuthenticated) => Ok(()),
-        // The key-management surface is session-only: a key that could mint
-        // keys could hand itself more access than it holds.
-        Some(RouteAccess::SessionOnly) => Err(StatusCode::FORBIDDEN),
-        Some(RouteAccess::Capability(capability)) => {
-            if !authority.has(capability) {
-                return Err(StatusCode::FORBIDDEN);
-            }
-            // When the path names a library, the key must also cover it, with a
-            // write-capable ceiling for a write capability.
-            if let Some(repo_id) = repo_path::find_repo_id(parts.uri.path())
-                && !authority.allows_repo(&repo_id, capability.is_write())
-            {
-                return Err(StatusCode::FORBIDDEN);
-            }
-            Ok(())
-        }
+    let Some(access) = required_access(&parts.method, route) else {
+        tracing::warn!(
+            method = %parts.method,
+            path = parts.uri.path(),
+            credential = credential.kind_id(),
+            "credential used on a route with no classification"
+        );
+        return Err(StatusCode::FORBIDDEN);
+    };
+    if !credential.allows_route(access) {
+        return Err(StatusCode::FORBIDDEN);
     }
+    // A key carries a per-library ceiling on top of the route's requirement.
+    // Every other credential is the account itself and has no ceiling, so
+    // `allows_repo` accepts unconditionally there.
+    if let RouteAccess::Capability(capability) = access
+        && let Some(repo_id) = repo_path::find_repo_id(parts.uri.path())
+        && !credential.allows_repo(&repo_id, capability.is_write())
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(())
 }
 
 /// Extract a token from `Authorization: Bearer <token>` or `Authorization: Token <token>`.
@@ -449,7 +437,7 @@ impl SyncAuth {
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: record.repo_id,
-                key: None,
+                credential: Credential::SyncToken,
             });
         }
 
@@ -491,7 +479,7 @@ impl SyncAuth {
             return Ok(SyncAuth {
                 user_id: lookup.key.user_id,
                 repo_id: url_repo_id.unwrap_or("").to_string(),
-                key: Some(authority),
+                credential: Credential::Key(authority),
             });
         }
 
@@ -524,7 +512,7 @@ impl SyncAuth {
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: url_repo_id.unwrap_or("").to_string(),
-                key: None,
+                credential: Credential::Session,
             });
         }
 
