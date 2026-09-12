@@ -209,6 +209,38 @@ mod tests {
         assert_eq!(en.trf("test.hello", &[("name", "World")]), "Hello, World!");
     }
 
+    /// A TOML error anywhere in a locale file empties the whole dictionary
+    /// (parsing is best-effort), so pin that the source file actually loaded.
+    #[test]
+    fn the_source_dictionary_is_not_empty() {
+        assert!(
+            EN.len() > 100,
+            "en.toml parsed into only {} entries — a TOML mistake silently \
+             disables every translation",
+            EN.len()
+        );
+    }
+
+    /// Both locales carry the same keys, so a new string cannot ship in one
+    /// language only (a missing key renders as its own identifier).
+    #[test]
+    fn locales_define_the_same_keys() {
+        let mut missing_in_zh: Vec<&String> =
+            EN.keys().filter(|key| !ZH.contains_key(*key)).collect();
+        let mut missing_in_en: Vec<&String> =
+            ZH.keys().filter(|key| !EN.contains_key(*key)).collect();
+        missing_in_zh.sort();
+        missing_in_en.sort();
+        assert!(
+            missing_in_zh.is_empty(),
+            "zh.toml is missing: {missing_in_zh:?}"
+        );
+        assert!(
+            missing_in_en.is_empty(),
+            "en.toml is missing: {missing_in_en:?}"
+        );
+    }
+
     #[test]
     fn get_matches_zh_variants() {
         assert_eq!(I18n::get(Some("zh")).lang, "zh");

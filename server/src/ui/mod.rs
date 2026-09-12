@@ -2,6 +2,7 @@
 pub mod activities;
 pub mod adminshares;
 pub mod admintasks;
+pub mod api_keys;
 pub mod auth;
 pub mod auth_extractor;
 pub mod client_login;
@@ -127,6 +128,20 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route(
             "/settings/language/",
             axum::routing::post(settings::update_language),
+        )
+        // Unified API keys
+        .route("/settings/api-keys/", get(api_keys::list_page))
+        .route(
+            "/settings/api-keys/create/",
+            axum::routing::post(api_keys::create),
+        )
+        .route(
+            "/settings/api-keys/{id}/update/",
+            axum::routing::post(api_keys::update),
+        )
+        .route(
+            "/settings/api-keys/{id}/revoke/",
+            axum::routing::post(api_keys::revoke),
         )
         // Invitation codes
         .route(

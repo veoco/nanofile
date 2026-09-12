@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t.tr("apikey.title") }} | Nanofile{% endblock %}
+
+{% block content %}
+<h1 class="page-title">{{ t.tr("apikey.title") }}</h1>
+<p class="page-subtitle">{{ t.tr("apikey.desc") }}</p>
+
+{% if let Some(error) = error %}
+{% include "includes/alert_error.html" %}
+{% endif %}
+
+{% if let Some(success) = success %}
+{% include "includes/alert_success.html" %}
+{% endif %}
+
+{% if let Some(new_key) = new_key %}
+<div class="mt-6 max-w-3xl rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 p-4">
+    <p class="text-sm font-semibold text-green-800 dark:text-green-300">{{ t.tr("apikey.show_once") }}</p>
+    <p class="mt-1 text-xs text-green-700 dark:text-green-400">{{ t.tr("apikey.show_once_desc") }}</p>
+    <div class="mt-2 flex items-center gap-2">
+        <input id="new-key-value" type="text" readonly value="{{ new_key.secret }}"
+               class="flex-1 min-w-0 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-700 font-mono text-sm text-gray-900 dark:text-gray-100 px-2 py-1 break-all">
+        <button type="button" id="copy-new-key-btn" data-action="copy-api-key"
+                class="flex-shrink-0 rounded-lg bg-brand-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-600 transition-colors">
+            {{ t.tr("apikey.copy") }}
+        </button>
+    </div>
+</div>
+{% endif %}
+
+<div class="mt-6 max-w-3xl space-y-6">
+    <div class="card">
+        <div class="card-body">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("apikey.create") }}</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("apikey.create_desc") }}</p>
+
+            <form id="create-key-form" action="/settings/api-keys/create/" method="POST" class="mt-4 space-y-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+                <div class="flex flex-wrap items-end gap-3">
+                    <div class="flex-1 min-w-[12rem]">
+                        <label for="create-key-name" class="form-label">{{ t.tr("apikey.name") }}</label>
+                        <input type="text" id="create-key-name" name="name" maxlength="255"
+                               placeholder="{{ t.tr("apikey.name_placeholder") }}" class="mt-1 input">
+                    </div>
+                    <div class="min-w-[10rem]">
+                        <label for="apikey-preset" class="form-label">{{ t.tr("apikey.preset_label") }}</label>
+                        <select id="apikey-preset" class="mt-1 select">
+                            <option value="">{{ t.tr("apikey.preset_custom") }}</option>
+                            {% for preset in presets %}
+                            <option value="{{ preset.id }}"
+                                    data-caps="{% for capability in preset.capabilities %}{{ capability }} {% endfor %}">
+                                {{ preset.label }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <p class="form-label">{{ t.tr("apikey.capabilities") }}</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">{{ t.tr("apikey.capabilities_desc") }}</p>
+                    <div class="space-y-3">
+                        {% for domain in domains %}
+                        <div>
+                            <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                {{ domain.label }}
+                            </p>
+                            <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                                {% for capability in domain.capabilities %}
+                                <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-200">
+                                    <input type="checkbox" name="cap__{{ capability.id }}" value="1"
+                                           class="rounded border-gray-300 dark:border-gray-600">
+                                    <span class="font-mono text-xs">{{ capability.id }}</span>
+                                    {% if capability.write %}
+                                    <span class="rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ t.tr("apikey.write") }}</span>
+                                    {% endif %}
+                                </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div>
+                    <p class="form-label">{{ t.tr("apikey.scope") }}</p>
+                    <label class="mt-1 inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+                        <input type="checkbox" name="all_repos" value="1"
+                               class="rounded border-gray-300 dark:border-gray-600">
+                        {{ t.tr("apikey.scope_all") }}
+                    </label>
+                    <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t.tr("apikey.scope_selected") }}</p>
+                    <div class="mt-1 space-y-1">
+                        {% for repo in repo_options %}
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="truncate text-sm text-gray-700 dark:text-gray-200">{{ repo.name }}</span>
+                            <select name="repo__{{ repo.id }}" class="select w-32"
+                                    aria-label="{{ repo.name }}">
+                                <option value="">{{ t.tr("apikey.permission_none") }}</option>
+                                <option value="r">{{ t.tr("apikey.permission_r") }}</option>
+                                <option value="rw">{{ t.tr("apikey.permission_rw") }}</option>
+                            </select>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap items-end gap-3">
+                    <div>
+                        <label for="create-key-expiry" class="form-label">{{ t.tr("apikey.expiry") }}</label>
+                        <select id="create-key-expiry" name="expiry" class="mt-1 select">
+                            {% for option in ttl_options %}
+                            <option value="{{ option.days }}">{{ option.label }}</option>
+                            {% endfor %}
+                            <option value="custom">{{ t.tr("apikey.expiry_custom") }}</option>
+                            {% if max_ttl_days == 0 %}
+                            <option value="never">{{ t.tr("apikey.expiry_never") }}</option>
+                            {% endif %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="create-key-expiry-days" class="form-label">{{ t.tr("apikey.expiry_custom_days") }}</label>
+                        <input type="number" min="1" id="create-key-expiry-days" name="expiry_days" class="mt-1 input w-28">
+                    </div>
+                    <button type="submit" class="btn btn-primary">{{ t.tr("apikey.create_button") }}</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    {% if keys.is_empty() %}
+    <div class="card">
+        <div class="card-body">
+            <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.tr("apikey.no_keys") }}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    {% for key in keys %}
+    <div class="card">
+        <div class="card-body">
+            <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                    <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ key.name }}</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 font-mono">{{ key.key_prefix }}…</p>
+                    <div class="mt-1 flex flex-wrap gap-1">
+                        {% if key.read_only %}
+                        <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-surface-700 dark:text-gray-300">{{ t.tr("apikey.read_only") }}</span>
+                        {% endif %}
+                        {% if key.all_repos %}
+                        <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ t.tr("apikey.scope_all_badge") }}</span>
+                        {% endif %}
+                        {% for capability in key.capabilities %}
+                        <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-mono text-gray-600 dark:bg-surface-700 dark:text-gray-300">{{ capability }}</span>
+                        {% endfor %}
+                    </div>
+                    {% if !key.repos.is_empty() %}
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {% for repo in key.repos %}{{ repo.1 }} ({{ repo.2 }}){% if !loop.last %}, {% endif %}{% endfor %}
+                    </p>
+                    {% endif %}
+                    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                        {{ t.tr("apikey.created") }}: {{ key.created_at }}
+                        &middot; {{ t.tr("apikey.expires") }}: {{ key.expires_at }}
+                        &middot; {{ t.tr("apikey.last_used") }}: {{ key.last_used_at }}
+                    </p>
+                </div>
+                <form action="/settings/api-keys/{{ key.id }}/revoke/" method="POST"
+                      data-confirm="apikey.revoke_confirm">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-danger btn-sm">{{ t.tr("apikey.revoke") }}</button>
+                </form>
+            </div>
+
+            <details class="mt-3">
+                <summary class="cursor-pointer text-sm text-brand-500 dark:text-brand-400">{{ t.tr("apikey.edit") }}</summary>
+                <form action="/settings/api-keys/{{ key.id }}/update/" method="POST" class="mt-3 space-y-4">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <div>
+                        <label for="key-name-{{ key.id }}" class="form-label">{{ t.tr("apikey.name") }}</label>
+                        <input type="text" id="key-name-{{ key.id }}" name="name" value="{{ key.name }}"
+                               maxlength="255" class="mt-1 input">
+                    </div>
+
+                    <div class="space-y-3">
+                        {% for domain in domains %}
+                        <div>
+                            <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                {{ domain.label }}
+                            </p>
+                            <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                                {% for capability in domain.capabilities %}
+                                <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-200">
+                                    <input type="checkbox" name="cap__{{ capability.id }}" value="1"
+                                           {% if key.has(capability.id) %}checked{% endif %}
+                                           class="rounded border-gray-300 dark:border-gray-600">
+                                    <span class="font-mono text-xs">{{ capability.id }}</span>
+                                </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div>
+                        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+                            <input type="checkbox" name="all_repos" value="1"
+                                   {% if key.all_repos %}checked{% endif %}
+                                   class="rounded border-gray-300 dark:border-gray-600">
+                            {{ t.tr("apikey.scope_all") }}
+                        </label>
+                        <div class="mt-1 space-y-1">
+                            {% for repo in repo_options %}
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="truncate text-sm text-gray-700 dark:text-gray-200">{{ repo.name }}</span>
+                                <select name="repo__{{ repo.id }}" class="select w-32" aria-label="{{ repo.name }}">
+                                    <option value="" {% if key.permission_for(repo.id).is_empty() %}selected{% endif %}>{{ t.tr("apikey.permission_none") }}</option>
+                                    <option value="r" {% if key.permission_for(repo.id) == "r" %}selected{% endif %}>{{ t.tr("apikey.permission_r") }}</option>
+                                    <option value="rw" {% if key.permission_for(repo.id) == "rw" %}selected{% endif %}>{{ t.tr("apikey.permission_rw") }}</option>
+                                </select>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap items-end gap-3">
+                        <div>
+                            <label for="key-expiry-{{ key.id }}" class="form-label">{{ t.tr("apikey.expiry") }}</label>
+                            <select id="key-expiry-{{ key.id }}" name="expiry" class="mt-1 select">
+                                {% for option in ttl_options %}
+                                <option value="{{ option.days }}">{{ option.label }}</option>
+                                {% endfor %}
+                                <option value="custom" {% if key.has_expiry %}selected{% endif %}>{{ t.tr("apikey.expiry_custom") }}</option>
+                                <option value="never" {% if !key.has_expiry %}selected{% endif %}>{{ t.tr("apikey.expiry_never") }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="key-expiry-days-{{ key.id }}" class="form-label">{{ t.tr("apikey.expiry_custom_days") }}</label>
+                            <input type="number" min="1" id="key-expiry-days-{{ key.id }}" name="expiry_days"
+                                   value="{{ key.expiry_days }}" class="mt-1 input w-28">
+                        </div>
+                        <button type="submit" class="btn btn-primary">{{ t.tr("common.save") }}</button>
+                    </div>
+                </form>
+            </details>
+        </div>
+    </div>
+    {% endfor %}
+
+    <div class="mt-6">
+        <a href="/settings/" class="text-sm text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300">
+            &larr; {{ t.tr("common.back_to_settings") }}
+        </a>
+    </div>
+</div>
+{% endblock %}
