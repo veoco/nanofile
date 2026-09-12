@@ -43,10 +43,24 @@ Nanofile 实现了 Seafile 同步协议和 REST API，因此官方 Seafile 桌�
     盐）而非 v2（固定全局盐）。服务器只接受 enc_version 2/4，并在创建时校验 magic/random_key
     格式。已知限制：`/api2/repos/` 创建 API 没有 `salt` 字段，因此通过它创建的库按 v2 派生——
     真正的每库 v4 盐是通过同步协议创建的。
-- **存储与版本管理**：每用户配额、内容寻址块存储、完整历史（含版本浏览 / 恢复）、每仓库历史
+- **存储与版本管理**：每用户配额、**按库命名空间**的内容寻址块存储
+  （`data/blocks/repos/<sha1(repo_id)>/…`）、完整历史（含版本浏览 / 恢复）、每仓库历史
   限制与 TTL、垃圾回收（历史修剪 + 不可达 FS 对象清理）、带还原的回收站、已删除库恢复。
   可选的透明静态块加密（`block_encryption_mode`：`off` / `on` / `lazy`），块 id（逻辑字节的
   SHA-1）保持不变，因此 Seafile 客户端和内容寻址去重继续正常工作。
+  - **回收站（库级）**：删除库时会保留其内容——提交图和 FS 对象在同一事务里被复制到
+    `deleted_repo_commits` / `deleted_repo_fs_objects`（相当于官方服务端的 `deleted_store/`），
+    块文件留在磁盘上。`POST /api/v2.1/deleted-repos/` 恢复该库（文件、历史、head 提交一并恢复）；
+    `DELETE /api/v2.1/deleted-repos/{repo_id}/` 彻底删除单个库、`DELETE /api/v2.1/deleted-repos/`
+    清空整个回收站，两者都会释放对应的块目录。**在本次构建之前**删除的库从未归档：回收站条目仍可
+    恢复，但恢复出来是空库，服务器会在日志中说明原因。
+  - **从旧版本升级**：块过去存在一个全局扁平的目录树里（`data/blocks/<2 位十六进制>/<id>`）。
+    该布局只按内容 id 索引块，因此任何已认证用户都能借自己所属的库读取其他库的块。现在服务器会
+    把每个被引用的块复制到拥有它的库下，然后删除旧目录树——在启动时、处理第一个请求之前自动完成。
+    可用 `nanofile migrate-blocks --dry-run` 预估复制量，或用 `nanofile migrate-blocks` 在停机状态
+    下手动执行。迁移只做复制（不使用硬链接），可断点续跑，并且只有在确认每个被引用的块都落到新位置
+    后才删除旧目录树；如需回滚路径请先备份 `data/blocks`。去重现在按库进行，跨库重复的内容会在每个
+    库各存一份，磁盘占用会相应增加。
 - **全文搜索**：内置 Tantivy 索引，带 jieba 中文分词器；跨库的文件名和内容搜索。
 - **实时通知**：WebSocket 推送仓库更新、文件锁定、文件夹权限和评论更新。
 - **运维**：可续传 / 分块上传（`Content-Range` 组装）、zip 批量下载、带指标的后台调度器，
@@ -283,6 +297,9 @@ nanofile [--config <path>]          启动服务器（默认）
 nanofile [--config <path>] adduser  创建用户（默认管理员；--regular 创建普通用户）
                                     口令：默认交互式输入，也可用
                                     --password-stdin / --password-file <path>
+nanofile [--config <path>] migrate-blocks [--dry-run]
+                                    把旧的全局扁平块目录树迁移为按库布局
+                                    （服务器启动时也会自动执行；--dry-run 只报告不落盘）
 ```
 
 ## 数据布局
@@ -293,7 +310,7 @@ nanofile [--config <path>] adduser  创建用户（默认管理员；--regular �
 data/
 ├── nanofile.db        # SQLite 数据库（WAL 模式，文件权限 0600）
 ├── nanofile.db-wal    # WAL 日志
-├── blocks/            # 内容寻址块存储：{2 位十六进制前缀}/{40 位十六进制 SHA-1}
+├── blocks/            # 内容寻址块存储：repos/{sha1(repo_id)}/{2 位十六进制前缀}/{40 位 SHA-1}
 ├── temp/              # 可续传 / 分块上传暂存
 ├── thumbnails/        # 生成的图片 / 视频缩略图缓存
 ├── avatars/           # 用户头像图片

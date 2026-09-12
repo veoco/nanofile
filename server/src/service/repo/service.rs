@@ -618,6 +618,13 @@ impl RepoService {
     }
 
     /// Delete a repo. Only the owner can delete.
+    ///
+    /// The library moves to the trash: its commit graph and FS objects are
+    /// archived so that restoring it brings the files back, while its blocks stay
+    /// on disk (garbage collection keeps the block directory of a library that is
+    /// still listed in the trash). Both the trash entry and the archive are
+    /// load-bearing, so a failure to write either one aborts the delete instead
+    /// of leaving a half-deleted library behind.
     pub async fn delete_repo(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -634,8 +641,10 @@ impl RepoService {
             return Err(AppError::Forbidden);
         }
 
-        // Record deleted repo in trash before cascade-delete
-        if let Err(e) = crate::fs::core::trash::add_deleted_repo(
+        // Record deleted repo in trash before cascade-delete: the trash entry is
+        // what makes the archive reachable, and what keeps GC from reclaiming the
+        // library's blocks.
+        crate::fs::core::trash::add_deleted_repo(
             repos,
             repo_id,
             &r.name,
@@ -643,10 +652,7 @@ impl RepoService {
             r.owner_id,
             r.size,
         )
-        .await
-        {
-            tracing::warn!("Failed to record deleted repo in trash: {e}");
-        }
+        .await?;
 
         // Log repo deletion activity BEFORE deleting the repo
         activity_log::log_activity(
@@ -654,13 +660,12 @@ impl RepoService {
         )
         .await;
 
-        // Cascade-delete related records
-        repos.member.delete_by_repo(repo_id).await?;
+        // Archive the library's content and delete its rows in one transaction.
+        crate::fs::core::repo_archive::archive_and_delete(db, repo_id).await?;
 
+        // The token rows were deleted with the library; this drops the cached
+        // copies so a revoked client cannot keep authenticating from the cache.
         repos.sync_token.delete_by_repo(repo_id).await?;
-
-        // Delete the repo itself
-        repos.repo.delete_by_id(repo_id).await?;
 
         Ok(())
     }

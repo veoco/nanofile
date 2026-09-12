@@ -1,7 +1,7 @@
 use axum::{
     Json,
     body::Body,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::Request,
 };
 use serde::Deserialize;
@@ -220,6 +220,11 @@ pub async fn list_trash(
     Ok(Json(result))
 }
 
+/// GET /api/v2.1/deleted-repos/ — the libraries in the caller's trash.
+///
+/// The response is a bare JSON array, matching seahub's `DeletedRepos.get`
+/// (`Response(trashs_json)`), which is what the web UI's deleted-libraries view
+/// reads.
 pub async fn list_deleted_repos(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -252,16 +257,76 @@ pub async fn list_deleted_repos(
         })
         .collect();
 
-    Ok(Json(serde_json::json!({"repos": items})))
+    Ok(Json(serde_json::Value::Array(items)))
 }
 
+/// POST /api/v2.1/deleted-repos/ — restore a library from the trash.
+///
+/// seahub posts this as a form (`repo_id=…`) and reads the repo id from
+/// `request.POST`; a JSON body is accepted as well, since that is what this
+/// endpoint used to take.
 pub async fn restore_deleted_repo(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<RestoreDeletedRepoBody>,
+    req: Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    trash::restore_deleted_repo(state.db.as_ref(), &state.repos, &body.repo_id, auth.user_id)
-        .await?;
+    let repo_id = parse_repo_id_body(req).await?;
+
+    trash::restore_deleted_repo(state.db.as_ref(), &state.repos, &repo_id, auth.user_id).await?;
 
     Ok(ok_json())
+}
+
+/// DELETE /api/v2.1/deleted-repos/{repo_id}/ — permanently delete one library
+/// from the trash, reclaiming its blocks.
+pub async fn purge_deleted_repo(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    trash::purge_deleted_repo(
+        state.db.as_ref(),
+        &state.repos,
+        &state.block_store,
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
+    Ok(ok_json())
+}
+
+/// DELETE /api/v2.1/deleted-repos/ — empty the caller's trash.
+pub async fn purge_deleted_repos(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let purged = trash::purge_deleted_repos_of_owner(
+        state.db.as_ref(),
+        &state.repos,
+        &state.block_store,
+        auth.user_id,
+    )
+    .await?;
+
+    tracing::info!(user_id = auth.user_id, purged, "emptied the library trash");
+
+    Ok(ok_json())
+}
+
+/// Read the repo id from a form-encoded or JSON body.
+async fn parse_repo_id_body(req: Request<Body>) -> Result<String, AppError> {
+    let (_, body) = req.into_parts();
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
+
+    if let Ok(parsed) = serde_json::from_slice::<RestoreDeletedRepoBody>(&bytes)
+        && !parsed.repo_id.is_empty()
+    {
+        return Ok(parsed.repo_id);
+    }
+
+    match serde_urlencoded::from_bytes::<RestoreDeletedRepoBody>(&bytes) {
+        Ok(parsed) if !parsed.repo_id.is_empty() => Ok(parsed.repo_id),
+        _ => Err(AppError::BadRequest("repo_id can not be empty.".into())),
+    }
 }

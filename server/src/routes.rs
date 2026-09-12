@@ -349,7 +349,12 @@ fn v2_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/v2.1/deleted-repos/",
             get(crate::handler::trash::list_deleted_repos)
-                .post(crate::handler::trash::restore_deleted_repo),
+                .post(crate::handler::trash::restore_deleted_repo)
+                .delete(crate::handler::trash::purge_deleted_repos),
+        )
+        .route(
+            "/api/v2.1/deleted-repos/{repo_id}/",
+            delete(crate::handler::trash::purge_deleted_repo),
         )
 }
 

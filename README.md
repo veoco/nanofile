@@ -58,6 +58,14 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   cleanup), trash with revert, deleted-library restore. Optional transparent at-rest encryption for
   file blocks (`block_encryption_mode`: `off` / `on` / `lazy`), with the block id (SHA-1 of logical
   bytes) unchanged so Seafile clients and content-addressed dedup keep working.
+  - **Library trash**: deleting a library keeps its content. Its commit graph and FS objects are
+    copied into `deleted_repo_commits` / `deleted_repo_fs_objects` (the equivalent of the official
+    server's `deleted_store/`) in the same transaction that removes the library, and its blocks stay
+    on disk. `POST /api/v2.1/deleted-repos/` restores the library with its files, history and head
+    commit; `DELETE /api/v2.1/deleted-repos/{repo_id}/` purges one library and
+    `DELETE /api/v2.1/deleted-repos/` empties the trash, in both cases reclaiming the blocks.
+    Libraries deleted *before* this build were never archived: their trash entries still restore, but
+    the library comes back empty and the server logs why.
   - **Upgrading from an older build**: blocks used to live in one flat, server-wide tree
     (`data/blocks/<2hex>/<id>`). That layout keyed blocks only by content id, so any authenticated
     user could read any library's block by naming it through a library they *were* a member of.
@@ -194,6 +202,9 @@ run it:
   library the caller is a member of: a removed collaborator who still has another library on the
   server cannot read the blocks their client cached from the one they lost. This also means
   deduplication is per library rather than server-wide.
+- **Deleted libraries keep their disk usage until their trash entry is purged.** Garbage collection
+  never reclaims the blocks of a library that is still listed in the trash — that is what makes a
+  restore serve its files again. Purge the library (or empty the trash) to free the space.
 - **`addr = "0.0.0.0"` is the default** so the server is reachable on the host's interfaces. Bind
   `127.0.0.1` when a reverse proxy is the only intended entry point, and firewall the port otherwise.
 - **Behind a reverse proxy, set `trusted_proxies`.** `X-Forwarded-For` is only honoured when the TCP

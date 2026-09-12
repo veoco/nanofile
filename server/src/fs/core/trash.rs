@@ -1,6 +1,6 @@
 use sea_orm::{
     ColumnTrait, Condition, DatabaseConnection, EntityTrait, Order, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -13,6 +13,7 @@ use infra::activity_log;
 use infra::common::util::{get_head_commit_id, timestamp_rfc3339};
 use infra::entity::{deleted_repo, file_trash, repo, repo_member};
 use infra::serialization::S_IFDIR;
+use infra::storage::DynBlockStorage;
 
 /// A single item recorded during batch delete.
 #[derive(Debug, Clone)]
@@ -925,7 +926,13 @@ pub async fn list_deleted_repos(
 
 /// Restore a repo from trash.
 ///
-/// Re-inserts the repo, creates owner membership, and removes from trash.
+/// Re-inserts the repo, copies its archived content (commit graph and FS objects)
+/// back, restores the head commit recorded at delete time, creates owner
+/// membership, and removes it from trash.
+///
+/// A library deleted before its content was archived (an installation that
+/// predates the archive tables) still restores, but comes back empty; that is
+/// reported in the log rather than silently.
 pub async fn restore_deleted_repo(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -971,6 +978,46 @@ pub async fn restore_deleted_repo(
             .await?;
     }
 
+    // Bring the library's content back. The copy is one transaction, and the
+    // archive is only dropped once the whole restore has succeeded, so a failure
+    // leaves a state the user can retry instead of a library without content.
+    let restored = {
+        let txn = db.begin().await?;
+        let copied = crate::fs::core::repo_archive::copy_from(&txn, &trashed.repo_id).await?;
+        txn.commit().await?;
+        copied
+    };
+
+    // The head commit recorded at delete time is only meaningful when the
+    // commit came back with the archive. A library that had content always has a
+    // recorded head, so a missing commit means its content is not recoverable.
+    if let Some(head) = trashed.head_id.as_deref() {
+        if repos
+            .commit
+            .find_by_repo_and_commit_id(&trashed.repo_id, head)
+            .await?
+            .is_some()
+        {
+            repos
+                .repo
+                .update_head_commit(&trashed.repo_id, Some(head.to_owned()))
+                .await?;
+        } else {
+            tracing::warn!(
+                repo_id = %trashed.repo_id,
+                head_commit_id = %head,
+                "restored library has no archived commit for its recorded head: it was deleted \
+                 before its content was archived, so it is restored empty"
+            );
+        }
+    }
+
+    tracing::debug!(
+        repo_id = %trashed.repo_id,
+        restored,
+        "restored a library from the trash"
+    );
+
     // Re-create owner membership (with INSERT OR IGNORE semantics)
     if repos
         .member
@@ -990,6 +1037,9 @@ pub async fn restore_deleted_repo(
             .await?;
     }
 
+    // The library is complete again, so the archive copy is no longer needed.
+    crate::fs::core::repo_archive::drop_archive(db, &trashed.repo_id).await?;
+
     // Remove from trash
     repos.deleted_repo.delete_by_id(repo_id).await?;
 
@@ -1000,4 +1050,100 @@ pub async fn restore_deleted_repo(
     .await;
 
     Ok(())
+}
+
+// ─── Purging trashed libraries ────────────────────────────────────────
+
+/// Permanently delete a trashed library.
+///
+/// Drops its archived content, its file-level trash rows and its trash entry,
+/// then reclaims its block directory so the space is actually freed. Only the
+/// owner can purge.
+pub async fn purge_deleted_repo(
+    db: &DatabaseConnection,
+    repos: &Repositories,
+    block_store: &DynBlockStorage,
+    repo_id: &str,
+    user_id: i32,
+) -> Result<(), AppError> {
+    let trashed = repos
+        .deleted_repo
+        .find_by_id(repo_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found in trash".into()))?;
+
+    if trashed.owner_id != user_id {
+        return Err(AppError::Forbidden);
+    }
+
+    // The archive is the last copy of the library's content.
+    crate::fs::core::repo_archive::drop_archive(db, repo_id).await?;
+
+    // File-level trash entries of a library that is gone for good. Their table
+    // has no foreign key to `repos`, so they would otherwise outlive the library
+    // they point at.
+    repos.file_trash.delete_by_repo(repo_id).await?;
+
+    // Remove the trash entry before touching the disk: from here on the library
+    // is unrecoverable, so a crash mid-purge leaves the blocks to the next
+    // garbage collection instead of a trash entry pointing at deleted content.
+    repos.deleted_repo.delete_by_id(repo_id).await?;
+    remove_repo_block_dir(block_store, &trashed.repo_id).await;
+
+    tracing::info!(repo_id = %trashed.repo_id, "purged a library from the trash");
+    Ok(())
+}
+
+/// Permanently delete every library in a user's trash, returning how many were
+/// purged.
+///
+/// Entries are purged one by one, so a failure part way through leaves the
+/// remaining entries for a retry rather than undoing the whole sweep.
+pub async fn purge_deleted_repos_of_owner(
+    db: &DatabaseConnection,
+    repos: &Repositories,
+    block_store: &DynBlockStorage,
+    user_id: i32,
+) -> Result<u64, AppError> {
+    let trashed = repos.deleted_repo.find_by_owner(user_id).await?;
+    let mut purged = 0u64;
+    for row in &trashed {
+        purge_deleted_repo(db, repos, block_store, &row.repo_id, user_id).await?;
+        purged += 1;
+    }
+    Ok(purged)
+}
+
+/// Remove a purged library's block directory.
+///
+/// Best effort: garbage collection reclaims the directory of any library that
+/// has neither a `repos` row nor a trash entry, so failing here only delays the
+/// cleanup until the next collection.
+async fn remove_repo_block_dir(block_store: &DynBlockStorage, repo_id: &str) {
+    let dir = match block_store.repo_dirs().await {
+        Ok(dirs) => dirs
+            .into_iter()
+            .find(|(id, _)| id == repo_id)
+            .map(|(_, dir)| dir),
+        Err(e) => {
+            tracing::warn!(repo_id, "failed to list block directories: {e}");
+            return;
+        }
+    };
+    let Some(dir) = dir else { return };
+
+    match tokio::fs::remove_dir_all(&dir).await {
+        Ok(()) => tracing::info!(
+            repo_id,
+            dir = %dir.display(),
+            "removed the block directory of a purged library"
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(
+            repo_id,
+            dir = %dir.display(),
+            "failed to remove the block directory of a purged library, the next garbage \
+             collection will reclaim it: {e}"
+        ),
+    }
 }

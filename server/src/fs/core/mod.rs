@@ -10,6 +10,7 @@ pub mod download;
 pub mod file_ops;
 pub mod gc;
 pub mod lock;
+pub mod repo_archive;
 pub mod size;
 pub mod store;
 pub mod trash;

@@ -71,6 +71,7 @@ migrations!(
     m20260823_000001_hash_short_lived_tokens,
     m20260829_000001_add_permission_to_webdav_keys,
     m20260830_000001_add_last_used_step_to_user_2fa,
+    m20260901_000001_create_deleted_repo_archive,
 );
 
 #[cfg(test)]
