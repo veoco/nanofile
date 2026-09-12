@@ -10,7 +10,8 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use base::error::AppError;
 use infra::entity::{
-    api_token, client_login_token, password_reset_token, s2fa_token, sso_login_token, sync_token,
+    api_key, api_token, client_login_token, password_reset_token, s2fa_token, sso_login_token,
+    sync_token,
 };
 
 /// Client-login tokens are single-use and short-lived; anything older than an
@@ -31,6 +32,16 @@ pub async fn delete_expired_tokens(db: &DatabaseConnection, now: i64) -> Result<
     total += api_token::Entity::delete_many()
         .filter(api_token::Column::ExpiresAt.is_not_null())
         .filter(api_token::Column::ExpiresAt.lt(now))
+        .exec(db)
+        .await?
+        .rows_affected;
+
+    // Unified API keys may also expire. A cached lookup checks `expires_at`
+    // before use, so a row that outlives its expiry by up to one cleanup cycle
+    // is still rejected.
+    total += api_key::Entity::delete_many()
+        .filter(api_key::Column::ExpiresAt.is_not_null())
+        .filter(api_key::Column::ExpiresAt.lt(now))
         .exec(db)
         .await?
         .rows_affected;

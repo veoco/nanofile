@@ -7,6 +7,7 @@
 //! base/infra crates (Phase 4).
 
 pub mod activity;
+pub mod api_key;
 pub mod api_token;
 pub mod auth_cache;
 pub mod avatar;
@@ -46,6 +47,7 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::repository::activity::*;
+use crate::repository::api_key::*;
 use crate::repository::api_token::*;
 use crate::repository::avatar::*;
 use crate::repository::client_login_token::*;
@@ -100,6 +102,7 @@ pub struct Repositories {
     pub locked_file: Arc<dyn LockedFileRepository>,
     pub sync_token: Arc<dyn SyncTokenRepository>,
     pub api_token: Arc<dyn ApiTokenRepository>,
+    pub api_key: Arc<dyn ApiKeyRepository>,
     pub s2fa_token: Arc<dyn S2faTokenRepository>,
     pub user_2fa: Arc<dyn User2faRepository>,
     pub sso_login_token: Arc<dyn SsoLoginTokenRepository>,
@@ -158,6 +161,9 @@ impl Repositories {
             ))),
             api_token: Arc::new(auth_cache::CachingApiTokenRepository::new(Arc::new(
                 DbApiTokenRepository::new(db.clone()),
+            ))),
+            api_key: Arc::new(auth_cache::CachingApiKeyRepository::new(Arc::new(
+                DbApiKeyRepository::new(db.clone()),
             ))),
             s2fa_token: Arc::new(DbS2faTokenRepository::new(db.clone())),
             user_2fa: Arc::new(DbUser2faRepository::new(db.clone(), totp_cipher)),

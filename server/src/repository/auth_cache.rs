@@ -26,8 +26,11 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 
 use base::error::AppError;
-use infra::entity::{api_token, sync_token, webdav_key};
+use infra::entity::{api_key, api_token, sync_token, webdav_key};
 
+use super::api_key::{
+    ApiKeyBinding, ApiKeyLookup, ApiKeyRepository, CreateApiKeyParams, UpdateApiKeyParams,
+};
 use super::api_token::{ApiTokenRepository, CreateSessionTokenParams};
 use super::sync_token::SyncTokenRepository;
 use super::webdav_key::WebdavKeyRepository;
@@ -433,6 +436,146 @@ impl WebdavKeyRepository for CachingWebdavKeyRepository {
 
     async fn update_last_used_at(&self, key_id: i32, ts: i64) -> Result<(), AppError> {
         self.inner.update_last_used_at(key_id, ts).await
+    }
+}
+
+/// Cache decorator for unified API-key lookups.
+///
+/// A key authenticates every request its client makes, including the many small
+/// `/seafhttp/` calls, so the key row and its library bindings are cached as one
+/// value. Any mutation clears the whole cache, so a revoked, edited or rebound
+/// key takes effect immediately; `touch_last_used` deliberately does not, since
+/// the auth path never reads `last_used_at` from the cached value.
+///
+/// Binding changes made through another `Repositories` handle (a second server
+/// on the same database) are not observed until the TTL expires; the auth layer
+/// still re-checks user state and library membership against the database on
+/// every request, which is what actually revokes access.
+pub struct CachingApiKeyRepository {
+    inner: Arc<dyn ApiKeyRepository>,
+    cache: TokenCache<ApiKeyLookup>,
+}
+
+impl CachingApiKeyRepository {
+    pub fn new(inner: Arc<dyn ApiKeyRepository>) -> Self {
+        Self {
+            inner,
+            cache: TokenCache::new(TOKEN_CACHE_TTL),
+        }
+    }
+}
+
+#[async_trait]
+impl ApiKeyRepository for CachingApiKeyRepository {
+    async fn find_by_presented(&self, raw: &str) -> Result<Option<ApiKeyLookup>, AppError> {
+        if let Some(lookup) = self
+            .cache
+            .get(raw, |lookup| !token_expired(lookup.key.expires_at))
+        {
+            return Ok(Some(lookup));
+        }
+        let result = self.inner.find_by_presented(raw).await?;
+        if let Some(lookup) = &result {
+            self.cache.insert(raw, lookup.clone());
+        }
+        Ok(result)
+    }
+
+    async fn find_by_id_and_user(
+        &self,
+        key_id: i32,
+        user_id: i32,
+    ) -> Result<Option<api_key::Model>, AppError> {
+        self.inner.find_by_id_and_user(key_id, user_id).await
+    }
+
+    async fn find_by_user(&self, user_id: i32) -> Result<Vec<api_key::Model>, AppError> {
+        self.inner.find_by_user(user_id).await
+    }
+
+    async fn create(&self, params: CreateApiKeyParams) -> Result<api_key::Model, AppError> {
+        let result = self.inner.create(params).await;
+        // A newly issued key must be usable immediately.
+        self.cache.clear();
+        result
+    }
+
+    async fn update_metadata(
+        &self,
+        key_id: i32,
+        user_id: i32,
+        params: UpdateApiKeyParams,
+    ) -> Result<bool, AppError> {
+        let result = self.inner.update_metadata(key_id, user_id, params).await;
+        // New capabilities, expiry or library scope must apply at once.
+        self.cache.clear();
+        result
+    }
+
+    async fn delete_by_id_and_user(&self, key_id: i32, user_id: i32) -> Result<bool, AppError> {
+        let result = self.inner.delete_by_id_and_user(key_id, user_id).await;
+        // A revoked key must stop authenticating immediately.
+        self.cache.clear();
+        result
+    }
+
+    async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError> {
+        let result = self.inner.delete_by_user(user_id).await;
+        self.cache.clear();
+        result
+    }
+
+    async fn list_bindings(
+        &self,
+        key_id: i32,
+    ) -> Result<Vec<infra::entity::api_key_repo::Model>, AppError> {
+        self.inner.list_bindings(key_id).await
+    }
+
+    async fn list_bindings_for_keys(
+        &self,
+        key_ids: &[i32],
+    ) -> Result<Vec<infra::entity::api_key_repo::Model>, AppError> {
+        self.inner.list_bindings_for_keys(key_ids).await
+    }
+
+    async fn replace_bindings(
+        &self,
+        key_id: i32,
+        bindings: &[ApiKeyBinding],
+    ) -> Result<(), AppError> {
+        let result = self.inner.replace_bindings(key_id, bindings).await;
+        self.cache.clear();
+        result
+    }
+
+    async fn delete_bindings_by_repo(&self, repo_id: &str) -> Result<u64, AppError> {
+        let result = self.inner.delete_bindings_by_repo(repo_id).await;
+        self.cache.clear();
+        result
+    }
+
+    async fn delete_bindings_for_repo_user(
+        &self,
+        repo_id: &str,
+        user_id: i32,
+    ) -> Result<u64, AppError> {
+        let result = self
+            .inner
+            .delete_bindings_for_repo_user(repo_id, user_id)
+            .await;
+        self.cache.clear();
+        result
+    }
+
+    async fn delete_orphan_bound_keys(&self) -> Result<u64, AppError> {
+        let result = self.inner.delete_orphan_bound_keys().await;
+        self.cache.clear();
+        result
+    }
+
+    async fn touch_last_used(&self, key_id: i32, ts: i64) -> Result<(), AppError> {
+        self.inner.touch_last_used(key_id, ts).await
     }
 }
 

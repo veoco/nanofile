@@ -1,4 +1,6 @@
 pub mod activity;
+pub mod api_key;
+pub mod api_key_repo;
 pub mod api_token;
 pub mod avatar;
 pub mod client_login_token;

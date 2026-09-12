@@ -73,6 +73,7 @@ migrations!(
     m20260830_000001_add_last_used_step_to_user_2fa,
     m20260901_000001_create_deleted_repo_archive,
     m20260902_000001_unique_webdav_key_hash,
+    m20260910_000001_create_api_keys,
 );
 
 #[cfg(test)]
