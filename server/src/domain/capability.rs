@@ -576,6 +576,20 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api2/devices/",
         RouteAccess::Capability(Capability::DeviceWrite),
     ),
+    // The credential inventory. It answers a wider question than
+    // `/api2/devices/` -- browser sessions and sync tokens are not devices --
+    // but it is the same management surface, so it is governed by the same
+    // capability rather than by one minted for a single endpoint.
+    (
+        "GET",
+        "/api2/credentials/",
+        RouteAccess::Capability(Capability::DeviceRead),
+    ),
+    (
+        "DELETE",
+        "/api2/credentials/{kind}/{id}/",
+        RouteAccess::Capability(Capability::DeviceWrite),
+    ),
     (
         "GET",
         "/api2/unseen_messages/",

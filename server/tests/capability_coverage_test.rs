@@ -32,6 +32,8 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api/v2.1/user-avatar/"),
     ("GET",    "/api2/devices/"),
     ("DELETE", "/api2/devices/"),
+    ("GET",    "/api2/credentials/"),
+    ("DELETE", "/api2/credentials/{kind}/{id}/"),
     ("GET",    "/api2/unseen_messages/"),
     // Library metadata.
     ("GET",    "/api2/repos/"),

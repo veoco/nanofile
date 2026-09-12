@@ -129,6 +129,7 @@ fn v1_routes() -> Router<Arc<AppState>> {
         )
         .nest("/api2", crate::handler::history::repo_history_routes())
         .nest("/api2", crate::handler::devices::devices_routes())
+        .nest("/api2", crate::handler::credential::credential_routes())
 }
 
 // ── V2.1 API routes ──────────────────────────────────────────────────────

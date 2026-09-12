@@ -104,6 +104,7 @@ pub mod avatar;
 pub mod batch;
 pub mod chunked_upload;
 pub mod client_login;
+pub mod credential;
 pub mod device_wipe;
 pub mod devices;
 pub mod dir;
