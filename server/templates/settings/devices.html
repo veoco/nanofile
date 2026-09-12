@@ -14,64 +14,245 @@
 {% include "includes/alert_success.html" %}
 {% endif %}
 
-<div class="mt-6 max-w-2xl">
-    {% if devices.is_empty() %}
-    <div class="card">
-        <div class="card-body">
-            <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.tr("device.no_devices") }}</p>
-        </div>
-    </div>
-    {% endif %}
+<div class="mt-6 max-w-3xl space-y-8">
 
-    {% for device in devices %}
-    <div class="card {% if !loop.first %}mt-4{% endif %}">
-        <div class="card-body">
-            <div class="flex items-center justify-between">
-                <div class="flex items-center space-x-3">
-                    <div class="flex-shrink-0">
-                        {% if device.is_desktop_client %}
-                        <svg class="h-8 w-8 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-                        </svg>
-                        {% else %}
-                        <svg class="h-8 w-8 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-                        </svg>
-                        {% endif %}
-                    </div>
-                    <div>
-                        <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
-                            {% if !device.device_name.is_empty() %}
-                            {{ device.device_name }}
-                            {% else %}
-                            <span class="italic text-gray-400 dark:text-gray-500">{{ t.tr("device.unnamed") }}</span>
-                            {% endif %}
-                        </p>
-                        <p class="text-xs text-gray-500 dark:text-gray-400">
-                            {{ device.platform_display }}
-                            {% if !device.client_version.is_empty() %}
-                            &middot; v{{ device.client_version }}
-                            {% endif %}
-                        </p>
-                        <p class="text-xs text-gray-400 dark:text-gray-500">
-                            {{ t.tr("device.last_accessed") }}:
-                            <span class="select-all inline-block" data-ts="{{ device.last_accessed_ts }}"></span>
-                        </p>
-                    </div>
-                </div>
-                <form action="/settings/devices/" method="POST" data-confirm="device.unlink_confirm">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                    <input type="hidden" name="platform" value="{{ device.platform }}">
-                    <input type="hidden" name="device_id" value="{{ device.device_id }}">
-                    <button type="submit"
-                            class="btn btn-danger btn-sm">
-                        {{ t.tr("device.unlink") }}
-                    </button>
-                </form>
+    {# ── Client sessions ─────────────────────────────────────────────── #}
+    <section>
+        <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("credential.clients") }}</h2>
+        <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("credential.clients_desc") }}</p>
+
+        {% if inventory.clients.is_empty() %}
+        <div class="card">
+            <div class="card-body">
+                <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.tr("credential.no_clients") }}</p>
             </div>
         </div>
-    </div>
-    {% endfor %}
+        {% endif %}
+
+        {% for device in inventory.clients %}
+        <div class="card {% if !loop.first %}mt-3{% endif %}">
+            <div class="card-body">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="flex-shrink-0">
+                            {% if device.is_desktop_client %}
+                            <svg class="h-8 w-8 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                            </svg>
+                            {% else %}
+                            <svg class="h-8 w-8 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                            </svg>
+                            {% endif %}
+                        </div>
+                        <div>
+                            <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                                {% if !device.device_name.is_empty() %}
+                                {{ device.device_name }}
+                                {% else %}
+                                <span class="italic text-gray-400 dark:text-gray-500">{{ t.tr("device.unnamed") }}</span>
+                                {% endif %}
+                            </p>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">
+                                {{ device.platform_display }}
+                                {% if !device.client_version.is_empty() %}
+                                &middot; v{{ device.client_version }}
+                                {% endif %}
+                            </p>
+                            <p class="text-xs text-gray-400 dark:text-gray-500">
+                                {{ t.tr("credential.signed_in") }}:
+                                <span class="select-all inline-block" data-ts="{{ device.signed_in_ts }}"></span>
+                            </p>
+                        </div>
+                    </div>
+                    <form action="/settings/devices/" method="POST" data-confirm="device.unlink_confirm">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                        <input type="hidden" name="platform" value="{{ device.platform }}">
+                        <input type="hidden" name="device_id" value="{{ device.device_id }}">
+                        <button type="submit" class="btn btn-danger btn-sm">{{ t.tr("device.unlink") }}</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </section>
+
+    {# ── Browser sessions ───────────────────────────────────────────── #}
+    <section>
+        <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("credential.browsers") }}</h2>
+        <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("credential.browsers_desc") }}</p>
+
+        {% if inventory.browsers.is_empty() %}
+        <div class="card">
+            <div class="card-body">
+                <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.tr("credential.no_browsers") }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        {% for session in inventory.browsers %}
+        <div class="card {% if !loop.first %}mt-3{% endif %}">
+            <div class="card-body">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                            {% if !session.client.is_empty() %}
+                            {{ session.client }}
+                            {% else %}
+                            <span class="italic text-gray-400 dark:text-gray-500">{{ t.tr("credential.unknown_client") }}</span>
+                            {% endif %}
+                            {% if session.is_current %}
+                            <span class="badge badge-success ml-2">{{ t.tr("credential.current_session") }}</span>
+                            {% endif %}
+                        </p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t.tr(session.source_label) }}</p>
+                        <p class="text-xs text-gray-400 dark:text-gray-500">
+                            {{ t.tr("credential.signed_in") }}:
+                            <span class="select-all inline-block" data-ts="{{ session.signed_in_ts }}"></span>
+                        </p>
+                    </div>
+                    <form action="/settings/devices/revoke/" method="POST"
+                          data-confirm="{% if session.is_current %}credential.revoke_current_confirm{% else %}credential.revoke_confirm{% endif %}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                        <input type="hidden" name="kind" value="browser_session">
+                        <input type="hidden" name="id" value="{{ session.id }}">
+                        <button type="submit" class="btn btn-danger btn-sm">
+                            {% if session.is_current %}{{ t.tr("credential.sign_out") }}{% else %}{{ t.tr("credential.revoke") }}{% endif %}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </section>
+
+    {# ── Sync tokens ────────────────────────────────────────────────── #}
+    <section>
+        <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("credential.sync_tokens") }}</h2>
+        <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("credential.sync_tokens_desc") }}</p>
+
+        {% if inventory.sync_tokens.is_empty() %}
+        <div class="card">
+            <div class="card-body">
+                <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.tr("credential.no_sync_tokens") }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        {% for token in inventory.sync_tokens %}
+        <div class="card {% if !loop.first %}mt-3{% endif %}">
+            <div class="card-body">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                            {% match token.repo_name %}
+                            {% when Some with (name) %}
+                            {{ name }}
+                            {% when None %}
+                            <span class="italic text-gray-400 dark:text-gray-500">{{ t.tr("credential.library_missing") }}</span>
+                            {% endmatch %}
+                        </p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                            {% match token.device_name %}
+                            {% when Some with (name) %}
+                            {{ name }}
+                            {% when None %}
+                            <span class="italic">{{ t.tr("device.unnamed") }}</span>
+                            {% endmatch %}
+                            {% match token.peer_ip %}
+                            {% when Some with (ip) %}
+                            &middot; {{ ip }}
+                            {% when None %}
+                            {% endmatch %}
+                            {% match token.client_version %}
+                            {% when Some with (version) %}
+                            &middot; v{{ version }}
+                            {% when None %}
+                            {% endmatch %}
+                        </p>
+                        <p class="text-xs text-gray-400 dark:text-gray-500">
+                            {{ t.tr("credential.signed_in") }}: {{ token.created }}
+                            {% match token.last_sync %}
+                            {% when Some with (last_sync) %}
+                            &middot; {{ t.tr("credential.last_sync") }}: {{ last_sync }}
+                            {% when None %}
+                            &middot; {{ t.tr("credential.never_used") }}
+                            {% endmatch %}
+                            &middot; {{ t.tr("credential.expires") }}: {{ token.expires }}
+                        </p>
+                    </div>
+                    <form action="/settings/devices/revoke/" method="POST" data-confirm="credential.revoke_confirm">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                        <input type="hidden" name="kind" value="sync_token">
+                        <input type="hidden" name="id" value="{{ token.id }}">
+                        <button type="submit" class="btn btn-danger btn-sm">{{ t.tr("credential.revoke") }}</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </section>
+
+    {# ── 2FA device trust ───────────────────────────────────────────── #}
+    <section>
+        <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("credential.device_trusts") }}</h2>
+        <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("credential.device_trusts_desc") }}</p>
+
+        {% if inventory.device_trusts.is_empty() %}
+        <div class="card">
+            <div class="card-body">
+                <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.tr("credential.no_device_trusts") }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        {% for trust in inventory.device_trusts %}
+        <div class="card {% if !loop.first %}mt-3{% endif %}">
+            <div class="card-body">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                            {% match trust.device_name %}
+                            {% when Some with (name) %}
+                            {{ name }}
+                            {% when None %}
+                            <span class="italic text-gray-400 dark:text-gray-500">{{ t.tr("device.unnamed") }}</span>
+                            {% endmatch %}
+                        </p>
+                        <p class="text-xs text-gray-400 dark:text-gray-500">
+                            {% match trust.device_id %}
+                            {% when Some with (id) %}
+                            {{ id }} &middot;
+                            {% when None %}
+                            {% endmatch %}
+                            {{ t.tr("credential.expires") }}: {{ trust.expires }}
+                        </p>
+                    </div>
+                    <form action="/settings/devices/revoke/" method="POST" data-confirm="credential.revoke_confirm">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                        <input type="hidden" name="kind" value="device_trust">
+                        <input type="hidden" name="id" value="{{ trust.id }}">
+                        <button type="submit" class="btn btn-danger btn-sm">{{ t.tr("credential.revoke") }}</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </section>
+
+    {# ── API keys (managed on their own page) ───────────────────────── #}
+    <section>
+        <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("apikey.title") }}</h2>
+        <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("credential.api_keys_desc") }}</p>
+        <div class="card">
+            <div class="card-body flex items-center justify-between">
+                <p class="text-sm text-gray-700 dark:text-gray-300">
+                    {{ t.tr("credential.api_key_count") }}: {{ inventory.api_key_count }}
+                </p>
+                <a href="/settings/api-keys/" class="btn btn-secondary btn-sm">{{ t.tr("credential.manage_keys") }}</a>
+            </div>
+        </div>
+    </section>
 
     <div class="mt-6">
         <a href="/settings/" class="text-sm text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300">

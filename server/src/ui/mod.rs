@@ -119,6 +119,10 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             get(settings::devices_page).post(settings::unlink_device),
         )
         .route(
+            "/settings/devices/revoke/",
+            axum::routing::post(settings::revoke_credential),
+        )
+        .route(
             "/settings/password/",
             axum::routing::post(settings::change_password),
         )

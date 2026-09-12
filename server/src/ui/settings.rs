@@ -13,23 +13,11 @@ use crate::AppState;
 use crate::handler::read_multipart_field_limited;
 use crate::i18n::I18n;
 use crate::service::auth::password::{hash_password_async, verify_password_async};
+use crate::service::credential::{CredentialKind, CredentialService};
 use crate::service::user::avatar::MAX_AVATAR_SIZE;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
-
-/// Get a human-readable platform name.
-fn platform_display_name(platform: &str) -> String {
-    match platform {
-        "windows" => "Windows".to_string(),
-        "linux" => "Linux".to_string(),
-        "mac" => "macOS".to_string(),
-        "ios" => "iOS".to_string(),
-        "android" => "Android".to_string(),
-        "harmonyos" => "HarmonyOS".to_string(),
-        _ => platform.to_string(),
-    }
-}
 
 #[derive(Template)]
 #[template(path = "settings/index.html")]
@@ -60,7 +48,8 @@ pub struct DevicesTemplate {
     pub user_email: String,
     pub is_admin: bool,
     pub active_page: &'static str,
-    pub devices: Vec<DeviceInfo>,
+    /// The account's whole credential inventory, already formatted for display.
+    pub inventory: InventoryInfo,
     pub error: Option<String>,
     pub success: Option<String>,
     pub csrf_token: Option<String>,
@@ -68,15 +57,62 @@ pub struct DevicesTemplate {
     pub current_repo_id: Option<String>,
 }
 
-pub struct DeviceInfo {
+/// The inventory with every date and label resolved.
+///
+/// Formatting lives here rather than in the service because the service has no
+/// business knowing about the reader's locale, and askama cannot call into
+/// arbitrary helpers.
+#[derive(Default)]
+pub struct InventoryInfo {
+    pub clients: Vec<ClientInfo>,
+    pub browsers: Vec<BrowserInfo>,
+    pub sync_tokens: Vec<SyncTokenInfo>,
+    pub device_trusts: Vec<DeviceTrustInfo>,
+    pub api_key_count: usize,
+}
+
+pub struct ClientInfo {
     pub platform: String,
     pub platform_display: String,
     pub device_id: String,
     pub device_name: String,
     pub client_version: String,
-    pub last_accessed: String,
-    pub last_accessed_ts: i64,
+    pub signed_in: String,
+    pub signed_in_ts: i64,
     pub is_desktop_client: bool,
+}
+
+pub struct BrowserInfo {
+    pub id: i32,
+    /// i18n key naming the login this session came from.
+    pub source_label: &'static str,
+    /// `Chrome · macOS`, or empty when the login carried no usable agent.
+    pub client: String,
+    pub signed_in: String,
+    pub signed_in_ts: i64,
+    pub is_current: bool,
+}
+
+pub struct SyncTokenInfo {
+    pub id: i32,
+    /// `None` when the library is gone, so the template can say so.
+    pub repo_name: Option<String>,
+    pub device_name: Option<String>,
+    pub peer_ip: Option<String>,
+    pub client_version: Option<String>,
+    pub created: String,
+    pub created_ts: i64,
+    pub last_sync: Option<String>,
+    pub expires: String,
+}
+
+pub struct DeviceTrustInfo {
+    pub id: i32,
+    pub device_name: Option<String>,
+    pub device_id: Option<String>,
+    pub created: String,
+    pub created_ts: i64,
+    pub expires: String,
 }
 
 #[derive(Deserialize)]
@@ -90,6 +126,14 @@ pub struct PasswordForm {
 pub struct UnlinkDeviceForm {
     pub platform: String,
     pub device_id: String,
+    pub csrf_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct RevokeCredentialForm {
+    /// Which list the id belongs to; see [`CredentialKind`].
+    pub kind: String,
+    pub id: i32,
     pub csrf_token: Option<String>,
 }
 
@@ -272,37 +316,86 @@ pub async fn update_language(
     Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }
 
-/// GET /profile/devices/ — device management page.
+/// GET /settings/devices/ — the account's credential inventory.
+///
+/// Everything long-lived the account holds, in one place: client sessions,
+/// browser sessions, repository sync tokens, 2FA device trusts, and a pointer
+/// to the API keys. The page exists because a credential the owner cannot see
+/// is one they cannot revoke — which is how sync tokens, with a one-year
+/// default lifetime, used to be.
 pub async fn devices_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    let tokens = state
-        .repos
-        .api_token
-        .find_by_user_id_with_platform(user.user_id)
+    let service = CredentialService::new(state.repos.clone());
+    let inventory = service
+        .inventory(user.user_id, Some(user.session_id))
         .await?;
 
-    let mut seen = std::collections::HashSet::new();
-    let mut devices = Vec::new();
-
-    for token in tokens {
-        let dev_key = (token.platform.clone(), token.device_id.clone());
-        if seen.insert(dev_key) {
-            let platform = token.platform.unwrap_or_default();
-            let is_desktop = matches!(platform.as_str(), "windows" | "linux" | "mac");
-            devices.push(DeviceInfo {
-                platform: platform.clone(),
-                platform_display: platform_display_name(&platform),
-                device_id: token.device_id.unwrap_or_default(),
-                device_name: token.device_name.unwrap_or_default(),
-                client_version: token.client_version.unwrap_or_default(),
-                last_accessed: super::format_ts(token.created_at),
-                last_accessed_ts: token.created_at,
-                is_desktop_client: is_desktop,
-            });
-        }
-    }
+    let info = InventoryInfo {
+        clients: inventory
+            .clients
+            .into_iter()
+            .map(|client| ClientInfo {
+                platform: client.platform,
+                platform_display: client.platform_display,
+                device_id: client.device_id,
+                device_name: client.device_name,
+                client_version: client.client_version,
+                signed_in: super::format_ts(client.created_ts),
+                signed_in_ts: client.created_ts,
+                is_desktop_client: client.is_desktop_client,
+            })
+            .collect(),
+        browsers: inventory
+            .browsers
+            .into_iter()
+            .map(|browser| BrowserInfo {
+                id: browser.id,
+                source_label: match browser.source {
+                    crate::domain::session_source::SessionSource::WebClientLogin => {
+                        "credential.source_web_client_login"
+                    }
+                    _ => "credential.source_web",
+                },
+                client: browser.client,
+                signed_in: super::format_ts(browser.created_ts),
+                signed_in_ts: browser.created_ts,
+                is_current: browser.is_current,
+            })
+            .collect(),
+        sync_tokens: inventory
+            .sync_tokens
+            .into_iter()
+            .map(|token| SyncTokenInfo {
+                id: token.id,
+                repo_name: token.repo_name,
+                device_name: token.device_name,
+                peer_ip: token.peer_ip,
+                client_version: token.client_version,
+                created: super::format_ts(token.created_ts),
+                created_ts: token.created_ts,
+                last_sync: token.last_sync_ts.map(super::format_ts),
+                expires: super::format_ts_opt(
+                    I18n::get(user.language.as_deref()),
+                    token.expires_at,
+                ),
+            })
+            .collect(),
+        device_trusts: inventory
+            .device_trusts
+            .into_iter()
+            .map(|trust| DeviceTrustInfo {
+                id: trust.id,
+                device_name: trust.device_name,
+                device_id: trust.device_id,
+                created: super::format_ts(trust.created_ts),
+                created_ts: trust.created_ts,
+                expires: super::format_ts(trust.expires_at),
+            })
+            .collect(),
+        api_key_count: inventory.api_key_count,
+    };
 
     let csrf_token = Some(crate::service::auth::csrf::generate_csrf_token(
         &state.csrf_secret,
@@ -319,7 +412,7 @@ pub async fn devices_page(
         user_email: user.email,
         is_admin: user.is_admin,
         active_page: "settings",
-        devices,
+        inventory: info,
         error: None,
         success: None,
         csrf_token,
@@ -331,6 +424,40 @@ pub async fn devices_page(
         .render()
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Html(html))
+}
+
+/// POST /settings/devices/revoke/ — revoke one credential by kind and id.
+///
+/// A device is not revoked here: [`unlink_device`] owns that, because one
+/// device holds several credentials that have to go together.
+pub async fn revoke_credential(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<RevokeCredentialForm>,
+) -> Result<impl IntoResponse, AppError> {
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        form.csrf_token.as_deref(),
+    )?;
+
+    let kind = CredentialKind::from_id(&form.kind)
+        .ok_or_else(|| AppError::BadRequest("unknown credential kind".into()))?;
+
+    // Revoking the session you are reading this page with is allowed -- it is
+    // how you sign yourself out remotely -- but it has to leave you at the
+    // login page rather than on a page you can no longer load.
+    let signing_out_self = kind == CredentialKind::BrowserSession && form.id == user.session_id;
+
+    let service = CredentialService::new(state.repos.clone());
+    service.revoke(user.user_id, kind, form.id).await?;
+
+    let location = if signing_out_self {
+        "/accounts/login/"
+    } else {
+        "/settings/devices/"
+    };
+    Ok((StatusCode::FOUND, [("Location", location)]).into_response())
 }
 
 /// POST /profile/devices/ — remove a device's tokens (API, S2FA, sync).

@@ -8,6 +8,7 @@ pub mod activity;
 pub mod admin;
 pub mod api_key;
 pub mod auth;
+pub mod credential;
 pub mod fs;
 pub mod repo;
 pub mod sharing;

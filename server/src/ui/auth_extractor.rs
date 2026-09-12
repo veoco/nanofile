@@ -23,6 +23,9 @@ pub struct WebUser {
     pub email: String,
     /// The raw session token (for CSRF generation etc.).
     pub session_token: String,
+    /// The `api_tokens` row this session is, so a page that lists sessions can
+    /// mark the one the reader is using.
+    pub session_id: i32,
     /// Whether the user has admin privileges.
     pub is_admin: bool,
     /// Preferred UI language from the user profile (None = browser default).
@@ -96,6 +99,7 @@ impl FromRequestParts<Arc<AppState>> for WebUser {
             user_id: user_record.id,
             email: user_record.email,
             session_token: session_token.to_string(),
+            session_id: token_record.id,
             is_admin: user_record.is_admin,
             language: user_record.language.clone(),
         })
