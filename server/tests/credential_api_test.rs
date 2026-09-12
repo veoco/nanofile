@@ -284,6 +284,80 @@ async fn the_device_endpoint_revokes_by_kind_too() {
     );
 }
 
+/// The `kind` the list emits has to be the value the revoke route accepts.
+/// A caller that reads an entry and acts on it is the whole point of the field,
+/// so a display name here ("browser") would silently 400 on every browser
+/// session.
+#[tokio::test]
+async fn every_listed_kind_can_be_fed_straight_back_to_revoke() {
+    let f = TestFixture::new().await;
+
+    // A browser session and a device trust, so the list has every kind.
+    let raw = server::service::auth::token::generate_api_token();
+    server::repository::api_token::ApiTokenRepository::create_session_token(
+        f.server.repos.api_token.as_ref(),
+        server::repository::api_token::CreateSessionTokenParams {
+            user_id: f.user_id,
+            token: raw,
+            created_at: 1,
+            expires_at: None,
+            device_id: None,
+            platform: None,
+            device_name: None,
+            client_version: None,
+            is_pending: false,
+            source: server::domain::session_source::SessionSource::Web,
+            user_agent: Some("NanofileTestBrowser/1.0".into()),
+        },
+    )
+    .await
+    .expect("seed a browser session");
+    f.server
+        .repos
+        .s2fa_token
+        .create_s2fa_token(server::repository::s2fa_token::CreateS2faTokenParams {
+            user_id: f.user_id,
+            token: server::service::auth::token::generate_api_token(),
+            device_id: Some("trusted".into()),
+            device_name: None,
+            created_at: 1,
+            expires_at: i64::MAX,
+        })
+        .await
+        .expect("seed a device trust");
+
+    let entries: Vec<Value> = f
+        .client
+        .get("/api2/devices/", Some(&f.api_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    let mut checked = 0;
+    for entry in &entries {
+        let kind = entry["kind"].as_str().expect("kind");
+        if kind == "client" {
+            // A device is a group of rows, so it is addressed by
+            // `platform` + `device_id` instead.
+            assert!(entry["platform"].is_string() && entry["device_id"].is_string());
+            continue;
+        }
+        let id = entry["id"].as_i64().expect("a revocable entry has an id");
+        let resp = f
+            .client
+            .delete_form(
+                "/api2/devices/",
+                Some(&f.api_token),
+                &[("kind", kind), ("id", &id.to_string())],
+            )
+            .await;
+        assert_eq!(resp.status(), 200, "kind {kind:?} must be addressable");
+        checked += 1;
+    }
+    assert_eq!(checked, 3, "browser, sync_token and device_trust");
+}
+
 /// A body that names neither a device nor a kind is a client error rather than
 /// a silent no-op, and `platform` alone is not enough to mean "the device with
 /// an empty id".

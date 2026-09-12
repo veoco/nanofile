@@ -67,6 +67,8 @@ pub async fn list_devices(
         // SHA-256 *digest* of a bearer credential and used to be echoed here.
         let key = format!("{}:{}", client.platform, client.device_id);
         entries.push(serde_json::json!({
+            // A device has no row id -- it is a group of them -- so it is
+            // addressed by `platform` + `device_id` rather than by kind.
             "kind": "client",
             "key": key,
             "platform": client.platform,
@@ -80,7 +82,9 @@ pub async fn list_devices(
 
     for browser in inventory.browsers {
         entries.push(serde_json::json!({
-            "kind": "browser",
+            // The addressing kind, not a display name: a caller has to be able
+            // to feed this value straight back to the revoke route.
+            "kind": CredentialKind::BrowserSession.id(),
             "key": format!("browser:{}", browser.id),
             "id": browser.id,
             "source": browser.source.id(),
@@ -91,7 +95,7 @@ pub async fn list_devices(
 
     for token in inventory.sync_tokens {
         entries.push(serde_json::json!({
-            "kind": "sync_token",
+            "kind": CredentialKind::SyncToken.id(),
             "key": format!("sync_token:{}", token.id),
             "id": token.id,
             "repo_id": token.repo_id,
@@ -107,7 +111,7 @@ pub async fn list_devices(
 
     for trust in inventory.device_trusts {
         entries.push(serde_json::json!({
-            "kind": "device_trust",
+            "kind": CredentialKind::DeviceTrust.id(),
             "key": format!("device_trust:{}", trust.id),
             "id": trust.id,
             "device_id": trust.device_id,
