@@ -12,7 +12,11 @@ pub async fn accessible_repos(
 ) -> Result<Json<Vec<crate::service::sync::AccessibleRepo>>, AppError> {
     let repos = state
         .sync_service()
-        .accessible_repos(_auth.user_id, state.config.auth.sync_token_ttl_days)
+        .accessible_repos(
+            _auth.user_id,
+            state.config.auth.sync_token_ttl_days,
+            &_auth.repo_scope(),
+        )
         .await?;
     Ok(Json(repos))
 }

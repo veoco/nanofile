@@ -11,7 +11,16 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::middleware::auth::AuthUser;
+use axum::http::StatusCode;
 use base::error::AppError;
+
+/// Map `AuthUser`'s rejection status onto the API error it represents.
+fn auth_rejection_to_app_error(status: StatusCode) -> AppError {
+    match status {
+        StatusCode::FORBIDDEN => AppError::Forbidden,
+        _ => AppError::Unauthorized,
+    }
+}
 
 /// Extractor for authenticated user + repo read permission.
 ///
@@ -39,10 +48,13 @@ impl FromRequestParts<Arc<AppState>> for RepoPathRead {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        // Extract authenticated user
+        // Extract authenticated user. The status is preserved: a missing or
+        // invalid credential is 401, while an API key that lacks the capability
+        // or the library scope is 403 — collapsing both into 401 would tell a
+        // client to re-authenticate when re-authenticating cannot help.
         let user = AuthUser::from_request_parts(parts, state)
             .await
-            .map_err(|_| AppError::Unauthorized)?;
+            .map_err(auth_rejection_to_app_error)?;
 
         // Extract repo_id from path
         let Path(repo_id) = Path::<String>::from_request_parts(parts, state)
@@ -57,6 +69,14 @@ impl FromRequestParts<Arc<AppState>> for RepoPathRead {
         )
         .await?;
 
+        // A unified API key adds a library-scope ceiling on top of membership:
+        // the key must be bound to this library (or bound to all of them).
+        if let Some(authority) = &user.key
+            && !authority.allows_repo(&repo_id, false)
+        {
+            return Err(AppError::Forbidden);
+        }
+
         Ok(RepoPathRead { user, repo_id })
     }
 }
@@ -68,10 +88,13 @@ impl FromRequestParts<Arc<AppState>> for RepoPathWrite {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        // Extract authenticated user
+        // Extract authenticated user. The status is preserved: a missing or
+        // invalid credential is 401, while an API key that lacks the capability
+        // or the library scope is 403 — collapsing both into 401 would tell a
+        // client to re-authenticate when re-authenticating cannot help.
         let user = AuthUser::from_request_parts(parts, state)
             .await
-            .map_err(|_| AppError::Unauthorized)?;
+            .map_err(auth_rejection_to_app_error)?;
 
         // Extract repo_id from path
         let Path(repo_id) = Path::<String>::from_request_parts(parts, state)
@@ -85,6 +108,14 @@ impl FromRequestParts<Arc<AppState>> for RepoPathWrite {
             user.user_id,
         )
         .await?;
+
+        // A unified API key adds a library-scope ceiling: a read ceiling on this
+        // library blocks the write even when the member's permission allows it.
+        if let Some(authority) = &user.key
+            && !authority.allows_repo(&repo_id, true)
+        {
+            return Err(AppError::Forbidden);
+        }
 
         Ok(RepoPathWrite { user, repo_id })
     }

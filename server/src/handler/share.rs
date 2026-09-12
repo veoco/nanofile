@@ -47,8 +47,12 @@ pub async fn list_share_links(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<share::ShareLinkInfo>>, AppError> {
-    let infos =
+    let mut infos =
         share::list_share_links(&state.repos, &state.config.server.site_url, auth.user_id).await?;
+    // A share token is a capability URL: never hand one out for a library
+    // outside the key's scope.
+    let scope = auth.repo_scope();
+    infos.retain(|link| scope.allows(&link.repo_id));
     Ok(Json(infos))
 }
 

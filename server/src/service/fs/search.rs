@@ -61,6 +61,7 @@ impl SearchService {
         page: i32,
         search_repo: Option<&str>,
         search_filename_only: bool,
+        repo_scope: &crate::domain::permission::RepoScope,
     ) -> Result<(Vec<serde_json::Value>, i32, bool), AppError> {
         if q.is_empty() {
             return Ok((Vec::new(), 0, false));
@@ -70,7 +71,9 @@ impl SearchService {
         // get bounded pagination, and the offset below must not overflow.
         let per_page = per_page.clamp(1, MAX_SEARCH_PER_PAGE);
         let page = page.clamp(1, MAX_SEARCH_PAGE);
-        let repo_ids = self.get_accessible_repo_ids(user_id, search_repo).await?;
+        let repo_ids = self
+            .get_accessible_repo_ids(user_id, search_repo, repo_scope)
+            .await?;
         // No accessible repo ⇒ nothing to search. `repo_ids` is the caller's
         // access-control allow-list: an empty list must never be handed to the
         // indexer as "no filter" (that leaked every repo's filenames and
@@ -253,6 +256,7 @@ impl SearchService {
         &self,
         user_id: i32,
         repo_id_filter: Option<&str>,
+        repo_scope: &crate::domain::permission::RepoScope,
     ) -> Result<Vec<String>, AppError> {
         let member_repos = self.repos.member.find_by_user_id(user_id).await?;
         let owned_repos = self.repos.repo.find_by_owner_id(user_id).await?;
@@ -288,6 +292,10 @@ impl SearchService {
                 ids.retain(|id| id == filter);
             }
         }
+
+        // A key bound to specific libraries searches only those, exactly like
+        // every other listing.
+        ids.retain(|id| repo_scope.allows(id));
 
         Ok(ids)
     }

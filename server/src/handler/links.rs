@@ -158,8 +158,13 @@ pub async fn list_share_links_v21(
     Query(query): Query<ListShareLinksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let base_url = &state.config.server.site_url;
+    let scope = auth.repo_scope();
     let infos = if let (Some(repo_id), Some(path)) = (&query.repo_id, &query.path) {
-        // Filtering by a repo requires membership of that repo.
+        // Filtering by a repo requires membership of that repo, and — for a
+        // key — that the repo is inside its library scope.
+        if !scope.allows(repo_id) {
+            return Err(AppError::Forbidden);
+        }
         crate::domain::permission::check_repo_read_permission(
             state.repos.member.as_ref(),
             repo_id,
@@ -169,7 +174,11 @@ pub async fn list_share_links_v21(
         share::list_share_links_for_path(&state.repos, base_url, repo_id, path, auth.user_id)
             .await?
     } else {
-        share::list_share_links(&state.repos, base_url, auth.user_id).await?
+        let mut links = share::list_share_links(&state.repos, base_url, auth.user_id).await?;
+        // A share token is a capability URL, so listing one for a library
+        // outside the key's scope would hand the key that library.
+        links.retain(|link| scope.allows(&link.repo_id));
+        links
     };
     let items: Vec<serde_json::Value> = infos
         .into_iter()
@@ -386,8 +395,13 @@ pub async fn list_upload_links_v21(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListUploadLinksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let scope = auth.repo_scope();
     let items = if let (Some(repo_id), Some(path)) = (&query.repo_id, &query.path) {
-        // Filtering by a repo requires membership of that repo.
+        // Filtering by a repo requires membership of that repo, and — for a
+        // key — that the repo is inside its library scope.
+        if !scope.allows(repo_id) {
+            return Err(AppError::Forbidden);
+        }
         crate::domain::permission::check_repo_read_permission(
             state.repos.member.as_ref(),
             repo_id,
@@ -396,7 +410,13 @@ pub async fn list_upload_links_v21(
         .await?;
         link::list_upload_links_for_path(&state.repos, repo_id, path, auth.user_id).await?
     } else {
-        link::list_upload_links_v21(&state.repos, auth.user_id).await?
+        let mut items = link::list_upload_links_v21(&state.repos, auth.user_id).await?;
+        items.retain(|item| {
+            item.get("repo_id")
+                .and_then(|value| value.as_str())
+                .is_some_and(|repo_id| scope.allows(repo_id))
+        });
+        items
     };
     Ok(Json(serde_json::Value::Array(items)))
 }

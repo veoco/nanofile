@@ -37,6 +37,10 @@ pub async fn batch_move_items(
     )
     .await?;
 
+    // The library id comes from the request body, so the path-based key guard
+    // never sees it.
+    auth.ensure_repo_allowed(repo_id, true)?;
+
     if req.src_dirents.is_empty() {
         return Ok(ok_json());
     }
@@ -90,6 +94,10 @@ pub async fn sync_batch_copy_item(
     )
     .await?;
 
+    // The library id comes from the request body, so the path-based key guard
+    // never sees it.
+    auth.ensure_repo_allowed(repo_id, true)?;
+
     let svc = state.fileops_service();
 
     let src_parent_dir = safe_normalize_path(&body.src_parent_dir)
@@ -137,6 +145,10 @@ pub async fn batch_delete_item(
         auth.user_id,
     )
     .await?;
+
+    // The library id comes from the request body, so the path-based key guard
+    // never sees it.
+    auth.ensure_repo_allowed(repo_id, true)?;
 
     let parent_dir = safe_normalize_path(&body.parent_dir)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;

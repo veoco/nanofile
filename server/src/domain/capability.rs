@@ -790,6 +790,13 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api/v2.1/repos/{repo_id}/zip-task/",
         RouteAccess::Capability(Capability::FileRead),
     ),
+    // The web UI's file-content endpoint lives outside the API namespaces but
+    // serves the same bytes as `GET /api2/repos/{id}/file/`, so it is a read.
+    (
+        "GET",
+        "/repos/{repo_id}/files/{*path}",
+        RouteAccess::Capability(Capability::FileRead),
+    ),
     // ── Upload / download capability URLs ────────────────────────────────
     // These answer with a bearer URL (or a block link), so they are write-level
     // even though two of them are served on GET: a read-only key must not be
@@ -1308,27 +1315,38 @@ fn is_classified_prefix(path: &str) -> bool {
         || path.starts_with("/api2/")
         || path == "/api/v2.1"
         || path.starts_with("/api/v2.1/")
+        // The unified web file-content endpoint is served outside the API
+        // namespaces but also accepts an API key, so it has to be classified
+        // rather than falling through to "deny".
+        || path.starts_with("/repos/")
 }
 
-/// Whether `path` matches a `{name}`-style pattern of the same segment count.
+/// Whether `path` matches a `{name}`-style pattern.
+///
+/// `{name}` matches exactly one non-empty segment; a trailing `{*name}`
+/// (axum's catch-all) matches one or more remaining segments.
 fn pattern_matches(pattern: &str, path: &str) -> bool {
     let pattern_segments: Vec<&str> = pattern.trim_matches('/').split('/').collect();
     let path_segments: Vec<&str> = path.trim_matches('/').split('/').collect();
-    if pattern_segments.len() != path_segments.len() {
-        return false;
-    }
-    pattern_segments
-        .iter()
-        .zip(path_segments.iter())
-        .all(|(pattern, actual)| {
-            if pattern.starts_with('{') && pattern.ends_with('}') {
-                // A placeholder never matches an empty segment, so a doubled
-                // slash cannot satisfy a parameter position.
-                !actual.is_empty()
-            } else {
-                pattern == actual
+    for (index, segment) in pattern_segments.iter().enumerate() {
+        if let Some(_rest) = segment.strip_prefix("{*").and_then(|s| s.strip_suffix('}')) {
+            // A catch-all must consume at least one segment, matching axum.
+            return path_segments.len() > index;
+        }
+        let Some(actual) = path_segments.get(index) else {
+            return false;
+        };
+        if segment.starts_with('{') && segment.ends_with('}') {
+            // A placeholder never matches an empty segment, so a doubled slash
+            // cannot satisfy a parameter position.
+            if actual.is_empty() {
+                return false;
             }
-        })
+        } else if segment != actual {
+            return false;
+        }
+    }
+    pattern_segments.len() == path_segments.len()
 }
 
 /// Prefer the pattern with more literal (non-placeholder) characters, so a
@@ -1340,6 +1358,27 @@ fn specificity(pattern: &str) -> usize {
         .filter(|segment| !(segment.starts_with('{') && segment.ends_with('}')))
         .map(str::len)
         .sum()
+}
+
+/// Whether a `/seafhttp/...` request mutates repository state.
+///
+/// The sync protocol has no route table of its own here (its paths arrive both
+/// in full and prefix-stripped form, because axum's `nest` rewrites the URI), so
+/// the classification is by method with an explicit list of read-only POSTs.
+/// Anything unrecognised counts as a write, so a read-only key fails closed on a
+/// new endpoint.
+pub fn requires_sync_write(method: &Method, path: &str) -> bool {
+    if method == Method::GET || method == Method::HEAD {
+        return false;
+    }
+    // `folder-perm` and the batch `locked-files` query carry their token in the
+    // body and only read; `head-commits-multi` is a batch metadata read.
+    const READ_ONLY_POST_SUFFIXES: [&str; 3] =
+        ["/head-commits-multi", "/folder-perm", "/locked-files"];
+    let trimmed = path.trim_end_matches('/');
+    !READ_ONLY_POST_SUFFIXES
+        .iter()
+        .any(|suffix| trimmed.ends_with(suffix))
 }
 
 /// A named starting point offered by the management UI.
@@ -1629,6 +1668,26 @@ mod tests {
             "/api2/repos/{repo_id}/dir/",
             "/api2/repos/abc/dir/detail/"
         ));
+    }
+
+    #[test]
+    fn catch_all_matches_one_or_more_segments() {
+        assert!(pattern_matches(
+            "/repos/{repo_id}/files/{*path}",
+            "/repos/abc/files/a/b.txt"
+        ));
+        assert!(pattern_matches(
+            "/repos/{repo_id}/files/{*path}",
+            "/repos/abc/files/one"
+        ));
+        assert!(
+            !pattern_matches("/repos/{repo_id}/files/{*path}", "/repos/abc/files/"),
+            "the catch-all must consume at least one segment, like axum's"
+        );
+        assert_eq!(
+            required_access(&Method::GET, "/repos/abc/files/a/b.txt"),
+            Some(RouteAccess::Capability(Capability::FileRead))
+        );
     }
 
     #[test]

@@ -37,10 +37,11 @@ impl StarredService {
     pub async fn list_starred_files(
         &self,
         user_id: i32,
+        scope: &crate::domain::permission::RepoScope,
     ) -> Result<Vec<StarredFileEntry>, AppError> {
         let entries = self.repos.starred.find_by_user_id(user_id).await?;
         let accessible =
-            crate::domain::permission::accessible_repo_ids(&self.repos, user_id).await?;
+            crate::domain::permission::accessible_repo_ids(&self.repos, user_id, scope).await?;
 
         Ok(entries
             .into_iter()
@@ -60,6 +61,7 @@ impl StarredService {
         &self,
         user_id: i32,
         email: &str,
+        scope: &crate::domain::permission::RepoScope,
     ) -> Result<serde_json::Value, AppError> {
         let user_nickname = self
             .repos
@@ -76,7 +78,7 @@ impl StarredService {
         // that library's name, paths, timestamps or "deleted" state. Intersect
         // with the repositories the user can currently access (fail closed).
         let accessible =
-            crate::domain::permission::accessible_repo_ids(&self.repos, user_id).await?;
+            crate::domain::permission::accessible_repo_ids(&self.repos, user_id, scope).await?;
 
         // Batch-load the distinct repos and their head commits in two queries
         // instead of one repo + one commit lookup per starred repo.

@@ -28,6 +28,7 @@ impl ActivityService {
         per_page: u32,
         repo_id: Option<&str>,
         op_user: Option<&str>,
+        repo_scope: &crate::domain::permission::RepoScope,
     ) -> Result<serde_json::Value, AppError> {
         // Clamp defensively: `per_page` becomes the SQL LIMIT, so an unbounded
         // value pulls the whole filtered table into memory.
@@ -48,6 +49,9 @@ impl ActivityService {
                 repo_ids.push(m.repo_id.clone());
             }
         }
+        // A key bound to specific libraries must not learn about the others
+        // through the activity feed.
+        repo_ids.retain(|id| repo_scope.allows(id));
 
         // Look up op_user by email if provided.
         // If the email doesn't match any user, return empty immediately.

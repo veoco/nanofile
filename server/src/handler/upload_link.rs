@@ -32,8 +32,12 @@ pub async fn list_upload_links(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<link::UploadLinkInfo>>, AppError> {
-    let infos =
+    let mut infos =
         link::list_upload_links(&state.repos, &state.config.server.site_url, auth.user_id).await?;
+    // An upload-link token is a capability URL: never hand one out for a
+    // library outside the key's scope.
+    let scope = auth.repo_scope();
+    infos.retain(|link| scope.allows(&link.repo_id));
     Ok(Json(infos))
 }
 

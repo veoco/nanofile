@@ -7,18 +7,68 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::AppState;
+use crate::domain::api_key::KeyAuthority;
+use crate::domain::capability::{RouteAccess, required_access};
+use crate::domain::permission::RepoScope;
+use crate::domain::repo_path;
 use crate::repository::Repositories;
+use base::error::AppError;
 
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: i32,
     pub email: String,
+    /// Set when the request authenticated with a unified API key. `None` means
+    /// an ordinary session, which carries no capability or library limits.
+    pub key: Option<KeyAuthority>,
+}
+
+impl AuthUser {
+    /// The libraries an account-wide query may return.
+    pub fn repo_scope(&self) -> RepoScope {
+        match &self.key {
+            Some(authority) if !authority.all_repos => {
+                RepoScope::only(authority.bound_repo_ids().map(str::to_string))
+            }
+            _ => RepoScope::all(),
+        }
+    }
+
+    /// Enforce a key's library scope for a repo id the path guard cannot see.
+    ///
+    /// Some endpoints carry the library in a query parameter or a JSON body
+    /// (`repo-tokens`, the batch copy/move handlers, `search-file`), so callers
+    /// apply this next to the membership check for those ids. Sessions are
+    /// unaffected.
+    pub fn ensure_repo_allowed(&self, repo_id: &str, need_write: bool) -> Result<(), AppError> {
+        match &self.key {
+            Some(authority) if !authority.allows_repo(repo_id, need_write) => {
+                Err(AppError::Forbidden)
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct SyncAuth {
     pub user_id: i32,
     pub repo_id: String,
+    /// Set when the request authenticated with a unified API key rather than a
+    /// repository sync token or a session.
+    pub key: Option<KeyAuthority>,
+}
+
+impl SyncAuth {
+    /// The libraries an account-wide sync query may return.
+    pub fn repo_scope(&self) -> RepoScope {
+        match &self.key {
+            Some(authority) if !authority.all_repos => {
+                RepoScope::only(authority.bound_repo_ids().map(str::to_string))
+            }
+            _ => RepoScope::all(),
+        }
+    }
 }
 
 impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
@@ -110,13 +160,23 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
                     .await;
             }
 
-            return Ok(SyncAuth { user_id, repo_id });
+            return Ok(SyncAuth {
+                user_id,
+                repo_id,
+                key: None,
+            });
         }
 
-        // Fall back to API token (for requests using Bearer/Token auth).
-        SyncAuth::from_token(repos, &token, url_repo_id.as_deref())
-            .await
-            .map_err(|_| base::error::AppError::Forbidden)
+        // Fall back to a unified API key or a session API token.
+        SyncAuth::from_token(
+            repos,
+            &token,
+            url_repo_id.as_deref(),
+            &parts.method,
+            parts.uri.path(),
+        )
+        .await
+        .map_err(|_| base::error::AppError::Forbidden)
     }
 }
 
@@ -191,19 +251,35 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         };
 
         // Only account credentials authenticate `/api2/*` and the Web UI:
-        // API tokens (which also back hashed session cookies) are the sole
-        // accepted bearer type here. Repository-scoped sync tokens are accepted
-        // exclusively by [`SyncAuth`] on `/seafhttp/...`, mirroring seahub's
-        // `TokenAuthentication`, which never consults the repo-token table.
-        // Treating a repo token as an account session would let a leaked
-        // library credential read the whole account.
-        let api_record = repos
-            .api_token
-            .find_by_token(&token_str)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        // unified API keys (created in the settings UI) and session API tokens.
+        // Repository-scoped sync tokens are accepted exclusively by [`SyncAuth`]
+        // on `/seafhttp/...`, mirroring seahub's `TokenAuthentication`, which
+        // never consults the repo-token table. Treating a repo token as an
+        // account session would let a leaked library credential read the whole
+        // account.
+        //
+        // A key and a session token can never share a value (both are 160-bit
+        // random), so the two lookups run together and the order is immaterial.
+        let (key_lookup, api_record) = tokio::join!(
+            repos.api_key.find_by_presented(&token_str),
+            repos.api_token.find_by_token(&token_str),
+        );
+        let key_lookup = key_lookup.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let api_record = api_record.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let user_id = if let Some(token_record) = api_record {
+        let (user_id, key) = if let Some(lookup) = key_lookup {
+            if is_token_expired(lookup.key.expires_at) {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            let authority = KeyAuthority::from_lookup(&lookup).map_err(|error| {
+                // An unreadable grant means this build cannot honour what the
+                // row promises; refusing the credential is the safe direction.
+                tracing::warn!(key_id = lookup.key.id, %error, "rejecting API key with an unreadable capability set");
+                StatusCode::UNAUTHORIZED
+            })?;
+            enforce_route_access(&authority, parts)?;
+            (lookup.key.user_id, Some(authority))
+        } else if let Some(token_record) = api_record {
             // Check API token expiration.
             if is_token_expired(token_record.expires_at) {
                 return Err(StatusCode::UNAUTHORIZED);
@@ -212,7 +288,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             if token_record.is_pending {
                 return Err(StatusCode::UNAUTHORIZED);
             }
-            token_record.user_id
+            (token_record.user_id, None)
         } else {
             return Err(StatusCode::UNAUTHORIZED);
         };
@@ -231,7 +307,56 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         Ok(AuthUser {
             user_id: user_record.id,
             email: user_record.email,
+            key,
         })
+    }
+}
+
+/// Apply a unified API key's capability and library limits to a request.
+///
+/// Sessions never reach this: only key callers are classified, so the behaviour
+/// of a login token is unchanged. An unclassified route is denied, which is what
+/// makes a newly added endpoint fail closed instead of silently accepting every
+/// key.
+///
+/// Classification uses the router's matched path template, not the raw URI:
+/// `nest` strips the matched prefix before the request reaches a nested handler,
+/// so the raw path is `/{repo_id}/dir/` where the template is
+/// `/api2/repos/{repo_id}/dir/`. Library binding is checked against the raw path
+/// instead, because that is where the concrete id lives.
+fn enforce_route_access(authority: &KeyAuthority, parts: &Parts) -> Result<(), StatusCode> {
+    let matched = parts
+        .extensions
+        .get::<axum::extract::MatchedPath>()
+        .map(axum::extract::MatchedPath::as_str);
+    let route = matched.unwrap_or_else(|| parts.uri.path());
+
+    match required_access(&parts.method, route) {
+        None => {
+            tracing::warn!(
+                method = %parts.method,
+                path = parts.uri.path(),
+                "API key used on an unclassified route"
+            );
+            Err(StatusCode::FORBIDDEN)
+        }
+        Some(RouteAccess::Public | RouteAccess::AnyAuthenticated) => Ok(()),
+        // The key-management surface is session-only: a key that could mint
+        // keys could hand itself more access than it holds.
+        Some(RouteAccess::SessionOnly) => Err(StatusCode::FORBIDDEN),
+        Some(RouteAccess::Capability(capability)) => {
+            if !authority.has(capability) {
+                return Err(StatusCode::FORBIDDEN);
+            }
+            // When the path names a library, the key must also cover it, with a
+            // write-capable ceiling for a write capability.
+            if let Some(repo_id) = repo_path::find_repo_id(parts.uri.path())
+                && !authority.allows_repo(&repo_id, capability.is_write())
+            {
+                return Err(StatusCode::FORBIDDEN);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -297,12 +422,15 @@ impl SyncAuth {
         repos: &Repositories,
         token_str: &str,
         url_repo_id: Option<&str>,
+        method: &axum::http::Method,
+        path: &str,
     ) -> Result<Self, StatusCode> {
-        // Query both token tables concurrently.
+        // Query all three credential tables concurrently.
         let sync_fut = repos.sync_token.find_by_token(token_str);
         let api_fut = repos.api_token.find_by_token(token_str);
+        let key_fut = repos.api_key.find_by_presented(token_str);
 
-        let (sync_result, api_result) = tokio::join!(sync_fut, api_fut);
+        let (sync_result, api_result, key_result) = tokio::join!(sync_fut, api_fut, key_fut);
 
         // Check sync token first (has repo_id — preferred).
         if let Some(record) = sync_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
@@ -321,10 +449,53 @@ impl SyncAuth {
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: record.repo_id,
+                key: None,
             });
         }
 
-        // Fall back to API token — check expiration like AuthUser does.
+        // A unified API key: it must carry the sync capability this request
+        // needs, and cover the library in the URL.
+        if let Some(lookup) = key_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
+            if is_token_expired(lookup.key.expires_at) {
+                return Err(StatusCode::FORBIDDEN);
+            }
+            let authority = KeyAuthority::from_lookup(&lookup).map_err(|error| {
+                tracing::warn!(key_id = lookup.key.id, %error, "rejecting API key with an unreadable capability set");
+                StatusCode::FORBIDDEN
+            })?;
+            let needed = if crate::domain::capability::requires_sync_write(method, path) {
+                crate::domain::capability::Capability::SyncWrite
+            } else {
+                crate::domain::capability::Capability::SyncRead
+            };
+            if !authority.has(needed) {
+                return Err(StatusCode::FORBIDDEN);
+            }
+            if let Some(url_repo) = url_repo_id {
+                if !authority.allows_repo(url_repo, needed.is_write()) {
+                    return Err(StatusCode::FORBIDDEN);
+                }
+                // The key's scope is a ceiling, not a grant: membership still
+                // decides, so a removed collaborator loses access at once.
+                crate::domain::permission::check_repo_read_permission(
+                    repos.member.as_ref(),
+                    url_repo,
+                    lookup.key.user_id,
+                )
+                .await
+                .map_err(|_| StatusCode::FORBIDDEN)?;
+            }
+
+            ensure_active_user(repos, lookup.key.user_id).await?;
+
+            return Ok(SyncAuth {
+                user_id: lookup.key.user_id,
+                repo_id: url_repo_id.unwrap_or("").to_string(),
+                key: Some(authority),
+            });
+        }
+
+        // Fall back to a session API token — check expiration like AuthUser does.
         if let Some(record) = api_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
             if is_token_expired(record.expires_at) {
                 return Err(StatusCode::FORBIDDEN);
@@ -334,7 +505,7 @@ impl SyncAuth {
                 return Err(StatusCode::FORBIDDEN);
             }
 
-            // API tokens are not repo-scoped. On repo-scoped endpoints the
+            // Session tokens are not repo-scoped. On repo-scoped endpoints the
             // caller must be a member of the URL repo, closing the cross-repo
             // IDOR while keeping seaf-daemon's API-token logon working for the
             // user's own repos.
@@ -353,6 +524,7 @@ impl SyncAuth {
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: url_repo_id.unwrap_or("").to_string(),
+                key: None,
             });
         }
 

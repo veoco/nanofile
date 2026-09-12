@@ -44,6 +44,7 @@ pub async fn get_activities(
         per_page,
         query.repo_id.as_deref(),
         query.op_user.as_deref(),
+        &auth.repo_scope(),
     )
     .await?;
 

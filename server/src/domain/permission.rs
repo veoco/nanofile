@@ -8,8 +8,52 @@ use crate::repository::Repositories;
 use crate::repository::member::MemberRepository;
 use base::AppError;
 
+/// The libraries an account-wide query may return.
+///
+/// A session (or a key bound to every library) is unrestricted, which is what
+/// [`RepoScope::all`] means. A key bound to specific libraries narrows every
+/// listing to those, so `starred`, `activities`, `search` and the link lists
+/// cannot describe libraries the key was not given.
+#[derive(Clone, Debug, Default)]
+pub struct RepoScope(Option<std::collections::HashSet<String>>);
+
+impl RepoScope {
+    /// No narrowing: every library the account can reach.
+    pub fn all() -> Self {
+        Self(None)
+    }
+
+    /// Narrow to an explicit set of library ids.
+    pub fn only(ids: impl IntoIterator<Item = String>) -> Self {
+        Self(Some(ids.into_iter().collect()))
+    }
+
+    pub fn allows(&self, repo_id: &str) -> bool {
+        match &self.0 {
+            None => true,
+            Some(allowed) => allowed.contains(repo_id),
+        }
+    }
+
+    /// Drop the ids this scope excludes.
+    pub fn intersect(
+        &self,
+        ids: std::collections::HashSet<String>,
+    ) -> std::collections::HashSet<String> {
+        match &self.0 {
+            None => ids,
+            Some(allowed) => ids.into_iter().filter(|id| allowed.contains(id)).collect(),
+        }
+    }
+
+    /// Whether this scope imposes any restriction at all.
+    pub fn is_unrestricted(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
 /// Repo ids `user_id` can currently access: the libraries they own plus every
-/// library a membership row grants them.
+/// library a membership row grants them, narrowed by `scope`.
 ///
 /// Used by the listing endpoints (starred items, activities, search) to
 /// intersect a user-specific table with live access, so a row that refers to a
@@ -18,6 +62,7 @@ use base::AppError;
 pub async fn accessible_repo_ids(
     repos: &Repositories,
     user_id: i32,
+    scope: &RepoScope,
 ) -> Result<std::collections::HashSet<String>, AppError> {
     let mut ids: std::collections::HashSet<String> = repos
         .repo
@@ -29,7 +74,7 @@ pub async fn accessible_repo_ids(
     for member in repos.member.find_by_user_id(user_id).await? {
         ids.insert(member.repo_id);
     }
-    Ok(ids)
+    Ok(scope.intersect(ids))
 }
 
 /// Check if `user_id` has write (`rw`) permission on the repo.

@@ -136,14 +136,17 @@ impl SyncService {
         &self,
         user_id: i32,
         sync_token_ttl_days: u64,
+        repo_scope: &crate::domain::permission::RepoScope,
     ) -> Result<Vec<AccessibleRepo>, AppError> {
         let memberships = self.repos.member.find_by_user_id(user_id).await?;
 
-        // Distinct repo ids across memberships.
+        // Distinct repo ids across memberships, limited to the caller's scope.
+        // Filtering before the tokens are minted keeps a key from causing work
+        // (and rows) for libraries it cannot reach.
         let mut repo_ids: Vec<String> = Vec::with_capacity(memberships.len());
         let mut seen: HashSet<&str> = HashSet::with_capacity(memberships.len());
         for m in &memberships {
-            if seen.insert(m.repo_id.as_str()) {
+            if repo_scope.allows(&m.repo_id) && seen.insert(m.repo_id.as_str()) {
                 repo_ids.push(m.repo_id.clone());
             }
         }

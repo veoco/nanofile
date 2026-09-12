@@ -19,7 +19,9 @@ pub async fn list_starred_files(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<StarredFileEntry>>, AppError> {
     let svc = state.starred_service();
-    let result = svc.list_starred_files(auth.user_id).await?;
+    let result = svc
+        .list_starred_files(auth.user_id, &auth.repo_scope())
+        .await?;
     Ok(Json(result))
 }
 
@@ -44,7 +46,9 @@ pub async fn get_starred_items(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let svc = state.starred_service();
-    let result = svc.get_starred_items(auth.user_id, &auth.email).await?;
+    let result = svc
+        .get_starred_items(auth.user_id, &auth.email, &auth.repo_scope())
+        .await?;
     Ok(Json(result))
 }
 

@@ -105,7 +105,11 @@ pub async fn list_repos(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<RepoInfo>>, AppError> {
-    let repos = service::RepoService::list_repos(&state.repos, auth.user_id, &auth.email).await?;
+    let mut repos =
+        service::RepoService::list_repos(&state.repos, auth.user_id, &auth.email).await?;
+    // A key bound to specific libraries must not enumerate the others.
+    let scope = auth.repo_scope();
+    repos.retain(|repo| scope.allows(&repo.id));
     Ok(Json(repos))
 }
 
@@ -581,10 +585,14 @@ pub async fn repo_tokens(
     let repos_param = params
         .get("repos")
         .ok_or_else(|| AppError::BadRequest("repos parameter required".into()))?;
+    // A key bound to specific libraries may only mint tokens for those; other
+    // ids are dropped rather than rejected, matching the service's behaviour
+    // for libraries the caller cannot see.
+    let scope = auth.repo_scope();
     let repo_ids: Vec<&str> = repos_param
         .split(',')
         .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && scope.allows(s))
         .collect();
 
     let result = service::RepoService::repo_tokens(
@@ -603,8 +611,10 @@ pub async fn list_repos_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<V21RepoListResponse>, AppError> {
-    let response =
+    let mut response =
         service::RepoService::list_repos_v21(&state.repos, auth.user_id, &auth.email).await?;
+    let scope = auth.repo_scope();
+    response.repos.retain(|repo| scope.allows(&repo.repo_id));
     Ok(Json(response))
 }
 
@@ -642,7 +652,8 @@ pub async fn get_default_repo(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let default_id = service::RepoService::default_repo_id(&state.repos, auth.user_id).await?;
-    match default_id {
+    let scope = auth.repo_scope();
+    match default_id.filter(|id| scope.allows(id)) {
         Some(id) => Ok(Json(serde_json::json!({"exists": true, "repo_id": id}))),
         None => Ok(Json(serde_json::json!({"exists": false}))),
     }

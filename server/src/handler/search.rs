@@ -52,11 +52,25 @@ pub async fn search_file(
     }
     state.auth_limiters.search.record_attempt(&rl_key);
 
+    // The repo id arrives in the query string, so the path-based key guard
+    // never sees it: enforce the key's library scope here.
+    if !auth.repo_scope().allows(&query.repo_id) {
+        return Err(AppError::Forbidden);
+    }
+
     let svc = state.search_service();
     // Filename-only search scoped to the single repo; fetch a large page and
     // paginate the reshaped result below.
     let (results, _total, _has_more) = svc
-        .search(&q, auth.user_id, 1000, 1, Some(&query.repo_id), true)
+        .search(
+            &q,
+            auth.user_id,
+            1000,
+            1,
+            Some(&query.repo_id),
+            true,
+            &auth.repo_scope(),
+        )
         .await?;
 
     let mut data: Vec<serde_json::Value> = results
@@ -124,6 +138,7 @@ pub async fn search(
             page,
             query.search_repo.as_deref(),
             search_filename_only,
+            &auth.repo_scope(),
         )
         .await?;
 

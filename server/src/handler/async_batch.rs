@@ -23,6 +23,10 @@ pub async fn async_batch_copy_item(
     )
     .await?;
 
+    // The library id comes from the request body, so the path-based key guard
+    // never sees it.
+    auth.ensure_repo_allowed(&body.src_repo_id, true)?;
+
     crate::handler::sanitize_dirent_list(&mut body.src_dirents)?;
     // The description below indexes `src_dirents[0]`, so an empty list must be
     // rejected here rather than panicking inside the handler.
@@ -112,6 +116,10 @@ pub async fn async_batch_move_item(
         auth.user_id,
     )
     .await?;
+
+    // The library id comes from the request body, so the path-based key guard
+    // never sees it.
+    auth.ensure_repo_allowed(&body.src_repo_id, true)?;
 
     crate::handler::sanitize_dirent_list(&mut body.src_dirents)?;
     // See `async_batch_copy_item`: the description indexes `src_dirents[0]`.
@@ -211,6 +219,10 @@ pub async fn copy_move_task(
         auth.user_id,
     )
     .await?;
+
+    // The library id comes from the request body, so the path-based key guard
+    // never sees it.
+    auth.ensure_repo_allowed(&body.src_repo_id, true)?;
 
     let src_dir = safe_normalize_path(&body.src_parent_dir)
         .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
