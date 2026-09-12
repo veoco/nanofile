@@ -41,6 +41,17 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
+        // A previous failed run of this migration may have left partial rows
+        // in api_keys / api_key_repos (each INSERT auto-commits in SQLite, so
+        // a mid-loop failure does not roll them back). Re-running would then
+        // hit api_keys.key_hash's unique constraint on the first row already
+        // copied. Remove any migrated rows — key_prefix IS NULL is the marker
+        // for a migrated key, since API-created keys always carry a prefix —
+        // before starting the copy. api_key_repos is cleared first as the
+        // child side of the FK.
+        db.execute_unprepared("DELETE FROM api_key_repos").await?;
+        db.execute_unprepared("DELETE FROM api_keys WHERE key_prefix IS NULL").await?;
+
         let legacy = db
             .query_all_raw(Statement::from_string(
                 backend,

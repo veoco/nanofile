@@ -240,6 +240,71 @@ async fn orphaned_webdav_keys_are_dropped() {
 }
 
 #[tokio::test]
+async fn rerun_after_partial_failure_succeeds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("migration.db");
+    let db = Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
+        .await
+        .expect("connect");
+
+    Migrator::up(&db, Some(steps_before(MOVE)))
+        .await
+        .expect("migrate to the pre-move schema");
+
+    db.execute_unprepared(
+        "INSERT INTO users (id, email, password_hash, created_at) \
+         VALUES (1, 'owner@example.com', 'x', 1)",
+    )
+    .await
+    .expect("seed user");
+    db.execute_unprepared(&format!(
+        "INSERT INTO repos (id, name, owner_id, created_at, updated_at) \
+         VALUES ('{REPO}', 'library', 1, 1, 1)"
+    ))
+    .await
+    .expect("seed repo");
+    db.execute_unprepared(&format!(
+        "INSERT INTO webdav_keys (repo_id, user_id, name, permission, key_hash, created_at, last_used_at) \
+         VALUES ('{REPO}', 1, 'rclone', 'rw', '{HASH_RW}', 100, 200)"
+    ))
+    .await
+    .expect("seed legacy key");
+
+    // Simulate a previous failed run: a row was already copied into api_keys
+    // (key_prefix IS NULL, the migration's marker) but the migration then
+    // aborted before dropping webdav_keys.
+    db.execute_unprepared(&format!(
+        "INSERT INTO api_keys (user_id, name, key_hash, key_prefix, capabilities, all_repos, created_at, expires_at, last_used_at) \
+         VALUES (1, 'rclone', '{HASH_RW}', NULL, 'webdav.read,webdav.write', 0, 100, NULL, 200)"
+    ))
+    .await
+    .expect("seed leftover api_key");
+    db.execute_unprepared(&format!(
+        "INSERT INTO api_key_repos (key_id, repo_id, permission) \
+         SELECT id, '{REPO}', 'rw' FROM api_keys WHERE key_hash = '{HASH_RW}'"
+    ))
+    .await
+    .expect("seed leftover binding");
+
+    // Re-running the move must not choke on the leftover row.
+    Migrator::up(&db, None).await.expect("apply the move");
+
+    assert_eq!(
+        count(&db, "SELECT COUNT(*) AS n FROM api_keys").await,
+        1,
+        "the leftover row is replaced, not duplicated"
+    );
+    assert_eq!(
+        count(&db, "SELECT COUNT(*) AS n FROM api_key_repos").await,
+        1,
+        "the leftover binding is replaced, not duplicated"
+    );
+    assert!(!table_exists(&db, "webdav_keys").await);
+
+    let _ = db.close().await;
+}
+
+#[tokio::test]
 async fn duplicate_digest_across_libraries_merges_into_one_key() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("migration.db");
