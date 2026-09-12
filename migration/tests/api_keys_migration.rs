@@ -238,3 +238,99 @@ async fn orphaned_webdav_keys_are_dropped() {
 
     let _ = db.close().await;
 }
+
+#[tokio::test]
+async fn duplicate_digest_across_libraries_merges_into_one_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("migration.db");
+    let db = Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
+        .await
+        .expect("connect");
+
+    Migrator::up(&db, Some(steps_before(MOVE)))
+        .await
+        .expect("migrate to the pre-move schema");
+
+    db.execute_unprepared(
+        "INSERT INTO users (id, email, password_hash, created_at) \
+         VALUES (1, 'owner@example.com', 'x', 1)",
+    )
+    .await
+    .expect("seed user");
+
+    // Two libraries, same owner. The owner used the same WebDAV secret for
+    // both — the old schema allowed that because its unique index was on
+    // (repo_id, user_id, key_hash), not key_hash alone.
+    let repo_a = "11111111-2222-3333-4444-555555555555";
+    let repo_b = "22222222-3333-4444-5555-666666666666";
+    db.execute_unprepared(&format!(
+        "INSERT INTO repos (id, name, owner_id, created_at, updated_at) \
+         VALUES ('{repo_a}', 'library-a', 1, 1, 1), \
+                ('{repo_b}', 'library-b', 1, 1, 1)"
+    ))
+    .await
+    .expect("seed repos");
+
+    db.execute_unprepared(&format!(
+        "INSERT INTO webdav_keys (repo_id, user_id, name, permission, key_hash, created_at, last_used_at) \
+         VALUES ('{repo_a}', 1, 'rclone', 'rw', '{HASH_RW}', 100, 200), \
+                ('{repo_b}', 1, 'rclone', 'r', '{HASH_RW}', 101, NULL)"
+    ))
+    .await
+    .expect("seed legacy keys");
+
+    Migrator::up(&db, None).await.expect("apply the move");
+
+    // One api_key, two library bindings.
+    assert_eq!(
+        count(&db, "SELECT COUNT(*) AS n FROM api_keys").await,
+        1,
+        "the same digest must produce a single api_key, not two"
+    );
+    assert_eq!(
+        count(&db, "SELECT COUNT(*) AS n FROM api_key_repos").await,
+        2,
+        "each legacy library gets its own binding"
+    );
+
+    // The rw occurrence widens the key's capabilities beyond the ro one.
+    let caps = db
+        .query_one_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            format!("SELECT capabilities FROM api_keys WHERE key_hash = '{HASH_RW}'"),
+        ))
+        .await
+        .expect("query")
+        .expect("one row");
+    assert_eq!(
+        caps.try_get::<String>("", "capabilities").unwrap(),
+        "webdav.read,webdav.write",
+        "the broader of the two permissions wins"
+    );
+
+    // Each binding keeps its own ceiling.
+    assert_eq!(
+        count(
+            &db,
+            &format!(
+                "SELECT COUNT(*) AS n FROM api_key_repos \
+                 WHERE repo_id = '{repo_a}' AND permission = 'rw'"
+            )
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count(
+            &db,
+            &format!(
+                "SELECT COUNT(*) AS n FROM api_key_repos \
+                 WHERE repo_id = '{repo_b}' AND permission = 'r'"
+            )
+        )
+        .await,
+        1
+    );
+
+    let _ = db.close().await;
+}

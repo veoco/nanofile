@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use sea_orm::Statement;
 use sea_orm_migration::prelude::*;
 
@@ -48,6 +50,13 @@ impl MigrationTrait for Migration {
             ))
             .await?;
 
+        // The old schema's unique index was on (repo_id, user_id, key_hash),
+        // so the same digest could appear on multiple rows — one per library.
+        // The unified api_keys.key_hash is globally unique, so the first
+        // occurrence of a digest creates the key and later ones add another
+        // api_key_repos binding to the same key.
+        let mut key_id_by_hash: HashMap<String, i32> = HashMap::new();
+
         let mut migrated = 0usize;
         for row in &legacy {
             let get = |column: &str| {
@@ -74,38 +83,60 @@ impl MigrationTrait for Migration {
                 "webdav.read,webdav.write"
             };
 
-            db.execute_raw(Statement::from_sql_and_values(
-                backend,
-                "INSERT INTO api_keys \
-                   (user_id, name, key_hash, key_prefix, capabilities, all_repos, created_at, expires_at, last_used_at) \
-                 VALUES (?, ?, ?, NULL, ?, 0, ?, NULL, ?)",
-                [
-                    user_id.into(),
-                    name.into(),
-                    key_hash.into(),
-                    capabilities.into(),
-                    created_at.into(),
-                    last_used_at.into(),
-                ],
-            ))
-            .await?;
-
-            let key_id: i32 = db
-                .query_one_raw(Statement::from_string(
+            let key_id = if let Some(&id) = key_id_by_hash.get(&key_hash) {
+                // Same secret already migrated from another library: the
+                // unified key is globally unique on key_hash, so widen the
+                // capability set if this row grants broader access (rw
+                // supersedes r) rather than inserting a duplicate row.
+                if permission != "r" {
+                    db.execute_raw(Statement::from_sql_and_values(
+                        backend,
+                        "UPDATE api_keys SET capabilities = 'webdav.read,webdav.write' \
+                         WHERE id = ? AND capabilities = 'webdav.read'",
+                        [id.into()],
+                    ))
+                    .await?;
+                }
+                id
+            } else {
+                db.execute_raw(Statement::from_sql_and_values(
                     backend,
-                    "SELECT last_insert_rowid() AS id".to_string(),
+                    "INSERT INTO api_keys \
+                       (user_id, name, key_hash, key_prefix, capabilities, all_repos, created_at, expires_at, last_used_at) \
+                     VALUES (?, ?, ?, NULL, ?, 0, ?, NULL, ?)",
+                    [
+                        user_id.into(),
+                        name.into(),
+                        key_hash.clone().into(),
+                        capabilities.into(),
+                        created_at.into(),
+                        last_used_at.into(),
+                    ],
                 ))
-                .await?
-                .ok_or_else(|| DbErr::Custom("api_keys insert returned no rowid".into()))?
-                .try_get("", "id")
-                .map_err(|e| DbErr::Custom(e.to_string()))?;
+                .await?;
+
+                let id: i32 = db
+                    .query_one_raw(Statement::from_string(
+                        backend,
+                        "SELECT last_insert_rowid() AS id".to_string(),
+                    ))
+                    .await?
+                    .ok_or_else(|| DbErr::Custom("api_keys insert returned no rowid".into()))?
+                    .try_get("", "id")
+                    .map_err(|e| DbErr::Custom(e.to_string()))?;
+
+                key_id_by_hash.insert(key_hash, id);
+                id
+            };
 
             // The binding carries the same ceiling as the legacy key, so a
             // read-only key stays read-only even if its capabilities are later
-            // widened.
+            // widened. INSERT OR IGNORE covers the rare case of the same
+            // (key_id, repo_id) pair arising from two users sharing a digest.
             db.execute_raw(Statement::from_sql_and_values(
                 backend,
-                "INSERT INTO api_key_repos (key_id, repo_id, permission) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO api_key_repos (key_id, repo_id, permission) \
+                 VALUES (?, ?, ?)",
                 [key_id.into(), repo_id.into(), permission.into()],
             ))
             .await?;
