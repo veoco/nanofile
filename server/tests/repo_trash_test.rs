@@ -454,6 +454,37 @@ async fn trash_operations_are_owner_scoped() {
     assert_eq!(resp.bytes().await.unwrap().to_vec(), content);
 }
 
+/// seahub's status codes and message for a library that is not in the trash:
+/// 400 on a restore, 404 on a permanent delete.
+#[tokio::test]
+async fn missing_trash_entry_reports_seahub_status_codes() {
+    let f = TestFixture::new().await;
+    let unknown = "11111111-2222-3333-4444-555555555555";
+
+    let resp = f
+        .client
+        .post_form(
+            "/api/v2.1/deleted-repos/",
+            Some(&f.api_token),
+            &[("repo_id", unknown)],
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "restore of an unknown library");
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error_msg"], "Library does not exist in trash.");
+
+    let resp = f
+        .client
+        .delete(
+            &format!("/api/v2.1/deleted-repos/{unknown}/"),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 404, "permanent delete of an unknown library");
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error_msg"], "Library does not exist in trash.");
+}
+
 /// A trash entry from an installation that predates the archive still restores,
 /// but the library comes back empty: its content was destroyed when it was
 /// deleted, and that is reported in the log rather than hidden.

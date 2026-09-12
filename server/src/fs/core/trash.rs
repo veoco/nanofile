@@ -933,6 +933,11 @@ pub async fn list_deleted_repos(
 /// A library deleted before its content was archived (an installation that
 /// predates the archive tables) still restores, but comes back empty; that is
 /// reported in the log rather than silently.
+///
+/// Restoring a library that is not in the trash is a 400 with seahub's
+/// `Library does not exist in trash.` message; seahub's permanent-delete
+/// endpoint reports the same condition as a 404, and [`purge_deleted_repo`] does
+/// the same.
 pub async fn restore_deleted_repo(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -943,7 +948,7 @@ pub async fn restore_deleted_repo(
         .deleted_repo
         .find_by_id(repo_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("repo not found in trash".into()))?;
+        .ok_or_else(|| AppError::BadRequest(MISSING_TRASH_ENTRY.into()))?;
 
     if trashed.owner_id != user_id {
         return Err(AppError::Forbidden);
@@ -1054,6 +1059,11 @@ pub async fn restore_deleted_repo(
 
 // ─── Purging trashed libraries ────────────────────────────────────────
 
+/// What seahub answers when a library is not in the caller's trash. Both trash
+/// endpoints use this text; only the status differs (400 for a restore, 404 for
+/// a permanent delete).
+const MISSING_TRASH_ENTRY: &str = "Library does not exist in trash.";
+
 /// Permanently delete a trashed library.
 ///
 /// Drops its archived content, its file-level trash rows and its trash entry,
@@ -1070,7 +1080,7 @@ pub async fn purge_deleted_repo(
         .deleted_repo
         .find_by_id(repo_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("repo not found in trash".into()))?;
+        .ok_or_else(|| AppError::NotFound(MISSING_TRASH_ENTRY.into()))?;
 
     if trashed.owner_id != user_id {
         return Err(AppError::Forbidden);
