@@ -1260,24 +1260,6 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
     ("GET", "/api2/api-keys/{id}/", RouteAccess::SessionOnly),
     ("PUT", "/api2/api-keys/{id}/", RouteAccess::SessionOnly),
     ("DELETE", "/api2/api-keys/{id}/", RouteAccess::SessionOnly),
-    // ── Legacy per-library WebDAV key management ─────────────────────────
-    // Superseded by the unified key API; kept classified until the routes are
-    // removed, and session-only because a key must never manage credentials.
-    (
-        "GET",
-        "/api2/repos/{repo_id}/webdav-keys/",
-        RouteAccess::SessionOnly,
-    ),
-    (
-        "POST",
-        "/api2/repos/{repo_id}/webdav-keys/",
-        RouteAccess::SessionOnly,
-    ),
-    (
-        "DELETE",
-        "/api2/repos/{repo_id}/webdav-keys/{key_id}/",
-        RouteAccess::SessionOnly,
-    ),
 ];
 
 /// Classify a request path for the unified key system.

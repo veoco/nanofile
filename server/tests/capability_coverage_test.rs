@@ -180,10 +180,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET",    "/api2/api-keys/{key_id}/"),
     ("PUT",    "/api2/api-keys/{key_id}/"),
     ("DELETE", "/api2/api-keys/{key_id}/"),
-    // Legacy per-library WebDAV key management (removed with the unified API).
-    ("GET",    "/api2/repos/{repo_id}/webdav-keys/"),
-    ("POST",   "/api2/repos/{repo_id}/webdav-keys/"),
-    ("DELETE", "/api2/repos/{repo_id}/webdav-keys/{key_id}/"),
 ];
 
 fn method(name: &str) -> Method {

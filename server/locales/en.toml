@@ -645,21 +645,8 @@ uploadlink.no_links_hint = "Create an upload link from the file browser to allow
 webdav.access = "WebDAV Access"
 webdav.copied = "Copied"
 webdav.copy = "Copy"
-webdav.created_at = "Created {date}"
-webdav.delete_failed = "Failed to delete key: "
-webdav.delete_key_confirm = "Delete this WebDAV key? Devices using it will immediately lose access."
-webdav.device_name_placeholder = "Device name, e.g. MacBook"
-webdav.generate_failed = "Failed to generate key: "
-webdav.generate_key = "Generate Key"
-webdav.last_used_at = "Last used {date}"
-webdav.load_keys_failed = "Failed to load keys, please try again."
-webdav.loading = "Loading..."
-webdav.never_used = "Never used"
-webdav.new_key_generated = "New key generated. It is shown only once."
-webdav.no_keys = "No WebDAV keys generated yet."
-webdav.permission = "Permission"
-webdav.permission_rw = "Read & write"
-webdav.permission_r = "Read only"
+webdav.key_hint = "WebDAV keys are managed as API keys, with their own capabilities and lifetime."
+webdav.manage_keys = "Manage API keys"
 
 
 # System tray menu (desktop builds)

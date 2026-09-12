@@ -133,4 +133,3 @@ pub mod upload_link;
 pub mod user_avatar;
 pub mod users;
 pub mod web;
-pub mod webdav_key;

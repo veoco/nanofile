@@ -381,3 +381,48 @@ async fn the_configured_lifetime_bound_is_enforced() {
     assert_eq!(catalog["max_ttl_days"], 30);
     assert!(repo_id.len() == 36);
 }
+
+#[tokio::test]
+async fn webdav_capabilities_are_rejected_on_an_encrypted_library() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .create_encrypted_repo_with_password(&f.api_token, "enc", "secret-pw")
+        .await;
+    assert_eq!(resp.status(), 201);
+    let encrypted_repo = resp.json::<Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // WebDAV has no way to supply the library password, so granting it on an
+    // encrypted library must be refused at creation.
+    let mut body = bound_body(&f);
+    body["capabilities"] = json!(["webdav.read"]);
+    body["repo_permissions"] = json!([{"repo_id": encrypted_repo, "permission": "rw"}]);
+    assert_eq!(create(&f, &body).await.status(), 400);
+
+    // The same key without WebDAV capability is fine.
+    let mut body = bound_body(&f);
+    body["capabilities"] = json!(["file.read"]);
+    body["repo_permissions"] = json!([{"repo_id": encrypted_repo, "permission": "rw"}]);
+    assert_eq!(create(&f, &body).await.status(), 200);
+}
+
+#[tokio::test]
+async fn binding_to_a_library_the_caller_cannot_reach_is_forbidden() {
+    let f = TestFixture::new().await;
+    create_test_user(f.server.db.as_ref(), "owner@example.com", "password123").await;
+    let resp = f.client.login("owner@example.com", "password123").await;
+    let other_token = resp.json::<Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let private_repo = create_test_repo(&f.client, &other_token, "private").await;
+
+    // The caller is not a member, so binding a key to it must fail rather than
+    // hand out access the account does not have.
+    let mut body = bound_body(&f);
+    body["repo_permissions"] = json!([{"repo_id": private_repo, "permission": "rw"}]);
+    assert_eq!(create(&f, &body).await.status(), 403);
+}

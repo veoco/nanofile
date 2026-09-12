@@ -36,6 +36,9 @@ async fn dav(
 }
 
 /// Generate a WebDAV key for `token`'s user on `repo_id` and return it.
+///
+/// WebDAV keys are ordinary unified API keys carrying `webdav.*` and bound to
+/// one library, so they are minted through the unified management API.
 async fn gen_key(
     client: &reqwest::Client,
     base: &str,
@@ -55,16 +58,43 @@ async fn gen_key_with_permission(
     name: &str,
     permission: &str,
 ) -> String {
+    gen_key_with_permission_and_id(client, base, token, repo_id, name, permission)
+        .await
+        .0
+}
+
+/// Generate a WebDAV key and return its plaintext plus its key id.
+async fn gen_key_with_permission_and_id(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    repo_id: &str,
+    name: &str,
+    permission: &str,
+) -> (String, i64) {
+    let capabilities = if permission == "r" {
+        serde_json::json!(["webdav.read"])
+    } else {
+        serde_json::json!(["webdav.read", "webdav.write"])
+    };
     let resp = client
-        .post(format!("{base}/api2/repos/{repo_id}/webdav-keys/"))
+        .post(format!("{base}/api2/api-keys/"))
         .bearer_auth(token)
-        .json(&serde_json::json!({ "name": name, "permission": permission }))
+        .json(&serde_json::json!({
+            "name": name,
+            "capabilities": capabilities,
+            "repo_permissions": [{ "repo_id": repo_id, "permission": permission }],
+            "never": true,
+        }))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200, "generate webdav key failed");
     let body: serde_json::Value = resp.json().await.unwrap();
-    body["key"].as_str().unwrap().to_string()
+    (
+        body["key"].as_str().unwrap().to_string(),
+        body["id"].as_i64().unwrap(),
+    )
 }
 
 /// PUT a file over WebDAV.
@@ -100,107 +130,6 @@ async fn dav_get(
 }
 
 // ── Key management API ────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn test_key_generate_list_delete() {
-    let f = TestFixture::new().await;
-    let base = &f.server.base_url;
-    let client = http();
-
-    // Generate a key — plaintext returned exactly once.
-    let resp = client
-        .post(format!("{base}/api2/repos/{}/webdav-keys/", f.repo_id))
-        .bearer_auth(&f.api_token)
-        .json(&serde_json::json!({ "name": "MacBook" }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let key = body["key"].as_str().unwrap().to_string();
-    let key_id = body["key_id"].as_i64().unwrap();
-    assert!(!key.is_empty());
-
-    // List — no plaintext returned.
-    let resp = client
-        .get(format!("{base}/api2/repos/{}/webdav-keys/", f.repo_id))
-        .bearer_auth(&f.api_token)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["keys"].as_array().unwrap().len(), 1);
-    assert!(body.to_string().contains(&key_id.to_string()));
-    assert!(!body.to_string().contains(&key));
-
-    // Delete the key.
-    let resp = client
-        .delete(format!(
-            "{base}/api2/repos/{}/webdav-keys/{}/",
-            f.repo_id, key_id
-        ))
-        .bearer_auth(&f.api_token)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-
-    let resp = client
-        .get(format!("{base}/api2/repos/{}/webdav-keys/", f.repo_id))
-        .bearer_auth(&f.api_token)
-        .send()
-        .await
-        .unwrap();
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["keys"].as_array().unwrap().len(), 0);
-}
-
-#[tokio::test]
-async fn test_key_non_member_forbidden() {
-    let f = TestFixture::new().await;
-    // A second user who is NOT a member of the repo.
-    create_test_user(f.server.db.as_ref(), "outsider@example.com", "password").await;
-    let resp = f.client.login("outsider@example.com", "password").await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let outsider_token = body["token"].as_str().unwrap().to_string();
-
-    let resp = f
-        .client
-        .post_json(
-            &format!("/api2/repos/{}/webdav-keys/", f.repo_id),
-            Some(&outsider_token),
-            &serde_json::json!({ "name": "x" }),
-        )
-        .await;
-    assert_eq!(resp.status(), 403);
-}
-
-#[tokio::test]
-async fn test_key_encrypted_repo_forbidden() {
-    let f = TestFixture::new().await;
-    let base = &f.server.base_url;
-    let client = http();
-
-    let resp = f
-        .client
-        .create_encrypted_repo_with_password(&f.api_token, "enc", "secret-pw")
-        .await;
-    assert_eq!(resp.status(), 201);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let enc_repo_id = body["id"].as_str().unwrap().to_string();
-
-    // Generating a key for an encrypted repo is rejected.
-    let resp = client
-        .post(format!("{base}/api2/repos/{enc_repo_id}/webdav-keys/"))
-        .bearer_auth(&f.api_token)
-        .json(&serde_json::json!({ "name": "x" }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 400);
-}
 
 // ── Authentication ────────────────────────────────────────────────────────
 
@@ -1042,16 +971,8 @@ async fn test_delete_key_revokes_access() {
     let client = http();
 
     // Generate a key and capture the plaintext + id.
-    let resp = client
-        .post(format!("{base}/api2/repos/{}/webdav-keys/", f.repo_id))
-        .bearer_auth(&f.api_token)
-        .json(&serde_json::json!({ "name": "dev" }))
-        .send()
-        .await
-        .unwrap();
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let plaintext = body["key"].as_str().unwrap().to_string();
-    let key_id = body["key_id"].as_i64().unwrap();
+    let (plaintext, key_id) =
+        gen_key_with_permission_and_id(&client, base, &f.api_token, &f.repo_id, "dev", "rw").await;
 
     // Works while present.
     assert_eq!(
@@ -1069,10 +990,7 @@ async fn test_delete_key_revokes_access() {
 
     // Delete → access revoked.
     let resp = client
-        .delete(format!(
-            "{base}/api2/repos/{}/webdav-keys/{key_id}/",
-            f.repo_id
-        ))
+        .delete(format!("{base}/api2/api-keys/{key_id}/"))
         .bearer_auth(&f.api_token)
         .send()
         .await

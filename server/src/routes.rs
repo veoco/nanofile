@@ -64,15 +64,6 @@ fn v1_routes() -> Router<Arc<AppState>> {
                 .post(crate::handler::repos::create_default_repo),
         )
         .route(
-            "/api2/repos/{repo_id}/webdav-keys/",
-            get(crate::handler::webdav_key::list_webdav_keys)
-                .post(crate::handler::webdav_key::create_webdav_key),
-        )
-        .route(
-            "/api2/repos/{repo_id}/webdav-keys/{key_id}/",
-            delete(crate::handler::webdav_key::delete_webdav_key),
-        )
-        .route(
             "/api2/api-keys/",
             get(crate::handler::api_key::list_api_keys)
                 .post(crate::handler::api_key::create_api_key),

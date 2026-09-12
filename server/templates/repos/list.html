@@ -157,33 +157,11 @@
                             {{ t.tr("webdav.copy") }}
                         </button>
                     </div>
-                    <div id="new-key-box" class="hidden mb-2 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 p-2">
-                        <p class="text-xs font-medium text-green-700 dark:text-green-400 mb-1">{{ t.tr("webdav.new_key_generated") }}</p>
-                        <div class="flex items-center gap-2">
-                            <input id="new-key-value" type="text" readonly
-                                   class="flex-1 min-w-0 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-700 font-mono text-sm text-gray-900 dark:text-gray-100 px-2 py-1 break-all"
-                                   value="">
-                            <button type="button" id="copy-new-key-btn" data-action="copy-new-key"
-                                    class="flex-shrink-0 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-600 transition-colors">{{ t.tr("webdav.copy") }}</button>
-                            <button type="button" data-action="dismiss-new-key"
-                                    class="flex-shrink-0 rounded-lg bg-white dark:bg-surface-700 px-2.5 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">{{ t.tr("common.close") }}</button>
-                        </div>
-                    </div>
-                    <ul id="webdav-key-list" class="text-sm text-gray-900 dark:text-gray-100 space-y-1 mb-2"></ul>
-                    <div class="flex gap-2">
-                        <input id="webdav-key-name" type="text" placeholder="{{ t.tr("webdav.device_name_placeholder") }}"
-                               class="block flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2">
-                        <select id="webdav-key-permission"
-                                class="flex-shrink-0 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2"
-                                title="{{ t.tr("webdav.permission") }}">
-                            <option value="rw">{{ t.tr("webdav.permission_rw") }}</option>
-                            <option value="r">{{ t.tr("webdav.permission_r") }}</option>
-                        </select>
-                        <button type="button" data-action="create-webdav-key"
-                                class="rounded-lg bg-brand-500 px-3 py-2 text-xs font-medium text-white hover:bg-brand-600 transition-colors">
-                            {{ t.tr("webdav.generate_key") }}
-                        </button>
-                    </div>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">{{ t.tr("webdav.key_hint") }}</p>
+                    <a href="/settings/api-keys/"
+                       class="inline-block rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
+                        {{ t.tr("webdav.manage_keys") }}
+                    </a>
                 </div>
             </div>
             <div class="mt-6 flex justify-end gap-2">

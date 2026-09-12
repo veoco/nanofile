@@ -94,10 +94,17 @@ async fn gen_webdav_key(
     token: &str,
     repo_id: &str,
 ) -> String {
+    // WebDAV keys are unified API keys carrying `webdav.*` and bound to one
+    // library.
     let resp = client
-        .post(format!("{base}/api2/repos/{repo_id}/webdav-keys/"))
+        .post(format!("{base}/api2/api-keys/"))
         .bearer_auth(token)
-        .json(&serde_json::json!({ "name": "test-key" }))
+        .json(&serde_json::json!({
+            "name": "test-key",
+            "capabilities": ["webdav.read", "webdav.write"],
+            "repo_permissions": [{ "repo_id": repo_id, "permission": "rw" }],
+            "never": true,
+        }))
         .send()
         .await
         .unwrap();
