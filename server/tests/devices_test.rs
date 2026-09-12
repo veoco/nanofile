@@ -339,6 +339,8 @@ async fn test_device_wiped_expired_token_rejected() {
         device_name: sea_orm::Set(None),
         client_version: sea_orm::Set(None),
         is_pending: sea_orm::Set(false),
+        source: sea_orm::Set("client".to_string()),
+        user_agent: sea_orm::Set(None),
     };
     model.insert(server.db.as_ref()).await.unwrap();
 
@@ -378,6 +380,8 @@ async fn test_device_wiped_pending_token_rejected() {
         device_name: sea_orm::Set(None),
         client_version: sea_orm::Set(None),
         is_pending: sea_orm::Set(true),
+        source: sea_orm::Set("web".to_string()),
+        user_agent: sea_orm::Set(None),
     };
     model.insert(server.db.as_ref()).await.unwrap();
 

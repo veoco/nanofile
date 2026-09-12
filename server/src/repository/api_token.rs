@@ -7,6 +7,8 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::api_token;
 
+use crate::domain::session_source::SessionSource;
+
 /// Parameters for creating a session token.
 pub struct CreateSessionTokenParams {
     pub user_id: i32,
@@ -19,6 +21,11 @@ pub struct CreateSessionTokenParams {
     pub client_version: Option<String>,
     /// Marks a 2FA pending token (must not be usable as a full session).
     pub is_pending: bool,
+    /// Which login produced this token.
+    pub source: SessionSource,
+    /// The login's `User-Agent`, for the sources that carry one. Browser
+    /// sessions have no device name, so this is what identifies them.
+    pub user_agent: Option<String>,
 }
 
 #[async_trait]
@@ -179,6 +186,8 @@ impl ApiTokenRepository for DbApiTokenRepository {
             device_name: Set(params.device_name),
             client_version: Set(params.client_version),
             is_pending: Set(params.is_pending),
+            source: Set(params.source.id().to_string()),
+            user_agent: Set(params.user_agent),
         };
         Ok(model.insert(self.db.as_ref()).await?)
     }

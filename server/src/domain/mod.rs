@@ -17,3 +17,4 @@ pub mod credential;
 pub mod fs;
 pub mod permission;
 pub mod repo_path;
+pub mod session_source;

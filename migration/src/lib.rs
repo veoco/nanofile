@@ -75,6 +75,7 @@ migrations!(
     m20260902_000001_unique_webdav_key_hash,
     m20260910_000001_create_api_keys,
     m20260912_000001_migrate_webdav_keys_into_api_keys,
+    m20260913_000001_add_source_and_user_agent_to_api_tokens,
 );
 
 #[cfg(test)]

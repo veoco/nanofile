@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 
+use crate::domain::session_source::SessionSource;
 use crate::repository::api_token::CreateSessionTokenParams;
 use crate::repository::{
     Repositories, client_login_token::CreateClientLoginTokenParams,
@@ -266,6 +267,8 @@ impl SsoService {
                 device_name: record.device_name.clone(),
                 client_version: record.client_version.clone(),
                 is_pending: false,
+                source: SessionSource::ClientSso,
+                user_agent: None,
             })
             .await?;
 

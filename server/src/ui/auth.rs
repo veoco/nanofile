@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::domain::session_source::SessionSource;
 use crate::i18n::I18n;
 use crate::repository::api_token::CreateSessionTokenParams;
 use crate::service::auth::password::{
@@ -20,6 +21,7 @@ use crate::service::auth::registration::{RegistrationParams, RegistrationService
 use crate::service::auth::token::generate_api_token;
 use crate::service::auth::totp::TotpManager;
 use crate::ui::client_login::resolve_next;
+use crate::ui::user_agent;
 use base::error::AppError;
 
 // ─── Templates ───────────────────────────────────────────────────────────────
@@ -138,6 +140,10 @@ async fn create_pending_token(
             device_name: None,
             client_version: None,
             is_pending: true,
+            source: SessionSource::Web,
+            // A 5-minute half-credential is never listed, so its user agent
+            // would only be a place for a secret-adjacent value to sit.
+            user_agent: None,
         })
         .await
         .map_err(|e| AppError::internal(format!("failed to create pending token: {e}")))?;
@@ -377,6 +383,8 @@ pub async fn login(
             device_name: None,
             client_version: None,
             is_pending: false,
+            source: SessionSource::Web,
+            user_agent: user_agent::from_headers(&headers),
         })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
@@ -643,6 +651,8 @@ pub async fn two_factor_auth(
             device_name: None,
             client_version: None,
             is_pending: false,
+            source: SessionSource::Web,
+            user_agent: user_agent::from_headers(&headers),
         })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
@@ -878,6 +888,8 @@ pub async fn register(
             device_name: None,
             client_version: None,
             is_pending: false,
+            source: SessionSource::Web,
+            user_agent: user_agent::from_headers(&headers),
         })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;

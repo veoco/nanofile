@@ -19,6 +19,7 @@ pub mod starred;
 pub mod sysadmin;
 pub mod trash;
 pub mod two_factor;
+pub mod user_agent;
 
 use axum::Router;
 use axum::routing::get;

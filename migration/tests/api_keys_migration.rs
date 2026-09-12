@@ -8,6 +8,18 @@
 use migration::{Migrator, MigratorTrait};
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
 
+/// The migration that performs the move under test.
+const MOVE: &str = "m20260912_000001_migrate_webdav_keys_into_api_keys";
+
+/// How many migrations run before `name`: the `steps` argument that leaves the
+/// database in the state immediately preceding it.
+fn steps_before(name: &str) -> u32 {
+    Migrator::migrations()
+        .iter()
+        .position(|migration| migration.name() == name)
+        .expect("the named migration must exist") as u32
+}
+
 const REPO: &str = "11111111-2222-3333-4444-555555555555";
 const HASH_RW: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HASH_RO: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -38,9 +50,10 @@ async fn legacy_webdav_keys_become_unified_keys() {
         .await
         .expect("connect");
 
-    // Stop immediately before the move.
-    let total = Migrator::migrations().len();
-    Migrator::up(&db, Some((total - 1) as u32))
+    // Stop immediately before the move. The index is looked up by name rather
+    // than assumed to be the last migration, so adding a later one cannot
+    // silently turn this into "after the move".
+    Migrator::up(&db, Some(steps_before(MOVE)))
         .await
         .expect("migrate to the pre-move schema");
     assert!(

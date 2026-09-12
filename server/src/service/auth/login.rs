@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::domain::session_source::SessionSource;
 use crate::repository::Repositories;
 use crate::service::auth::password::{
     dummy_password_hash, hash_password_async, needs_rehash, verify_password_async,
@@ -246,6 +247,11 @@ impl LoginService {
                 device_name,
                 client_version,
                 is_pending: false,
+                // A client application holds this token, not a browser. Its
+                // `User-Agent` is the client library's, so the device fields
+                // above are what identify it.
+                source: SessionSource::Client,
+                user_agent: None,
             })
             .await?;
 

@@ -19,6 +19,19 @@ pub struct Model {
     pub client_version: Option<String>,
     #[sea_orm(not_null, default_value = false)]
     pub is_pending: bool,
+    /// Where this token came from, as a session-source id: `web`,
+    /// `web_client_login`, `client` or `client_sso`.
+    ///
+    /// Recorded explicitly rather than inferred from `platform`, which is only
+    /// set when the client reported device details and is therefore also absent
+    /// for a browser session, for a client that sent no device info, and for
+    /// the desktop client's "view on website" handoff.
+    #[sea_orm(not_null, default_value = "web")]
+    pub source: String,
+    /// The `User-Agent` of the login that created the token, for the sources
+    /// that have one. Browser sessions carry no `device_name`, so this is the
+    /// only thing that identifies them.
+    pub user_agent: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

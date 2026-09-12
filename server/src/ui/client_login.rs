@@ -15,6 +15,7 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::AppState;
+use crate::domain::session_source::SessionSource;
 use crate::i18n::I18n;
 use crate::repository::api_token::CreateSessionTokenParams;
 use crate::service::auth::token::generate_api_token;
@@ -121,7 +122,13 @@ pub async fn client_token_login(
         return Ok(Html(html).into_response());
     }
 
-    complete_login(&state, &token_str, params.get("next").map(String::as_str)).await
+    complete_login(
+        &state,
+        &token_str,
+        params.get("next").map(String::as_str),
+        crate::ui::user_agent::from_headers(&headers),
+    )
+    .await
 }
 
 /// POST /client-login/ — confirmation submitted by the page rendered above.
@@ -143,7 +150,13 @@ pub async fn client_token_login_confirm(
         _ => return Ok(Redirect::to("/libraries/").into_response()),
     };
 
-    complete_login(&state, &token_str, form.get("next").map(String::as_str)).await
+    complete_login(
+        &state,
+        &token_str,
+        form.get("next").map(String::as_str),
+        crate::ui::user_agent::from_headers(&headers),
+    )
+    .await
 }
 
 /// Exchange a one-time client-login token for a browser session.
@@ -151,6 +164,9 @@ async fn complete_login(
     state: &Arc<AppState>,
     token_str: &str,
     next: Option<&str>,
+    // The browser's `User-Agent`, recorded on the session: this token has no
+    // device fields, so it is the only thing that identifies the session.
+    user_agent: Option<String>,
 ) -> Result<axum::response::Response, AppError> {
     let allowed_origin = state.config.server.site_url_origin();
     // Look up the token
@@ -218,6 +234,11 @@ async fn complete_login(
             device_name: None,
             client_version: None,
             is_pending: false,
+            // The desktop client opened this in a browser and it sets the
+            // session cookie, so it is a browser session — but the user did not
+            // sign in to get it, which is what the label records.
+            source: SessionSource::WebClientLogin,
+            user_agent,
         })
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
