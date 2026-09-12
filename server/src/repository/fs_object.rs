@@ -27,6 +27,14 @@ pub trait FsObjectRepository: Send + Sync {
         fs_ids: &[String],
     ) -> Result<HashSet<String>, AppError>;
     async fn insert_many(&self, models: Vec<fs_object::ActiveModel>) -> Result<(), AppError>;
+    /// Whether any FS object in `repo_id` mentions `block_id`.
+    ///
+    /// Used before deleting a block that an interrupted upload wrote: a
+    /// concurrent commit of identical content can end up referencing that very
+    /// block, and deleting it would corrupt the committed file. The match is a
+    /// substring search over the object JSON, so a false positive only leaves an
+    /// orphan for GC — the safe direction.
+    async fn references_block(&self, repo_id: &str, block_id: &str) -> Result<bool, AppError>;
     /// Get all fs objects of a single repo (used by garbage collection).
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<fs_object::Model>, AppError>;
     /// Project only `(id, fs_id)` for every object of a repo, without loading
@@ -145,6 +153,24 @@ impl FsObjectRepository for DbFsObjectRepository {
             .filter(fs_object::Column::RepoId.eq(repo_id))
             .all(self.db.as_ref())
             .await?)
+    }
+
+    async fn references_block(&self, repo_id: &str, block_id: &str) -> Result<bool, AppError> {
+        // Only a content id we could actually have written may authorize a
+        // delete; anything else (empty, non-hex, `%`/`_` LIKE metacharacters)
+        // reports "referenced" so a malformed value can never remove a block.
+        if block_id.is_empty() || !block_id.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(true);
+        }
+        let row: Option<(i64,)> = fs_object::Entity::find()
+            .select_only()
+            .column(fs_object::Column::Id)
+            .filter(fs_object::Column::RepoId.eq(repo_id))
+            .filter(fs_object::Column::Data.like(format!("%{block_id}%")))
+            .into_tuple()
+            .one(self.db.as_ref())
+            .await?;
+        Ok(row.is_some())
     }
 
     async fn find_ids_and_fs_ids_by_repo_id(

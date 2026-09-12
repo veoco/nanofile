@@ -635,7 +635,7 @@ pub async fn file_browser_root(
     file_browser_inner(user, state, repo_id, "/".to_string(), query).await
 }
 
-/// GET /library/{id}/{name}/{*path} — repo file browser (any path).
+/// GET /libraries/{id}/files/{*path} — repo file browser (any path).
 pub async fn file_browser(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -645,6 +645,56 @@ pub async fn file_browser(
     let path = base::sanitize::safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
     file_browser_inner(user, state, repo_id, path, query).await
+}
+
+/// `GET /library/{id}/{name}/` — seahub-compatible spelling of the library root.
+///
+/// The desktop client's "view on website" hands this URL to the browser after
+/// auto-login (`seafile-client/src/ui/repo-tree-view.cpp:578` builds
+/// `/library/<repo-id>/<name>/`), and only the repository id is meaningful —
+/// seahub carries the name as a decorative second segment. Redirect to this
+/// server's own path so the address bar, bookmarks and every link rendered on
+/// the page settle on one canonical URL.
+pub async fn library_redirect_root(
+    Path((repo_id, _name)): Path<(String, String)>,
+) -> Result<Redirect, AppError> {
+    library_redirect(repo_id, None)
+}
+
+/// `GET /library/{id}/{name}/{*path}` — seahub-compatible path inside a library.
+pub async fn library_redirect_path(
+    Path((repo_id, _name, path)): Path<(String, String, String)>,
+) -> Result<Redirect, AppError> {
+    library_redirect(repo_id, Some(path))
+}
+
+/// Build the `/libraries/{id}/files/…` redirect, refusing anything that could
+/// not have come from a browser navigation.
+///
+/// The repository id and the path are both percent-decoded before they reach
+/// this function, so a `%0d%0a` must not be echoed into `Location`: the id is
+/// restricted to the alphabet repository ids actually use, and the path is
+/// normalized (rejecting `..`, NUL and friends) and re-encoded per segment.
+fn library_redirect(repo_id: String, path: Option<String>) -> Result<Redirect, AppError> {
+    if repo_id.is_empty()
+        || !repo_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(AppError::BadRequest("invalid repository id".into()));
+    }
+    let target = match path {
+        None => format!("/libraries/{repo_id}/files/"),
+        Some(path) => {
+            let normalized = base::sanitize::safe_normalize_path(&path)
+                .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+            format!(
+                "/libraries/{repo_id}/files/{}",
+                encode_repo_path(&normalized)
+            )
+        }
+    };
+    Ok(Redirect::to(&target))
 }
 
 async fn file_browser_inner(
@@ -969,17 +1019,22 @@ const PATH_SAFE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMER
 /// Build the unified `/repos/{repo}/files/{path}` content URL, percent-encoding
 /// each path segment (matching the browser-side `encodeURIComponent` per segment).
 fn content_url(repo_id: &str, path: &str, dl: bool) -> String {
-    let encoded: String = path
-        .trim_start_matches('/')
-        .split('/')
-        .map(|seg| percent_encoding::utf8_percent_encode(seg, PATH_SAFE).to_string())
-        .collect::<Vec<_>>()
-        .join("/");
+    let encoded = encode_repo_path(path);
     let mut url = format!("/repos/{repo_id}/files/{encoded}");
     if dl {
         url.push_str("?dl=1");
     }
     url
+}
+
+/// Percent-encode a repository path for use in a URL, keeping the `/`
+/// separators: every segment goes through [`PATH_SAFE`] individually.
+fn encode_repo_path(path: &str) -> String {
+    path.trim_start_matches('/')
+        .split('/')
+        .map(|seg| percent_encoding::utf8_percent_encode(seg, PATH_SAFE).to_string())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Serve a file directly from the repo (preview or download).

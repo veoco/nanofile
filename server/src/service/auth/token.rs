@@ -1,5 +1,6 @@
 use rand::Rng;
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
 use base::error::AppError;
 
@@ -130,8 +131,15 @@ pub fn hash_token(token: &str) -> String {
 /// session can be preserved via `keep_session_token` (the equivalent of
 /// seahub's `update_session_auth_hash`) so the user is not logged out of the
 /// browser they just used.
+///
+/// `token_manager` additionally drops the in-memory capability URLs
+/// (`/download-api/…`, `/upload-api/…`, `/blks/…`) this user still holds. They
+/// are bearer capabilities with a one-hour TTL, and leaving them alive meant a
+/// leaked upload/download URL outlived the password change that was supposed to
+/// revoke it. Pass `None` only where no manager is reachable.
 pub async fn revoke_all_credentials(
     repos: &crate::repository::Repositories,
+    token_manager: Option<&Arc<crate::AccessTokenManager>>,
     user_id: i32,
     keep_session_token: Option<&str>,
 ) -> Result<(), AppError> {
@@ -146,6 +154,21 @@ pub async fn revoke_all_credentials(
     }
     repos.s2fa_token.delete_by_user(user_id).await?;
     repos.sync_token.delete_by_user(user_id).await?;
+
+    // Outstanding password-reset links are credentials too: a reset link that
+    // survives a password change (or a competing reset) keeps offering account
+    // takeover for the rest of its 3-day TTL.
+    for token in repos.password_reset_token.find_by_user(user_id).await? {
+        repos.password_reset_token.delete_by_id(token.id).await?;
+    }
+
+    if let Some(manager) = token_manager {
+        let revoked = manager.revoke_user(user_id);
+        if revoked > 0 {
+            tracing::debug!(user_id, revoked, "revoked in-memory access tokens");
+        }
+    }
+
     Ok(())
 }
 

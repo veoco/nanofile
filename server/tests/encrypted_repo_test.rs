@@ -651,3 +651,215 @@ async fn test_password_rotation_evicts_every_cached_key() {
         440
     );
 }
+
+// ─── Write path: the library password gates uploads ─────────────────────────
+
+/// Regression: an upload into an encrypted library used to store **plaintext**
+/// blocks because every upload path passed `enc_key = None` and never consulted
+/// the server-side key cache. A cold cache must now be a hard 440 — the status
+/// Android and iOS map to "Library password is needed" — instead of silently
+/// writing plaintext into a library the owner expects to be ciphertext.
+#[tokio::test]
+async fn upload_to_encrypted_repo_without_password_is_rejected() {
+    let f = TestFixture::new().await;
+    let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "test-password").await;
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &enc_repo_id, "/", "secret.txt", b"plaintext")
+        .await;
+    assert_eq!(
+        resp.status(),
+        440,
+        "upload without a cached library key must be rejected, got: {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    // Nothing may have been committed for that path.
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{enc_repo_id}/dir/?p=/"),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let entries: serde_json::Value = resp.json().await.unwrap();
+    let empty = entries.as_array().map(|a| a.is_empty()).unwrap_or(false);
+    assert!(empty, "no entry may be created: {entries}");
+}
+
+/// Once the key is cached the upload succeeds and the round-trip through the
+/// decrypting download path returns the original bytes — i.e. the write path
+/// encrypts symmetrically with the read path.
+#[tokio::test]
+async fn upload_to_encrypted_repo_round_trips() {
+    let f = TestFixture::new().await;
+    let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "test-password").await;
+
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &enc_repo_id, "test-password")
+        .await;
+    assert_eq!(resp.status(), 200, "set-password failed");
+
+    let payload = b"the quick brown fox jumps over the lazy dog".repeat(64);
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &enc_repo_id, "/", "doc.txt", &payload)
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "upload with a cached key failed: {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &enc_repo_id, "/doc.txt")
+        .await;
+    assert_eq!(resp.status(), 200, "download failed");
+    let got = resp.bytes().await.unwrap();
+    assert_eq!(
+        got.as_ref(),
+        payload.as_slice(),
+        "ciphertext written by the upload path must decrypt back to the original bytes"
+    );
+}
+
+/// An anonymous upload link has no per-user key cache entry, so an encrypted
+/// library must be refused when the link is created and when a token is minted
+/// from an existing link.
+#[tokio::test]
+async fn upload_link_blocked_for_encrypted_repo() {
+    let f = TestFixture::new().await;
+    let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "test-password").await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({"repo_id": enc_repo_id, "path": "/"}),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "upload link for an encrypted repo must be refused, got: {}",
+        resp.status()
+    );
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    assert!(
+        body["error_msg"]
+            .as_str()
+            .unwrap_or("")
+            .contains("encrypted"),
+        "error should mention encryption: {body}"
+    );
+
+    // The block-upload link is refused for the same reason.
+    let resp = f.client.upload_blks_link(&f.api_token, &enc_repo_id).await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "block upload link for an encrypted repo must be refused, got: {}",
+        resp.status()
+    );
+}
+
+/// The desktop client sets a library password with a bare
+/// `POST /api2/repos/{id}/` (form field `password`, no `op`). It used to answer
+/// "invalid operation", which the client renders as "Incorrect password" even
+/// for the right password — leaving encrypted libraries unusable from the
+/// desktop client while its uploads wrote plaintext.
+#[tokio::test]
+async fn bare_post_sets_library_password() {
+    let f = TestFixture::new().await;
+    let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "test-password").await;
+
+    // Wrong password: the desktop client branches on the 400 status, iOS on the
+    // `error_msg` body, so both must agree.
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{enc_repo_id}/"),
+            Some(&f.api_token),
+            &[("password", "wrong-password")],
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "wrong password must be a 400");
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    assert_eq!(
+        body["error_msg"].as_str().unwrap_or(""),
+        "Incorrect password",
+        "the message is what the iOS client matches on"
+    );
+
+    // Correct password: the key is cached for this session.
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{enc_repo_id}/"),
+            Some(&f.api_token),
+            &[("password", "test-password")],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "bare set-password failed: {}",
+        resp.text().await.unwrap_or_default()
+    );
+    assert!(
+        cached_key_is_set(&f, &f.api_token, &enc_repo_id).await,
+        "a successful bare set-password must cache the library key"
+    );
+
+    // A bare POST that is not a password submission keeps the descriptive error.
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{enc_repo_id}/"),
+            Some(&f.api_token),
+            &[("nonsense", "1")],
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    assert!(
+        body["error_msg"]
+            .as_str()
+            .unwrap_or("")
+            .contains("invalid operation"),
+        "unrelated bare POSTs keep the original error: {body}"
+    );
+}
+
+/// iOS sends `?op=setpassword` and decides "wrong password" purely from the
+/// `error_msg` body (`SeafRepos.m:250-256`), not from the status, so the body
+/// must carry the exact string it matches on.
+#[tokio::test]
+async fn v1_setpassword_reports_incorrect_password_for_ios() {
+    let f = TestFixture::new().await;
+    let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "test-password").await;
+
+    let resp = f
+        .client
+        .set_repo_password_v2(&f.api_token, &enc_repo_id, "wrong-password")
+        .await;
+    assert_eq!(resp.status(), 400, "wrong password must be a 400");
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    assert_eq!(
+        body["error_msg"].as_str().unwrap_or(""),
+        "Incorrect password"
+    );
+
+    let resp = f
+        .client
+        .set_repo_password_v2(&f.api_token, &enc_repo_id, "test-password")
+        .await;
+    assert_eq!(resp.status(), 200, "correct password must succeed");
+    assert!(cached_key_is_set(&f, &f.api_token, &enc_repo_id).await);
+}

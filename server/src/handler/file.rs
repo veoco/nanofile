@@ -118,6 +118,20 @@ pub async fn file_post_handler(
         let mut file_total_size: i64 = 0;
         let mut has_file = false;
 
+        // Encrypted libraries need the password-equivalent block key before any
+        // block is written, so the uploaded bytes are stored as ciphertext
+        // (matching `common/fs-mgr.c:707-721`, which hashes the encrypted
+        // buffer). `repo_id` comes from the path, so this can fail fast before
+        // the body is read.
+        let enc_key = crate::handler::web::download::upload_block_key(
+            &state,
+            repo_id,
+            access.user.user_id,
+            false,
+        )
+        .await?;
+        let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+
         while let Some(mut field) = mp
             .next_field()
             .await
@@ -132,6 +146,7 @@ pub async fn file_post_handler(
                             state.block_store.clone(),
                             &access.repo_id,
                             &mut field,
+                            enc_key_ref,
                         )
                         .await?;
                     file_block_ids = block_ids;
@@ -589,6 +604,9 @@ pub async fn get_block_download_link(
     Path((repo_id, file_id, block_id)): Path<(String, String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<String>, AppError> {
+    // Mints an in-memory upload/download token on a GET; see `repo_tokens`.
+    crate::middleware::require_csrf_for_cookie_session(&headers, &state.csrf_secret)?;
+
     let parent_dir = query.get("p").map(|s| s.as_str()).unwrap_or("/");
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),

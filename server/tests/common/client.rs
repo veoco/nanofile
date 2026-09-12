@@ -527,6 +527,38 @@ impl TestClient {
             .unwrap()
     }
 
+    /// POST one `Content-Range` chunk to a server-returned upload URL.
+    ///
+    /// The first chunk of a resumable upload is what reserves the declared
+    /// total size against the user's quota (`temp_upload_ttl_hours` cleanup
+    /// releases it later if the client never finishes), so tests need to drive
+    /// that step directly instead of going through the whole file.
+    pub async fn post_upload_chunk(
+        &self,
+        upload_url: &str,
+        parent_dir: &str,
+        filename: &str,
+        chunk: &[u8],
+        start: u64,
+        total_size: u64,
+    ) -> reqwest::Response {
+        let file_part = reqwest::multipart::Part::bytes(chunk.to_vec())
+            .file_name(filename.to_string())
+            .mime_str("application/octet-stream")
+            .unwrap();
+        let end = start + chunk.len() as u64 - 1;
+        let form = reqwest::multipart::Form::new()
+            .part("file", file_part)
+            .text("parent_dir", parent_dir.to_string());
+        self.client
+            .post(upload_url)
+            .header("Content-Range", format!("bytes {start}-{end}/{total_size}"))
+            .multipart(form)
+            .send()
+            .await
+            .unwrap()
+    }
+
     pub async fn upload_file_with_replace(
         &self,
         token: &str,

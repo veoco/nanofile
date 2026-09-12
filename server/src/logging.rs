@@ -228,12 +228,22 @@ impl RotatingLog {
         if let Some(dir) = path.parent()
             && !dir.as_os_str().is_empty()
         {
-            // Logs carry request metadata and error details; create the
-            // directory owner-only rather than inheriting the umask. This runs
-            // before `run_server`, so it cannot rely on that startup loop.
-            infra::common::util::ensure_private_dir(dir)?;
+            // Create an owner-only directory for the log, but never tighten one
+            // that already existed: `ensure_private_dir` also chmods a
+            // pre-existing directory, and silently turning a shared `/var/log`
+            // into 0700 breaks every other service writing there.
+            infra::common::util::ensure_private_dir_only_if_created(dir)?;
         }
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        // The file itself is owner-only regardless, so the log never depends on
+        // the process umask or on the directory's mode.
+        let mut opts = OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let file = opts.open(path)?;
         let written = file.metadata().map(|m| m.len()).unwrap_or(0);
         Ok(Self {
             path: path.to_path_buf(),

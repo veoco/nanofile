@@ -26,8 +26,13 @@ pub trait PasswordResetTokenRepository: Send + Sync {
         created_at: i64,
         expires_at: i64,
     ) -> Result<password_reset_token::Model, AppError>;
-    /// Mark a token as used.
-    async fn mark_as_used(&self, id: i32) -> Result<(), AppError>;
+    /// Atomically claim a token, returning `true` only for the caller that won.
+    ///
+    /// The `used = false` predicate is what makes single-use real: a caller that
+    /// validates first and marks used afterwards leaves a window in which two
+    /// concurrent submissions of the same reset link both pass validation and
+    /// both set a password (last writer wins).
+    async fn mark_as_used(&self, id: i32) -> Result<bool, AppError>;
 }
 
 pub struct DbPasswordResetTokenRepository {
@@ -87,18 +92,18 @@ impl PasswordResetTokenRepository for DbPasswordResetTokenRepository {
         Ok(model.insert(self.db.as_ref()).await?)
     }
 
-    async fn mark_as_used(&self, id: i32) -> Result<(), AppError> {
+    async fn mark_as_used(&self, id: i32) -> Result<bool, AppError> {
         let result = password_reset_token::Entity::update_many()
             .filter(password_reset_token::Column::Id.eq(id))
+            .filter(password_reset_token::Column::Used.eq(false))
             .set(password_reset_token::ActiveModel {
                 used: Set(true),
                 ..Default::default()
             })
             .exec(self.db.as_ref())
             .await?;
-        if result.rows_affected == 0 {
-            return Err(AppError::NotFound("Token not found.".to_string()));
-        }
-        Ok(())
+        // `false` means another request already claimed it (or it does not
+        // exist); either way this caller must not proceed to set a password.
+        Ok(result.rows_affected == 1)
     }
 }

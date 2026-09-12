@@ -413,7 +413,16 @@ pub async fn beshare_repo(
 
     // Add repo member
     let now = chrono::Utc::now().timestamp();
+    // Validate the level like `modify_share_permission` does. Write access
+    // requires exactly "rw" but *read* is granted for any non-NULL value, so an
+    // unvalidated "" / "none" / typo silently produced a read-share instead of
+    // being rejected.
     let perm = permission.unwrap_or("rw").to_string();
+    if perm != "rw" && perm != "r" {
+        return Err(AppError::BadRequest(
+            "permission must be 'rw' or 'r'".into(),
+        ));
+    }
 
     repos
         .member
@@ -564,6 +573,22 @@ pub async fn delete_share(
     // The member's share/upload links must stop resolving at once, not after the
     // creator-access cache expires.
     invalidate_link_creator_cache(target_user.id, Some(repo_id));
+
+    // A sync token is bound to (repo, user) for up to `sync_token_ttl_days`
+    // (a year by default) and the `/seafhttp/` endpoints re-derive the caller's
+    // identity from it, so the removed member would otherwise keep a
+    // block-existence oracle (and the locked-file list) for the library long
+    // after losing access.
+    if let Err(e) = repos
+        .sync_token
+        .delete_by_repo_and_user(repo_id, target_user.id)
+        .await
+    {
+        tracing::warn!(
+            "failed to revoke sync tokens for user {} on repo {repo_id}: {e}",
+            target_user.id
+        );
+    }
 
     // Likewise for the decrypted library key cached for the removed member.
     if let Some(pm) = password_manager {

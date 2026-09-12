@@ -24,6 +24,8 @@ pub struct AuthRateLimiters {
     /// requests are never counted, so a working client cannot trip this.
     pub webdav_auth: Arc<GenericRateLimiter>,
     pub reindex: Arc<GenericRateLimiter>,
+    /// Anonymous SSO link creations, keyed by client IP.
+    pub sso_link: Arc<GenericRateLimiter>,
     pub search: Arc<GenericRateLimiter>,
 }
 
@@ -59,6 +61,7 @@ impl AuthRateLimiters {
                 300,
             )),
             reindex: Arc::new(GenericRateLimiter::new(cfg.reindex_max_per_hour, 3600)),
+            sso_link: Arc::new(GenericRateLimiter::new(cfg.sso_link_max_per_hour, 3600)),
             search: Arc::new(GenericRateLimiter::new(cfg.search_max_per_minute, 60)),
         })
     }

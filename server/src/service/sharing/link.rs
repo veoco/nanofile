@@ -96,6 +96,24 @@ async fn create_upload_link_impl(
     )
     .await?;
 
+    // An encrypted library cannot be written through an anonymous link: the
+    // server stores ciphertext, which needs the password-equivalent library key
+    // held in the per-user password cache, and an anonymous visitor has no
+    // cache entry. The official clients already hide the upload-link action for
+    // encrypted libraries (desktop `file-table.cpp:386`, Android
+    // `BottomSheetMenuManager:365`), so this matches their expectation. Mirrors
+    // the share-link guard in `sharing::share`.
+    let repo_model = repos
+        .repo
+        .find_by_id(repo_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+    if repo_model.encrypted != 0 {
+        return Err(AppError::BadRequest(
+            "cannot create upload link for encrypted library".into(),
+        ));
+    }
+
     let now = chrono::Utc::now().timestamp();
     let password_hash = password.map(|p| hash_password(p, config.auth.password_hash_iterations));
 
@@ -142,11 +160,22 @@ pub async fn delete_upload_link(
     repos: &Repositories,
     token: &str,
     user_id: i32,
+    token_manager: Option<&Arc<crate::AccessTokenManager>>,
 ) -> Result<(), AppError> {
+    // Resolve the row first: deleting the link must also revoke the upload
+    // tokens already minted from it, otherwise someone who exchanged the link
+    // for a token can keep uploading for the token's remaining TTL.
+    let link = repos.upload_link.find_by_token(token).await?;
     repos
         .upload_link
         .delete_by_token_and_user(token, user_id)
         .await?;
+    if let (Some(manager), Some(link)) = (token_manager, link) {
+        let revoked = manager.revoke_upload_link(link.id);
+        if revoked > 0 {
+            tracing::debug!(link_id = link.id, revoked, "revoked upload-link tokens");
+        }
+    }
     Ok(())
 }
 
@@ -214,9 +243,17 @@ pub async fn delete_upload_link_v21(
     repos: &Repositories,
     id: i32,
     user_id: i32,
+    token_manager: Option<&Arc<crate::AccessTokenManager>>,
 ) -> Result<bool, AppError> {
     let result = repos.upload_link.delete_by_id_and_user(id, user_id).await?;
-    Ok(result.rows_affected > 0)
+    let deleted = result.rows_affected > 0;
+    if deleted && let Some(manager) = token_manager {
+        let revoked = manager.revoke_upload_link(id);
+        if revoked > 0 {
+            tracing::debug!(link_id = id, revoked, "revoked upload-link tokens");
+        }
+    }
+    Ok(deleted)
 }
 
 /// Delete an upload link by token string (seahub-compatible).
@@ -224,6 +261,7 @@ pub async fn delete_upload_link_v21_by_token(
     repos: &Repositories,
     token: &str,
     user_id: i32,
+    token_manager: Option<&Arc<crate::AccessTokenManager>>,
 ) -> Result<bool, AppError> {
     // Find the link by token first, then delete by id
     let link = repos
@@ -240,7 +278,14 @@ pub async fn delete_upload_link_v21_by_token(
         .upload_link
         .delete_by_id_and_user(link.id, user_id)
         .await?;
-    Ok(result.rows_affected > 0)
+    let deleted = result.rows_affected > 0;
+    if deleted && let Some(manager) = token_manager {
+        let revoked = manager.revoke_upload_link(link.id);
+        if revoked > 0 {
+            tracing::debug!(link_id = link.id, revoked, "revoked upload-link tokens");
+        }
+    }
+    Ok(deleted)
 }
 
 pub async fn get_upload_link_v21(

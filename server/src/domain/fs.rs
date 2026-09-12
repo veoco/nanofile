@@ -63,3 +63,53 @@ pub fn compute_file(data: &FsFileData) -> (String, String) {
 // These were previously here but have been moved to `crate::fs::core::store`
 // (store_fs_dir_object / store_fs_file_object) to keep domain pure.
 // This module now contains only pure computation functions.
+
+/// Whether the in-repo path `dst` is `src` itself or lies inside `src`.
+///
+/// Used to reject "move a directory into its own subtree". The FS tree update
+/// is a two-phase (remove-from-old-parent, then add-to-new-parent) sequence
+/// with a commit in between, so a destination inside the moved subtree no
+/// longer exists once phase 1 is durable: phase 2 then fails *after* the
+/// subtree has already disappeared from HEAD, leaving no trash entry and a 500.
+/// The WebDAV MOVE/COPY handler guarded this case; the REST and sync move
+/// endpoints did not.
+///
+/// Both arguments are canonical in-repo paths (`/`-rooted, no `..`/`.` and no
+/// trailing slash except for the root itself), as produced by
+/// `base::sanitize::safe_normalize_path`.
+pub fn is_self_or_subpath(src: &str, dst: &str) -> bool {
+    if dst == src {
+        return true;
+    }
+    let prefix = if src == "/" {
+        "/".to_string()
+    } else {
+        format!("{}/", src.trim_end_matches('/'))
+    };
+    dst.starts_with(&prefix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_self_or_subpath;
+
+    #[test]
+    fn identical_paths_are_self() {
+        assert!(is_self_or_subpath("/a/b", "/a/b"));
+        assert!(is_self_or_subpath("/", "/"));
+    }
+
+    #[test]
+    fn descendants_are_subpaths() {
+        assert!(is_self_or_subpath("/a", "/a/b"));
+        assert!(is_self_or_subpath("/a", "/a/b/c"));
+        assert!(is_self_or_subpath("/", "/anything"));
+    }
+
+    #[test]
+    fn siblings_and_prefix_traps_are_not_subpaths() {
+        assert!(!is_self_or_subpath("/a", "/ab"));
+        assert!(!is_self_or_subpath("/a/b", "/a/c"));
+        assert!(!is_self_or_subpath("/a/b", "/a"));
+    }
+}

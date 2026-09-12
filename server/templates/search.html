@@ -66,6 +66,10 @@
                 </p>
                 {% if !item.content_highlight.is_empty() %}
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                    {# `|safe` is deliberate: `content_highlight` is built by
+   `indexer::build_content_highlight`, which HTML-escapes the file content and
+   only injects the `<mark>` wrapper. If that ever changes to any other
+   producer, this sink becomes an XSS vector — keep it escaped. #}
                     {{ item.content_highlight|safe }}
                 </p>
                 {% endif %}

@@ -41,7 +41,7 @@ async fn test_groups_empty() {
     let resp = f.client.get("/api2/groups/", Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body.as_array().unwrap().len(), 0);
+    assert!(body.as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -76,7 +76,11 @@ async fn test_search_user_found() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(!body.as_array().unwrap().is_empty());
+    // The desktop client reads `json_object_get(json, "users")`; a bare array
+    // left its share-to-user autocomplete silently empty.
+    let users = body["users"].as_array().expect("`users` envelope");
+    assert!(!users.is_empty());
+    assert!(users[0]["email"].as_str().is_some());
 }
 
 #[tokio::test]
@@ -91,7 +95,7 @@ async fn test_search_user_not_found() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body.as_array().unwrap().len(), 0);
+    assert!(body["users"].as_array().unwrap().is_empty());
 }
 
 /// Security: LIKE wildcards in the search query must be matched literally, so
@@ -110,7 +114,7 @@ async fn test_search_user_wildcard_not_wildcard() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(
-        body.as_array().unwrap().len(),
+        body["users"].as_array().unwrap().len(),
         0,
         "a bare % must not enumerate all emails"
     );
@@ -123,7 +127,7 @@ async fn test_search_user_wildcard_not_wildcard() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(
-        body.as_array().unwrap().len(),
+        body["users"].as_array().unwrap().len(),
         0,
         "a bare _ must not enumerate all emails"
     );
@@ -135,7 +139,11 @@ async fn test_search_user_wildcard_not_wildcard() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body.as_array().unwrap().len(), 1, "substring search works");
+    assert_eq!(
+        body["users"].as_array().unwrap().len(),
+        1,
+        "substring search works"
+    );
 }
 
 /// v2.1 — GET /api/v2.1/groups/ (required by seadroid `getGroupsAsync`, part of

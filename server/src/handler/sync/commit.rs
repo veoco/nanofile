@@ -214,5 +214,15 @@ pub async fn update_branch(
         .update_branch(&repo_id, new_head, _auth.user_id, &commit_desc)
         .await?;
 
+    // The blocks and FS objects this client uploaded are now referenced by the
+    // new head, so drop its uncommitted-block reservation for the repo. Blocks
+    // it uploaded but never committed are left to GC — the reservation was what
+    // bounded the write loop, and holding it after a commit would double-count
+    // the bytes that are now part of the repo's size.
+    crate::service::fs::quota::release_repo_reservation(&state.repos, _auth.user_id, &repo_id);
+    // The commit changed the repo's size, so the cached per-user usage snapshot
+    // must not be reused by the next quota check.
+    crate::service::fs::quota::invalidate_user(&state.repos, _auth.user_id);
+
     Ok(StatusCode::OK)
 }

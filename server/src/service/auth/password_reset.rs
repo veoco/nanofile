@@ -21,11 +21,29 @@ pub struct PasswordResetTokenResult {
 /// Service handling password reset operations.
 pub struct PasswordResetService {
     repos: Arc<Repositories>,
+    /// In-memory capability-URL manager, so a reset also drops the user's
+    /// outstanding upload/download tokens. `None` in contexts without one.
+    token_manager: Option<Arc<crate::AccessTokenManager>>,
 }
 
 impl PasswordResetService {
     pub fn new(repos: Arc<Repositories>) -> Self {
-        Self { repos }
+        Self {
+            repos,
+            token_manager: None,
+        }
+    }
+
+    /// Same as [`Self::new`], but able to revoke in-memory capability URLs on
+    /// reset as well.
+    pub fn with_token_manager(
+        repos: Arc<Repositories>,
+        token_manager: Arc<crate::AccessTokenManager>,
+    ) -> Self {
+        Self {
+            repos,
+            token_manager: Some(token_manager),
+        }
     }
 
     /// Create a password reset token for a user.
@@ -102,7 +120,9 @@ impl PasswordResetService {
 
     /// Complete the password reset process.
     ///
-    /// Validates the token, updates the password, and marks the token as used.
+    /// Claim the token **first**, then set the password: the claim is a single
+    /// conditional UPDATE, so two concurrent submissions of the same link
+    /// cannot both take effect (the loser aborts before writing a password).
     pub async fn reset_password(
         &self,
         raw_token: &str,
@@ -122,13 +142,28 @@ impl PasswordResetService {
             }
         };
 
-        // Validate password
+        // Validate password before claiming, so a weak password does not burn
+        // the link.
         crate::service::auth::password::validate_password(
             new_password,
             password_min_length as u32,
             require_strong_password,
         )
         .map_err(AppError::BadRequest)?;
+
+        // Claim the token atomically. Losing the race means someone else is
+        // resetting with the same link, so this request must not write a
+        // password — the last writer would otherwise win.
+        if !self
+            .repos
+            .password_reset_token
+            .mark_as_used(record.id)
+            .await?
+        {
+            return Err(AppError::BadRequest(
+                "This reset link is invalid or has expired.".to_string(),
+            ));
+        }
 
         // Update password
         let password_hash = hash_password(new_password, password_hash_iterations);
@@ -137,17 +172,17 @@ impl PasswordResetService {
             .update_password(record.user_id, password_hash)
             .await?;
 
-        // Mark token as used
-        self.repos
-            .password_reset_token
-            .mark_as_used(record.id)
-            .await?;
-
-        // Revoke every credential (sessions, API tokens, 2FA device trust and
-        // repository sync tokens) so a stolen credential cannot outlive the
-        // reset — matching seahub's `clear_token()` on password reset.
-        crate::service::auth::token::revoke_all_credentials(&self.repos, record.user_id, None)
-            .await?;
+        // Revoke every credential (sessions, API tokens, 2FA device trust,
+        // repository sync tokens and any outstanding reset links) so a stolen
+        // credential cannot outlive the reset — matching seahub's
+        // `clear_token()` on password reset.
+        crate::service::auth::token::revoke_all_credentials(
+            &self.repos,
+            self.token_manager.as_ref(),
+            record.user_id,
+            None,
+        )
+        .await?;
 
         Ok(())
     }

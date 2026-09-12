@@ -86,6 +86,16 @@ pub async fn register_user(
         return Err(AppError::Forbidden);
     }
 
+    // The configured password policy applies here too. Registration, the
+    // self-service change form and the reset flow all enforce it; this
+    // admin-only path used to accept a one-character password.
+    crate::service::auth::password::validate_password(
+        &form.password,
+        state.config.auth.password_min_length,
+        state.config.auth.require_strong_password,
+    )
+    .map_err(AppError::BadRequest)?;
+
     let iterations = state.config.auth.password_hash_iterations;
     let password_hash = crate::service::auth::password::hash_password(&form.password, iterations);
 

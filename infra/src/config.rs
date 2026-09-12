@@ -518,7 +518,19 @@ impl ServerConfig {
                     .iter()
                     .any(|allowed| allowed.eq_ignore_ascii_case(h)))
         {
-            return format!("{}://{h}", self.site_url_scheme());
+            // When `allowed_hosts` is empty the Host is only echoed if it names a
+            // literal address, because the URL being built **carries a capability
+            // token**. A DNS name here is attacker-influenceable (DNS rebinding,
+            // a wildcard vhost, a proxy forwarding arbitrary Host values) and
+            // following the returned link would hand that token to whoever owns
+            // the name. Literal addresses are what the zero-config LAN case
+            // documents ("LAN clients hitting the server by IP"): they cannot be
+            // pointed at a third party by rebinding the server's own address.
+            // An operator who wants a hostname echoed lists it in
+            // `allowed_hosts`.
+            if !self.allowed_hosts.is_empty() || host_names_literal_address(h) {
+                return format!("{}://{h}", self.site_url_scheme());
+            }
         }
         base.to_string()
     }
@@ -649,6 +661,30 @@ fn is_hostname(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
+}
+
+/// Whether a validated `Host` header names a literal IP address (or localhost).
+///
+/// `download_url_base` only echoes a Host like this when `allowed_hosts` is
+/// unset: the URLs it builds carry capability tokens, and a DNS name in the Host
+/// is attacker-influenceable (DNS rebinding, wildcard vhost, a proxy that
+/// forwards arbitrary Host values). LAN deployments reach the server by address
+/// anyway, so this keeps the documented zero-config behaviour without letting a
+/// hostile name into a token-bearing URL.
+fn host_names_literal_address(host: &str) -> bool {
+    // Strip a `:port` suffix; bracketed IPv6 keeps its own colons.
+    let name = if host.starts_with('[') {
+        host.split(']')
+            .next()
+            .unwrap_or(host)
+            .trim_start_matches('[')
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+    if name.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    name.parse::<std::net::IpAddr>().is_ok()
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -847,6 +883,14 @@ pub struct AuthConfig {
     /// after every few guesses and spray forever.
     #[serde(default = "default_spray_distinct_usernames")]
     pub max_distinct_usernames_per_ip: u32,
+    /// Max anonymous SSO link creations per IP per hour (0 = unlimited).
+    ///
+    /// `POST /api2/client-sso-link/` is anonymous by protocol and writes a row
+    /// per call, so without a cap it is a cheap way to fill `sso_login_tokens`
+    /// and take the SQLite writer lock.
+    /// Env: NANOFILE_AUTH_SSO_LINK_MAX_PER_HOUR
+    #[serde(default = "default_sso_link_max_per_hour")]
+    pub sso_link_max_per_hour: u32,
     /// Whether to show the "Create Account" link on the login page and
     /// allow invitation-code-based registration.
     #[serde(default = "default_true")]
@@ -906,6 +950,7 @@ impl Default for AuthConfig {
             max_login_attempts: default_five(),
             lockout_duration_secs: default_lockout_duration_secs(),
             max_distinct_usernames_per_ip: default_spray_distinct_usernames(),
+            sso_link_max_per_hour: default_sso_link_max_per_hour(),
             enable_invitations: default_true(),
             enable_password_reset: default_true(),
             password_min_length: default_password_min_length(),
@@ -947,6 +992,10 @@ fn default_true() -> bool {
 fn default_five() -> u32 {
     5
 }
+fn default_sso_link_max_per_hour() -> u32 {
+    30
+}
+
 fn default_spray_distinct_usernames() -> u32 {
     20
 }
@@ -1333,6 +1382,10 @@ impl Config {
         env_parse!(
             "NANOFILE_AUTH_WEBDAV_MAX_FAILURES_PER_5MIN",
             self.auth.webdav_max_failures_per_5min
+        );
+        env_parse!(
+            "NANOFILE_AUTH_SSO_LINK_MAX_PER_HOUR",
+            self.auth.sso_link_max_per_hour
         );
         env_parse!(
             "NANOFILE_AUTH_ENABLE_INVITATIONS",
@@ -1801,31 +1854,72 @@ request_timeout_secs = 600
 
     #[test]
     fn default_site_url_falls_back_to_host_with_port() {
-        // Direct LAN access: Host carries the port, keep it verbatim.
+        // Direct LAN access: Host carries a literal address, keep it verbatim.
         let c = cfg("http://127.0.0.1:8082");
         assert_eq!(
             c.download_url_base(Some("192.168.1.100:8082")),
             "http://192.168.1.100:8082"
         );
-        // Domain with explicit port.
+        // A *name* is not echoed while `allowed_hosts` is unset: these URLs
+        // carry a capability token, so a DNS name the server did not choose
+        // (DNS rebinding, wildcard vhost) must not reach the client. The
+        // operator lists the name in `allowed_hosts` to opt in.
         assert_eq!(
             c.download_url_base(Some("seafile.example.com:8082")),
+            "http://127.0.0.1:8082"
+        );
+
+        let mut allowed = cfg("http://127.0.0.1:8082");
+        allowed.allowed_hosts = vec!["seafile.example.com:8082".to_string()];
+        assert_eq!(
+            allowed.download_url_base(Some("seafile.example.com:8082")),
             "http://seafile.example.com:8082"
         );
+    }
+
+    #[test]
+    fn trust_request_host_never_echoes_a_name_by_default() {
+        let c = cfg("http://127.0.0.1:8082");
+        // Literal addresses (and localhost) keep the zero-config LAN case
+        // working.
+        for host in [
+            "192.168.1.100",
+            "10.0.0.5:8082",
+            "[fe80::1]",
+            "[fe80::1]:8082",
+            "localhost",
+            "127.0.0.1:8082",
+        ] {
+            assert_eq!(
+                c.download_url_base(Some(host)),
+                format!("http://{host}"),
+                "host {host}"
+            );
+        }
+        // Names do not.
+        for host in ["evil.example", "evil.example:8082", "rebind.attacker.tld"] {
+            assert_eq!(
+                c.download_url_base(Some(host)),
+                "http://127.0.0.1:8082",
+                "host {host} must not be echoed into a token-bearing URL"
+            );
+        }
     }
 
     #[test]
     fn default_site_url_falls_back_to_host_without_port() {
         // Reverse proxy without a port in Host (80/443): never append the
         // internal listen port — the old behavior produced unreachable URLs.
+        // A literal address is echoed; a name needs `allowed_hosts` (see
+        // `trust_request_host_never_echoes_a_name_by_default`).
         let c = cfg("http://127.0.0.1:8082");
-        assert_eq!(
-            c.download_url_base(Some("seafile.example.com")),
-            "http://seafile.example.com"
-        );
         assert_eq!(
             c.download_url_base(Some("192.168.1.100")),
             "http://192.168.1.100"
+        );
+        assert_eq!(
+            c.download_url_base(Some("seafile.example.com")),
+            "http://127.0.0.1:8082"
         );
     }
 

@@ -42,6 +42,13 @@ pub trait SyncTokenRepository: Send + Sync {
     async fn delete_by_id(&self, id: i32) -> Result<(), AppError>;
     async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError>;
     async fn delete_by_user_and_peer(&self, user_id: i32, peer_id: &str) -> Result<u64, AppError>;
+    /// Delete a user's token for one repository.
+    ///
+    /// Called when a member loses access to a library: a sync token is bound to
+    /// (repo, user) for up to `sync_token_ttl_days` (a year by default) and the
+    /// sync endpoints re-derive the caller's identity from it, so it must not
+    /// outlive the membership.
+    async fn delete_by_repo_and_user(&self, repo_id: &str, user_id: i32) -> Result<u64, AppError>;
     async fn update_peer_info(
         &self,
         model: sync_token::Model,
@@ -181,6 +188,15 @@ impl SyncTokenRepository for DbSyncTokenRepository {
 
     async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError> {
         let result = sync_token::Entity::delete_many()
+            .filter(sync_token::Column::UserId.eq(user_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
+    }
+
+    async fn delete_by_repo_and_user(&self, repo_id: &str, user_id: i32) -> Result<u64, AppError> {
+        let result = sync_token::Entity::delete_many()
+            .filter(sync_token::Column::RepoId.eq(repo_id))
             .filter(sync_token::Column::UserId.eq(user_id))
             .exec(self.db.as_ref())
             .await?;

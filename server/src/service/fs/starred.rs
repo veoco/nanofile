@@ -29,14 +29,22 @@ impl StarredService {
     }
 
     /// List starred files (legacy v2 API).
+    ///
+    /// Entries are intersected with the libraries the user can still access, the
+    /// same way the v2.1 list does. A stale row otherwise kept disclosing a
+    /// library id and the exact file/directory paths of a library the user was
+    /// removed from.
     pub async fn list_starred_files(
         &self,
         user_id: i32,
     ) -> Result<Vec<StarredFileEntry>, AppError> {
         let entries = self.repos.starred.find_by_user_id(user_id).await?;
+        let accessible =
+            crate::domain::permission::accessible_repo_ids(&self.repos, user_id).await?;
 
         Ok(entries
             .into_iter()
+            .filter(|e| accessible.contains(&e.repo_id))
             .map(|e| StarredFileEntry {
                 repo_id: e.repo_id,
                 path: e.path,

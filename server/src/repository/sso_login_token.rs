@@ -33,6 +33,8 @@ pub trait SsoLoginTokenRepository: Send + Sync {
     async fn mark_accessed(&self, token: &str, accessed_at: i64) -> Result<(), AppError>;
     /// Mark the SSO flow successful with the completed username and API token.
     async fn complete(&self, token: &str, username: &str, api_token: &str) -> Result<(), AppError>;
+    /// Delete a link row (expired links are removed when they are first seen).
+    async fn delete_by_token(&self, token: &str) -> Result<(), AppError>;
 }
 
 pub struct DbSsoLoginTokenRepository {
@@ -131,6 +133,15 @@ impl SsoLoginTokenRepository for DbSsoLoginTokenRepository {
                 ..Default::default()
             })
             .filter(sso_login_token::Column::Token.eq(hash_token(token)))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+    async fn delete_by_token(&self, token: &str) -> Result<(), AppError> {
+        sso_login_token::Entity::delete_many()
+            .filter(
+                sso_login_token::Column::Token.eq(crate::service::auth::token::hash_token(token)),
+            )
             .exec(self.db.as_ref())
             .await?;
         Ok(())

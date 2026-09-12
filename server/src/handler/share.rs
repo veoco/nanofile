@@ -111,10 +111,23 @@ pub async fn beshare_repo(
 }
 
 /// `GET /api2/beshared-repos/{repo_id}/` — list all users shared to this repo.
+///
+/// Owner-only. `RepoPathWrite` would admit any `rw` member, which let a
+/// collaborator harvest every co-member's email address even though every
+/// operation that *changes* membership is owner-only. No official client calls
+/// this with GET (the desktop and Android clients only DELETE here), so
+/// tightening it costs nothing.
 pub async fn list_share_members(
     path: RepoPathWrite,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<share::ShareMember>>, AppError> {
+    crate::domain::permission::check_repo_owner(
+        state.repos.member.as_ref(),
+        &path.repo_id,
+        path.user.user_id,
+    )
+    .await?;
+
     let members = share::list_share_members(&state.repos, &path.repo_id).await?;
     Ok(Json(members))
 }
@@ -151,6 +164,15 @@ pub async fn delete_share(
     Path(repo_id): Path<String>,
     Json(req): Json<ModifyShareRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Resolve the target before the share is deleted so their in-memory
+    // capability URLs can be revoked below.
+    let target_user_id = state
+        .repos
+        .user
+        .find_by_email(&req.user)
+        .await?
+        .map(|u| u.id);
+
     share::delete_share(
         &state.repos,
         state.notification_manager.as_ref(),
@@ -160,6 +182,15 @@ pub async fn delete_share(
         &req.user,
     )
     .await?;
+
+    // Outstanding `/download-api/…` and `/upload-…api/…` URLs for the removed
+    // member would otherwise keep working for their remaining TTL.
+    if let Some(uid) = target_user_id {
+        let revoked = state.token_manager.revoke_user_repo(uid, &repo_id);
+        if revoked > 0 {
+            tracing::debug!(uid, repo_id, revoked, "revoked access tokens on unshare");
+        }
+    }
 
     state.left_panel_cache.clear_all();
 

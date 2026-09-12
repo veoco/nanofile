@@ -87,37 +87,33 @@ pub async fn client_token_login(
     // mint a token for their own account and have a victim's browser silently
     // switch to it.
     //
-    // Two independent signals are trusted instead:
-    //   * `Sec-Fetch-Site: none|same-origin` — a navigation the browser itself
-    //     initiated, which a cross-site redirect can never produce;
-    //   * the issuing client address — the desktop client and its browser share
-    //     an egress address, so a token minted elsewhere is not accepted.
-    // When neither holds, the user gets an explicit confirmation page (a POST,
-    // whose `Origin` a browser always sends and an attacker cannot suppress).
-    let sec_fetch_site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    // The only signal that decides a silent login is the issuing client address:
+    // the desktop client and the browser it opens share an egress address, so a
+    // token minted elsewhere is not accepted. `Sec-Fetch-Site` is *not* used to
+    // grant trust — `none` is also what a link opened from an external
+    // application (chat, mail, a PDF) produces, which is precisely how an
+    // attacker would deliver the link — so it can only ever force the
+    // confirmation page, never skip it. That page is a POST whose `Origin` a
+    // browser always sends and an attacker cannot suppress.
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
         &state.config.server.trusted_proxies,
     );
-    let trusted = match sec_fetch_site {
-        // The browser's own navigation metadata is decisive when present.
-        Some("none") | Some("same-origin") => true,
-        // Anything else (`cross-site`, `same-site` across origins, …) must not
-        // silently switch the browser's session.
-        Some(_) => false,
-        // Browsers too old for `Sec-Fetch-*`: fall back to the address that
-        // requested the token.
-        None => issuer_matches(&token_str, &client_ip),
-    };
+    let cross_site_navigation = headers
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|site| !matches!(site, "none" | "same-origin"));
+    let trusted = !cross_site_navigation && issuer_matches(&token_str, &client_ip);
 
     if !trusted {
+        let allowed_origin = state.config.server.site_url_origin();
         let html = ClientLoginConfirmTemplate {
             t: I18n::from_headers(&headers, &state.config.ui.default_language),
             token: token_str.clone(),
             next: params
                 .get("next")
-                .filter(|n| crate::ui::client_login::resolve_next(Some(n)) == **n)
+                .filter(|n| crate::ui::client_login::resolve_next(Some(n), &allowed_origin) == **n)
                 .cloned(),
         }
         .render()
@@ -156,6 +152,7 @@ async fn complete_login(
     token_str: &str,
     next: Option<&str>,
 ) -> Result<axum::response::Response, AppError> {
+    let allowed_origin = state.config.server.site_url_origin();
     // Look up the token
     let record = state
         .repos
@@ -167,7 +164,7 @@ async fn complete_login(
     let record = match record {
         Some(r) => r,
         None => {
-            let next = resolve_next(next);
+            let next = resolve_next(next, &allowed_origin);
             return Ok(Redirect::to(&next).into_response());
         }
     };
@@ -177,7 +174,7 @@ async fn complete_login(
     let elapsed = now - record.created_at;
     if !(0..=TOKEN_TTL_SECS).contains(&elapsed) {
         let _ = state.repos.client_login_token.delete(record).await;
-        let next = resolve_next(next);
+        let next = resolve_next(next, &allowed_origin);
         return Ok(Redirect::to(&next).into_response());
     }
 
@@ -198,7 +195,7 @@ async fn complete_login(
     let user_record = match user_record {
         Some(u) if u.is_active => u,
         _ => {
-            let next = resolve_next(next);
+            let next = resolve_next(next, &allowed_origin);
             return Ok(Redirect::to(&next).into_response());
         }
     };
@@ -237,7 +234,7 @@ async fn complete_login(
         secure,
     );
 
-    let next = resolve_next(next);
+    let next = resolve_next(next, &allowed_origin);
 
     let csrf_cookie = crate::service::auth::csrf::csrf_cookie_header(
         &state.csrf_secret,
@@ -268,26 +265,134 @@ async fn complete_login(
     Ok((StatusCode::FOUND, resp_headers).into_response())
 }
 
-/// Resolve the `next` URL to redirect to.
-/// Falls back to /libraries/ for invalid or unsafe URLs.
-pub(crate) fn resolve_next(next: Option<&str>) -> String {
-    const SAFE_PREFIXES: &[&str] = &[
-        "/libraries/",
-        "/shares/",
-        "/settings/",
-        "/search/",
-        // SSO confirm page (browser bounce after login).
-        "/client-sso/",
-    ];
+/// Resolve the `next` URL to redirect to, or `/libraries/` when it is unsafe.
+///
+/// Validation is by **origin**, not by a path allowlist. The desktop client
+/// asks for `/library/<repo-id>/<name>/` on "view on website"
+/// (`repo-tree-view.cpp:578`), `/` from the account view and
+/// `/notification/list/` from the notification monitor, and it strips the
+/// scheme/host before sending — a path allowlist cannot anticipate those and
+/// silently dropped users on the library list instead of the page they asked
+/// for.
+///
+/// What actually matters for an open-redirect is where the browser ends up, so:
+///
+/// * a relative path is accepted as long as it cannot be interpreted as a
+///   protocol-relative URL (`//evil.example`) or an escaped path (`/\evil`, which
+///   some browsers normalise to `//evil`);
+/// * an absolute URL is accepted only when its host matches this server's own
+///   origin; everything else falls back.
+pub(crate) fn resolve_next(next: Option<&str>, allowed_origin: &str) -> String {
+    const FALLBACK: &str = "/libraries/";
 
-    match next {
-        Some(url) if url.starts_with('/') => {
-            if SAFE_PREFIXES.iter().any(|p| url.starts_with(p)) {
-                url.to_string()
-            } else {
-                "/libraries/".to_string()
-            }
+    let Some(url) = next else {
+        return FALLBACK.to_string();
+    };
+    if url.is_empty() {
+        return FALLBACK.to_string();
+    }
+    // Strip surrounding whitespace and a NUL/CR/LF; header injection is already
+    // impossible (HeaderValue rejects control characters) but the value is
+    // compared below, so normalise it first.
+    let url = url.trim();
+    if url.chars().any(|c| c == '\0' || c == '\r' || c == '\n') {
+        return FALLBACK.to_string();
+    }
+
+    if url.starts_with('/') {
+        // `//host` is protocol-relative; `/\` is normalised to it by browsers.
+        if url.starts_with("//") || url.starts_with("/\\") {
+            return FALLBACK.to_string();
         }
-        _ => "/libraries/".to_string(),
+        return url.to_string();
+    }
+
+    // Absolute URL: only this server's own origin.
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return FALLBACK.to_string();
+    };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return FALLBACK.to_string();
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return FALLBACK.to_string();
+    }
+
+    let allowed = allowed_origin.trim().trim_end_matches('/');
+    let candidate = format!("{}://{}", scheme.to_ascii_lowercase(), authority);
+    if candidate.eq_ignore_ascii_case(allowed) {
+        url.to_string()
+    } else {
+        FALLBACK.to_string()
+    }
+}
+
+#[cfg(test)]
+mod resolve_next_tests {
+    use super::resolve_next;
+
+    const ORIGIN: &str = "https://files.example.com";
+
+    #[test]
+    fn relative_paths_are_kept() {
+        // The desktop client asks for `/library/<id>/<name>/` on "view on
+        // website"; a path allowlist used to silently drop it.
+        for path in [
+            "/library/abc/name/",
+            "/libraries/",
+            "/",
+            "/notification/list/",
+            "/shares/",
+        ] {
+            assert_eq!(resolve_next(Some(path), ORIGIN), path, "path {path}");
+        }
+    }
+
+    #[test]
+    fn protocol_relative_and_escaped_paths_are_rejected() {
+        for hostile in ["//evil.example/x", "/\\evil.example", "/\\/evil.example"] {
+            assert_eq!(
+                resolve_next(Some(hostile), ORIGIN),
+                "/libraries/",
+                "{hostile} must not be honoured"
+            );
+        }
+    }
+
+    #[test]
+    fn absolute_same_origin_urls_are_kept() {
+        assert_eq!(
+            resolve_next(Some("https://files.example.com/library/x/y/"), ORIGIN),
+            "https://files.example.com/library/x/y/"
+        );
+    }
+
+    #[test]
+    fn other_origins_schemes_and_junk_fall_back() {
+        for hostile in [
+            "https://evil.example/",
+            "https://files.example.com.evil.example/",
+            "http://files.example.com/", // scheme downgrade is a different origin
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "",
+            "   ",
+        ] {
+            assert_eq!(
+                resolve_next(Some(hostile), ORIGIN),
+                "/libraries/",
+                "{hostile} must not be honoured"
+            );
+        }
+        assert_eq!(resolve_next(None, ORIGIN), "/libraries/");
+    }
+
+    #[test]
+    fn control_characters_are_rejected() {
+        assert_eq!(
+            resolve_next(Some("/library/x\r\nLocation: https://evil"), ORIGIN),
+            "/libraries/"
+        );
     }
 }

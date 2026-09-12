@@ -97,7 +97,10 @@ pub async fn serve_avatar_image(
                 StatusCode::OK,
                 [
                     (header::CONTENT_TYPE, mime),
-                    (header::CACHE_CONTROL, "public, max-age=86400"),
+                    // `private`: the image identifies one account, so a shared
+                    // cache must not store it (the URL is guessable from an
+                    // email address).
+                    (header::CACHE_CONTROL, "private, max-age=86400"),
                 ],
                 data,
             )

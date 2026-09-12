@@ -169,9 +169,25 @@ pub(crate) async fn move_entry(
     // internal error (handler bug).
     let new_parent_path = base::sanitize::safe_normalize_path(new_parent_dir)
         .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
-    let _ = crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, &new_parent_path)
-        .await
-        .map_err(|e| AppError::Internal(format!("resolve dest parent failed: {e}")))?;
+
+    // Reject a move into the entry itself or into its own subtree *before* any
+    // mutation. The tree update below removes the entry from its old parent and
+    // commits, then adds it to the destination; a destination inside the moved
+    // subtree is destroyed by the first commit, so the second phase would fail
+    // after the subtree had already vanished from HEAD (no trash entry, 500 to
+    // the client). WebDAV rejects this case explicitly; this path did not.
+    if crate::domain::fs::is_self_or_subpath(path, &new_parent_path) {
+        return Err(AppError::BadRequest(if is_dir {
+            "cannot move a directory into itself".into()
+        } else {
+            "cannot move a file onto itself".into()
+        }));
+    }
+
+    let pre_removal_dst_fs_id =
+        crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, &new_parent_path)
+            .await
+            .map_err(|_| AppError::BadRequest("destination directory not found".into()))?;
 
     let intermediate_root = FileOps::update_dir_tree_no_commit(
         db,
@@ -202,13 +218,26 @@ pub(crate) async fn move_entry(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let new_head_root = get_head_root_id(db, repo_id).await?;
-    let new_dst_fs_id =
+    // Destination directory object:
+    //
+    // * A move within the entry's own parent directory (`/a/b` → `/a`) needs a
+    //   fresh read: phase 1 rewrote that very directory object, so the
+    //   pre-removal id still lists the entry.
+    // * Every other destination is untouched by removing the source (the guard
+    //   above rules out a destination inside the moved subtree), so reuse the
+    //   id resolved before the removal. Re-resolving from the new HEAD — what
+    //   this used to do unconditionally — is exactly what failed once the
+    //   removal was already durable, losing the subtree from HEAD.
+    let new_dst_fs_id = if new_parent_path == parent_path {
+        let new_head_root = get_head_root_id(db, repo_id).await?;
         crate::fs::core::resolve_fs_id(repos, repo_id, &new_head_root, &new_parent_path)
             .await
             .map_err(|e| {
                 AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
-            })?;
+            })?
+    } else {
+        pre_removal_dst_fs_id
+    };
 
     let now = chrono::Utc::now().timestamp();
     let email_clone = email.to_string();
@@ -306,6 +335,50 @@ impl FileService {
 
     fn db(&self) -> &DatabaseConnection {
         self.db.as_ref()
+    }
+
+    /// Delete blocks that a failed upload wrote and that nothing references.
+    ///
+    /// `only_new` comes from `write_block_with_id_tracked`, which reports a block
+    /// as new for exactly one writer — but a *concurrent* upload of identical
+    /// content can still receive the same id (`was_new == false`, so it is not in
+    /// that upload's cleanup set) and go on to commit a file that references it.
+    /// Deleting unconditionally would then remove a block a committed file needs.
+    /// Each candidate is therefore checked against the FS objects: a false
+    /// positive (a block id that merely appears as a substring elsewhere) only
+    /// leaves an orphan for GC, which is the safe direction.
+    async fn cleanup_uncommitted_blocks(&self, repo_id: &str, ids: &[String]) {
+        for id in ids {
+            match self.fs_object_references_block(repo_id, id).await {
+                Ok(true) => {
+                    tracing::debug!(
+                        "keeping block {id} in repo {repo_id}: another file references it"
+                    );
+                    continue;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    // Unknown: keep the block rather than risk deleting data.
+                    tracing::warn!("could not check references for block {id}: {e}");
+                    continue;
+                }
+            }
+            if let Err(e) = self.block_store.remove_block(repo_id, id).await {
+                tracing::warn!("failed to cleanup orphaned block {id}: {e}");
+            }
+        }
+    }
+
+    /// Whether any FS object in `repo_id` lists `block_id`.
+    async fn fs_object_references_block(
+        &self,
+        repo_id: &str,
+        block_id: &str,
+    ) -> Result<bool, AppError> {
+        self.repos
+            .fs_object
+            .references_block(repo_id, block_id)
+            .await
     }
 
     /// Generate a download URL and return the file_fs_id.
@@ -428,14 +501,10 @@ impl FileService {
             )
             .await
         {
-            for id in &new_block_ids {
-                if let Err(e) = self.block_store.remove_block(repo_id, id).await {
-                    tracing::warn!("failed to cleanup orphaned block {id}: {e}");
-                }
-            }
+            self.cleanup_uncommitted_blocks(repo_id, &new_block_ids)
+                .await;
             return Err(e);
         }
-
         // Ensure the target directory exists (folder uploads with missing subdirs).
         if ensure_dir && let Some(uid) = user_id {
             self.ensure_dir_recursive(repo_id, target_dir, modifier, uid)
@@ -458,6 +527,18 @@ impl FileService {
 
         // Adjust repo size (delta = new_size - old_size).
         crate::fs::core::adjust_repo_size(&self.repos, repo_id, total_size - old_size_eff).await?;
+
+        // The bytes are now part of the repo's committed `size`, which
+        // `user_usage` counts, so drop this uploader's uncommitted-block
+        // reservation for the repo: keeping it would double-count the file and
+        // would also keep counting blocks that stayed orphaned (those are GC's
+        // business, not the quota's). The cached usage snapshot is dropped too,
+        // so an upload that starts right after this commit sees the new total
+        // instead of the pre-commit one (check-then-write race).
+        if let Some(uid) = user_id {
+            crate::service::fs::quota::release_repo_reservation(&self.repos, uid, repo_id);
+            crate::service::fs::quota::invalidate_user(&self.repos, uid);
+        }
 
         // Log activity.
         if let Some(uid) = user_id {
@@ -1010,6 +1091,20 @@ impl FileService {
         } else {
             None
         };
+
+        // The token proves it was issued for this repo, not that its owner is
+        // still a member: someone removed while the token was still valid (up to
+        // a year) would keep reading the library's locked-file paths. The token
+        // arrives in the body, so this path never sees `SyncAuth` and has to
+        // re-check membership itself.
+        if let Some(user_id) = token_user_id {
+            crate::domain::permission::check_repo_read_permission(
+                self.repos.member.as_ref(),
+                repo_id,
+                user_id,
+            )
+            .await?;
+        }
 
         let lock_ts = if token_valid {
             self.repos

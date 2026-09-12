@@ -12,6 +12,29 @@ use crate::middleware::auth::AuthUser;
 use base::common::FsFileData;
 use base::error::AppError;
 
+/// Reject a capability token whose owner is no longer an active account.
+///
+/// The `/download-api/{token}`, `/blks/{token}/…` and `/upload-api/{token}`
+/// endpoints authenticate with an in-memory token rather than `AuthUser`, so
+/// they never saw the `is_active` check every other surface applies. A
+/// deactivated account kept read (and write) access for the token's remaining
+/// TTL — exactly the window an administrator deactivates an account to close.
+pub(crate) async fn ensure_token_user_active(
+    state: &AppState,
+    user_id: i32,
+) -> Result<(), AppError> {
+    let user = state
+        .repos
+        .user
+        .find_by_id(user_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    if !user.is_active {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
 /// Helper: get decryption key for an encrypted repo if password is set.
 ///
 /// Returns `None` if the repo is not encrypted, or `Some(Some((key, iv)))` if
@@ -22,6 +45,8 @@ pub(crate) async fn get_decryption_key_for_repo(
     repo_id: &str,
     user_id: i32,
 ) -> Result<Option<(Vec<u8>, Vec<u8>)>, AppError> {
+    ensure_token_user_active(state, user_id).await?;
+
     let repo_model = state
         .repos
         .repo
@@ -46,6 +71,66 @@ pub(crate) async fn get_decryption_key_for_repo(
     } else {
         Err(AppError::RepoPasswdRequired)
     }
+}
+
+/// Resolve the block cipher key for a **write** into `repo_id` made by
+/// `user_id`, or reject the write before any block is stored.
+///
+/// Symmetric with [`get_decryption_key_for_repo`] (AES-256-CBC uses the same
+/// key/IV in both directions). An encrypted library's key lives only in the
+/// server-side password cache, which the official clients warm through
+/// `POST /api2/repos/{id}/?op=setpassword` / `.../set-password/` before
+/// uploading — iOS refreshes it every 300 s (`SeafUploadOperation.m:109-118`),
+/// well inside this server's 3600 s cache TTL. Writing without it would store
+/// plaintext in a library whose owner expects ciphertext, so a cold cache is a
+/// hard error: `RepoPasswdRequired` (440) is exactly the status Android and iOS
+/// map to "Library password is needed" and then retry after re-warming.
+///
+/// `anonymous_link` marks a request authenticated only by a shareable upload
+/// link. Such a caller has no `user_id` whose password cache could hold the
+/// key, so an encrypted library is rejected outright — matching the official
+/// clients, which hide the upload-link action for encrypted libraries
+/// (`seafile-client/src/filebrowser/file-table.cpp:386`,
+/// `seadroid/.../BottomSheetMenuManager.java:365`).
+pub(crate) async fn upload_block_key(
+    state: &AppState,
+    repo_id: &str,
+    user_id: i32,
+    anonymous_link: bool,
+) -> Result<Option<(Vec<u8>, Vec<u8>)>, AppError> {
+    // Every upload path funnels through here, so this is also where the
+    // token-only paths get the `is_active` check the rest of the server
+    // applies. Without it a deactivated account could keep writing until its
+    // access token expired.
+    ensure_token_user_active(state, user_id).await?;
+
+    // The server-wide kill switch has to reach the token consumers too: with
+    // anonymous links disabled, an upload URL that was minted (or is still in
+    // its one-hour TTL) before the switch was flipped must stop accepting
+    // writes. `ensure_share_links_enabled` only guarded the pages and the
+    // creation endpoints.
+    if anonymous_link && !state.config.server.share_link_enabled {
+        return Err(AppError::Forbidden);
+    }
+
+    let repo_model = state
+        .repos
+        .repo
+        .find_by_id(repo_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    if repo_model.encrypted == 0 {
+        return Ok(None);
+    }
+
+    if anonymous_link {
+        return Err(AppError::BadRequest(
+            "cannot upload to an encrypted library through an upload link".into(),
+        ));
+    }
+
+    get_decryption_key_for_repo(state, repo_id, user_id).await
 }
 
 #[derive(Deserialize)]

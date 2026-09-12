@@ -235,13 +235,23 @@ pub async fn search_user(
     let pattern = format!("%{}%", escaped);
     let users = repos.user.find_by_email_like(&pattern).await?;
 
+    // Cap the answer. The match is a substring `%q%` with no pagination, so a
+    // single-character query returned essentially the whole directory (email +
+    // display name) to any authenticated user — enough to map an organisation
+    // for phishing or to find share targets. The desktop completer renders
+    // whatever it is given and never pages, so a smaller list simply means a
+    // narrower suggestion set.
+    const MAX_RESULTS: usize = 50;
     let result: Vec<serde_json::Value> = users
         .into_iter()
+        .take(MAX_RESULTS)
         .map(|u| {
+            let avatar_url = crate::service::user::primary_avatar_url(&u.email, 64);
             serde_json::json!({
                 "email": u.email,
                 "name": u.nickname(),
                 "contact_email": u.email,
+                "avatar_url": avatar_url,
             })
         })
         .collect();

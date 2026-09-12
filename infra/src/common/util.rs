@@ -30,6 +30,25 @@ pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Create a directory owner-only, but leave a **pre-existing** one alone.
+///
+/// [`ensure_private_dir`] also chmods a directory it did not create, which is
+/// right for a directory this application owns and wrong for a shared one: a
+/// root-run instance pointed at `/var/log/nanofile.log` would silently turn
+/// `/var/log` into 0700 and break every other service that writes there.
+pub fn ensure_private_dir_only_if_created(dir: &Path) -> std::io::Result<()> {
+    if dir.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
 /// Extract a field from a POST body probing JSON, form-urlencoded,
 /// then multipart/form-data in order.
 pub fn extract_body_field(bytes: &[u8], field_name: &str) -> Option<String> {

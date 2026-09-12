@@ -312,6 +312,7 @@ impl AppState {
             self.db.clone(),
             self.indexer.clone(),
             self.block_store.clone(),
+            self.config.clone(),
         )
     }
 

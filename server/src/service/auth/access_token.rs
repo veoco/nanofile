@@ -197,6 +197,53 @@ impl AccessTokenManager {
             guard.remove(token);
         }
     }
+
+    /// Drop every outstanding token belonging to `user_id`.
+    ///
+    /// These tokens are capability URLs (valid 1 hour) that the server hands
+    /// out for uploads, updates and downloads. They used to survive a password
+    /// change, a password reset, an account deactivation and a logout, so a
+    /// leaked URL kept working for the rest of its TTL regardless of what the
+    /// account did afterwards. Callers revoke on those events.
+    pub fn revoke_user(&self, user_id: i32) -> usize {
+        let mut guard = match self.tokens.write() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let before = guard.len();
+        guard.retain(|_, t| t.user_id != user_id);
+        before - guard.len()
+    }
+
+    /// Drop `user_id`'s outstanding tokens for one repository.
+    ///
+    /// Used when a member loses access to a library (unshare, library deleted):
+    /// the token was minted while they were a member, so it must not outlive
+    /// that membership.
+    pub fn revoke_user_repo(&self, user_id: i32, repo_id: &str) -> usize {
+        let mut guard = match self.tokens.write() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let before = guard.len();
+        guard.retain(|_, t| !(t.user_id == user_id && t.repo_id == repo_id));
+        before - guard.len()
+    }
+
+    /// Drop the tokens minted from the shareable upload link `link_id`.
+    ///
+    /// Deleting an upload link revokes the URLs already handed out from it;
+    /// otherwise the link's own deletion would not stop an uploader that had
+    /// already exchanged it for a token.
+    pub fn revoke_upload_link(&self, link_id: i32) -> usize {
+        let mut guard = match self.tokens.write() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let before = guard.len();
+        guard.retain(|_, t| t.upload_link_id != Some(link_id));
+        before - guard.len()
+    }
 }
 
 #[cfg(test)]

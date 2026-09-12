@@ -212,14 +212,47 @@ run it:
 - **Behind a reverse proxy, set `trusted_proxies`.** `X-Forwarded-For` is only honoured when the TCP
   peer is listed there, so client-IP rate limiting cannot be spoofed from outside.
 - **`share_link_enabled = false`** turns off anonymous share/upload links entirely (existing links
-  stop resolving). `allowed_hosts` pins the host names used to build absolute download URLs when
-  `site_url` is unset.
+  stop resolving, an existing upload-link token can no longer be exchanged for an upload URL, and an
+  already-minted link token stops accepting uploads). `allowed_hosts` pins the host names used to
+  build absolute download URLs when `site_url` is unset; while it is empty only a literal address
+  (`192.168.1.20`, `[fe80::1]`, `localhost`) is echoed, because those URLs carry a capability token
+  and a DNS name in the `Host` header is attacker-influenceable.
+- **Encrypted libraries require the library password for writes, not just reads.** Every HTTP upload
+  path (including resumable ones) refuses with 440 — "library password needed", the status Android
+  and iOS act on — until the client has called `?op=setpassword` / `set-password/`, and the blocks are
+  then stored as ciphertext encrypted with the cached key. Anonymous upload links cannot be created
+  for, or used against, an encrypted library: there is no per-visitor key cache to draw on. The sync
+  protocol is unchanged (clients encrypt locally).
+- **Account remediation is complete.** A password change or reset, a deactivation and a device wipe
+  drop every credential the account holds — database tokens (including repository sync tokens) *and*
+  the in-memory `/download-api/…`, `/upload-api/…` and `/blks/…` capability URLs — and a password
+  change/reset also invalidates outstanding password-reset links. Removing a member from a library
+  revokes their sync token and capability URLs for it.
+- **Uploads and downloads are charged before they are written.** Bytes in the block store that no
+  commit references yet are reserved against the uploader's quota, so "write blocks and never commit"
+  is bounded rather than free; the reservation is released when the upload commits, or when an
+  abandoned upload is reaped — the reap deletes the blocks that upload wrote, after re-checking that
+  no FS object references them, so it can never remove a block a committed file needs.
+- **A folder cannot be moved or copied into its own subtree.** The tree update removes then re-adds,
+  so the destination inside the subtree would be destroyed by the first commit; both move and copy
+  are rejected up front, as WebDAV already did.
+- **The desktop client's "view on website" URL is a validated redirect.**
+  `/library/{repo-id}/{repo-name}/…` is seahub's spelling (the name segment is decorative); it now
+  redirects to this server's own `/libraries/{id}/files/…` instead of 404ing, so the post-login
+  `next` value the desktop client sends (`repo-tree-view.cpp:578`) lands on the library. The
+  redirect is built only from a repository id that passes an id-alphabet check and a path that
+  normalizes inside the repository, then percent-encoded per segment — a `%0d%0a` in either can
+  therefore never inject a header or point the browser off-site.
 - **Run the server with a minimal `PATH`.** Helper binaries (`ffmpeg` for video thumbnails,
   `xdg-open`/`launchctl` for tray actions) are looked up through `PATH`; point
   `storage.ffmpeg_path` at an absolute path and keep untrusted directories (a world-writable
   working directory, `node_modules/.bin`) out of the server's `PATH`.
 - **Tighten the example's finite caps if you serve many users** (`max_zip_bytes`,
   `max_temp_upload_bytes`); `0` means unlimited.
+- **In release builds the server refuses to start with an ephemeral or placeholder `secret_key`**
+  when block encryption is enabled (an ephemeral key is regenerated on every start, which would make
+  every stored block permanently unreadable) or when the configured key looks like a placeholder.
+  `NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` overrides that for local/CI use only.
 
 Deliberate, documented trade-offs (no code path is unprotected — each is bounded by something else):
 
@@ -238,6 +271,35 @@ Deliberate, documented trade-offs (no code path is unprotected — each is bound
 - **`head-commits-multi` and `check_blocks`** answer anonymous/authenticated callers the same way
   upstream does (library metadata and block existence). They are required by the sync protocol;
   rate limiting bounds the request rate.
+- **Uncommitted-upload accounting lives in memory.** Quota reservations for blocks that no commit
+  references yet (`QuotaCache`) are rebuilt empty on start, so a restart in the middle of an upload
+  forgets that reservation and the uploader could exceed their quota by the in-flight amount until
+  the abandoned upload is reaped. Committed usage is persisted and re-read, so this cannot be used
+  to accumulate data across restarts.
+- **Nothing reclaims orphan blocks unless GC is on.** `gc.enabled` defaults to `false`, so blocks
+  from an upload that was abandoned before its final chunk stay on disk (the server warns at
+  startup). Quota is still charged for them, so this is disk usage, not a bypass; enable `[gc]` to
+  reclaim them.
+- **A removed collaborator's client stops syncing until it logs in again.** Unsharing (and
+  deactivation, password change and device wipe) deletes the database sync tokens, so the affected
+  client's next `/seafhttp/` call is refused and it has to re-authenticate. That is intentional —
+  keeping the token alive would keep serving the library through it — and it matches what the
+  official server does when access is revoked.
+- **The web UI does not unlock encrypted libraries.** Names can be browsed (Seafile leaves the FS
+  tree and commits unencrypted and encrypts only file content), but preview, download and upload
+  from a browser answer 440 (`RepoPasswdRequired`) because only the API and the official clients can
+  hand the server the library password — there is no password prompt in the UI. The library is shown
+  as encrypted rather than silently unusable.
+- **`validate_origin` still accepts requests without an `Origin`/`Referer`.** The login, register
+  and password-reset forms are posted by non-browser callers too (curl, integration tests), so an
+  absent header cannot be treated as hostile. An attacker's browser always sends one, and it is
+  checked when present; the authenticated state-changing endpoints additionally require the
+  session-bound CSRF token.
+- **Resumable uploads are keyed by `(repo_id, path)` only.** Two writers with write access to the
+  same library could collide in the temporary-upload map and interfere with each other's resumable
+  state. It is confined to one library (no cross-user data is exposed, the key is not derived from
+  anything secret) and the extra bookkeeping was judged not worth threading a user id through every
+  upload call site.
 - **Configuration secrets are held in memory as ordinary strings** (server secret, notification
   key, at-rest encryption key, database URL, admin password) and are not zeroed on drop; the
   derived AEAD keys used by the token/TOTP/block ciphers are cleared. Scrubbing the live

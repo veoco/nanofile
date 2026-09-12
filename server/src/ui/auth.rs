@@ -36,6 +36,10 @@ pub struct LoginTemplate {
     pub remember_days: u64,
     /// Whether password reset is enabled (show/hide "Forgot password?" link).
     pub enable_password_reset: bool,
+    /// Whether invitation-based registration is enabled (show/hide the
+    /// "Create account" link). The POST handler enforces the same flag, so a
+    /// disabled flow cannot be reached by navigating directly.
+    pub enable_invitations: bool,
     /// URL to redirect to after login (kept as a hidden form field).
     pub next: String,
 }
@@ -91,6 +95,7 @@ pub async fn login_page(
         error: None,
         remember_days: state.config.auth.api_token_ttl_days,
         enable_password_reset: state.config.auth.enable_password_reset,
+        enable_invitations: state.config.auth.enable_invitations,
         next: query.next.unwrap_or_default(),
     };
     let html = tpl
@@ -152,6 +157,7 @@ async fn render_login_page(
         error,
         remember_days: state.config.auth.api_token_ttl_days,
         enable_password_reset: state.config.auth.enable_password_reset,
+        enable_invitations: state.config.auth.enable_invitations,
         next: next.to_string(),
     };
     let html = tpl
@@ -160,7 +166,19 @@ async fn render_login_page(
     Ok(Html(html))
 }
 
-/// POST /accounts/login/ — authenticate user, handle 2FA if enabled.
+/// Reject registration when invitations are disabled.
+///
+/// Both the GET page and the POST use it, so the flag cannot be bypassed by
+/// navigating straight to `/accounts/register/`.
+fn ensure_invitations_enabled(state: &Arc<AppState>) -> Result<(), AppError> {
+    if state.config.auth.enable_invitations {
+        Ok(())
+    } else {
+        Err(AppError::NotFound("registration is disabled".into()))
+    }
+}
+
+/// Post /accounts/login/ — authenticate user, handle 2FA if enabled.
 pub async fn login(
     State(state): State<Arc<AppState>>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -170,7 +188,11 @@ pub async fn login(
 ) -> Result<impl IntoResponse, AppError> {
     // The hidden `next` form field carries the original `?next=` query value.
     // Fall back to the query itself for clients that post without the field.
-    let next = resolve_next(form.next.as_deref().or(query.next.as_deref()));
+    let tenant_origin = state.config.server.site_url_origin();
+    let next = resolve_next(
+        form.next.as_deref().or(query.next.as_deref()),
+        &tenant_origin,
+    );
 
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
@@ -440,7 +462,11 @@ pub async fn two_factor_auth(
     Form(form): Form<TwoFactorAuthForm>,
 ) -> Result<impl IntoResponse, AppError> {
     // The hidden `next` field carries the value from the pending 2FA redirect.
-    let next = resolve_next(form.next.as_deref().or(query.next.as_deref()));
+    let tenant_origin = state.config.server.site_url_origin();
+    let next = resolve_next(
+        form.next.as_deref().or(query.next.as_deref()),
+        &tenant_origin,
+    );
 
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
@@ -504,6 +530,19 @@ pub async fn two_factor_auth(
                     .into(),
             ));
         }
+    }
+
+    // Only a 2FA-pending token may be presented here. Without this check any
+    // live account token placed in the `seahub-session-pending` cookie is
+    // accepted as evidence that the password step already happened, which is
+    // the precondition this page exists to establish (every other consumer of
+    // an API token rejects `is_pending`).
+    if !token_record.is_pending {
+        return Err(AppError::BadRequest(
+            I18n::from_headers(&headers, &state.config.ui.default_language)
+                .tr("auth.session_expired_alt")
+                .into(),
+        ));
     }
 
     let user_id = token_record.user_id;
@@ -744,6 +783,12 @@ pub async fn register_page(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Html<String>, AppError> {
+    // `auth.enable_invitations = false` is documented as "do not allow
+    // invitation-code registration". It used to be inert: the page and the POST
+    // below worked regardless, so an operator who closed registration still
+    // accepted accounts from any valid (or leaked) invitation code.
+    ensure_invitations_enabled(&state)?;
+
     let tpl = RegisterTemplate {
         urls: crate::static_assets::template_urls(),
         t: I18n::from_headers(&headers, &state.config.ui.default_language),
@@ -771,6 +816,9 @@ pub async fn register(
                 .to_string(),
         ));
     }
+
+    // Registration closed: refuse before any invitation or password work.
+    ensure_invitations_enabled(&state)?;
 
     // Rate limit: per IP (TCP peer, not spoofable XFF).
     let client_ip = crate::middleware::effective_client_ip(
@@ -954,6 +1002,18 @@ pub async fn password_reset(
         return Ok(Html(String::new()));
     }
 
+    // The feature switch and an email backend are both required.
+    if !state.config.auth.enable_password_reset {
+        let tpl = PasswordResetDoneTemplate {
+            urls: crate::static_assets::template_urls(),
+            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        };
+        let html = tpl
+            .render()
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        return Ok(Html(html));
+    }
+
     // Email delivery is required to hand the reset link to the account owner.
     // Without it, minting a token and echoing the link back would let anyone
     // reset any account. Render the generic page and do not create a token.
@@ -1026,6 +1086,12 @@ pub async fn password_reset_confirm_page(
     headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Result<Html<String>, AppError> {
+    // `auth.enable_password_reset = false` must close the whole flow, not just
+    // hide the link: the confirm pages used to work regardless of the flag.
+    if !state.config.auth.enable_password_reset {
+        return Err(AppError::NotFound("password reset is disabled".into()));
+    }
+
     let reset_service = PasswordResetService::new(state.repos.clone());
     let valid = reset_service.validate_token(&token).await?.is_some();
 
@@ -1048,6 +1114,10 @@ pub async fn password_reset_confirm(
     Path(token): Path<String>,
     Form(form): Form<PasswordResetConfirmForm>,
 ) -> Result<impl IntoResponse, AppError> {
+    if !state.config.auth.enable_password_reset {
+        return Err(AppError::NotFound("password reset is disabled".into()));
+    }
+
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
@@ -1074,8 +1144,10 @@ pub async fn password_reset_confirm(
         return Ok((StatusCode::OK, Html(html)).into_response());
     }
 
-    // Use PasswordResetService.
-    let reset_service = PasswordResetService::new(state.repos.clone());
+    // Use PasswordResetService. The manager is threaded in so the reset also
+    // drops the user's outstanding in-memory capability URLs.
+    let reset_service =
+        PasswordResetService::with_token_manager(state.repos.clone(), state.token_manager.clone());
     match reset_service
         .reset_password(
             &token,

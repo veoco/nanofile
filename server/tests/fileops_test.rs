@@ -383,3 +383,88 @@ async fn test_batch_move_cross_repo_fails() {
         .await;
     assert_eq!(resp.status(), 400);
 }
+
+// ─── Self-subtree moves/copies must be refused ──────────────────────────────
+//
+// The tree update is a two-phase remove-then-add with a commit in between, so
+// moving a directory into its own subtree used to commit the removal and then
+// fail to resolve the destination — the subtree disappeared from HEAD with no
+// trash entry and the client got a 500. A copy in the same shape creates a
+// reference cycle (`/a/b/a` -> `/a`) because copies share fs_ids. WebDAV
+// guarded both; the REST/sync paths did not.
+
+#[tokio::test]
+async fn move_directory_into_its_own_subtree_is_rejected() {
+    let f = TestFixture::new().await;
+
+    create_subdir(&f, "/important").await;
+    create_subdir(&f, "/important/sub").await;
+    upload_test_file(&f, "keep.txt", b"payload", "/important").await;
+
+    let resp = f
+        .client
+        .batch_move(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            &["important"],
+            &f.repo_id,
+            "/important/sub",
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "moving a directory into its own subtree must be rejected, got: {}",
+        resp.status()
+    );
+
+    // The source subtree is still intact — the removal must not have been
+    // committed before the destination was validated.
+    assert_eq!(dir_entry_count(&f, "/important").await, 2);
+    assert_eq!(dir_entry_count(&f, "/important/sub").await, 0);
+
+    // Moving a directory onto itself is likewise refused.
+    let resp = f
+        .client
+        .batch_move(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            &["important"],
+            &f.repo_id,
+            "/important",
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    assert_eq!(dir_entry_count(&f, "/important").await, 2);
+}
+
+#[tokio::test]
+async fn copy_directory_into_its_own_subtree_is_rejected() {
+    let f = TestFixture::new().await;
+
+    create_subdir(&f, "/a").await;
+    create_subdir(&f, "/a/b").await;
+
+    let resp = f
+        .client
+        .batch_copy(&f.api_token, &f.repo_id, "/", &["a"], &f.repo_id, "/a/b")
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "copying a directory into its own subtree would create a cycle, got: {}",
+        resp.status()
+    );
+    assert_eq!(dir_entry_count(&f, "/a/b").await, 0);
+
+    // A sibling copy is still allowed and duplicates the subtree.
+    create_subdir(&f, "/c").await;
+    let resp = f
+        .client
+        .batch_copy(&f.api_token, &f.repo_id, "/", &["a"], &f.repo_id, "/c")
+        .await;
+    assert_eq!(resp.status(), 200, "a legitimate copy must still work");
+    assert_eq!(dir_entry_count(&f, "/c").await, 1);
+}

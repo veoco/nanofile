@@ -46,10 +46,23 @@ fn validate_block_id(block_id: &str) -> Result<(), AppError> {
 
 pub async fn check_blocks(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    auth: SyncAuth,
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<Json<Vec<String>>, AppError> {
+    // `SyncAuth` only proves the token was issued for this repo; it does not
+    // re-check membership, so a member removed while their (year-long) token was
+    // still valid kept a block-existence oracle for the library. Every other
+    // sync endpoint re-checks, and the client only calls this with write intent
+    // (it follows `permission-check?op=upload`), so write permission is the
+    // right bar.
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
@@ -161,11 +174,16 @@ pub async fn put_block(
         )));
     }
 
-    // Check storage quota before writing the block. Without this, a user can
-    // accumulate unlimited orphan blocks via put_block + never-commit.
-    crate::service::fs::quota::check_upload_quota(
+    // Charge the block against the user's quota as an **uncommitted** write.
+    // Comparing against committed usage alone was ineffective here: content
+    // addressing means writing a block never changes any repo's `size`, so
+    // every distinct block passed and `put_block` + never-commit accumulated
+    // blocks without bound. The reservation is released when the branch update
+    // commits the blocks into a file.
+    crate::service::fs::quota::reserve_block_bytes(
         &state.repos,
         auth.user_id,
+        &repo_id,
         data.len() as i64,
         state.config.storage.max_storage_bytes,
     )

@@ -24,6 +24,15 @@ pub struct ClientLoginConfirmTemplate {
     pub csrf_token: String,
     /// Absolute path this form POSTs to.
     pub action: String,
+    /// Who is asking for the account, when the caller supplied it.
+    ///
+    /// The SSO flow is anonymous and asks the signed-in user to hand a client
+    /// full account access. Showing the platform/device the client reported (the
+    /// desktop client sends `shib_platform` / `shib_device_name` /
+    /// `shib_client_version`) is what lets a user notice a link they did not
+    /// start; without it the page is a generic "authorize this device?" prompt
+    /// and the flow is a phishing primitive.
+    pub requester: Option<String>,
 }
 
 #[derive(Template)]
@@ -97,6 +106,7 @@ pub async fn client_sso_complete_page(
     let tpl = ClientLoginConfirmTemplate {
         csrf_token,
         action: format!("/client-sso/{token}/complete/"),
+        requester: svc.sso_link_requester(&token).await,
     };
     render(tpl)
 }

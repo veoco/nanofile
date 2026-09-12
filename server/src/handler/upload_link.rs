@@ -61,6 +61,12 @@ pub async fn delete_upload_link(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    link::delete_upload_link(&state.repos, &token, auth.user_id).await?;
+    link::delete_upload_link(
+        &state.repos,
+        &token,
+        auth.user_id,
+        Some(&state.token_manager),
+    )
+    .await?;
     Ok(ok_json())
 }

@@ -213,6 +213,26 @@ async fn login_client(fixture: &TestFixture) -> reqwest::Client {
     client // cookie stored by cookie_store
 }
 
+/// Mint a one-time client-login token the way the desktop client does.
+///
+/// Going through `POST /api2/client-login/` matters: the endpoint records the
+/// requesting address as the token's issuer, and the browser entry point only
+/// logs in silently when the navigation comes from that same address.
+async fn mint_client_login_token(fixture: &TestFixture) -> String {
+    let resp = reqwest::Client::new()
+        .post(format!("{}/api2/client-login/", fixture.server.base_url))
+        .header("Authorization", format!("Token {}", fixture.api_token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "client-login token request failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    body["token"]
+        .as_str()
+        .expect("client-login response carries a token")
+        .to_string()
+}
+
 /// Fetch the hidden `csrf_token` from the settings page (the settings form
 /// embeds it as `<input type="hidden" name="csrf_token" value="...">`).
 async fn settings_csrf_token(client: &reqwest::Client, base_url: &str) -> String {
@@ -392,6 +412,74 @@ async fn test_file_list_navigates_into_dir() {
     assert_eq!(resp.status(), 200, "dir navigation should return 200");
     let body = resp.text().await.unwrap();
     assert!(body.contains("nested.txt"), "should show nested file");
+}
+
+/// The desktop client's "view on website" opens seahub's URL
+/// `/library/<repo-id>/<repo-name>/…` (`repo-tree-view.cpp:578`), whose second
+/// segment is decorative. That spelling has to reach the file browser, so it is
+/// redirected to this server's canonical `/libraries/{id}/files/…` path.
+#[tokio::test]
+async fn seahub_library_url_redirects_to_the_file_browser() {
+    let fixture = TestFixture::new().await;
+    fixture
+        .client
+        .create_dir(&fixture.api_token, &fixture.repo_id, "/subdir")
+        .await;
+
+    let client = login_client(&fixture).await;
+
+    // Root: `/library/<id>/<name>/` — the request the desktop actually makes.
+    let resp = client
+        .get(format!(
+            "{}/library/{}/test-repo/",
+            fixture.server.base_url, fixture.repo_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 303, "seahub library root must redirect");
+    assert_eq!(
+        resp.headers().get("location").unwrap().to_str().unwrap(),
+        format!("/libraries/{}/files/", fixture.repo_id)
+    );
+
+    // Nested path: the trailing path is carried over (percent-encoded per
+    // segment), so a deep link lands on the directory the client asked for.
+    let resp = client
+        .get(format!(
+            "{}/library/{}/test%20repo/subdir/with%20space",
+            fixture.server.base_url, fixture.repo_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 303);
+    assert_eq!(
+        resp.headers().get("location").unwrap().to_str().unwrap(),
+        format!("/libraries/{}/files/subdir/with%20space", fixture.repo_id)
+    );
+
+    // A path that normalizes away (`..`) or an id that could inject a header
+    // must not produce a redirect at all. The dot segments are percent-encoded
+    // (`%2e%2e%2f`) because both the URL parser and the server would otherwise
+    // collapse or reject them before the handler sees the traversal.
+    for hostile in [
+        format!(
+            "{}/library/{}/test-repo/%2e%2e%2f%2e%2e%2fetc",
+            fixture.server.base_url, fixture.repo_id
+        ),
+        format!(
+            "{}/library/x%0d%0aLocation:%20https://evil/test-repo/",
+            fixture.server.base_url
+        ),
+    ] {
+        let resp = client.get(&hostile).send().await.unwrap();
+        assert_eq!(
+            resp.status(),
+            400,
+            "hostile library URL {hostile} must be refused, not redirected"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1248,26 +1336,32 @@ async fn test_client_login_flow_works() {
 async fn test_client_login_expired_token_redirects() {
     let fixture = TestFixture::new().await;
 
-    // Create an expired token directly in DB (stored hashed, like the repo does).
-    use sea_orm::EntityTrait;
-    let now = chrono::Utc::now().timestamp();
-    let raw = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    infra::entity::client_login_token::Entity::insert(
-        infra::entity::client_login_token::ActiveModel {
-            token: sea_orm::Set(server::service::auth::token::hash_token(raw)),
-            username: sea_orm::Set("test@example.com".to_string()),
-            created_at: sea_orm::Set(now - 60), // 60 seconds ago (past 30s TTL)
-        },
-    )
-    .exec(fixture.server.db.as_ref())
-    .await
-    .unwrap();
+    // Mint the token through the API first: the silent-login path only trusts a
+    // browser request that comes from the address the token was issued to, so a
+    // token inserted straight into the database would be sent to the
+    // confirmation page instead of being evaluated. Then age the row past the
+    // 30 s TTL.
+    let token = mint_client_login_token(&fixture).await;
+
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    infra::entity::client_login_token::Entity::update_many()
+        .col_expr(
+            infra::entity::client_login_token::Column::CreatedAt,
+            sea_orm::sea_query::Expr::value(chrono::Utc::now().timestamp() - 60),
+        )
+        .filter(
+            infra::entity::client_login_token::Column::Token
+                .eq(server::service::auth::token::hash_token(&token)),
+        )
+        .exec(fixture.server.db.as_ref())
+        .await
+        .unwrap();
 
     let browser = no_redirect_client();
     let resp = browser
         .get(format!(
-            "{}/client-login/?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&next=/libraries/",
-            fixture.server.base_url
+            "{}/client-login/?token={}&next=/libraries/",
+            fixture.server.base_url, token
         ))
         // The normal browser flow: a navigation the browser itself initiated.
         .header("sec-fetch-site", "none")
@@ -1278,7 +1372,8 @@ async fn test_client_login_expired_token_redirects() {
     // Should redirect without setting cookie (token expired)
     assert!(
         resp.status() == 302 || resp.status() == 303,
-        "expired token should redirect"
+        "expired token should redirect, got {}",
+        resp.status()
     );
     let cookie = resp
         .headers()
@@ -1295,11 +1390,22 @@ async fn test_client_login_expired_token_redirects() {
 async fn test_client_login_invalid_token_redirects() {
     let fixture = TestFixture::new().await;
 
+    // Bound to the minting address (see the expired-token test), then deleted,
+    // so the request is trusted but the token is unknown to the server.
+    let token = mint_client_login_token(&fixture).await;
+    use sea_orm::EntityTrait;
+    infra::entity::client_login_token::Entity::delete_by_id(
+        server::service::auth::token::hash_token(&token),
+    )
+    .exec(fixture.server.db.as_ref())
+    .await
+    .unwrap();
+
     let browser = no_redirect_client();
     let resp = browser
         .get(format!(
-            "{}/client-login/?token=nonexistenttoken1234567890abcdef&next=/libraries/",
-            fixture.server.base_url
+            "{}/client-login/?token={}&next=/libraries/",
+            fixture.server.base_url, token
         ))
         .header("sec-fetch-site", "none")
         .send()
@@ -1309,7 +1415,8 @@ async fn test_client_login_invalid_token_redirects() {
     // Should redirect without setting cookie (token not found)
     assert!(
         resp.status() == 302 || resp.status() == 303,
-        "invalid token should redirect"
+        "invalid token should redirect, got {}",
+        resp.status()
     );
     let cookie = resp
         .headers()

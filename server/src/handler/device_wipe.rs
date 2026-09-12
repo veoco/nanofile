@@ -1,5 +1,6 @@
-use axum::{Json, extract::Form, extract::State};
-use std::collections::HashMap;
+use axum::Json;
+use axum::extract::State;
+use axum::http::HeaderMap;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -8,23 +9,36 @@ use base::error::AppError;
 
 /// POST /api2/device-wiped/
 ///
-/// Official seafile protocol: the wiped device reports itself anonymously,
-/// carrying its own API token in the body (the desktop client sends a form
-/// field `token`, no Authorization header). The server invalidates that
-/// (user, device)'s sessions. Scoping by the reporting token's owner prevents
+/// A wiped device reports itself so the server drops the credentials it holds.
+/// The two official callers authenticate differently and **both** shapes have
+/// to work:
+///
+/// * desktop Qt: `application/x-www-form-urlencoded` with a `token` form field
+///   and *no* `Authorization` header
+///   (`seafile-client/src/api/requests.cpp:1225-1235`);
+/// * Android: an empty multipart POST with `Authorization: Token <token>` and
+///   no body fields (`seadroid/.../AccountService.java:24-26`, token added by
+///   `TokenInterceptor`).
+///
+/// Requiring only the form field meant Android's wipe report was rejected and
+/// its credentials were never revoked; requiring only the header would break
+/// the desktop client. Scoping by the reporting token's owner prevents
 /// cross-user session revocation.
 pub async fn device_wiped(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: String,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let token = form
-        .get("token")
-        .ok_or_else(|| AppError::BadRequest("token required".into()))?;
+    let token = match extract_authorization_token(&headers) {
+        Some(t) => t,
+        None => infra::common::util::extract_body_field(body.as_bytes(), "token")
+            .ok_or_else(|| AppError::BadRequest("token required".into()))?,
+    };
 
     let token_record = state
         .repos
         .api_token
-        .find_by_token(token)
+        .find_by_token(&token)
         .await?
         .ok_or_else(|| AppError::BadRequest("invalid token".into()))?;
 
@@ -48,6 +62,22 @@ pub async fn device_wiped(
 
     let svc = state.sso_service();
     svc.device_wiped(token_record.user_id, &device_id).await?;
+    // The device's `/download-api/…`, `/upload-api/…` capability URLs are
+    // credentials too, and they are not addressed by device id, so drop all of
+    // the user's outstanding ones.
+    state.token_manager.revoke_user(token_record.user_id);
 
     Ok(ok_json())
+}
+
+/// `Authorization: Token <t>` / `Bearer <t>`, as the mobile clients send it.
+fn extract_authorization_token(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get("authorization")?.to_str().ok()?;
+    let token = raw
+        .strip_prefix("Token ")
+        .or_else(|| raw.strip_prefix("Bearer "))?;
+    if token.is_empty() {
+        return None;
+    }
+    Some(token.to_string())
 }

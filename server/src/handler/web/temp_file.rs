@@ -54,6 +54,12 @@ struct TempFileEntry {
     /// Total file size as declared in the first Content-Range header
     file_size: u64,
     created_at: Instant,
+    /// Uploading user, once the caller binds it. Used to release the block
+    /// reservation when the upload is abandoned.
+    owner: Option<i32>,
+    /// Blocks written by this upload that no commit references yet, so
+    /// `abort`/`cleanup_stale` can delete them instead of leaving orphans.
+    new_block_ids: Vec<String>,
     /// Per-upload CDC streaming state. An in-order resumable upload streams
     /// each chunk straight into blocks as it arrives (see `feed_stream`), so
     /// the final chunk commits without re-reading the whole temp file.
@@ -104,6 +110,40 @@ pub enum FeedOutcome {
 /// separated per repo without any path semantics.
 fn repo_dir_name(repo_id: &str) -> String {
     infra::crypto::fs_id::sha1_hex(repo_id.as_bytes())
+}
+
+/// Delete blocks an abandoned upload wrote and no commit references.
+///
+/// Best effort: a failure is logged and the block is left for GC. Only the ids
+/// this upload *newly wrote* are tracked (`write_block_with_id_tracked` reports
+/// a block as new for exactly one writer), but even those can have become
+/// referenced since: a concurrent upload of identical content sees
+/// `was_new == false`, is not tracked, and can go on to commit a file that
+/// references the same block. Every candidate is therefore re-checked against
+/// the FS objects, and a check that fails keeps the block.
+async fn delete_uncommitted_blocks(
+    repos: &crate::repository::Repositories,
+    store: &DynBlockStorage,
+    repo_id: &str,
+    ids: &[String],
+) {
+    for id in ids {
+        match repos.fs_object.references_block(repo_id, id).await {
+            Ok(true) => {
+                tracing::debug!("keeping block {id} in repo {repo_id}: a file references it");
+                continue;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                // Unknown: keep the block rather than risk deleting data.
+                tracing::warn!("could not check references for block {id}: {e}");
+                continue;
+            }
+        }
+        if let Err(e) = store.remove_block(repo_id, id).await {
+            tracing::warn!("failed to remove abandoned block {id} in repo {repo_id}: {e}");
+        }
+    }
 }
 
 impl TempFileManager {
@@ -198,6 +238,8 @@ impl TempFileManager {
                 tmp_path: tmp_path.clone(),
                 file_size,
                 created_at: Instant::now(),
+                owner: None,
+                new_block_ids: Vec::new(),
                 stream: Arc::new(Mutex::new(Some(UploadStream {
                     chunker: None,
                     next_offset: 0,
@@ -210,6 +252,29 @@ impl TempFileManager {
         );
 
         Ok(tmp_path)
+    }
+
+    /// Record which user owns this upload, so an abandoned upload can release
+    /// its block reservation.
+    pub async fn bind_owner(&self, repo_id: &str, file_path: &str, user_id: i32) {
+        let key = (repo_id.to_string(), file_path.to_string());
+        let mut guard = self.inner.active.write().await;
+        if let Some(entry) = guard.entries.get_mut(&key) {
+            entry.owner = Some(user_id);
+        }
+    }
+
+    /// Remember blocks written by the caller that no commit references yet, so
+    /// an abort or a stale-cleanup can delete them instead of leaving orphans.
+    pub async fn record_new_blocks(&self, repo_id: &str, file_path: &str, ids: &[String]) {
+        if ids.is_empty() {
+            return;
+        }
+        let key = (repo_id.to_string(), file_path.to_string());
+        let mut guard = self.inner.active.write().await;
+        if let Some(entry) = guard.entries.get_mut(&key) {
+            entry.new_block_ids.extend(ids.iter().cloned());
+        }
     }
 
     /// Write `data` at `offset` into the temp file identified by
@@ -462,30 +527,55 @@ impl TempFileManager {
         }
     }
 
-    /// Abort an upload: same as `finish` but also logs a warning.
-    pub async fn abort(&self, repo_id: &str, file_path: &str) {
+    /// Abort an upload: remove its temp file, delete the blocks it wrote that
+    /// no commit references, and release its block reservation.
+    ///
+    /// Clients have no protocol-level abort (a cancelled upload is purely local
+    /// to seaf-daemon and the Qt client), so this is only reached from nanofile's
+    /// own failure paths; the periodic [`Self::cleanup_stale`] covers clients
+    /// that simply stop sending chunks.
+    pub async fn abort(
+        &self,
+        repos: &crate::repository::Repositories,
+        repo_id: &str,
+        file_path: &str,
+        store: &DynBlockStorage,
+    ) {
         let key = (repo_id.to_string(), file_path.to_string());
-        let tmp_path = {
+        let (tmp_path, owner, blocks) = {
             let mut guard = self.inner.active.write().await;
             let removed = guard.entries.remove(&key);
             if let Some(e) = &removed {
                 guard.reserved_bytes -= e.file_size;
             }
-            removed.map(|e| e.tmp_path)
+            match removed {
+                Some(e) => (Some(e.tmp_path), e.owner, e.new_block_ids),
+                None => (None, None, Vec::new()),
+            }
         };
         if let Some(p) = tmp_path {
             let _ = fs::remove_file(&p).await;
         }
+        delete_uncommitted_blocks(repos, store, repo_id, &blocks).await;
+        if let Some(uid) = owner {
+            crate::service::fs::quota::release_repo_reservation(repos, uid, repo_id);
+        }
     }
 
-    /// Remove active uploads that have been idle longer than `ttl` and delete
-    /// their temp files from disk. Called periodically by the scheduler so
-    /// abandoned resumable uploads don't leak memory or disk.
-    pub async fn cleanup_stale(&self, ttl: std::time::Duration) {
+    /// Remove active uploads that have been idle longer than `ttl`, delete their
+    /// temp files and any blocks they wrote that no commit references, and
+    /// release their block reservations. Called periodically by the scheduler so
+    /// abandoned resumable uploads don't leak memory, disk or quota.
+    pub async fn cleanup_stale(
+        &self,
+        repos: &crate::repository::Repositories,
+        ttl: std::time::Duration,
+        store: &DynBlockStorage,
+    ) {
         let cutoff = Instant::now() - ttl;
-        let stale: Vec<PathBuf> = {
+        let stale: Vec<(String, PathBuf, Option<i32>, Vec<String>)> = {
             let mut guard = self.inner.active.write().await;
-            let mut paths = Vec::new();
+            let mut removed = Vec::new();
             // Collect the stale keys first so the closure doesn't borrow both
             // `entries` and `reserved_bytes` from `guard` at once.
             let stale_keys: Vec<(String, String)> = guard
@@ -497,14 +587,20 @@ impl TempFileManager {
             for key in stale_keys {
                 if let Some(e) = guard.entries.remove(&key) {
                     guard.reserved_bytes -= e.file_size;
-                    paths.push(e.tmp_path);
+                    // The key carries the repo id; the on-disk directory name is
+                    // only a hash of it, so it cannot be recovered from the path.
+                    removed.push((key.0, e.tmp_path, e.owner, e.new_block_ids));
                 }
             }
-            paths
+            removed
         };
-        for p in stale {
+        for (repo_id, p, owner, blocks) in stale {
             if let Err(e) = fs::remove_file(&p).await {
                 tracing::warn!("Failed to remove stale temp file {:?}: {e}", p);
+            }
+            delete_uncommitted_blocks(repos, store, &repo_id, &blocks).await;
+            if let Some(uid) = owner {
+                crate::service::fs::quota::release_repo_reservation(repos, uid, &repo_id);
             }
         }
     }

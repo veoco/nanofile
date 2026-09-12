@@ -290,6 +290,23 @@ fn main() -> anyhow::Result<()> {
 
     if !secret_is_strong(&config.server.secret_key) {
         if is_dev || allow_ephemeral || !needs_secret {
+            // An ephemeral key is regenerated on every start, which silently
+            // invalidates every key derived from it. For sessions and CSRF that
+            // is an inconvenience; with at-rest block encryption it is
+            // irreversible data loss (the stored blocks can never be decrypted
+            // again). Refuse instead of starting a deployment that will destroy
+            // its own data on the next restart.
+            if needs_secret
+                && config.storage.block_encryption_mode()
+                    != infra::storage::encrypting_block_store::BlockEncryptionMode::Off
+            {
+                anyhow::bail!(
+                    "storage encryption is enabled but the server secret key is not set: an \
+                     ephemeral key would be regenerated on every start, making every stored \
+                     block permanently unreadable. Set NANOFILE_SERVER_SECRET_KEY (or \
+                     [server] secret_key) to a strong, persisted value."
+                );
+            }
             if config.server.secret_key.is_empty()
                 || config.server.secret_key == "nanofile-server-secret"
             {
@@ -312,6 +329,18 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    if secret_is_strong(&config.server.secret_key)
+        && secret_looks_low_entropy(&config.server.secret_key)
+        && needs_secret
+        && !is_dev
+        && !allow_ephemeral
+    {
+        anyhow::bail!(
+            "server secret_key passes the length check but looks like a placeholder or a \
+             repeated character. Every session, CSRF, sync-token and at-rest key is derived \
+             from it; generate one with `openssl rand -hex 32`."
+        );
+    }
     if secret_is_strong(&config.server.secret_key)
         && secret_looks_low_entropy(&config.server.secret_key)
     {
@@ -352,6 +381,19 @@ fn main() -> anyhow::Result<()> {
     }
     if config.auth.sync_token_ttl_days == 0 {
         tracing::warn!("auth.sync_token_ttl_days = 0: repository sync tokens will NEVER expire.");
+    }
+
+    // Orphan blocks are no longer a quota bypass — every block write is charged
+    // as an uncommitted write (`service::fs::quota::reserve_block_bytes`) — but
+    // with GC off nothing ever reclaims blocks that no commit references (an
+    // upload abandoned before its final chunk, a sync whose branch update
+    // failed). Say so rather than letting the disk watermark grow silently.
+    if !config.gc.enabled {
+        tracing::warn!(
+            "gc.enabled = false: blocks and FS objects that no commit references are \
+             never reclaimed. Per-user quota still bounds how much one user may write, \
+             but total disk usage only grows. Enable [gc] to reclaim them."
+        );
     }
 
     // ── Derive notification private key from secret_key if not set ─────

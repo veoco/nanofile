@@ -248,11 +248,15 @@ pub fn register_default_tasks(
     // Skipped entirely when `temp_upload_ttl_hours` is 0.
     if temp_upload_ttl_hours > 0 {
         let tmp = temp_file_manager.clone();
+        let store = block_store.clone();
+        let repos = repos.clone();
         let ttl = std::time::Duration::from_secs(temp_upload_ttl_hours * 3600);
         scheduler.spawn_periodic("temp upload cleanup", 1800, move || {
             let tmp = tmp.clone();
+            let store = store.clone();
+            let repos = repos.clone();
             async move {
-                tmp.cleanup_stale(ttl).await;
+                tmp.cleanup_stale(&repos, ttl, &store).await;
                 TaskOutput::success("ok", None)
             }
         });

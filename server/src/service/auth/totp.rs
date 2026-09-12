@@ -33,13 +33,17 @@ impl TotpManager {
         totp.check_current(code)
     }
 
-    /// Verify a code and record its time step, rejecting any step already used.
+    /// Verify a code and atomically claim its time step.
     ///
-    /// The skew tolerance stays in place for honest clients; only a *replayed*
-    /// code (same or earlier step) is refused. Recording is best effort: a
-    /// failed write must not lock a user out, so a storage error is logged and
-    /// the code is accepted (the database being unwritable is a bigger problem
-    /// than this check).
+    /// The skew tolerance (`totp-rs` accepts the previous, current and next
+    /// step, so a code stays valid for ~90 s) is what makes a claim necessary:
+    /// a code observed by someone else must not be replayable. Claiming is a
+    /// single conditional UPDATE (`last_used_step < step`), so two concurrent
+    /// submissions of the same code cannot both win — a read-then-write guard
+    /// left exactly that window open.
+    ///
+    /// A storage error fails **closed**: this gates authentication, so an
+    /// unwritable database must not silently disable the replay guard.
     pub async fn verify_and_consume(
         repos: &crate::repository::Repositories,
         user_id: i32,
@@ -50,21 +54,13 @@ impl TotpManager {
             return false;
         };
         let step = step as i64;
-        let already_used = repos
-            .user_2fa
-            .find_by_user_id(user_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|m| m.last_used_step)
-            .is_some_and(|last| step <= last);
-        if already_used {
-            return false;
+        match repos.user_2fa.consume_step(user_id, step).await {
+            Ok(claimed) => claimed,
+            Err(e) => {
+                tracing::error!(user_id, "could not record the used TOTP step: {e}");
+                false
+            }
         }
-        if let Err(e) = repos.user_2fa.set_last_used_step(user_id, step).await {
-            tracing::warn!(user_id, "could not record the used TOTP step: {e}");
-        }
-        true
     }
 
     pub fn get_otpauth_url(totp: &Totp) -> String {

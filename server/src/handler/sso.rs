@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::HeaderMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,23 +8,54 @@ use crate::AppState;
 use crate::service::auth::sso::PollResult;
 use base::error::AppError;
 
+/// Longest accepted `shib_*` device parameter.
+///
+/// The values are stored verbatim in `sso_login_tokens` and rendered on the
+/// confirmation page; the official desktop client sends a hostname and an OS
+/// name, so anything longer is not a legitimate client.
+const MAX_SSO_PARAM_LEN: usize = 128;
+
 /// POST /api2/client-sso-link/
 ///
-/// Anonymous per the official protocol: seadroid posts with no body or auth
-/// header, and the desktop client sends `shib_*` device params on the query
-/// string. Returns the full browser link the client opens.
+/// Anonymous per the official protocol: seadroid and iOS post with no body and
+/// no auth header (so every parameter here is optional), while the desktop
+/// client sends `shib_*` device params on the query string. Returns the full
+/// browser link the client opens.
+///
+/// Being anonymous and writing a row per call, this needs a rate limit: without
+/// one a trivial loop fills `sso_login_tokens` for an hour at a time and each
+/// insert takes the single SQLite writer lock.
 pub async fn client_sso_link(
     State(state): State<Arc<AppState>>,
-    _headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let client_ip = crate::middleware::effective_client_ip(
+        &addr,
+        &headers,
+        &state.config.server.trusted_proxies,
+    );
+    if state.auth_limiters.sso_link.is_limited(&client_ip) {
+        return Err(AppError::TooManyRequests);
+    }
+    state.auth_limiters.sso_link.record_attempt(&client_ip);
+
+    let bounded = |key: &str| -> Result<Option<String>, AppError> {
+        match params.get(key) {
+            None => Ok(None),
+            Some(v) if v.len() <= MAX_SSO_PARAM_LEN => Ok(Some(v.clone())),
+            Some(_) => Err(AppError::BadRequest(format!("{key} is too long"))),
+        }
+    };
+
     let svc = state.sso_service();
     let token = svc
         .create_sso_link(
-            params.get("shib_platform").cloned(),
-            params.get("shib_device_id").cloned(),
-            params.get("shib_device_name").cloned(),
-            params.get("shib_client_version").cloned(),
+            bounded("shib_platform")?,
+            bounded("shib_device_id")?,
+            bounded("shib_device_name")?,
+            bounded("shib_client_version")?,
         )
         .await?;
 

@@ -58,8 +58,10 @@ sso_enabled = true
 file_search_enabled = true
 # Whether anonymous share links and upload links are allowed at all. When false,
 # creating new share/upload links is rejected, existing links (/f/, /d/, /u/)
-# become inaccessible, and the `share-link-disabled` feature is advertised so
-# clients hide sharing. Manage pages still let admins view/delete existing links.
+# become inaccessible, minting an upload token from an existing upload link is
+# refused, and uploads through an already-minted link token are refused too. The
+# `share-link-disabled` feature is advertised so clients hide sharing. Manage
+# pages still let admins view/delete existing links.
 share_link_enabled = true
 # Optional desktop-client customization — only advertised in /api2/server-info/
 # when set:
@@ -82,9 +84,13 @@ trusted_proxies = []
 # falls back to `site_url`. Simplest alternative: set `site_url` to the address
 # clients actually use. Env: NANOFILE_SERVER_ALLOWED_HOSTS
 allowed_hosts = []
-# Whether to honour a syntactically valid request Host header when `site_url` is
-# still the built-in default (LAN convenience). Set to false to always use
-# `site_url` — recommended behind a proxy or a wildcard vhost.
+# Whether to honour a request Host header when `site_url` is still the built-in
+# default (LAN convenience). Only a **literal address** (`192.168.1.20`,
+# `[fe80::1]`, `localhost`) is echoed while `allowed_hosts` is empty, because the
+# URLs built from it carry a capability token and a DNS name is
+# attacker-influenceable (DNS rebinding, wildcard vhost, proxy forwarding).
+# List a name in `allowed_hosts` to have it echoed. Set to false to always use
+# `site_url` — recommended behind a proxy.
 # Env: NANOFILE_SERVER_TRUST_REQUEST_HOST
 trust_request_host = true
 # Maximum resources one WebDAV PROPFIND may return (0 = unlimited). An absent
@@ -231,8 +237,22 @@ lockout_duration_secs = 900
 # This counter is NOT reset by a successful login, so an attacker holding one
 # valid account cannot spray forever by logging into it between guesses.
 max_distinct_usernames_per_ip = 20
+# Whether invitation-code-based registration is allowed at all. When false the
+# login page hides the "Create Account" link AND `/accounts/register/` (GET and
+# POST) answers 404, so a valid or leaked invitation code cannot create an
+# account.
+# Env: NANOFILE_AUTH_ENABLE_INVITATIONS
 enable_invitations = true
+# Whether the password-reset flow is served at all (it additionally needs an
+# email backend under [email]). When false, `/accounts/password/reset/` and the
+# confirm page answer 404 and no token is minted.
+# Env: NANOFILE_AUTH_ENABLE_PASSWORD_RESET
 enable_password_reset = true
+# Max anonymous SSO link creations per IP per hour (0 = unlimited).
+# `POST /api2/client-sso-link/` is anonymous by protocol and writes a row per
+# call.
+# Env: NANOFILE_AUTH_SSO_LINK_MAX_PER_HOUR
+sso_link_max_per_hour = 30
 password_min_length = 8
 require_strong_password = false
 # Max password reset requests per IP per hour (0 = unlimited)
@@ -310,6 +330,11 @@ max_backups = 3
 # Environment variables:
 #   NANOFILE_GC_ENABLED
 #   NANOFILE_GC_INTERVAL_HOURS
+# Reclaims blocks and FS objects that no commit references (an upload abandoned
+# before its final chunk, a sync whose branch update failed) and prunes history
+# past the per-repo limits. Per-user quota is enforced independently of this
+# setting, so leaving it off does not allow a quota bypass — it only means total
+# disk usage never shrinks. The server logs a warning at startup in that case.
 enabled = false
 interval_hours = 24
 

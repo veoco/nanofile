@@ -214,6 +214,7 @@ async fn try_handle_chunked(
     content_range: Option<&str>,
     modifier: &str,
     user_id: Option<i32>,
+    enc_key: Option<(&[u8], &[u8])>,
 ) -> Result<Option<Json<serde_json::Value>>, AppError> {
     let Some(range_header) = content_range else {
         return Ok(None); // not a chunked upload
@@ -251,18 +252,6 @@ async fn try_handle_chunked(
     // total size so over-quota uploads fail before consuming the whole file.
     // The result only depends on `file_size`, so re-checking every chunk is
     // wasted work; the final assembly path re-checks quota as a backstop.
-    if start == 0
-        && let Some(uid) = user_id
-    {
-        crate::service::fs::quota::check_upload_quota(
-            &state.repos,
-            uid,
-            file_size as i64,
-            state.config.storage.max_storage_bytes,
-        )
-        .await?;
-    }
-
     let file_path = base::sanitize::safe_join_path(target_dir, file_name)
         .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
 
@@ -271,6 +260,29 @@ async fn try_handle_chunked(
         .get_or_create(repo_id, &file_path, file_size)
         .await
         .map_err(map_temp_error)?;
+    if let Some(uid) = user_id {
+        temp_mgr.bind_owner(repo_id, &file_path, uid).await;
+    }
+
+    // Pre-check and **reserve** storage quota once (on the first chunk) against
+    // the declared total size. Reserving (rather than only comparing against
+    // committed usage) is what bounds an upload abandoned before its final
+    // chunk: its bytes are already in the block store, so without the
+    // reservation every later upload would still see a full quota. The
+    // reservation is released when the file commits, or when the upload is
+    // aborted / reaped as stale (which also deletes the blocks).
+    if start == 0
+        && let Some(uid) = user_id
+    {
+        crate::service::fs::quota::reserve_block_bytes(
+            &state.repos,
+            uid,
+            repo_id,
+            file_size as i64,
+            state.config.storage.max_storage_bytes,
+        )
+        .await?;
+    }
 
     // Write the chunk at the declared offset
     temp_mgr
@@ -283,9 +295,18 @@ async fn try_handle_chunked(
     // re-reading the temp file. Out-of-order chunks disable streaming and the
     // final chunk falls back to the temp-file assembly below. The result is
     // ignored — `Broken` is recorded internally and short-circuits later feeds.
-    let _ = temp_mgr
-        .feed_stream(&state.block_store, repo_id, &file_path, start, file_data)
-        .await;
+    //
+    // Encrypted libraries use the assembly fallback exclusively: the streaming
+    // state hashes plaintext blocks as they arrive (`feed_stream` →
+    // `sha1_hex(&blk)`), whereas an encrypted library must store
+    // `sha1(ciphertext)`. Skipping the feed leaves the stream's chunker unset,
+    // so `take_streamed_blocks` returns `None` and the fallback below — which
+    // does honour `enc_key` — assembles the file.
+    if enc_key.is_none() {
+        let _ = temp_mgr
+            .feed_stream(&state.block_store, repo_id, &file_path, start, file_data)
+            .await;
+    }
 
     // Intermediate chunk — tell the client to keep sending
     if end != file_size - 1 {
@@ -325,7 +346,9 @@ async fn try_handle_chunked(
     // blocks to the content-addressed store and `upload_file_committed_stream`
     // commits the resulting block_ids into the repo.
     let Some(stream) = temp_mgr.read_stream(repo_id, &file_path).await else {
-        temp_mgr.abort(repo_id, &file_path).await;
+        temp_mgr
+            .abort(&state.repos, repo_id, &file_path, &state.block_store)
+            .await;
         return Err(AppError::Internal(
             "failed to open assembled temp file".into(),
         ));
@@ -336,14 +359,22 @@ async fn try_handle_chunked(
         repo_id,
         file_size as usize,
         stream,
-        None,
+        enc_key,
     )
     .await?;
+
+    // Track what this upload wrote so an abort or a stale cleanup can delete
+    // the blocks instead of leaving orphans behind.
+    temp_mgr
+        .record_new_blocks(repo_id, &file_path, &new_block_ids)
+        .await;
 
     // Verify we got the expected number of bytes (the streamed total must
     // match the declared file size).
     if total_size as u64 != file_size {
-        temp_mgr.abort(repo_id, &file_path).await;
+        temp_mgr
+            .abort(&state.repos, repo_id, &file_path, &state.block_store)
+            .await;
         return Err(AppError::Internal(format!(
             "assembled file size {total_size} does not match expected {file_size}"
         )));
@@ -585,6 +616,12 @@ pub async fn upload_aj(
     )
     .await?;
 
+    // Encrypted libraries require the password-equivalent key before anything
+    // reaches the block store; the staged bytes are still plaintext on disk in
+    // the staging area, which is not part of the library.
+    let enc_key = super::download::upload_block_key(&state, repo_id, user.user_id, false).await?;
+    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+
     if is_chunked {
         let file_data = chunked_file_data.unwrap_or_default();
         if !file_data.is_empty()
@@ -598,6 +635,7 @@ pub async fn upload_aj(
                 content_range,
                 &user.email,
                 Some(user.user_id),
+                enc_key_ref,
             )
             .await?
         {
@@ -610,8 +648,13 @@ pub async fn upload_aj(
     // removes the staging file on every exit path.
     let staged = StagedUpload(staged_path);
     if let Some(path) = staged.path() {
-        let ingested =
-            ingest_staged_file(state.block_store.clone(), repo_id, path.to_path_buf()).await;
+        let ingested = ingest_staged_file(
+            state.block_store.clone(),
+            repo_id,
+            path.to_path_buf(),
+            enc_key_ref,
+        )
+        .await;
         let (block_ids, total_size, new_block_ids) = ingested?;
         if !block_ids.is_empty() {
             let fs_id = state
@@ -654,37 +697,48 @@ fn extract_multipart_boundary(headers: &HeaderMap) -> Result<String, AppError> {
 /// block store, returning the block ids and total size, so the file is never
 /// fully buffered in memory. `Chunker::new(0)` uses the default (sub-2GB)
 /// chunk sizing; pass a known size for larger files.
+///
+/// `enc_key` is the library block key for an encrypted repository (see
+/// [`upload_block_key`]); when set, each block is encrypted before it is stored
+/// and its id becomes `sha1(ciphertext)`, which is the Seafile convention
+/// (`common/fs-mgr.c:707-721` hashes the encrypted buffer).
 pub(crate) async fn stream_file_into_blocks(
     store: infra::storage::DynBlockStorage,
     repo_id: &str,
     field: &mut multer::Field<'_>,
+    enc_key: Option<(&[u8], &[u8])>,
 ) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
-    crate::fs::core::FileOps::stream_blocks_pipelined(&store, repo_id, None, move |tx| async move {
-        let mut chunker = infra::storage::cdc::Chunker::new(0);
-        let mut total_size = 0i64;
-        let mut idx = 0usize;
-        while let Some(c) = field
-            .chunk()
-            .await
-            .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-        {
-            for block in chunker.feed(&c) {
-                total_size += block.len() as i64;
-                tx.send((idx, block))
+    crate::fs::core::FileOps::stream_blocks_pipelined(
+        &store,
+        repo_id,
+        enc_key,
+        move |tx| async move {
+            let mut chunker = infra::storage::cdc::Chunker::new(0);
+            let mut total_size = 0i64;
+            let mut idx = 0usize;
+            while let Some(c) = field
+                .chunk()
+                .await
+                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
+            {
+                for block in chunker.feed(&c) {
+                    total_size += block.len() as i64;
+                    tx.send((idx, block))
+                        .await
+                        .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+                    idx += 1;
+                }
+            }
+            let last = chunker.finish();
+            if !last.is_empty() {
+                total_size += last.len() as i64;
+                tx.send((idx, last))
                     .await
                     .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-                idx += 1;
             }
-        }
-        let last = chunker.finish();
-        if !last.is_empty() {
-            total_size += last.len() as i64;
-            tx.send((idx, last))
-                .await
-                .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-        }
-        Ok(total_size)
-    })
+            Ok(total_size)
+        },
+    )
     .await
 }
 
@@ -748,46 +802,55 @@ async fn stage_file_field(
 }
 
 /// CDC a staged file into the block store (called only after authorization).
+///
+/// `enc_key` behaves exactly as in [`stream_file_into_blocks`]: `Some` for an
+/// encrypted library, so the staged plaintext is encrypted on the way in.
 async fn ingest_staged_file(
     store: infra::storage::DynBlockStorage,
     repo_id: &str,
     path: std::path::PathBuf,
+    enc_key: Option<(&[u8], &[u8])>,
 ) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
     use tokio::io::AsyncReadExt;
 
-    crate::fs::core::FileOps::stream_blocks_pipelined(&store, repo_id, None, move |tx| async move {
-        let mut file = tokio::fs::File::open(&path)
-            .await
-            .map_err(|e| AppError::Internal(format!("open staged file: {e}")))?;
-        let mut chunker = infra::storage::cdc::Chunker::new(0);
-        let mut total_size = 0i64;
-        let mut idx = 0usize;
-        let mut buf = vec![0u8; 64 * 1024];
-        loop {
-            let n = file
-                .read(&mut buf)
+    crate::fs::core::FileOps::stream_blocks_pipelined(
+        &store,
+        repo_id,
+        enc_key,
+        move |tx| async move {
+            let mut file = tokio::fs::File::open(&path)
                 .await
-                .map_err(|e| AppError::Internal(format!("read staged file: {e}")))?;
-            if n == 0 {
-                break;
+                .map_err(|e| AppError::Internal(format!("open staged file: {e}")))?;
+            let mut chunker = infra::storage::cdc::Chunker::new(0);
+            let mut total_size = 0i64;
+            let mut idx = 0usize;
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let n = file
+                    .read(&mut buf)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("read staged file: {e}")))?;
+                if n == 0 {
+                    break;
+                }
+                for block in chunker.feed(&buf[..n]) {
+                    total_size += block.len() as i64;
+                    tx.send((idx, block))
+                        .await
+                        .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+                    idx += 1;
+                }
             }
-            for block in chunker.feed(&buf[..n]) {
-                total_size += block.len() as i64;
-                tx.send((idx, block))
+            let last = chunker.finish();
+            if !last.is_empty() {
+                total_size += last.len() as i64;
+                tx.send((idx, last))
                     .await
                     .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-                idx += 1;
             }
-        }
-        let last = chunker.finish();
-        if !last.is_empty() {
-            total_size += last.len() as i64;
-            tx.send((idx, last))
-                .await
-                .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-        }
-        Ok(total_size)
-    })
+            Ok(total_size)
+        },
+    )
     .await
 }
 
@@ -875,6 +938,11 @@ pub async fn update_api(
         )
         .await?;
 
+        // Encrypted libraries need the cached key before blocks are written.
+        let enc_key =
+            super::download::upload_block_key(&state, &repo_id, user.user_id, false).await?;
+        let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+
         let parent = file_path
             .rsplit_once('/')
             .map(|(p, _)| if p.is_empty() { "/" } else { p })
@@ -885,8 +953,13 @@ pub async fn update_api(
             .unwrap_or(&file_path);
 
         if let Some(path) = staged.path() {
-            let ingested =
-                ingest_staged_file(state.block_store.clone(), &repo_id, path.to_path_buf()).await;
+            let ingested = ingest_staged_file(
+                state.block_store.clone(),
+                &repo_id,
+                path.to_path_buf(),
+                enc_key_ref,
+            )
+            .await;
             let (block_ids, total_size, new_block_ids) = ingested?;
             if !block_ids.is_empty() {
                 let fs_id = state
@@ -999,6 +1072,10 @@ pub async fn update_aj(
     )
     .await?;
 
+    // Encrypted libraries need the cached key before blocks are written.
+    let enc_key = super::download::upload_block_key(&state, repo_id, user.user_id, false).await?;
+    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+
     let parent = target_file
         .rsplit_once('/')
         .map(|(p, _)| if p.is_empty() { "/" } else { p })
@@ -1021,6 +1098,7 @@ pub async fn update_aj(
                 content_range,
                 &user.email,
                 Some(user.user_id),
+                enc_key_ref,
             )
             .await?
         {
@@ -1031,8 +1109,13 @@ pub async fn update_aj(
 
     let staged = StagedUpload(staged_path);
     if let Some(path) = staged.path() {
-        let ingested =
-            ingest_staged_file(state.block_store.clone(), repo_id, path.to_path_buf()).await;
+        let ingested = ingest_staged_file(
+            state.block_store.clone(),
+            repo_id,
+            path.to_path_buf(),
+            enc_key_ref,
+        )
+        .await;
         let (block_ids, total_size, new_block_ids) = ingested?;
         if !block_ids.is_empty() {
             let fs_id = state
@@ -1094,6 +1177,18 @@ pub async fn upload_aj_token(
     )
     .await?;
 
+    // A shareable upload link has no password cache to draw on, so an encrypted
+    // library is refused outright; every other caller must have warmed the
+    // server-side library key (440 otherwise).
+    let enc_key = super::download::upload_block_key(
+        &state,
+        &info.repo_id,
+        info.user_id,
+        info.upload_link_id.is_some(),
+    )
+    .await?;
+    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+
     if headers.get("content-range").is_none() {
         precheck_quota(
             &state,
@@ -1132,9 +1227,13 @@ pub async fn upload_aj_token(
                     .await?,
                 );
             } else {
-                let (bids, size, nids) =
-                    stream_file_into_blocks(state.block_store.clone(), &info.repo_id, &mut field)
-                        .await?;
+                let (bids, size, nids) = stream_file_into_blocks(
+                    state.block_store.clone(),
+                    &info.repo_id,
+                    &mut field,
+                    enc_key_ref,
+                )
+                .await?;
                 block_ids = bids;
                 new_block_ids = nids;
                 total_size = size;
@@ -1175,6 +1274,7 @@ pub async fn upload_aj_token(
                 // Bind anonymous (upload-link) chunked uploads to the token
                 // owner's storage quota, matching the non-chunked path below.
                 Some(info.user_id),
+                enc_key_ref,
             )
             .await?
         {
@@ -1236,12 +1336,23 @@ pub async fn upload_api(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned())
         .unwrap_or_default();
+    // Resumable uploads (`Content-Range`) reach this endpoint: the desktop Qt
+    // client fetches `api2/repos/{id}/upload-link/` and chunks files over
+    // 100 MB (`ReliablePostFileTask`, `kMinimalSizeForChunkedUploads`). The
+    // chunk has to go through the temp-file/assembly path — streaming a chunk
+    // straight into blocks would commit it as a complete file, and it is also
+    // where the declared total size is reserved against the quota.
+    let content_range = req
+        .headers()
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
     let content_length = req
         .headers()
         .get("content-length")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned());
-    let has_range = req.headers().get("content-range").is_some();
+    let has_range = content_range.is_some();
 
     let info = state
         .token_manager
@@ -1260,6 +1371,17 @@ pub async fn upload_api(
         info.user_id,
     )
     .await?;
+
+    // Encrypted libraries need the cached library key before blocks are
+    // written; a shareable upload link is refused (see `upload_block_key`).
+    let enc_key = super::download::upload_block_key(
+        &state,
+        &info.repo_id,
+        info.user_id,
+        info.upload_link_id.is_some(),
+    )
+    .await?;
+    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
     if !has_range {
         precheck_quota(&state, Some(info.user_id), content_length.as_deref()).await?;
@@ -1281,6 +1403,8 @@ pub async fn upload_api(
     let mut block_ids: Vec<String> = Vec::new();
     let mut new_block_ids: Vec<String> = Vec::new();
     let mut total_size: i64 = 0;
+    let is_chunked = content_range.is_some();
+    let mut chunked_file_data: Option<Vec<u8>> = None;
 
     while let Some(mut field) = multipart
         .next_field()
@@ -1290,12 +1414,27 @@ pub async fn upload_api(
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
             filename = field.file_name().unwrap_or("unknown").to_string();
-            let (bids, size, nids) =
-                stream_file_into_blocks(state.block_store.clone(), &info.repo_id, &mut field)
-                    .await?;
-            block_ids = bids;
-            new_block_ids = nids;
-            total_size = size;
+            if is_chunked {
+                chunked_file_data = Some(
+                    read_chunked_field(
+                        &mut field,
+                        content_range.as_deref(),
+                        state.config.server.max_chunk_size_mb * 1024 * 1024,
+                    )
+                    .await?,
+                );
+            } else {
+                let (bids, size, nids) = stream_file_into_blocks(
+                    state.block_store.clone(),
+                    &info.repo_id,
+                    &mut field,
+                    enc_key_ref,
+                )
+                .await?;
+                block_ids = bids;
+                new_block_ids = nids;
+                total_size = size;
+            }
         } else {
             fields.insert(
                 name,
@@ -1313,6 +1452,28 @@ pub async fn upload_api(
         .unwrap_or_else(|| info.parent_dir.clone());
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
     let target_dir = compute_scoped_target_dir(&info, &parent_dir, &relative_path)?;
+
+    if is_chunked {
+        let file_data = chunked_file_data.unwrap_or_default();
+        if !file_data.is_empty()
+            && let Some(resp) = try_handle_chunked(
+                &state.temp_file_manager,
+                &state,
+                &info.repo_id,
+                &target_dir,
+                &filename,
+                &file_data,
+                content_range.as_deref(),
+                &info.username,
+                Some(info.user_id),
+                enc_key_ref,
+            )
+            .await?
+        {
+            return Ok(resp);
+        }
+        return Ok(Json(json!([{"name": filename, "uploaded": true}])));
+    }
 
     if !block_ids.is_empty() {
         let uid = Some(info.user_id);
@@ -1384,6 +1545,17 @@ pub async fn update_api_handler(
     )
     .await?;
 
+    // Encrypted libraries need the cached library key before blocks are
+    // written; a shareable upload link is refused (see `upload_block_key`).
+    let enc_key = super::download::upload_block_key(
+        &state,
+        &info.repo_id,
+        info.user_id,
+        info.upload_link_id.is_some(),
+    )
+    .await?;
+    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+
     if !has_range {
         precheck_quota(&state, Some(info.user_id), content_length.as_deref()).await?;
     }
@@ -1409,9 +1581,13 @@ pub async fn update_api_handler(
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
             filename = field.file_name().unwrap_or("unknown").to_string();
-            let (bids, size, nids) =
-                stream_file_into_blocks(state.block_store.clone(), &info.repo_id, &mut field)
-                    .await?;
+            let (bids, size, nids) = stream_file_into_blocks(
+                state.block_store.clone(),
+                &info.repo_id,
+                &mut field,
+                enc_key_ref,
+            )
+            .await?;
             block_ids = bids;
             new_block_ids = nids;
             total_size = size;
@@ -1440,7 +1616,12 @@ pub async fn update_api_handler(
             } else {
                 raw_parent
             };
-            let target_dir = compute_target_dir(parent, &relative_path)?;
+            // Scoped helper, for consistency with every other token path. An
+            // update token never carries `upload_link_id` today, so this does
+            // not change behaviour; it keeps the link-directory clamp from
+            // silently disappearing if an update-link is ever minted from an
+            // upload link.
+            let target_dir = compute_scoped_target_dir(&info, parent, &relative_path)?;
             let name = raw_name.to_string();
 
             let fs_id = state
@@ -1523,6 +1704,17 @@ pub async fn update_aj_token(
     )
     .await?;
 
+    // Encrypted libraries need the cached library key before blocks are
+    // written; a shareable upload link is refused (see `upload_block_key`).
+    let enc_key = super::download::upload_block_key(
+        &state,
+        &info.repo_id,
+        info.user_id,
+        info.upload_link_id.is_some(),
+    )
+    .await?;
+    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+
     let boundary = extract_multipart_boundary(&headers)?;
     let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
@@ -1538,9 +1730,13 @@ pub async fn update_aj_token(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            let (bids, size, nids) =
-                stream_file_into_blocks(state.block_store.clone(), &info.repo_id, &mut field)
-                    .await?;
+            let (bids, size, nids) = stream_file_into_blocks(
+                state.block_store.clone(),
+                &info.repo_id,
+                &mut field,
+                enc_key_ref,
+            )
+            .await?;
             block_ids = bids;
             new_block_ids = nids;
             total_size = size;
@@ -1641,6 +1837,22 @@ pub async fn upload_blks_api(
     )
     .await?;
 
+    // Block-level uploads name their own blocks (`filename` = block id, which
+    // must equal `sha1(plaintext)` below) and are committed by replaying that
+    // same client-supplied id list. Server-side encryption would have to store
+    // the block under `sha1(ciphertext)` instead, so the ids the client later
+    // commits would not resolve. Upstream only ever used this API for encrypted
+    // libraries with *client-side* encryption (a path the current iOS client no
+    // longer calls), so encrypted libraries are refused here rather than
+    // silently storing plaintext under a mismatched id.
+    if let Some(repo_model) = state.repos.repo.find_by_id(&info.repo_id).await?
+        && repo_model.encrypted != 0
+    {
+        return Err(AppError::BadRequest(
+            "block upload is not supported for encrypted libraries".into(),
+        ));
+    }
+
     let uid = Some(info.user_id);
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut new_block_ids: Vec<String> = Vec::new();
@@ -1663,6 +1875,19 @@ pub async fn upload_blks_api(
                         "block ID mismatch: expected {block_id}, computed {computed}"
                     )));
                 }
+                // Charge the block before it is written. This branch had no
+                // quota check at all, so a loop that only ever uploaded blocks
+                // (never a commit) could fill the disk while the caller's
+                // committed usage stayed at zero. 443 is the code both the Qt
+                // client and seaf-daemon map to "out of quota".
+                crate::service::fs::quota::reserve_block_bytes(
+                    &state.repos,
+                    info.user_id,
+                    &info.repo_id,
+                    data.len() as i64,
+                    state.config.storage.max_storage_bytes,
+                )
+                .await?;
                 let (_, was_new) = state
                     .block_store
                     .write_block_with_id_tracked(&info.repo_id, &block_id, &data)

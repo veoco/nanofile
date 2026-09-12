@@ -88,6 +88,17 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route("/libraries/{id}/files", get(files::file_browser_root))
         .route("/libraries/{id}/files/", get(files::file_browser_root))
         .route("/libraries/{id}/files/{*path}", get(files::file_browser))
+        // Seahub-compatible library URL: the desktop client's "view on website"
+        // opens `/library/<repo-id>/<name>/…` (`repo-tree-view.cpp:578`), so the
+        // singular spelling has to resolve for that flow to work. The id is
+        // authoritative (the name segment is decorative) and both are redirected
+        // to this server's own `/libraries/{id}/files/…` path.
+        .route("/library/{id}/{name}", get(files::library_redirect_root))
+        .route("/library/{id}/{name}/", get(files::library_redirect_root))
+        .route(
+            "/library/{id}/{name}/{*path}",
+            get(files::library_redirect_path),
+        )
         // Shares — page listing (GET only)
         .route("/shares/", get(shares::list_shares))
         .route("/shares/create/", axum::routing::post(shares::create_share))

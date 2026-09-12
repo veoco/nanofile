@@ -16,6 +16,11 @@ pub trait User2faRepository: Send + Sync {
     async fn set_enabled(&self, user_id: i32, enabled: bool, now: i64) -> Result<(), AppError>;
     /// Record the highest TOTP time step accepted for this user (replay guard).
     async fn set_last_used_step(&self, user_id: i32, step: i64) -> Result<(), AppError>;
+    /// Atomically claim `step` as used, returning `true` only for the winner.
+    ///
+    /// Prefer this to [`Self::set_last_used_step`] when the result gates
+    /// authentication: it closes the read-then-write replay window.
+    async fn consume_step(&self, user_id: i32, step: i64) -> Result<bool, AppError>;
     async fn delete_by_user_id(&self, user_id: i32) -> Result<(), AppError>;
 }
 
@@ -124,6 +129,30 @@ impl User2faRepository for DbUser2faRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(())
+    }
+
+    /// Claim a TOTP time step, returning whether this call won it.
+    ///
+    /// The `last_used_step < step` predicate makes the claim atomic: two
+    /// concurrent submissions of the same observed code both reach this
+    /// statement, but only one updates a row, so only one authenticates. A
+    /// read-then-write guard (what this used to be) had a window in which both
+    /// callers saw the old step and both were accepted.
+    async fn consume_step(&self, user_id: i32, step: i64) -> Result<bool, AppError> {
+        let result = user_2fa::Entity::update_many()
+            .filter(user_2fa::Column::UserId.eq(user_id))
+            .filter(
+                sea_orm::Condition::any()
+                    .add(user_2fa::Column::LastUsedStep.is_null())
+                    .add(user_2fa::Column::LastUsedStep.lt(step)),
+            )
+            .set(user_2fa::ActiveModel {
+                last_used_step: Set(Some(step)),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected == 1)
     }
 
     async fn delete_by_user_id(&self, user_id: i32) -> Result<(), AppError> {

@@ -244,6 +244,24 @@ impl FileOpsService {
         let (dst_parent_fs_id, dst_ancestor_chain) =
             FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir).await?;
 
+        // Reject copying a directory into its own subtree. The copy is a
+        // reference copy (the new entry points at the source's fs_id), so
+        // `/a` → `/a/b` would create a cycle in the FS tree: every tree walk
+        // (client included) would then recurse through it forever. WebDAV's
+        // COPY rejects this; the REST/sync paths did not.
+        for entry in &new_entries {
+            if entry.mode & S_IFDIR == 0 {
+                continue;
+            }
+            let copied_dir_path = join_path(src_parent_dir, &entry.name);
+            if crate::domain::fs::is_self_or_subpath(&copied_dir_path, dst_dir) {
+                return Err(AppError::BadRequest(format!(
+                    "cannot copy directory \"{}\" into itself",
+                    entry.name
+                )));
+            }
+        }
+
         let dst_parent_data =
             crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &dst_parent_fs_id)
                 .await
@@ -402,6 +420,34 @@ impl FileOpsService {
                 name: entry.name.clone(),
                 size: entry.size,
             });
+        }
+
+        // Reject destinations that the remove-then-add sequence below would
+        // destroy before the second phase needs them:
+        //
+        // * `dst_dir == src_parent_dir`: moving items into the directory they
+        //   already live in is a no-op request that only invites conflict
+        //   renaming; report it instead of silently rewriting names.
+        // * a moved directory's own subtree: phase 1 commits the removal, so
+        //   the destination would no longer resolve in phase 2 — the subtree
+        //   would disappear from HEAD with no trash entry and a 500 to the
+        //   client (WebDAV guards this; the REST/sync paths did not).
+        if dst_dir == src_parent_dir {
+            return Err(AppError::BadRequest(
+                "cannot move items into their current directory".into(),
+            ));
+        }
+        for entry in &entries_to_move {
+            if entry.mode & S_IFDIR == 0 {
+                continue;
+            }
+            let moved_dir_path = join_path(src_parent_dir, &entry.name);
+            if crate::domain::fs::is_self_or_subpath(&moved_dir_path, dst_dir) {
+                return Err(AppError::BadRequest(format!(
+                    "cannot move directory \"{}\" into itself",
+                    entry.name
+                )));
+            }
         }
 
         // Pre-validate the destination exists before mutating the source tree.

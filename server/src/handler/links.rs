@@ -507,7 +507,13 @@ pub async fn delete_upload_link_v21(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let found = link::delete_upload_link_v21_by_token(&state.repos, &token, auth.user_id).await?;
+    let found = link::delete_upload_link_v21_by_token(
+        &state.repos,
+        &token,
+        auth.user_id,
+        Some(&state.token_manager),
+    )
+    .await?;
     if !found {
         return Err(AppError::NotFound("upload link not found".into()));
     }
@@ -523,6 +529,18 @@ pub async fn get_upload_link_upload_url_v21(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // The server-wide kill switch must gate this token mint as well: without it
+    // an already-shared upload-link token could still be turned into an upload
+    // URL while anonymous links are disabled.
+    crate::middleware::ensure_share_links_enabled(&state)?;
+
+    // No CSRF guard here on purpose: the capability under attack is the link
+    // token itself, which anyone holding it can already exchange for an upload
+    // URL, so a cross-site GET adds nothing — while the public upload page
+    // (`public-upload.js`) legitimately calls this with `credentials:
+    // same-origin` and no CSRF header when a logged-in user opens their own
+    // link.
+
     // Look up the upload link
     let link = state
         .repos
@@ -552,12 +570,23 @@ pub async fn get_upload_link_upload_url_v21(
     }
 
     // Check repo still exists
-    let _repo = state
+    let repo = state
         .repos
         .repo
         .find_by_id(&link.repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
+
+    // An anonymous upload link cannot write ciphertext into an encrypted
+    // library (no per-user key cache entry exists for the visitor), so refuse
+    // to mint an upload token for one. The official clients never offer this
+    // action for encrypted libraries.
+    if repo.encrypted != 0 {
+        return Err(AppError::BadRequest(
+            "upload links are not supported for encrypted libraries".into(),
+        ));
+    }
+    let _repo = repo;
 
     // The uploaded token acts as the link's creator, so minting it requires that
     // the creator still has write access (defence in depth: the token endpoint

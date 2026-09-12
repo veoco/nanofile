@@ -114,6 +114,11 @@ pub struct Repositories {
     pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
     pub file_lock_timestamp: Arc<dyn FileLockTimestampRepository>,
     pub webdav_key: Arc<dyn WebdavKeyRepository>,
+    /// Per-server quota accounting state (committed-usage snapshots and
+    /// uncommitted-block reservations). Owned here rather than kept in
+    /// process-global statics so it always describes this database; several
+    /// servers can share one process.
+    pub quota_cache: Arc<infra::quota_cache::QuotaCache>,
 }
 
 impl std::fmt::Debug for Repositories {
@@ -170,6 +175,7 @@ impl Repositories {
             webdav_key: Arc::new(auth_cache::CachingWebdavKeyRepository::new(Arc::new(
                 DbWebdavKeyRepository::new(db.clone()),
             ))),
+            quota_cache: Arc::new(infra::quota_cache::QuotaCache::new()),
         }
     }
 

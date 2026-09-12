@@ -283,51 +283,102 @@ pub async fn repo_post_handler(
         Some("update") => update_repo(auth, state, Path(repo_id), req).await,
         Some("setpassword") => set_repo_password_v2(auth, state, Path(repo_id), req).await,
         Some("checkpassword") => check_repo_password_v2(auth, state, Path(repo_id), req).await,
-        _ => Err(AppError::BadRequest(
-            "invalid operation; use rename, update, setpassword, or checkpassword".into(),
-        )),
+        // The official desktop client sets a library password with a bare
+        // `POST /api2/repos/{id}/` carrying form field `password` and **no**
+        // `op` (`seafile-client/src/api/requests.cpp:701-711`). Route that form
+        // to the same service as `?op=setpassword`; anything else without an
+        // `op` keeps the original "invalid operation" answer.
+        _ => set_repo_password_bare(auth, state, Path(repo_id), req).await,
     }
+}
+
+/// A wrong library password, in the shape each client recognises.
+///
+/// The official clients disagree on how to signal "wrong library password":
+/// the desktop Qt client branches on the **status** (400 →
+/// "Incorrect password", `set-repo-password-dialog.cpp:57-60`), while iOS
+/// branches on `error_msg == "Incorrect password"`
+/// (`SeafRepos.m:250-256`). Returning 400 with that exact message satisfies
+/// both. The v2.1 endpoint (`/api/v2.1/repos/{id}/set-password/`) keeps its 440
+/// because Android maps that status (`ExceptionUtils.java:209-217`).
+fn incorrect_password() -> AppError {
+    AppError::BadRequest("Incorrect password".into())
+}
+
+/// `POST /api2/repos/{repo_id}/` — the desktop client's password-set form.
+///
+/// Identical to [`set_repo_password_v2`] except that a missing `password` field
+/// falls back to the historical "invalid operation" error, so a bare POST that
+/// is not a password submission still gets the descriptive answer.
+pub async fn set_repo_password_bare(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(repo_id): Path<String>,
+    req: axum::http::Request<Body>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_parts, body) = req.into_parts();
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
+
+    if infra::common::util::extract_body_field(&bytes, "password").is_none() {
+        return Err(AppError::BadRequest(
+            "invalid operation; use rename, update, setpassword, or checkpassword".into(),
+        ));
+    }
+
+    set_repo_password_with_body(&state, auth.user_id, &repo_id, &bytes).await
 }
 
 /// `POST /api2/repos/{repo_id}/?op=setpassword`
 ///
-/// Set the password for an encrypted repo (v2 API).
+/// Set the password for an encrypted repo (v2 API). iOS calls this form
+/// (`SeafRepos.m:237`); its failure handling reads the `error_msg` body.
 pub async fn set_repo_password_v2(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     req: axum::http::Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Membership is required before the password is even looked at. This
-    // endpoint verifies the supplied password against the stored `magic` and
-    // returns a different status for a hit, so without this check it is a
-    // password oracle for any authenticated non-member who knows the repo id.
-    // The KDF is fixed by the wire protocol at a low iteration count, so the
-    // per-(user, repo) limiter below is the practical brute-force control.
+    let (_parts, body) = req.into_parts();
+    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
+
+    set_repo_password_with_body(&state, auth.user_id, &repo_id, &bytes).await
+}
+
+/// Shared body of the v2 set-password surfaces.
+///
+/// Membership is checked before the password is even looked at. This endpoint
+/// verifies the supplied password against the stored `magic` and returns a
+/// distinguishable answer for a hit, so without that gate it would be a password
+/// oracle for any authenticated non-member who knows the repo id. The KDF is
+/// fixed by the wire protocol at a low iteration count, so the per-(user, repo)
+/// limiter below is the practical brute-force control.
+async fn set_repo_password_with_body(
+    state: &Arc<AppState>,
+    user_id: i32,
+    repo_id: &str,
+    bytes: &[u8],
+) -> Result<Json<serde_json::Value>, AppError> {
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
+        repo_id,
+        user_id,
     )
     .await?;
 
     if state
         .auth_limiters
-        .is_repo_password_limited(auth.user_id, &repo_id)
+        .is_repo_password_limited(user_id, repo_id)
     {
         return Err(AppError::TooManyRequests);
     }
 
-    let (_parts, body) = req.into_parts();
-    let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
-
-    let password = parse_body_field(&bytes, "password", "password required")?;
+    let password = parse_body_field(bytes, "password", "password required")?;
 
     if let Err(e) = PasswordService::set_password(
         &state.password_manager,
         &state.repos,
-        &repo_id,
-        auth.user_id,
+        repo_id,
+        user_id,
         &password,
     )
     .await
@@ -337,7 +388,8 @@ pub async fn set_repo_password_v2(
         if matches!(e, base::error::AppError::RepoPasswdRequired) {
             state
                 .auth_limiters
-                .record_repo_password_failure(auth.user_id, &repo_id);
+                .record_repo_password_failure(user_id, repo_id);
+            return Err(incorrect_password());
         }
         return Err(e);
     }
@@ -347,7 +399,7 @@ pub async fn set_repo_password_v2(
     // successes must never accumulate.
     state
         .auth_limiters
-        .clear_repo_password_failures(auth.user_id, &repo_id);
+        .clear_repo_password_failures(user_id, repo_id);
 
     Ok(ok_json())
 }
@@ -516,8 +568,16 @@ pub async fn get_update_link(
 pub async fn repo_tokens(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<HashMap<String, String>>, AppError> {
+    // Minting (or handing back) a `sync_token_ttl_days`-long repository token is
+    // a state change served on GET, so a cross-site navigation carrying the
+    // session cookie must not be able to trigger it. Bearer callers are
+    // unaffected — the official clients all authenticate with `Authorization:
+    // Token`, and a cross-site request cannot set that header.
+    crate::middleware::require_csrf_for_cookie_session(&headers, &state.csrf_secret)?;
+
     let repos_param = params
         .get("repos")
         .ok_or_else(|| AppError::BadRequest("repos parameter required".into()))?;

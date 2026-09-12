@@ -75,11 +75,15 @@ impl RegistrationService {
         }
 
         // 4. Validate email uniqueness
+        //
+        // The answer is deliberately the same as for a bad invitation code: the
+        // login and password-reset paths return generic responses so an
+        // unauthenticated caller cannot test which addresses are registered, and
+        // this endpoint used to hand out exactly that oracle to anyone holding
+        // one valid invitation code.
         let existing = self.repos.user.find_by_email(&params.email).await?;
         if existing.is_some() {
-            return Err(AppError::BadRequest(
-                "A user with this email already exists.".to_string(),
-            ));
+            return Err(AppError::BadRequest("Invalid invitation code.".to_string()));
         }
 
         // 5. Validate password strength
@@ -98,12 +102,36 @@ impl RegistrationService {
             .create_with_inviter(params.email, password_hash, Some(code_record.creator_id))
             .await?;
 
-        // 7. Mark invitation code as used
+        // 7. Claim the invitation code.
+        //
+        // `mark_as_used` is a conditional UPDATE (`used_by IS NULL`), so exactly
+        // one concurrent request can win it. Everything before this point is a
+        // read plus a 600k-iteration PBKDF2, which is a wide window: without a
+        // real claim, several requests holding the same code each created an
+        // account and only the loser of the UPDATE noticed. The loser now
+        // deletes the account it just made, so one code yields one account.
         let now = chrono::Utc::now().timestamp();
-        self.repos
+        if let Err(e) = self
+            .repos
             .invitation_code
             .mark_as_used(code_record.id, new_user.id, now)
-            .await?;
+            .await
+        {
+            if let Err(cleanup) = self.repos.user.delete_user(new_user.id).await {
+                tracing::error!(
+                    "invitation race: could not roll back account {} created with code {}: {cleanup}",
+                    new_user.email,
+                    code_record.id
+                );
+            }
+            tracing::warn!(
+                "invitation code {} was claimed concurrently; registration rejected: {e}",
+                code_record.id
+            );
+            return Err(AppError::BadRequest(
+                "This invitation code has already been used.".to_string(),
+            ));
+        }
 
         Ok(RegistrationResult { user: new_user })
     }

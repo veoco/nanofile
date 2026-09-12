@@ -345,6 +345,9 @@ pub struct DirService {
     /// parent library's block ids, so the blocks themselves have to be copied
     /// into the new library's own block directory.
     block_store: infra::storage::DynBlockStorage,
+    /// Server config: the global storage cap is needed to charge a sub-repo copy
+    /// against the caller's quota.
+    config: Arc<infra::config::Config>,
 }
 
 impl DirService {
@@ -353,12 +356,14 @@ impl DirService {
         db: Arc<DatabaseConnection>,
         indexer: Option<crate::indexer::TextIndexer>,
         block_store: infra::storage::DynBlockStorage,
+        config: Arc<infra::config::Config>,
     ) -> Self {
         Self {
             repos,
             db,
             indexer,
             block_store,
+            config,
         }
     }
 
@@ -598,20 +603,26 @@ impl DirService {
         // exist in the new library's directory, so every download would 404
         // until the blocks are copied over as well. Do that **before** the
         // commit, so a failure leaves no library that looks complete but is not.
-        if let Err(e) = copy_subtree_blocks(
+        let copied_bytes = match copy_subtree_blocks(
             &self.repos,
             &self.block_store,
             repo_id,
             &new_repo_id,
             &source_dir_fs_id,
+            user_id,
+            self.config.storage.max_storage_bytes,
         )
         .await
         {
-            // Roll the half-built library back rather than leaving an empty one.
-            let _ = self.repos.member.delete_by_repo(&new_repo_id).await;
-            let _ = self.repos.repo.delete_by_id(&new_repo_id).await;
-            return Err(e);
-        }
+            Ok(bytes) => bytes,
+            Err(e) => {
+                // Roll the half-built library back rather than leaving an empty
+                // one (or, on a quota refusal, one whose blocks are on disk).
+                let _ = self.repos.member.delete_by_repo(&new_repo_id).await;
+                let _ = self.repos.repo.delete_by_id(&new_repo_id).await;
+                return Err(e);
+            }
+        };
 
         FileOps::create_commit(
             &self.repos,
@@ -622,6 +633,16 @@ impl DirService {
         )
         .await
         .map_err(|e| AppError::Internal(format!("create commit failed: {e}")))?;
+
+        // Charge the duplicated blocks to the new library. Without this the new
+        // repo reported `size = 0`, so `compute_user_usage` never saw the
+        // bytes and repeated sub-repo creation was a free disk amplifier.
+        if copied_bytes > 0
+            && let Err(e) =
+                crate::fs::core::adjust_repo_size(&self.repos, &new_repo_id, copied_bytes).await
+        {
+            tracing::warn!("could not record the sub-repo size: {e}");
+        }
 
         Ok(serde_json::json!({
             "id": new_repo_id,
@@ -927,9 +948,11 @@ async fn copy_subtree_blocks(
     src_repo_id: &str,
     dst_repo_id: &str,
     root_fs_id: &str,
-) -> Result<(), AppError> {
+    owner_id: i32,
+    max_storage_bytes: u64,
+) -> Result<i64, AppError> {
     if root_fs_id == EMPTY_SHA1 {
-        return Ok(());
+        return Ok(0);
     }
 
     // Level-frontier walk of the source subtree, collecting the block ids of
@@ -938,6 +961,10 @@ async fn copy_subtree_blocks(
     let mut frontier = vec![root_fs_id.to_string()];
     let mut seen: HashSet<String> = HashSet::new();
     let mut block_ids: HashSet<String> = HashSet::new();
+    // Sum of the logical file sizes in the subtree, so the copy can be charged
+    // to the owner's quota before any block is written. The walk already parses
+    // each file object, so this costs nothing extra.
+    let mut total_size: i64 = 0;
     let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
         guard.enter_level()?;
@@ -963,6 +990,7 @@ async fn copy_subtree_blocks(
             } else {
                 let file_data: base::common::FsFileData = serde_json::from_str(&obj.data)
                     .map_err(|e| AppError::Internal(format!("deserialize failed: {e}")))?;
+                total_size = total_size.saturating_add(file_data.size.max(0));
                 for id in file_data.block_ids {
                     block_ids.insert(id);
                 }
@@ -970,6 +998,11 @@ async fn copy_subtree_blocks(
         }
         frontier = next;
     }
+
+    // Refuse before writing anything: duplicating a folder consumes real disk,
+    // and the caller may be over quota already.
+    crate::service::fs::quota::check_upload_quota(repos, owner_id, total_size, max_storage_bytes)
+        .await?;
 
     for id in block_ids {
         if block_store.has_block(dst_repo_id, &id).await {
@@ -989,7 +1022,7 @@ async fn copy_subtree_blocks(
             .map_err(|e| AppError::Internal(format!("copy block {id}: {e}")))?;
     }
 
-    Ok(())
+    Ok(total_size)
 }
 
 /// Copy all reachable fs_objects from one repo to another.

@@ -213,6 +213,7 @@ pub async fn change_password(
     // alive. Mirrors seahub's `clear_token()` + `update_session_auth_hash()`.
     crate::service::auth::token::revoke_all_credentials(
         &state.repos,
+        Some(&state.token_manager),
         user.user_id,
         Some(user.session_token.as_str()),
     )

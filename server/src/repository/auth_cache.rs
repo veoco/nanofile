@@ -183,6 +183,14 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
         result
     }
 
+    async fn delete_by_repo_and_user(&self, repo_id: &str, user_id: i32) -> Result<u64, AppError> {
+        let result = self.inner.delete_by_repo_and_user(repo_id, user_id).await;
+        // Clearing here is what makes a revocation bite immediately rather than
+        // after the cache TTL.
+        self.cache.clear();
+        result
+    }
+
     async fn delete_by_user_and_peer(&self, user_id: i32, peer_id: &str) -> Result<u64, AppError> {
         let result = self.inner.delete_by_user_and_peer(user_id, peer_id).await;
         self.cache.clear();
@@ -509,6 +517,14 @@ mod tests {
         }
 
         async fn delete_by_user(&self, _user_id: i32) -> Result<u64, AppError> {
+            Ok(0)
+        }
+
+        async fn delete_by_repo_and_user(
+            &self,
+            _repo_id: &str,
+            _user_id: i32,
+        ) -> Result<u64, AppError> {
             Ok(0)
         }
 

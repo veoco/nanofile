@@ -270,7 +270,41 @@ impl TestServer {
         tweak: impl FnOnce(&mut infra::config::ServerConfig) + Send + 'static,
     ) -> Self {
         Self::start_full_tweaked(
-            false, false, 30, 90, true, false, true, None, None, None, None, None, tweak,
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            move |config| tweak(&mut config.server),
+        )
+        .await
+    }
+
+    /// Start a server with `auth.*` switched (invitations, password reset, …).
+    pub async fn start_with_auth_config(
+        tweak: impl FnOnce(&mut infra::config::AuthConfig) + Send + 'static,
+    ) -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            move |config| tweak(&mut config.auth),
         )
         .await
     }
@@ -339,7 +373,7 @@ impl TestServer {
         tweak: F,
     ) -> Self
     where
-        F: FnOnce(&mut infra::config::ServerConfig),
+        F: FnOnce(&mut infra::config::Config),
     {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -415,6 +449,7 @@ impl TestServer {
                 max_login_attempts: 5,
                 lockout_duration_secs: 300,
                 max_distinct_usernames_per_ip: 20,
+                sso_link_max_per_hour: 30,
                 enable_invitations: true,
                 enable_password_reset: true,
                 password_min_length: 8,
@@ -467,7 +502,7 @@ impl TestServer {
             ui: Default::default(),
             sync: Default::default(),
         };
-        tweak(&mut config.server);
+        tweak(&mut config);
         // Ensure block directory exists
         std::fs::create_dir_all(&config.storage.block_dir).unwrap();
 

@@ -63,8 +63,13 @@ pub async fn search_user(
     _auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Query(query): Query<SearchUserQuery>,
-) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let q = query.q.unwrap_or_default();
-    let result = group::search_user(&state.repos, &q).await?;
-    Ok(Json(result))
+    let users = group::search_user(&state.repos, &q).await?;
+    // The desktop client reads `json_object_get(json, "users")` and silently
+    // ends up with an empty list if the key is missing
+    // (`seafile-client/src/api/requests.cpp:1260-1284`), so the envelope is the
+    // contract — a bare array was accepted and produced nothing. The companion
+    // rate limit lives in `group::search_user`'s caller-side cap.
+    Ok(Json(serde_json::json!({ "users": users })))
 }
