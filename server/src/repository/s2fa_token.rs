@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 use std::sync::Arc;
 
 use base::error::AppError;
@@ -29,6 +31,11 @@ pub trait S2faTokenRepository: Send + Sync {
         user_id: i32,
         device_id: &str,
     ) -> Result<u64, AppError>;
+    /// Every device-trust token a user holds, newest first, for the credential
+    /// inventory.
+    async fn list_for_user(&self, user_id: i32) -> Result<Vec<s2fa_token::Model>, AppError>;
+    /// Revoke one device trust, scoped to its owner.
+    async fn delete_by_id_and_user(&self, id: i32, user_id: i32) -> Result<u64, AppError>;
     async fn insert(&self, model: s2fa_token::ActiveModel) -> Result<(), AppError>;
     async fn create_s2fa_token(
         &self,
@@ -84,6 +91,23 @@ impl S2faTokenRepository for DbS2faTokenRepository {
 
     async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError> {
         let result = s2fa_token::Entity::delete_many()
+            .filter(s2fa_token::Column::UserId.eq(user_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
+    }
+
+    async fn list_for_user(&self, user_id: i32) -> Result<Vec<s2fa_token::Model>, AppError> {
+        Ok(s2fa_token::Entity::find()
+            .filter(s2fa_token::Column::UserId.eq(user_id))
+            .order_by_desc(s2fa_token::Column::CreatedAt)
+            .all(self.db.as_ref())
+            .await?)
+    }
+
+    async fn delete_by_id_and_user(&self, id: i32, user_id: i32) -> Result<u64, AppError> {
+        let result = s2fa_token::Entity::delete_many()
+            .filter(s2fa_token::Column::Id.eq(id))
             .filter(s2fa_token::Column::UserId.eq(user_id))
             .exec(self.db.as_ref())
             .await?;

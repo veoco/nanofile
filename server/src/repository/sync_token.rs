@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 use std::sync::Arc;
 
 use base::error::AppError;
@@ -40,6 +42,15 @@ pub trait SyncTokenRepository: Send + Sync {
     /// Delete by the **raw** token value.
     async fn delete_by_token(&self, token: &str) -> Result<(), AppError>;
     async fn delete_by_id(&self, id: i32) -> Result<(), AppError>;
+    /// Every sync token a user holds, newest first, for the credential
+    /// inventory.
+    ///
+    /// The stored value is a ciphertext of a bearer credential, so callers that
+    /// only need to show *what exists* must not reveal it.
+    async fn list_for_user(&self, user_id: i32) -> Result<Vec<sync_token::Model>, AppError>;
+    /// Revoke one sync token, scoped to its owner: the plain `delete_by_id` is
+    /// not safe to expose.
+    async fn delete_by_id_and_user(&self, id: i32, user_id: i32) -> Result<u64, AppError>;
     async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError>;
     async fn delete_by_user_and_peer(&self, user_id: i32, peer_id: &str) -> Result<u64, AppError>;
     /// Delete a user's token for one repository.
@@ -184,6 +195,23 @@ impl SyncTokenRepository for DbSyncTokenRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(())
+    }
+
+    async fn list_for_user(&self, user_id: i32) -> Result<Vec<sync_token::Model>, AppError> {
+        Ok(sync_token::Entity::find()
+            .filter(sync_token::Column::UserId.eq(user_id))
+            .order_by_desc(sync_token::Column::CreatedAt)
+            .all(self.db.as_ref())
+            .await?)
+    }
+
+    async fn delete_by_id_and_user(&self, id: i32, user_id: i32) -> Result<u64, AppError> {
+        let result = sync_token::Entity::delete_many()
+            .filter(sync_token::Column::Id.eq(id))
+            .filter(sync_token::Column::UserId.eq(user_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
     }
 
     async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError> {

@@ -35,6 +35,22 @@ pub trait ApiTokenRepository: Send + Sync {
         &self,
         user_id: i32,
     ) -> Result<Vec<api_token::Model>, AppError>;
+    /// Every session a user holds, newest first.
+    ///
+    /// The inventory needs all of them, not only the ones carrying a
+    /// `platform`: a browser session has no device details, and a client that
+    /// reports none is still a client. Pending 2FA tokens are left out — they
+    /// are a five-minute half-credential, not something the owner holds.
+    async fn list_sessions(&self, user_id: i32) -> Result<Vec<api_token::Model>, AppError>;
+    /// One of a user's sessions, so a guessed id cannot reach another account's
+    /// row.
+    async fn find_by_id_and_user(
+        &self,
+        token_id: i32,
+        user_id: i32,
+    ) -> Result<Option<api_token::Model>, AppError>;
+    /// Revoke one session, scoped to its owner.
+    async fn delete_by_id_and_user(&self, token_id: i32, user_id: i32) -> Result<u64, AppError>;
     async fn delete_many_by_device(&self, device_id: &str) -> Result<(), AppError>;
     async fn delete_many_by_user_platform_device(
         &self,
@@ -95,6 +111,36 @@ impl ApiTokenRepository for DbApiTokenRepository {
             .order_by_desc(api_token::Column::CreatedAt)
             .all(self.db.as_ref())
             .await?)
+    }
+
+    async fn list_sessions(&self, user_id: i32) -> Result<Vec<api_token::Model>, AppError> {
+        Ok(api_token::Entity::find()
+            .filter(api_token::Column::UserId.eq(user_id))
+            .filter(api_token::Column::IsPending.eq(false))
+            .order_by_desc(api_token::Column::CreatedAt)
+            .all(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_id_and_user(
+        &self,
+        token_id: i32,
+        user_id: i32,
+    ) -> Result<Option<api_token::Model>, AppError> {
+        Ok(api_token::Entity::find()
+            .filter(api_token::Column::Id.eq(token_id))
+            .filter(api_token::Column::UserId.eq(user_id))
+            .one(self.db.as_ref())
+            .await?)
+    }
+
+    async fn delete_by_id_and_user(&self, token_id: i32, user_id: i32) -> Result<u64, AppError> {
+        let result = api_token::Entity::delete_many()
+            .filter(api_token::Column::Id.eq(token_id))
+            .filter(api_token::Column::UserId.eq(user_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
     }
 
     async fn delete_many_by_device(&self, device_id: &str) -> Result<(), AppError> {

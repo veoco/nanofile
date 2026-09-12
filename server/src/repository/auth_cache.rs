@@ -179,6 +179,20 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
         result
     }
 
+    async fn list_for_user(&self, user_id: i32) -> Result<Vec<sync_token::Model>, AppError> {
+        // Not cached: an enumeration goes straight to the database, and the
+        // cache holds per-credential lookups rather than lists.
+        self.inner.list_for_user(user_id).await
+    }
+
+    async fn delete_by_id_and_user(&self, id: i32, user_id: i32) -> Result<u64, AppError> {
+        let result = self.inner.delete_by_id_and_user(id, user_id).await;
+        // Clearing here is what makes the revocation bite immediately rather
+        // than after the cache TTL.
+        self.cache.clear();
+        result
+    }
+
     async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError> {
         let result = self.inner.delete_by_user(user_id).await;
         self.cache.clear();
@@ -319,6 +333,25 @@ impl ApiTokenRepository for CachingApiTokenRepository {
             .inner
             .delete_many_by_user_id_except(user_id, keep_raw_token)
             .await;
+        self.cache.clear();
+        result
+    }
+
+    async fn list_sessions(&self, user_id: i32) -> Result<Vec<api_token::Model>, AppError> {
+        // Not cached: the cache holds per-credential lookups, not lists.
+        self.inner.list_sessions(user_id).await
+    }
+
+    async fn find_by_id_and_user(
+        &self,
+        token_id: i32,
+        user_id: i32,
+    ) -> Result<Option<api_token::Model>, AppError> {
+        self.inner.find_by_id_and_user(token_id, user_id).await
+    }
+
+    async fn delete_by_id_and_user(&self, token_id: i32, user_id: i32) -> Result<u64, AppError> {
+        let result = self.inner.delete_by_id_and_user(token_id, user_id).await;
         self.cache.clear();
         result
     }
@@ -562,6 +595,15 @@ mod tests {
 
         async fn delete_by_id(&self, _id: i32) -> Result<(), AppError> {
             Ok(())
+        }
+
+        async fn list_for_user(&self, _user_id: i32) -> Result<Vec<sync_token::Model>, AppError> {
+            self.db_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+
+        async fn delete_by_id_and_user(&self, _id: i32, _user_id: i32) -> Result<u64, AppError> {
+            Ok(0)
         }
 
         async fn delete_by_user(&self, _user_id: i32) -> Result<u64, AppError> {
