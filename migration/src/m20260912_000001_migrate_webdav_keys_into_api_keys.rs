@@ -124,13 +124,23 @@ impl MigrationTrait for Migration {
                 ))
                 .await?;
 
+                // Look up the id by key_hash rather than last_insert_rowid():
+                // the migration connection is a pool, so the INSERT and a
+                // last_insert_rowid() call may land on different connections,
+                // returning 0 or an unrelated id. key_hash is globally
+                // unique, so this SELECT always finds the right row.
                 let id: i32 = db
-                    .query_one_raw(Statement::from_string(
+                    .query_one_raw(Statement::from_sql_and_values(
                         backend,
-                        "SELECT last_insert_rowid() AS id".to_string(),
+                        "SELECT id FROM api_keys WHERE key_hash = ?",
+                        [key_hash.clone().into()],
                     ))
                     .await?
-                    .ok_or_else(|| DbErr::Custom("api_keys insert returned no rowid".into()))?
+                    .ok_or_else(|| {
+                        DbErr::Custom(format!(
+                            "api_keys insert for key_hash {key_hash} could not be read back"
+                        ))
+                    })?
                     .try_get("", "id")
                     .map_err(|e| DbErr::Custom(e.to_string()))?;
 
