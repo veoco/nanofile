@@ -30,17 +30,6 @@ impl MigrationTrait for Migration {
             return Ok(());
         }
 
-        // SQLite does not enforce FKs by default, so past deletes of users or
-        // repos may have left dangling webdav_keys rows. Copying them into
-        // api_keys / api_key_repos would violate the new tables' FK constraints,
-        // so remove them first.
-        db.execute_unprepared(
-            "DELETE FROM webdav_keys \
-             WHERE user_id NOT IN (SELECT id FROM users) \
-                OR repo_id NOT IN (SELECT id FROM repos)",
-        )
-        .await?;
-
         // A previous failed run of this migration may have left partial rows
         // in api_keys / api_key_repos (each INSERT auto-commits in SQLite, so
         // a mid-loop failure does not roll them back). Re-running would then
@@ -52,11 +41,20 @@ impl MigrationTrait for Migration {
         db.execute_unprepared("DELETE FROM api_key_repos").await?;
         db.execute_unprepared("DELETE FROM api_keys WHERE key_prefix IS NULL").await?;
 
+        // SQLite does not enforce FKs by default, so past deletes of users or
+        // repos may have left dangling webdav_keys rows whose user_id or
+        // repo_id points at a record that no longer exists. Filtering at
+        // SELECT time (rather than DELETE) is robust against transaction
+        // rollbacks: even if a previous run's orphan-cleanup DELETE was
+        // rolled back, this query only returns rows whose FK targets exist,
+        // so the INSERTs below cannot trip the new tables' FK constraints.
         let legacy = db
             .query_all_raw(Statement::from_string(
                 backend,
-                "SELECT id, repo_id, user_id, name, permission, key_hash, created_at, last_used_at \
-                 FROM webdav_keys"
+                "SELECT w.id, w.repo_id, w.user_id, w.name, w.permission, w.key_hash, w.created_at, w.last_used_at \
+                 FROM webdav_keys w \
+                 WHERE EXISTS (SELECT 1 FROM users WHERE users.id = w.user_id) \
+                    AND EXISTS (SELECT 1 FROM repos WHERE repos.id = w.repo_id)"
                     .to_string(),
             ))
             .await?;
