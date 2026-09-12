@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod repo_extractor;
+pub mod route_audit;
 
 use std::net::SocketAddr;
 

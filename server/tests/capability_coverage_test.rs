@@ -169,6 +169,10 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET",    "/api2/repo-tokens/"),
     ("GET",    "/api2/repos/{repo_id}/download-info/"),
     ("GET",    "/api/v2.1/smart-link/"),
+    // The web UI's file-content endpoint: outside the API namespaces, but the
+    // only route there that authenticates with `AuthUser`, so it needs a
+    // classification like any other. Nothing else in this inventory pins it.
+    ("GET",    "/repos/{repo_id}/files/{*path}"),
     ("GET",    "/api2/admin/users/"),
     ("POST",   "/api2/admin/users/"),
     ("PUT",    "/api2/admin/users/{user_id}/"),

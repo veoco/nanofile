@@ -348,12 +348,18 @@ fn route_decision(
     uri_path: &str,
 ) -> Result<(), StatusCode> {
     let Some(access) = required_access(method, route) else {
-        tracing::warn!(
-            %method,
-            path = uri_path,
-            credential = credential.kind_id(),
-            "credential used on a route with no classification"
-        );
+        // Fail closed, and leave a trace: a gap in the table is a bug, so it
+        // has to be observable instead of looking like an ordinary refusal.
+        // `record` answers true only for the first hit of a given route, so a
+        // misclassified hot endpoint cannot flood the log.
+        if super::route_audit::record(method.as_str(), uri_path) {
+            tracing::warn!(
+                %method,
+                path = uri_path,
+                credential = credential.kind_id(),
+                "credential used on a route with no classification"
+            );
+        }
         return Err(StatusCode::FORBIDDEN);
     };
     if !credential.allows_route(access) {
@@ -711,6 +717,39 @@ mod tests {
                 "/not-an-api/route"
             ),
             Err(StatusCode::FORBIDDEN)
+        );
+    }
+
+    /// A denied request must leave a trace, otherwise a gap in the table is
+    /// indistinguishable from a legitimate refusal. The classified route in the
+    /// same test is the control: reaching it must not be reported as a gap.
+    #[test]
+    fn an_unclassified_route_is_recorded_and_a_classified_one_is_not() {
+        use crate::middleware::route_audit;
+
+        let gap = "/api2/control-gap-probe/";
+        assert_eq!(
+            route_decision(&Credential::Session, &Method::GET, gap, gap),
+            Err(StatusCode::FORBIDDEN)
+        );
+        assert!(
+            route_audit::recorded().contains(&("GET".to_string(), gap.to_string())),
+            "the gap must be recorded so the end-to-end run can fail on it"
+        );
+
+        let classified = ("GET".to_string(), "/api2/repos/".to_string());
+        assert_eq!(
+            route_decision(
+                &Credential::Session,
+                &Method::GET,
+                "/api2/repos/",
+                "/api2/repos/"
+            ),
+            Ok(())
+        );
+        assert!(
+            !route_audit::recorded().contains(&classified),
+            "a classified route is not a gap"
         );
     }
 

@@ -21,6 +21,14 @@ function ensureBinary(): string {
 
 export default async function globalSetup() {
   const binary = ensureBinary();
+
+  // Truncate the shared server log before the first server starts. It is
+  // opened in append mode (a spec may spawn its own isolated instance), so
+  // without this the teardown audit would also read earlier runs.
+  const resultsDir = path.join(process.cwd(), "test-results");
+  fs.mkdirSync(resultsDir, { recursive: true });
+  fs.rmSync(path.join(resultsDir, "server.log"), { force: true });
+
   const handle = await startServer(binary);
 
   try {

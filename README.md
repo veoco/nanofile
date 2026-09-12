@@ -247,8 +247,9 @@ run it:
   route table is consulted for all of them, not only for keys. A session is the account itself and
   therefore satisfies every capability, but it is still classified; a key gets exactly the
   capabilities it carries, narrowed per library by its bindings; and a route that nobody classified
-  is refused to everyone. Adding an endpoint without classifying it is a loud 403 with a warning log
-  rather than a silently open door.
+  is refused to everyone. A gap in the table is reported once per route and **fails the end-to-end
+  run** (`e2e/global-teardown.ts` reads it back out of the server log), so forgetting to classify a
+  new endpoint is a red build rather than a silently open door.
 - **Uploads and downloads are charged before they are written.** Bytes in the block store that no
   commit references yet are reserved against the uploader's quota, so "write blocks and never commit"
   is bounded rather than free; the reservation is released when the upload commits, or when an
