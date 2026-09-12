@@ -178,3 +178,63 @@ async fn legacy_webdav_keys_become_unified_keys() {
 
     let _ = db.close().await;
 }
+
+#[tokio::test]
+async fn orphaned_webdav_keys_are_dropped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("migration.db");
+    let db = Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
+        .await
+        .expect("connect");
+
+    Migrator::up(&db, Some(steps_before(MOVE)))
+        .await
+        .expect("migrate to the pre-move schema");
+
+    db.execute_unprepared(
+        "INSERT INTO users (id, email, password_hash, created_at) \
+         VALUES (1, 'owner@example.com', 'x', 1)",
+    )
+    .await
+    .expect("seed user");
+    db.execute_unprepared(&format!(
+        "INSERT INTO repos (id, name, owner_id, created_at, updated_at) \
+         VALUES ('{REPO}', 'library', 1, 1, 1)"
+    ))
+    .await
+    .expect("seed repo");
+
+    // Disable FK enforcement so the orphaned row can be inserted — this
+    // mirrors the real-world cause of the bug: SQLite defaults to FKs off,
+    // so deleting a repo or user left dangling webdav_keys rows.
+    db.execute_unprepared("PRAGMA foreign_keys = OFF")
+        .await
+        .expect("disable FKs for seeding");
+
+    let ghost_repo = "99999999-9999-9999-9999-999999999999";
+    let ghost_hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    db.execute_unprepared(&format!(
+        "INSERT INTO webdav_keys (repo_id, user_id, name, permission, key_hash, created_at, last_used_at) \
+         VALUES ('{REPO}', 1, 'rclone', 'rw', '{HASH_RW}', 100, 200), \
+                ('{REPO}', 1, 'viewer', 'r', '{HASH_RO}', 101, NULL), \
+                ('{ghost_repo}', 1, 'orphan', 'rw', '{ghost_hash}', 102, NULL)"
+    ))
+    .await
+    .expect("seed legacy keys");
+
+    db.execute_unprepared("PRAGMA foreign_keys = ON")
+        .await
+        .expect("re-enable FKs for the migration");
+
+    // The move must not abort on the orphaned row.
+    Migrator::up(&db, None).await.expect("apply the move");
+
+    assert_eq!(
+        count(&db, "SELECT COUNT(*) AS n FROM api_keys").await,
+        2,
+        "only keys with a valid user and repo are migrated"
+    );
+    assert!(!table_exists(&db, "webdav_keys").await);
+
+    let _ = db.close().await;
+}

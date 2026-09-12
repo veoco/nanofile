@@ -28,6 +28,17 @@ impl MigrationTrait for Migration {
             return Ok(());
         }
 
+        // SQLite does not enforce FKs by default, so past deletes of users or
+        // repos may have left dangling webdav_keys rows. Copying them into
+        // api_keys / api_key_repos would violate the new tables' FK constraints,
+        // so remove them first.
+        db.execute_unprepared(
+            "DELETE FROM webdav_keys \
+             WHERE user_id NOT IN (SELECT id FROM users) \
+                OR repo_id NOT IN (SELECT id FROM repos)",
+        )
+        .await?;
+
         let legacy = db
             .query_all_raw(Statement::from_string(
                 backend,
