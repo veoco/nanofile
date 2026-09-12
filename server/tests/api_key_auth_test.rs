@@ -337,17 +337,33 @@ async fn sync_access_follows_the_sync_capabilities() {
 }
 
 #[tokio::test]
-async fn sessions_are_unaffected_by_the_key_guard() {
+async fn a_session_satisfies_every_capability_but_is_still_classified() {
     let f = TestFixture::new().await;
-    // The unclassified-route deny and the capability checks apply to keys only:
-    // a login token still reaches every endpoint it always did.
+    // The route table says what a *key* needs. A session is the account itself,
+    // so it satisfies every capability — including on the session-only
+    // key-management surface, which is the one place a key is refused.
     for path in [
         "/api2/repos/",
         "/api2/starredfiles/",
         "/api2/api-keys/",
+        "/api2/api-keys/catalog/",
+        "/api2/account/info/",
+        "/api2/devices/",
+        "/api2/groups/",
+        "/api2/unseen_messages/",
         "/api/v2.1/activities/",
     ] {
         let resp = f.client.get(path, Some(&f.api_token)).await;
         assert_eq!(resp.status(), 200, "session access to {path}");
     }
+
+    // Library-scoped routes are classified too, and a session has no ceiling.
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/dir/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "session access to a library route");
 }

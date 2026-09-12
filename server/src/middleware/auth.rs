@@ -281,7 +281,9 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             if token_record.is_pending {
                 return Err(StatusCode::UNAUTHORIZED);
             }
-            (token_record.user_id, Credential::Session)
+            let credential = Credential::Session;
+            enforce_route_access(&credential, parts)?;
+            (token_record.user_id, credential)
         } else {
             return Err(StatusCode::UNAUTHORIZED);
         };
@@ -307,10 +309,13 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
 
 /// Apply a credential's capability and library limits to a request.
 ///
-/// Sessions never reach this: only key callers are classified, so the behaviour
-/// of a login token is unchanged. An unclassified route is denied, which is what
-/// makes a newly added endpoint fail closed instead of silently accepting every
-/// key.
+/// Every credential goes through here, so the route table is the single place
+/// that decides which caller may reach which route. A session satisfies every
+/// capability (it *is* the account) but is still classified, which is what
+/// makes an unclassified route fail closed for everyone rather than only for
+/// keys. An unclassified route is denied, so a newly added endpoint is
+/// unreachable until it is classified instead of silently accepting every
+/// caller.
 ///
 /// Classification uses the router's matched path template, not the raw URI:
 /// `nest` strips the matched prefix before the request reaches a nested handler,
@@ -322,12 +327,30 @@ fn enforce_route_access(credential: &Credential, parts: &Parts) -> Result<(), St
         .extensions
         .get::<axum::extract::MatchedPath>()
         .map(axum::extract::MatchedPath::as_str);
-    let route = matched.unwrap_or_else(|| parts.uri.path());
+    let uri_path = parts.uri.path();
+    route_decision(
+        credential,
+        &parts.method,
+        matched.unwrap_or(uri_path),
+        uri_path,
+    )
+}
 
-    let Some(access) = required_access(&parts.method, route) else {
+/// The policy half of [`enforce_route_access`].
+///
+/// Split out because the path *template* arrives in a request extension that
+/// only a real router fills in; taking it as a parameter keeps the decision
+/// testable, including the branch that denies an unclassified route.
+fn route_decision(
+    credential: &Credential,
+    method: &axum::http::Method,
+    route: &str,
+    uri_path: &str,
+) -> Result<(), StatusCode> {
+    let Some(access) = required_access(method, route) else {
         tracing::warn!(
-            method = %parts.method,
-            path = parts.uri.path(),
+            %method,
+            path = uri_path,
             credential = credential.kind_id(),
             "credential used on a route with no classification"
         );
@@ -340,7 +363,7 @@ fn enforce_route_access(credential: &Credential, parts: &Parts) -> Result<(), St
     // Every other credential is the account itself and has no ceiling, so
     // `allows_repo` accepts unconditionally there.
     if let RouteAccess::Capability(capability) = access
-        && let Some(repo_id) = repo_path::find_repo_id(parts.uri.path())
+        && let Some(repo_id) = repo_path::find_repo_id(uri_path)
         && !credential.allows_repo(&repo_id, capability.is_write())
     {
         return Err(StatusCode::FORBIDDEN);
@@ -603,9 +626,140 @@ fn should_write_peer_info(token_id: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_url_repo_id;
+    use super::{extract_url_repo_id, route_decision};
+    use crate::domain::api_key::{KeyAuthority, RepoCeiling};
+    use crate::domain::capability::{Capability, CapabilitySet};
+    use crate::domain::credential::Credential;
+    use axum::http::{Method, StatusCode};
+    use std::collections::HashMap;
 
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
+    const OTHER_REPO: &str = "11111111-1111-1111-1111-111111111111";
+
+    /// A key carrying exactly `capabilities`, bound to `repos`.
+    fn key(capabilities: &[Capability], repos: &[(&str, RepoCeiling)]) -> Credential {
+        let mut set = CapabilitySet::EMPTY;
+        for capability in capabilities {
+            set.insert(*capability);
+        }
+        Credential::Key(KeyAuthority {
+            key_id: 1,
+            capabilities: set,
+            all_repos: repos.is_empty(),
+            repos: repos
+                .iter()
+                .map(|(id, ceiling)| ((*id).to_string(), *ceiling))
+                .collect::<HashMap<_, _>>(),
+        })
+    }
+
+    /// A session satisfies every capability, so classification must not get in
+    /// its way: the route table says what a *key* needs.
+    #[test]
+    fn a_session_passes_every_classified_route() {
+        for (method, route) in [
+            (Method::GET, "/api2/repos/"),
+            (Method::POST, "/api2/repos/"),
+            (Method::DELETE, "/api2/repos/{repo_id}/"),
+            (Method::GET, "/api2/repos/{repo_id}/dir/"),
+            (Method::POST, "/api/v2.1/repos/{repo_id}/file/"),
+            (Method::GET, "/api2/admin/users/"),
+            // Session-only routes are exactly where a session is required.
+            (Method::GET, "/api2/api-keys/"),
+            (Method::POST, "/api2/api-keys/"),
+        ] {
+            assert_eq!(
+                route_decision(
+                    &Credential::Session,
+                    &method,
+                    route,
+                    &route.replace("{repo_id}", REPO)
+                ),
+                Ok(()),
+                "session must reach {method} {route}"
+            );
+        }
+    }
+
+    /// The hardening this table is for: a route that nobody classified is
+    /// denied to *every* credential, so adding an endpoint without classifying
+    /// it cannot leave a silently open door.
+    #[test]
+    fn an_unclassified_route_is_denied_to_every_credential() {
+        let session = Credential::Session;
+        let key = key(&[Capability::FileRead], &[(REPO, RepoCeiling::Write)]);
+
+        // Inside a classified namespace but absent from the table.
+        for credential in [&session, &key] {
+            assert_eq!(
+                route_decision(
+                    credential,
+                    &Method::GET,
+                    "/api2/not-a-route/",
+                    "/api2/not-a-route/"
+                ),
+                Err(StatusCode::FORBIDDEN)
+            );
+        }
+        // Outside every classified namespace: the fallback uses the raw URI,
+        // which is what a request to an unknown path looks like.
+        assert_eq!(
+            route_decision(
+                &session,
+                &Method::GET,
+                "/not-an-api/route",
+                "/not-an-api/route"
+            ),
+            Err(StatusCode::FORBIDDEN)
+        );
+    }
+
+    /// The key half of the policy, and the wiring the template/URI split
+    /// exists for: the route is matched on the template while the library
+    /// ceiling is checked against the concrete id in the raw path.
+    #[test]
+    fn a_key_is_limited_by_its_capabilities_and_its_library_ceiling() {
+        let read_only_here = key(
+            &[Capability::FileRead, Capability::FileWrite],
+            &[(REPO, RepoCeiling::Read)],
+        );
+        let template = "/api2/repos/{repo_id}/dir/";
+        let uri = format!("/api2/repos/{REPO}/dir/");
+
+        // A read goes through the read ceiling...
+        assert_eq!(
+            route_decision(&read_only_here, &Method::GET, template, &uri),
+            Ok(())
+        );
+        // ...and a write does not.
+        assert_eq!(
+            route_decision(&read_only_here, &Method::POST, template, &uri),
+            Err(StatusCode::FORBIDDEN),
+            "a read ceiling must block the write"
+        );
+
+        // An unbound library is out of scope even though the capability is held.
+        assert_eq!(
+            route_decision(
+                &read_only_here,
+                &Method::GET,
+                template,
+                &format!("/api2/repos/{OTHER_REPO}/dir/")
+            ),
+            Err(StatusCode::FORBIDDEN)
+        );
+
+        // Key management stays closed to keys however wide they are.
+        assert_eq!(
+            route_decision(
+                &read_only_here,
+                &Method::GET,
+                "/api2/api-keys/",
+                "/api2/api-keys/"
+            ),
+            Err(StatusCode::FORBIDDEN)
+        );
+    }
 
     #[test]
     fn plain_repo_id_is_extracted() {

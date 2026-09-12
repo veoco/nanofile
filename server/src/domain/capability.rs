@@ -7,14 +7,19 @@
 //! ([`crate::middleware::auth::AuthUser`]) instead of being re-stated by every
 //! handler.
 //!
+//! Every credential is classified, not only keys. A session satisfies every
+//! capability because it *is* the account, so what the table really records is
+//! "what does this route need of a key", plus the routes that are closed to keys
+//! altogether ([`RouteAccess::SessionOnly`]).
+//!
 //! Three properties matter and are covered by tests:
 //!
 //! * **Write implies read.** Granting `file.write` without `file.read` would
 //!   produce a key that can upload but not list, so the implication closure is
 //!   expanded when capabilities are parsed.
 //! * **Unknown means denied.** [`required_access`] answering `None` for a route
-//!   a key is calling is a hard 403, so a newly added route fails closed until
-//!   it is classified.
+//!   a caller is reaching is a hard 403, so a newly added route fails closed
+//!   until it is classified.
 //! * **Capabilities are stable ids.** They are persisted as a canonical
 //!   comma-separated list, so the enum's discriminants are an in-memory detail
 //!   while [`Capability::id`] is the on-disk contract.
@@ -487,6 +492,9 @@ impl CapabilitySet {
 }
 
 /// What a route requires of the caller.
+///
+/// This is the complete policy: it is consulted for every credential, not only
+/// for keys (see `Credential::allows_route`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteAccess {
     /// No credential: a public endpoint, or a handler that authenticates the
@@ -496,13 +504,13 @@ pub enum RouteAccess {
     /// Any valid credential is enough. Used for probes such as
     /// `GET /api2/auth/ping/`, which only answers "is this token accepted".
     AnyAuthenticated,
-    /// A browser/API-token session is required; API keys are rejected. Used for
-    /// the authentication plumbing (login/logout, client login, SSO) and for
-    /// key management itself: a key that can mint keys could grant itself more
-    /// than it holds.
+    /// The account itself is required; API keys are rejected. Used for the
+    /// authentication plumbing (login/logout, client login, SSO) and for key
+    /// management itself: a key that can mint keys could grant itself more than
+    /// it holds.
     SessionOnly,
-    /// The caller needs this capability when it authenticates with an API key.
-    /// Session callers are unaffected by the capability check.
+    /// A key needs this capability; a session satisfies it because a session is
+    /// the account, not a subset of it.
     Capability(Capability),
 }
 
@@ -511,7 +519,7 @@ pub enum RouteAccess {
 /// `{name}` matches exactly one non-empty path segment. The table covers every
 /// `/api2` and `/api/v2.1` route (see the coverage test in
 /// `server/tests/capability_coverage_test.rs`); a route that is missing here is
-/// denied to API keys, which is the intended failure direction.
+/// denied to every credential, which is the intended failure direction.
 #[allow(clippy::type_complexity)]
 const ROUTES: &[(&str, &str, RouteAccess)] = &[
     // ── Authentication plumbing ──────────────────────────────────────────
@@ -1262,12 +1270,12 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
     ("DELETE", "/api2/api-keys/{id}/", RouteAccess::SessionOnly),
 ];
 
-/// Classify a request path for the unified key system.
+/// Classify a request path for the credential guard.
 ///
 /// Returns `None` when the path is outside the classified API surface or is not
-/// in [`ROUTES`]. Callers enforcing key access must treat `None` as denied: a
-/// route added without a classification then fails closed instead of silently
-/// accepting every key.
+/// in [`ROUTES`]. Callers enforcing access must treat `None` as denied: a route
+/// added without a classification then fails closed instead of silently
+/// accepting every credential.
 pub fn required_access(method: &Method, path: &str) -> Option<RouteAccess> {
     if !is_classified_prefix(path) {
         return None;

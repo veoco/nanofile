@@ -242,6 +242,13 @@ run it:
     key they already hold. Deleting a library removes the keys bound only to it.
   - API keys cannot reach `/api2/api-keys/`: a key that could mint keys could give itself more
     access than it holds. Managing keys requires a browser session.
+- **One route table classifies every credential, so a new endpoint fails closed.** A request is
+  resolved to a `Credential` — a session, a unified API key, or a repository sync token — and the
+  route table is consulted for all of them, not only for keys. A session is the account itself and
+  therefore satisfies every capability, but it is still classified; a key gets exactly the
+  capabilities it carries, narrowed per library by its bindings; and a route that nobody classified
+  is refused to everyone. Adding an endpoint without classifying it is a loud 403 with a warning log
+  rather than a silently open door.
 - **Uploads and downloads are charged before they are written.** Bytes in the block store that no
   commit references yet are reserved against the uploader's quota, so "write blocks and never commit"
   is bounded rather than free; the reservation is released when the upload commits, or when an
