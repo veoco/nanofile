@@ -33,6 +33,7 @@ pub mod share_link;
 pub mod sso_login_token;
 pub mod starred;
 pub mod sync_token;
+pub mod throttle;
 pub mod thumbnail;
 pub mod token_cleanup;
 pub mod upload_link;
@@ -119,6 +120,12 @@ pub struct Repositories {
     /// process-global statics so it always describes this database; several
     /// servers can share one process.
     pub quota_cache: Arc<infra::quota_cache::QuotaCache>,
+    /// At most one write per interval for the two "when was this last used?"
+    /// columns the auth path updates. They live on the database handle rather
+    /// than in process-global state because they describe writes to *this*
+    /// database (see [`throttle`]).
+    pub peer_info_writes: throttle::WriteThrottle,
+    pub key_usage_writes: throttle::WriteThrottle,
 }
 
 impl std::fmt::Debug for Repositories {
@@ -137,6 +144,8 @@ impl Repositories {
         // both need a recoverable (not hashed) server-side token.
         let sso_token_cipher = token_cipher.clone();
         Self {
+            peer_info_writes: throttle::WriteThrottle::new(throttle::PEER_INFO_WRITE_INTERVAL),
+            key_usage_writes: throttle::WriteThrottle::new(throttle::KEY_USAGE_WRITE_INTERVAL),
             user: Arc::new(DbUserRepository::new(db.clone())),
             repo: Arc::new(DbRepoRepository::new(db.clone())),
             member: Arc::new(DbMemberRepository::new(db.clone())),

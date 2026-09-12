@@ -336,6 +336,60 @@ async fn sync_access_follows_the_sync_capabilities() {
     assert_eq!(resp.status(), 403, "the sync scope is per library");
 }
 
+/// "When was this key last used?" is only answerable if using it records that.
+/// The web UI rendered a column nothing ever wrote, because only the WebDAV
+/// path touched it.
+#[tokio::test]
+async fn using_a_key_records_when_it_was_last_used() {
+    let f = TestFixture::new().await;
+    // `sync.read` as well, so the same key can be used on both surfaces.
+    let key = create_key(&f, &key_body(&["library.read", "sync.read"], true, &[])).await;
+
+    async fn last_used(f: &TestFixture, key_id: i64) -> Option<i64> {
+        let listed: Value = f
+            .client
+            .get("/api2/api-keys/", Some(&f.api_token))
+            .await
+            .json()
+            .await
+            .unwrap();
+        listed["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"].as_i64() == Some(key_id))
+            .expect("the key")["last_used_at"]
+            .as_i64()
+    }
+
+    let listed: Value = f
+        .client
+        .get("/api2/api-keys/", Some(&f.api_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let key_id = listed["keys"][0]["id"].as_i64().expect("id");
+    assert_eq!(
+        last_used(&f, key_id).await,
+        None,
+        "a key that has never been presented has no last use"
+    );
+
+    // The REST surface.
+    let resp = f.client.get("/api2/repos/", Some(&key)).await;
+    assert_eq!(resp.status(), 200);
+    let after_rest = last_used(&f, key_id).await.expect("recorded by /api2");
+
+    // The sync surface, which is where an unthrottled write would hurt most.
+    let resp = f.client.get_head_commit(&key, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let after_sync = last_used(&f, key_id).await.expect("recorded by /seafhttp");
+
+    assert!(after_rest > 0);
+    assert!(after_sync >= after_rest);
+}
+
 #[tokio::test]
 async fn a_session_satisfies_every_capability_but_is_still_classified() {
     let f = TestFixture::new().await;

@@ -2,9 +2,6 @@ use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
 };
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
 
 use crate::AppState;
 use crate::domain::api_key::KeyAuthority;
@@ -126,7 +123,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
                 && let Ok(params) =
                     serde_urlencoded::from_str::<std::collections::HashMap<String, String>>(query)
                 && let Some(client_id) = params.get("client_id")
-                && should_write_peer_info(record.id)
+                && repos.peer_info_writes.allows_now(record.id)
             {
                 let now = chrono::Utc::now().timestamp();
                 let peer_ip = parts
@@ -269,6 +266,9 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
                 tracing::warn!(key_id = lookup.key.id, %error, "rejecting API key with an unreadable capability set");
                 StatusCode::UNAUTHORIZED
             })?;
+            // The key is authentic; note that it was used before the route
+            // guard decides whether it may be.
+            note_key_usage(repos, lookup.key.id).await;
             let credential = Credential::Key(authority);
             enforce_route_access(&credential, parts)?;
             (lookup.key.user_id, credential)
@@ -485,6 +485,9 @@ impl SyncAuth {
             } else {
                 crate::domain::capability::Capability::SyncRead
             };
+            // A sync client makes many small requests, so this is the surface
+            // where an unthrottled `last_used_at` would hurt most.
+            note_key_usage(repos, lookup.key.id).await;
             if !authority.has(needed) {
                 return Err(StatusCode::FORBIDDEN);
             }
@@ -598,36 +601,24 @@ pub fn extract_sync_token(
     Err(AppError::BadRequest("token is null".into()))
 }
 
-/// How often a sync token's peer info may be persisted to the DB at most.
-/// A seafile client that carries `client_id` on every `/seafhttp/` request
-/// would otherwise turn each request into a write; SQLite writes serialize,
-/// so this bounds the cost while keeping `last_sync_time` within ~1 minute of
-/// accuracy.
-const PEER_INFO_WRITE_INTERVAL: Duration = Duration::from_secs(60);
-
-/// Last persisted timestamp per sync-token id, so the write throttle above has
-/// shared state across requests. Entries older than the interval are pruned on
-/// insert, so the map stays bounded to tokens seen in the last minute.
-static PEER_INFO_LAST_WRITE: LazyLock<Mutex<HashMap<i32, Instant>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Whether peer info for `token_id` may be written now (throttled to at most
-/// once per [`PEER_INFO_WRITE_INTERVAL`]).
-fn should_write_peer_info(token_id: i32) -> bool {
-    let mut last_writes = PEER_INFO_LAST_WRITE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let now = Instant::now();
-    if last_writes
-        .get(&token_id)
-        .is_some_and(|&last| now.duration_since(last) < PEER_INFO_WRITE_INTERVAL)
-    {
-        return false;
+/// Record that a key authenticated a request, at most once per
+/// [`crate::repository::throttle::KEY_USAGE_WRITE_INTERVAL`].
+///
+/// Best effort: a key must not fail a request because a timestamp could not be
+/// written, so the error is logged and dropped. This counts *authentication*,
+/// not success — a key that keeps being refused still shows as used, which is
+/// the more useful thing for an owner auditing it.
+async fn note_key_usage(repos: &Repositories, key_id: i32) {
+    if !repos.key_usage_writes.allows_now(key_id) {
+        return;
     }
-    // Prune entries that have aged out of the interval.
-    last_writes.retain(|_, last| now.duration_since(*last) < PEER_INFO_WRITE_INTERVAL);
-    last_writes.insert(token_id, now);
-    true
+    if let Err(error) = repos
+        .api_key
+        .touch_last_used(key_id, chrono::Utc::now().timestamp())
+        .await
+    {
+        tracing::warn!(key_id, %error, "could not record API key usage");
+    }
 }
 
 #[cfg(test)]
