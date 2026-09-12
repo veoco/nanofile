@@ -12,7 +12,18 @@ impl DeviceService {
         Self { repos }
     }
 
-    /// Unlink (revoke) a device by removing all its tokens.
+    /// Unlink (revoke) a device by removing the credentials it owns.
+    ///
+    /// Scoped to the device: its sessions, its 2FA trust, and the sync tokens
+    /// the sync protocol linked to it (`peer_id` carries the client's
+    /// `client_id`).
+    ///
+    /// It used to also delete *every* sync token the user held, because a token
+    /// whose `peer_id` is NULL cannot be attributed to any device. That made
+    /// unlinking a phone silently stop a laptop syncing, and the justification
+    /// is gone: such tokens are now listed in the credential inventory and can
+    /// be revoked one by one, so leaving them alone leaves nothing
+    /// unmanageable.
     pub async fn unlink_device(
         &self,
         user_id: i32,
@@ -37,16 +48,11 @@ impl DeviceService {
             .delete_by_user_and_peer(user_id, device_id)
             .await?;
 
-        // Also revoke sync tokens not linked to any peer (created via
-        // download-info / repo-tokens with peer_id NULL), so a device unlink
-        // reliably revokes every sync token the user holds.
-        let deleted_sync_unlinked = self.repos.sync_token.delete_by_user(user_id).await?;
-
         Ok(serde_json::json!({
             "success": true,
             "deleted_api_tokens": deleted_api,
             "deleted_s2fa_tokens": deleted_s2fa,
-            "deleted_sync_tokens": deleted_sync + deleted_sync_unlinked,
+            "deleted_sync_tokens": deleted_sync,
         }))
     }
 }

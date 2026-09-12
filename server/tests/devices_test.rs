@@ -208,6 +208,112 @@ async fn test_list_devices_with_data() {
     assert_eq!(devices[0]["platform"], "windows");
 }
 
+/// Unlinking one device revokes that device's credentials and nothing else.
+///
+/// It used to delete every sync token the account held, which meant unlinking a
+/// phone silently stopped a laptop syncing. The sync tokens it cannot attribute
+/// to a device (no `peer_id`) are left alone too: the credential inventory
+/// lists them, so they are revocable individually.
+#[tokio::test]
+async fn test_unlink_only_revokes_the_device_it_names() {
+    let server = TestServer::start().await;
+    let client = server.client();
+
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+
+    // Two devices, each with its own repo (creating a repo mints a sync token).
+    let resp = client
+        .post_form(
+            "/api2/auth-token/",
+            None,
+            &[
+                ("username", "test@example.com"),
+                ("password", "password123"),
+                ("platform", "android"),
+                ("device_id", "phone-001"),
+            ],
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let phone = body["token"].as_str().unwrap().to_string();
+
+    let resp = client
+        .post_form(
+            "/api2/auth-token/",
+            None,
+            &[
+                ("username", "test@example.com"),
+                ("password", "password123"),
+                ("platform", "windows"),
+                ("device_id", "laptop-001"),
+            ],
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let laptop = body["token"].as_str().unwrap().to_string();
+
+    let phone_repo = common::create_test_repo(&client, &phone, "Phone Repo").await;
+    let laptop_repo = common::create_test_repo(&client, &laptop, "Laptop Repo").await;
+    // A third library whose token is never attributed to a device: the sync
+    // protocol only stores `peer_id` once a client identifies itself.
+    let unattributed_repo = common::create_test_repo(&client, &laptop, "Unattributed").await;
+
+    for (repo_id, peer) in [(&phone_repo, "phone-001"), (&laptop_repo, "laptop-001")] {
+        let token = infra::entity::sync_token::Entity::find()
+            .filter(infra::entity::sync_token::Column::RepoId.eq(repo_id))
+            .one(server.db.as_ref())
+            .await
+            .unwrap()
+            .expect("a sync token per repo");
+        let mut active: infra::entity::sync_token::ActiveModel = token.into();
+        active.peer_id = Set(Some(peer.to_string()));
+        active.update(server.db.as_ref()).await.unwrap();
+    }
+
+    // Unlink the phone.
+    let resp = client
+        .delete_form(
+            "/api2/devices/",
+            Some(&phone),
+            &[("platform", "android"), ("device_id", "phone-001")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["deleted_sync_tokens"].as_i64().unwrap(),
+        1,
+        "only the phone's sync token"
+    );
+
+    let remaining: Vec<infra::entity::sync_token::Model> =
+        infra::entity::sync_token::Entity::find()
+            .all(server.db.as_ref())
+            .await
+            .unwrap();
+    assert_eq!(
+        remaining.len(),
+        2,
+        "the laptop's token and the unattributed one both survive"
+    );
+    assert!(
+        remaining
+            .iter()
+            .any(|token| token.peer_id.as_deref() == Some("laptop-001")),
+        "the laptop keeps its own token"
+    );
+    assert!(
+        remaining
+            .iter()
+            .any(|token| token.repo_id == unattributed_repo && token.peer_id.is_none()),
+        "a token the sync protocol never attributed is not swept up either"
+    );
+
+    // The laptop keeps syncing.
+    let resp = client.get_head_commit(&laptop, &laptop_repo).await;
+    assert_eq!(resp.status(), 200, "the other device is untouched");
+}
+
 // ============================================================================
 // device-wiped (official protocol: anonymous + the device's own API token)
 // ============================================================================
