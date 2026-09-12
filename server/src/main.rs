@@ -81,6 +81,15 @@ enum Command {
         #[arg(long, default_value_t = false)]
         regular: bool,
     },
+    /// Migrate the legacy flat block layout (`blocks/<2hex>/<id>`) to the
+    /// per-library layout. Normally runs automatically at startup before the
+    /// server serves its first request; use this to pre-flight the copy volume
+    /// (`--dry-run`) or to run it explicitly with the server stopped.
+    MigrateBlocks {
+        /// Only report what would be copied; touch nothing.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
 }
 
 /// Commands sent from the optional system tray menu to the server task.
@@ -156,6 +165,28 @@ fn secret_is_strong(s: &str) -> bool {
     s.len() >= 32
 }
 
+/// Whether a secret that passed [`secret_is_strong`] still looks like a
+/// placeholder or a single repeated character.
+///
+/// A 30+ byte `"aaaa…"` or `"changeme-…"` satisfies the length check while
+/// carrying almost no entropy, and every key in the system (sessions, CSRF,
+/// sync-token encryption, at-rest blocks, notification JWTs) is derived from
+/// this value. Warn rather than refuse: refusing would break an existing
+/// deployment on upgrade, which is the operator's call.
+fn secret_looks_low_entropy(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return true;
+    };
+    if chars.all(|c| c == first) {
+        return true;
+    }
+    let lowered = s.to_ascii_lowercase();
+    ["changeme", "secret", "password", "example", "nanofile"]
+        .iter()
+        .any(|placeholder| lowered.contains(placeholder))
+}
+
 /// Whether an explicitly configured notification signing key is too weak.
 ///
 /// An empty value (or the legacy placeholder) is *not* weak: it has already
@@ -226,12 +257,21 @@ fn main() -> anyhow::Result<()> {
     // client-supplied, so an attacker who can make a client use their hostname
     // (DNS rebinding, wildcard vhost) receives the client's capability token.
     if config.server.site_url_is_default() && config.server.allowed_hosts.is_empty() {
-        tracing::warn!(
-            "site_url is still the built-in default and server.allowed_hosts is empty: \
-             download/block URLs will echo the request Host header verbatim. Set \
-             server.site_url to the address clients use, or restrict \
-             server.allowed_hosts."
-        );
+        if config.server.trust_request_host {
+            tracing::warn!(
+                "site_url is still the built-in default and server.allowed_hosts is empty: \
+                 download/block URLs will echo a syntactically valid request Host header, \
+                 which is attacker-influenced behind a wildcard vhost or a proxy that \
+                 forwards arbitrary Host values. Set server.site_url to the address \
+                 clients use, restrict server.allowed_hosts, or disable the echo with \
+                 server.trust_request_host = false."
+            );
+        } else {
+            tracing::info!(
+                "site_url is still the built-in default; download/block URLs will use it \
+                 verbatim (server.trust_request_host = false)."
+            );
+        }
     }
 
     // ── Server secret key ──────────────────────────────────────────────
@@ -272,6 +312,15 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    if secret_is_strong(&config.server.secret_key)
+        && secret_looks_low_entropy(&config.server.secret_key)
+    {
+        tracing::warn!(
+            "server secret_key passes the length/format check but looks low-entropy              (repeated characters or a placeholder). Every session, CSRF, sync-token \
+             and at-rest key is derived from it; generate one with `openssl rand -hex 32`."
+        );
+    }
+
     // An explicitly configured at-rest encryption key must also be strong.
     if let Some(key) = &config.storage.encryption_key
         && !secret_is_strong(key)
@@ -287,6 +336,22 @@ fn main() -> anyhow::Result<()> {
                  of high entropy (64 hex chars); generate one with `openssl rand -hex 32`."
             );
         }
+    }
+
+    // ── Token lifetimes ────────────────────────────────────────────────
+    // `0` is not "use the default" for these two: on the API login path it means
+    // the token never expires, so it silently turns into a permanent bearer
+    // credential. The web-UI path reads `0` the opposite way, which makes this
+    // easy to misread — say so out loud rather than letting it pass silently.
+    if config.auth.api_token_ttl_days == 0 {
+        tracing::warn!(
+            "auth.api_token_ttl_days = 0: account tokens issued by POST /api2/auth-token/ \
+             will NEVER expire (they are only revoked by a password change/reset or by \
+             deactivating the account). Set a positive value unless that is intended."
+        );
+    }
+    if config.auth.sync_token_ttl_days == 0 {
+        tracing::warn!("auth.sync_token_ttl_days = 0: repository sync tokens will NEVER expire.");
     }
 
     // ── Derive notification private key from secret_key if not set ─────
@@ -372,6 +437,34 @@ fn main() -> anyhow::Result<()> {
                 .await
             })
         }
+        Command::MigrateBlocks { dry_run } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async move {
+                let db = establish_connection(&config.database).await?;
+                migration::Migrator::up(&db, None).await?;
+                infra::common::util::ensure_private_dir(&config.storage.block_dir)?;
+                let mode = if dry_run {
+                    server::fs::core::block_migration::MigrationMode::DryRun
+                } else {
+                    server::fs::core::block_migration::MigrationMode::Apply
+                };
+                let report = server::fs::core::block_migration::BlockLayoutMigration::run(
+                    &db,
+                    &config.storage.block_dir,
+                    mode,
+                )
+                .await?;
+                println!("{}", report.summary());
+                if !report.missing_block_ids.is_empty() {
+                    println!(
+                        "missing blocks (first {}): {}",
+                        report.missing_block_ids.len(),
+                        report.missing_block_ids.join(", ")
+                    );
+                }
+                anyhow::Ok(())
+            })
+        }
     }
 }
 
@@ -406,6 +499,34 @@ async fn run_server(
         &config.index.index_dir,
     ] {
         infra::common::util::ensure_private_dir(dir)?;
+    }
+
+    // ── Block layout migration (blocks are stored per library) ─────────
+    // The legacy flat layout (`blocks/<2hex>/<id>`) has no read path in the
+    // running server, so the migration must complete *before* anything serves
+    // a request: starting with the legacy tree still present would 404 every
+    // download. It is a pure copy, resumable, and removes the legacy tree only
+    // after every referenced block is in its new place.
+    {
+        let report = server::fs::core::block_migration::BlockLayoutMigration::run(
+            &db,
+            &config.storage.block_dir,
+            server::fs::core::block_migration::MigrationMode::Apply,
+        )
+        .await?;
+        if report.already_migrated {
+            tracing::debug!("{}", report.summary());
+        } else {
+            tracing::info!("{}", report.summary());
+        }
+        if report.missing_sources > 0 {
+            tracing::warn!(
+                missing = report.missing_sources,
+                sample = ?report.missing_block_ids,
+                "referenced blocks were already missing from the legacy block store; \
+                 their files will report missing blocks until restored from a backup"
+            );
+        }
     }
 
     let temp_file_manager = server::handler::web::temp_file::TempFileManager::new(

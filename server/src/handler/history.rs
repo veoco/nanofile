@@ -103,6 +103,7 @@ pub async fn get_file_revision_v21(
     )
     .await?;
     let stream = crate::fs::core::download::stream_blocks(
+        repo_id.clone(),
         file_data.block_ids,
         state.block_store.clone(),
         dec_key,

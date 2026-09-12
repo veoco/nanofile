@@ -333,6 +333,7 @@ async fn try_handle_chunked(
 
     let (block_ids, total_size, new_block_ids) = crate::fs::core::FileOps::write_stream_blocks(
         &state.block_store,
+        repo_id,
         file_size as usize,
         stream,
         None,
@@ -609,7 +610,8 @@ pub async fn upload_aj(
     // removes the staging file on every exit path.
     let staged = StagedUpload(staged_path);
     if let Some(path) = staged.path() {
-        let ingested = ingest_staged_file(state.block_store.clone(), path.to_path_buf()).await;
+        let ingested =
+            ingest_staged_file(state.block_store.clone(), repo_id, path.to_path_buf()).await;
         let (block_ids, total_size, new_block_ids) = ingested?;
         if !block_ids.is_empty() {
             let fs_id = state
@@ -654,9 +656,10 @@ fn extract_multipart_boundary(headers: &HeaderMap) -> Result<String, AppError> {
 /// chunk sizing; pass a known size for larger files.
 pub(crate) async fn stream_file_into_blocks(
     store: infra::storage::DynBlockStorage,
+    repo_id: &str,
     field: &mut multer::Field<'_>,
 ) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
-    crate::fs::core::FileOps::stream_blocks_pipelined(&store, None, move |tx| async move {
+    crate::fs::core::FileOps::stream_blocks_pipelined(&store, repo_id, None, move |tx| async move {
         let mut chunker = infra::storage::cdc::Chunker::new(0);
         let mut total_size = 0i64;
         let mut idx = 0usize;
@@ -747,11 +750,12 @@ async fn stage_file_field(
 /// CDC a staged file into the block store (called only after authorization).
 async fn ingest_staged_file(
     store: infra::storage::DynBlockStorage,
+    repo_id: &str,
     path: std::path::PathBuf,
 ) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
     use tokio::io::AsyncReadExt;
 
-    crate::fs::core::FileOps::stream_blocks_pipelined(&store, None, move |tx| async move {
+    crate::fs::core::FileOps::stream_blocks_pipelined(&store, repo_id, None, move |tx| async move {
         let mut file = tokio::fs::File::open(&path)
             .await
             .map_err(|e| AppError::Internal(format!("open staged file: {e}")))?;
@@ -881,7 +885,8 @@ pub async fn update_api(
             .unwrap_or(&file_path);
 
         if let Some(path) = staged.path() {
-            let ingested = ingest_staged_file(state.block_store.clone(), path.to_path_buf()).await;
+            let ingested =
+                ingest_staged_file(state.block_store.clone(), &repo_id, path.to_path_buf()).await;
             let (block_ids, total_size, new_block_ids) = ingested?;
             if !block_ids.is_empty() {
                 let fs_id = state
@@ -1026,7 +1031,8 @@ pub async fn update_aj(
 
     let staged = StagedUpload(staged_path);
     if let Some(path) = staged.path() {
-        let ingested = ingest_staged_file(state.block_store.clone(), path.to_path_buf()).await;
+        let ingested =
+            ingest_staged_file(state.block_store.clone(), repo_id, path.to_path_buf()).await;
         let (block_ids, total_size, new_block_ids) = ingested?;
         if !block_ids.is_empty() {
             let fs_id = state
@@ -1127,7 +1133,8 @@ pub async fn upload_aj_token(
                 );
             } else {
                 let (bids, size, nids) =
-                    stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
+                    stream_file_into_blocks(state.block_store.clone(), &info.repo_id, &mut field)
+                        .await?;
                 block_ids = bids;
                 new_block_ids = nids;
                 total_size = size;
@@ -1284,7 +1291,8 @@ pub async fn upload_api(
         if name == "file" {
             filename = field.file_name().unwrap_or("unknown").to_string();
             let (bids, size, nids) =
-                stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
+                stream_file_into_blocks(state.block_store.clone(), &info.repo_id, &mut field)
+                    .await?;
             block_ids = bids;
             new_block_ids = nids;
             total_size = size;
@@ -1402,7 +1410,8 @@ pub async fn update_api_handler(
         if name == "file" {
             filename = field.file_name().unwrap_or("unknown").to_string();
             let (bids, size, nids) =
-                stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
+                stream_file_into_blocks(state.block_store.clone(), &info.repo_id, &mut field)
+                    .await?;
             block_ids = bids;
             new_block_ids = nids;
             total_size = size;
@@ -1530,7 +1539,8 @@ pub async fn update_aj_token(
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
             let (bids, size, nids) =
-                stream_file_into_blocks(state.block_store.clone(), &mut field).await?;
+                stream_file_into_blocks(state.block_store.clone(), &info.repo_id, &mut field)
+                    .await?;
             block_ids = bids;
             new_block_ids = nids;
             total_size = size;
@@ -1655,7 +1665,7 @@ pub async fn upload_blks_api(
                 }
                 let (_, was_new) = state
                     .block_store
-                    .write_block_with_id_tracked(&block_id, &data)
+                    .write_block_with_id_tracked(&info.repo_id, &block_id, &data)
                     .await
                     .map_err(|e| {
                         AppError::Internal(format!("failed to write block {block_id}: {e}"))
@@ -1716,12 +1726,14 @@ pub async fn upload_blks_api(
         }
         // Stat the blocks concurrently; order does not matter for a sum.
         use futures::StreamExt;
+        let owner_repo_id = info.repo_id.clone();
         let sizes: Vec<Result<i64, AppError>> = futures::stream::iter(block_ids.iter().cloned())
             .map(|bid| {
                 let store = state.block_store.clone();
+                let repo_id = owner_repo_id.clone();
                 async move {
                     store
-                        .block_size(&bid)
+                        .block_size(&repo_id, &bid)
                         .await
                         .map_err(|_| AppError::BadRequest(format!("block not found: {bid}")))
                 }
@@ -1754,12 +1766,23 @@ pub async fn upload_blks_api(
         .await
         {
             for id in &new_block_ids {
-                if let Err(e) = state.block_store.remove_block(id).await {
+                if let Err(e) = state.block_store.remove_block(&info.repo_id, id).await {
                     tracing::warn!("failed to cleanup orphaned block {id}: {e}");
                 }
             }
             return Err(e);
         }
+
+        // Resolve the target directory **before** writing the file object, and
+        // through the upload-link-aware helper: a token that carries an
+        // `upload_link_id` is scoped to the link's directory and must not be
+        // able to commit outside it via `parent_dir`/`relative_path`. Rejecting
+        // an invalid path here also avoids leaving an orphan fs_object behind.
+        let relative_path = fields
+            .get("relative_path")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        let target_dir = compute_scoped_target_dir(&info, parent_dir, relative_path)?;
 
         // Create FsFileData from block IDs
         let file_fs_data = base::common::FsFileData {
@@ -1773,11 +1796,6 @@ pub async fn upload_blks_api(
                 .await?;
 
         // Update directory tree and create commit
-        let relative_path = fields
-            .get("relative_path")
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        let target_dir = compute_target_dir(parent_dir, relative_path)?;
         let now = chrono::Utc::now().timestamp();
 
         // Full path of the assembled file (for activity logging).

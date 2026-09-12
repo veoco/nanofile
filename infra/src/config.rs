@@ -367,6 +367,37 @@ pub struct ServerConfig {
     /// Env: NANOFILE_SERVER_ALLOWED_HOSTS (comma-separated)
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
+    /// Whether to honour the request `Host` header when building absolute URLs
+    /// while `site_url` is left at its built-in default.
+    ///
+    /// Defaults to `true` because direct LAN access relies on it (the client's
+    /// browser and the desktop client reach the server by an address it cannot
+    /// know). The header is only trusted when it is a syntactically valid
+    /// authority and, when configured, matches `allowed_hosts`. Set to `false`
+    /// to always use `site_url` — recommended whenever the server is exposed
+    /// through a proxy or a wildcard vhost, where an attacker-influenced Host
+    /// would otherwise be echoed into a URL that carries a capability token.
+    /// Env: NANOFILE_SERVER_TRUST_REQUEST_HOST
+    #[serde(default = "default_true")]
+    pub trust_request_host: bool,
+    /// Maximum resources a single WebDAV `PROPFIND` may return (0 = unlimited).
+    ///
+    /// RFC 4918 makes `Depth: infinity` the default when the header is absent,
+    /// so one request can ask for an entire library. The multistatus document is
+    /// assembled in memory, so without a cap a single request against a huge
+    /// library — or a handful of concurrent ones — can exhaust the process.
+    /// Over the cap the request is answered `507` rather than truncated, which
+    /// tells the client to retry with `Depth: 1`.
+    /// Env: NANOFILE_SERVER_MAX_PROPFIND_ENTRIES
+    #[serde(default = "default_max_propfind_entries")]
+    pub max_propfind_entries: usize,
+    /// Add `includeSubDomains` to the HSTS header (HTTPS deployments only).
+    ///
+    /// Off by default: the pin only covers host names the operator controls, and
+    /// a deployment may serve unrelated plain-HTTP sites on sibling host names.
+    /// Env: NANOFILE_SERVER_HSTS_INCLUDE_SUBDOMAINS
+    #[serde(default)]
+    pub hsts_include_subdomains: bool,
     /// Whether the system tray icon is shown. Only meaningful for binaries
     /// compiled with `--features tray` (plain builds have no tray code at
     /// all). Set to false to run headless even in a desktop session, e.g. for
@@ -406,6 +437,9 @@ fn default_site_url() -> String {
 fn default_cors_max_age() -> u64 {
     86400
 }
+fn default_max_propfind_entries() -> usize {
+    100_000
+}
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -433,6 +467,9 @@ impl Default for ServerConfig {
             share_link_enabled: default_true(),
             trusted_proxies: Vec::new(),
             allowed_hosts: Vec::new(),
+            trust_request_host: default_true(),
+            max_propfind_entries: default_max_propfind_entries(),
+            hsts_include_subdomains: false,
             tray: default_true(),
         }
     }
@@ -447,7 +484,7 @@ impl ServerConfig {
     /// header instead (mirroring seahub's FILE_SERVER_ROOT semantics, where the
     /// admin-provided root always wins).
     pub fn site_url_is_default(&self) -> bool {
-        self.site_url.trim_end_matches('/') == default_site_url()
+        self.site_url.trim().trim_end_matches('/') == default_site_url()
     }
 
     /// URL base (`scheme://host[:port]`) for download / block links.
@@ -472,7 +509,9 @@ impl ServerConfig {
         if !self.site_url_is_default() {
             return base.to_string();
         }
-        if let Some(h) = host_header
+        if self.trust_request_host
+            && let Some(h) = host_header
+            && is_valid_host_header(h)
             && (self.allowed_hosts.is_empty()
                 || self
                     .allowed_hosts
@@ -486,44 +525,52 @@ impl ServerConfig {
 
     /// Extract the scheme (http / https) from `site_url`.
     pub fn site_url_scheme(&self) -> &str {
-        if self.site_url.starts_with("https://") {
+        if self.site_url_is_https() {
             "https"
         } else {
             "http"
         }
     }
 
+    /// Whether `site_url` uses the `https` scheme.
+    ///
+    /// Uses `get(..8)` rather than a byte slice so a short or multi-byte value
+    /// can never panic; the comparison is case-insensitive because URL schemes
+    /// are.
+    fn site_url_is_https(&self) -> bool {
+        self.site_url
+            .trim()
+            .get(..8)
+            .is_some_and(|p| p.eq_ignore_ascii_case("https://"))
+    }
+
     /// Whether cookies should include the `Secure` flag.
     /// Enabled when the site_url scheme is `https`.
     pub fn secure_cookies(&self) -> bool {
-        self.site_url.starts_with("https://")
+        self.site_url_is_https()
     }
 
     /// Extract the origin (scheme + host + port) from `site_url`.
     /// e.g. "http://127.0.0.1:8082/some/path" -> "http://127.0.0.1:8082"
+    ///
+    /// Never panics: a malformed value (`"http:/"`, an empty string, a value
+    /// whose scheme is longer than the string) yields the built-in default
+    /// origin instead of slicing at a byte offset that may not be a char
+    /// boundary. [`Config::normalize`] repairs the common cases at load time,
+    /// so this is the last-resort floor.
     pub fn site_url_origin(&self) -> String {
-        let http_prefix = "http://";
-        let https_prefix = "https://";
-        let prefix = if self.site_url.starts_with(https_prefix) {
-            https_prefix.len()
-        } else {
-            http_prefix.len()
+        let url = self.site_url.trim();
+        let (scheme, rest) = match url.split_once("://") {
+            Some((scheme, rest)) if !scheme.is_empty() => (format!("{scheme}://"), rest),
+            // No scheme: treat the whole value as the authority (a bare
+            // `example.com` origin is what the operator meant).
+            _ => (String::from("http://"), url),
         };
-        // Take everything after scheme:// up to the next '/' or end-of-string.
-        let rest = &self.site_url[prefix..];
-        if let Some(pos) = rest.find('/') {
-            format!(
-                "{}{}",
-                if self.site_url.starts_with(https_prefix) {
-                    https_prefix
-                } else {
-                    http_prefix
-                },
-                &rest[..pos]
-            )
-        } else {
-            self.site_url.clone()
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("").trim();
+        if authority.is_empty() {
+            return default_site_url();
         }
+        format!("{scheme}{authority}")
     }
 
     /// Return the list of CORS origins to allow.
@@ -535,6 +582,73 @@ impl ServerConfig {
             self.cors_allowed_origins.clone()
         }
     }
+}
+
+/// Whether a `Host` header value is safe to echo into an absolute URL.
+///
+/// The value is client-supplied, so only a plain `host[:port]` authority is
+/// accepted: ASCII, no userinfo, no path/query/fragment, no whitespace or
+/// control characters, and a numeric port in range. Anything else falls back to
+/// `site_url`.
+pub fn is_valid_host_header(host: &str) -> bool {
+    if host.is_empty() || host.len() > 255 || !host.is_ascii() {
+        return false;
+    }
+    if host
+        .bytes()
+        .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+    {
+        return false;
+    }
+    if host.contains(['/', '?', '#', '@', '\\', '"', '\'', '<', '>', ';', ',']) {
+        return false;
+    }
+
+    // Split the optional port. An IPv6 literal keeps its brackets, so the port
+    // separator is the colon *after* the closing bracket.
+    let (host_ok, port) = if let Some(rest) = host.strip_prefix('[') {
+        let Some((inside, after)) = rest.split_once(']') else {
+            return false;
+        };
+        let inside_ok = !inside.is_empty()
+            && inside
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.');
+        match after.strip_prefix(':') {
+            Some(port) => (inside_ok, Some(port)),
+            None => (inside_ok && after.is_empty(), None),
+        }
+    } else {
+        match host.split_once(':') {
+            Some((name, port)) => (is_hostname(name), Some(port)),
+            None => (is_hostname(host), None),
+        }
+    };
+    if !host_ok {
+        return false;
+    }
+    match port {
+        None => true,
+        Some(p) => {
+            !p.is_empty()
+                && p.len() <= 5
+                && p.bytes().all(|b| b.is_ascii_digit())
+                && p.parse::<u32>().is_ok_and(|n| n > 0 && n <= 65535)
+        }
+    }
+}
+
+/// A hostname: dot-separated labels of letters, digits, `-` and `_`.
+fn is_hostname(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 253
+        && !name.starts_with('.')
+        && !name.ends_with('.')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -702,8 +816,17 @@ impl Default for StorageConfig {
 pub struct AuthConfig {
     #[serde(default = "default_password_hash_iterations")]
     pub password_hash_iterations: u32,
+    /// Lifetime of an account (API/session) token, in days.
+    ///
+    /// **`0` means the token never expires** on the API login path
+    /// (`POST /api2/auth-token/`), which is a permanent bearer credential until
+    /// a password change or reset revokes it. The web-UI login path treats `0`
+    /// as "expires immediately" instead. Leave this at its default.
     #[serde(default = "default_api_token_ttl_days")]
     pub api_token_ttl_days: u64,
+    /// Lifetime of a repository sync token, in days.
+    ///
+    /// **`0` means the token never expires.** Leave this at its default.
     #[serde(default = "default_sync_token_ttl_days")]
     pub sync_token_ttl_days: u64,
     /// Max failed login attempts before the client address (and the
@@ -928,9 +1051,76 @@ impl Default for IndexConfig {
     }
 }
 
+/// Load a `.env` file, unless `NANOFILE_DOTENV=0`.
+///
+/// `dotenvy` walks the working directory and its parents, so the file that is
+/// found is not necessarily next to the config file — a `.env` written by
+/// another local user in a shared run directory could supply the master
+/// `secret_key` or point the database somewhere else. The file is still loaded
+/// (existing deployments rely on it), but a permissive mode is called out so the
+/// risk is visible, and `NANOFILE_DOTENV=0` turns the feature off.
+fn load_dotenv() {
+    if std::env::var("NANOFILE_DOTENV").is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("false")) {
+        return;
+    }
+    let Ok(path) = dotenvy::dotenv() else {
+        return;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                eprintln!(
+                    "[nanofile] WARN: {} is readable by other local users (mode {mode:o}); a \
+                     .env file can supply the master secret_key or the database URL. Run \
+                     `chmod 600 {}` or set NANOFILE_DOTENV=0.",
+                    path.display(),
+                    path.display()
+                );
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 impl Config {
+    /// Repair externally visible URL fields at load time.
+    ///
+    /// Accepts the two shapes operators actually write — a full
+    /// `scheme://host[:port]` URL, or a bare `host[:port]` — and rewrites the
+    /// latter to `http://host[:port]`. An empty value becomes the built-in
+    /// default. Without this, a schemeless value yielded a garbage origin in
+    /// [`ServerConfig::site_url_origin`], so every browser login/2FA request
+    /// failed its Origin check with a confusing message.
+    ///
+    /// `https` must be written explicitly: silently upgrading a value that had
+    /// no scheme would flip `Secure` cookies and HSTS on for a server that may
+    /// not be served over TLS.
+    pub fn normalize(&mut self) {
+        let trimmed = self.server.site_url.trim().to_string();
+        if trimmed.is_empty() {
+            self.server.site_url = default_site_url();
+            return;
+        }
+        if !trimmed.contains("://") {
+            // tracing_subscriber is not initialized yet at load time.
+            eprintln!(
+                "[nanofile] WARN: site_url \"{trimmed}\" has no scheme; assuming http:// \
+                 (write https:// explicitly when the server is served over TLS)"
+            );
+            self.server.site_url = format!("http://{trimmed}");
+            return;
+        }
+        self.server.site_url = trimmed;
+    }
+
     pub fn load() -> anyhow::Result<Self> {
-        let _ = dotenvy::dotenv();
+        load_dotenv();
         let path =
             std::env::var(CONFIG_PATH_ENV).unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
         Self::load_from(&path)
@@ -956,6 +1146,7 @@ impl Config {
                 );
                 let mut config = Config::default();
                 config.apply_env_overrides();
+                config.normalize();
                 return Ok(config);
             }
             Err(e) => {
@@ -966,6 +1157,10 @@ impl Config {
         // Deserialize first (missing fields get serde defaults in memory), then
         // fill the same defaults into the document and write it back if anything
         // was missing. NANOFILE_* overrides are applied last and never written.
+        // The live config carries the master secret; a permissive mode is worth
+        // an explicit warning (it used to be silently inherited).
+        warn_if_group_or_world_readable(path);
+
         let mut config: Config = toml::from_str(&original)?;
         let mut doc: toml_edit::DocumentMut = original.parse()?;
         let defaults = toml::to_string_pretty(&Config::default())?;
@@ -989,6 +1184,7 @@ impl Config {
             }
         }
         config.apply_env_overrides();
+        config.normalize();
         Ok(config)
     }
 
@@ -1356,22 +1552,74 @@ fn persist_with_backup(path: &Path, filled: &str) -> anyhow::Result<()> {
             backup_path(path).display()
         )
     })?;
+    // The backup is a second copy of the same secrets: `fs::copy` carries the
+    // source mode over, so tighten it explicitly.
+    if let Err(e) = restrict_to_owner(&backup_path(path)) {
+        tracing::warn!(
+            "could not restrict permissions on the config backup {}: {e}",
+            backup_path(path).display()
+        );
+    }
     atomic_write(path, filled)
 }
 
-/// Write `content` to `path` via a same-directory temp file + rename. Keeps
-/// the original file's permissions and fsyncs before renaming so the replaced
-/// file is never observed half-written. The temp file is cleaned up on failure.
+/// Restrict a file to its owner (`0600`) on Unix.
+///
+/// The config file holds the master `secret_key` (plus, potentially, an
+/// encryption key and an admin password), so it must never be group- or
+/// world-readable. A no-op on platforms without Unix modes.
+fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+/// Warn (on stderr, because `tracing` is not initialized yet at load time) when
+/// a config file is readable by users other than its owner.
+fn warn_if_group_or_world_readable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                eprintln!(
+                    "[nanofile] WARN: {} is accessible to other local users (mode {mode:o}) \
+                     but holds the master secret_key; run `chmod 600 {}`.",
+                    path.display(),
+                    path.display()
+                );
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+/// Write `content` to `path` via a same-directory temp file + rename. The file is
+/// restricted to its owner and fsynced before renaming, so the replaced file is
+/// never observed half-written or world-readable. The temp file is cleaned up on
+/// failure.
 fn atomic_write(path: &Path, content: &str) -> anyhow::Result<()> {
     let tmp = tmp_path(path);
     let result = (|| -> anyhow::Result<()> {
-        let perms = std::fs::metadata(path)?.permissions();
         {
             let mut f = std::fs::File::create(&tmp)?;
             f.write_all(content.as_bytes())?;
             f.sync_all()?;
-            f.set_permissions(perms)?;
         }
+        // The config file holds the master secret: never inherit a permissive
+        // mode from the file being replaced.
+        restrict_to_owner(&tmp)?;
         #[cfg(windows)]
         {
             // `rename` does not overwrite an existing target on Windows.
@@ -1416,6 +1664,123 @@ request_timeout_secs = 600
         // Any explicitly configured address is not the default.
         assert!(!cfg("https://seafile.example.com").site_url_is_default());
         assert!(!cfg("http://192.168.1.100:8082").site_url_is_default());
+    }
+
+    #[test]
+    fn site_url_origin_extracts_scheme_host_port() {
+        assert_eq!(
+            cfg("http://127.0.0.1:8082/some/path").site_url_origin(),
+            "http://127.0.0.1:8082"
+        );
+        assert_eq!(
+            cfg("https://seafile.example.com").site_url_origin(),
+            "https://seafile.example.com"
+        );
+        // A bare host (as written by mistake) is treated as an http origin.
+        assert_eq!(cfg("example.com").site_url_origin(), "http://example.com");
+        // Query/fragment terminators also end the authority.
+        assert_eq!(
+            cfg("https://example.com:8443?x=1").site_url_origin(),
+            "https://example.com:8443"
+        );
+    }
+
+    /// Regression: `site_url_origin()` used to slice `&self.site_url[7..]`,
+    /// which panicked for values shorter than the scheme or ending on a
+    /// non-UTF-8 char boundary. It is reachable from every login / 2FA /
+    /// CORS-origin path, so a config typo must never take the server down.
+    #[test]
+    fn site_url_origin_never_panics_on_malformed_input() {
+        for value in ["", "http:/", "http://", "h", "例", "https://例"] {
+            let origin = cfg(value).site_url_origin();
+            assert!(!origin.is_empty(), "value={value:?}");
+        }
+        // Empty / scheme-only values fall back to the built-in default origin.
+        assert_eq!(cfg("").site_url_origin(), default_site_url());
+        assert_eq!(cfg("http://").site_url_origin(), default_site_url());
+    }
+
+    #[test]
+    fn host_header_validation_accepts_only_authorities() {
+        for ok in [
+            "example.com",
+            "example.com:8082",
+            "192.168.1.5:8082",
+            "localhost",
+            "host_name.internal",
+            "[::1]:8080",
+            "[2001:db8::1]",
+        ] {
+            assert!(is_valid_host_header(ok), "{ok:?} should be accepted");
+        }
+        for bad in [
+            "",
+            " ",
+            "example.com/path",
+            "example.com?x=1",
+            "example.com#frag",
+            "user@example.com",
+            "exam ple.com",
+            "example.com:99999",
+            "example.com:abc",
+            "example.com:",
+            "a\\b",
+            "exa\"mple.com",
+            "[::1",
+            "host;x",
+            "host,x",
+            ".leading.dot",
+            "-leading-dash",
+        ] {
+            assert!(!is_valid_host_header(bad), "{bad:?} should be rejected");
+        }
+    }
+
+    /// The Host echo is a compatibility feature for direct LAN access; it must
+    /// never echo anything but a plain authority, and it must be switchable off
+    /// for proxied or wildcard-vhost deployments.
+    #[test]
+    fn trust_request_host_controls_the_fallback() {
+        let mut c = cfg("http://127.0.0.1:8082");
+        assert!(c.trust_request_host, "LAN compatibility is the default");
+        assert_eq!(
+            c.download_url_base(Some("192.168.1.100:8082")),
+            "http://192.168.1.100:8082"
+        );
+        // A malformed or hostile value is not echoed.
+        assert_eq!(
+            c.download_url_base(Some("evil.example/path")),
+            "http://127.0.0.1:8082"
+        );
+        assert_eq!(
+            c.download_url_base(Some("user@evil.example")),
+            "http://127.0.0.1:8082"
+        );
+
+        // Opting out disables the echo entirely.
+        c.trust_request_host = false;
+        assert_eq!(
+            c.download_url_base(Some("192.168.1.100:8082")),
+            "http://127.0.0.1:8082"
+        );
+    }
+
+    #[test]
+    fn normalize_repairs_schemeless_and_empty_site_url() {
+        let mut c = Config::default();
+        c.server.site_url = "  example.com:8082/  ".to_string();
+        c.normalize();
+        assert_eq!(c.server.site_url, "http://example.com:8082/");
+
+        c.server.site_url = "   ".to_string();
+        c.normalize();
+        assert_eq!(c.server.site_url, default_site_url());
+
+        // An explicit scheme is preserved verbatim (never silently upgraded to
+        // https, which would flip Secure cookies and HSTS).
+        c.server.site_url = " https://files.example.com ".to_string();
+        c.normalize();
+        assert_eq!(c.server.site_url, "https://files.example.com");
     }
 
     #[test]
@@ -1602,6 +1967,36 @@ request_timeout_secs = 600
             assert_eq!(std::fs::read_to_string(backup_path(&path)).unwrap(), "old");
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "permissions must survive the atomic write");
+            let backup_mode = std::fs::metadata(backup_path(&path))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(
+                backup_mode, 0o600,
+                "the backup is a second copy of the same secrets and must be private too"
+            );
+        }
+
+        /// The config file holds the master `secret_key`: a permissive mode must
+        /// be tightened by the write-back path instead of being inherited.
+        #[test]
+        fn permissive_config_is_tightened() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            std::fs::write(&path, "old").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+            persist_with_backup(&path, "new").unwrap();
+
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "a world-readable config must be tightened");
+            let backup_mode = std::fs::metadata(backup_path(&path))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(backup_mode, 0o600, "the backup must be tightened as well");
         }
 
         #[test]

@@ -47,24 +47,33 @@ impl BlockEncryptionConverter {
         batch_limit: usize,
         batch_sleep: Duration,
     ) -> Result<u64, AppError> {
-        // 1. Collect all block ids. `for_each_block`'s callback is a synchronous
-        //    `'static` `FnMut` and cannot await, so it only collects ids into an
-        //    Arc-shared buffer; conversion happens below.
-        let ids = Arc::new(Mutex::new(Vec::<String>::new()));
-        let ids_ref = ids.clone();
-        block_store
-            .for_each_block(Box::new(move |id| {
-                ids_ref.lock().unwrap().push(id.to_string())
-            }))
-            .await?;
-        let ids = ids.lock().unwrap().clone();
+        // 1. Collect every `(repo_id, block_id)` pair. The callbacks are
+        //    synchronous `'static` `FnMut`s and cannot await, so they only
+        //    collect ids into an Arc-shared buffer; conversion happens below.
+        let pairs = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        for (repo_id, _dir) in block_store.repo_dirs().await? {
+            let pairs_ref = pairs.clone();
+            let owner = repo_id.clone();
+            block_store
+                .for_each_block_in_repo(
+                    &repo_id,
+                    Box::new(move |id| {
+                        pairs_ref
+                            .lock()
+                            .unwrap()
+                            .push((owner.clone(), id.to_string()))
+                    }),
+                )
+                .await?;
+        }
+        let pairs = pairs.lock().unwrap().clone();
 
         // 2. Probe and convert in batches, sleeping between batches so a large
         //    store never hogs CPU/IO in one burst.
         let mut converted = 0u64;
-        for chunk in ids.chunks(batch_limit) {
-            for id in chunk {
-                match block_store.convert_legacy_block(id).await {
+        for chunk in pairs.chunks(batch_limit) {
+            for (repo_id, id) in chunk {
+                match block_store.convert_legacy_block(repo_id, id).await {
                     Ok(true) => converted += 1, // plaintext → ciphertext
                     Ok(false) => {}             // already ciphertext
                     Err(e) => return Err(AppError::internal(e.to_string())),
@@ -87,6 +96,7 @@ mod tests {
     use infra::storage::encrypting_block_store::{BlockEncryptionMode, EncryptingBlockStore};
 
     const MASTER: [u8; 32] = [0x42; 32];
+    const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
 
     /// Build a lazy-mode decorator over a raw store sharing one temp dir, so
     /// tests can write legacy plaintext via the raw store and inspect on-disk
@@ -110,7 +120,7 @@ mod tests {
 
         // Write legacy plaintext straight to the raw store.
         let legacy = b"legacy plaintext block".to_vec();
-        let legacy_id = raw.write_block(&legacy).await.unwrap();
+        let legacy_id = raw.write_block(REPO, &legacy).await.unwrap();
 
         let converted =
             BlockEncryptionConverter::convert_legacy_blocks(&store, 100, Duration::ZERO)
@@ -119,7 +129,7 @@ mod tests {
         assert_eq!(converted, 1);
 
         // On-disk bytes are now `NFE1 || key_id || ciphertext || tag`.
-        let on_disk = raw.read_block(&legacy_id).await.unwrap();
+        let on_disk = raw.read_block(REPO, &legacy_id).await.unwrap();
         assert_eq!(on_disk.len(), legacy.len() + 16 + 6);
     }
 
@@ -129,10 +139,10 @@ mod tests {
 
         // A freshly written block via the decorator is already ciphertext.
         let fresh = b"freshly encrypted block".to_vec();
-        let fresh_id = store.write_block(&fresh).await.unwrap();
+        let fresh_id = store.write_block(REPO, &fresh).await.unwrap();
         // A legacy plaintext block.
         let legacy = b"legacy plaintext block".to_vec();
-        let legacy_id = raw.write_block(&legacy).await.unwrap();
+        let legacy_id = raw.write_block(REPO, &legacy).await.unwrap();
 
         let converted =
             BlockEncryptionConverter::convert_legacy_blocks(&store, 100, Duration::ZERO)
@@ -141,10 +151,10 @@ mod tests {
         // Only the plaintext block is counted as converted.
         assert_eq!(converted, 1);
         // The already-encrypted block is untouched (still decryptable).
-        assert_eq!(store.read_block(&fresh_id).await.unwrap(), fresh);
+        assert_eq!(store.read_block(REPO, &fresh_id).await.unwrap(), fresh);
         // The legacy block is now ciphertext.
         assert_eq!(
-            raw.read_block(&legacy_id).await.unwrap().len(),
+            raw.read_block(REPO, &legacy_id).await.unwrap().len(),
             legacy.len() + 16 + 6
         );
     }

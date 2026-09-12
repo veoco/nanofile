@@ -35,6 +35,10 @@ use base::error::AppError;
 #[allow(dead_code)]
 struct ZipTaskInfo {
     repo_id: String,
+    /// Who requested the archive. Re-checked when the token is consumed, so a
+    /// user whose access was revoked (or whose account was deactivated) during
+    /// the token's one-hour TTL cannot still download the archive.
+    user_id: i32,
     files: Vec<ZipFileEntry>,
     // zip display name (without .zip extension)
     zip_name: String,
@@ -183,6 +187,7 @@ pub async fn zip_task_handler(
             token.clone(),
             ZipTaskInfo {
                 repo_id: repo_id.clone(),
+                user_id: auth.user_id,
                 files,
                 zip_name,
                 created_at: now,
@@ -212,6 +217,26 @@ pub async fn zip_download_handler(
             .remove(&token)
             .ok_or_else(|| AppError::NotFound("Zip task not found or expired".into()))?
     };
+
+    // The token outlives membership, so re-check the requester the same way
+    // `/download-api` does: a user removed from the library (or deactivated)
+    // between `POST /zip-task/` and this GET must not receive the archive.
+    if !crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &task.repo_id,
+        task.user_id,
+    )
+    .await
+    .is_ok()
+        || !state
+            .repos
+            .user
+            .find_by_id(task.user_id)
+            .await?
+            .is_some_and(|u| u.is_active)
+    {
+        return Err(AppError::NotFound("Zip task not found or expired".into()));
+    }
 
     // Check if repo is encrypted and if password is set (for the user who created the task)
     // For simplicity with token-based access, we handle this case separately.
@@ -246,7 +271,13 @@ pub async fn zip_download_handler(
     // Acquire a permit for the streaming phase; moved into stream_zip and held
     // for the writer task's full lifecycle.
     let permit = acquire_zip_permit().await?;
-    let stream = stream_zip(state.block_store.clone(), task.files, dec_key, permit);
+    let stream = stream_zip(
+        task.repo_id.clone(),
+        state.block_store.clone(),
+        task.files,
+        dec_key,
+        permit,
+    );
 
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(

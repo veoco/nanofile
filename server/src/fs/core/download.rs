@@ -52,7 +52,7 @@ impl Downloader {
                 break;
             }
             let block_data = block_store
-                .read_block(block_id)
+                .read_block(repo_id, block_id)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
             let block_data = if let Some((key, iv)) = dec_key {
@@ -77,6 +77,7 @@ impl Downloader {
     /// fs_object lookup is needed here. Returns fewer bytes when the file is
     /// smaller. Used by thumbnails after a single `resolve_file_entry`.
     pub async fn read_file_limited_from_blocks(
+        repo_id: &str,
         block_store: &DynBlockStorage,
         block_ids: &[String],
         size: i64,
@@ -91,7 +92,7 @@ impl Downloader {
                 break;
             }
             let block_data = block_store
-                .read_block(block_id)
+                .read_block(repo_id, block_id)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?;
             let block_data = if let Some((key, iv)) = dec_key {
@@ -171,16 +172,18 @@ impl Downloader {
 /// `block_store` — content-addressed block storage backend.
 /// `enc_key` — optional decryption key (None = plaintext blocks).
 pub fn stream_blocks(
+    repo_id: String,
     block_ids: Vec<String>,
     block_store: DynBlockStorage,
     enc_key: Option<(Vec<u8>, Vec<u8>)>,
 ) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static {
     futures::stream::iter(block_ids.into_iter().map(move |block_id| {
         let store = block_store.clone();
+        let repo_id = repo_id.clone();
         let key = enc_key.clone();
         async move {
             let data = store
-                .read_block(&block_id)
+                .read_block(&repo_id, &block_id)
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             let data = match &key {
@@ -242,6 +245,7 @@ pub fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
 /// no block-size metadata is required. Blocks entirely before `start` are read
 /// and skipped; streaming stops once `end` is reached.
 pub fn range_stream(
+    repo_id: String,
     block_ids: Vec<String>,
     block_store: DynBlockStorage,
     enc_key: Option<(Vec<u8>, Vec<u8>)>,
@@ -253,6 +257,7 @@ pub fn range_stream(
     // (`start`/`end` are captured by the `move` closure below.)
     futures::stream::unfold((iter, 0u64, false), move |(mut iter, mut pos, done)| {
         let store = block_store.clone();
+        let repo_id = repo_id.clone();
         let key = enc_key.clone();
         async move {
             if done {
@@ -275,7 +280,7 @@ pub fn range_stream(
                         Some(id) => id,
                         None => return Some((Ok(bytes::Bytes::new()), (iter, pos, true))),
                     };
-                    let size = match store.block_size(&next_id).await {
+                    let size = match store.block_size(&repo_id, &next_id).await {
                         Ok(s) if s >= 0 => s as u64,
                         _ => break, // fall through to the read path
                     };
@@ -291,7 +296,7 @@ pub fn range_stream(
                 Some(id) => id,
                 None => return Some((Ok(bytes::Bytes::new()), (iter, pos, true))),
             };
-            let data = match store.read_block(&block_id).await {
+            let data = match store.read_block(&repo_id, &block_id).await {
                 Ok(d) => d,
                 Err(e) => {
                     return Some((Err(std::io::Error::other(e.to_string())), (iter, pos, done)));
@@ -390,6 +395,9 @@ pub fn content_disposition(filename: &str, attachment: bool) -> String {
 
 /// Parameters for building a file-download HTTP response with Range support.
 pub struct FileDownloadParams {
+    /// Repository the blocks belong to: the per-repository block layout means
+    /// every read must name the library it is allowed to read from.
+    pub repo_id: String,
     pub block_ids: Vec<String>,
     pub block_store: DynBlockStorage,
     /// Optional decryption key (key, iv) — passed through to the streamers.
@@ -451,7 +459,7 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
             HeaderValue::from_str(&(end - start + 1).to_string())
                 .expect("Content-Length header value must be valid ASCII"),
         );
-        let stream = range_stream(p.block_ids, p.block_store, p.enc_key, start, end);
+        let stream = range_stream(p.repo_id, p.block_ids, p.block_store, p.enc_key, start, end);
         return (
             StatusCode::PARTIAL_CONTENT,
             headers,
@@ -465,7 +473,7 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
         HeaderValue::from_str(&p.total_size.to_string())
             .expect("Content-Length header value must be valid ASCII"),
     );
-    let stream = stream_blocks(p.block_ids, p.block_store, p.enc_key);
+    let stream = stream_blocks(p.repo_id, p.block_ids, p.block_store, p.enc_key);
     (StatusCode::OK, headers, Body::from_stream(stream)).into_response()
 }
 
@@ -486,10 +494,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl BlockStorageBackend for MockStore {
-        async fn has_block(&self, block_id: &str) -> bool {
+        async fn has_block(&self, _repo_id: &str, block_id: &str) -> bool {
             self.blocks.lock().unwrap().contains_key(block_id)
         }
-        async fn read_block(&self, block_id: &str) -> Result<Vec<u8>, std::io::Error> {
+        async fn read_block(
+            &self,
+            _repo_id: &str,
+            block_id: &str,
+        ) -> Result<Vec<u8>, std::io::Error> {
             self.blocks
                 .lock()
                 .unwrap()
@@ -497,13 +509,21 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "missing block"))
         }
-        async fn write_block(&self, _data: &[u8]) -> Result<String, std::io::Error> {
+        async fn write_block(
+            &self,
+            _repo_id: &str,
+            _data: &[u8],
+        ) -> Result<String, std::io::Error> {
             unimplemented!()
         }
-        async fn remove_block(&self, _block_id: &str) -> Result<(), std::io::Error> {
+        async fn remove_block(
+            &self,
+            _repo_id: &str,
+            _block_id: &str,
+        ) -> Result<(), std::io::Error> {
             unimplemented!()
         }
-        async fn block_size(&self, block_id: &str) -> Result<i64, std::io::Error> {
+        async fn block_size(&self, _repo_id: &str, block_id: &str) -> Result<i64, std::io::Error> {
             self.blocks
                 .lock()
                 .unwrap()
@@ -511,7 +531,7 @@ mod tests {
                 .map(|v| v.len() as i64)
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "missing block"))
         }
-        async fn list_blocks(&self) -> Result<Vec<String>, std::io::Error> {
+        async fn list_blocks(&self, _repo_id: &str) -> Result<Vec<String>, std::io::Error> {
             unimplemented!()
         }
     }
@@ -522,7 +542,7 @@ mod tests {
         start: u64,
         end: u64,
     ) -> Vec<u8> {
-        range_stream(block_ids, store, None, start, end)
+        range_stream("test-repo".to_string(), block_ids, store, None, start, end)
             .collect::<Vec<_>>()
             .await
             .into_iter()

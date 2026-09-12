@@ -311,6 +311,7 @@ impl AppState {
             self.repos.clone(),
             self.db.clone(),
             self.indexer.clone(),
+            self.block_store.clone(),
         )
     }
 

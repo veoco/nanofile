@@ -155,13 +155,24 @@ async fn test_quota_exact_boundary() {
     );
 }
 
-/// Count block files on disk by walking the two-level prefix directory tree.
+/// Count block files on disk.
+///
+/// Blocks are stored per library:
+/// `{block_dir}/repos/<sha1(repo_id)>/<2hex>/<block_id>`. The `.repo_id` marker
+/// lives directly in the library directory, so only the two-hex-digit prefix
+/// directories are descended into.
 fn count_blocks_on_disk(block_dir: &std::path::Path) -> usize {
     let mut count = 0;
-    if let Ok(prefix_entries) = std::fs::read_dir(block_dir) {
-        for prefix in prefix_entries.flatten() {
-            if let Ok(file_entries) = std::fs::read_dir(prefix.path()) {
-                count += file_entries.flatten().count();
+    let Ok(repos) = std::fs::read_dir(block_dir.join("repos")) else {
+        return 0;
+    };
+    for repo_dir in repos.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        let Ok(prefixes) = std::fs::read_dir(&repo_dir) else {
+            continue;
+        };
+        for prefix in prefixes.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+            if let Ok(files) = std::fs::read_dir(&prefix) {
+                count += files.flatten().filter(|f| f.path().is_file()).count();
             }
         }
     }

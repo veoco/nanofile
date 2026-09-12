@@ -67,6 +67,7 @@ impl FileOps {
     /// producer's `total_size`.
     pub(crate) async fn stream_blocks_pipelined<F, Fut>(
         store: &DynBlockStorage,
+        repo_id: &str,
         enc_key: Option<(&[u8], &[u8])>,
         producer: F,
     ) -> Result<(Vec<String>, i64, Vec<String>), AppError>
@@ -78,6 +79,7 @@ impl FileOps {
 
         // The writer task needs owned handles and key material.
         let store = store.clone();
+        let repo_id = repo_id.to_string();
         let enc_key_owned: Option<(Vec<u8>, Vec<u8>)> =
             enc_key.map(|(key, iv)| (key.to_vec(), iv.to_vec()));
 
@@ -89,6 +91,7 @@ impl FileOps {
             })
             .map(|(idx, blk)| {
                 let store = store.clone();
+                let repo_id = repo_id.clone();
                 let enc_key = enc_key_owned.clone();
                 async move {
                     let (block_id, was_new) = match &enc_key {
@@ -103,11 +106,15 @@ impl FileOps {
                                     .await
                                     .map_err(|e| AppError::internal(e.to_string()))?;
                             let id = sha1_hex(&encrypted);
-                            store.write_block_with_id_tracked(&id, &encrypted).await?
+                            store
+                                .write_block_with_id_tracked(&repo_id, &id, &encrypted)
+                                .await?
                         }
                         None => {
                             let id = sha1_hex(&blk);
-                            store.write_block_with_id_tracked(&id, &blk).await?
+                            store
+                                .write_block_with_id_tracked(&repo_id, &id, &blk)
+                                .await?
                         }
                     };
                     Ok((idx, block_id, was_new))
@@ -140,6 +147,7 @@ impl FileOps {
 
     pub async fn write_stream_blocks<S>(
         store: &DynBlockStorage,
+        repo_id: &str,
         file_size: usize,
         stream: S,
         enc_key: Option<(&[u8], &[u8])>,
@@ -148,7 +156,7 @@ impl FileOps {
         S: futures::Stream<Item = std::io::Result<bytes::Bytes>> + Unpin,
     {
         let mut stream = stream;
-        Self::stream_blocks_pipelined(store, enc_key, move |tx| async move {
+        Self::stream_blocks_pipelined(store, repo_id, enc_key, move |tx| async move {
             let mut chunker = infra::storage::cdc::Chunker::new(file_size);
             let mut total_size: i64 = 0;
             let mut idx = 0usize;
@@ -717,6 +725,10 @@ impl FileOps {
 mod tests {
     use super::*;
 
+    /// Every block operation is scoped to a repository; the tests use one fixed
+    /// id because the pipeline itself is what is under test.
+    const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
+
     fn temp_store() -> (tempfile::TempDir, DynBlockStorage) {
         let dir = tempfile::tempdir().unwrap();
         let store = infra::storage::new_block_store(dir.path());
@@ -761,16 +773,17 @@ mod tests {
         let mut expected_ids = Vec::new();
         for (offset, size) in &chunks {
             let id = store
-                .write_block(&data[*offset..offset + size])
+                .write_block(REPO, &data[*offset..offset + size])
                 .await
                 .unwrap();
             expected_ids.push(id);
         }
 
         let stream = bytes_stream(data.clone(), 8192);
-        let (ids, total, _new_ids) = FileOps::write_stream_blocks(&store, data.len(), stream, None)
-            .await
-            .unwrap();
+        let (ids, total, _new_ids) =
+            FileOps::write_stream_blocks(&store, REPO, data.len(), stream, None)
+                .await
+                .unwrap();
         assert_eq!(ids, expected_ids);
         assert_eq!(total as usize, data.len());
     }
@@ -782,7 +795,7 @@ mod tests {
     async fn test_stream_blocks_pipelined_many_blocks_in_order() {
         let (_dir, store) = temp_store();
         let (ids, total, new_ids) =
-            FileOps::stream_blocks_pipelined(&store, None, move |tx| async move {
+            FileOps::stream_blocks_pipelined(&store, REPO, None, move |tx| async move {
                 for i in 0..12u8 {
                     tx.send((i as usize, vec![i; 128]))
                         .await
@@ -798,7 +811,10 @@ mod tests {
         assert_eq!(new_ids.len(), 12);
         // Content addressing: each block id round-trips to its bytes in order.
         for (i, id) in ids.iter().enumerate() {
-            assert_eq!(store.read_block(id).await.unwrap(), vec![i as u8; 128]);
+            assert_eq!(
+                store.read_block(REPO, id).await.unwrap(),
+                vec![i as u8; 128]
+            );
         }
     }
 
@@ -810,7 +826,7 @@ mod tests {
             Ok(bytes::Bytes::from_static(b"hello")),
             Err(std::io::Error::other("boom")),
         ]);
-        let result = FileOps::write_stream_blocks(&store, 10, stream, None).await;
+        let result = FileOps::write_stream_blocks(&store, REPO, 10, stream, None).await;
         assert!(result.is_err(), "stream error must propagate");
     }
 }

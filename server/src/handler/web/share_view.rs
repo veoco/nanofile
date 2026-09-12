@@ -221,6 +221,7 @@ pub async fn shared_file_view(
         let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
         return Ok(crate::fs::core::download::file_download_response(
             crate::fs::core::download::FileDownloadParams {
+                repo_id: link.repo_id.clone(),
                 block_ids,
                 block_store: state.block_store.clone(),
                 enc_key: None,
@@ -479,7 +480,13 @@ pub async fn shared_dir_view(
         .await?;
 
         crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
-        let stream = stream_zip(state.block_store.clone(), files, None, permit);
+        let stream = stream_zip(
+            link.repo_id.clone(),
+            state.block_store.clone(),
+            files,
+            None,
+            permit,
+        );
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -691,6 +698,7 @@ pub async fn shared_dir_file_view(
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
     Ok(crate::fs::core::download::file_download_response(
         crate::fs::core::download::FileDownloadParams {
+            repo_id: link.repo_id.clone(),
             block_ids,
             block_store: state.block_store.clone(),
             enc_key: None,
@@ -740,6 +748,11 @@ pub async fn shared_dir_view_post(
     .await;
 
     if !valid {
+        // The IP-keyed limiter above can be bypassed by spreading attempts over
+        // many addresses, so the per-token cap is the control that actually
+        // bounds guessing against one link. The GET/file paths already record
+        // it; the POST path used to be the hole.
+        record_link_password_failure(&state, &token)?;
         let tpl = ShareAccessValidationTemplate {
             t: I18n::from_headers(&headers, &state.config.ui.default_language),
             token: token.clone(),

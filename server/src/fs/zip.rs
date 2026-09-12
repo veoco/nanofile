@@ -261,6 +261,7 @@ pub async fn collect_selected_entries(
 /// [`stream_blocks`](crate::fs::core::stream_blocks), then written into each
 /// entry in order (the ZIP writer is single-threaded).
 pub fn stream_zip(
+    repo_id: String,
     block_store: infra::storage::DynBlockStorage,
     files: Vec<ZipFileEntry>,
     enc_key: Option<(Vec<u8>, Vec<u8>)>,
@@ -289,6 +290,7 @@ pub fn stream_zip(
             // stream_blocks buffers (default 4) so disk I/O and decryption
             // overlap across blocks while preserving block order.
             let mut blocks = Box::pin(crate::fs::core::stream_blocks(
+                repo_id.clone(),
                 entry.block_ids.clone(),
                 block_store.clone(),
                 enc_key.clone(),

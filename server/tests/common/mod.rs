@@ -384,6 +384,9 @@ impl TestServer {
                 share_link_enabled: true,
                 trusted_proxies: vec![],
                 allowed_hosts: vec![],
+                trust_request_host: true,
+                max_propfind_entries: 100_000,
+                hsts_include_subdomains: false,
                 tray: false,
             },
             database: infra::config::DatabaseConfig {

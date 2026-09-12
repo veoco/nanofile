@@ -127,8 +127,12 @@ async fn get_handler(
     if is_head {
         return (StatusCode::OK, resp_headers).into_response();
     }
-    let stream =
-        crate::fs::core::download::stream_blocks(block_ids, state.block_store.clone(), None);
+    let stream = crate::fs::core::download::stream_blocks(
+        auth.repo_id.clone(),
+        block_ids,
+        state.block_store.clone(),
+        None,
+    );
     (StatusCode::OK, resp_headers, Body::from_stream(stream)).into_response()
 }
 
@@ -183,6 +187,7 @@ async fn put_handler(
 
     let (block_ids, total_size, new_block_ids) = match FileOps::write_stream_blocks(
         &state.block_store,
+        &auth.repo_id,
         content_length,
         stream,
         None,

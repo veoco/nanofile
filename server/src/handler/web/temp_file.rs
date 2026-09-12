@@ -305,7 +305,10 @@ impl TempFileManager {
         let mut new_ids = Vec::new();
         for blk in chunker.feed(data) {
             let block_id = sha1_hex(&blk);
-            match store.write_block_with_id_tracked(&block_id, &blk).await {
+            match store
+                .write_block_with_id_tracked(repo_id, &block_id, &blk)
+                .await
+            {
                 Ok((id, was_new)) => {
                     ids.push(id.clone());
                     if was_new {
@@ -367,7 +370,10 @@ impl TempFileManager {
         let tail = chunker.finish();
         if !tail.is_empty() {
             let block_id = sha1_hex(&tail);
-            match store.write_block_with_id_tracked(&block_id, &tail).await {
+            match store
+                .write_block_with_id_tracked(repo_id, &block_id, &tail)
+                .await
+            {
                 Ok((id, was_new)) => {
                     if was_new {
                         state.new_block_ids.push(id.clone());
@@ -720,14 +726,15 @@ mod tests {
     /// mirroring `FileOps::write_stream_blocks`. Returns the reference ids that
     /// an in-order streaming upload must reproduce exactly.
     async fn reference_block_ids(store: &DynBlockStorage, data: &[u8]) -> Vec<String> {
+        const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
         let mut chunker = Chunker::new(data.len());
         let mut ids = Vec::new();
         for blk in chunker.feed(data) {
-            ids.push(store.write_block(&blk).await.unwrap());
+            ids.push(store.write_block(REPO, &blk).await.unwrap());
         }
         let tail = chunker.finish();
         if !tail.is_empty() {
-            ids.push(store.write_block(&tail).await.unwrap());
+            ids.push(store.write_block(REPO, &tail).await.unwrap());
         }
         ids
     }

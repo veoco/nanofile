@@ -10,23 +10,22 @@ const SECS_PER_DAY: i64 = 86_400;
 pub struct GcManager;
 
 impl GcManager {
-    /// Garbage-collect every repo that has history retention limits set, and
-    /// delete block files no longer referenced by any retained commit anywhere.
+    /// Garbage-collect every repository: delete each repository's own
+    /// unreachable blocks, and remove block directories whose repository no
+    /// longer exists.
     ///
-    /// Blocks are content-addressed and shared across files/repos, so a block is
-    /// deletable only when it is unreachable from every retained commit's FS
-    /// tree (current head + `history_limit` / `history_ttl_days` retained
-    /// history, across all repos). Orphan blocks are `list_blocks` minus that
-    /// global live set.
+    /// With the per-repository block layout there is no cross-repository
+    /// sharing, so a block is deletable as soon as it is unreachable from every
+    /// retained commit **of its own repository** (`history_limit` /
+    /// `history_ttl_days` retained history plus the current head). That makes
+    /// this pass both simpler and more precise than the previous global live
+    /// set: collecting repository A can never affect repository B's blocks.
     pub async fn garbage_collect(
         repos: &Repositories,
         block_store: &DynBlockStorage,
     ) -> Result<u64, AppError> {
         let now = chrono::Utc::now().timestamp();
         let all_repos = repos.repo.find_all().await?;
-
-        let mut alive_blocks: std::collections::HashSet<[u8; 20]> =
-            std::collections::HashSet::new();
         let mut removed = 0u64;
 
         for repo_model in &all_repos {
@@ -46,6 +45,12 @@ impl GcManager {
                 repo_model.history_ttl_days,
                 now,
             );
+
+            // Block ids referenced by the retained history of this repository.
+            // The set is per repository (there is no cross-repository sharing),
+            // so it is rebuilt for each one.
+            let mut alive_blocks: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             let reachable = Self::collect_repo_alive_blocks(
                 repos,
                 &repo_model.id,
@@ -60,30 +65,70 @@ impl GcManager {
             if repo_model.history_limit != 0 || repo_model.history_ttl_days != 0 {
                 removed += Self::prune_repo(repos, repo_model, &commits, &keep, reachable).await?;
             }
+
+            // Delete this repository's unreachable blocks. Stream disk blocks so
+            // the full on-disk list is never materialised; only the orphan
+            // subset (usually tiny) is collected for deletion.
+            block_store.invalidate_exists_cache();
+            // The callback is a `'static` trait object, so the live set and
+            // orphan collector are shared through Arc rather than borrowed.
+            let alive_blocks = std::sync::Arc::new(alive_blocks);
+            let orphan_blocks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let (alive_ref, orphan_ref) = (alive_blocks.clone(), orphan_blocks.clone());
+            block_store
+                .for_each_block_in_repo(
+                    &repo_model.id,
+                    Box::new(move |id| {
+                        if !alive_ref.contains(id) {
+                            orphan_ref.lock().unwrap().push(id.to_string());
+                        }
+                    }),
+                )
+                .await?;
+            let orphan_blocks = orphan_blocks.lock().unwrap().clone();
+            for id in &orphan_blocks {
+                block_store.remove_block(&repo_model.id, id).await?;
+            }
+            removed += orphan_blocks.len() as u64;
         }
 
-        // Delete blocks no longer referenced by any retained commit anywhere.
-        // Stream disk blocks so the full on-disk list is never materialised;
-        // only the orphan subset (usually tiny) is collected for deletion.
-        block_store.invalidate_exists_cache();
-        // The callback is a `'static` trait object, so the live set and orphan
-        // collector are shared through Arc rather than borrowed.
-        let alive_blocks = std::sync::Arc::new(alive_blocks);
-        let orphan_blocks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let (alive_ref, orphan_ref) = (alive_blocks.clone(), orphan_blocks.clone());
-        block_store
-            .for_each_block(Box::new(move |id| {
-                if !alive_ref.contains(&Self::decode_sha1_hex(id)) {
-                    orphan_ref.lock().unwrap().push(id.to_string());
-                }
-            }))
-            .await?;
-        let orphan_blocks = orphan_blocks.lock().unwrap().clone();
-        for id in &orphan_blocks {
-            block_store.remove_block(id).await?;
-        }
-        removed += orphan_blocks.len() as u64;
+        removed += Self::sweep_orphan_repo_dirs(repos, block_store).await?;
 
+        Ok(removed)
+    }
+
+    /// Remove block directories whose repository no longer exists.
+    ///
+    /// Deleting a repository removes its rows (cascading to commits and
+    /// fs_objects) but leaves its block files, so without this sweep the hashed
+    /// directory would stay on disk forever. Directories whose id is still in
+    /// the trash table are kept: restoring a deleted library reuses the same
+    /// repository id.
+    async fn sweep_orphan_repo_dirs(
+        repos: &Repositories,
+        block_store: &DynBlockStorage,
+    ) -> Result<u64, AppError> {
+        let mut removed = 0u64;
+        for (repo_id, dir) in block_store.repo_dirs().await? {
+            if repos.repo.find_by_id(&repo_id).await?.is_some() {
+                continue;
+            }
+            if repos.deleted_repo.find_by_id(&repo_id).await?.is_some() {
+                continue;
+            }
+            tracing::info!(
+                repo_id = %repo_id,
+                dir = %dir.display(),
+                "removing block directory of a repository that no longer exists"
+            );
+            match tokio::fs::remove_dir_all(&dir).await {
+                Ok(()) => removed += 1,
+                Err(e) => tracing::warn!(
+                    dir = %dir.display(),
+                    "failed to remove orphan block directory: {e}"
+                ),
+            }
+        }
         Ok(removed)
     }
 
@@ -122,14 +167,15 @@ impl GcManager {
     }
 
     /// Collect the block ids referenced by any file reachable from the retained
-    /// commits of a single repo into `alive_blocks`. Run for every repo (even
-    /// unlimited ones) so cross-repo shared blocks are never deleted.
+    /// commits of a single repo into `alive_blocks`. The per-repository block
+    /// layout means this set is exactly the set of blocks that repository is
+    /// allowed to keep, so it doubles as the authorization-relevant live set.
     async fn collect_repo_alive_blocks(
         repos: &Repositories,
         repo_id: &str,
         commits: &[commit::Model],
         keep: &std::collections::HashSet<i64>,
-        alive_blocks: &mut std::collections::HashSet<[u8; 20]>,
+        alive_blocks: &mut std::collections::HashSet<String>,
     ) -> Result<std::collections::HashSet<[u8; 20]>, AppError> {
         if commits.is_empty() {
             return Ok(std::collections::HashSet::new());
@@ -152,7 +198,7 @@ impl GcManager {
         let files = read_fs_file_data_batch(repos, repo_id, &ids).await?;
         for file in files.values() {
             for block_id in &file.block_ids {
-                alive_blocks.insert(Self::decode_sha1_hex(block_id));
+                alive_blocks.insert(block_id.clone());
             }
         }
         Ok(reachable)
@@ -262,6 +308,9 @@ impl GcManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fixture repo id used by `setup_gc_test_db`.
+    const REPO: &str = "test-repo";
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
     use std::sync::Arc;
 
@@ -521,8 +570,8 @@ mod tests {
         let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
-        let kept_id = store.write_block(b"kept content").await.unwrap();
-        let orphan_id = store.write_block(b"orphan content").await.unwrap();
+        let kept_id = store.write_block(REPO, b"kept content").await.unwrap();
+        let orphan_id = store.write_block(REPO, b"orphan content").await.unwrap();
 
         insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 3000).await;
         insert_fs_object(
@@ -546,11 +595,11 @@ mod tests {
             .expect("gc succeeds");
         assert_eq!(removed, 1, "only the orphan block should be removed");
         assert!(
-            store.has_block(&kept_id).await,
+            store.has_block(REPO, &kept_id).await,
             "referenced block must survive"
         );
         assert!(
-            !store.has_block(&orphan_id).await,
+            !store.has_block(REPO, &orphan_id).await,
             "orphan block must be deleted"
         );
     }
@@ -564,8 +613,8 @@ mod tests {
         let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
-        let shared_id = store.write_block(b"shared content").await.unwrap();
-        let orphan_id = store.write_block(b"orphan content").await.unwrap();
+        let shared_id = store.write_block(REPO, b"shared content").await.unwrap();
+        let orphan_id = store.write_block(REPO, b"orphan content").await.unwrap();
         let shared_json =
             format!(r#"{{"block_ids":["{shared_id}"],"size":10,"type":1,"version":1}}"#);
 
@@ -610,11 +659,11 @@ mod tests {
         assert_eq!(removed, 3);
         // Shared block is still referenced by c2's b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 → must survive.
         assert!(
-            store.has_block(&shared_id).await,
+            store.has_block(REPO, &shared_id).await,
             "shared block must survive"
         );
         assert!(
-            !store.has_block(&orphan_id).await,
+            !store.has_block(REPO, &orphan_id).await,
             "orphan block must be deleted"
         );
     }

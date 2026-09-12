@@ -429,7 +429,7 @@ impl FileService {
             .await
         {
             for id in &new_block_ids {
-                if let Err(e) = self.block_store.remove_block(id).await {
+                if let Err(e) = self.block_store.remove_block(repo_id, id).await {
                     tracing::warn!("failed to cleanup orphaned block {id}: {e}");
                 }
             }
@@ -1129,7 +1129,10 @@ impl FileService {
     }
 
     /// Check uploaded bytes for resumable upload.
-    pub async fn check_uploaded_bytes(&self, blockids: Option<&str>) -> i64 {
+    /// Count how many of the client-supplied block ids already exist **in this
+    /// repository**. Scoping the lookup to the repository is what keeps the
+    /// endpoint from being a cross-library existence oracle.
+    pub async fn check_uploaded_bytes(&self, repo_id: &str, blockids: Option<&str>) -> i64 {
         let Some(blockids_str) = blockids else {
             return 0;
         };
@@ -1142,7 +1145,7 @@ impl FileService {
         let present: Vec<bool> = futures::stream::iter(ids)
             .map(|bid| {
                 let store = self.block_store.clone();
-                async move { store.has_block(&bid).await }
+                async move { store.has_block(repo_id, &bid).await }
             })
             .buffered(16)
             .collect()

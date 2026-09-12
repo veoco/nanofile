@@ -67,19 +67,25 @@ impl EncryptingBlockStore {
         }
     }
 
-    /// Encrypt-write `data` under the caller-assigned `id`. Never re-hashes:
-    /// the caller has already verified `sha1(data) == id`.
-    async fn write_encrypted_with_id(&self, id: &str, data: &[u8]) -> Result<String, io::Error> {
+    /// Encrypt-write `data` under the caller-assigned `id`, in `repo_id`'s
+    /// directory. Never re-hashes: the caller has already verified
+    /// `sha1(data) == id`.
+    async fn write_encrypted_with_id(
+        &self,
+        repo_id: &str,
+        id: &str,
+        data: &[u8],
+    ) -> Result<String, io::Error> {
         let ct = self.encrypt_offload(data.to_vec()).await?;
-        self.inner.write_block_with_id(id, &ct).await
+        self.inner.write_block_with_id(repo_id, id, &ct).await
     }
 
     /// Read raw bytes and decrypt them according to `self.mode`.
     ///
     /// `lazy` treats a tag-mismatch as a legacy plaintext block (returns the raw
     /// bytes); `on` treats it as an error.
-    async fn read_decrypted(&self, id: &str) -> Result<Vec<u8>, io::Error> {
-        let raw = self.inner.read_block(id).await?;
+    async fn read_decrypted(&self, repo_id: &str, id: &str) -> Result<Vec<u8>, io::Error> {
+        let raw = self.inner.read_block(repo_id, id).await?;
         self.decrypt_offload(raw).await
     }
 
@@ -129,29 +135,35 @@ impl EncryptingBlockStore {
 
 #[async_trait]
 impl BlockStorageBackend for EncryptingBlockStore {
-    async fn has_block(&self, block_id: &str) -> bool {
-        self.inner.has_block(block_id).await
+    async fn has_block(&self, repo_id: &str, block_id: &str) -> bool {
+        self.inner.has_block(repo_id, block_id).await
     }
 
-    async fn read_block(&self, block_id: &str) -> Result<Vec<u8>, io::Error> {
-        self.read_decrypted(block_id).await
+    async fn read_block(&self, repo_id: &str, block_id: &str) -> Result<Vec<u8>, io::Error> {
+        self.read_decrypted(repo_id, block_id).await
     }
 
-    async fn write_block(&self, data: &[u8]) -> Result<String, io::Error> {
+    async fn write_block(&self, repo_id: &str, data: &[u8]) -> Result<String, io::Error> {
         // Content-addressed id is the sha1 of the *logical* bytes, so it is the
         // same whether the store is encrypted or not. We encrypt and write
         // under that id; we do not reuse `write_block` on the inner store, which
         // would key the id on the ciphertext.
         let id = sha1_hex(data);
-        self.write_encrypted_with_id(&id, data).await
+        self.write_encrypted_with_id(repo_id, &id, data).await
     }
 
-    async fn write_block_with_id(&self, block_id: &str, data: &[u8]) -> Result<String, io::Error> {
-        self.write_encrypted_with_id(block_id, data).await
+    async fn write_block_with_id(
+        &self,
+        repo_id: &str,
+        block_id: &str,
+        data: &[u8],
+    ) -> Result<String, io::Error> {
+        self.write_encrypted_with_id(repo_id, block_id, data).await
     }
 
     async fn write_block_with_id_tracked(
         &self,
+        repo_id: &str,
         block_id: &str,
         data: &[u8],
     ) -> Result<(String, bool), io::Error> {
@@ -159,15 +171,17 @@ impl BlockStorageBackend for EncryptingBlockStore {
         // so the `was_new` flag reflects whether the ciphertext file was
         // created on disk.
         let ct = self.encrypt_offload(data.to_vec()).await?;
-        self.inner.write_block_with_id_tracked(block_id, &ct).await
+        self.inner
+            .write_block_with_id_tracked(repo_id, block_id, &ct)
+            .await
     }
 
-    async fn remove_block(&self, block_id: &str) -> Result<(), io::Error> {
-        self.inner.remove_block(block_id).await
+    async fn remove_block(&self, repo_id: &str, block_id: &str) -> Result<(), io::Error> {
+        self.inner.remove_block(repo_id, block_id).await
     }
 
-    async fn block_size(&self, block_id: &str) -> Result<i64, io::Error> {
-        let stored = self.inner.block_size(block_id).await?;
+    async fn block_size(&self, repo_id: &str, block_id: &str) -> Result<i64, io::Error> {
+        let stored = self.inner.block_size(repo_id, block_id).await?;
         match self.mode {
             // Logical size equals the stored size for legacy plaintext blocks.
             BlockEncryptionMode::Off => Ok(stored),
@@ -187,7 +201,7 @@ impl BlockStorageBackend for EncryptingBlockStore {
             // In the migration window a block may still be plaintext; decide by
             // the `NFE1` header rather than by a failed decode.
             BlockEncryptionMode::Lazy => {
-                let raw = self.inner.read_block(block_id).await?;
+                let raw = self.inner.read_block(repo_id, block_id).await?;
                 if !BlockCipher::looks_encrypted(&raw) {
                     return Ok(raw.len() as i64);
                 }
@@ -206,10 +220,10 @@ impl BlockStorageBackend for EncryptingBlockStore {
         }
     }
 
-    async fn convert_legacy_block(&self, block_id: &str) -> Result<bool, io::Error> {
+    async fn convert_legacy_block(&self, repo_id: &str, block_id: &str) -> Result<bool, io::Error> {
         // Read the raw on-disk bytes (not through `read_decrypted`, which in
         // `Lazy` mode would fall back to plaintext and hide the distinction).
-        let raw = self.inner.read_block(block_id).await?;
+        let raw = self.inner.read_block(repo_id, block_id).await?;
         // Probe the GCM-SIV tag: a successful decrypt means the block is already
         // ciphertext (nothing to do); a tag mismatch means legacy plaintext.
         // Both the probe and the re-encryption are CPU-bound, so run them on the
@@ -228,22 +242,29 @@ impl BlockStorageBackend for EncryptingBlockStore {
         .await
         .map_err(|e| io::Error::other(e.to_string()))?;
         if let Some(ct) = converted {
-            self.inner.write_block_with_id_force(block_id, &ct).await?;
+            self.inner
+                .write_block_with_id_force(repo_id, block_id, &ct)
+                .await?;
             Ok(true)
         } else {
             Ok(false)
         }
     }
 
-    async fn list_blocks(&self) -> Result<Vec<String>, io::Error> {
-        self.inner.list_blocks().await
+    async fn list_blocks(&self, repo_id: &str) -> Result<Vec<String>, io::Error> {
+        self.inner.list_blocks(repo_id).await
     }
 
-    async fn for_each_block(
+    async fn for_each_block_in_repo(
         &self,
+        repo_id: &str,
         f: Box<dyn for<'a> FnMut(&'a str) + Send>,
     ) -> Result<(), io::Error> {
-        self.inner.for_each_block(f).await
+        self.inner.for_each_block_in_repo(repo_id, f).await
+    }
+
+    async fn repo_dirs(&self) -> Result<Vec<(String, std::path::PathBuf)>, io::Error> {
+        self.inner.repo_dirs().await
     }
 
     fn invalidate_exists_cache(&self) {
@@ -258,6 +279,7 @@ mod tests {
     use std::sync::Arc;
 
     const MASTER: [u8; 32] = [0x42; 32];
+    const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
 
     /// Build a raw filesystem store plus a decorator in `mode` over that same
     /// raw store, rooted under a temp dir. Both the raw store and the decorator
@@ -283,19 +305,22 @@ mod tests {
     async fn on_mode_roundtrip_and_ciphertext_on_disk() {
         let (dir, store, raw) = temp_store(BlockEncryptionMode::On);
         let data = b"secret plaintext block";
-        let id = store.write_block(data).await.unwrap();
+        let id = store.write_block(REPO, data).await.unwrap();
 
         // Logical id is the sha1 of the plaintext.
         assert_eq!(id, sha1_hex(data));
         // Logical read returns the original bytes.
-        assert_eq!(store.read_block(&id).await.unwrap(), data);
+        assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
 
         // Underlying bytes differ from the plaintext and hold no plaintext prefix.
-        let on_disk = raw.read_block(&id).await.unwrap();
+        let on_disk = raw.read_block(REPO, &id).await.unwrap();
         assert!(!on_disk.starts_with(data));
 
         // Logical block_size is the plaintext length; physical is +16 bytes.
-        assert_eq!(store.block_size(&id).await.unwrap(), data.len() as i64);
+        assert_eq!(
+            store.block_size(REPO, &id).await.unwrap(),
+            data.len() as i64
+        );
         assert_eq!(on_disk.len(), data.len() + TAG_LEN + HEADER_LEN);
         drop(dir);
     }
@@ -305,11 +330,13 @@ mod tests {
         let (dir, store, raw) = temp_store(BlockEncryptionMode::On);
         let data = b"caller-verified block";
         let id = sha1_hex(data);
-        let returned = store.write_block_with_id(&id, data).await.unwrap();
+        let returned = store.write_block_with_id(REPO, &id, data).await.unwrap();
         assert_eq!(returned, id);
-        assert_eq!(store.read_block(&id).await.unwrap(), data);
+        assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
         // The stored bytes on disk are ciphertext, not the original plaintext.
-        assert!(raw.read_block(&id).await.unwrap().len() == data.len() + TAG_LEN + HEADER_LEN);
+        assert!(
+            raw.read_block(REPO, &id).await.unwrap().len() == data.len() + TAG_LEN + HEADER_LEN
+        );
         drop((dir, raw));
     }
 
@@ -317,16 +344,16 @@ mod tests {
     async fn deterministic_encryption_same_ciphertext() {
         let (dir, store, raw) = temp_store(BlockEncryptionMode::On);
         let data = b"content-addressed dedup".to_vec();
-        let id = store.write_block(&data).await.unwrap();
-        let first = raw.read_block(&id).await.unwrap();
+        let id = store.write_block(REPO, &data).await.unwrap();
+        let first = raw.read_block(REPO, &id).await.unwrap();
 
         // Remove the deduped block and write the same content again; the
         // produced ciphertext must be byte-identical.
-        raw.remove_block(&id).await.unwrap();
+        raw.remove_block(REPO, &id).await.unwrap();
         raw.invalidate_exists_cache();
-        let id2 = store.write_block(&data).await.unwrap();
+        let id2 = store.write_block(REPO, &data).await.unwrap();
         assert_eq!(id2, id);
-        assert_eq!(raw.read_block(&id).await.unwrap(), first);
+        assert_eq!(raw.read_block(REPO, &id).await.unwrap(), first);
         drop(dir);
     }
 
@@ -335,19 +362,19 @@ mod tests {
         let (dir, store, raw) = temp_store(BlockEncryptionMode::Lazy);
         // Legacy plaintext written straight to the raw store.
         let legacy = b"pre-existing plaintext block".to_vec();
-        let legacy_id = raw.write_block(&legacy).await.unwrap();
+        let legacy_id = raw.write_block(REPO, &legacy).await.unwrap();
         // New encrypted block via the decorator.
         let fresh = b"freshly encrypted block".to_vec();
-        let fresh_id = store.write_block(&fresh).await.unwrap();
+        let fresh_id = store.write_block(REPO, &fresh).await.unwrap();
 
-        assert_eq!(store.read_block(&legacy_id).await.unwrap(), legacy);
-        assert_eq!(store.read_block(&fresh_id).await.unwrap(), fresh);
+        assert_eq!(store.read_block(REPO, &legacy_id).await.unwrap(), legacy);
+        assert_eq!(store.read_block(REPO, &fresh_id).await.unwrap(), fresh);
         assert_eq!(
-            store.block_size(&legacy_id).await.unwrap(),
+            store.block_size(REPO, &legacy_id).await.unwrap(),
             legacy.len() as i64
         );
         assert_eq!(
-            store.block_size(&fresh_id).await.unwrap(),
+            store.block_size(REPO, &fresh_id).await.unwrap(),
             fresh.len() as i64
         );
         drop(dir);
@@ -357,16 +384,16 @@ mod tests {
     async fn on_mode_tamper_detected() {
         let (dir, store, raw) = temp_store(BlockEncryptionMode::On);
         let data = b"tamper me".to_vec();
-        let id = store.write_block(&data).await.unwrap();
+        let id = store.write_block(REPO, &data).await.unwrap();
 
         // Corrupt one byte on disk.
-        let mut ct = raw.read_block(&id).await.unwrap();
+        let mut ct = raw.read_block(REPO, &id).await.unwrap();
         ct[0] ^= 0xFF;
-        raw.remove_block(&id).await.unwrap();
-        raw.write_block_with_id(&id, &ct).await.unwrap();
+        raw.remove_block(REPO, &id).await.unwrap();
+        raw.write_block_with_id(REPO, &id, &ct).await.unwrap();
 
         // In `on` mode a tampered block is a hard read error.
-        assert!(store.read_block(&id).await.is_err());
+        assert!(store.read_block(REPO, &id).await.is_err());
         drop((dir, store));
     }
 
@@ -374,8 +401,8 @@ mod tests {
     async fn lazy_mode_untampered_reads_plaintext_and_encrypted() {
         let (dir, store, _raw) = temp_store(BlockEncryptionMode::Lazy);
         let data = b"lazy plaintext block".to_vec();
-        let id = store.write_block(&data).await.unwrap();
-        assert_eq!(store.read_block(&id).await.unwrap(), data);
+        let id = store.write_block(REPO, &data).await.unwrap();
+        assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
         drop(dir);
     }
 
@@ -383,7 +410,7 @@ mod tests {
     async fn on_mode_short_block_size_is_error() {
         let (dir, _store, raw) = temp_store(BlockEncryptionMode::Off);
         let short = b"tiny".to_vec();
-        let id = raw.write_block(&short).await.unwrap();
+        let id = raw.write_block(REPO, &short).await.unwrap();
         raw.invalidate_exists_cache();
 
         let on_store = EncryptingBlockStore::new(
@@ -391,7 +418,7 @@ mod tests {
             BlockCipher::from_master_key(&MASTER),
             BlockEncryptionMode::On,
         );
-        assert!(on_store.block_size(&id).await.is_err());
+        assert!(on_store.block_size(REPO, &id).await.is_err());
         drop(dir);
     }
 }

@@ -289,6 +289,52 @@ async fn test_sub_repo_create() {
     );
 }
 
+/// A library created from a folder must be able to serve the folder's files.
+///
+/// Blocks are stored per library, so `copy_fs_tree` copying only the FS objects
+/// is not enough: the referenced blocks have to be copied into the new
+/// library's block directory, otherwise every download from it 404s (or the
+/// file reports missing blocks).
+#[tokio::test]
+async fn test_sub_repo_copies_referenced_blocks() {
+    let f = TestFixture::new().await;
+    let content = b"content that must follow the folder into the new library".to_vec();
+
+    assert!(
+        f.client
+            .create_dir(&f.api_token, &f.repo_id, "/subdir")
+            .await
+            .status()
+            .is_success()
+    );
+    assert!(
+        f.client
+            .upload_file(&f.api_token, &f.repo_id, "/subdir", "inside.txt", &content)
+            .await
+            .status()
+            .is_success()
+    );
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/dir/sub_repo/?p=/subdir", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let new_repo = body["id"].as_str().unwrap().to_string();
+
+    // The new library must serve the very same bytes.
+    let resp = f
+        .client
+        .download_file(&f.api_token, &new_repo, "/inside.txt")
+        .await;
+    assert_eq!(resp.status(), 200, "download from the new library failed");
+    assert_eq!(resp.bytes().await.unwrap().to_vec(), content);
+}
+
 #[tokio::test]
 async fn test_sub_repo_invalid_path() {
     let f = TestFixture::new().await;

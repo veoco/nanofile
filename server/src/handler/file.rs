@@ -130,6 +130,7 @@ pub async fn file_post_handler(
                     let (block_ids, total_size, new_block_ids) =
                         crate::handler::web::upload::stream_file_into_blocks(
                             state.block_store.clone(),
+                            &access.repo_id,
                             &mut field,
                         )
                         .await?;
@@ -552,7 +553,9 @@ pub async fn file_uploaded_bytes(
     }
 
     let svc = state.file_service();
-    let mut uploaded_bytes = svc.check_uploaded_bytes(query.blockids.as_deref()).await;
+    let mut uploaded_bytes = svc
+        .check_uploaded_bytes(repo_id, query.blockids.as_deref())
+        .await;
 
     // For resumable upload: check if a temp file already exists and return
     // the actual byte offset.  This takes precedence over the block-count

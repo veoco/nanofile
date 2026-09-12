@@ -1331,3 +1331,92 @@ async fn test_repo_tokens_reuse_stable_token() {
     let second = get_sync_token(&f.client, &f.api_token, &f.repo_id).await;
     assert_eq!(first, second, "non-expired sync token must be reused");
 }
+
+/// Security: the block store is namespaced per repository, so a member of one
+/// library cannot read another library's block even when they know its id.
+///
+/// This is the case the previous flat, globally content-addressed layout could
+/// not express. `get_block` used to check membership on the *URL* repository
+/// only, so naming any repository the caller belonged to was enough to read any
+/// block on the server — which also let a collaborator whose access was revoked
+/// keep reading a library from the `fs_object` block ids their client had
+/// cached.
+#[tokio::test]
+async fn test_cross_repo_block_access_is_denied() {
+    let f = TestFixture::new().await;
+
+    // The victim stores a block in their own library.
+    let content = b"victim secret block content".to_vec();
+    let block_id = infra::crypto::fs_id::sha1_hex(&content);
+    let resp = f
+        .client
+        .put_block(&f.sync_token, &f.repo_id, &block_id, content.clone())
+        .await;
+    assert!(
+        resp.status().is_success(),
+        "victim block upload failed: {}",
+        resp.status()
+    );
+
+    // Baseline: the victim reads it back.
+    let resp = f
+        .client
+        .get_block(&f.sync_token, &f.repo_id, &block_id)
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().to_vec(), content);
+
+    // Attacker: a different user with a library of their own.
+    create_test_user(f.server.db.as_ref(), "attacker@example.com", "password123").await;
+    let resp = f.client.login("attacker@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let attacker_api = body["token"].as_str().unwrap().to_string();
+    let attacker_repo =
+        common::create_test_repo(&f.client, &attacker_api, "Attacker Library").await;
+    let attacker_sync = get_sync_token(&f.client, &attacker_api, &attacker_repo).await;
+
+    // The attacker names *their own* library in the URL and the victim's block
+    // id: the membership check passes, so only the per-library layout stops it.
+    let resp = f
+        .client
+        .get_block(&attacker_sync, &attacker_repo, &block_id)
+        .await;
+    assert_eq!(
+        resp.status(),
+        404,
+        "a block of another library must not be readable through the attacker's own library"
+    );
+
+    // The same request against the victim's library is still rejected by the
+    // token/repo binding.
+    let resp = f
+        .client
+        .get_block(&attacker_sync, &f.repo_id, &block_id)
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    // `check-blocks` must report the victim's block as missing from the
+    // attacker's library: it is no longer a cross-library existence oracle.
+    let check_path = format!("/seafhttp/repo/{attacker_repo}/check-blocks/");
+    let resp = f
+        .client
+        .post_sync_raw(&check_path, &attacker_sync, &serde_json::json!([block_id]))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let missing: Vec<String> = resp.json().await.unwrap();
+    assert_eq!(
+        missing,
+        vec![block_id.clone()],
+        "check-blocks must not see another library's block as present"
+    );
+
+    // And for the victim's own library the block is reported as present.
+    let victim_check = format!("/seafhttp/repo/{}/check-blocks/", f.repo_id);
+    let resp = f
+        .client
+        .post_sync_raw(&victim_check, &f.sync_token, &serde_json::json!([block_id]))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let missing: Vec<String> = resp.json().await.unwrap();
+    assert!(missing.is_empty(), "the owner's block must be present");
+}

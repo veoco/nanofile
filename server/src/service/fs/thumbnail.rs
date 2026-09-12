@@ -204,6 +204,7 @@ impl ThumbnailService {
             }
 
             let content = Downloader::read_file_limited_from_blocks(
+                repo_id,
                 &self.block_store,
                 &file_data.block_ids,
                 file_data.size,
@@ -311,6 +312,7 @@ impl ThumbnailService {
         let write_result: Result<(), std::io::Error> = async {
             let mut out = tokio::fs::File::create(&scratch_media).await?;
             let mut stream = crate::fs::core::download::stream_blocks(
+                repo_id.to_string(),
                 file_data.block_ids.clone(),
                 self.block_store.clone(),
                 None,

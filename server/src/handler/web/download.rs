@@ -135,6 +135,7 @@ pub async fn repo_file_download(
 
     Ok(crate::fs::core::download::file_download_response(
         crate::fs::core::download::FileDownloadParams {
+            repo_id: repo_id.clone(),
             block_ids,
             block_store: state.block_store.clone(),
             enc_key: dec_key,
@@ -190,6 +191,7 @@ pub async fn download_api(
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
     Ok(crate::fs::core::download::file_download_response(
         crate::fs::core::download::FileDownloadParams {
+            repo_id: repo_id.clone(),
             block_ids,
             block_store: state.block_store.clone(),
             enc_key: dec_key,
@@ -254,7 +256,7 @@ pub async fn block_download(
     // Read the block from the block store.
     let block_data = state
         .block_store
-        .read_block(&block_id)
+        .read_block(repo_id, &block_id)
         .await
         .map_err(|_| AppError::NotFound("block data not found".into()))?;
 

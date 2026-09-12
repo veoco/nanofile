@@ -47,7 +47,7 @@ fn validate_block_id(block_id: &str) -> Result<(), AppError> {
 pub async fn check_blocks(
     State(state): State<Arc<AppState>>,
     _auth: SyncAuth,
-    Path(_repo_id): Path<String>,
+    Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<Json<Vec<String>>, AppError> {
     let data = axum::body::to_bytes(body, 10 * 1024 * 1024)
@@ -81,8 +81,9 @@ pub async fn check_blocks(
     let missing: Vec<String> = stream::iter(block_ids)
         .map(move |block_id| {
             let store = block_store.clone();
+            let repo_id = repo_id.clone();
             async move {
-                if !store.has_block(&block_id).await {
+                if !store.has_block(&repo_id, &block_id).await {
                     Some(block_id)
                 } else {
                     None
@@ -117,9 +118,18 @@ pub async fn get_block(
     let block_store = state.block_store.clone();
 
     block_store
-        .read_block(&block_id)
+        .read_block(&repo_id, &block_id)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                // The block is not part of *this* library (or was pruned):
+                // with the per-library layout, "absent" is also the answer for
+                // a block id that exists in a library the caller cannot read.
+                AppError::NotFound("block not found".into())
+            } else {
+                AppError::internal(e.to_string())
+            }
+        })
 }
 
 pub async fn put_block(
@@ -163,7 +173,7 @@ pub async fn put_block(
 
     let block_store = state.block_store.clone();
     block_store
-        .write_block_with_id(&block_id, &data)
+        .write_block_with_id(&repo_id, &block_id, &data)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
@@ -209,7 +219,8 @@ pub async fn get_block_map(
     let block_sizes: Vec<i64> = stream::iter(block_id_strs)
         .map(move |bid| {
             let store = block_store.clone();
-            async move { store.block_size(&bid).await.unwrap_or(0) }
+            let repo_id = repo_id.clone();
+            async move { store.block_size(&repo_id, &bid).await.unwrap_or(0) }
         })
         .buffered(16)
         .collect()

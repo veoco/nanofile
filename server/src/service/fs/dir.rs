@@ -341,6 +341,10 @@ pub struct DirService {
     repos: Arc<Repositories>,
     db: Arc<DatabaseConnection>,
     indexer: Option<crate::indexer::TextIndexer>,
+    /// Needed by `create_sub_repo`: the new library's FS objects reference the
+    /// parent library's block ids, so the blocks themselves have to be copied
+    /// into the new library's own block directory.
+    block_store: infra::storage::DynBlockStorage,
 }
 
 impl DirService {
@@ -348,8 +352,14 @@ impl DirService {
         repos: Arc<Repositories>,
         db: Arc<DatabaseConnection>,
         indexer: Option<crate::indexer::TextIndexer>,
+        block_store: infra::storage::DynBlockStorage,
     ) -> Self {
-        Self { repos, db, indexer }
+        Self {
+            repos,
+            db,
+            indexer,
+            block_store,
+        }
     }
 
     pub fn db(&self) -> &DatabaseConnection {
@@ -582,6 +592,26 @@ impl DirService {
             .await?;
 
         copy_fs_tree(&self.repos, repo_id, &new_repo_id, &source_dir_fs_id).await?;
+
+        // `copy_fs_tree` copies the FS objects, which reference the parent
+        // library's block ids. With blocks stored per library those ids do not
+        // exist in the new library's directory, so every download would 404
+        // until the blocks are copied over as well. Do that **before** the
+        // commit, so a failure leaves no library that looks complete but is not.
+        if let Err(e) = copy_subtree_blocks(
+            &self.repos,
+            &self.block_store,
+            repo_id,
+            &new_repo_id,
+            &source_dir_fs_id,
+        )
+        .await
+        {
+            // Roll the half-built library back rather than leaving an empty one.
+            let _ = self.repos.member.delete_by_repo(&new_repo_id).await;
+            let _ = self.repos.repo.delete_by_id(&new_repo_id).await;
+            return Err(e);
+        }
 
         FileOps::create_commit(
             &self.repos,
@@ -883,6 +913,84 @@ impl DirService {
 }
 
 // ── Helpers (private) ───────────────────────────────────────────────
+
+/// Copy every block referenced by the subtree rooted at `root_fs_id` from
+/// `src_repo_id` into `dst_repo_id`.
+///
+/// Creating a library from a folder copies the FS objects, and those keep the
+/// parent's block ids — blocks are stored per library, so the bytes have to
+/// follow the ids into the new library's directory. Without this the new
+/// library would look complete but every download would 404.
+async fn copy_subtree_blocks(
+    repos: &Repositories,
+    block_store: &infra::storage::DynBlockStorage,
+    src_repo_id: &str,
+    dst_repo_id: &str,
+    root_fs_id: &str,
+) -> Result<(), AppError> {
+    if root_fs_id == EMPTY_SHA1 {
+        return Ok(());
+    }
+
+    // Level-frontier walk of the source subtree, collecting the block ids of
+    // every file object. `TreeGuard` bounds depth and visits so a corrupt tree
+    // cannot spin here.
+    let mut frontier = vec![root_fs_id.to_string()];
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut block_ids: HashSet<String> = HashSet::new();
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
+    while !frontier.is_empty() {
+        guard.enter_level()?;
+        frontier.retain(|id| *id != EMPTY_SHA1 && seen.insert(id.clone()));
+        guard.visit(frontier.len())?;
+        if frontier.is_empty() {
+            break;
+        }
+
+        let objs =
+            crate::fs::core::tree::fetch_fs_object_map(repos, src_repo_id, &frontier).await?;
+        let mut next = Vec::new();
+        for fs_id in &frontier {
+            let Some(obj) = objs.get(fs_id) else {
+                return Err(AppError::NotFound(format!("fs_object not found: {fs_id}")));
+            };
+            if obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 {
+                let dir_data: FsDirData = serde_json::from_str(&obj.data)
+                    .map_err(|e| AppError::Internal(format!("deserialize failed: {e}")))?;
+                for entry in &dir_data.dirents {
+                    next.push(entry.id.clone());
+                }
+            } else {
+                let file_data: base::common::FsFileData = serde_json::from_str(&obj.data)
+                    .map_err(|e| AppError::Internal(format!("deserialize failed: {e}")))?;
+                for id in file_data.block_ids {
+                    block_ids.insert(id);
+                }
+            }
+        }
+        frontier = next;
+    }
+
+    for id in block_ids {
+        if block_store.has_block(dst_repo_id, &id).await {
+            continue;
+        }
+        let data = block_store
+            .read_block(src_repo_id, &id)
+            .await
+            .map_err(|e| {
+                AppError::NotFound(format!(
+                    "block {id} referenced by the folder is missing in the source library: {e}"
+                ))
+            })?;
+        block_store
+            .write_block_with_id(dst_repo_id, &id, &data)
+            .await
+            .map_err(|e| AppError::Internal(format!("copy block {id}: {e}")))?;
+    }
+
+    Ok(())
+}
 
 /// Copy all reachable fs_objects from one repo to another.
 async fn copy_fs_tree(

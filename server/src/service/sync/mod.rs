@@ -908,7 +908,7 @@ impl SyncService {
                                 .map(|id| {
                                     let store = store.clone();
                                     let id = id.clone();
-                                    async move { !store.has_block(&id).await }
+                                    async move { !store.has_block(repo_id, &id).await }
                                 })
                                 .collect();
                             // Each future yields `true` when the block is
@@ -990,7 +990,10 @@ impl SyncService {
                     let file_data: base::common::FsFileData = serde_json::from_str(&obj.data)
                         .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
                     *size_total += file_data.size;
-                    if self.check_blocks_concurrent(&file_data.block_ids).await {
+                    if self
+                        .check_blocks_concurrent(repo_id, &file_data.block_ids)
+                        .await
+                    {
                         missing.push(frame.path.clone());
                     }
                 } else if obj.obj_type == 3 {
@@ -1015,7 +1018,7 @@ impl SyncService {
         Ok(())
     }
 
-    async fn check_blocks_concurrent(&self, block_ids: &[String]) -> bool {
+    async fn check_blocks_concurrent(&self, repo_id: &str, block_ids: &[String]) -> bool {
         const BATCH_SIZE: usize = 16;
         for chunk in block_ids.chunks(BATCH_SIZE) {
             let futures: Vec<_> = chunk
@@ -1023,7 +1026,7 @@ impl SyncService {
                 .map(|block_id| {
                     let store = self.block_store.clone();
                     let id = block_id.clone();
-                    async move { !store.has_block(&id).await }
+                    async move { !store.has_block(repo_id, &id).await }
                 })
                 .collect();
             let results = futures::future::join_all(futures).await;
