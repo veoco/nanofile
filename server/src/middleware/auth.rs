@@ -150,21 +150,12 @@ fn extract_url_repo_id(path: &str) -> Result<Option<String>, ()> {
         .decode_utf8()
         .map_err(|_| ())?;
     let trimmed = decoded.trim_start_matches('/');
+    let candidates = crate::domain::repo_path::candidates(trimmed);
 
-    // Candidate repo-id positions, most specific first: the full
-    // `seafhttp/repo/{id}` form, the `repo/{id}` form and the stripped
-    // `{id}/…` form.
-    let mut candidates: Vec<&str> = Vec::new();
-    for prefix in ["seafhttp/repo/", "repo/"] {
-        if let Some(rest) = trimmed.strip_prefix(prefix)
-            && let Some(seg) = rest.split('/').next()
-        {
-            candidates.push(seg);
-        }
-    }
-    candidates.push(trimmed.split('/').next().unwrap_or(""));
-
-    if let Some(repo_id) = candidates.iter().find(|c| is_uuid_str(c)) {
+    if let Some(repo_id) = candidates
+        .iter()
+        .find(|c| crate::domain::repo_path::is_uuid(c))
+    {
         return Ok(Some((*repo_id).to_string()));
     }
 
@@ -174,19 +165,6 @@ fn extract_url_repo_id(path: &str) -> Result<Option<String>, ()> {
     }
 
     Err(())
-}
-
-/// True when `s` is a UUID-formatted string (8-4-4-4-12 hex).
-fn is_uuid_str(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() == 36
-        && b[8] == b'-'
-        && b[13] == b'-'
-        && b[18] == b'-'
-        && b[23] == b'-'
-        && b.iter()
-            .enumerate()
-            .all(|(i, &c)| i == 8 || i == 13 || i == 18 || i == 23 || c.is_ascii_hexdigit())
 }
 
 impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {

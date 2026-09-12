@@ -10,6 +10,8 @@
 //! This module intentionally avoids infrastructure concerns (DB access,
 //! HTTP, etc.) — it's pure domain logic.
 
+pub mod capability;
 pub mod commit;
 pub mod fs;
 pub mod permission;
+pub mod repo_path;
