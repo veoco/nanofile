@@ -31,11 +31,17 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   configurable lifetime. Presets cover the common cases (sync client, WebDAV, CI upload, read-only).
   Write capabilities imply their read counterpart; `admin.*` needs an admin; a key can never manage
   keys.
+- **Credential inventory**: *Settings → Sessions & Credentials* lists everything long-lived that can
+  reach the account — client sessions, browser sessions (labelled from their `User-Agent`), repository
+  sync tokens, and the devices that skip two-factor — and revokes any one of them. API keys keep their
+  own page. The same data is available as `GET /api2/credentials/` (needs `device.read`) and
+  `DELETE /api2/credentials/{kind}/{id}/` (needs `device.write`); sync-token *values* are never part of
+  it, only their metadata.
 - **WebDAV** (`/dav/...`) authenticated with those keys (`webdav.*` capabilities), gated by
   `webdav_enabled`.
 - **Web UI**: file browser with previews and thumbnails, starred files, activity feed, trash,
-  settings (profile, devices, 2FA, invitations, API keys), and a **sysadmin panel** (users, shares,
-  background tasks). Localized in English and Chinese.
+  settings (profile, sessions & credentials, 2FA, invitations, API keys), and a **sysadmin panel**
+  (users, shares, background tasks). Localized in English and Chinese.
 - **Sharing**: share links (optional password / expiry / view counting), anonymous upload links,
   user shares with rw/r permissions, custom share permissions. A global `share_link_enabled` switch
   can disable anonymous share/upload links entirely (existing links become inaccessible and the
@@ -242,6 +248,15 @@ run it:
     key they already hold. Deleting a library removes the keys bound only to it.
   - API keys cannot reach `/api2/api-keys/`: a key that could mint keys could give itself more
     access than it holds. Managing keys requires a browser session.
+- **Every long-lived credential is visible and individually revocable.** A credential its owner
+  cannot see is one they cannot revoke, which is how a 365-day repository sync token used to be: the
+  devices page listed client sessions only, and neither sync tokens nor 90-day 2FA device trusts had
+  any read path at all. Account tokens now record *where they came from* (`api_tokens.source`)
+  instead of having it inferred from `platform`, which is set only when a client reports device
+  details — a browser session, a client that reported nothing and the desktop client's "view on
+  website" handoff were otherwise indistinguishable, and a client that reported no `platform` was
+  not listed anywhere. The inventory reports sync tokens by metadata only; their stored value is a
+  ciphertext the server can decrypt, so it is never serialised.
 - **One route table classifies every credential, so a new endpoint fails closed.** A request is
   resolved to a `Credential` — a session, a unified API key, or a repository sync token — and the
   route table is consulted for all of them, not only for keys. A session is the account itself and
