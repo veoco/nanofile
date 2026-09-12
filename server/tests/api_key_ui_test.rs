@@ -225,3 +225,63 @@ async fn the_page_requires_a_session() {
         .unwrap();
     assert_eq!(resp.status(), 303, "the UI redirects to the login page");
 }
+
+#[tokio::test]
+async fn changing_the_password_revokes_every_key() {
+    let f = TestFixture::new().await;
+
+    // A key with an `/api2` capability and a WebDAV-scoped one: both are
+    // credentials the account holds, so both must die with the password.
+    let resp = f
+        .client
+        .post_json(
+            "/api2/api-keys/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "name": "before-change",
+                "capabilities": ["library.read", "webdav.read"],
+                "all_repos": true,
+                "expires_in_days": 7,
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let key = resp.json::<serde_json::Value>().await.unwrap()["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(f.client.get("/api2/repos/", Some(&key)).await.status(), 200);
+
+    let client = login_client(&f).await;
+    let csrf = csrf_token(&client, &format!("{}/settings/", f.server.base_url)).await;
+    let resp = client
+        .post(format!("{}/settings/password/", f.server.base_url))
+        .form(&[
+            ("old_password", "password"),
+            ("new_password", "newpass123"),
+            ("csrf_token", csrf.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "password change failed");
+
+    assert_eq!(
+        f.client.get("/api2/repos/", Some(&key)).await.status(),
+        401,
+        "a key must not survive the password change that revoked it"
+    );
+
+    // And it is gone from the list rather than merely inert. The API token the
+    // fixture held was revoked with the password too, so read the page through
+    // the browser session the change preserved.
+    let page = client
+        .get(format!("{}/settings/api-keys/", f.server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!page.contains("before-change"), "the key must be revoked");
+}

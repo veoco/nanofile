@@ -24,9 +24,17 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
 - **REST API**: legacy v1 (`/api2/*`) and v2.1 (`/api/v2.1/*`) surfaces covering libraries, files,
   directories, sharing, activities, search, trash, devices, avatars and more — compatible with the
   official mobile apps.
-- **WebDAV** (`/dav/...`) with per-library keys, gated by `webdav_enabled`.
+- **API keys**: one credential type for external clients, managed under *Settings → API Keys*. A key
+  carries a set of fine-grained capabilities (`file.read`, `share_link.write`, `sync.token`,
+  `webdav.write`, …; 45 in total, grouped by domain), is either bound to specific libraries — each
+  with its own read/write ceiling — or to every library the owner can reach, and expires on a
+  configurable lifetime. Presets cover the common cases (sync client, WebDAV, CI upload, read-only).
+  Write capabilities imply their read counterpart; `admin.*` needs an admin; a key can never manage
+  keys.
+- **WebDAV** (`/dav/...`) authenticated with those keys (`webdav.*` capabilities), gated by
+  `webdav_enabled`.
 - **Web UI**: file browser with previews and thumbnails, starred files, activity feed, trash,
-  settings (profile, devices, 2FA, invitations), and a **sysadmin panel** (users, shares,
+  settings (profile, devices, 2FA, invitations, API keys), and a **sysadmin panel** (users, shares,
   background tasks). Localized in English and Chinese.
 - **Sharing**: share links (optional password / expiry / view counting), anonymous upload links,
   user shares with rw/r permissions, custom share permissions. A global `share_link_enabled` switch
@@ -35,8 +43,9 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
 - **Security**: TOTP two-factor auth with backup codes and trusted devices, SSO / "view on website"
   login, invitation-code registration, login rate limiting with lockout, password reset (email-gated),
   hashed session cookies with CSRF protection, path-traversal-safe filename handling.
-  - **Security note**: API, S2FA, SSO-login and client-login bearer tokens are stored as SHA-256
-    hashes, so a leaked database does not yield usable credentials. Sync tokens stay recoverable
+  - **Security note**: API keys, API, S2FA, SSO-login and client-login bearer tokens are stored as
+    SHA-256 hashes, so a leaked database does not yield usable credentials; a freshly created key is
+    therefore shown exactly once. Sync tokens stay recoverable
     (clients re-present them), so they are encrypted at rest with an AEAD key derived from
     `secret_key`; share-link tokens remain plaintext because the "my shares" list shows the
     copyable URL — matching official Seafile's plaintext URL model. In **release** builds
@@ -175,7 +184,7 @@ migration is applied in memory only.
 | `[server]` | Bind address/port, `site_url` (external URL used for download/share links and cookies — set to your HTTPS domain behind a TLS proxy), max upload size, request timeout, CORS, WebDAV switch, feature switches (`sso_enabled`, `file_search_enabled`, `share_link_enabled`, `tray`), desktop-client branding (`desktop_custom_brand` / `desktop_custom_logo`), trusted reverse proxies (`trusted_proxies`). |
 | `[database]` | SeaORM/SQLite connection URL (default `sqlite:data/nanofile.db?mode=rwc`) and pool size. |
 | `[storage]` | Block store, temp, thumbnail and avatar directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited), ffmpeg path for video thumbnails, resumable-upload temp limits (`max_temp_uploads`, `max_temp_upload_bytes`, `temp_upload_ttl_hours`), zip-archive caps (`max_zip_entries`, `max_zip_bytes`, `0` = unlimited), and transparent at-rest block encryption (`block_encryption_mode` / `encryption_key`). |
-| `[auth]` | Password hashing cost, token TTLs, login lockout, invitation registration, password policy, and per-IP rate limits (password reset, registration, TOTP verification, share/upload-link passwords, anonymous share downloads). |
+| `[auth]` | Password hashing cost, token TTLs, API-key lifetime presets (`api_key_ttl_presets_days`) and their upper bound (`api_key_max_ttl_days`, `0` = unbounded; when set, non-expiring keys are refused), login lockout, invitation registration, password policy, and per-IP rate limits (password reset, registration, TOTP verification, share/upload-link passwords, anonymous share downloads). |
 | `[ui]` | Default UI language (`en` / `zh`), tray menu language (`tray_language`: `auto` follows the OS locale, `en`/`zh` force one). |
 | `[email]` | Master switch for the email backend. Password-reset links are only delivered to the owner's inbox and are never echoed back by the server, so the reset flow stays disabled until an SMTP backend exists. |
 | `[admin_init]` | Optional first-start admin auto-creation. Prefer `NANOFILE_ADMIN_INIT_PASSWORD_FILE` for the password. |
@@ -224,10 +233,15 @@ run it:
   for, or used against, an encrypted library: there is no per-visitor key cache to draw on. The sync
   protocol is unchanged (clients encrypt locally).
 - **Account remediation is complete.** A password change or reset, a deactivation and a device wipe
-  drop every credential the account holds — database tokens (including repository sync tokens) *and*
-  the in-memory `/download-api/…`, `/upload-api/…` and `/blks/…` capability URLs — and a password
-  change/reset also invalidates outstanding password-reset links. Removing a member from a library
-  revokes their sync token and capability URLs for it.
+  drop every credential the account holds — session tokens, API keys (WebDAV keys included),
+  repository sync tokens *and* the in-memory `/download-api/…`, `/upload-api/…` and `/blks/…`
+  capability URLs — and a password change/reset also invalidates outstanding password-reset links.
+  Removing a member from a library revokes their sync token and capability URLs for it.
+  - A key bound to a library stops working the moment its owner loses membership, because every
+    request re-checks membership; the binding itself is kept, so re-adding the member restores the
+    key they already hold. Deleting a library removes the keys bound only to it.
+  - API keys cannot reach `/api2/api-keys/`: a key that could mint keys could give itself more
+    access than it holds. Managing keys requires a browser session.
 - **Uploads and downloads are charged before they are written.** Bytes in the block store that no
   commit references yet are reserved against the uploader's quota, so "write blocks and never commit"
   is bounded rather than free; the reservation is released when the upload commits, or when an

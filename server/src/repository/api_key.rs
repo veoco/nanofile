@@ -102,8 +102,13 @@ pub trait ApiKeyRepository: Send + Sync {
     /// Drop every binding that points at a deleted library, then delete the
     /// now-unbound keys. Returns the number of bindings removed.
     async fn delete_bindings_by_repo(&self, repo_id: &str) -> Result<u64, AppError>;
-    /// Drop one user's bindings for a library (member removed) and delete any
-    /// key left without bindings. Returns the number of bindings removed.
+    /// Drop one user's bindings for a library and delete any key left without
+    /// bindings. Returns the number of bindings removed.
+    ///
+    /// Not part of the current revocation policy: removing a member keeps their
+    /// bindings, because every request re-checks membership (so the key is inert
+    /// while they are out) and re-adding them legitimately restores the key they
+    /// already hold. Available for an explicit purge.
     async fn delete_bindings_for_repo_user(
         &self,
         repo_id: &str,

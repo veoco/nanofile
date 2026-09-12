@@ -21,9 +21,14 @@ Nanofile 实现了 Seafile 同步协议和 REST API，因此官方 Seafile 桌�
     限制为 4096。
 - **REST API**：旧版 v1（`/api2/*`）和 v2.1（`/api/v2.1/*`）接口，覆盖库、文件、目录、分享、
   动态、搜索、回收站、设备、头像等——与官方移动应用兼容。
-- **WebDAV**（`/dav/...`）：支持每库密钥，由 `webdav_enabled` 控制。
+- **API 密钥**：面向外部客户端的统一凭据，在*设置 → API 密钥*中管理。每个密钥持有一组细粒度
+  能力（`file.read`、`share_link.write`、`sync.token`、`webdav.write` 等共 45 项，按领域分组），
+  可绑定到指定资料库（每个库单独设置读写上限）或该账号可访问的全部资料库，并按可配置的有效期过期。
+  内置同步客户端、WebDAV、CI 上传、只读等预设。写能力会自动包含对应的读能力；`admin.*` 需要管理员
+  身份；密钥永远不能管理密钥。
+- **WebDAV**（`/dav/...`）：使用上述密钥中的 `webdav.*` 能力认证，由 `webdav_enabled` 控制。
 - **Web UI**：带预览和缩略图的文件浏览器、星标文件、动态流、回收站、设置（个人资料、设备、
-  2FA、邀请），以及**系统管理后台**（用户、分享、后台任务）。支持中英文界面。
+  2FA、邀请、API 密钥），以及**系统管理后台**（用户、分享、后台任务）。支持中英文界面。
 - **分享**：分享链接（可选密码 / 过期时间 / 浏览计数）、匿名上传链接、带 rw/r 权限的用户
   分享、自定义分享权限。全局 `share_link_enabled` 开关可完全禁用匿名分享 / 上传链接（已有
   链接将不可访问，并广播 `share-link-disabled` 特性让客户端隐藏分享功能）。
@@ -148,7 +153,7 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
 | `[server]` | 绑定地址 / 端口、`site_url`（用于下载 / 分享链接和 cookie 的外部 URL——在 TLS 代理后请设为你的 HTTPS 域名）、最大上传大小、请求超时、CORS、WebDAV 开关、功能开关（`sso_enabled`、`file_search_enabled`、`share_link_enabled`、`tray`）、桌面客户端品牌定制（`desktop_custom_brand` / `desktop_custom_logo`）、受信反向代理（`trusted_proxies`）。 |
 | `[database]` | SeaORM/SQLite 连接 URL（默认 `sqlite:data/nanofile.db?mode=rwc`）和连接池大小。 |
 | `[storage]` | 块存储、临时、缩略图和头像目录，全局存储配额上限（`max_storage_bytes`，`0` = 不限）、视频缩略图的 ffmpeg 路径、可续传上传临时限制（`max_temp_uploads`、`max_temp_upload_bytes`、`temp_upload_ttl_hours`）、zip 归档上限（`max_zip_entries`、`max_zip_bytes`，`0` = 不限），以及透明静态块加密（`block_encryption_mode` / `encryption_key`）。 |
-| `[auth]` | 密码哈希成本、token TTL、登录锁定、邀请注册、密码策略，以及每 IP 限流（密码重置、注册、TOTP 验证、分享 / 上传链接密码、匿名分享下载）。 |
+| `[auth]` | 密码哈希成本、token TTL、API 密钥有效期预设（`api_key_ttl_presets_days`）及其上限（`api_key_max_ttl_days`，`0` = 不限；非 0 时不允许创建永不过期的密钥）、登录锁定、邀请注册、密码策略，以及每 IP 限流（密码重置、注册、TOTP 验证、分享 / 上传链接密码、匿名分享下载）。 |
 | `[ui]` | 默认 UI 语言（`en` / `zh`）、托盘菜单语言（`tray_language`：`auto` 跟随系统区域设置，`en`/`zh` 强制指定）。 |
 | `[email]` | 邮件后端总开关。密码重置链接只投递到所有者的收件箱，服务器从不回显，因此在存在 SMTP 后端之前重置流程保持禁用。 |
 | `[admin_init]` | 可选的首次启动管理员自动创建。密码优先使用 `NANOFILE_ADMIN_INIT_PASSWORD_FILE`。 |
@@ -189,10 +194,15 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
   Android / iOS 据此重试的状态码），随后写入的块会用以缓存密钥加密后的密文保存。匿名上传链接既不
   能为加密资料库创建，也不能用于加密资料库：匿名访问者没有可缓存密钥的身份。同步协议不变（客户端
   本地加密）。
-- **账号处置是彻底的。** 改密/重置口令、停用账号、远程擦除都会吊销该账号持有的全部凭证——数据库
-  token（含资料库同步 token）*以及*内存中的 `/download-api/…`、`/upload-api/…`、`/blks/…`
-  capability URL；改密/重置还会作废未使用的口令重置链接。把成员移出资料库会吊销其同步 token 与
-  该资料库的 capability URL。
+- **账号处置是彻底的。** 改密/重置口令、停用账号、远程擦除都会吊销该账号持有的全部凭证——会话
+  token、API 密钥（含 WebDAV 密钥）、资料库同步 token *以及*内存中的 `/download-api/…`、
+  `/upload-api/…`、`/blks/…` capability URL；改密/重置还会作废未使用的口令重置链接。把成员移出
+  资料库会吊销其同步 token 与该资料库的 capability URL。
+  - 绑定到某资料库的密钥会在其持有者失去成员身份的那一刻停止工作，因为每次请求都会重新校验成员
+    身份；绑定关系本身会保留，所以重新加回成员后原有密钥即可恢复。删除资料库会一并清理只绑定到
+    它的密钥。
+  - API 密钥无法访问 `/api2/api-keys/`：能签发密钥的密钥就能给自己扩权。管理密钥必须使用浏览器
+    会话。
 - **上传与下载在写入前就已记账。** 尚未被任何 commit 引用的块字节会先记在调用者的配额上，因此
   "只写块不提交"是被约束的而不是免费的；提交时释放预留，被回收的废弃上传也会释放预留——回收会删除
   该上传写入的块，但删除前会复查没有任何 FS 对象引用它们，因此绝不会删掉已提交文件仍需要的块。

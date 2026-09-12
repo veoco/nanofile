@@ -126,8 +126,9 @@ pub fn hash_token(token: &str) -> String {
 /// Revoke every credential for a user, optionally keeping the acting session.
 ///
 /// Mirrors seahub's `clear_token()` on password change/reset: account API
-/// tokens, 2FA device-trust tokens and **all** repository sync tokens are
-/// dropped, so a stolen credential cannot survive the remediation. The acting
+/// tokens, unified API keys (WebDAV keys included), 2FA device-trust tokens and
+/// **all** repository sync tokens are dropped, so a stolen credential cannot
+/// survive the remediation. The acting
 /// session can be preserved via `keep_session_token` (the equivalent of
 /// seahub's `update_session_auth_hash`) so the user is not logged out of the
 /// browser they just used.
@@ -154,6 +155,9 @@ pub async fn revoke_all_credentials(
     }
     repos.s2fa_token.delete_by_user(user_id).await?;
     repos.sync_token.delete_by_user(user_id).await?;
+    // Unified API keys include the WebDAV-scoped ones, which used to survive a
+    // password change because they lived in their own table with no TTL.
+    repos.api_key.delete_by_user(user_id).await?;
 
     // Outstanding password-reset links are credentials too: a reset link that
     // survives a password change (or a competing reset) keeps offering account

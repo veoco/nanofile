@@ -426,3 +426,44 @@ async fn binding_to_a_library_the_caller_cannot_reach_is_forbidden() {
     body["repo_permissions"] = json!([{"repo_id": private_repo, "permission": "rw"}]);
     assert_eq!(create(&f, &body).await.status(), 403);
 }
+
+#[tokio::test]
+async fn deleting_a_library_removes_keys_bound_only_to_it() {
+    let f = TestFixture::new().await;
+
+    // One key bound to the library, one account-wide.
+    let bound: Value = create(&f, &bound_body(&f)).await.json().await.unwrap();
+    let mut wide = bound_body(&f);
+    wide.as_object_mut().unwrap().remove("repo_permissions");
+    wide["all_repos"] = json!(true);
+    let account_wide: Value = create(&f, &wide).await.json().await.unwrap();
+    assert_ne!(bound["id"], account_wide["id"]);
+
+    let resp = f
+        .client
+        .delete(&format!("/api2/repos/{}/", f.repo_id), Some(&f.api_token))
+        .await;
+    assert_eq!(resp.status(), 200, "library deletion failed");
+
+    let listed: Value = f
+        .client
+        .get(KEYS, Some(&f.api_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let ids: Vec<i64> = listed["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|key| key["id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        !ids.contains(&bound["id"].as_i64().unwrap()),
+        "a key with no libraries left is inert and must be removed"
+    );
+    assert!(
+        ids.contains(&account_wide["id"].as_i64().unwrap()),
+        "an account-wide key is unaffected"
+    );
+}

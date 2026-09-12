@@ -667,6 +667,11 @@ impl RepoService {
         // copies so a revoked client cannot keep authenticating from the cache.
         repos.sync_token.delete_by_repo(repo_id).await?;
 
+        // API-key bindings cascade with the repository; a key that was only
+        // bound to this library is left inert, so remove it rather than leave a
+        // credential that can never authenticate again.
+        repos.api_key.delete_bindings_by_repo(repo_id).await?;
+
         Ok(())
     }
 
