@@ -46,6 +46,8 @@ pub struct TwoFactorTemplate {
     pub csrf_token: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
+    /// The shared settings navigation.
+    pub nav: super::settings::SettingsNav,
 }
 
 // ─── Request types ──────────────────────────────────────────────────────────
@@ -83,12 +85,15 @@ async fn render_page(
     };
 
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
+    let nav =
+        super::settings::build_nav(state, user, super::settings::SettingsNav::SECURITY).await?;
     let tpl = TwoFactorTemplate {
         urls: ctx.urls,
         t: ctx.t,
         user_email: ctx.user_email,
         is_admin: ctx.is_admin,
-        active_page: "settings",
+        active_page: super::settings::SettingsNav::SECURITY,
+        nav,
         enabled,
         setup_pending,
         secret,

@@ -170,6 +170,8 @@ pub struct ApiKeysTemplate {
     pub new_key: Option<NewKeyView>,
     pub error: Option<String>,
     pub success: Option<String>,
+    /// The shared settings navigation.
+    pub nav: crate::ui::settings::SettingsNav,
 }
 
 /// Render the page, optionally with a freshly created (shown-once) secret.
@@ -235,13 +237,17 @@ async fn render(
         .left_panel_cache
         .get_for_user(&state.repos, user.user_id)
         .await?;
+    let nav =
+        crate::ui::settings::build_nav(state, user, crate::ui::settings::SettingsNav::API_KEYS)
+            .await?;
 
     let tpl = ApiKeysTemplate {
         urls: crate::static_assets::template_urls(),
         t,
         user_email: user.email.clone(),
         is_admin: user.is_admin,
-        active_page: "settings",
+        active_page: crate::ui::settings::SettingsNav::API_KEYS,
+        nav,
         left_panel_repos,
         current_repo_id: None,
         csrf_token: crate::service::auth::csrf::generate_csrf_token(

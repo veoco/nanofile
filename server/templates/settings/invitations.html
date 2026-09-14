@@ -1,13 +1,11 @@
-{% extends "base.html" %}
+{% extends "settings_shell.html" %}
 
 {% block title %}{{ t.tr("invite.title") }} | Nanofile{% endblock %}
 
-{% block content %}
-<h1 class="page-title">{{ t.tr("invite.title") }}</h1>
-<p class="page-subtitle">
-    {{ t.tr("settings.invitations_desc") }}
-</p>
+{% block settings_title %}{{ t.tr("invite.title") }}{% endblock %}
+{% block settings_subtitle %}{{ t.tr("settings.invitations_desc") }}{% endblock %}
 
+{% block settings_content %}
 {% if let Some(error) = error %}
 {% include "includes/alert_error.html" %}
 {% endif %}
@@ -95,11 +93,5 @@
         </div>
     </div>
     {% endfor %}
-
-    <div class="mt-6">
-        <a href="/settings/" class="text-sm text-brand-500 dark:text-brand-400 hover:text-brand-600 dark:hover:text-brand-300">
-            &larr; {{ t.tr("common.back_to_settings") }}
-        </a>
-    </div>
 </div>
 {% endblock %}

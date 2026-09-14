@@ -32,6 +32,8 @@ pub struct InvitationsTemplate {
     pub csrf_token: String,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
+    /// The shared settings navigation.
+    pub nav: crate::ui::settings::SettingsNav,
 }
 
 #[derive(Deserialize)]
@@ -59,12 +61,19 @@ pub async fn list_invitations(
         .left_panel_cache
         .get_for_user(&state.repos, user.user_id)
         .await?;
+    let nav = crate::ui::settings::build_nav(
+        &state,
+        &user,
+        crate::ui::settings::SettingsNav::INVITATIONS,
+    )
+    .await?;
     let tpl = InvitationsTemplate {
         urls: crate::static_assets::template_urls(),
         t: I18n::get(user.language.as_deref()),
         user_email: user.email,
         is_admin: user.is_admin,
-        active_page: "settings",
+        active_page: crate::ui::settings::SettingsNav::INVITATIONS,
+        nav,
         invitations,
         error: None,
         success: None,

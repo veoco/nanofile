@@ -112,11 +112,28 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/shares/upload/{token}/delete/",
             axum::routing::post(shares::delete_upload),
         )
-        // Profile / Settings
+        // Profile / Settings — one shell, entered from any of its pages.
         .route("/settings/", get(settings::settings_page))
+        .route("/settings/profile/", get(settings::profile_page))
+        .route("/settings/security/", get(settings::security_page))
+        // The credential inventory. `/settings/devices/` is the path this page
+        // used to live at; it redirects so old links and bookmarks still land.
+        .route("/settings/credentials/", get(settings::credentials_page))
+        .route(
+            "/settings/credentials/revoke/",
+            axum::routing::post(settings::revoke_credential),
+        )
+        .route(
+            "/settings/credentials/bulk/",
+            axum::routing::post(settings::revoke_bulk),
+        )
+        .route(
+            "/settings/credentials/unlink/",
+            axum::routing::post(settings::unlink_device),
+        )
         .route(
             "/settings/devices/",
-            get(settings::devices_page).post(settings::unlink_device),
+            get(settings::redirect_credentials).post(settings::unlink_device),
         )
         .route(
             "/settings/devices/revoke/",
@@ -126,6 +143,16 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/settings/password/",
             axum::routing::post(settings::change_password),
         )
+        .route(
+            "/settings/profile/display-name/",
+            axum::routing::post(settings::update_display_name),
+        )
+        .route(
+            "/settings/profile/language/",
+            axum::routing::post(settings::update_language),
+        )
+        // Legacy profile-form paths, kept as aliases so existing tests and
+        // bookmarked pages keep working.
         .route(
             "/settings/display-name/",
             axum::routing::post(settings::update_display_name),
@@ -157,7 +184,11 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/settings/invitations/{id}/delete/",
             axum::routing::post(invitations::delete_invitation),
         )
-        // Avatar upload
+        // Avatar upload (the legacy path stays an alias of the profile one)
+        .route(
+            "/settings/profile/avatar/",
+            axum::routing::post(settings::upload_avatar),
+        )
         .route(
             "/settings/avatar/",
             axum::routing::post(settings::upload_avatar),

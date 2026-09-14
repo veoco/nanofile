@@ -1,182 +1,131 @@
-{% extends "base.html" %}
+{% extends "settings_shell.html" %}
 
 {% block title %}{{ t.tr("settings.title") }} | Nanofile{% endblock %}
 
-{% block content %}
-<h1 class="page-title">{{ t.tr("settings.title") }}</h1>
-<p class="page-subtitle">{{ t.tr("settings.subtitle") }}</p>
+{% block settings_subtitle %}{{ t.tr("settings.subtitle") }}{% endblock %}
 
-{% if let Some(error) = error %}
-{% include "includes/alert_error.html" %}
-{% endif %}
+{% block settings_content %}
+{# The overview posts nothing itself, but it carries the session's CSRF token:
+   other pages and forms built around this one read it from here. #}
+<input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
 
-{% if let Some(success) = success %}
-{% include "includes/alert_success.html" %}
-{% endif %}
-
-<div class="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-    <!-- Avatar -->
-    <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.avatar") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("settings.avatar_desc") }}</p>
-            <div class="mt-4 flex items-center gap-x-6">
-                <img src="/avatars/user/{{ user_email }}/resized/96/" alt=""
-                     class="h-24 w-24 rounded-full object-cover bg-brand-500 ring-2 ring-gray-200 dark:ring-gray-600">
-                <form action="/settings/avatar/" method="POST" enctype="multipart/form-data" class="flex flex-col gap-y-3">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                    <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif" required
-                           class="block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-4 file:rounded-lg file:border-0 file:bg-brand-500 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-brand-600 file:transition-colors">
-                    <button type="submit"
-                            class="self-start btn btn-primary">
-                        {{ t.tr("common.upload") }}
-                    </button>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <!-- Account Info -->
-    <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.account_info") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ user_email }}</p>
-        </div>
-    </div>
-
-    <!-- Interface Language -->
-    <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.language") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t.tr("settings.language_desc") }}
+<div class="card">
+    <div class="card-body flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="min-w-0">
+            <p class="text-base font-semibold text-gray-900 dark:text-gray-100">
+                {{ t.tr("settings.greeting") }}<span class="ml-1">{{ user_display_name }}</span>
             </p>
-            <form action="/settings/language/" method="POST" class="mt-4 space-y-4">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                <select name="language"
-                        class="mt-1 select">
-                    <option value="en" {% if user_language == "en" %}selected{% endif %}>English</option>
-                    <option value="zh" {% if user_language == "zh" %}selected{% endif %}>简体中文</option>
-                </select>
-                <button type="submit"
-                        class="btn btn-primary">
-                    {{ t.tr("common.save") }}
-                </button>
-            </form>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400 break-all">{{ user_email }}</p>
         </div>
+        <img src="/avatars/user/{{ user_email }}/resized/96/" alt=""
+             class="h-16 w-16 flex-shrink-0 rounded-full object-cover bg-brand-500 ring-2 ring-gray-200 dark:ring-gray-600">
     </div>
+</div>
 
-    <!-- Display Name -->
+<div class="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2">
+
+    {# ── Account ─────────────────────────────────────────────────────── #}
     <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.display_name") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t.tr("settings.display_name_desc") }}
-            </p>
-            <form action="/settings/display-name/" method="POST" class="mt-4 space-y-4">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                <div>
-                    <label for="display_name" class="form-label">{{ t.tr("settings.display_name") }}</label>
-                    <input type="text" name="display_name" id="display_name"
-                           value="{{ user_display_name }}"
-                           maxlength="255"
-                           class="mt-1 input">
+        <div class="card-body flex h-full flex-col">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.group_account") }}</h2>
+            <dl class="mt-3 flex-1 space-y-2 text-sm">
+                <div class="flex justify-between gap-3">
+                    <dt class="text-gray-500 dark:text-gray-400">{{ t.tr("settings.display_name") }}</dt>
+                    <dd class="truncate font-medium text-gray-900 dark:text-gray-100">{{ user_display_name }}</dd>
                 </div>
-                <button type="submit"
-                        class="btn btn-primary">
-                    {{ t.tr("common.save") }}
-                </button>
-            </form>
-        </div>
-    </div>
-
-    <!-- API Keys -->
-    <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.api_keys") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t.tr("settings.api_keys_desc") }}
-            </p>
-            <a href="/settings/api-keys/"
-               class="mt-3 inline-block btn btn-primary">
-                {{ t.tr("settings.manage_api_keys") }}
+                <div class="flex justify-between gap-3">
+                    <dt class="text-gray-500 dark:text-gray-400">{{ t.tr("settings.language") }}</dt>
+                    <dd class="font-medium text-gray-900 dark:text-gray-100">
+                        {% if user_language == "zh" %}简体中文{% else %}English{% endif %}
+                    </dd>
+                </div>
+            </dl>
+            <a href="/settings/profile/" class="btn btn-primary btn-sm mt-4 self-start">
+                {{ t.tr("settings.manage_profile") }}
             </a>
         </div>
     </div>
 
-    <!-- Two-Factor Authentication -->
+    {# ── Security ────────────────────────────────────────────────────── #}
     <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.two_factor") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t.tr("settings.two_factor_desc") }}
-            </p>
-            <p class="mt-2 text-sm">
-                {{ t.tr("settings.status") }}:
-                {% if two_fa_enabled %}
-                <span class="font-semibold text-green-700 dark:text-green-400">{{ t.tr("settings.status_enabled") }}</span>
-                {% else %}
-                <span class="font-semibold text-gray-500 dark:text-gray-400">{{ t.tr("settings.status_not_configured") }}</span>
-                {% endif %}
-            </p>
-            <a href="/settings/two-factor/"
-               class="mt-3 inline-block btn btn-primary">
-                {{ t.tr("settings.manage_two_factor") }}
+        <div class="card-body flex h-full flex-col">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.group_security") }}</h2>
+            <dl class="mt-3 flex-1 space-y-2 text-sm">
+                <div class="flex items-center justify-between gap-3">
+                    <dt class="text-gray-500 dark:text-gray-400">{{ t.tr("settings.two_factor") }}</dt>
+                    <dd>
+                        {% if summary.two_fa_enabled %}
+                        <span class="badge badge-green">{{ t.tr("settings.status_enabled") }}</span>
+                        {% else %}
+                        <span class="badge badge-gray">{{ t.tr("settings.status_not_configured") }}</span>
+                        {% endif %}
+                    </dd>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                    <dt class="text-gray-500 dark:text-gray-400">{{ t.tr("settings.change_password") }}</dt>
+                    <dd class="text-gray-500 dark:text-gray-400">{{ t.tr("settings.password_managed_here") }}</dd>
+                </div>
+            </dl>
+            <a href="/settings/security/" class="btn {% if summary.two_fa_enabled %}btn-secondary{% else %}btn-primary{% endif %} btn-sm mt-4 self-start">
+                {{ t.tr("settings.manage_security") }}
             </a>
         </div>
     </div>
 
-    <!-- Connected Devices -->
+    {# ── Sessions & credentials ──────────────────────────────────────── #}
     <div class="card">
-        <div class="card-body">
+        <div class="card-body flex h-full flex-col">
             <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.devices") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t.tr("settings.devices_desc") }}
+            <ul class="mt-3 flex-1 space-y-2 text-sm">
+                <li class="flex justify-between gap-3">
+                    <span class="text-gray-500 dark:text-gray-400">{{ t.tr("credential.browsers") }}</span>
+                    <span class="font-medium text-gray-900 dark:text-gray-100">{{ summary.browser_sessions }}</span>
+                </li>
+                <li class="flex justify-between gap-3">
+                    <span class="text-gray-500 dark:text-gray-400">{{ t.tr("credential.clients") }}</span>
+                    <span class="font-medium text-gray-900 dark:text-gray-100">{{ summary.client_devices }}</span>
+                </li>
+                <li class="flex justify-between gap-3">
+                    <span class="text-gray-500 dark:text-gray-400">{{ t.tr("credential.sync_tokens") }}</span>
+                    <span class="font-medium text-gray-900 dark:text-gray-100">{{ summary.sync_tokens }}</span>
+                </li>
+            </ul>
+            {% if !warning_lines.is_empty() %}
+            <p class="mt-3 text-xs text-amber-600 dark:text-amber-400">
+                {% for line in warning_lines %}
+                {% if !loop.first %} &middot; {% endif %}{{ line }}
+                {% endfor %}
             </p>
-            <a href="/settings/devices/"
-               class="mt-3 inline-block btn btn-primary">
+            {% endif %}
+            <a href="/settings/credentials/" class="btn {% if !warning_lines.is_empty() %}btn-primary{% else %}btn-secondary{% endif %} btn-sm mt-4 self-start">
                 {{ t.tr("settings.manage_devices") }}
             </a>
         </div>
     </div>
 
-    {% if is_admin %}
-    <!-- Invitations -->
+    {# ── Integrations ────────────────────────────────────────────────── #}
     <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.invitations") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t.tr("settings.invitations_desc") }}
-            </p>
-            <a href="/settings/invitations/"
-               class="mt-3 inline-block btn btn-primary">
-                {{ t.tr("settings.manage_invitations") }}
+        <div class="card-body flex h-full flex-col">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.group_integrations") }}</h2>
+            <dl class="mt-3 flex-1 space-y-2 text-sm">
+                <div class="flex justify-between gap-3">
+                    <dt class="text-gray-500 dark:text-gray-400">{{ t.tr("settings.api_keys") }}</dt>
+                    <dd class="font-medium text-gray-900 dark:text-gray-100">{{ summary.api_keys }}</dd>
+                </div>
+                {% if is_admin %}
+                <div class="flex justify-between gap-3">
+                    <dt class="text-gray-500 dark:text-gray-400">{{ t.tr("settings.invitations") }}</dt>
+                    <dd>
+                        <a href="/settings/invitations/" class="text-brand-500 dark:text-brand-400 hover:underline">
+                            {{ t.tr("settings.manage_invitations") }}
+                        </a>
+                    </dd>
+                </div>
+                {% endif %}
+            </dl>
+            <a href="/settings/api-keys/" class="btn btn-secondary btn-sm mt-4 self-start">
+                {{ t.tr("settings.manage_api_keys") }}
             </a>
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- Change Password -->
-    <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.change_password") }}</h2>
-            <form action="/settings/password/" method="POST" class="mt-4 space-y-4">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                <div>
-                    <label for="old_password" class="form-label">{{ t.tr("settings.current_password") }}</label>
-                    <input type="password" name="old_password" id="old_password" required
-                           class="mt-1 input">
-                </div>
-                <div>
-                    <label for="new_password" class="form-label">{{ t.tr("settings.new_password") }}</label>
-                    <input type="password" name="new_password" id="new_password" required
-                           class="mt-1 input">
-                </div>
-                <button type="submit"
-                        class="btn btn-primary">
-                    {{ t.tr("settings.change_password") }}
-                </button>
-            </form>
         </div>
     </div>
 </div>

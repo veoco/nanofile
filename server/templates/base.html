@@ -60,8 +60,8 @@
                 {{ icons::icon_clock("h-5 w-5") }}
                 <span>{{ t.tr("nav.activity") }}</span>
             </a>
-            <a href="/profile/"
-               class="flex flex-col items-center gap-0.5 text-xs {% if active_page == "settings" %}text-brand-500{% else %}text-gray-400 dark:text-gray-500{% endif %}">
+            <a href="/settings/"
+               class="flex flex-col items-center gap-0.5 text-xs {% if active_page == "settings" || active_page.starts_with("settings.") %}text-brand-500{% else %}text-gray-400 dark:text-gray-500{% endif %}">
                 {{ icons::icon_cog("h-5 w-5") }}
                 <span>{{ t.tr("nav.settings") }}</span>
             </a>

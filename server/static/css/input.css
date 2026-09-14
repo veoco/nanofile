@@ -231,6 +231,10 @@ html[data-view="gallery"] .js-view-gallery { color: var(--color-brand-500) !impo
   .nav-item          { @apply flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors; }
   .nav-item-active   { @apply bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 font-medium; }
   .nav-item-inactive { @apply text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-surface-700 hover:text-gray-900 dark:hover:text-gray-100; }
+
+  /* Settings navigation — a vertical list on wide screens and a scrollable
+     tab strip on narrow ones, so the same markup serves both. */
+  .settings-nav-item { @apply flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors whitespace-nowrap; }
 }
 
 

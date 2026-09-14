@@ -1,0 +1,63 @@
+{% extends "settings_shell.html" %}
+
+{% block title %}{{ t.tr("settings.security_title") }} | Nanofile{% endblock %}
+
+{% block settings_title %}{{ t.tr("settings.nav_security") }}{% endblock %}
+{% block settings_subtitle %}{{ t.tr("settings.security_desc") }}{% endblock %}
+
+{% block settings_content %}
+{% if let Some(flash) = flash %}
+<div role="alert"
+     class="mt-1 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 p-4">
+    <p class="text-sm font-semibold text-green-800 dark:text-green-300">{{ t.tr(flash) }}</p>
+    <p class="mt-1 text-xs text-green-700 dark:text-green-400">{{ t.tr("settings.password_changed_desc") }}</p>
+</div>
+{% endif %}
+
+{% if let Some(error) = error %}
+{% include "includes/alert_error.html" %}
+{% endif %}
+
+<div class="space-y-6">
+
+    {# ── Two-factor ──────────────────────────────────────────────────── #}
+    <div class="card">
+        <div class="card-body">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.two_factor") }}</h2>
+                {% if two_fa_enabled %}
+                <span class="badge badge-green">{{ t.tr("settings.status_enabled") }}</span>
+                {% else %}
+                <span class="badge badge-gray">{{ t.tr("settings.status_not_configured") }}</span>
+                {% endif %}
+            </div>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("settings.two_factor_desc") }}</p>
+            <a href="/settings/two-factor/" class="btn {% if two_fa_enabled %}btn-secondary{% else %}btn-primary{% endif %} btn-sm mt-4 self-start">
+                {{ t.tr("settings.manage_two_factor") }}
+            </a>
+        </div>
+    </div>
+
+    {# ── Password ────────────────────────────────────────────────────── #}
+    <div class="card">
+        <div class="card-body">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.change_password") }}</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("settings.change_password_desc") }}</p>
+            <form action="/settings/password/" method="POST" class="mt-4 space-y-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                <div>
+                    <label for="old_password" class="form-label">{{ t.tr("settings.current_password") }}</label>
+                    <input type="password" name="old_password" id="old_password" required autocomplete="current-password"
+                           class="mt-1 input">
+                </div>
+                <div>
+                    <label for="new_password" class="form-label">{{ t.tr("settings.new_password") }}</label>
+                    <input type="password" name="new_password" id="new_password" required autocomplete="new-password"
+                           class="mt-1 input">
+                </div>
+                <button type="submit" class="btn btn-primary">{{ t.tr("settings.change_password") }}</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
