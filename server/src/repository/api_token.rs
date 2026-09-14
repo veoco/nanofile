@@ -70,6 +70,25 @@ pub trait ApiTokenRepository: Send + Sync {
         keep_raw_token: &str,
     ) -> Result<(), AppError>;
 
+    /// Delete every *browser session* a user holds except one row id.
+    ///
+    /// The bulk "sign out my other sessions" action. Only browser-held tokens
+    /// go: a client application's session is a device the owner manages from
+    /// the device list, not something a web page quietly signs out.
+    ///
+    /// A row whose `source` this build does not recognise is treated as a
+    /// browser session, matching the inventory's safe default: showing (and
+    /// revoking) an unknown credential beats leaving it untouched. The filter
+    /// is therefore written as "everything that is not a known client", not as
+    /// an allow-list of the two browser sources.
+    ///
+    /// Returns how many rows were removed.
+    async fn delete_browser_sessions_except(
+        &self,
+        user_id: i32,
+        keep_id: Option<i32>,
+    ) -> Result<u64, AppError>;
+
     // ── Methods for UI layer refactoring ───────────────────────────────
     /// Create a session token and return the model.
     async fn create_session_token(
@@ -199,6 +218,25 @@ impl ApiTokenRepository for DbApiTokenRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(())
+    }
+
+    async fn delete_browser_sessions_except(
+        &self,
+        user_id: i32,
+        keep_id: Option<i32>,
+    ) -> Result<u64, AppError> {
+        let mut query = api_token::Entity::delete_many()
+            .filter(api_token::Column::UserId.eq(user_id))
+            .filter(api_token::Column::IsPending.eq(false))
+            .filter(
+                api_token::Column::Source
+                    .is_not_in([SessionSource::Client.id(), SessionSource::ClientSso.id()]),
+            );
+        if let Some(id) = keep_id {
+            query = query.filter(api_token::Column::Id.ne(id));
+        }
+        let result = query.exec(self.db.as_ref()).await?;
+        Ok(result.rows_affected)
     }
 
     async fn create_session_token(

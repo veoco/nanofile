@@ -330,6 +330,19 @@ impl ApiTokenRepository for CachingApiTokenRepository {
         result
     }
 
+    async fn delete_browser_sessions_except(
+        &self,
+        user_id: i32,
+        keep_id: Option<i32>,
+    ) -> Result<u64, AppError> {
+        let result = self
+            .inner
+            .delete_browser_sessions_except(user_id, keep_id)
+            .await;
+        self.cache.clear();
+        result
+    }
+
     async fn list_sessions(&self, user_id: i32) -> Result<Vec<api_token::Model>, AppError> {
         // Not cached: the cache holds per-credential lookups, not lists.
         self.inner.list_sessions(user_id).await
