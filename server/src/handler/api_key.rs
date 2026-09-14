@@ -196,7 +196,9 @@ pub async fn delete_api_key(
 /// GET /api2/api-keys/catalog/
 ///
 /// The capability catalog, the presets and the configured lifetime options, so
-/// a client can render the same picker the settings page does.
+/// a client can render the same picker the settings page does. Each capability
+/// carries `enforced_by`, the routes (or WebDAV/sync surfaces) that consult it,
+/// so a client can explain what a grant buys without hard-coding the table.
 pub async fn api_key_catalog(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -216,6 +218,7 @@ pub async fn api_key_catalog(
                 "id": entry.id,
                 "domain": entry.domain,
                 "write": entry.write,
+                "enforced_by": entry.enforced_by,
             }))
             .collect::<Vec<_>>(),
         "presets": presets

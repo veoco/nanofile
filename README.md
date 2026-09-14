@@ -26,12 +26,17 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   official mobile apps.
 - **API keys**: one credential type for external clients, managed under *Settings → API Keys*. A key
   carries a set of fine-grained capabilities (`file.read`, `share_link.write`, `sync.token`,
-  `webdav.write`, …; 45 in total, grouped by domain), is either bound to specific libraries — each
+  `webdav.write`, …; 43 in total, grouped by domain), is either bound to specific libraries — each
   with its own read/write ceiling — or to every library the owner can reach, and expires on a
-  configurable lifetime. Presets cover the common cases (sync client, WebDAV, CI upload, read-only).
-  Write capabilities imply their read counterpart; `admin.*` needs an admin; a key can never manage
-  keys. Each key records when it was last presented — on the REST and sync surfaces alike, throttled to at
-  most one write per minute — so an unused key is visible as one.
+  configurable lifetime. Presets cover the common cases (sync client, WebDAV, CI upload, read-only)
+  and stay inside the surface they name: a WebDAV key authenticates with `webdav.*` plus its library
+  binding and nothing else, so the WebDAV presets grant exactly that rather than also handing out the
+  REST API. Write capabilities imply their read counterpart; `admin.*` needs an admin; a key can never
+  manage keys. The catalog only lists capabilities something enforces — each entry names the routes
+  (or WebDAV/sync surface) that consult it, and ids retired for having no enforcement point are
+  dropped from stored keys instead of breaking them. Each key records when it was last presented — on
+  the REST and sync surfaces alike, throttled to at most one write per minute — so an unused key is
+  visible as one.
 - **Credential inventory**: *Settings → Sessions & Credentials* lists everything long-lived that can
   reach the account — client sessions, browser sessions (labelled from their `User-Agent`), repository
   sync tokens, and the devices that skip two-factor — and revokes any one of them. The page opens with

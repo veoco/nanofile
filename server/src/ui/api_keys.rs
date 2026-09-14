@@ -85,6 +85,9 @@ fn take_reveal(user_id: i32, key_id: i32) -> Option<NewKeyView> {
 pub struct CapabilityView {
     pub id: &'static str,
     pub write: bool,
+    /// The enforcement points that consult this capability, pre-joined for the
+    /// label's tooltip. Language-neutral (methods and paths), so no i18n key.
+    pub targets: String,
 }
 
 /// Capabilities grouped under a translated domain heading.
@@ -98,6 +101,9 @@ pub struct PresetView {
     pub id: &'static str,
     pub label: String,
     pub capabilities: Vec<&'static str>,
+    /// How many capabilities the preset expands to, shown next to the label so
+    /// an over-broad preset is visible before it is applied.
+    pub count: usize,
 }
 
 /// A selectable lifetime preset value.
@@ -199,6 +205,7 @@ async fn render(
             .map(|entry| CapabilityView {
                 id: entry.id,
                 write: entry.write,
+                targets: entry.enforced_by.join(", "),
             })
             .collect();
         if !capabilities.is_empty() {
@@ -260,6 +267,7 @@ async fn render(
             .map(|preset| PresetView {
                 id: preset.id,
                 label: t.tr(&format!("apikey.preset.{}", preset.id)).to_string(),
+                count: preset.capabilities.len(),
                 capabilities: preset.capabilities,
             })
             .collect(),
