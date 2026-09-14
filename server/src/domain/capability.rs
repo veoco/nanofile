@@ -38,8 +38,6 @@ pub enum Capability {
     AccountWrite,
     DeviceRead,
     DeviceWrite,
-    InvitationRead,
-    InvitationWrite,
     LibraryRead,
     LibraryCreate,
     LibraryUpdate,
@@ -52,7 +50,6 @@ pub enum Capability {
     TrashWrite,
     HistoryRead,
     HistoryWrite,
-    HistoryManage,
     ShareLinkRead,
     ShareLinkWrite,
     UploadLinkRead,
@@ -69,6 +66,7 @@ pub enum Capability {
     ActivityRead,
     SearchRead,
     SearchReindex,
+    SearchWrite,
     SyncRead,
     SyncWrite,
     SyncToken,
@@ -143,13 +141,16 @@ impl CapabilityDomain {
 
 impl Capability {
     /// Every capability, in discriminant order.
-    pub const ALL: [Capability; 45] = [
+    ///
+    /// Only capabilities with an enforcement point appear here: the catalog is
+    /// what the management UI and `/api2/api-keys/catalog/` offer, and offering
+    /// a grant nothing consults would be a lie. Ids that were removed for that
+    /// reason are listed in [`RETIRED_IDS`].
+    pub const ALL: [Capability; 43] = [
         Capability::AccountRead,
         Capability::AccountWrite,
         Capability::DeviceRead,
         Capability::DeviceWrite,
-        Capability::InvitationRead,
-        Capability::InvitationWrite,
         Capability::LibraryRead,
         Capability::LibraryCreate,
         Capability::LibraryUpdate,
@@ -162,7 +163,6 @@ impl Capability {
         Capability::TrashWrite,
         Capability::HistoryRead,
         Capability::HistoryWrite,
-        Capability::HistoryManage,
         Capability::ShareLinkRead,
         Capability::ShareLinkWrite,
         Capability::UploadLinkRead,
@@ -179,6 +179,7 @@ impl Capability {
         Capability::ActivityRead,
         Capability::SearchRead,
         Capability::SearchReindex,
+        Capability::SearchWrite,
         Capability::SyncRead,
         Capability::SyncWrite,
         Capability::SyncToken,
@@ -198,8 +199,6 @@ impl Capability {
             Capability::AccountWrite => "account.write",
             Capability::DeviceRead => "device.read",
             Capability::DeviceWrite => "device.write",
-            Capability::InvitationRead => "invitation.read",
-            Capability::InvitationWrite => "invitation.write",
             Capability::LibraryRead => "library.read",
             Capability::LibraryCreate => "library.create",
             Capability::LibraryUpdate => "library.update",
@@ -212,7 +211,6 @@ impl Capability {
             Capability::TrashWrite => "trash.write",
             Capability::HistoryRead => "history.read",
             Capability::HistoryWrite => "history.write",
-            Capability::HistoryManage => "history.manage",
             Capability::ShareLinkRead => "share_link.read",
             Capability::ShareLinkWrite => "share_link.write",
             Capability::UploadLinkRead => "upload_link.read",
@@ -229,6 +227,7 @@ impl Capability {
             Capability::ActivityRead => "activity.read",
             Capability::SearchRead => "search.read",
             Capability::SearchReindex => "search.reindex",
+            Capability::SearchWrite => "search.write",
             Capability::SyncRead => "sync.read",
             Capability::SyncWrite => "sync.write",
             Capability::SyncToken => "sync.token",
@@ -247,6 +246,11 @@ impl Capability {
         Capability::ALL.iter().copied().find(|c| c.id() == id)
     }
 
+    /// Whether `id` names a capability this build retired.
+    pub fn is_retired(id: &str) -> bool {
+        RETIRED_IDS.contains(&id)
+    }
+
     /// Index into [`CapabilitySet`]'s bit set.
     const fn bit(self) -> u128 {
         1u128 << (self as u32)
@@ -256,9 +260,6 @@ impl Capability {
         match self {
             Capability::AccountRead | Capability::AccountWrite => CapabilityDomain::Account,
             Capability::DeviceRead | Capability::DeviceWrite => CapabilityDomain::Device,
-            Capability::InvitationRead | Capability::InvitationWrite => {
-                CapabilityDomain::Invitation
-            }
             Capability::LibraryRead
             | Capability::LibraryCreate
             | Capability::LibraryUpdate
@@ -268,9 +269,7 @@ impl Capability {
                 CapabilityDomain::File
             }
             Capability::TrashRead | Capability::TrashWrite => CapabilityDomain::Trash,
-            Capability::HistoryRead | Capability::HistoryWrite | Capability::HistoryManage => {
-                CapabilityDomain::History
-            }
+            Capability::HistoryRead | Capability::HistoryWrite => CapabilityDomain::History,
             Capability::ShareLinkRead
             | Capability::ShareLinkWrite
             | Capability::UploadLinkRead
@@ -286,7 +285,8 @@ impl Capability {
             | Capability::StarWrite
             | Capability::ActivityRead
             | Capability::SearchRead
-            | Capability::SearchReindex => CapabilityDomain::Discovery,
+            | Capability::SearchReindex
+            | Capability::SearchWrite => CapabilityDomain::Discovery,
             Capability::SyncRead | Capability::SyncWrite | Capability::SyncToken => {
                 CapabilityDomain::Sync
             }
@@ -306,7 +306,6 @@ impl Capability {
             self,
             Capability::AccountRead
                 | Capability::DeviceRead
-                | Capability::InvitationRead
                 | Capability::LibraryRead
                 | Capability::FileRead
                 | Capability::TrashRead
@@ -338,6 +337,26 @@ impl Capability {
     }
 }
 
+/// Identifiers that used to be grantable and are not any more.
+///
+/// A capability is only offered while something actually enforces it. These
+/// three never had an enforcement point:
+///
+/// * `invitation.read` / `invitation.write` — invitations are a Web-UI,
+///   session-only, admin feature; there is no invitation route in [`ROUTES`]
+///   (the [`CapabilityDomain::Invitation`] grouping stays for the day there is).
+/// * `history.manage` — history has exactly two powers, reading a version's
+///   history (`history.read`) and restoring one (`history.write`); nothing else
+///   consults it.
+///
+/// A stored list may still name them, because a key minted from the `full` or
+/// `readonly_all` preset before this build carries them. Such ids are *dropped*
+/// on parse (see [`CapabilitySet::parse_stored`]) — dropping a grant nothing
+/// consults cannot make a key more permissive than the database says, which is
+/// the property the strict parse otherwise protects. Client input stays strict:
+/// [`CapabilitySet::parse`] rejects a retired id rather than accepting a no-op.
+pub const RETIRED_IDS: &[&str] = &["invitation.read", "invitation.write", "history.manage"];
+
 /// Capabilities implied by another capability.
 ///
 /// The closure is applied on parse, so a stored list never needs to contain the
@@ -346,7 +365,6 @@ impl Capability {
 const IMPLICATIONS: &[(Capability, &[Capability])] = &[
     (Capability::AccountWrite, &[Capability::AccountRead]),
     (Capability::DeviceWrite, &[Capability::DeviceRead]),
-    (Capability::InvitationWrite, &[Capability::InvitationRead]),
     (Capability::LibraryCreate, &[Capability::LibraryRead]),
     (Capability::LibraryUpdate, &[Capability::LibraryRead]),
     (Capability::LibraryDelete, &[Capability::LibraryRead]),
@@ -359,7 +377,6 @@ const IMPLICATIONS: &[(Capability, &[Capability])] = &[
     ),
     (Capability::HistoryRead, &[Capability::FileRead]),
     (Capability::HistoryWrite, &[Capability::HistoryRead]),
-    (Capability::HistoryManage, &[Capability::HistoryRead]),
     (Capability::ShareLinkWrite, &[Capability::ShareLinkRead]),
     (Capability::UploadLinkWrite, &[Capability::UploadLinkRead]),
     (Capability::MemberRead, &[Capability::LibraryRead]),
@@ -370,6 +387,7 @@ const IMPLICATIONS: &[(Capability, &[Capability])] = &[
     (Capability::TagWrite, &[Capability::TagRead]),
     (Capability::StarWrite, &[Capability::StarRead]),
     (Capability::SearchReindex, &[Capability::SearchRead]),
+    (Capability::SearchWrite, &[Capability::SearchRead]),
     (Capability::SyncWrite, &[Capability::SyncRead]),
     (Capability::SyncToken, &[Capability::SyncWrite]),
     (Capability::WebdavWrite, &[Capability::WebdavRead]),
@@ -387,7 +405,7 @@ fn implied_by(capability: Capability) -> &'static [Capability] {
 
 /// A set of capabilities, stored in memory as a bit set.
 ///
-/// `u128` comfortably covers the catalog (45 today); adding a 129th capability
+/// `u128` comfortably covers the catalog (43 today); adding a 129th capability
 /// would be a compile-time error at [`Capability::bit`], which is the intended
 /// prompt to widen the type together with the persisted format.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -439,7 +457,9 @@ impl CapabilitySet {
     /// Parse a persisted identifier list and expand the implication closure.
     ///
     /// An unknown id is an error rather than a silent drop: a typo must not
-    /// produce a key that quietly lacks the access its creator intended.
+    /// produce a key that quietly lacks the access its creator intended. This is
+    /// the path for *client input*; stored lists go through
+    /// [`CapabilitySet::parse_stored`], which additionally tolerates retirement.
     pub fn parse(ids: &[String]) -> Result<CapabilitySet, UnknownCapability> {
         let mut set = CapabilitySet::EMPTY;
         for id in ids {
@@ -449,6 +469,22 @@ impl CapabilitySet {
         }
         set.expand();
         Ok(set)
+    }
+
+    /// Parse an identifier list that came out of the database.
+    ///
+    /// Retired ids ([`RETIRED_IDS`]) are dropped instead of rejected, so a key
+    /// minted before a capability was retired keeps working with everything this
+    /// build can still enforce. Dropping a grant that nothing consults can never
+    /// make a key more permissive than its row, which is what the strict parse
+    /// protects; an id that is neither live nor retired is still an error.
+    pub fn parse_stored(ids: &[String]) -> Result<CapabilitySet, UnknownCapability> {
+        let live: Vec<String> = ids
+            .iter()
+            .filter(|id| !Capability::is_retired(id))
+            .cloned()
+            .collect();
+        CapabilitySet::parse(&live)
     }
 
     /// Expand every capability to its full implication closure.
@@ -482,7 +518,7 @@ impl CapabilitySet {
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .collect();
-        CapabilitySet::parse(&ids)
+        CapabilitySet::parse_stored(&ids)
     }
 
     /// Render the canonical on-disk form.
@@ -1231,7 +1267,7 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
     (
         "POST",
         "/api2/index-file-text/",
-        RouteAccess::Capability(Capability::SearchReindex),
+        RouteAccess::Capability(Capability::SearchWrite),
     ),
     // ── Sync token issuance ──────────────────────────────────────────────
     // The minted sync token is a full read/write library credential, so
@@ -1312,6 +1348,36 @@ pub fn required_access(method: &Method, path: &str) -> Option<RouteAccess> {
         .filter(|(m, pattern, _)| *m == method && pattern_matches(pattern, path))
         .max_by_key(|(_, pattern, _)| specificity(pattern))
         .map(|(_, _, access)| *access)
+}
+
+/// Human-readable list of the enforcement points that consult `capability`.
+///
+/// This is the catalog's own documentation: the management UI renders it as a
+/// tooltip and `/api2/api-keys/catalog/` returns it, so "what does granting this
+/// actually buy?" is answered by the route table instead of by a comment that can
+/// drift. Entries are method + path literals (language-neutral, so they need no
+/// translation). Every capability in [`Capability::ALL`] has at least one entry —
+/// enforced by `every_catalog_capability_has_an_enforcement_point`.
+pub fn enforced_by(capability: Capability) -> Vec<String> {
+    // Two surfaces are authenticated on their own and never reach the route
+    // table: WebDAV's Basic-auth extractor and the sync protocol's `/seafhttp`
+    // guard. Both read-only method sets are named explicitly.
+    match capability {
+        Capability::WebdavRead => {
+            return vec!["GET|HEAD|PROPFIND|REPORT /dav/{repo_id}/…".to_string()];
+        }
+        Capability::WebdavWrite => {
+            return vec!["PUT|POST|DELETE|MKCOL|COPY|MOVE /dav/{repo_id}/…".to_string()];
+        }
+        Capability::SyncRead => return vec!["GET /seafhttp/…".to_string()],
+        Capability::SyncWrite => return vec!["POST|PUT /seafhttp/…".to_string()],
+        _ => {}
+    }
+    ROUTES
+        .iter()
+        .filter(|(_, _, access)| matches!(access, RouteAccess::Capability(c) if *c == capability))
+        .map(|(method, pattern, _)| format!("{method} {pattern}"))
+        .collect()
 }
 
 fn is_classified_prefix(path: &str) -> bool {
@@ -1402,6 +1468,13 @@ pub struct Preset {
 
 /// Presets are convenience only; they expand to ordinary capability sets, and
 /// the user can edit any of them before saving.
+///
+/// A preset stays within its own surface. `webdav_*` is the sharpest case: the
+/// `/dav/...` guard consults only `webdav.*` plus the key's library binding
+/// (`webdav_requires_write`), so a preset that also carried `file.*` or
+/// `library.read` would silently hand a WebDAV key the REST API of the bound
+/// libraries — including `file.delete`. Rebuilding a key as a REST client is a
+/// deliberate extra tick, not part of "mount this library".
 pub const PRESETS: &[Preset] = &[
     Preset {
         id: "sync_client_rw",
@@ -1443,24 +1516,11 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "webdav_rw",
-        capabilities: &[
-            Capability::LibraryRead,
-            Capability::FileRead,
-            Capability::FileWrite,
-            Capability::FileDelete,
-            Capability::MetadataRead,
-            Capability::WebdavRead,
-            Capability::WebdavWrite,
-        ],
+        capabilities: &[Capability::WebdavRead, Capability::WebdavWrite],
     },
     Preset {
         id: "webdav_ro",
-        capabilities: &[
-            Capability::LibraryRead,
-            Capability::FileRead,
-            Capability::MetadataRead,
-            Capability::WebdavRead,
-        ],
+        capabilities: &[Capability::WebdavRead],
     },
     Preset {
         id: "ci_upload",
@@ -1470,8 +1530,6 @@ pub const PRESETS: &[Preset] = &[
             Capability::FileWrite,
             Capability::UploadLinkRead,
             Capability::UploadLinkWrite,
-            Capability::SyncRead,
-            Capability::SyncToken,
         ],
     },
     Preset {
@@ -1479,7 +1537,6 @@ pub const PRESETS: &[Preset] = &[
         capabilities: &[
             Capability::AccountRead,
             Capability::DeviceRead,
-            Capability::InvitationRead,
             Capability::LibraryRead,
             Capability::FileRead,
             Capability::TrashRead,
@@ -1505,8 +1562,6 @@ pub const PRESETS: &[Preset] = &[
             Capability::AccountWrite,
             Capability::DeviceRead,
             Capability::DeviceWrite,
-            Capability::InvitationRead,
-            Capability::InvitationWrite,
             Capability::LibraryRead,
             Capability::LibraryCreate,
             Capability::LibraryUpdate,
@@ -1519,7 +1574,6 @@ pub const PRESETS: &[Preset] = &[
             Capability::TrashWrite,
             Capability::HistoryRead,
             Capability::HistoryWrite,
-            Capability::HistoryManage,
             Capability::ShareLinkRead,
             Capability::ShareLinkWrite,
             Capability::UploadLinkRead,
@@ -1536,6 +1590,7 @@ pub const PRESETS: &[Preset] = &[
             Capability::ActivityRead,
             Capability::SearchRead,
             Capability::SearchReindex,
+            Capability::SearchWrite,
             Capability::SyncRead,
             Capability::SyncWrite,
             Capability::SyncToken,
@@ -1555,9 +1610,28 @@ mod tests {
         CapabilitySet::parse(&owned).expect("known capabilities")
     }
 
+    /// A preset expanded the way the service expands it for the picker.
+    fn preset_set(id: &str) -> CapabilitySet {
+        let preset = PRESETS.iter().find(|p| p.id == id).expect("preset");
+        let mut set = CapabilitySet::EMPTY;
+        for capability in preset.capabilities {
+            set.insert(*capability);
+        }
+        set.expand();
+        set
+    }
+
+    fn catalog_set() -> CapabilitySet {
+        let mut set = CapabilitySet::EMPTY;
+        for capability in Capability::ALL {
+            set.insert(capability);
+        }
+        set
+    }
+
     #[test]
     fn catalog_ids_are_unique_and_round_trip() {
-        assert_eq!(Capability::ALL.len(), 45);
+        assert_eq!(Capability::ALL.len(), 43);
         let mut ids: Vec<&str> = Capability::ALL.iter().map(|c| c.id()).collect();
         ids.sort_unstable();
         ids.dedup();
@@ -1566,6 +1640,17 @@ mod tests {
             assert_eq!(Capability::from_id(capability.id()), Some(capability));
         }
         assert_eq!(Capability::from_id("file.upload"), None);
+        // A retired id is not in the catalog any more, but is still recognised
+        // as retired rather than as a typo.
+        for id in RETIRED_IDS {
+            assert_eq!(
+                Capability::from_id(id),
+                None,
+                "{id} must be out of the catalog"
+            );
+            assert!(Capability::is_retired(id));
+        }
+        assert!(!Capability::is_retired("file.upload"));
     }
 
     #[test]
@@ -1584,6 +1669,10 @@ mod tests {
         assert!(Capability::SyncToken.is_write());
         assert!(Capability::WebdavWrite.is_write());
         assert!(!Capability::WebdavRead.is_write());
+        // Writing index text is a write; rebuilding an index is a different one.
+        assert!(Capability::SearchWrite.is_write());
+        assert!(Capability::SearchReindex.is_write());
+        assert!(!Capability::SearchRead.is_write());
     }
 
     #[test]
@@ -1602,6 +1691,37 @@ mod tests {
         let parsed = set(&["sync.token"]);
         assert!(parsed.contains(Capability::SyncWrite));
         assert!(parsed.contains(Capability::SyncRead));
+    }
+
+    #[test]
+    fn search_write_implies_search_read_but_not_reindex() {
+        let parsed = set(&["search.write"]);
+        assert!(parsed.contains(Capability::SearchWrite));
+        assert!(parsed.contains(Capability::SearchRead));
+        assert!(!parsed.contains(Capability::SearchReindex));
+
+        // Rebuilding an index is not the same power as writing its text, so the
+        // implication does not run the other way either.
+        let parsed = set(&["search.reindex"]);
+        assert!(parsed.contains(Capability::SearchRead));
+        assert!(!parsed.contains(Capability::SearchWrite));
+    }
+
+    #[test]
+    fn manual_index_writes_need_search_write() {
+        assert_eq!(
+            required_access(&Method::POST, "/api2/index-file-text/"),
+            Some(RouteAccess::Capability(Capability::SearchWrite))
+        );
+        // A whole-repository rebuild (and its progress) stays on reindex.
+        assert_eq!(
+            required_access(&Method::POST, "/api2/reindex/"),
+            Some(RouteAccess::Capability(Capability::SearchReindex))
+        );
+        assert_eq!(
+            required_access(&Method::GET, "/api2/reindex-progress/"),
+            Some(RouteAccess::Capability(Capability::SearchReindex))
+        );
     }
 
     #[test]
@@ -1624,6 +1744,152 @@ mod tests {
         let err = CapabilitySet::parse(&["file.rede".to_string()]).unwrap_err();
         assert_eq!(err.0, "file.rede");
         assert_eq!(err.to_string(), "unknown capability: file.rede");
+    }
+
+    #[test]
+    fn retired_ids_are_dropped_from_stored_lists_but_rejected_as_input() {
+        // A key minted by an older build carries these; it keeps working, with
+        // exactly the capabilities this build can still enforce.
+        let parsed = CapabilitySet::from_canonical("invitation.read,file.read,history.manage")
+            .expect("stored lists tolerate retirement");
+        assert_eq!(parsed, set(&["file.read"]));
+        assert_eq!(parsed.to_canonical(), "file.read");
+
+        // Client input stays strict: a grant that does nothing must be refused,
+        // not silently accepted.
+        for id in RETIRED_IDS {
+            assert!(
+                CapabilitySet::parse(&[(*id).to_string()]).is_err(),
+                "{id} must not be accepted from a client"
+            );
+        }
+    }
+
+    #[test]
+    fn every_catalog_capability_has_an_enforcement_point() {
+        for capability in Capability::ALL {
+            // `key.*` is reserved to sessions and never granted (the management
+            // routes are `SessionOnly`), so it is not part of the picker's
+            // promise.
+            if capability.is_reserved_to_sessions() {
+                continue;
+            }
+            assert!(
+                !enforced_by(capability).is_empty(),
+                "{} is offered by the catalog but no surface enforces it",
+                capability.id()
+            );
+        }
+        // The four surfaces that are not in the route table are still named.
+        assert_eq!(
+            enforced_by(Capability::WebdavRead),
+            vec!["GET|HEAD|PROPFIND|REPORT /dav/{repo_id}/…".to_string()]
+        );
+        assert_eq!(
+            enforced_by(Capability::SyncRead),
+            vec!["GET /seafhttp/…".to_string()]
+        );
+    }
+
+    #[test]
+    fn route_table_only_names_live_capabilities() {
+        for (method, pattern, access) in ROUTES {
+            if let RouteAccess::Capability(capability) = access {
+                assert!(
+                    Capability::ALL.contains(capability),
+                    "{method} {pattern} requires {}, which is not in the catalog",
+                    capability.id()
+                );
+            }
+        }
+        // Every live capability is enforced either by the route table or by one
+        // of the four non-table surfaces named in `enforced_by`. `key.*` is the
+        // deliberate exception: it is reserved to sessions and never granted.
+        let non_table = [
+            Capability::SyncRead,
+            Capability::SyncWrite,
+            Capability::WebdavRead,
+            Capability::WebdavWrite,
+        ];
+        for capability in Capability::ALL {
+            if capability.is_reserved_to_sessions() {
+                continue;
+            }
+            let in_table = ROUTES.iter().any(
+                |(_, _, access)| matches!(access, RouteAccess::Capability(c) if *c == capability),
+            );
+            assert!(
+                in_table || non_table.contains(&capability),
+                "{} is in the catalog but nowhere in the route table",
+                capability.id()
+            );
+        }
+    }
+
+    #[test]
+    fn webdav_presets_grant_exactly_the_webdav_surface() {
+        let mut ro = CapabilitySet::EMPTY;
+        let mut rw = CapabilitySet::EMPTY;
+        let mut all = CapabilitySet::EMPTY;
+        for capability in Capability::ALL {
+            if capability.domain() == CapabilityDomain::Webdav {
+                all.insert(capability);
+                if !capability.is_write() {
+                    ro.insert(capability);
+                }
+                rw.insert(capability);
+            }
+        }
+        // A WebDAV key authenticates with `webdav.*` and its library binding
+        // alone; anything else in these presets would hand it the REST API too.
+        assert_eq!(preset_set("webdav_ro"), ro);
+        assert_eq!(preset_set("webdav_rw"), rw);
+        assert_eq!(all, set(&["webdav.read", "webdav.write"]));
+        assert!(
+            catalog_set().contains_all(&preset_set("webdav_rw")),
+            "a preset may only name capabilities the catalog offers"
+        );
+    }
+
+    #[test]
+    fn ci_upload_cannot_mint_a_repository_credential() {
+        let ci = preset_set("ci_upload");
+        assert!(ci.contains(Capability::FileWrite));
+        assert!(ci.contains(Capability::UploadLinkWrite));
+        // `sync.token` mints a full read/write credential for the bound
+        // libraries (see the comment on `/api2/repo-tokens/`), which an upload
+        // preset must not hand out.
+        assert!(!ci.contains(Capability::SyncToken));
+        assert!(!ci.contains(Capability::SyncRead));
+        assert!(!ci.contains(Capability::SyncWrite));
+    }
+
+    #[test]
+    fn blanket_presets_follow_the_catalog() {
+        let mut full = CapabilitySet::EMPTY;
+        let mut read_only = CapabilitySet::EMPTY;
+        for capability in Capability::ALL {
+            let admin = matches!(
+                capability,
+                Capability::AdminUserRead | Capability::AdminUserWrite
+            );
+            // No preset may grant `admin.*` or the session-reserved `key.*`.
+            if admin || capability.is_reserved_to_sessions() {
+                continue;
+            }
+            full.insert(capability);
+            if !capability.is_write() {
+                read_only.insert(capability);
+            }
+        }
+        full.expand();
+        read_only.expand();
+        assert_eq!(preset_set("full"), full, "full must track the catalog");
+        assert_eq!(
+            preset_set("readonly_all"),
+            read_only,
+            "readonly_all must track every read capability"
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ use base::error::AppError;
 use infra::config::AuthConfig;
 use infra::entity::api_key;
 
-use crate::domain::capability::{Capability, CapabilitySet, PRESETS, Preset};
+use crate::domain::capability::{Capability, CapabilitySet, PRESETS, Preset, enforced_by};
 use crate::repository::Repositories;
 use crate::repository::api_key::{ApiKeyBinding, CreateApiKeyParams, UpdateApiKeyParams};
 use crate::service::auth::token::generate_api_token;
@@ -73,6 +73,9 @@ pub struct CatalogEntry {
     pub id: &'static str,
     pub domain: &'static str,
     pub write: bool,
+    /// The routes (or WebDAV/sync surfaces) that consult this capability, so a
+    /// picker can say what a grant actually buys.
+    pub enforced_by: Vec<String>,
 }
 
 /// A named starting point offered by the UI.
@@ -262,6 +265,7 @@ pub fn catalog(is_admin: bool) -> (Vec<CatalogEntry>, Vec<CatalogPreset>) {
             id: capability.id(),
             domain: capability.domain().id(),
             write: capability.is_write(),
+            enforced_by: enforced_by(*capability),
         })
         .collect();
     let presets = PRESETS
@@ -454,12 +458,14 @@ fn resolve_expiry(config: &AuthConfig, expiry: KeyExpiry) -> Result<Option<i64>,
 fn view_of(key: api_key::Model, repos: Vec<(String, String)>) -> ApiKeyView {
     // The stored list is already canonical; splitting it back is lenient on
     // purpose, so a row carrying an id this build does not know still lists
-    // instead of failing the whole page.
+    // instead of failing the whole page. Retired ids are the exception: they can
+    // no longer be granted, so showing them would advertise a power the key does
+    // not have any more.
     let capabilities = key
         .capabilities
         .split(',')
         .map(str::trim)
-        .filter(|id| !id.is_empty())
+        .filter(|id| !id.is_empty() && !Capability::is_retired(id))
         .map(str::to_string)
         .collect();
     ApiKeyView {
@@ -538,20 +544,38 @@ mod tests {
             !entries.iter().any(|entry| entry.id.starts_with("admin.")),
             "admin capabilities are hidden from non-admins"
         );
+        // The catalog only offers what something enforces, and never a retired id.
+        assert!(
+            entries.iter().all(|entry| !entry.enforced_by.is_empty()),
+            "a capability with no enforcement point must not be offered"
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|entry| !Capability::is_retired(entry.id)),
+            "retired capabilities must not be offered"
+        );
+        assert!(entries.iter().any(|entry| entry.id == "search.write"));
         let (admin_entries, _) = catalog(true);
         assert!(
             admin_entries
                 .iter()
                 .any(|entry| entry.id == "admin.user.read")
         );
-        assert!(presets.iter().any(|preset| preset.id == "webdav_ro"));
-        // Presets are expanded, so a client can post them back verbatim.
+        // Presets are expanded, so a client can post them back verbatim. The
+        // WebDAV ones stay inside the WebDAV surface: `/dav/...` consults
+        // `webdav.*` plus the library binding and nothing else, so carrying
+        // `file.delete` would hand a mount-only key the REST API.
         let webdav_ro = presets
             .iter()
             .find(|preset| preset.id == "webdav_ro")
             .expect("preset");
-        assert!(webdav_ro.capabilities.contains(&"library.read"));
-        assert!(webdav_ro.capabilities.contains(&"webdav.read"));
+        assert_eq!(webdav_ro.capabilities, vec!["webdav.read"]);
+        let webdav_rw = presets
+            .iter()
+            .find(|preset| preset.id == "webdav_rw")
+            .expect("preset");
+        assert_eq!(webdav_rw.capabilities, vec!["webdav.read", "webdav.write"]);
     }
 
     #[test]

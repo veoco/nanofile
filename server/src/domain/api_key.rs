@@ -60,7 +60,9 @@ impl KeyAuthority {
     /// A stored capability id that is no longer in the catalog is an internal
     /// error rather than a silently dropped grant: a key must never end up
     /// *more* permissive than what the database says, and an unreadable grant is
-    /// a data bug worth surfacing.
+    /// a data bug worth surfacing. Retired ids are the one exception — see
+    /// [`CapabilitySet::parse_stored`]: they name grants nothing ever enforced,
+    /// so dropping them keeps an older key working without widening it.
     pub fn from_lookup(lookup: &ApiKeyLookup) -> Result<Self, AppError> {
         let ids: Vec<String> = lookup
             .key
@@ -70,7 +72,7 @@ impl KeyAuthority {
             .filter(|id| !id.is_empty())
             .map(str::to_string)
             .collect();
-        let capabilities = CapabilitySet::parse(&ids).map_err(|error| {
+        let capabilities = CapabilitySet::parse_stored(&ids).map_err(|error| {
             AppError::Internal(format!("api key {} has {error}", lookup.key.id))
         })?;
         let mut repos = HashMap::with_capacity(lookup.bindings.len());
@@ -197,6 +199,21 @@ mod tests {
             KeyAuthority::from_lookup(&lookup("file.rede", false, &[("a", "rw")])).is_err(),
             "an unreadable grant must not be ignored"
         );
+    }
+
+    #[test]
+    fn retired_stored_capabilities_are_dropped_not_rejected() {
+        // A key minted from the `full` preset by an older build names grants no
+        // build ever enforced. Dropping them keeps the key usable; it cannot make
+        // the key more permissive, because nothing consults them.
+        let authority = KeyAuthority::from_lookup(&lookup(
+            "file.read,invitation.write,history.manage",
+            false,
+            &[("a", "rw")],
+        ))
+        .expect("retired ids must not break the key");
+        assert!(authority.has(Capability::FileRead));
+        assert_eq!(authority.capabilities.len(), 1, "only the live id survives");
     }
 
     #[test]
