@@ -32,7 +32,7 @@ async fn login_client(fixture: &TestFixture) -> reqwest::Client {
 
 async fn page(client: &reqwest::Client, base_url: &str) -> String {
     client
-        .get(format!("{base_url}/settings/devices/"))
+        .get(format!("{base_url}/settings/credentials/"))
         .send()
         .await
         .unwrap()
@@ -105,9 +105,13 @@ async fn every_kind_of_credential_is_listed() {
     // Read each section on its own: "test-repo" also names a library in the
     // left panel, so a whole-page search would prove nothing about the sync
     // token list.
-    let clients = section(&body, "Client sessions", "Browser sessions");
-    let browsers = section(&body, "Browser sessions", "Sync tokens");
-    let tokens = section(&body, "Sync tokens", "Devices that skip two-factor");
+    let clients = section(&body, "Desktop and mobile apps", "Browser sessions");
+    let browsers = section(&body, "Browser sessions", "Repository sync tokens");
+    let tokens = section(
+        &body,
+        "Repository sync tokens",
+        "Devices that skip two-factor",
+    );
 
     assert!(
         clients.contains("Test Device"),
@@ -153,7 +157,9 @@ async fn a_client_without_device_details_is_still_listed() {
     let body = visible(&page(&client, &f.server.base_url).await);
 
     // It shows up in the client section, unnamed, rather than nowhere.
-    let clients_at = body.find("Client sessions").expect("the client heading");
+    let clients_at = body
+        .find("Desktop and mobile apps")
+        .expect("the client heading");
     let browsers_at = body.find("Browser sessions").expect("the browser heading");
     assert!(clients_at < browsers_at, "sections are ordered");
 
@@ -172,7 +178,10 @@ async fn a_sync_token_can_be_revoked_by_id() {
 
     let id = hidden_value(&body, "sync_token", "id").expect("a sync-token revoke form");
     let resp = client
-        .post(format!("{}/settings/devices/revoke/", f.server.base_url))
+        .post(format!(
+            "{}/settings/credentials/revoke/",
+            f.server.base_url
+        ))
         .form(&[
             ("csrf_token", csrf_token(&body)),
             ("kind", "sync_token".to_string()),
@@ -212,7 +221,10 @@ async fn revoking_the_current_session_returns_to_the_login_page() {
 
     let id = hidden_value(&body, "browser_session", "id").expect("a browser-session revoke form");
     let resp = client
-        .post(format!("{}/settings/devices/revoke/", f.server.base_url))
+        .post(format!(
+            "{}/settings/credentials/revoke/",
+            f.server.base_url
+        ))
         .form(&[
             ("csrf_token", csrf_token(&body)),
             ("kind", "browser_session".to_string()),
@@ -282,7 +294,10 @@ async fn another_accounts_credential_cannot_be_revoked() {
     let client = login_client(&f).await;
     let body = page(&client, &f.server.base_url).await;
     let resp = client
-        .post(format!("{}/settings/devices/revoke/", f.server.base_url))
+        .post(format!(
+            "{}/settings/credentials/revoke/",
+            f.server.base_url
+        ))
         .form(&[
             ("csrf_token", csrf_token(&body)),
             ("kind", "sync_token".to_string()),
@@ -319,7 +334,10 @@ async fn revocation_requires_the_csrf_token() {
     let id = hidden_value(&body, "sync_token", "id").expect("a sync-token revoke form");
 
     let resp = client
-        .post(format!("{}/settings/devices/revoke/", f.server.base_url))
+        .post(format!(
+            "{}/settings/credentials/revoke/",
+            f.server.base_url
+        ))
         .form(&[("kind", "sync_token".to_string()), ("id", id)])
         .send()
         .await

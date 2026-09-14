@@ -59,6 +59,107 @@ async fn raw_session(
         .id
 }
 
+/// A browser session for `user_id`, inserted with an explicit `source` so the
+/// bulk sign-out can be tested against rows that are not the acting login.
+async fn raw_browser_session(f: &TestFixture, user_id: i32, source: &str) -> i32 {
+    let raw = server::service::auth::token::generate_api_token();
+    let model = infra::entity::api_token::ActiveModel {
+        id: sea_orm::NotSet,
+        user_id: Set(user_id),
+        token: Set(server::service::auth::token::hash_token(&raw)),
+        created_at: Set(1_000),
+        expires_at: Set(None),
+        device_id: Set(None),
+        platform: Set(None),
+        device_name: Set(None),
+        client_version: Set(None),
+        is_pending: Set(false),
+        source: Set(source.to_string()),
+        user_agent: Set(Some("NanofileTestBrowser/1.0".to_string())),
+    };
+    model
+        .insert(f.server.db.as_ref())
+        .await
+        .expect("insert browser session")
+        .id
+}
+
+/// Bulk sign-out deletes the account's *other browser sessions* and nothing
+/// else: the acting session, client devices, and every other account's rows
+/// all have to survive.
+#[tokio::test]
+async fn bulk_sign_out_spares_the_acting_session_and_clients() {
+    let f = TestFixture::new().await;
+    let other_user = create_test_user(f.server.db.as_ref(), "other@example.com", "password").await;
+
+    let keep = raw_browser_session(&f, f.user_id, "web").await;
+    let doomed = raw_browser_session(&f, f.user_id, "web_client_login").await;
+    // An unrecognised source is treated as a browser session, so it goes too.
+    let unknown = raw_browser_session(&f, f.user_id, "something_new").await;
+    // A client application's session is a device, not a browser session.
+    let client = raw_session(&f, f.user_id, Some("android"), false).await;
+    let foreign = raw_browser_session(&f, other_user, "web").await;
+
+    let removed = f
+        .server
+        .repos
+        .api_token
+        .delete_browser_sessions_except(f.user_id, Some(keep))
+        .await
+        .expect("bulk sign out");
+    assert_eq!(removed, 2, "the other browser sessions only");
+
+    for (id, owner, should_survive) in [
+        (keep, f.user_id, true),
+        (doomed, f.user_id, false),
+        (unknown, f.user_id, false),
+        (client, f.user_id, true),
+        (foreign, other_user, true),
+    ] {
+        let found = f
+            .server
+            .repos
+            .api_token
+            .find_by_id_and_user(id, owner)
+            .await
+            .expect("find");
+        assert_eq!(
+            found.is_some(),
+            should_survive,
+            "session {id} survival should be {should_survive}"
+        );
+    }
+}
+
+/// With no session to keep, every browser session goes — the "sign out
+/// everywhere" case, which is what a password change does.
+#[tokio::test]
+async fn bulk_sign_out_without_a_keep_removes_every_browser_session() {
+    let f = TestFixture::new().await;
+    raw_browser_session(&f, f.user_id, "web").await;
+    let client = raw_session(&f, f.user_id, Some("android"), false).await;
+
+    let removed = f
+        .server
+        .repos
+        .api_token
+        .delete_browser_sessions_except(f.user_id, None)
+        .await
+        .expect("bulk sign out");
+    assert_eq!(removed, 1);
+
+    assert!(
+        f.server
+            .repos
+            .api_token
+            .find_by_id_and_user(client, f.user_id)
+            .await
+            .expect("find")
+            .is_some(),
+        "a client session is not a browser session"
+    );
+}
+
 /// A session that is not the fixture's login and carries no device details is
 /// still a session: filtering on `platform` used to hide it.
 #[tokio::test]

@@ -8,14 +8,14 @@ test.beforeAll(async () => {
 });
 
 test("the page marks the browser session in use", async ({ page }) => {
-  await page.goto("/settings/devices/");
+  await page.goto("/settings/credentials/");
 
-  const browsers = page.locator("main section").filter({ hasText: "Browser sessions" });
+  const browsers = page.locator("#browsers");
   await expect(browsers).toContainText("This session");
 
   // The session in use is the one the run is holding, so the button offers to
   // sign out rather than to revoke something else.
-  const current = browsers.locator(".card").filter({ hasText: "This session" });
+  const current = browsers.locator("tr").filter({ hasText: "This session" });
   await expect(current.locator('form[action$="/revoke/"] button')).toHaveText("Sign out");
 });
 
@@ -31,24 +31,38 @@ test("a sync token is visible and can be revoked", async ({ page }) => {
   const tokens = (await res.json()) as Record<string, string>;
   expect(Object.keys(tokens)).toContain(repoId);
 
-  await page.goto("/settings/devices/");
-  const section = page.locator("main section").filter({ hasText: "Sync tokens" });
-  // The card shows the library's name, not its id.
-  const card = section.locator(".card").filter({ hasText: name });
-  await expect(card).toBeVisible();
-  await expect(card).toContainText("Never synced");
+  await page.goto("/settings/credentials/");
+  const section = page.locator("#sync-tokens");
+  // The row shows the library's name, not its id.
+  const row = section.locator("tr").filter({ hasText: name });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("Never synced");
 
   page.once("dialog", (dialog) => dialog.accept());
-  await card.locator('form[action$="/revoke/"] button').click();
+  await row.locator('form[action$="/revoke/"] button').click();
   // Only this token is gone: other specs mint sync tokens for the same account
   // through the sync protocol, so the section is not necessarily empty.
-  await expect(card).toHaveCount(0);
+  await expect(page.locator("#sync-tokens")).not.toContainText(name);
 });
 
 test("a client session that reports no device is still listed", async ({ page }) => {
   // The token minted by `login()` in the helpers carries no device details, and
   // used to be invisible here because the list selected on `platform`.
-  await page.goto("/settings/devices/");
-  const clients = page.locator("main section").filter({ hasText: "Client sessions" });
+  await page.goto("/settings/credentials/");
+  const clients = page.locator("#devices");
   await expect(clients.locator(".card").first()).toBeVisible();
+});
+
+test("the summary strip and the device detail both render", async ({ page }) => {
+  await page.goto("/settings/credentials/");
+  // Four counters, whatever their numbers.
+  await expect(page.locator("main").getByText("Browser sessions").first()).toBeVisible();
+  await expect(page.locator("main").getByText("Sync tokens").first()).toBeVisible();
+
+  // A device card exposes what unlinking would remove.
+  const device = page.locator("#devices .card").first();
+  if (await device.count()) {
+    await device.getByText("Credentials held by this device").click();
+    await expect(device).toContainText("Unlinking removes");
+  }
 });

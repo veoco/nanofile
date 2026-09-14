@@ -380,19 +380,38 @@ async fn test_form_pages_include_csrf_tokens() {
         .unwrap();
     assert_eq!(trash_resp.status(), 200, "trash page should render");
 
-    // 4. Settings page (has password, display-name, avatar forms with csrf_token)
-    let settings_html = ui_client
-        .get(format!("{}/settings/", server.base_url))
+    // 4. Settings pages. The area is split into one page per subject, so each
+    //    page that posts has to carry the token: the account forms live on
+    //    /settings/profile/ and the password form on /settings/security/,
+    //    while the overview still publishes one so anything that reads a token
+    //    off "the settings page" keeps working.
+    for path in ["/settings/", "/settings/profile/", "/settings/security/"] {
+        let html = ui_client
+            .get(format!("{}{}", server.base_url, path))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let count = html.matches(r#"csrf_token"#).count();
+        assert!(
+            count >= 1,
+            "{path} should embed at least one csrf_token, found {count}"
+        );
+    }
+    let profile_html = ui_client
+        .get(format!("{}/settings/profile/", server.base_url))
         .send()
         .await
         .unwrap()
         .text()
         .await
         .unwrap();
-    let csrf_count = settings_html.matches(r#"csrf_token"#).count();
+    let csrf_count = profile_html.matches(r#"csrf_token"#).count();
     assert!(
         csrf_count >= 3,
-        "settings page should have csrf_token in at least 3 forms, found {csrf_count}"
+        "the profile page should have csrf_token in its avatar, display-name and language forms, found {csrf_count}"
     );
 
     // 5. 2FA page — create user_2fa record to trigger setup_pending state

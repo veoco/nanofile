@@ -34,11 +34,23 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   most one write per minute — so an unused key is visible as one.
 - **Credential inventory**: *Settings → Sessions & Credentials* lists everything long-lived that can
   reach the account — client sessions, browser sessions (labelled from their `User-Agent`), repository
-  sync tokens, and the devices that skip two-factor — and revokes any one of them. API keys keep their
-  own page. The same data is available as `GET /api2/credentials/` (needs `device.read`) and
+  sync tokens, and the devices that skip two-factor — and revokes any one of them. The page opens with
+  a summary strip, then groups client sessions, their sync tokens and their 2FA trust under the device
+  that owns them (matched by `platform` + `device_id`, never by name), so "what can this machine still
+  do?" is one row and "unlink" is one click. Two bulk actions cover the common cleanup: *sign out other
+  browser sessions* (the acting session always survives) and *revoke all sync tokens*. Expired and
+  30-days-quiet tokens are flagged, and the page warns while two-factor is off. API keys keep their own
+  page. The same data is available as `GET /api2/credentials/` (needs `device.read`) and
   `DELETE /api2/credentials/{kind}/{id}/` (needs `device.write`), and `GET /api2/devices/` — the
   Seafile-compatible surface — now returns the same inventory with a `kind` tag on each entry, keeping
   the field names it always had. Sync-token *values* are never part of any of them, only metadata.
+- **Settings shell**: the settings area is one shell with a shared sidebar (a scrollable tab strip on
+  narrow screens) across `/settings/` (overview), `/settings/profile/` (avatar, display name,
+  language), `/settings/security/` (two-factor state and password), `/settings/credentials/`,
+  `/settings/api-keys/` and `/settings/invitations/`. Changing the password lands back on the security
+  page with a notice that other devices, their sync tokens, their 2FA trusts and all API keys were
+  revoked. `/settings/devices/` redirects to `/settings/credentials/`; the old profile form paths
+  remain as aliases.
 - **WebDAV** (`/dav/...`) authenticated with those keys (`webdav.*` capabilities), gated by
   `webdav_enabled`.
 - **Web UI**: file browser with previews and thumbnails, starred files, activity feed, trash,
