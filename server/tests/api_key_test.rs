@@ -319,6 +319,10 @@ async fn the_catalog_is_rendered_without_secrets() {
         .collect();
     assert!(ids.contains(&"file.write"));
     assert!(ids.contains(&"webdav.read"));
+    // Writing one file's index text is grantable on its own; rebuilding an index
+    // is a separate capability, and both imply read.
+    assert!(ids.contains(&"search.write"));
+    assert!(ids.contains(&"search.reindex"));
     assert!(
         !ids.iter().any(|id| id.starts_with("key.")),
         "key management must not be grantable"
@@ -326,6 +330,30 @@ async fn the_catalog_is_rendered_without_secrets() {
     assert!(
         !ids.iter().any(|id| id.starts_with("admin.")),
         "admin capabilities are hidden from non-admins"
+    );
+    // A capability with no enforcement point is not offered at all.
+    assert!(
+        !ids.iter().any(|id| matches!(
+            *id,
+            "invitation.read" | "invitation.write" | "history.manage"
+        )),
+        "retired capabilities must not be offered"
+    );
+    // Each entry explains what it buys, so a client can render the picker.
+    let entries = catalog["capabilities"].as_array().unwrap();
+    assert!(
+        entries.iter().all(|entry| entry["enforced_by"]
+            .as_array()
+            .is_some_and(|targets| !targets.is_empty())),
+        "every offered capability must name its enforcement points"
+    );
+    let index_text = entries
+        .iter()
+        .find(|entry| entry["id"] == "search.write")
+        .expect("search.write");
+    assert_eq!(
+        index_text["enforced_by"],
+        json!(["POST /api2/index-file-text/"])
     );
 
     let presets: Vec<&str> = catalog["presets"]
@@ -335,8 +363,38 @@ async fn the_catalog_is_rendered_without_secrets() {
         .map(|preset| preset["id"].as_str().unwrap())
         .collect();
     assert!(presets.contains(&"webdav_ro"));
+    let webdav_ro = catalog["presets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|preset| preset["id"] == "webdav_ro")
+        .expect("webdav_ro");
+    assert_eq!(webdav_ro["capabilities"], json!(["webdav.read"]));
     assert_eq!(catalog["ttl_presets_days"], json!([7, 30, 90, 180, 365]));
     assert_eq!(catalog["max_ttl_days"], 0);
+}
+
+#[tokio::test]
+async fn a_retired_capability_cannot_be_granted() {
+    let f = TestFixture::new().await;
+
+    // The catalog never offers it, and posting one by hand is refused rather
+    // than accepted as a no-op grant.
+    for id in ["invitation.read", "invitation.write", "history.manage"] {
+        let mut body = bound_body(&f);
+        body["capabilities"] = json!([id]);
+        assert_eq!(
+            create(&f, &body).await.status(),
+            400,
+            "{id} must not be grantable"
+        );
+    }
+
+    // Mixing one with a live capability is refused too: silently dropping it
+    // would mint a key with less access than its creator asked for.
+    let mut body = bound_body(&f);
+    body["capabilities"] = json!(["file.read", "invitation.read"]);
+    assert_eq!(create(&f, &body).await.status(), 400);
 }
 
 #[tokio::test]

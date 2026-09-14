@@ -292,4 +292,37 @@ fn sensitive_routes_have_the_expected_access() {
         required_access(&Method::GET, "/api2/api-keys/"),
         Some(RouteAccess::SessionOnly)
     );
+    // Writing a file's index text is its own capability: rebuilding an index and
+    // writing one file's indexed content are different powers.
+    assert_eq!(
+        required_access(&Method::POST, "/api2/index-file-text/"),
+        Some(RouteAccess::Capability(
+            server::domain::capability::Capability::SearchWrite
+        ))
+    );
+    assert_eq!(
+        required_access(&Method::POST, "/api2/reindex/"),
+        Some(RouteAccess::Capability(
+            server::domain::capability::Capability::SearchReindex
+        ))
+    );
+    // A WebDAV preset grants only `webdav.*`, so no `/api2` route may be
+    // satisfiable by a WebDAV capability.
+    assert!(
+        ![
+            ("GET", "/api2/repos/abc/dir/"),
+            ("POST", "/api2/repos/abc/file/"),
+            ("DELETE", "/api2/repos/abc/file/"),
+            ("GET", "/api/v2.1/repos/abc/metadata/"),
+        ]
+        .iter()
+        .any(|(verb, path)| matches!(
+            required_access(&method(verb), path),
+            Some(RouteAccess::Capability(
+                server::domain::capability::Capability::WebdavRead
+                    | server::domain::capability::Capability::WebdavWrite
+            ))
+        )),
+        "a REST route must not be reachable with a WebDAV capability"
+    );
 }

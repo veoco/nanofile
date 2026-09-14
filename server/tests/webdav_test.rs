@@ -1007,3 +1007,89 @@ async fn test_delete_key_revokes_access() {
     .await;
     assert_eq!(resp.status(), 401);
 }
+
+/// A key minted from the `webdav_ro` preset is a WebDAV key and nothing else.
+///
+/// `/dav/...` consults `webdav.*` plus the key's library binding and no other
+/// capability, so the preset used to carry `library.read`, `file.read` and
+/// `metadata.read` — quietly handing the REST API of the bound library (and with
+/// a read/write preset, `file.delete`) to a credential the user created to mount
+/// a filesystem. The preset is taken from the catalog rather than hard-coded so
+/// this pins what the picker actually offers.
+#[tokio::test]
+async fn a_key_minted_from_the_webdav_preset_is_a_webdav_key() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+
+    let resp = f
+        .client
+        .get("/api2/api-keys/catalog/", Some(&f.api_token))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let catalog: serde_json::Value = resp.json().await.unwrap();
+    let capabilities = catalog["presets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|preset| preset["id"] == "webdav_ro")
+        .expect("webdav_ro preset")["capabilities"]
+        .clone();
+    assert_eq!(
+        capabilities,
+        serde_json::json!(["webdav.read"]),
+        "the WebDAV read-only preset must grant the WebDAV surface only"
+    );
+
+    // Mint a key with exactly the preset's capabilities, bound read/write to the
+    // library: the binding is the ceiling, not a grant.
+    let resp = f
+        .client
+        .post_json(
+            "/api2/api-keys/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "name": "preset-webdav",
+                "capabilities": capabilities,
+                "repo_permissions": [{ "repo_id": f.repo_id, "permission": "rw" }],
+                "never": true,
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "the preset must mint a usable key");
+    let key = resp.json::<serde_json::Value>().await.unwrap()["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // WebDAV works.
+    let resp = dav(
+        &client,
+        "PROPFIND",
+        &dav_url(base, &f.repo_id, "/"),
+        &f.email,
+        &key,
+    )
+    .await;
+    assert_eq!(resp.status(), 207);
+
+    // The REST API of the same library does not: neither a read ...
+    let resp = f
+        .client
+        .get(&format!("/api2/repos/{}/dir/", f.repo_id), Some(&key))
+        .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "a WebDAV key must not read the library over REST"
+    );
+    // ... nor a delete, even though the binding allows writing.
+    let resp = f
+        .client
+        .delete(
+            &format!("/api2/repos/{}/file/?p=%2Fgone.txt", f.repo_id),
+            Some(&key),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "a WebDAV key must not delete over REST");
+}
