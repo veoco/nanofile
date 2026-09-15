@@ -104,14 +104,11 @@ async fn every_kind_of_credential_is_listed() {
 
     // Read each section on its own: "test-repo" also names a library in the
     // left panel, so a whole-page search would prove nothing about the sync
-    // token list.
-    let clients = section(&body, "Desktop and mobile apps", "Browser sessions");
-    let browsers = section(&body, "Browser sessions", "Repository sync tokens");
-    let tokens = section(
-        &body,
-        "Repository sync tokens",
-        "Devices that skip two-factor",
-    );
+    // token list. Sections are addressed by id because the leftover ones are
+    // absent unless there is something to show.
+    let clients = section_by_id(&body, "devices").expect("the device list");
+    let browsers = section_by_id(&body, "browsers").expect("the browser list");
+    let tokens = section_by_id(&body, "sync-tokens").expect("the leftover token list");
 
     assert!(
         clients.contains("Test Device"),
@@ -135,16 +132,14 @@ async fn every_kind_of_credential_is_listed() {
     );
 }
 
-/// The text between two section headings.
-fn section<'a>(body: &'a str, heading: &str, next_heading: &str) -> &'a str {
-    let start = body
-        .find(heading)
-        .unwrap_or_else(|| panic!("missing heading {heading}"));
-    let end = body
-        .find(next_heading)
-        .unwrap_or_else(|| panic!("missing heading {next_heading}"));
-    assert!(start < end, "{heading} must come before {next_heading}");
-    &body[start..end]
+/// The HTML of the `<section id="…">` block, or `None` when the page did not
+/// render it at all — which is the expected state for a section that only
+/// exists to list leftovers.
+fn section_by_id<'a>(body: &'a str, id: &str) -> Option<&'a str> {
+    let marker = format!(r#"id="{id}""#);
+    let start = body.find(&marker)?;
+    let end = body[start..].find("</section>")? + start;
+    Some(&body[start..end])
 }
 
 /// The regression this page exists for: a client that reports no device details
@@ -167,6 +162,173 @@ async fn a_client_without_device_details_is_still_listed() {
     assert!(
         client_section.contains("Unnamed device"),
         "the platform-less client is listed, shown as unnamed"
+    );
+}
+
+/// The heading number of a section is the first `<span>` after its title.
+fn heading_count(section: &str) -> usize {
+    let span = section.find("<span").expect("a heading count span");
+    let rest = &section[span..];
+    let open = rest.find('>').expect("span open tag") + 1;
+    let close = rest.find("</span>").expect("span close tag");
+    rest[open..close].trim().parse().expect("a heading number")
+}
+
+/// A 2FA device trust owned by `device_id` (`None` means no device at all).
+async fn seed_device_trust(f: &TestFixture, token: &str, device_id: Option<&str>) {
+    f.server
+        .repos
+        .s2fa_token
+        .create_s2fa_token(server::repository::s2fa_token::CreateS2faTokenParams {
+            user_id: f.user_id,
+            token: token.to_string(),
+            device_id: device_id.map(str::to_string),
+            device_name: Some("Test Device".to_string()),
+            created_at: 1_000,
+            expires_at: i64::MAX,
+        })
+        .await
+        .expect("seed a device trust");
+}
+
+/// A trust whose `device_id` matches a signed-in device is shown inside that
+/// device's card. The page used to render a "Devices that skip two-factor"
+/// section carrying the global count and, under it, "No devices skip two-factor."
+/// — the heading and the body contradicted each other.
+#[tokio::test]
+async fn a_trust_that_belongs_to_a_device_is_not_an_unknown_one() {
+    let f = TestFixture::new().await;
+    let resp = f.client.login_multipart("test@example.com", "password").await;
+    assert_eq!(resp.status(), 200);
+    seed_device_trust(&f, "trust-known", Some("test-device-123")).await;
+
+    let client = login_client(&f).await;
+    let body = visible(&page(&client, &f.server.base_url).await);
+
+    assert!(
+        section_by_id(&body, "device-trusts").is_none(),
+        "a trust with a known device must not reach the leftover section"
+    );
+    let devices = section_by_id(&body, "devices").expect("the device list");
+    assert!(devices.contains("Test Device"), "the device card is rendered");
+    assert!(
+        devices.contains("This device may skip verification codes"),
+        "the trust is listed inside the device card"
+    );
+}
+
+/// The leftover section exists for trusts with no known device, and its heading
+/// counts exactly the rows underneath it.
+#[tokio::test]
+async fn an_unknown_trust_is_listed_and_counted() {
+    let f = TestFixture::new().await;
+    seed_device_trust(&f, "trust-ghost-1", Some("ghost-a")).await;
+    seed_device_trust(&f, "trust-ghost-2", None).await;
+
+    let client = login_client(&f).await;
+    let body = visible(&page(&client, &f.server.base_url).await);
+    let trusts = section_by_id(&body, "device-trusts").expect("the leftover trust list");
+
+    assert_eq!(heading_count(trusts), 2, "the heading counts its own rows");
+    assert_eq!(
+        trusts.matches(r#"value="device_trust""#).count(),
+        2,
+        "and there are that many rows"
+    );
+}
+
+/// A sync token pointed at a signed-in device belongs to that device; only the
+/// token with no known device is listed, and the heading counts just that one.
+#[tokio::test]
+async fn a_sync_token_for_a_known_device_is_not_listed_as_unknown() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .login_multipart("test@example.com", "password")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // A second library, because a sync token is unique per (user, library).
+    // Creating one mints its sync token, which has no peer id yet, so that is
+    // the leftover; the fixture's own token is then pointed at the device that
+    // signed in above, so it belongs to that card instead.
+    let resp = f.client.create_repo(&f.api_token, "second").await;
+    assert_eq!(resp.status(), 201);
+
+    let attached = f
+        .server
+        .repos
+        .sync_token
+        .list_for_user(f.user_id)
+        .await
+        .expect("list")
+        .into_iter()
+        .find(|t| t.repo_id == f.repo_id)
+        .expect("the fixture's token");
+    f.server
+        .repos
+        .sync_token
+        .update_peer_info(
+            attached,
+            Some("test-device-123".to_string()),
+            Some("Test Device".to_string()),
+            None,
+            None,
+            Some(2_000),
+        )
+        .await
+        .expect("attach the token to the device");
+
+    let client = login_client(&f).await;
+    let body = visible(&page(&client, &f.server.base_url).await);
+    let tokens = section_by_id(&body, "sync-tokens").expect("the leftover token list");
+
+    assert_eq!(heading_count(tokens), 1, "only the unowned token is listed");
+    assert_eq!(
+        tokens.matches(r#"value="sync_token""#).count(),
+        1,
+        "and there is one row"
+    );
+    assert!(
+        tokens.contains("second"),
+        "the row shown is the second library's token"
+    );
+    let devices = section_by_id(&body, "devices").expect("the device list");
+    assert!(
+        devices.contains("Unlinking removes 2 credential(s)"),
+        "the device owns its session and the attached token"
+    );
+
+    // Point the last leftover at the device too: with nothing unowned, the
+    // section must not be rendered at all rather than shown empty.
+    let second = f
+        .server
+        .repos
+        .sync_token
+        .list_for_user(f.user_id)
+        .await
+        .expect("list")
+        .into_iter()
+        .find(|t| t.repo_id != f.repo_id)
+        .expect("the second library's token");
+    f.server
+        .repos
+        .sync_token
+        .update_peer_info(
+            second,
+            Some("test-device-123".to_string()),
+            Some("Test Device".to_string()),
+            None,
+            None,
+            Some(2_000),
+        )
+        .await
+        .expect("attach the last token");
+
+    let after = visible(&page(&client, &f.server.base_url).await);
+    assert!(
+        section_by_id(&after, "sync-tokens").is_none(),
+        "every token belongs to a device, so the section is not rendered"
     );
 }
 
@@ -204,10 +366,12 @@ async fn a_sync_token_can_be_revoked_by_id() {
         "the sync token was revoked"
     );
 
+    // The section holds leftovers only, so it disappears with its last entry
+    // rather than staying behind to announce that there are none.
     let after = visible(&page(&client, &f.server.base_url).await);
     assert!(
-        after.contains("No sync tokens."),
-        "the page says there are none left"
+        !after.contains("Unknown repository sync tokens"),
+        "the section is gone once nothing is unowned"
     );
 }
 

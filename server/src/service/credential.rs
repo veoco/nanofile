@@ -153,8 +153,11 @@ pub struct DeviceGroup {
     pub is_desktop_client: bool,
     /// Sync tokens whose `peer_id` is this device's `device_id`.
     pub sync_tokens: Vec<SyncTokenView>,
-    /// The 2FA trust whose `device_id` is this device's `device_id`.
-    pub device_trust: Option<DeviceTrustView>,
+    /// The 2FA trusts whose `device_id` is this device's `device_id`. Usually
+    /// one, but a row left by an older build (which minted a new trust per
+    /// login) still belongs to this device rather than to the page's
+    /// "unknown device" section.
+    pub device_trusts: Vec<DeviceTrustView>,
 }
 
 /// A device that may skip the second factor.
@@ -230,12 +233,15 @@ impl CredentialInventory {
 }
 
 /// Which set of credentials a bulk revoke addresses.
+///
+/// It used to also carry `AllSyncTokens`. That action was retired: the page
+/// shows sync tokens grouped by the device that owns them and lists only the
+/// leftovers with no known device, so a button that deleted *every* token
+/// looked like it belonged to the list underneath it while doing far more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BulkRevoke {
     /// Every browser session except the one asking.
     OtherBrowserSessions,
-    /// Every repository sync token the account holds.
-    AllSyncTokens,
 }
 
 impl BulkRevoke {
@@ -243,7 +249,6 @@ impl BulkRevoke {
     pub fn from_id(value: &str) -> Option<Self> {
         match value {
             "sign_out_others" => Some(BulkRevoke::OtherBrowserSessions),
-            "revoke_sync_tokens" => Some(BulkRevoke::AllSyncTokens),
             _ => None,
         }
     }
@@ -251,7 +256,6 @@ impl BulkRevoke {
     pub const fn id(self) -> &'static str {
         match self {
             BulkRevoke::OtherBrowserSessions => "sign_out_others",
-            BulkRevoke::AllSyncTokens => "revoke_sync_tokens",
         }
     }
 }
@@ -438,7 +442,6 @@ impl CredentialService {
                     .delete_browser_sessions_except(user_id, keep_session_id)
                     .await
             }
-            BulkRevoke::AllSyncTokens => self.repos.sync_token.delete_by_user(user_id).await,
         }
     }
 }
@@ -472,13 +475,14 @@ fn group_devices(
                 })
                 .cloned()
                 .collect(),
-            device_trust: trusts
+            device_trusts: trusts
                 .iter()
-                .find(|t| {
+                .filter(|t| {
                     !client.device_id.is_empty()
                         && t.device_id.as_deref() == Some(client.device_id.as_str())
                 })
-                .cloned(),
+                .cloned()
+                .collect(),
         })
         .collect()
 }
@@ -576,10 +580,13 @@ mod tests {
 
     #[test]
     fn bulk_kinds_round_trip_through_their_form_value() {
-        for what in [BulkRevoke::OtherBrowserSessions, BulkRevoke::AllSyncTokens] {
-            assert_eq!(BulkRevoke::from_id(what.id()), Some(what));
-        }
+        let what = BulkRevoke::OtherBrowserSessions;
+        assert_eq!(BulkRevoke::from_id(what.id()), Some(what));
         assert_eq!(BulkRevoke::from_id("delete_everything"), None);
+        // The retiree: a form that still posts the old action must not be
+        // accepted, because a button that deletes every token looked like it
+        // only deleted the unowned ones listed under it.
+        assert_eq!(BulkRevoke::from_id("revoke_sync_tokens"), None);
     }
 
     fn client(platform: &str, device_id: &str, name: &str) -> ClientSessionView {
@@ -673,10 +680,39 @@ mod tests {
             &[],
             std::slice::from_ref(&trust),
         );
-        assert_eq!(devices[0].device_trust.as_ref().map(|t| t.id), Some(9));
+        assert_eq!(
+            devices[0].device_trusts.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![9]
+        );
         assert!(
-            devices[1].device_trust.is_none(),
+            devices[1].device_trusts.is_empty(),
             "names do not match devices"
+        );
+    }
+
+    /// A row minted by an older build, which added a trust per login instead of
+    /// replacing the device's, must still be shown under its device. Otherwise
+    /// it reaches the page's "unknown device" section, which is exactly where a
+    /// known device must never appear.
+    #[test]
+    fn every_trust_of_a_device_is_attached_to_it() {
+        let trust = |id: i32| DeviceTrustView {
+            id,
+            device_name: Some("laptop".to_string()),
+            device_id: Some("dev-a".to_string()),
+            created_ts: 1_000,
+            expires_at: i64::MAX,
+        };
+        let devices = group_devices(
+            &[client("mac", "dev-a", "laptop")],
+            &[],
+            &[trust(1), trust(2)],
+        );
+
+        assert_eq!(
+            devices[0].device_trusts.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![1, 2],
+            "both rows belong to the device, not to the unattached list"
         );
     }
 

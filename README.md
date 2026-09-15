@@ -42,9 +42,13 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   sync tokens, and the devices that skip two-factor — and revokes any one of them. The page opens with
   a summary strip, then groups client sessions, their sync tokens and their 2FA trust under the device
   that owns them (matched by `platform` + `device_id`, never by name), so "what can this machine still
-  do?" is one row and "unlink" is one click. Two bulk actions cover the common cleanup: *sign out other
-  browser sessions* (the acting session always survives) and *revoke all sync tokens*. Expired and
-  30-days-quiet tokens are flagged, and the page warns while two-factor is off. API keys keep their own
+  do?" is one row and "unlink" is one click. Only sync tokens and 2FA trusts that match no known device
+  — realistically just leftovers from an older version — are listed below as *unknown repository sync
+  tokens* and *unknown two-factor trust tokens*, and those sections are not rendered at all when there
+  are none; a credential that does belong to a device is visible inside its card, and each section
+  heading counts exactly the rows under it. The one bulk action left is *sign out other browser
+  sessions* (the acting session always survives). Expired and 30-days-quiet tokens are flagged, and the
+  page warns while two-factor is off. API keys keep their own
   page. The same data is available as `GET /api2/credentials/` (needs `device.read`) and
   `DELETE /api2/credentials/{kind}/{id}/` (needs `device.write`), and `GET /api2/devices/` — the
   Seafile-compatible surface — now returns the same inventory with a `kind` tag on each entry, keeping

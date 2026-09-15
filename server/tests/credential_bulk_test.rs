@@ -143,9 +143,12 @@ async fn signing_out_other_sessions_keeps_the_acting_one() {
     );
 }
 
-/// Revoking every sync token empties the list and reports the count.
+/// "Revoke all sync tokens" was retired. The button that posted it sat inside a
+/// list that only holds tokens with no known device, so it looked like it
+/// revoked those while deleting *every* token the account had. A stale page or
+/// a hand-crafted POST must now be refused as an unknown action.
 #[tokio::test]
-async fn revoking_all_sync_tokens_empties_the_list() {
+async fn the_retired_sync_token_bulk_action_is_refused() {
     let f = TestFixture::new().await;
     // The fixture already holds one sync token (minted through the API).
     assert_eq!(
@@ -161,6 +164,11 @@ async fn revoking_all_sync_tokens_empties_the_list() {
 
     let client = login_client(&f).await;
     let body = page(&client, &f.server.base_url).await;
+    assert!(
+        !body.contains(r#"value="revoke_sync_tokens""#),
+        "the page no longer offers the action"
+    );
+
     let resp = client
         .post(format!("{}/settings/credentials/bulk/", f.server.base_url))
         .form(&[
@@ -170,27 +178,21 @@ async fn revoking_all_sync_tokens_empties_the_list() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 302);
-    assert_eq!(
-        resp.headers().get("location").unwrap(),
-        "/settings/credentials/?bulk=revoke_sync_tokens&n=1"
-    );
-
     assert!(
+        resp.status().is_client_error(),
+        "a retired action is refused, got {}",
+        resp.status()
+    );
+    assert_eq!(
         f.server
             .repos
             .sync_token
             .list_for_user(f.user_id)
             .await
             .expect("list")
-            .is_empty(),
-        "every sync token is gone"
-    );
-    assert!(
-        page(&client, &f.server.base_url)
-            .await
-            .contains("No sync tokens."),
-        "the page says there are none left"
+            .len(),
+        1,
+        "the retired action deleted nothing"
     );
 }
 

@@ -68,7 +68,8 @@ pub async fn build_nav(
     Ok(SettingsNav {
         active,
         is_admin: user.is_admin,
-        // Everything that can reach the account, minus the session in use.
+        // Every credential row that can reach the account, counted one by one:
+        // a device contributes its session plus each token and trust it holds.
         credential_count: inventory.browsers.len()
             + inventory.clients.len()
             + inventory.sync_tokens.len()
@@ -478,11 +479,12 @@ pub struct CredentialsTemplate {
     /// Client devices with everything each one owns.
     pub devices: Vec<DeviceInfo>,
     pub browsers: Vec<BrowserInfo>,
-    pub sync_tokens: Vec<SyncTokenInfo>,
-    pub device_trusts: Vec<DeviceTrustInfo>,
     /// Sync tokens whose device is not in `devices`, i.e. everything except
-    /// the ones already shown inside a device's expanded detail.
+    /// the ones already shown inside a device's expanded detail. These are
+    /// historical leftovers — a normal account has none — so the section that
+    /// renders them is hidden when the list is empty.
     pub loose_sync_tokens: Vec<SyncTokenInfo>,
+    /// 2FA trusts whose device is not in `devices`; see `loose_sync_tokens`.
     pub loose_device_trusts: Vec<DeviceTrustInfo>,
     pub api_key_count: usize,
     pub other_browser_sessions: usize,
@@ -504,7 +506,7 @@ pub struct DeviceInfo {
     /// Total credentials this device owns, for the "unlink removes…" copy.
     pub credential_count: usize,
     pub sync_tokens: Vec<SyncTokenInfo>,
-    pub device_trust: Option<DeviceTrustInfo>,
+    pub device_trusts: Vec<DeviceTrustInfo>,
 }
 
 pub struct BrowserInfo {
@@ -602,13 +604,7 @@ async fn render_credentials(
     let device_trusts: Vec<DeviceTrustInfo> = inventory
         .device_trusts
         .iter()
-        .map(|trust| DeviceTrustInfo {
-            id: trust.id,
-            device_name: trust.device_name.clone(),
-            device_id: trust.device_id.clone(),
-            created_ts: trust.created_ts,
-            expires_ts: trust.expires_at,
-        })
+        .map(device_trust_info)
         .collect();
 
     let devices: Vec<DeviceInfo> = inventory
@@ -622,29 +618,23 @@ async fn render_credentials(
             client_version: device.client_version.clone(),
             last_sign_in_ts: device.created_ts,
             is_desktop_client: device.is_desktop_client,
-            credential_count: 1
-                + device.sync_tokens.len()
-                + usize::from(device.device_trust.is_some()),
+            credential_count: 1 + device.sync_tokens.len() + device.device_trusts.len(),
             sync_tokens: device.sync_tokens.iter().map(sync_token_info).collect(),
-            device_trust: device.device_trust.as_ref().map(|trust| DeviceTrustInfo {
-                id: trust.id,
-                device_name: trust.device_name.clone(),
-                device_id: trust.device_id.clone(),
-                created_ts: trust.created_ts,
-                expires_ts: trust.expires_at,
-            }),
+            device_trusts: device.device_trusts.iter().map(device_trust_info).collect(),
         })
         .collect();
 
     // A token shown inside a device is not repeated in the flat list; the page
-    // would otherwise present the same credential twice.
+    // would otherwise present the same credential twice. What is left over has
+    // no known device at all, which is why its section is only rendered when
+    // the list is non-empty.
     let attached_token_ids: std::collections::HashSet<i32> = devices
         .iter()
         .flat_map(|d| d.sync_tokens.iter().map(|t| t.id))
         .collect();
     let attached_trust_ids: std::collections::HashSet<i32> = devices
         .iter()
-        .filter_map(|d| d.device_trust.as_ref().map(|t| t.id))
+        .flat_map(|d| d.device_trusts.iter().map(|t| t.id))
         .collect();
     let loose_sync_tokens: Vec<SyncTokenInfo> = sync_tokens
         .iter()
@@ -697,8 +687,6 @@ async fn render_credentials(
                 is_current: browser.is_current,
             })
             .collect(),
-        sync_tokens,
-        device_trusts,
         loose_sync_tokens,
         loose_device_trusts,
         api_key_count: inventory.api_key_count,
@@ -730,6 +718,16 @@ fn sync_token_info(token: &crate::service::credential::SyncTokenView) -> SyncTok
         is_expired: token.is_expired(now),
         expires_soon: token.expires_soon(now),
         is_stale: token.is_stale(now),
+    }
+}
+
+fn device_trust_info(trust: &crate::service::credential::DeviceTrustView) -> DeviceTrustInfo {
+    DeviceTrustInfo {
+        id: trust.id,
+        device_name: trust.device_name.clone(),
+        device_id: trust.device_id.clone(),
+        created_ts: trust.created_ts,
+        expires_ts: trust.expires_at,
     }
 }
 
@@ -1041,7 +1039,7 @@ pub struct RevokeCredentialForm {
 
 #[derive(Deserialize)]
 pub struct BulkRevokeForm {
-    /// `sign_out_others` or `revoke_sync_tokens`; see [`BulkRevoke`].
+    /// `sign_out_others`; see [`BulkRevoke`].
     pub action: String,
     pub csrf_token: Option<String>,
 }

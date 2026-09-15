@@ -41,8 +41,10 @@ test("a sync token is visible and can be revoked", async ({ page }) => {
   page.once("dialog", (dialog) => dialog.accept());
   await row.locator('form[action$="/revoke/"] button').click();
   // Only this token is gone: other specs mint sync tokens for the same account
-  // through the sync protocol, so the section is not necessarily empty.
-  await expect(page.locator("#sync-tokens")).not.toContainText(name);
+  // through the sync protocol, so the section may still be there. Once the last
+  // unowned token goes the whole section is dropped rather than shown empty,
+  // so the row count is what proves the revocation — not the section's text.
+  await expect(section.locator("tr").filter({ hasText: name })).toHaveCount(0);
 });
 
 test("a client session that reports no device is still listed", async ({ page }) => {
@@ -51,6 +53,28 @@ test("a client session that reports no device is still listed", async ({ page })
   await page.goto("/settings/credentials/");
   const clients = page.locator("#devices");
   await expect(clients.locator(".card").first()).toBeVisible();
+});
+
+test("the leftover sections count exactly the rows they list", async ({ page }) => {
+  await page.goto("/settings/credentials/");
+
+  // Both sections only exist while they have something to show: they list the
+  // credentials that match no known device, which a normal account has none of.
+  // When one is there, its heading number is the number of rows beneath it —
+  // the bug this pins rendered the global total over a filtered list.
+  const sections = [
+    { id: "#sync-tokens", kind: "sync_token" },
+    { id: "#device-trusts", kind: "device_trust" },
+  ];
+
+  for (const { id, kind } of sections) {
+    const section = page.locator(id);
+    if ((await section.count()) === 0) continue;
+
+    const heading = Number((await section.locator("h2 span").first().innerText()).trim());
+    const rows = await section.locator(`input[name="kind"][value="${kind}"]`).count();
+    expect(heading).toBe(rows);
+  }
 });
 
 test("the summary strip and the device detail both render", async ({ page }) => {

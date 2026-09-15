@@ -185,6 +185,17 @@ impl LoginService {
                             use crate::repository::s2fa_token::CreateS2faTokenParams;
                             let s2fa_token_value = generate_s2fa_token();
                             let now = chrono::Utc::now().timestamp();
+                            // One trust per device. The previous row was this same
+                            // device's last trust, already superseded by the one
+                            // about to be issued, and keeping it would make the
+                            // credential page count more trusted devices than the
+                            // account has.
+                            if let Some(id) = device_id.as_deref().filter(|id| !id.is_empty()) {
+                                self.repos
+                                    .s2fa_token
+                                    .delete_by_user_and_device(user_record.id, id)
+                                    .await?;
+                            }
                             self.repos
                                 .s2fa_token
                                 .create_s2fa_token(CreateS2faTokenParams {
