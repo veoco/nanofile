@@ -168,6 +168,13 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
 `NANOFILE_DATABASE_URL`、`NANOFILE_SERVER_PORT`）。环境变量在运行时始终生效，且永远不会被
 写回文件。
 
+**相对状态路径相对于运行中的二进制所在目录解析**，绝不使用工作目录。数据库、`[storage]`
+各目录和 `[index] index_dir` 会在启动时拼接到该目录上：桌面实例的工作目录说明不了安装在
+哪里——Windows 的 `Run` 注册表值甚至无法携带起始目录，否则登录启动的实例会去
+`C:\Windows\System32` 里找 `data/nanofile.db`。如果配置里的相对路径在工作目录下已经存在，
+则完全保持原样，因此升级不会搬动已有部署的状态；要把状态放到别处请显式写成绝对路径。
+`[logging] file` 遵循同一规则（见“日志”）。
+
 升级到新版本时，如果配置格式发生变化，`config.toml` 会在原地自动迁移（保留注释），并先备份为
 `config.toml.bak`；在只读挂载上，迁移仅在内存中应用。
 
@@ -306,7 +313,7 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
   `config.toml`（`[logging] file`），因此登录启动的实例无论工作目录如何都使用同一文件，你
   也可以在那里修改。
 - `[logging] file` 接受显式路径；相对路径相对于二进制所在目录解析（绝不使用工作目录，这对
-  自动启动的实例没有意义）。
+  自动启动的实例没有意义）——与其他所有相对状态路径的规则一致（见“配置”）。
 - `max_file_size_mb`（默认 10）限制每个文件大小；超过后轮转为 `nanofile.log.1`、`.2`、…，
   保留 `max_backups`（默认 3）个旧文件。`max_backups = 0` 表示原地截断。
 - `file_enabled = true/false` 强制文件 / stdout 输出；未设置表示自动（桌面模式用文件，否则用
@@ -332,7 +339,8 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
 - **退出**——触发与 Ctrl+C 相同的优雅关闭
 
 自启动条目始终指向正在运行的二进制，并传入 `--config <绝对路径>`，因此自动启动的实例无论
-工作目录如何都使用同一配置。
+工作目录如何都使用同一配置；该配置里的相对状态路径同样相对于二进制所在目录解析（见
+“配置”），所以登录启动的实例与手动启动打开的是同一个数据库和块存储。
 
 注意事项：
 
@@ -405,7 +413,8 @@ nanofile [--config <path>] migrate-blocks [--dry-run]
 
 ## 数据布局
 
-所有状态都位于工作目录下（显示默认值）：
+所有状态都位于安装目录下——即运行中的二进制所在目录，相对状态路径就是相对于它解析的
+（见“配置”）——除非某个配置段写了绝对路径。默认值如下：
 
 ```
 data/

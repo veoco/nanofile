@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, Once};
 
 use tracing_subscriber::{EnvFilter, fmt::MakeWriter};
 
+use infra::common::util::exe_dir;
 use infra::config::Config;
 
 /// Default log file name, resolved against the binary's directory.
@@ -138,8 +139,9 @@ fn open_file_logging(config: &Config) -> io::Result<FileBackend> {
 /// Log file candidates in preference order. Explicit absolute paths win;
 /// relative paths resolve against the binary's directory (never the working
 /// directory, which is `C:\Windows\System32` or `/` for login-started
-/// instances), with the working directory as a fallback when the binary
-/// directory cannot be determined or written.
+/// instances — see [`infra::common::util::exe_dir`]), with the working
+/// directory as a fallback when the binary directory cannot be determined or
+/// written.
 fn candidate_paths(config: &Config) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     match &config.logging.file {
@@ -162,33 +164,6 @@ fn candidate_paths(config: &Config) -> Vec<PathBuf> {
         }
     }
     candidates
-}
-
-fn exe_dir() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let exe = absolute(exe);
-    exe.parent()
-        .filter(|d| !d.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-}
-
-/// Canonical absolute path with Windows `\\?\` verbatim prefixes stripped,
-/// falling back to the input when canonicalization fails.
-fn absolute(path: PathBuf) -> PathBuf {
-    let resolved = path.canonicalize().unwrap_or(path);
-    #[cfg(windows)]
-    {
-        let s = resolved.to_string_lossy();
-        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
-            PathBuf::from(format!(r"\\{rest}"))
-        } else if let Some(rest) = s.strip_prefix(r"\\?\") {
-            PathBuf::from(rest)
-        } else {
-            resolved
-        }
-    }
-    #[cfg(not(windows))]
-    resolved
 }
 
 /// Bake the resolved default log path into config.toml so every later run —

@@ -200,6 +200,15 @@ a `NANOFILE_*` environment variable — the shipped `config.toml.example` lists 
 in a comment above each key (e.g. `NANOFILE_DATABASE_URL`, `NANOFILE_SERVER_PORT`). Environment
 variables always win at runtime and are never written into the file.
 
+**Relative state paths resolve against the directory of the running binary**, never the working
+directory. The database, the `[storage]` directories and `[index] index_dir` are joined onto that
+directory at startup, because the working directory of a desktop instance says nothing about the
+installation — a Windows `Run` registry value cannot even carry a start directory, so a login-started
+instance would otherwise look for `data/nanofile.db` inside `C:\Windows\System32`. A configuration
+whose relative paths already exist under its working directory is left exactly as configured, so
+upgrading never moves an existing deployment's state; use absolute paths to place state somewhere
+else deliberately. `[logging] file` follows the same rule (see Logging).
+
 The live `config.toml` is deliberately not tracked by git: it holds the master `secret_key` (and
 optionally the admin-init, notification and storage-encryption keys). Copy the example, keep your
 own copy out of version control.
@@ -377,7 +386,8 @@ Desktop (tray) runs log to a size-capped rotating file instead:
   is written back into `config.toml` (`[logging] file`) on first run, so login-started instances
   always use the same file regardless of their working directory, and you can change it there.
 - `[logging] file` accepts an explicit path; a relative one resolves against the binary's directory
-  (never the working directory, which is meaningless for auto-started instances).
+  (never the working directory, which is meaningless for auto-started instances) — the same rule
+  every other relative state path follows (see Configuration).
 - `max_file_size_mb` (default 10) caps each file; once exceeded it rotates to `nanofile.log.1`,
   `.2`, … with `max_backups` (default 3) older files kept. `max_backups = 0` truncates in place.
 - `file_enabled = true/false` forces file/stdout output; unset means automatic (file in desktop
@@ -405,7 +415,9 @@ get Chinese menus; force a language with `tray_language = "en"/"zh"` in `[ui]`):
 - **Quit** — triggers the same graceful shutdown as Ctrl+C
 
 The auto-start entries always point at the running binary and pass `--config <absolute path>`, so
-the auto-started instance uses the same config regardless of its working directory.
+the auto-started instance uses the same config regardless of its working directory. Relative state
+paths in that config resolve against the binary's directory as well (see Configuration), so the
+login-started instance opens the same database and block store as a manual start.
 
 Notes:
 
@@ -495,7 +507,9 @@ nanofile [--config <path>] migrate-blocks [--dry-run]
 
 ## Data Layout
 
-All state lives under the working directory (defaults shown):
+All state lives under the installation directory — the directory of the running binary, which is what
+relative state paths resolve against (see Configuration) — unless a section names an absolute path.
+Defaults shown:
 
 ```
 data/

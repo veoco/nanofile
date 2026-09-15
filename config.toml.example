@@ -124,6 +124,14 @@ secret_key = ""
 # Environment variables:
 #   NANOFILE_DATABASE_URL
 #   NANOFILE_DATABASE_MAX_CONNECTIONS
+# A relative path here — and in [storage] / [index] — resolves against the
+# directory of the running binary, never the working directory: a desktop
+# instance started at login has a working directory that says nothing about the
+# installation, so `data/nanofile.db` would otherwise be looked up inside
+# `C:\Windows\System32`. The directory is created if it does not exist yet. When
+# an existing installation's relative paths already exist under its working
+# directory they are kept exactly as configured, so upgrading never moves its
+# state.
 url = "sqlite:data/nanofile.db?mode=rwc"
 # Pooled SQLite connections. WAL allows concurrent readers (single writer), so
 # this mainly improves read throughput. Kept modest because `mmap_size` and
@@ -149,6 +157,7 @@ max_connections = 5
 # Block storage root. Blocks are namespaced per library:
 #   {block_dir}/repos/<sha1(repo_id)>/<2hex>/<block_id>
 # so a block id only grants access through a library the caller is a member of.
+# A relative path resolves against the binary's directory, like `[database] url`.
 # Upgrading from a build that used the old flat layout
 # ({block_dir}/<2hex>/<block_id>): the migration runs automatically at startup,
 # before the first request is served — it copies every referenced block into its
@@ -360,6 +369,7 @@ max_active_tasks = 100
 #   NANOFILE_INDEX_ENABLED
 #   NANOFILE_INDEX_INDEX_DIR
 enabled = true
+# Relative paths resolve against the binary's directory, like `[database] url`.
 index_dir = "data/index"
 
 [notification]

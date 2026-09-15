@@ -1,11 +1,48 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::entity::{commit, repo};
 use base::AppError;
 use base::common::DirEntryData;
+
+/// Canonical absolute form of `path`, falling back to the input when
+/// canonicalization fails (the file does not exist yet).
+///
+/// On Windows the `\\?\` verbatim prefix is stripped. That is not cosmetic:
+/// `\\?\C:\…` contains a `?`, so a `sqlite:` URL built from it would be split
+/// into a file name and a query string right there, and Explorer's
+/// `/select,"…"` argument would be mangled too.
+pub fn absolute_path(path: &Path) -> PathBuf {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(windows)]
+    {
+        let s = resolved.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    resolved
+}
+
+/// Directory of the running binary, or `None` when it cannot be determined.
+///
+/// This is the directory every relative path the server owns resolves against
+/// (see [`crate::config::Config::resolve_state_paths`]): a login-started
+/// desktop instance runs with a working directory that has nothing to do with
+/// the installation, and a Windows `Run` registry entry cannot carry a start
+/// directory at all.
+pub fn exe_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe = absolute_path(&exe);
+    exe.parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+}
 
 /// Create `dir` (and its parents) and, on Unix, restrict `dir` to its owner.
 ///

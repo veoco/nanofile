@@ -251,6 +251,40 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("{reason}");
     }
 
+    // ── Relative state paths ───────────────────────────────────────────
+    // The database, the block store and the search index default to relative
+    // paths, and the working directory of a login-started instance has nothing
+    // to do with the installation — a Windows `Run` registry value cannot even
+    // carry a start directory — so `data/nanofile.db` used to be opened (and
+    // created) wherever the process happened to start, which for an auto-started
+    // tray instance is a system directory it may not write to.
+    let state_base = infra::config::state_path_base();
+    let resolutions = config.resolve_state_paths(&state_base);
+    let rewritten: Vec<&str> = resolutions
+        .iter()
+        .filter(|resolution| resolution.rewritten)
+        .map(|resolution| resolution.field)
+        .collect();
+    if !rewritten.is_empty() {
+        tracing::info!(
+            base = %state_base.display(),
+            fields = ?rewritten,
+            "relative state paths resolved against the installation directory"
+        );
+    }
+    let kept: Vec<&str> = resolutions
+        .iter()
+        .filter(|resolution| !resolution.rewritten)
+        .map(|resolution| resolution.field)
+        .collect();
+    if !kept.is_empty() {
+        tracing::info!(
+            cwd = %std::env::current_dir().unwrap_or_default().display(),
+            fields = ?kept,
+            "relative state paths already present in the working directory kept as configured"
+        );
+    }
+
     // ── Absolute-URL host trust ────────────────────────────────────────
     // While `site_url` is unconfigured the request Host is echoed into
     // download/block URLs so LAN clients get a reachable address. That value is

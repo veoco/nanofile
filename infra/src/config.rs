@@ -1155,6 +1155,84 @@ fn load_dotenv() {
     }
 }
 
+/// One relative state path handled by [`Config::resolve_state_paths`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathResolution {
+    /// The config field, e.g. `database.url`; used by the startup log so an
+    /// operator can see which file the running instance actually opened.
+    pub field: &'static str,
+    /// The path the field names (absolute once `rewritten`).
+    pub path: PathBuf,
+    /// `true` when the field was rewritten under the base directory, `false`
+    /// when it was left exactly as configured.
+    pub rewritten: bool,
+}
+
+/// Directory that every relative state path in a [`Config`] resolves against.
+///
+/// The working directory cannot be used for this. A Windows `Run` registry
+/// value carries no start directory, so a login-started desktop instance
+/// inherits the launcher's (`C:\Windows\System32`), and even a double-clicked
+/// binary depends on the shortcut's "Start in" field. `[logging] file` has
+/// always resolved against the binary's directory for that reason; the
+/// database, block store and search index now do too. The working directory is
+/// only a fallback for the case where the binary's location cannot be
+/// determined at all.
+pub fn state_path_base() -> PathBuf {
+    crate::common::util::exe_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+/// The database file of a `sqlite:` URL, with its query string, or `None` when
+/// the URL names a different backend, an in-memory database, or no file.
+///
+/// The URL is split exactly the way sqlx does it
+/// (`SqliteConnectOptions::from_str`: strip the scheme, and with it the `//`
+/// optional in the URL form, then cut at the first `?`), so callers ask about
+/// the very string sqlx will use as the file name. `trim_start_matches` strips
+/// *every* leading repetition, which is why `sqlite:///var/lib/x.db` keeps its
+/// leading slash and stays absolute.
+pub(crate) fn sqlite_url_file(url: &str) -> Option<(&str, Option<&str>)> {
+    if !url.starts_with("sqlite:") {
+        return None;
+    }
+    let rest = url
+        .trim_start_matches("sqlite://")
+        .trim_start_matches("sqlite:");
+    let (file, params) = match rest.split_once('?') {
+        Some((file, params)) => (file, Some(params)),
+        None => (rest, None),
+    };
+    // `:memory:`, `file::memory:?cache=shared` and `?mode=memory` (which leaves
+    // the file name empty) name no file on disk.
+    if file.is_empty() || file == ":memory:" || file.starts_with("file::memory") {
+        return None;
+    }
+    Some((file, params))
+}
+
+/// Rewrite a relative directory path under `base`, or record that it is kept
+/// as configured (see [`Config::resolve_state_paths`]).
+fn resolve_dir(
+    field: &'static str,
+    path: &mut PathBuf,
+    base: &Path,
+    keep: bool,
+    out: &mut Vec<PathResolution>,
+) {
+    if path.is_absolute() {
+        return;
+    }
+    if !keep {
+        *path = base.join(&*path);
+    }
+    out.push(PathResolution {
+        field,
+        path: path.clone(),
+        rewritten: !keep,
+    });
+}
+
 impl Config {
     /// Repair externally visible URL fields at load time.
     ///
@@ -1184,6 +1262,84 @@ impl Config {
             return;
         }
         self.server.site_url = trimmed;
+    }
+
+    /// Rewrite every relative state path in this config so it names the same
+    /// file no matter which directory the process was started from.
+    ///
+    /// "Relative" means relative to whatever the working directory happens to
+    /// be, which for a login-started desktop instance is a system directory that
+    /// has nothing to do with the installation (see [`state_path_base`]). The
+    /// database, the block store, the thumbnail and avatar caches and the search
+    /// index are therefore resolved against `base`. `[logging] file` is
+    /// deliberately not touched — `logging::init` already resolves it against
+    /// the same directory and bakes the result into the config file — and
+    /// neither is `storage.ffmpeg_path`, which is a command name looked up on
+    /// `PATH` rather than a state path.
+    ///
+    /// An installation that already keeps its state next to its working
+    /// directory (any configured relative path exists there) is left exactly as
+    /// configured, so upgrading never moves an existing deployment's data. That
+    /// decision is taken once for the whole config: rewriting only the paths
+    /// that do not exist yet would split one installation's state across two
+    /// roots.
+    ///
+    /// The returned [`PathResolution`]s list every relative field that was
+    /// rewritten or deliberately kept, for the startup log.
+    pub fn resolve_state_paths(&mut self, base: &Path) -> Vec<PathResolution> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        self.resolve_state_paths_in(base, &cwd)
+    }
+
+    /// [`Self::resolve_state_paths`] with an explicit working directory, so
+    /// tests never have to change the process's own.
+    fn resolve_state_paths_in(&mut self, base: &Path, cwd: &Path) -> Vec<PathResolution> {
+        // Absolute paths are unambiguous already and are never touched.
+        let relative_database = sqlite_url_file(&self.database.url)
+            .map(|(file, _)| PathBuf::from(file))
+            .filter(|file| !file.is_absolute());
+        let keep = relative_database
+            .iter()
+            .chain([
+                &self.storage.block_dir,
+                &self.storage.temp_dir,
+                &self.storage.thumbnail_dir,
+                &self.storage.avatar_dir,
+                &self.index.index_dir,
+            ])
+            .any(|path| cwd.join(path).exists());
+
+        let mut out = Vec::new();
+
+        // `database.url` needs its URL rebuilt around the new file name rather
+        // than a plain join, and its query string has to survive verbatim.
+        if !keep && let Some((file, params)) = sqlite_url_file(&self.database.url) {
+            let params = params.map(str::to_string);
+            let path = base.join(file);
+            self.database.url = match &params {
+                Some(params) => format!("sqlite:{}?{params}", path.display()),
+                None => format!("sqlite:{}", path.display()),
+            };
+        }
+        if let Some(file) = relative_database {
+            out.push(PathResolution {
+                field: "database.url",
+                path: if keep { file } else { base.join(file) },
+                rewritten: !keep,
+            });
+        }
+
+        for (field, path) in [
+            ("storage.block_dir", &mut self.storage.block_dir),
+            ("storage.temp_dir", &mut self.storage.temp_dir),
+            ("storage.thumbnail_dir", &mut self.storage.thumbnail_dir),
+            ("storage.avatar_dir", &mut self.storage.avatar_dir),
+            ("index.index_dir", &mut self.index.index_dir),
+        ] {
+            resolve_dir(field, path, base, keep, &mut out);
+        }
+
+        out
     }
 
     pub fn load() -> anyhow::Result<Self> {
@@ -2166,6 +2322,143 @@ request_timeout_secs = 600
         assert_eq!(config.database.url, "sqlite:data/nanofile.db?mode=rwc");
         assert_eq!(config.storage.block_dir, PathBuf::from("data/blocks"));
         assert_eq!(config.auth.password_hash_iterations, 600000);
+        // Loading leaves relative paths relative: resolving them is an explicit
+        // startup step (`resolve_state_paths`), so a config file loaded by a
+        // test or a tool never silently points somewhere else.
+        assert_eq!(config.index.index_dir, PathBuf::from("data/index"));
+    }
+
+    #[test]
+    fn sqlite_url_file_splits_urls_the_way_sqlx_does() {
+        assert_eq!(
+            sqlite_url_file("sqlite:data/x.db?mode=rwc"),
+            Some(("data/x.db", Some("mode=rwc")))
+        );
+        // The URL form keeps a relative file name relative...
+        assert_eq!(
+            sqlite_url_file("sqlite://data/x.db?mode=rwc"),
+            Some(("data/x.db", Some("mode=rwc")))
+        );
+        // ...and a rooted one rooted.
+        assert_eq!(
+            sqlite_url_file("sqlite:/var/lib/x.db"),
+            Some(("/var/lib/x.db", None))
+        );
+        assert_eq!(
+            sqlite_url_file("sqlite:///var/lib/x.db"),
+            Some(("/var/lib/x.db", None))
+        );
+        // No file on disk: in-memory forms and every other backend.
+        assert_eq!(sqlite_url_file("sqlite::memory:"), None);
+        assert_eq!(sqlite_url_file("sqlite://?mode=memory"), None);
+        assert_eq!(sqlite_url_file("sqlite:file::memory:?cache=shared"), None);
+        assert_eq!(sqlite_url_file("postgres://localhost/nanofile"), None);
+        assert_eq!(sqlite_url_file(""), None);
+    }
+
+    /// Regression: a desktop instance started at login runs with a working
+    /// directory that has nothing to do with the installation — a Windows `Run`
+    /// registry value carries no start directory, so it inherits
+    /// `C:\Windows\System32` — and there the relative defaults
+    /// (`sqlite:data/nanofile.db?mode=rwc`, `data/blocks`, …) name nothing.
+    #[test]
+    fn resolve_state_paths_rewrites_relative_paths_under_the_base() {
+        let base = PathBuf::from("/opt/nanofile");
+        let cwd = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+
+        let resolved = config.resolve_state_paths_in(&base, cwd.path());
+
+        assert_eq!(
+            config.database.url,
+            format!(
+                "sqlite:{}?mode=rwc",
+                base.join("data/nanofile.db").display()
+            ),
+            "the query string has to survive the rewrite"
+        );
+        assert_eq!(config.storage.block_dir, base.join("data/blocks"));
+        assert_eq!(config.storage.temp_dir, base.join("data/temp"));
+        assert_eq!(config.storage.thumbnail_dir, base.join("data/thumbnails"));
+        assert_eq!(config.storage.avatar_dir, base.join("data/avatars"));
+        assert_eq!(config.index.index_dir, base.join("data/index"));
+
+        assert_eq!(resolved.len(), 6, "every relative field is reported");
+        assert!(resolved.iter().all(|r| r.rewritten));
+        assert!(resolved.iter().any(|r| r.field == "database.url"));
+    }
+
+    /// The `sqlite://` URL spelling is relative too, so it is rewritten as well.
+    #[test]
+    fn resolve_state_paths_rewrites_the_sqlite_url_form() {
+        let base = PathBuf::from("/opt/nanofile");
+        let cwd = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.database.url = "sqlite://data/nanofile.db?mode=rwc".to_string();
+
+        config.resolve_state_paths_in(&base, cwd.path());
+
+        assert_eq!(
+            config.database.url,
+            format!(
+                "sqlite:{}?mode=rwc",
+                base.join("data/nanofile.db").display()
+            )
+        );
+    }
+
+    /// An installation whose state already lives next to its working directory
+    /// keeps every relative path: upgrading must not move a running
+    /// deployment's database, and deciding per path could split one
+    /// installation's state across two roots.
+    #[test]
+    fn resolve_state_paths_keeps_state_that_is_already_in_the_working_directory() {
+        let base = PathBuf::from("/opt/nanofile");
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cwd.path().join("data")).unwrap();
+        std::fs::write(cwd.path().join("data/nanofile.db"), b"").unwrap();
+        let mut config = Config::default();
+
+        let resolved = config.resolve_state_paths_in(&base, cwd.path());
+
+        assert_eq!(config.database.url, "sqlite:data/nanofile.db?mode=rwc");
+        // Not even the paths that do not exist yet move.
+        assert_eq!(config.storage.block_dir, PathBuf::from("data/blocks"));
+        assert_eq!(config.index.index_dir, PathBuf::from("data/index"));
+        assert_eq!(resolved.len(), 6);
+        assert!(resolved.iter().all(|r| !r.rewritten));
+    }
+
+    #[test]
+    fn resolve_state_paths_leaves_absolute_and_non_file_paths_alone() {
+        let base = PathBuf::from("/opt/nanofile");
+        let cwd = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.database.url = "postgres://localhost/nanofile".to_string();
+        config.storage.block_dir = PathBuf::from("/srv/blocks");
+        config.logging.file = Some(PathBuf::from("logs/nanofile.log"));
+
+        let resolved = config.resolve_state_paths_in(&base, cwd.path());
+
+        assert_eq!(config.database.url, "postgres://localhost/nanofile");
+        assert_eq!(config.storage.block_dir, PathBuf::from("/srv/blocks"));
+        // `[logging] file` resolves against the same directory, but inside
+        // `logging::init`, which also writes the resolved path back.
+        assert_eq!(
+            config.logging.file,
+            Some(PathBuf::from("logs/nanofile.log"))
+        );
+        // Only the relative directories are reported (temp, thumbnails,
+        // avatars, index).
+        assert!(resolved.iter().all(|r| r.field != "database.url"));
+        assert_eq!(resolved.len(), 4);
+    }
+
+    #[test]
+    fn state_path_base_is_an_existing_absolute_directory() {
+        let base = state_path_base();
+        assert!(base.is_absolute(), "{base:?}");
+        assert!(base.is_dir(), "{base:?}");
     }
 
     #[test]
