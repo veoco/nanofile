@@ -681,7 +681,11 @@ mod tests {
             std::slice::from_ref(&trust),
         );
         assert_eq!(
-            devices[0].device_trusts.iter().map(|t| t.id).collect::<Vec<_>>(),
+            devices[0]
+                .device_trusts
+                .iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>(),
             vec![9]
         );
         assert!(
@@ -710,7 +714,11 @@ mod tests {
         );
 
         assert_eq!(
-            devices[0].device_trusts.iter().map(|t| t.id).collect::<Vec<_>>(),
+            devices[0]
+                .device_trusts
+                .iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>(),
             vec![1, 2],
             "both rows belong to the device, not to the unattached list"
         );

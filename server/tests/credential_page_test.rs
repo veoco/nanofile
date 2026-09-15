@@ -198,7 +198,10 @@ async fn seed_device_trust(f: &TestFixture, token: &str, device_id: Option<&str>
 #[tokio::test]
 async fn a_trust_that_belongs_to_a_device_is_not_an_unknown_one() {
     let f = TestFixture::new().await;
-    let resp = f.client.login_multipart("test@example.com", "password").await;
+    let resp = f
+        .client
+        .login_multipart("test@example.com", "password")
+        .await;
     assert_eq!(resp.status(), 200);
     seed_device_trust(&f, "trust-known", Some("test-device-123")).await;
 
@@ -210,7 +213,10 @@ async fn a_trust_that_belongs_to_a_device_is_not_an_unknown_one() {
         "a trust with a known device must not reach the leftover section"
     );
     let devices = section_by_id(&body, "devices").expect("the device list");
-    assert!(devices.contains("Test Device"), "the device card is rendered");
+    assert!(
+        devices.contains("Test Device"),
+        "the device card is rendered"
+    );
     assert!(
         devices.contains("This device may skip verification codes"),
         "the trust is listed inside the device card"
