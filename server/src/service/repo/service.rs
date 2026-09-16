@@ -3,8 +3,9 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
 use crate::AccessTokenManager;
+use crate::domain::device::PeerStamp;
 use crate::repository::Repositories;
-use crate::service::auth::token::{ensure_sync_token, generate_sync_token};
+use crate::service::auth::token::{ensure_sync_token_for, ensure_sync_tokens_for_repos};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{format_size, timestamp_rfc3339};
@@ -224,7 +225,11 @@ impl RepoService {
 
     /// Create a new repo.
     ///
-    /// Returns the created RepoInfo and the sync token value.
+    /// Returns the created RepoInfo and the sync token value. `peer` is the
+    /// device the request came from, when it reported one: the new repository's
+    /// token is issued to it, so it shows up under that device immediately
+    /// instead of waiting for the first sync.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_repo(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -238,6 +243,7 @@ impl RepoService {
         magic: Option<String>,
         random_key: Option<String>,
         salt: Option<String>,
+        peer: Option<&PeerStamp>,
         sync_token_ttl_days: u64,
     ) -> Result<(RepoInfo, String), AppError> {
         let name = validate_repo_name(name)?;
@@ -336,21 +342,19 @@ impl RepoService {
             })
             .await?;
 
-        // Generate a sync token
-        let token_value = generate_sync_token();
-        let expires_at =
-            (sync_token_ttl_days > 0).then(|| now + sync_token_ttl_days as i64 * 86400);
-        repos
-            .sync_token
-            .create(
-                &repo_id,
-                user_id,
-                token_value.clone(),
-                None,
-                now,
-                expires_at,
-            )
-            .await?;
+        // Issue the repository's sync token, attributed to the creating device
+        // when it reported one. The membership was just created, so the
+        // permission re-check inside the resolver would only repeat it.
+        let token_value = ensure_sync_tokens_for_repos(
+            repos,
+            std::slice::from_ref(&repo_id),
+            user_id,
+            peer,
+            sync_token_ttl_days,
+        )
+        .await?
+        .remove(&repo_id)
+        .ok_or_else(|| AppError::internal("sync token was not resolved"))?;
 
         let encrypted = encrypted_val == 1;
 
@@ -676,10 +680,14 @@ impl RepoService {
     }
 
     /// Get download info for a repo.
+    ///
+    /// `peer` is the requesting device, when it reported one: the token handed
+    /// back is that device's own, and is attributed to it at issuance.
     pub async fn download_info(
         repos: &Repositories,
         repo_id: &str,
         user_id: i32,
+        peer: Option<&PeerStamp>,
         sync_token_ttl_days: u64,
     ) -> Result<DownloadInfoResponse, AppError> {
         let r = repos
@@ -694,7 +702,8 @@ impl RepoService {
             .await?
             .ok_or_else(|| AppError::NotFound("user not found".into()))?;
 
-        let token_value = ensure_sync_token(repos, repo_id, user_id, sync_token_ttl_days).await?;
+        let token_value =
+            ensure_sync_token_for(repos, repo_id, user_id, peer, sync_token_ttl_days).await?;
 
         Ok(DownloadInfoResponse {
             repo_id: repo_id.to_string(),
@@ -805,16 +814,21 @@ impl RepoService {
     /// Repos the caller has no permission on are silently skipped (matches
     /// official seahub's `RepoTokensView` behaviour) so desktop clients can
     /// batch-request without tripping over non-member repos.
+    ///
+    /// `peer` is the requesting device: each repository gets *that device's*
+    /// token, minted with the device already recorded. A caller with no device
+    /// identity shares the single unattributed token per repository.
     pub async fn repo_tokens(
         repos: &Repositories,
         repo_ids: &[&str],
         user_id: i32,
+        peer: Option<&PeerStamp>,
         sync_token_ttl_days: u64,
     ) -> Result<HashMap<String, String>, AppError> {
         let ids: Vec<String> = repo_ids.iter().map(|s| s.to_string()).collect();
 
-        // Batch-load repos (existence + owner), memberships and existing sync
-        // tokens so the whole batch is ~3 queries instead of 2-3 per repo.
+        // Batch-load repos (existence + owner) and memberships so the whole
+        // batch is ~2 queries instead of 1-2 per repo.
         let repo_map: HashMap<String, repo::Model> = repos
             .repo
             .find_by_ids(&ids)
@@ -825,57 +839,24 @@ impl RepoService {
         let memberships = repos.member.find_by_repo_ids(&ids, user_id).await?;
         let member_repo_ids: HashSet<&str> =
             memberships.iter().map(|m| m.repo_id.as_str()).collect();
-        let token_rows = repos
-            .sync_token
-            .find_by_repos_and_user(&ids, user_id)
-            .await?;
-        let token_map: HashMap<&str, &infra::entity::sync_token::Model> =
-            token_rows.iter().map(|t| (t.repo_id.as_str(), t)).collect();
 
-        let mut result = HashMap::new();
-        for repo_id in repo_ids {
-            // Repo deleted → skip (was NotFound).
-            let Some(repo_model) = repo_map.get(*repo_id) else {
-                continue;
-            };
-            // Owner has access even without a member row; memberships grant
-            // read access. Non-members are skipped (was Forbidden).
-            let has_access = repo_model.owner_id == user_id || member_repo_ids.contains(*repo_id);
-            if !has_access {
-                continue;
-            }
-            // Reuse the existing non-expired token when it can be revealed;
-            // otherwise (expired or undecryptable) mint a fresh one.
-            let reusable = token_map.get(*repo_id).and_then(|t| {
-                let expired = t
-                    .expires_at
-                    .is_some_and(|exp| chrono::Utc::now().timestamp() > exp);
-                if expired {
-                    None
-                } else {
-                    repos.sync_token.reveal_token(t)
-                }
-            });
-            let token = match reusable {
-                Some(raw) => raw,
-                None => {
-                    if let Some(t) = token_map.get(*repo_id) {
-                        let _ = repos.sync_token.delete_by_id(t.id).await;
-                    }
-                    let value = generate_sync_token();
-                    let now = chrono::Utc::now().timestamp();
-                    let expires_at =
-                        (sync_token_ttl_days > 0).then(|| now + sync_token_ttl_days as i64 * 86400);
-                    repos
-                        .sync_token
-                        .create(repo_id, user_id, value.clone(), None, now, expires_at)
-                        .await?;
-                    value
-                }
-            };
-            result.insert(repo_id.to_string(), token);
-        }
-        Ok(result)
+        // Only repos the caller may read are worth a token row.
+        let allowed: Vec<String> = repo_ids
+            .iter()
+            .copied()
+            .filter(|repo_id| {
+                // Repo deleted → skip (was NotFound).
+                let Some(repo_model) = repo_map.get(*repo_id) else {
+                    return false;
+                };
+                // Owner has access even without a member row; memberships grant
+                // read access. Non-members are skipped (was Forbidden).
+                repo_model.owner_id == user_id || member_repo_ids.contains(*repo_id)
+            })
+            .map(str::to_string)
+            .collect();
+
+        ensure_sync_tokens_for_repos(repos, &allowed, user_id, peer, sync_token_ttl_days).await
     }
 
     /// List repos with v2.1 response format.

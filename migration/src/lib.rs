@@ -76,6 +76,7 @@ migrations!(
     m20260910_000001_create_api_keys,
     m20260912_000001_migrate_webdav_keys_into_api_keys,
     m20260913_000001_add_source_and_user_agent_to_api_tokens,
+    m20260915_000001_sync_token_per_device,
 );
 
 #[cfg(test)]

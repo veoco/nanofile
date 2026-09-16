@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, createRepo } from "../helpers/api";
+import { ADMIN_EMAIL, ADMIN_PASSWORD } from "../helpers/server";
 
 let state: ReturnType<typeof readState>;
 
@@ -88,5 +89,48 @@ test("the summary strip and the device detail both render", async ({ page }) => 
   if (await device.count()) {
     await device.getByText("Credentials held by this device").click();
     await expect(device).toContainText("Unlinking removes");
+  }
+});
+
+test("a token a device asks for is shown under it before it ever syncs", async ({ page }) => {
+  // A device that identifies itself, the way a desktop client logs in.
+  const deviceId = `dev-attr-${Date.now()}`;
+  const login = await fetch(`${state.baseURL}/api2/auth-token/`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      username: ADMIN_EMAIL,
+      password: ADMIN_PASSWORD,
+      platform: "linux",
+      device_id: deviceId,
+      device_name: "Attributed Device",
+      client_version: "3.0.4",
+    }),
+  });
+  if (!login.ok) throw new Error(`device login failed: ${login.status} ${await login.text()}`);
+  const { token } = (await login.json()) as { token: string };
+
+  // It receives a repository token but makes no /seafhttp/ request, so the
+  // server only knows the device from the request that asked for it.
+  const name = `e2e-attributed-${Date.now()}`;
+  const repoId = await createRepo(state.baseURL, token, name);
+  const res = await fetch(`${state.baseURL}/api2/repo-tokens/?repos=${repoId}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`mint sync token failed: ${res.status} ${await res.text()}`);
+  const tokens = (await res.json()) as Record<string, string>;
+  expect(tokens[repoId]).toBeTruthy();
+
+  await page.goto("/settings/credentials/");
+  const card = page.locator(`[data-device-key="linux:${deviceId}"]`);
+  await expect(card).toBeVisible();
+  await card.getByText("Credentials held by this device").click();
+  await expect(card).toContainText("Sync token");
+  await expect(card).toContainText(name);
+
+  // And the token is not filed as unattributed either.
+  const leftovers = page.locator("#sync-tokens");
+  if ((await leftovers.count()) > 0) {
+    await expect(leftovers.locator("tr").filter({ hasText: name })).toHaveCount(0);
   }
 });

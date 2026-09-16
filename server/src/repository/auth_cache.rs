@@ -12,9 +12,10 @@
 //! - A cached entry whose `expires_at` has passed is evicted on read.
 //! - Any `create`/`delete*` clears the whole cache (rare operations), so a
 //!   regenerated or revoked token takes effect immediately.
-//! - `update_peer_info` does **not** clear the cache: it is called on nearly
-//!   every sync request and only touches peer fields that the auth layer never
-//!   reads from the cached model.
+//! - `attach_peer_if_unset`/`touch_peer` do **not** clear the cache: they run on
+//!   the sync path and only touch peer fields that the auth layer never reads
+//!   from the cached model. Which request wins an attribution is decided by the
+//!   conditional UPDATE against the database, never by a cached value.
 //! - The auth layer still checks user existence + `is_active` against the DB on
 //!   every request, so a stale cached token cannot authenticate a deleted or
 //!   deactivated account (defense in depth).
@@ -27,6 +28,8 @@ use async_trait::async_trait;
 
 use base::error::AppError;
 use infra::entity::{api_key, api_token, sync_token};
+
+use crate::domain::device::PeerStamp;
 
 use super::api_key::{
     ApiKeyBinding, ApiKeyLookup, ApiKeyRepository, CreateApiKeyParams, UpdateApiKeyParams,
@@ -108,20 +111,26 @@ impl CachingSyncTokenRepository {
 
 #[async_trait]
 impl SyncTokenRepository for CachingSyncTokenRepository {
-    async fn find_by_repo_and_user(
+    async fn find_by_repo_user_peer(
         &self,
         repo_id: &str,
         user_id: i32,
+        peer_id: Option<&str>,
     ) -> Result<Option<sync_token::Model>, AppError> {
-        self.inner.find_by_repo_and_user(repo_id, user_id).await
+        self.inner
+            .find_by_repo_user_peer(repo_id, user_id, peer_id)
+            .await
     }
 
-    async fn find_by_repos_and_user(
+    async fn find_by_repos_user_peer(
         &self,
         repo_ids: &[String],
         user_id: i32,
+        peer_id: Option<&str>,
     ) -> Result<Vec<sync_token::Model>, AppError> {
-        self.inner.find_by_repos_and_user(repo_ids, user_id).await
+        self.inner
+            .find_by_repos_user_peer(repo_ids, user_id, peer_id)
+            .await
     }
 
     async fn find_by_token(&self, token: &str) -> Result<Option<sync_token::Model>, AppError> {
@@ -148,13 +157,13 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
         repo_id: &str,
         user_id: i32,
         token: String,
-        client_peername: Option<String>,
+        peer: Option<&PeerStamp>,
         now: i64,
         expires_at: Option<i64>,
     ) -> Result<(), AppError> {
         let result = self
             .inner
-            .create(repo_id, user_id, token, client_peername, now, expires_at)
+            .create(repo_id, user_id, token, peer, now, expires_at)
             .await;
         // A regenerated token may shadow a cached one for the same device.
         self.cache.clear();
@@ -213,24 +222,24 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
         result
     }
 
-    async fn update_peer_info(
+    async fn attach_peer_if_unset(&self, id: i32, peer: &PeerStamp) -> Result<bool, AppError> {
+        // Deliberately does not clear the cache: peer info is not consulted by
+        // authentication, and this runs on the first sync of every token. The
+        // conditional UPDATE is what decides who wins, never a cached value.
+        self.inner.attach_peer_if_unset(id, peer).await
+    }
+
+    async fn touch_peer(
         &self,
-        model: sync_token::Model,
-        peer_id: Option<String>,
-        peer_name: Option<String>,
+        id: i32,
         peer_ip: Option<String>,
         client_version: Option<String>,
-        last_sync_time: Option<i64>,
+        last_sync_time: i64,
     ) -> Result<(), AppError> {
+        // Same reason as `attach_peer_if_unset`: a cached row's peer columns do
+        // not affect any authorization decision.
         self.inner
-            .update_peer_info(
-                model,
-                peer_id,
-                peer_name,
-                peer_ip,
-                client_version,
-                last_sync_time,
-            )
+            .touch_peer(id, peer_ip, client_version, last_sync_time)
             .await
     }
 
@@ -555,18 +564,20 @@ mod tests {
             Ok(Some(model))
         }
 
-        async fn find_by_repo_and_user(
+        async fn find_by_repo_user_peer(
             &self,
             _repo_id: &str,
             _user_id: i32,
+            _peer_id: Option<&str>,
         ) -> Result<Option<sync_token::Model>, AppError> {
             Ok(None)
         }
 
-        async fn find_by_repos_and_user(
+        async fn find_by_repos_user_peer(
             &self,
             _repo_ids: &[String],
             _user_id: i32,
+            _peer_id: Option<&str>,
         ) -> Result<Vec<sync_token::Model>, AppError> {
             Ok(Vec::new())
         }
@@ -584,7 +595,7 @@ mod tests {
             _repo_id: &str,
             _user_id: i32,
             _token: String,
-            _client_peername: Option<String>,
+            _peer: Option<&PeerStamp>,
             _now: i64,
             _expires_at: Option<i64>,
         ) -> Result<(), AppError> {
@@ -632,14 +643,20 @@ mod tests {
             Ok(0)
         }
 
-        async fn update_peer_info(
+        async fn attach_peer_if_unset(
             &self,
-            _model: sync_token::Model,
-            _peer_id: Option<String>,
-            _peer_name: Option<String>,
+            _id: i32,
+            _peer: &PeerStamp,
+        ) -> Result<bool, AppError> {
+            Ok(false)
+        }
+
+        async fn touch_peer(
+            &self,
+            _id: i32,
             _peer_ip: Option<String>,
             _client_version: Option<String>,
-            _last_sync_time: Option<i64>,
+            _last_sync_time: i64,
         ) -> Result<(), AppError> {
             Ok(())
         }

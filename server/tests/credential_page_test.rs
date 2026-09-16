@@ -142,6 +142,15 @@ fn section_by_id<'a>(body: &'a str, id: &str) -> Option<&'a str> {
     Some(&body[start..end])
 }
 
+/// The device the fixture's multipart login reports (`login_multipart`).
+fn test_device() -> server::domain::device::PeerStamp {
+    server::domain::device::PeerStamp {
+        id: "test-device-123".to_string(),
+        name: Some("Test Device".to_string()),
+        client_version: None,
+    }
+}
+
 /// The regression this page exists for: a client that reports no device details
 /// used to be invisible, because the old query selected on `platform`.
 #[tokio::test]
@@ -274,14 +283,7 @@ async fn a_sync_token_for_a_known_device_is_not_listed_as_unknown() {
     f.server
         .repos
         .sync_token
-        .update_peer_info(
-            attached,
-            Some("test-device-123".to_string()),
-            Some("Test Device".to_string()),
-            None,
-            None,
-            Some(2_000),
-        )
+        .attach_peer_if_unset(attached.id, &test_device())
         .await
         .expect("attach the token to the device");
 
@@ -320,14 +322,7 @@ async fn a_sync_token_for_a_known_device_is_not_listed_as_unknown() {
     f.server
         .repos
         .sync_token
-        .update_peer_info(
-            second,
-            Some("test-device-123".to_string()),
-            Some("Test Device".to_string()),
-            None,
-            None,
-            Some(2_000),
-        )
+        .attach_peer_if_unset(second.id, &test_device())
         .await
         .expect("attach the last token");
 
@@ -372,11 +367,11 @@ async fn a_sync_token_can_be_revoked_by_id() {
         "the sync token was revoked"
     );
 
-    // The section holds leftovers only, so it disappears with its last entry
-    // rather than staying behind to announce that there are none.
+    // The section holds unattributed tokens only, so it disappears with its
+    // last entry rather than staying behind to announce that there are none.
     let after = visible(&page(&client, &f.server.base_url).await);
     assert!(
-        !after.contains("Unknown repository sync tokens"),
+        !after.contains("Unattributed repository sync tokens"),
         "the section is gone once nothing is unowned"
     );
 }
@@ -442,14 +437,7 @@ async fn another_accounts_credential_cannot_be_revoked() {
     f.server
         .repos
         .sync_token
-        .create(
-            &other_repo,
-            other,
-            "peer-token".to_string(),
-            Some("x".into()),
-            1,
-            None,
-        )
+        .create(&other_repo, other, "peer-token".to_string(), None, 1, None)
         .await
         .expect("seed another account's sync token");
     let foreign_id = f

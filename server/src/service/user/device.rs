@@ -15,15 +15,19 @@ impl DeviceService {
     /// Unlink (revoke) a device by removing the credentials it owns.
     ///
     /// Scoped to the device: its sessions, its 2FA trust, and the sync tokens
-    /// the sync protocol linked to it (`peer_id` carries the client's
-    /// `client_id`).
+    /// issued to it (`peer_id` carries the client's `client_id`, recorded when
+    /// the device asked for a token or first synced with one).
     ///
     /// It used to also delete *every* sync token the user held, because a token
     /// whose `peer_id` is NULL cannot be attributed to any device. That made
     /// unlinking a phone silently stop a laptop syncing, and the justification
-    /// is gone: such tokens are now listed in the credential inventory and can
-    /// be revoked one by one, so leaving them alone leaves nothing
-    /// unmanageable.
+    /// is gone: each device now holds its own tokens, so unlinking one cannot
+    /// touch another's, and an unattributed token stays listed in the
+    /// credential inventory where it can be revoked one by one.
+    ///
+    /// A token left by an older build may still be shared by two devices: it is
+    /// attributed to the first of them, so unlinking the *other* one does not
+    /// revoke it. Revoke that token by id, or have the device re-acquire one.
     pub async fn unlink_device(
         &self,
         user_id: i32,

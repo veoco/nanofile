@@ -130,13 +130,16 @@ impl SyncService {
 
     /// Get all repos accessible to a user with their sync tokens.
     ///
-    /// Batch-loads repos, owners and sync tokens so the total work is a
-    /// handful of queries instead of ~4-5 per member repo.
+    /// Batch-loads repos and owners, and resolves every token in two batched
+    /// queries, so the total work is a handful of queries instead of ~4-5 per
+    /// member repo. `peer` is the requesting device: each library gets that
+    /// device's own token.
     pub async fn accessible_repos(
         &self,
         user_id: i32,
         sync_token_ttl_days: u64,
         repo_scope: &crate::domain::permission::RepoScope,
+        peer: Option<&crate::domain::device::PeerStamp>,
     ) -> Result<Vec<AccessibleRepo>, AppError> {
         let memberships = self.repos.member.find_by_user_id(user_id).await?;
 
@@ -167,52 +170,23 @@ impl SyncService {
         let owner_email: HashMap<i32, String> =
             owners.iter().map(|u| (u.id, u.email.clone())).collect();
 
-        // Existing sync tokens for all member repos in a single query.
-        let tokens = self
-            .repos
-            .sync_token
-            .find_by_repos_and_user(&repo_ids, user_id)
-            .await?;
-        let token_by_repo: HashMap<&str, &infra::entity::sync_token::Model> =
-            tokens.iter().map(|t| (t.repo_id.as_str(), t)).collect();
+        // Membership already grants access, so the permission check inside the
+        // single-repo resolver would only repeat it; resolve the whole batch.
+        let mut tokens = crate::service::auth::token::ensure_sync_tokens_for_repos(
+            &self.repos,
+            &repo_ids,
+            user_id,
+            peer,
+            sync_token_ttl_days,
+        )
+        .await?;
 
         let mut result = Vec::with_capacity(memberships.len());
         for member in &memberships {
             let Some(r) = repo_by_id.get(member.repo_id.as_str()) else {
                 continue; // repo deleted → skip, matching the previous behavior
             };
-            // Reuse the existing non-expired token when it can be revealed;
-            // otherwise (expired or undecryptable) mint a fresh one.
-            let reusable = token_by_repo.get(r.id.as_str()).and_then(|t| {
-                let expired = t
-                    .expires_at
-                    .is_some_and(|exp| chrono::Utc::now().timestamp() > exp);
-                if expired {
-                    None
-                } else {
-                    self.repos.sync_token.reveal_token(t)
-                }
-            });
-            let token = match reusable {
-                Some(raw) => raw,
-                None => {
-                    // Membership already grants access, so the permission
-                    // re-check inside ensure_sync_token is redundant here.
-                    // Create (or replace an expired) token directly.
-                    if let Some(t) = token_by_repo.get(r.id.as_str()) {
-                        let _ = self.repos.sync_token.delete_by_id(t.id).await;
-                    }
-                    let value = crate::service::auth::token::generate_sync_token();
-                    let now = chrono::Utc::now().timestamp();
-                    let expires_at =
-                        (sync_token_ttl_days > 0).then(|| now + sync_token_ttl_days as i64 * 86400);
-                    self.repos
-                        .sync_token
-                        .create(&r.id, user_id, value.clone(), None, now, expires_at)
-                        .await?;
-                    value
-                }
-            };
+            let token = tokens.remove(r.id.as_str()).unwrap_or_default();
             result.push(AccessibleRepo {
                 repo_id: r.id.clone(),
                 repo_name: r.name.clone(),

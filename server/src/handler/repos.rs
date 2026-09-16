@@ -163,6 +163,7 @@ pub async fn create_repo(
             .map_err(|e| AppError::BadRequest(format!("invalid form body: {e}")))?
     };
 
+    let peer = auth.device.as_ref().map(|device| device.peer());
     let (repo_info, _token) = service::RepoService::create_repo(
         state.db.as_ref(),
         &state.repos,
@@ -176,6 +177,7 @@ pub async fn create_repo(
         repo_req.magic.clone(),
         repo_req.random_key.clone(),
         repo_req.salt.clone(),
+        peer.as_ref(),
         state.config.auth.sync_token_ttl_days,
     )
     .await?;
@@ -500,10 +502,12 @@ pub async fn download_info(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<DownloadInfoResponse>, AppError> {
+    let peer = auth.device.as_ref().map(|device| device.peer());
     let info = service::RepoService::download_info(
         &state.repos,
         &repo_id,
         auth.user_id,
+        peer.as_ref(),
         state.config.auth.sync_token_ttl_days,
     )
     .await?;
@@ -595,10 +599,12 @@ pub async fn repo_tokens(
         .filter(|s| !s.is_empty() && scope.allows(s))
         .collect();
 
+    let peer = auth.device.as_ref().map(|device| device.peer());
     let result = service::RepoService::repo_tokens(
         &state.repos,
         &repo_ids,
         auth.user_id,
+        peer.as_ref(),
         state.config.auth.sync_token_ttl_days,
     )
     .await?;
@@ -671,6 +677,7 @@ pub async fn create_default_repo(
     let id = match default_id {
         Some(id) => id,
         None => {
+            let peer = auth.device.as_ref().map(|device| device.peer());
             let (repo_info, _token) = service::RepoService::create_repo(
                 state.db.as_ref(),
                 &state.repos,
@@ -684,6 +691,7 @@ pub async fn create_default_repo(
                 None,
                 None,
                 None,
+                peer.as_ref(),
                 state.config.auth.sync_token_ttl_days,
             )
             .await?;

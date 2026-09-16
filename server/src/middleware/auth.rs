@@ -7,6 +7,7 @@ use crate::AppState;
 use crate::domain::api_key::KeyAuthority;
 use crate::domain::capability::{RouteAccess, required_access};
 use crate::domain::credential::Credential;
+use crate::domain::device::DeviceIdentity;
 use crate::domain::permission::RepoScope;
 use crate::domain::repo_path;
 use crate::repository::Repositories;
@@ -21,6 +22,13 @@ pub struct AuthUser {
     /// Never [`Credential::SyncToken`]: repository-scoped tokens are accepted
     /// only by the sync protocol (see [`SyncAuth`]).
     pub credential: Credential,
+    /// The device that authenticated, when the credential carries one.
+    ///
+    /// A client API token records the `device_id` its login reported; a cookie
+    /// session and a unified API key have no device. Endpoints that mint a
+    /// repository sync token use this to attach the token to its device at
+    /// issuance instead of waiting for the first sync to reveal it.
+    pub device: Option<DeviceIdentity>,
 }
 
 impl AuthUser {
@@ -51,6 +59,10 @@ pub struct SyncAuth {
     /// What authenticated the request: a repository sync token, an account
     /// token, or a unified API key.
     pub credential: Credential,
+    /// The device behind the request, when it can be told: the peer already
+    /// recorded on the presented sync token, the `device_id` of the account
+    /// token, or the `client_id` the sync protocol put in the URL.
+    pub device: Option<DeviceIdentity>,
 }
 
 impl SyncAuth {
@@ -116,13 +128,26 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
                 return Err(base::error::AppError::Forbidden);
             }
 
-            // Capture client_id, client_name, client_ver from URL query params
-            // and update the sync_token's peer info. This mirrors seafile-server's
-            // RepoTokenPeerInfo table for device linking.
-            if let Some(query) = parts.uri.query()
-                && let Ok(params) =
-                    serde_urlencoded::from_str::<std::collections::HashMap<String, String>>(query)
-                && let Some(client_id) = params.get("client_id")
+            // Capture client_id, client_name, client_ver from the URL query.
+            // The sync protocol identifies the device there (`seaf-daemon` adds
+            // them to `permission-check`; see `fileserver/sync_api.go`).
+            let hint = client_hint(parts);
+
+            // A token that is already attributed keeps that attribution: peer
+            // info is insert-once, so one device can never take another's token
+            // over (upstream's `RepoTokenPeerInfo` behaves the same way).
+            if let Some(device) = &hint
+                && record.peer_id.as_deref().is_none_or(str::is_empty)
+            {
+                let _ = repos
+                    .sync_token
+                    .attach_peer_if_unset(record.id, &device.peer())
+                    .await;
+            }
+
+            // The volatile columns still follow the request, throttled so a
+            // syncing client's many small requests do not each cost a write.
+            if let Some(device) = &hint
                 && repos.peer_info_writes.allows_now(record.id)
             {
                 let now = chrono::Utc::now().timestamp();
@@ -138,26 +163,24 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
                     });
                 let _ = repos
                     .sync_token
-                    .update_peer_info(
-                        record,
-                        Some(client_id.clone()),
-                        params.get("client_name").cloned(),
-                        peer_ip,
-                        params.get("client_ver").cloned(),
-                        Some(now),
-                    )
+                    .touch_peer(record.id, peer_ip, device.client_version.clone(), now)
                     .await;
             }
 
+            let device = device_from_token(&record).or(hint);
             return Ok(SyncAuth {
                 user_id,
                 repo_id,
                 credential: Credential::SyncToken,
+                device,
             });
         }
 
-        // Fall back to a unified API key or a session API token.
-        SyncAuth::from_token(
+        // Fall back to a unified API key or a session API token. Neither has a
+        // device of its own, so the URL's `client_id` is the only identity the
+        // request may carry (used when a client asks for its repository tokens
+        // before it has one).
+        let mut auth = SyncAuth::from_token(
             repos,
             &token,
             url_repo_id.as_deref(),
@@ -165,7 +188,11 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             parts.uri.path(),
         )
         .await
-        .map_err(|_| base::error::AppError::Forbidden)
+        .map_err(|_| base::error::AppError::Forbidden)?;
+        if auth.device.is_none() {
+            auth.device = client_hint(parts);
+        }
+        Ok(auth)
     }
 }
 
@@ -256,7 +283,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         let key_lookup = key_lookup.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let api_record = api_record.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let (user_id, credential) = if let Some(lookup) = key_lookup {
+        let (user_id, credential, device) = if let Some(lookup) = key_lookup {
             if is_token_expired(lookup.key.expires_at) {
                 return Err(StatusCode::UNAUTHORIZED);
             }
@@ -271,7 +298,8 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             note_key_usage(repos, lookup.key.id).await;
             let credential = Credential::Key(authority);
             enforce_route_access(&credential, parts)?;
-            (lookup.key.user_id, credential)
+            // A unified API key belongs to no device.
+            (lookup.key.user_id, credential, None)
         } else if let Some(token_record) = api_record {
             // Check API token expiration.
             if is_token_expired(token_record.expires_at) {
@@ -283,7 +311,8 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             }
             let credential = Credential::Session;
             enforce_route_access(&credential, parts)?;
-            (token_record.user_id, credential)
+            let device = device_from_api_token(&token_record);
+            (token_record.user_id, credential, device)
         } else {
             return Err(StatusCode::UNAUTHORIZED);
         };
@@ -303,8 +332,49 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             user_id: user_record.id,
             email: user_record.email,
             credential,
+            device,
         })
     }
+}
+
+/// The device an account token was issued to, when its login reported one.
+///
+/// A browser session and a client that sent no device details both carry a
+/// `NULL` `device_id`, and both correctly yield `None` here.
+fn device_from_api_token(record: &infra::entity::api_token::Model) -> Option<DeviceIdentity> {
+    DeviceIdentity::new(
+        record.platform.clone(),
+        record.device_id.clone(),
+        record.device_name.clone(),
+        record.client_version.clone(),
+    )
+}
+
+/// The device a sync token is already attributed to.
+fn device_from_token(record: &infra::entity::sync_token::Model) -> Option<DeviceIdentity> {
+    DeviceIdentity::new(
+        None,
+        record.peer_id.clone(),
+        record.peer_name.clone(),
+        record.client_version.clone(),
+    )
+}
+
+/// The device the sync protocol named in the request URL.
+///
+/// `seaf-daemon` appends `client_id`/`client_name`/`client_ver` to the sync
+/// requests it makes (upstream's fileserver reads the same three parameters in
+/// `permissionCheckCB`), so they identify the device even when the credential
+/// that authenticated the request carries no device of its own.
+fn client_hint(parts: &Parts) -> Option<DeviceIdentity> {
+    let params: std::collections::HashMap<String, String> =
+        serde_urlencoded::from_str(parts.uri.query().unwrap_or_default()).ok()?;
+    DeviceIdentity::new(
+        None,
+        params.get("client_id").cloned(),
+        params.get("client_name").cloned(),
+        params.get("client_ver").cloned(),
+    )
 }
 
 /// Apply a credential's capability and library limits to a request.
@@ -463,10 +533,12 @@ impl SyncAuth {
 
             ensure_active_user(repos, record.user_id).await?;
 
+            let device = device_from_token(&record);
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: record.repo_id,
                 credential: Credential::SyncToken,
+                device,
             });
         }
 
@@ -512,6 +584,7 @@ impl SyncAuth {
                 user_id: lookup.key.user_id,
                 repo_id: url_repo_id.unwrap_or("").to_string(),
                 credential: Credential::Key(authority),
+                device: None,
             });
         }
 
@@ -541,10 +614,12 @@ impl SyncAuth {
 
             ensure_active_user(repos, record.user_id).await?;
 
+            let device = device_from_api_token(&record);
             return Ok(SyncAuth {
                 user_id: record.user_id,
                 repo_id: url_repo_id.unwrap_or("").to_string(),
                 credential: Credential::Session,
+                device,
             });
         }
 

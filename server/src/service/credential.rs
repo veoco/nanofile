@@ -142,6 +142,11 @@ const EXPIRING_SOON_SECS: i64 = 7 * 24 * 60 * 60;
 /// owner actually has. A device is keyed by `platform` + `device_id` — stable
 /// identifiers a client reports — and never by its name, which is display text
 /// two machines can legitimately share.
+///
+/// A repository has one sync token *per device*: it is issued to the device
+/// that asked for it, or claimed by the first device to use one minted without
+/// a device identity. A token without an owner (or whose device no longer has
+/// a session) is listed separately by the page.
 #[derive(Debug, Clone)]
 pub struct DeviceGroup {
     pub platform: String,

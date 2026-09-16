@@ -14,6 +14,7 @@ pub mod api_key;
 pub mod capability;
 pub mod commit;
 pub mod credential;
+pub mod device;
 pub mod fs;
 pub mod permission;
 pub mod repo_path;

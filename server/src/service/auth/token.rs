@@ -1,8 +1,13 @@
 use rand::Rng;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use base::error::AppError;
+use infra::entity::sync_token;
+
+use crate::domain::device::PeerStamp;
+use crate::repository::Repositories;
 
 const TOKEN_LEN: usize = 40;
 
@@ -39,45 +44,184 @@ pub async fn verify_body_sync_token(
         .is_some_and(|u| u.is_active))
 }
 
-/// Return the existing sync token for a repo/user, or create a new one.
+/// Return the sync token the caller should use for one repository, or create it.
 ///
 /// Requires read permission on the repo (a sync token grants repo access).
-pub async fn ensure_sync_token(
-    repos: &crate::repository::Repositories,
+pub async fn ensure_sync_token_for(
+    repos: &Repositories,
     repo_id: &str,
     user_id: i32,
+    peer: Option<&PeerStamp>,
     sync_token_ttl_days: u64,
 ) -> Result<String, AppError> {
     crate::domain::permission::check_repo_read_permission(repos.member.as_ref(), repo_id, user_id)
         .await?;
 
-    let now = chrono::Utc::now().timestamp();
+    let mut tokens = ensure_sync_tokens_for_repos(
+        repos,
+        std::slice::from_ref(&repo_id.to_string()),
+        user_id,
+        peer,
+        sync_token_ttl_days,
+    )
+    .await?;
 
-    // Reuse an existing non-expired token; replace an expired one.
-    if let Some(existing) = repos
-        .sync_token
-        .find_by_repo_and_user(repo_id, user_id)
-        .await?
-    {
-        let expired = existing.expires_at.is_some_and(|exp| now > exp);
-        if !expired {
-            // Tokens are stored as ciphertext; reveal the raw value. A row that
-            // cannot be decrypted (e.g. the server secret changed) is treated as
-            // invalid and replaced rather than surfaced as an error.
-            if let Some(raw) = repos.sync_token.reveal_token(&existing) {
-                return Ok(raw);
-            }
-        }
-        repos.sync_token.delete_by_id(existing.id).await?;
+    tokens
+        .remove(repo_id)
+        .ok_or_else(|| AppError::internal("sync token was not resolved"))
+}
+
+/// Resolve the sync token of many repositories at once.
+///
+/// A token belongs to one `(repository, user, device)`; the caller has already
+/// checked that the user may read every repository. Resolution per repository:
+///
+/// 1. the device's own token is reused;
+/// 2. failing that, an *unattributed* token — one minted by a caller with no
+///    device identity, or left by a build that never recorded a peer — is
+///    claimed for this device;
+/// 3. failing that, a fresh token is minted with the device already recorded,
+///    so the credential inventory shows it under its device before the first
+///    sync. A caller with no device (a browser session or an API key) shares
+///    the single unattributed token per repository, as it always has.
+///
+/// The two loads are batched so an account syncing twenty libraries pays two
+/// queries rather than forty.
+pub async fn ensure_sync_tokens_for_repos(
+    repos: &Repositories,
+    repo_ids: &[String],
+    user_id: i32,
+    peer: Option<&PeerStamp>,
+    sync_token_ttl_days: u64,
+) -> Result<HashMap<String, String>, AppError> {
+    if repo_ids.is_empty() {
+        return Ok(HashMap::new());
     }
 
+    let peer_id = peer.map(|p| p.id.as_str());
+    let own: HashMap<String, sync_token::Model> = repos
+        .sync_token
+        .find_by_repos_user_peer(repo_ids, user_id, peer_id)
+        .await?
+        .into_iter()
+        .map(|row| (row.repo_id.clone(), row))
+        .collect();
+    let unattributed: HashMap<String, sync_token::Model> = repos
+        .sync_token
+        .find_by_repos_user_peer(repo_ids, user_id, None)
+        .await?
+        .into_iter()
+        .map(|row| (row.repo_id.clone(), row))
+        .collect();
+
+    let now = chrono::Utc::now().timestamp();
+    let mut tokens = HashMap::with_capacity(repo_ids.len());
+    for repo_id in repo_ids {
+        let token = resolve_repo_token(
+            repos,
+            repo_id,
+            user_id,
+            peer,
+            own.get(repo_id),
+            unattributed.get(repo_id),
+            now,
+            sync_token_ttl_days,
+        )
+        .await?;
+        tokens.insert(repo_id.clone(), token);
+    }
+    Ok(tokens)
+}
+
+/// The token to use for one repository, given the candidate rows already
+/// loaded. See [`ensure_sync_tokens_for_repos`] for the rules.
+#[allow(clippy::too_many_arguments)]
+async fn resolve_repo_token(
+    repos: &Repositories,
+    repo_id: &str,
+    user_id: i32,
+    peer: Option<&PeerStamp>,
+    own: Option<&sync_token::Model>,
+    unattributed: Option<&sync_token::Model>,
+    now: i64,
+    sync_token_ttl_days: u64,
+) -> Result<String, AppError> {
+    // 1. The device's own token wins.
+    if let Some(row) = own {
+        if let Some(raw) = reusable(repos, row, now) {
+            return Ok(raw);
+        }
+        repos.sync_token.delete_by_id(row.id).await?;
+    }
+
+    // 2. An unattributed token may be claimed; with no device it is shared.
+    if let Some(row) = unattributed {
+        if let Some(raw) = reusable(repos, row, now) {
+            match peer {
+                None => return Ok(raw),
+                Some(peer) => {
+                    if repos.sync_token.attach_peer_if_unset(row.id, peer).await? {
+                        return Ok(raw);
+                    }
+                    // A concurrent request attached it first. If it became ours
+                    // (a retry of our own request), reuse it; otherwise it now
+                    // belongs to another device and we mint our own.
+                    if let Some(mine) = repos
+                        .sync_token
+                        .find_by_repo_user_peer(repo_id, user_id, Some(&peer.id))
+                        .await?
+                        && let Some(raw) = reusable(repos, &mine, now)
+                    {
+                        return Ok(raw);
+                    }
+                }
+            }
+        } else {
+            // Expired or undecryptable. Only a still-unattributed row may be
+            // dropped: one that was claimed meanwhile belongs to someone else.
+            let still_unattributed = repos
+                .sync_token
+                .find_by_repo_user_peer(repo_id, user_id, None)
+                .await?
+                .is_some();
+            if still_unattributed {
+                repos.sync_token.delete_by_id(row.id).await?;
+            }
+        }
+    }
+
+    // 3. Mint a fresh token, attributed to this device when there is one.
     let token_value = generate_sync_token();
     let expires_at = (sync_token_ttl_days > 0).then(|| now + sync_token_ttl_days as i64 * 86400);
-    repos
+    if let Err(error) = repos
         .sync_token
-        .create(repo_id, user_id, token_value.clone(), None, now, expires_at)
-        .await?;
+        .create(repo_id, user_id, token_value.clone(), peer, now, expires_at)
+        .await
+    {
+        // Two concurrent requests for the same device may both reach here; the
+        // unique `(repo, user, peer)` index lets only one insert through, and
+        // the loser can simply use the row the winner created.
+        if let Some(peer) = peer
+            && let Some(mine) = repos
+                .sync_token
+                .find_by_repo_user_peer(repo_id, user_id, Some(&peer.id))
+                .await?
+            && let Some(raw) = reusable(repos, &mine, now)
+        {
+            return Ok(raw);
+        }
+        return Err(error);
+    }
     Ok(token_value)
+}
+
+/// The raw value of a row that is still usable, or `None` when it is expired or
+/// its ciphertext cannot be decrypted (the server secret changed).
+fn reusable(repos: &Repositories, row: &sync_token::Model, now: i64) -> Option<String> {
+    if row.expires_at.is_some_and(|expires| now > expires) {
+        return None;
+    }
+    repos.sync_token.reveal_token(row)
 }
 
 pub fn generate_api_token() -> String {
