@@ -21,6 +21,12 @@ pub struct FsChange {
     pub obj_id: String,
     /// Previous path for rename/move operations.
     pub old_path: Option<String>,
+    /// True on a `"delete"` whose old path was reported as a `"rename"` or
+    /// `"move"` in the same result set (i.e. the same obj_id was re-emitted at
+    /// a new path). The delete is kept so consumers can still clean up the old
+    /// path, but activity logging must skip it: official seafevents records a
+    /// rename as a single event.
+    pub superseded: bool,
 }
 
 /// Walk an FS tree from `root_fs_id` using a level frontier (no recursion)
@@ -111,6 +117,7 @@ pub async fn diff_trees(
                     size: entry.size,
                     obj_id: entry.id,
                     old_path: None,
+                    superseded: false,
                 }
             })
             .collect();
@@ -126,8 +133,8 @@ pub async fn diff_trees(
     // old and new directory at one path; an absent side means the whole subtree
     // is new (created) or gone (deleted). Delete changes are emitted as soon as
     // an old-only entry is found; renames/moves are matched afterwards by
-    // obj_id so the output keeps both the delete and the rename/move, exactly
-    // like the full-tree reference diff.
+    // obj_id. A delete whose obj_id is re-emitted at a new path is then marked
+    // `superseded` so consumers can tell it apart from a real delete.
     struct Frame {
         old_fs_id: Option<String>,
         new_fs_id: String,
@@ -257,6 +264,7 @@ pub async fn diff_trees(
                                         size: new_entry.size,
                                         obj_id: new_entry.id.clone(),
                                         old_path: None,
+                                        superseded: false,
                                     });
                                     // If the old side was a directory, its
                                     // subtree is gone and must be deleted.
@@ -299,22 +307,23 @@ pub async fn diff_trees(
         frontier = next;
     }
 
-    // Match creates against deleted entries by obj_id to detect renames/moves.
-    // Deletes are never un-emitted; a rename adds a rename/move change in
-    // addition to the delete of the old path. When an obj_id appears on several
+    // Match creates against deleted entries by obj_id to detect renames/moves,
+    // mirroring seafevents' `CommitDiffer(handle_rename=True)`: an entry that
+    // moved to a new path is reported once, as a rename (same parent directory)
+    // or a move (different parent directory). When an obj_id appears on several
     // deleted paths, the last-collected path wins (deterministic frame order).
+    let mut superseded_ids: Vec<String> = Vec::new();
     for (path, entry) in created {
         let is_dir = entry.mode & 0o40000 != 0;
         if let Some(deleted_list) = obj_to_deleted.get_mut(&entry.id)
             && let Some((old_path, _old_entry)) = deleted_list.pop()
         {
-            let old_name = file_name(&old_path);
-            let new_name = file_name(&path);
-            let op_type = if old_name == new_name {
-                "move"
-            } else {
+            let op_type = if parent_dir(&old_path) == parent_dir(&path) {
                 "rename"
+            } else {
+                "move"
             };
+            superseded_ids.push(entry.id.clone());
             changes.push(FsChange {
                 op_type,
                 obj_type: if is_dir { "dir" } else { "file" },
@@ -322,6 +331,7 @@ pub async fn diff_trees(
                 size: entry.size,
                 obj_id: entry.id,
                 old_path: Some(old_path),
+                superseded: false,
             });
         } else {
             changes.push(FsChange {
@@ -331,7 +341,19 @@ pub async fn diff_trees(
                 size: entry.size,
                 obj_id: entry.id,
                 old_path: None,
+                superseded: false,
             });
+        }
+    }
+
+    // Mark the delete of each matched old path. The delete stays in the result
+    // (the indexer needs it to drop the old path) but is flagged so that
+    // activity logging can skip it: a rename is one event, not rename + delete.
+    if !superseded_ids.is_empty() {
+        for c in changes.iter_mut() {
+            if c.op_type == "delete" && superseded_ids.iter().any(|id| id == &c.obj_id) {
+                c.superseded = true;
+            }
         }
     }
 
@@ -349,12 +371,15 @@ fn join_path(prefix: &str, name: &str) -> String {
     }
 }
 
-/// Extract the final path segment of an absolute path.
-fn file_name(path: &str) -> &str {
-    std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
+/// Extract the parent directory of an absolute path (`"/"` for a top-level
+/// entry).
+fn parent_dir(path: &str) -> &str {
+    match path.rsplit_once('/') {
+        None => "/",
+        Some((_, "")) => path,
+        Some(("", _)) => "/",
+        Some((dir, _)) => dir,
+    }
 }
 
 /// Build a `delete` change for an old-side entry that no longer exists.
@@ -370,6 +395,7 @@ fn delete_change(path: &str, entry: &DirEntryData) -> FsChange {
         size: entry.size,
         obj_id: entry.id.clone(),
         old_path: None,
+        superseded: false,
     }
 }
 
@@ -459,6 +485,7 @@ mod tests {
                     size: entry.size,
                     obj_id: entry.id.clone(),
                     old_path: None,
+                    superseded: false,
                 });
                 obj_to_deleted
                     .entry(&entry.id)
@@ -466,18 +493,18 @@ mod tests {
                     .push((path.as_str(), entry));
             }
         }
+        let mut superseded_ids: Vec<&str> = Vec::new();
         for (path, entry) in &new_entries {
             let is_dir = entry.mode & 0o40000 != 0;
             if let Some(deleted_list) = obj_to_deleted.get_mut(&entry.id.as_str())
                 && let Some((old_path, _old_entry)) = deleted_list.pop()
             {
-                let old_name = file_name(old_path);
-                let new_name = file_name(path);
-                let op_type = if old_name == new_name {
-                    "move"
-                } else {
+                let op_type = if parent_dir(old_path) == parent_dir(path) {
                     "rename"
+                } else {
+                    "move"
                 };
+                superseded_ids.push(entry.id.as_str());
                 changes.push(FsChange {
                     op_type,
                     obj_type: if is_dir { "dir" } else { "file" },
@@ -485,6 +512,7 @@ mod tests {
                     size: entry.size,
                     obj_id: entry.id.clone(),
                     old_path: Some(old_path.to_string()),
+                    superseded: false,
                 });
                 continue;
             }
@@ -496,6 +524,7 @@ mod tests {
                     size: entry.size,
                     obj_id: entry.id.clone(),
                     old_path: None,
+                    superseded: false,
                 });
             }
         }
@@ -510,8 +539,14 @@ mod tests {
                         size: new_entry.size,
                         obj_id: new_entry.id.clone(),
                         old_path: None,
+                        superseded: false,
                     });
                 }
+            }
+        }
+        for c in changes.iter_mut() {
+            if c.op_type == "delete" && superseded_ids.iter().any(|id| *id == c.obj_id) {
+                c.superseded = true;
             }
         }
         changes.sort_by(|a, b| a.path.cmp(&b.path));
@@ -526,6 +561,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(inc, full, "incremental != full\nfull={full:?}\ninc={inc:?}");
+    }
+
+    /// Assert exactly which changes a diff produces, as
+    /// `"op_type obj_type path[ old_path]"`, plus whether the entry is a
+    /// superseded delete.
+    async fn assert_changes(
+        repos: &Repositories,
+        old_root: &str,
+        new_root: &str,
+        expected: &[(&str, bool)],
+    ) {
+        let changes = diff_trees(repos, REPO, Some(old_root), new_root)
+            .await
+            .unwrap();
+        let actual: Vec<(String, bool)> = changes
+            .iter()
+            .map(|c| {
+                let mut s = format!("{} {} {}", c.op_type, c.obj_type, c.path);
+                if let Some(op) = c.old_path.as_deref() {
+                    s.push(' ');
+                    s.push_str(op);
+                }
+                (s, c.superseded)
+            })
+            .collect();
+        let expected: Vec<(String, bool)> = expected
+            .iter()
+            .map(|(s, sup)| ((*s).to_string(), *sup))
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "unexpected diff for {old_root} -> {new_root}"
+        );
     }
 
     #[tokio::test]
@@ -562,6 +630,18 @@ mod tests {
         insert_dir(&db, "root-old", &[("f1", false, "a.txt")]).await;
         insert_dir(&db, "root-new", &[("f1", false, "b.txt")]).await;
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
+        // A rename keeps the file in the same parent directory. The delete of
+        // the old path is superseded — activity logging must skip it.
+        assert_changes(
+            &repos,
+            "root-old",
+            "root-new",
+            &[
+                ("delete file /a.txt", true),
+                ("rename file /b.txt /a.txt", false),
+            ],
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -575,6 +655,45 @@ mod tests {
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
     }
 
+    /// A file moved to a different directory is a `move`, not a `rename`
+    /// (matching seafevents' `commit_differ.py`, which compares the parent
+    /// directory).
+    #[tokio::test]
+    async fn test_diff_file_move_to_other_dir_is_move() {
+        let db = setup_diff_db().await;
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
+        insert_dir(&db, "root-old", &[("f1", false, "a.txt")]).await;
+        insert_dir(&db, "root-new", &[("d1", true, "d")]).await;
+        insert_dir(&db, "d1", &[("f1", false, "a.txt")]).await;
+        assert_changes(
+            &repos,
+            "root-old",
+            "root-new",
+            &[
+                ("delete file /a.txt", true),
+                ("create dir /d", false),
+                ("move file /d/a.txt /a.txt", false),
+            ],
+        )
+        .await;
+    }
+
+    /// A pure delete (no path reuses the object id) stays a plain delete.
+    #[tokio::test]
+    async fn test_diff_delete_is_not_superseded() {
+        let db = setup_diff_db().await;
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
+        insert_dir(&db, "root-old", &[("f1", false, "a.txt")]).await;
+        insert_dir(&db, "root-new", &[]).await;
+        assert_changes(
+            &repos,
+            "root-old",
+            "root-new",
+            &[("delete file /a.txt", false)],
+        )
+        .await;
+    }
+
     #[tokio::test]
     async fn test_diff_dir_rename_internal_unchanged() {
         let db = setup_diff_db().await;
@@ -584,6 +703,21 @@ mod tests {
         insert_dir(&db, "root-new", &[("d1", true, "e")]).await;
         insert_dir(&db, "d1", &[("f1", false, "a.txt")]).await;
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
+        // The children are still reported individually (a pre-existing trait of
+        // this diff, unchanged here), but the deletes their matches consume are
+        // flagged so activity logging reports only the rename and the move.
+        assert_changes(
+            &repos,
+            "root-old",
+            "root-new",
+            &[
+                ("delete dir /d", true),
+                ("delete file /d/a.txt", true),
+                ("rename dir /e /d", false),
+                ("move file /e/a.txt /d/a.txt", false),
+            ],
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -595,6 +729,22 @@ mod tests {
         insert_dir(&db, "root-new", &[("d2", true, "e")]).await;
         insert_dir(&db, "d2", &[("f1", false, "a.txt"), ("f3", false, "c.txt")]).await;
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
+        // The dir object id changed (a child was added), so the directory
+        // itself is no longer a rename: it is reported as a delete + create.
+        // The unchanged child keeps its id and is still matched as a move.
+        assert_changes(
+            &repos,
+            "root-old",
+            "root-new",
+            &[
+                ("delete dir /d", false),
+                ("delete file /d/a.txt", true),
+                ("create dir /e", false),
+                ("move file /e/a.txt /d/a.txt", false),
+                ("create file /e/c.txt", false),
+            ],
+        )
+        .await;
     }
 
     #[tokio::test]

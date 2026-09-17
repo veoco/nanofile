@@ -661,6 +661,199 @@ pub async fn get_sync_token(client: &client::TestClient, api_token: &str, repo_i
     body["token"].as_str().unwrap().to_string()
 }
 
+// ── Sync-protocol commit helpers ─────────────────────────────────────────
+//
+// The `PUT /seafhttp/repo/{id}/commit/HEAD` path is what desktop/mobile
+// clients drive; its tree diff feeds activity logging and the search index.
+// These helpers build such a commit from a flat dirent list, so tests can
+// exercise renames/moves/edits the way a real client produces them.
+
+/// A file to upload as an fs object: `(name, content, mode)`.
+pub type SyncFileSpec<'a> = (&'a str, &'a [u8], i32);
+
+/// SHA-1 hex of a packed fs object — the object id the server verifies.
+pub fn fs_object_id(data: &[u8]) -> String {
+    infra::crypto::fs_id::sha1_hex(data)
+}
+
+/// Create an empty *file* fs object with a random id and return it.
+///
+/// The id is not content-derived; `recv_fs` stores objects under the id the
+/// client sends and the sync commit references that same id, so a random id is
+/// accepted (the same trick `common/client.rs::upload_file` relies on).
+pub async fn sync_put_file(
+    client: &client::TestClient,
+    token: &str,
+    repo_id: &str,
+    content: &[u8],
+) -> String {
+    // Upload the content as a block and reference it, so the file is a normal
+    // readable object (the indexer re-reads it from block storage).
+    let block_id = fs_object_id(content);
+    let resp = client
+        .put_block(token, repo_id, &block_id, content.to_vec())
+        .await;
+    assert_eq!(resp.status(), 200, "put_block failed");
+
+    let fs = base::common::FsFileData {
+        block_ids: vec![block_id],
+        size: content.len() as i64,
+        obj_type: 1,
+        version: 1,
+    };
+    let json = serde_json::to_string(&fs).unwrap();
+    let id = fs_object_id(json.as_bytes());
+    let packed = infra::serialization::pack_fs::compress_fs_data(json.as_bytes()).unwrap();
+    let mut body = Vec::new();
+    body.extend_from_slice(id.as_bytes());
+    body.extend_from_slice(&(packed.len() as u32).to_be_bytes());
+    body.extend_from_slice(&packed);
+    let decoded = infra::serialization::pack_fs::decode_pack_fs_entries(&body).unwrap();
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0].0, id);
+    let decompressed = infra::serialization::pack_fs::decompress_fs_data(&decoded[0].1).unwrap();
+    assert_eq!(
+        infra::crypto::fs_id::sha1_hex(&decompressed),
+        id,
+        "helpers must agree with the server's strict id check"
+    );
+    let resp = client.recv_fs(token, repo_id, body).await;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        panic!("recv_fs for file object failed: {status} {body}");
+    }
+    id
+}
+
+/// Build and advance a sync commit for a flat root directory.
+///
+/// `entries` is `(file name, content)`; `dirs` is `(directory name,
+/// child entries)`; `parent` is the previous commit id (`None` for the first
+/// commit). Returns the new commit id.
+pub async fn sync_commit(
+    client: &client::TestClient,
+    sync_token: &str,
+    repo_id: &str,
+    entries: &[SyncFileSpec<'_>],
+    dirs: &[(&str, &[SyncFileSpec<'_>])],
+    parent: Option<&str>,
+) -> String {
+    use base::common::{CommitData, DirEntryData, FsDirData};
+
+    let now = chrono::Utc::now().timestamp();
+    let mut root_dirents = Vec::new();
+
+    for (dir_name, dir_files) in dirs {
+        let mut child_dirents = Vec::new();
+        for (name, content, mode) in *dir_files {
+            let file_id = sync_put_file(client, sync_token, repo_id, content).await;
+            child_dirents.push(DirEntryData {
+                id: file_id,
+                mode: *mode,
+                modifier: "test@example.com".to_string(),
+                mtime: now,
+                name: (*name).to_string(),
+                size: content.len() as i64,
+            });
+        }
+        let dir_data = FsDirData {
+            dirents: child_dirents,
+            obj_type: 3,
+            version: 1,
+        };
+        let dir_json = serde_json::to_string(&dir_data).unwrap();
+        let dir_id = fs_object_id(dir_json.as_bytes());
+        let packed = infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(dir_id.as_bytes());
+        body.extend_from_slice(&(packed.len() as u32).to_be_bytes());
+        body.extend_from_slice(&packed);
+        let resp = client.recv_fs(sync_token, repo_id, body).await;
+        assert_eq!(resp.status(), 200, "recv_fs for child dir failed");
+        root_dirents.push(DirEntryData {
+            id: dir_id,
+            mode: 0o40000,
+            modifier: "test@example.com".to_string(),
+            mtime: now,
+            name: (*dir_name).to_string(),
+            size: 0,
+        });
+    }
+
+    for (name, content, mode) in entries {
+        let file_id = sync_put_file(client, sync_token, repo_id, content).await;
+        root_dirents.push(DirEntryData {
+            id: file_id,
+            mode: *mode,
+            modifier: "test@example.com".to_string(),
+            mtime: now,
+            name: (*name).to_string(),
+            size: content.len() as i64,
+        });
+    }
+
+    let root = FsDirData {
+        dirents: root_dirents,
+        obj_type: 3,
+        version: 1,
+    };
+    let root_json = serde_json::to_string(&root).unwrap();
+    let root_id = fs_object_id(root_json.as_bytes());
+    let root_packed =
+        infra::serialization::pack_fs::compress_fs_data(root_json.as_bytes()).unwrap();
+    let mut pack = Vec::new();
+    pack.extend_from_slice(root_id.as_bytes());
+    pack.extend_from_slice(&(root_packed.len() as u32).to_be_bytes());
+    pack.extend_from_slice(&root_packed);
+    let resp = client.recv_fs(sync_token, repo_id, pack).await;
+    assert_eq!(resp.status(), 200, "recv_fs for root failed");
+
+    let commit_id = {
+        // Unique commit id (40 hex chars). A counter keeps repeated commits in
+        // the same test distinct even within the same nanosecond/millisecond.
+        static COMMIT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = COMMIT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        fs_object_id(
+            format!(
+                "{repo_id}:{}:{seq}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or_default()
+            )
+            .as_bytes(),
+        )
+    };
+    let commit = CommitData {
+        commit_id: commit_id.clone(),
+        repo_id: repo_id.to_string(),
+        root_id,
+        creator_name: "test@example.com".to_string(),
+        creator: "0".repeat(40),
+        description: "sync commit".to_string(),
+        ctime: now,
+        parent_id: parent.map(|p| p.to_string()),
+        second_parent_id: None,
+        repo_name: None,
+        repo_desc: None,
+        repo_category: None,
+        encrypted: None,
+        enc_version: None,
+        magic: None,
+        key: None,
+        version: 1,
+    };
+    let body = serde_json::to_string(&commit).unwrap().into_bytes();
+    let resp = client
+        .put_commit(sync_token, repo_id, &commit_id, body)
+        .await;
+    assert_eq!(resp.status(), 200, "put_commit failed");
+    let resp = client.update_branch(sync_token, repo_id, &commit_id).await;
+    assert_eq!(resp.status(), 200, "update_branch failed");
+    commit_id
+}
+
 /// Opinionated test fixture that sets up a server, user, repo, and tokens.
 ///
 /// ```

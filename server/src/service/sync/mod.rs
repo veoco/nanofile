@@ -1164,6 +1164,16 @@ impl SyncService {
                         op = "recover";
                     }
 
+                    // diff_trees keeps the old-path delete of a rename/move (the
+                    // indexer needs it to drop the old path) but marks it
+                    // superseded. seafevents reports a rename as a single
+                    // record, so skip the superseded delete. This runs before
+                    // the prefix filter so an excluded path can never leave the
+                    // delete behind without its rename.
+                    if c.superseded {
+                        return None;
+                    }
+
                     if EXCLUDED_ACTIVITY_PREFIXES
                         .iter()
                         .any(|p| c.path.starts_with(p))
@@ -1219,8 +1229,8 @@ impl SyncService {
                         }
                         "rename" | "move" => {
                             // The old path is removed by its own `delete`
-                            // change in this batch (diff_trees never un-emits
-                            // deletes), so only reindex the new path here.
+                            // change in this batch (diff_trees keeps it, marked
+                            // `superseded`), so only reindex the new path here.
                             spawn_reindex(
                                 indexer.clone(),
                                 block_store.clone(),

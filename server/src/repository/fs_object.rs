@@ -134,7 +134,12 @@ impl FsObjectRepository for DbFsObjectRepository {
         if models.is_empty() {
             return Ok(());
         }
-        fs_object::Entity::insert_many(models)
+        // `ON CONFLICT DO NOTHING` makes a re-uploaded object a no-op, and a
+        // client that re-sends objects an earlier commit already stored (a
+        // retried sync, or a second commit over the same tree) is legitimate.
+        // sea-orm surfaces "every row conflicted" as `RecordNotInserted`; that
+        // is success here, not an error.
+        match fs_object::Entity::insert_many(models)
             .on_conflict(
                 sea_orm::sea_query::OnConflict::columns([
                     fs_object::Column::RepoId,
@@ -144,8 +149,12 @@ impl FsObjectRepository for DbFsObjectRepository {
                 .to_owned(),
             )
             .exec(self.db.as_ref())
-            .await?;
-        Ok(())
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(sea_orm::DbErr::RecordNotInserted) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<fs_object::Model>, AppError> {

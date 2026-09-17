@@ -2,6 +2,7 @@ mod common;
 
 use common::TestFixture;
 use common::create_test_user;
+use common::sync_commit;
 use reqwest::Method;
 use sea_orm::ColumnTrait;
 use sea_orm::ConnectionTrait;
@@ -506,6 +507,69 @@ async fn test_activity_response_fields() {
             .contains("test-repo")
     );
     assert_eq!(ev["count"], 1);
+}
+
+/// A rename performed through the sync protocol (`PUT /commit/HEAD`) must
+/// produce exactly one activity record — the rename — and must NOT also record
+/// a delete of the old path. Matches official seafevents, whose
+/// `CommitDiffer(handle_rename=True)` folds the delete into the rename.
+///
+/// The web rename endpoint is a separate code path that already logged one
+/// event; this covers the client/sync path, which is the one that regressed.
+#[tokio::test]
+async fn test_sync_rename_activity_has_no_delete() {
+    let f = TestFixture::new().await;
+
+    let c1 = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("old.txt", b"rename me", 0o100644)],
+        &[],
+        None,
+    )
+    .await;
+    // Same file object id, new name, same directory → a rename.
+    let c2 = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("old.txt", b"rename me", 0o100644)],
+        &[],
+        Some(&c1),
+    )
+    .await;
+    let c3 = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("new.txt", b"rename me", 0o100644)],
+        &[],
+        Some(&c2),
+    )
+    .await;
+
+    let (events, _) = get_activities(&f, 1, 20).await;
+    let file_events: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["obj_type"] == "file" && e["commit_id"].as_str() == Some(&c3))
+        .collect();
+    assert_eq!(
+        file_events.len(),
+        1,
+        "a sync rename must record exactly one activity, got: {file_events:?}"
+    );
+    assert_eq!(file_events[0]["op_type"], "rename");
+    assert_eq!(file_events[0]["path"], "/new.txt");
+    assert_eq!(file_events[0]["old_path"], "/old.txt");
+
+    // No delete (or aggregated batch delete) may reference the old path.
+    assert!(
+        events
+            .iter()
+            .all(|e| e["op_type"] != "delete" && e["op_type"] != "batch_delete"),
+        "rename must not leave a delete record behind: {events:?}"
+    );
 }
 
 #[tokio::test]

@@ -302,6 +302,60 @@ async fn test_move_updates_index() {
     assert_eq!(results[0]["fullpath"], "/subdir/move_me.txt");
 }
 
+/// A rename performed through the sync protocol (`PUT /commit/HEAD`) must move
+/// the index entry: the new path is searchable and the old path is gone.
+///
+/// The sync path deletes the old path via the `superseded` delete change that
+/// activity logging now skips, so this guards the indexer half of that split.
+#[tokio::test]
+async fn test_sync_rename_updates_index() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+    let content = b"syncrenameuniqueword";
+
+    let c1 = common::sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("idx_old.txt", content, 0o100644)],
+        &[],
+        None,
+    )
+    .await;
+    // Same object id, new name, same directory → the diff reports a rename.
+    common::sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("idx_new.txt", content, 0o100644)],
+        &[],
+        Some(&c1),
+    )
+    .await;
+
+    // One polling loop for both halves: the search endpoint is rate limited
+    // (60/min), so poll at a 500ms interval rather than every 100ms.
+    let mut searchable_at_new_path = false;
+    let mut gone_from_old_path = false;
+    for _ in 0..30 {
+        let results = search_results(&f, token, "syncrenameuniqueword").await;
+        searchable_at_new_path = results.iter().any(|r| r["fullpath"] == "/idx_new.txt");
+        gone_from_old_path = !results.iter().any(|r| r["fullpath"] == "/idx_old.txt");
+        if searchable_at_new_path && gone_from_old_path {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    assert!(
+        searchable_at_new_path,
+        "renamed file should be searchable at its new path"
+    );
+    assert!(
+        gone_from_old_path,
+        "old path must be removed from the index after a sync rename"
+    );
+}
+
 /// Batch delete → all files removed from index.
 #[tokio::test]
 async fn test_batch_delete_cleans_index() {
