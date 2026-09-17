@@ -1241,6 +1241,46 @@ impl SyncService {
                         _ => {}
                     }
                 }
+
+                // A directory whose path changed stands for every file under it.
+                // `diff_trees` reports such a directory once (its contents are
+                // byte-identical, so it does not descend), which means the file
+                // loop above never sees those files — the subtree has to be
+                // re-indexed explicitly.
+                for change in &changes {
+                    if change.obj_type != "dir" {
+                        continue;
+                    }
+                    match (change.op_type, change.old_path.as_deref()) {
+                        ("rename" | "move", Some(old_path)) => {
+                            crate::service::fs::index_sync::spawn_reindex_dir_change(
+                                self.repos.clone(),
+                                indexer.clone(),
+                                block_store.clone(),
+                                repo_id.to_string(),
+                                Some(old_path.to_string()),
+                                Some(change.path.clone()),
+                                base_root_id.clone(),
+                                new_commit.root_id.clone(),
+                            );
+                        }
+                        ("delete", _) => {
+                            // The directory is gone from the new tree, so the old
+                            // path must be resolved against the parent root.
+                            crate::service::fs::index_sync::spawn_reindex_dir_change(
+                                self.repos.clone(),
+                                indexer.clone(),
+                                block_store.clone(),
+                                repo_id.to_string(),
+                                Some(change.path.clone()),
+                                None,
+                                base_root_id.clone(),
+                                new_commit.root_id.clone(),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
             }
 
             events::publish_repo_update(repo_id, new_head.to_string());

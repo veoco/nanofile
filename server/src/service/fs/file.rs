@@ -31,6 +31,8 @@ pub(crate) async fn rename_entry(
     modifier: &str,
     user_id: i32,
     is_dir: bool,
+    indexer: Option<&crate::indexer::TextIndexer>,
+    block_store: &infra::storage::DynBlockStorage,
 ) -> Result<(), AppError> {
     base::sanitize::validate_filename(new_name)
         .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
@@ -59,7 +61,7 @@ pub(crate) async fn rename_entry(
             })
         })?;
 
-    FileOps::update_dir_tree_and_commit(
+    let new_root = FileOps::update_dir_tree_and_commit(
         db,
         repos,
         repo_id,
@@ -98,6 +100,19 @@ pub(crate) async fn rename_entry(
     )
     .await;
 
+    update_dir_index_on_path_change(
+        repos,
+        indexer,
+        block_store,
+        repo_id,
+        path,
+        &new_path,
+        &head_root_id,
+        &new_root,
+        is_dir,
+    )
+    .await;
+
     // Update starred items with the new path (dirs move all items inside).
     if let Err(e) = repos
         .starred
@@ -121,11 +136,52 @@ pub(crate) async fn rename_entry(
 
 // ── Move entry (shared by file and dir services) ─────────────────────────
 
+/// Update the full-text index after a directory's path changed.
+///
+/// A file's index update is handled by the callers (`FileService::rename_file` /
+/// `move_file`); a directory stands for every file underneath it, so it needs a
+/// subtree walk that a single path cannot express. No-op for files and when
+/// indexing is disabled.
+#[allow(clippy::too_many_arguments)]
+async fn update_dir_index_on_path_change(
+    repos: &Repositories,
+    indexer: Option<&crate::indexer::TextIndexer>,
+    block_store: &infra::storage::DynBlockStorage,
+    repo_id: &str,
+    old_path: &str,
+    new_path: &str,
+    old_root: &str,
+    new_root: &str,
+    is_dir: bool,
+) {
+    if !is_dir {
+        return;
+    }
+    let Some(indexer) = indexer else {
+        return;
+    };
+    if let Err(e) = crate::service::fs::index_sync::reindex_dir_change(
+        repos,
+        indexer,
+        block_store,
+        repo_id,
+        Some(old_path),
+        Some(new_path),
+        Some(old_root),
+        new_root,
+    )
+    .await
+    {
+        tracing::warn!("failed to update index for {old_path} -> {new_path}: {e}");
+    }
+}
+
 /// Move a file or directory to a new parent directory using the two-phase
 /// commit sequence (remove from old parent, commit, re-add to new parent).
 ///
 /// `is_dir` controls the commit description, activity type and error wording.
-/// The caller is responsible for index updates (files only).
+/// A moved directory's subtree is re-indexed here; a moved file's index update
+/// is left to the caller.
 pub(crate) async fn move_entry(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -135,6 +191,8 @@ pub(crate) async fn move_entry(
     email: &str,
     user_id: i32,
     is_dir: bool,
+    indexer: Option<&crate::indexer::TextIndexer>,
+    block_store: &infra::storage::DynBlockStorage,
 ) -> Result<String, AppError> {
     let head_root_id = get_head_root_id(db, repo_id).await?;
     let entry_name = basename(path);
@@ -242,7 +300,7 @@ pub(crate) async fn move_entry(
     let now = chrono::Utc::now().timestamp();
     let email_clone = email.to_string();
     let entry_name_clone = entry_name.to_string();
-    FileOps::update_dir_tree_and_commit(
+    let new_root = FileOps::update_dir_tree_and_commit(
         db,
         repos,
         repo_id,
@@ -285,6 +343,19 @@ pub(crate) async fn move_entry(
         None,
         None,
         None,
+    )
+    .await;
+
+    update_dir_index_on_path_change(
+        repos,
+        indexer,
+        block_store,
+        repo_id,
+        path,
+        &new_path,
+        &head_root_id,
+        &new_root,
+        is_dir,
     )
     .await;
 
@@ -779,6 +850,8 @@ impl FileService {
             email,
             user_id,
             false,
+            self.indexer.as_ref(),
+            &self.block_store,
         )
         .await?;
 
@@ -821,6 +894,8 @@ impl FileService {
             email,
             user_id,
             false,
+            self.indexer.as_ref(),
+            &self.block_store,
         )
         .await?;
 

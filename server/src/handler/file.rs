@@ -181,6 +181,8 @@ pub async fn file_post_handler(
                 &access.user.email,
                 access.user.user_id,
                 false,
+                None,
+                &state.block_store,
             )
             .await?;
             return Ok(Json(serde_json::Value::String("success".to_string())));
@@ -517,6 +519,8 @@ pub async fn create_file_v21(
             &access.user.email,
             access.user.user_id,
             false,
+            None,
+            &state.block_store,
         )
         .await?;
         return Ok(ok_json());

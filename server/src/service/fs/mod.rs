@@ -2,6 +2,7 @@ pub mod dir;
 pub mod exif;
 pub mod file;
 pub mod fileops;
+pub(crate) mod index_sync;
 pub mod metadata;
 pub mod quota;
 pub mod search;

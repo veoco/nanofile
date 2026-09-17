@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use futures::StreamExt;
 use std::sync::Arc;
 use tantivy::Index;
 use tantivy::ReloadPolicy;
@@ -318,9 +319,92 @@ impl TextIndexer {
         Ok(())
     }
 
+    /// Run `delete_file` on a blocking thread for every path, then schedule a
+    /// single debounced commit.
+    ///
+    /// Used when a directory is deleted or renamed: one lock acquisition and one
+    /// commit for the whole batch instead of one per path.
+    pub async fn delete_files(&self, repo_id: &str, paths: &[String]) -> Result<(), AppError> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let idx = self.clone();
+        let repo_id = repo_id.to_string();
+        let paths: Vec<String> = paths.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+            let mut writer = idx
+                .writer
+                .lock()
+                .map_err(|e| AppError::internal(format!("indexer mutex poisoned: {e}")))?;
+            for path in &paths {
+                idx.delete_docs_inner(&mut writer, &repo_id, path)?;
+            }
+            idx.pending.fetch_add(paths.len(), Ordering::Relaxed);
+            Ok(())
+        })
+        .await
+        .map_err(|e| AppError::internal(format!("indexer delete task failed: {e}")))??;
+
+        self.schedule_debounced_commit();
+        Ok(())
+    }
+
     /// Whether there are uncommitted index operations since the last commit.
     pub(crate) fn has_pending(&self) -> bool {
         self.pending.load(Ordering::Relaxed) > 0
+    }
+
+    /// Re-index a directory's files by absolute path, returning how many were
+    /// indexed.
+    ///
+    /// The read + tokenize per file is heavy, so the batch is bounded; Tantivy
+    /// writes coalesce into the usual debounced commit.
+    pub async fn reindex_files(
+        &self,
+        repo_id: &str,
+        paths: &[String],
+        block_store: &DynBlockStorage,
+    ) -> Result<u64, AppError> {
+        if paths.is_empty() {
+            return Ok(0);
+        }
+        let results: Vec<Result<bool, AppError>> = futures::stream::iter(paths.iter().cloned())
+            .map(|fullpath| {
+                let indexer = self.clone();
+                let block_store = block_store.clone();
+                let rid = repo_id.to_string();
+                async move { indexer.reindex_file(&rid, &fullpath, &block_store).await }
+            })
+            .buffer_unordered(8)
+            .collect()
+            .await;
+        let mut indexed = 0;
+        for (path, result) in paths.iter().zip(results) {
+            match result {
+                Ok(true) => indexed += 1,
+                Ok(false) => {}
+                // Empty/Binary files resolve to false; a failure means the
+                // content could not be read, which the caller cannot act on.
+                Err(e) => tracing::warn!("failed to reindex {path}: {e}"),
+            }
+        }
+        Ok(indexed)
+    }
+
+    /// Re-index every file underneath a directory, returning how many were
+    /// indexed.
+    ///
+    /// Used when a directory is renamed or moved: every file below it has a new
+    /// path, so each one must be re-read and re-written even though its content
+    /// did not change. `dir_fs_id` is the directory's *new* fs object id.
+    pub async fn reindex_dir(
+        &self,
+        repo_id: &str,
+        dir_fs_id: &str,
+        block_store: &DynBlockStorage,
+    ) -> Result<u64, AppError> {
+        let paths = collect_file_paths_under(self.repos(), repo_id, dir_fs_id, "").await?;
+        self.reindex_files(repo_id, &paths, block_store).await
     }
 
     /// Coalesce writes into a single commit shortly after the last one: when
@@ -977,6 +1061,60 @@ fn text_content_sniff(data: &[u8]) -> bool {
     std::str::from_utf8(head).is_ok()
 }
 
+/// Collect the absolute repo paths (with a leading `/`) of every file in the
+/// tree rooted at `dir_fs_id`.
+///
+/// `base_path` is the directory's own repo path (`/docs`, or `""` for the repo
+/// root); returned paths are `base_path` joined with each descendant's relative
+/// path, so they match the paths the index stores.
+///
+/// Directories themselves are not indexable, so only files are returned. The
+/// queue is bounded by `TreeGuard` (level count and visited nodes), matching the
+/// other tree walks, so a pathological tree cannot run away here.
+pub(crate) async fn collect_file_paths_under(
+    repos: &Repositories,
+    repo_id: &str,
+    dir_fs_id: &str,
+    base_path: &str,
+) -> Result<Vec<String>, AppError> {
+    use base::common::S_IFDIR;
+
+    let join = |prefix: &str, name: &str| {
+        if prefix.is_empty() {
+            format!("/{name}")
+        } else {
+            format!("{prefix}/{name}")
+        }
+    };
+
+    let mut results = Vec::new();
+    let mut frontier = vec![(dir_fs_id.to_string(), base_path.to_string())];
+    let mut guard = crate::fs::core::traversal::TreeGuard::new();
+    while !frontier.is_empty() {
+        guard.enter_level()?;
+        guard.visit(frontier.len())?;
+        let ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
+        let dir_map = crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &ids).await?;
+
+        let mut next = Vec::new();
+        for (current_id, prefix) in frontier {
+            let Some(dir_data) = dir_map.get(&current_id) else {
+                continue; // EMPTY_SHA1 or missing directory
+            };
+            for entry in &dir_data.dirents {
+                let path = join(&prefix, &entry.name);
+                if entry.mode & S_IFDIR != 0 {
+                    next.push((entry.id.clone(), path));
+                } else {
+                    results.push(path);
+                }
+            }
+        }
+        frontier = next;
+    }
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1015,6 +1153,111 @@ mod tests {
     fn test_is_indexable_text_empty() {
         // Empty file should be valid.
         assert!(is_indexable_text("notes.txt", b""));
+    }
+
+    /// One directory object: its fs id and its `(entry id, is_dir, name)` list.
+    type TreeDir<'a> = (&'a str, &'a [(&'a str, bool, &'a str)]);
+
+    /// A minimal `fs_objects` table and one directory object per entry list, so
+    /// the subtree walk can be exercised without a server.
+    async fn setup_tree_db(dirs: &[TreeDir<'_>]) -> Arc<crate::repository::Repositories> {
+        use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        db.execute_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TABLE fs_objects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id VARCHAR(36) NOT NULL,
+                fs_id VARCHAR(40) NOT NULL,
+                obj_type TINYINT NOT NULL,
+                data TEXT NOT NULL
+            );",
+        ))
+        .await
+        .unwrap();
+
+        for (fs_id, entries) in dirs {
+            let items: Vec<String> = entries
+                .iter()
+                .map(|(id, is_dir, name)| {
+                    let mode = if *is_dir { 0o40000 } else { 0o100644 };
+                    format!(
+                        r#"{{"id":"{id}","mode":{mode},"modifier":"u1","mtime":1000,"name":"{name}","size":0}}"#
+                    )
+                })
+                .collect();
+            let data = format!(
+                r#"{{"dirents":[{}],"type":3,"version":1}}"#,
+                items.join(",")
+            );
+            db.execute_raw(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "INSERT INTO fs_objects (repo_id, fs_id, obj_type, data) \
+                     VALUES ('repo-1', '{fs_id}', 3, '{data}')"
+                ),
+            ))
+            .await
+            .unwrap();
+        }
+
+        Arc::new(crate::repository::Repositories::new_for_tests(Arc::new(db)))
+    }
+
+    /// The walk must produce repo-absolute paths: a subtree's files keep their
+    /// parent path, not just their own name. Reporting `/note.txt` for a file
+    /// actually at `/docs/note.txt` is what made the index update delete the
+    /// old entry and then fail to re-index the new one.
+    #[tokio::test]
+    async fn test_collect_file_paths_under_is_repo_absolute() {
+        let repos = setup_tree_db(&[
+            ("d1", &[("f1", false, "top.txt"), ("d2", true, "sub")]),
+            ("d2", &[("f2", false, "nested.txt")]),
+        ])
+        .await;
+
+        let mut paths = collect_file_paths_under(&repos, "repo-1", "d1", "/docs")
+            .await
+            .unwrap();
+        paths.sort();
+        assert_eq!(paths, vec!["/docs/sub/nested.txt", "/docs/top.txt"]);
+    }
+
+    /// A directory with no files yields no paths.
+    #[tokio::test]
+    async fn test_collect_file_paths_under_empty_dir() {
+        let repos = setup_tree_db(&[("d1", &[])]).await;
+        let paths = collect_file_paths_under(&repos, "repo-1", "d1", "/empty")
+            .await
+            .unwrap();
+        assert!(paths.is_empty());
+    }
+
+    /// A batch delete removes every requested document with one commit.
+    #[tokio::test]
+    async fn test_delete_files_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let indexer = TextIndexer::new(dir.path(), None).unwrap();
+        for name in ["/a.txt", "/b.txt", "/keep.txt"] {
+            indexer
+                .index_file("repo-1", name, name, "shared batchdeleteword")
+                .unwrap();
+        }
+        indexer.commit().unwrap();
+
+        indexer
+            .delete_files("repo-1", &["/a.txt".to_string(), "/b.txt".to_string()])
+            .await
+            .unwrap();
+        indexer.commit().unwrap();
+
+        let results = indexer
+            .search("batchdeleteword", &["repo-1".to_string()], 10, 0, false)
+            .await
+            .unwrap();
+        let paths: Vec<&str> = results.iter().map(|h| h.fullpath.as_str()).collect();
+        assert_eq!(paths, vec!["/keep.txt"], "deleted paths must be gone");
     }
 
     #[test]

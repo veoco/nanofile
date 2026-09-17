@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 
-use super::collect_file_paths;
-use crate::indexer::TextIndexer;
+use crate::indexer::{TextIndexer, collect_file_paths_under};
 use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::EMPTY_SHA1;
@@ -131,7 +130,7 @@ impl AdminService {
             return Ok((0, 0));
         }
 
-        let file_paths = collect_file_paths(&self.repos, repo_id, &head.root_id).await?;
+        let file_paths = collect_file_paths_under(&self.repos, repo_id, &head.root_id, "").await?;
         let total = file_paths.len() as u64;
 
         let results: Vec<Result<bool, AppError>> = futures::stream::iter(file_paths)

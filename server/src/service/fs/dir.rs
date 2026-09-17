@@ -418,6 +418,8 @@ impl DirService {
             modifier,
             user_id,
             true,
+            self.indexer.as_ref(),
+            &self.block_store,
         )
         .await
     }
@@ -512,6 +514,8 @@ impl DirService {
             email,
             user_id,
             true,
+            self.indexer.as_ref(),
+            &self.block_store,
         )
         .await
         .map(|_| ())

@@ -356,6 +356,209 @@ async fn test_sync_rename_updates_index() {
     );
 }
 
+/// Poll `search_results` until `gone` is absent and every path in `want` is
+/// present, or fail.
+///
+/// The search endpoint is rate limited (60/min), so this runs one poll per test
+/// rather than polling before and after the operation.
+async fn wait_for_paths(
+    f: &common::TestFixture,
+    token: &str,
+    q: &str,
+    want: &[&str],
+    gone: &[&str],
+) {
+    let ok = |results: &[serde_json::Value]| {
+        want.iter()
+            .all(|w| results.iter().any(|h| h["fullpath"].as_str() == Some(*w)))
+            && gone
+                .iter()
+                .all(|g| !results.iter().any(|h| h["fullpath"].as_str() == Some(*g)))
+    };
+    for _ in 0..20 {
+        if ok(&search_results(f, token, q).await) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    let results = search_results(f, token, q).await;
+    panic!("expected paths {want:?} (and not {gone:?}) for {q:?}; last results: {results:?}");
+}
+
+/// Renaming a *directory* via the web API must move the index entries of the
+/// files inside it to the new path, and moving the directory must move them
+/// again.
+///
+/// The directory rename path used to skip index updates entirely, which left
+/// every file under a renamed directory unsearchable (the old path no longer
+/// resolves in the FS tree, so the stale index hit was dropped).
+#[tokio::test]
+async fn test_dir_rename_and_move_update_index() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    assert_eq!(
+        f.client
+            .create_dir(token, &f.repo_id, "/docs")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        f.client
+            .upload_file(token, &f.repo_id, "/docs", "note.txt", b"dirrenameword")
+            .await
+            .status(),
+        200
+    );
+
+    // Rename the directory. `/docs/note.txt` is already indexed by the upload,
+    // so a single poll after the rename proves the entry moved (not merely that
+    // it became searchable).
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/repos/{}/dir/rename/", f.repo_id),
+            Some(token),
+            &serde_json::json!({"repo_id": f.repo_id, "p": "/docs", "new_name": "manuals"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "dir rename failed");
+    wait_for_paths(
+        &f,
+        token,
+        "dirrenameword",
+        &["/manuals/note.txt"],
+        &["/docs/note.txt"],
+    )
+    .await;
+
+    // Move it under another directory.
+    assert_eq!(
+        f.client
+            .create_dir(token, &f.repo_id, "/dst")
+            .await
+            .status(),
+        200
+    );
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/repos/{}/dir/move/", f.repo_id),
+            Some(token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "p": "/manuals",
+                "new_parent_dir": "/dst",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "dir move failed");
+    wait_for_paths(
+        &f,
+        token,
+        "dirrenameword",
+        &["/dst/manuals/note.txt"],
+        &["/manuals/note.txt"],
+    )
+    .await;
+}
+
+/// A sync client that renames a directory reports it as a single directory
+/// event; the files inside must still move in the index.
+#[tokio::test]
+async fn test_sync_dir_rename_updates_index() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+    let content = b"syncdirrenameword";
+
+    let c1 = common::sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[],
+        &[("docs", &[("note.txt", content.as_slice(), 0o100644)])],
+        None,
+    )
+    .await;
+
+    common::sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[],
+        &[("manuals", &[("note.txt", content.as_slice(), 0o100644)])],
+        Some(&c1),
+    )
+    .await;
+
+    wait_for_paths(
+        &f,
+        token,
+        "syncdirrenameword",
+        &["/manuals/note.txt"],
+        &["/docs/note.txt"],
+    )
+    .await;
+}
+
+/// Deleting a directory must drop the index entries of every file inside it,
+/// not just a document for the directory path itself.
+#[tokio::test]
+async fn test_dir_delete_cleans_index_subtree() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    assert_eq!(
+        f.client
+            .create_dir(token, &f.repo_id, "/gone")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        f.client
+            .upload_file(token, &f.repo_id, "/gone", "note.txt", b"dirdelword")
+            .await
+            .status(),
+        200
+    );
+
+    let resp = f
+        .client
+        .delete(
+            &format!("/api2/repos/{}/dir/?p=/gone", f.repo_id),
+            Some(token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "dir delete failed");
+
+    wait_for_paths(&f, token, "dirdelword", &[], &["/gone/note.txt"]).await;
+}
+
+/// The same for a directory deleted by a sync client: the directory is reported
+/// once, so the files under it must be cleared explicitly.
+#[tokio::test]
+async fn test_sync_dir_delete_cleans_index_subtree() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+    let content = b"syncdirdelword";
+
+    let c1 = common::sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[],
+        &[("gone", &[("note.txt", content.as_slice(), 0o100644)])],
+        None,
+    )
+    .await;
+    // Commit 2 drops the directory from the root.
+    common::sync_commit(&f.client, &f.sync_token, &f.repo_id, &[], &[], Some(&c1)).await;
+
+    wait_for_paths(&f, token, "syncdirdelword", &[], &["/gone/note.txt"]).await;
+}
+
 /// Batch delete → all files removed from index.
 #[tokio::test]
 async fn test_batch_delete_cleans_index() {
