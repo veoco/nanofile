@@ -549,8 +549,14 @@ pub async fn restore_trash_items(
     let mut parent_ids: Vec<String> = parent_fs_id_map
         .values()
         .filter_map(|v| v.clone())
-        .filter(|id| id != infra::common::EMPTY_SHA1)
         .collect();
+    // The root's dirents are needed as well: a `/`-level restore has to notice an
+    // existing entry with the same name, and the root id is not in the map above
+    // (only non-"/" parents are resolved there).
+    if let Some(root) = &head_root_id {
+        parent_ids.push(root.clone());
+    }
+    parent_ids.retain(|id| id != infra::common::EMPTY_SHA1);
     parent_ids.sort();
     parent_ids.dedup();
     let dir_map = crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &parent_ids).await?;
@@ -612,14 +618,12 @@ pub async fn restore_trash_items(
             }
         };
 
-        if parent_fs_id == infra::common::EMPTY_SHA1 {
-            failed.push(RevertFailedItem {
-                commit_id: item.commit_id.clone(),
-                path: item.full_path.clone(),
-                error_msg: format!("Directory {} not found.", item.parent_dir),
-            });
-            continue;
-        }
+        // `parent_fs_id` may legitimately be `EMPTY_SHA1`: it is the sentinel of
+        // an existing but *empty* directory, which is exactly what the root of a
+        // library whose last file was deleted is. Restoring into it works (the
+        // readers synthesize an empty directory for the sentinel), and a parent
+        // that genuinely disappeared resolved to `None` above instead of
+        // reaching this point.
 
         if let Some(dir_data) = dir_map.get(&parent_fs_id)
             && dir_data.dirents.iter().any(|d| d.name == item.obj_name)
@@ -632,8 +636,18 @@ pub async fn restore_trash_items(
             continue;
         }
 
-        let now = chrono::Utc::now().timestamp();
+        // Bytes this restore puts back into the tree. The trash row's `size` is
+        // only meaningful for a file — a directory dirent carries no size of its
+        // own — so a directory's subtree is walked here. Measured before the
+        // commit, so a missing object fails the item without mutating anything.
         let entry_size = model.size;
+        let restored_size = if is_dir {
+            crate::fs::core::compute_tree_size(repos, repo_id, &obj_id).await?
+        } else {
+            entry_size
+        };
+
+        let now = chrono::Utc::now().timestamp();
         let description = format!("Recovered {}", item.obj_name);
 
         let result = FileOps::update_dir_tree_and_commit(
@@ -667,6 +681,11 @@ pub async fn restore_trash_items(
         match result {
             Ok(_) => {
                 successful_ids.push(trash_id);
+
+                // The commit linked the entry — and, for a directory, its whole
+                // subtree — back into HEAD, so the bytes the delete path
+                // subtracted have to come back with it.
+                crate::fs::core::adjust_repo_size(repos, repo_id, restored_size).await?;
 
                 // Log activity
                 activity_log::log_activity(
