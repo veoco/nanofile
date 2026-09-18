@@ -87,6 +87,27 @@ pub trait RepoRepository: Send + Sync {
         repo_id: &str,
         head_commit_id: Option<String>,
     ) -> Result<(), AppError>;
+    /// Compare-and-swap the HEAD commit: set `to` only if the stored value is
+    /// still `from`. Returns whether the row matched.
+    ///
+    /// `update_head_commit` above is unconditional, which is only safe when the
+    /// caller knows no other writer can be in flight. The sync branch update
+    /// cannot assume that — two clients uploading at the same time both read
+    /// HEAD, both compute a merge against it, and with an unconditional UPDATE
+    /// the second write silently drops the first client's commit. Upstream does
+    /// the equivalent with `seaf_branch_manager_test_and_update_branch()`
+    /// (`common/branch-mgr.c`), which runs the comparison inside the same
+    /// transaction as the write.
+    ///
+    /// This mirrors upstream's `SELECT ... FOR UPDATE` + conditional UPDATE
+    /// inside one statement: SQLite serialises writes, and `rows_affected()`
+    /// tells the caller whether it won the race.
+    async fn test_and_update_head_commit(
+        &self,
+        repo_id: &str,
+        from: Option<&str>,
+        to: &str,
+    ) -> Result<bool, AppError>;
     async fn delete_by_id(&self, repo_id: &str) -> Result<(), AppError>;
     /// Add a delta to the repo's size (can be negative).
     async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError>;
@@ -265,6 +286,26 @@ impl RepoRepository for DbRepoRepository {
         Ok(())
     }
 
+    async fn test_and_update_head_commit(
+        &self,
+        repo_id: &str,
+        from: Option<&str>,
+        to: &str,
+    ) -> Result<bool, AppError> {
+        let mut query = repo::Entity::update_many()
+            .filter(repo::Column::Id.eq(repo_id))
+            .set(repo::ActiveModel {
+                head_commit_id: Set(Some(to.to_string())),
+                ..Default::default()
+            });
+        query = match from {
+            Some(head) => query.filter(repo::Column::HeadCommitId.eq(head)),
+            None => query.filter(repo::Column::HeadCommitId.is_null()),
+        };
+        let result = query.exec(self.db.as_ref()).await?;
+        Ok(result.rows_affected == 1)
+    }
+
     async fn delete_by_id(&self, repo_id: &str) -> Result<(), AppError> {
         repo::Entity::delete_by_id(repo_id)
             .exec(self.db.as_ref())
@@ -360,5 +401,102 @@ impl RepoRepository for DbRepoRepository {
             .exec(self.db.as_ref())
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use migration::MigratorTrait;
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+    /// A migrated in-memory database with one user and two libraries: one with
+    /// no HEAD (`repo-empty`) and one already at `h1`.
+    async fn setup() -> DbRepoRepository {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        migration::Migrator::up(&db, None).await.unwrap();
+        for sql in [
+            "INSERT INTO users (id, email, password_hash, created_at) \
+             VALUES (1, 'owner@example.com', 'x', 0)",
+            "INSERT INTO repos (id, name, description, owner_id, encrypted, enc_version, salt, \
+             permission, created_at, updated_at, size, repo_version, history_limit, \
+             history_ttl_days) \
+             VALUES ('repo-empty', 'empty', '', 1, 0, 0, '', 'rw', 0, 0, 0, 1, 0, 0)",
+            "INSERT INTO repos (id, name, description, owner_id, encrypted, enc_version, salt, \
+             permission, created_at, updated_at, size, repo_version, history_limit, \
+             history_ttl_days, head_commit_id) \
+             VALUES ('repo-h1', 'one', '', 1, 0, 0, '', 'rw', 0, 0, 0, 1, 0, 0, 'h1')",
+        ] {
+            db.execute_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
+                .await
+                .unwrap();
+        }
+        DbRepoRepository::new(std::sync::Arc::new(db))
+    }
+
+    async fn head(repo: &DbRepoRepository, repo_id: &str) -> Option<String> {
+        repo.find_by_id(repo_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .head_commit_id
+    }
+
+    /// A NULL HEAD only matches `from = None`, and wins.
+    #[tokio::test]
+    async fn test_and_update_matches_null_head() {
+        let repo = setup().await;
+
+        assert!(
+            repo.test_and_update_head_commit("repo-empty", None, "c1")
+                .await
+                .unwrap()
+        );
+        assert_eq!(head(&repo, "repo-empty").await.as_deref(), Some("c1"));
+
+        // The stored value is now `c1`, so the same NULL-based swap must miss.
+        assert!(
+            !repo
+                .test_and_update_head_commit("repo-empty", None, "c2")
+                .await
+                .unwrap()
+        );
+        assert_eq!(head(&repo, "repo-empty").await.as_deref(), Some("c1"));
+    }
+
+    /// Only one of two writers racing on the same expected HEAD may win.
+    #[tokio::test]
+    async fn test_and_update_is_compare_and_swap() {
+        let repo = setup().await;
+
+        assert!(
+            repo.test_and_update_head_commit("repo-h1", Some("h1"), "c1")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !repo
+                .test_and_update_head_commit("repo-h1", Some("h1"), "c2")
+                .await
+                .unwrap(),
+            "a stale expected HEAD must not overwrite the winner"
+        );
+        assert_eq!(head(&repo, "repo-h1").await.as_deref(), Some("c1"));
+
+        // The winner's value is now the expected one.
+        assert!(
+            repo.test_and_update_head_commit("repo-h1", Some("c1"), "c3")
+                .await
+                .unwrap()
+        );
+        assert_eq!(head(&repo, "repo-h1").await.as_deref(), Some("c3"));
+
+        // An unknown repo id matches no row.
+        assert!(
+            !repo
+                .test_and_update_head_commit("nope", None, "c4")
+                .await
+                .unwrap()
+        );
     }
 }

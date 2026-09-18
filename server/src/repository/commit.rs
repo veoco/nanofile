@@ -19,6 +19,11 @@ pub struct CreateCommitParams {
     pub description: String,
     pub ctime: i64,
     pub version: i8,
+    /// Set on a commit the server created by merging a client's upload with a
+    /// newer HEAD; `None` for every normal commit.
+    pub new_merge: Option<bool>,
+    /// Set when that merge had to rename a conflicting entry (`SFConflict`).
+    pub conflict: Option<bool>,
 }
 
 #[async_trait]
@@ -140,6 +145,8 @@ impl CommitRepository for DbCommitRepository {
             description: Set(params.description),
             ctime: Set(params.ctime),
             version: Set(params.version),
+            new_merge: Set(params.new_merge),
+            conflict: Set(params.conflict),
         };
         Ok(model.insert(self.db.as_ref()).await?)
     }

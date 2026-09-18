@@ -106,6 +106,8 @@ async fn push_commit(
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
     let json_str = serde_json::to_string(&commit_data).unwrap();
     let resp = client

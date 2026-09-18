@@ -848,6 +848,8 @@ pub async fn sync_commit(
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
     let body = serde_json::to_string(&commit).unwrap().into_bytes();
     let resp = client

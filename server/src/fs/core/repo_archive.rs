@@ -28,7 +28,7 @@ use base::error::AppError;
 /// Archived columns, in the order the `INSERT ... SELECT` statements use. They
 /// mirror the `commit` and `fs_object` entities.
 const COMMIT_COLUMNS: &str = "id, repo_id, commit_id, root_id, parent_id, second_parent_id, \
-     creator_name, creator, description, ctime, version";
+     creator_name, creator, description, ctime, version, new_merge, conflict";
 const FS_OBJECT_COLUMNS: &str = "id, repo_id, fs_id, obj_type, data";
 
 /// Build the copy statement for one table.

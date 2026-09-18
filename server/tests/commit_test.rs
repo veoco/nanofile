@@ -34,6 +34,8 @@ async fn test_commit_serialization_types() {
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
 
     let json = serde_json::to_string(&commit).unwrap();
@@ -69,6 +71,8 @@ async fn test_commit_serialization_null() {
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
 
     let json = serde_json::to_string(&commit).unwrap();
@@ -104,6 +108,8 @@ async fn test_commit_serialization_optional_fields() {
         pwd_hash_params: None,
         key: Some("def456".to_string()),
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
 
     let json = serde_json::to_string(&commit).unwrap();
@@ -144,6 +150,8 @@ async fn test_commit_roundtrip() {
         pwd_hash_params: None,
         key: None,
         version: 2,
+        conflict: None,
+        new_merge: None,
     };
 
     let json = serde_json::to_string(&commit).unwrap();
@@ -184,6 +192,8 @@ async fn test_compute_commit_id() {
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
 
     let commit_id = server::domain::commit::compute_commit_id(&commit);
@@ -242,6 +252,8 @@ fn test_compute_commit_id_matches_seafile_c_reference() {
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
 
     assert_eq!(
@@ -299,6 +311,8 @@ async fn test_put_get_commit_raw_json() {
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
 
     let json_str = serde_json::to_string(&commit_data).unwrap();
@@ -415,8 +429,10 @@ async fn test_update_branch_accepts_zero_sentinel_parent() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["head_commit_id"].as_str().unwrap(), commit_id);
 
-    // Verify subsequent 409 conflict still works: try to set a stale commit
-    // whose parent_id doesn't chain from the new current HEAD.
+    // A stale commit whose parent_id doesn't chain from the current HEAD is no
+    // longer rejected: the server merges it (upstream's
+    // `fast_forward_or_merge()`), so HEAD becomes a merge commit with the stale
+    // commit as its second parent and `new_merge` set.
     let commit_id2 = random_hex_id();
     let commit_data2 = serde_json::json!({
         "commit_id": commit_id2,
@@ -440,7 +456,27 @@ async fn test_update_branch_accepts_zero_sentinel_parent() {
     let resp = client
         .update_branch(&sync_token, &repo_id, &commit_id2)
         .await;
-    assert_eq!(resp.status(), 409);
+    assert_eq!(resp.status(), 200);
+
+    let resp = client.get_head_commit(&sync_token, &repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let merged_head = body["head_commit_id"].as_str().unwrap().to_string();
+    assert_ne!(merged_head, commit_id2, "HEAD must be the merge commit");
+    assert_ne!(merged_head, commit_id, "HEAD must be the merge commit");
+
+    let resp = client.get_commit(&sync_token, &repo_id, &merged_head).await;
+    assert_eq!(resp.status(), 200);
+    let merged: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(merged["parent_id"].as_str().unwrap(), commit_id);
+    assert_eq!(merged["second_parent_id"].as_str().unwrap(), commit_id2);
+    assert_eq!(merged["new_merge"].as_i64().unwrap(), 1);
+    assert_eq!(
+        merged["description"].as_str().unwrap(),
+        "Auto merge by system"
+    );
+    // A merge of three empty trees has no conflict.
+    assert!(merged.get("conflict").is_none() || merged["conflict"].is_null());
 }
 
 #[tokio::test]

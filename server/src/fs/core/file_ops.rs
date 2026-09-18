@@ -334,6 +334,8 @@ impl FileOps {
             pwd_hash_params: None,
             key: None,
             version: 1,
+            conflict: None,
+            new_merge: None,
         };
         let commit_id = domain::commit::compute_commit_id(&commit_data);
 
@@ -349,6 +351,8 @@ impl FileOps {
             description: sea_orm::Set(format!("Added {}", name)),
             ctime: sea_orm::Set(now),
             version: sea_orm::Set(1i8),
+            new_merge: sea_orm::NotSet,
+            conflict: sea_orm::NotSet,
         };
         repos.commit.insert(commit_model).await?;
 
@@ -681,6 +685,8 @@ impl FileOps {
             pwd_hash_params: None,
             key: None,
             version: 1,
+            conflict: None,
+            new_merge: None,
         };
         let commit_id = domain::commit::compute_commit_id(&commit_data);
 
@@ -696,6 +702,8 @@ impl FileOps {
             description: sea_orm::Set(description.to_string()),
             ctime: sea_orm::Set(now),
             version: sea_orm::Set(1i8),
+            new_merge: sea_orm::NotSet,
+            conflict: sea_orm::NotSet,
         };
         repos.commit.insert(commit_model).await?;
 

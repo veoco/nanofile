@@ -24,6 +24,18 @@ pub struct Model {
     pub ctime: i64,
     #[sea_orm(not_null, default_value = 1)]
     pub version: i8,
+    /// Set on a commit the server created by merging a client's commit with a
+    /// newer HEAD (`seaf_commit_to_data`: `if (commit->new_merge) set
+    /// "new_merge", 1`). NULL means "not a merge commit", which is how upstream
+    /// stores it too (the field is simply absent from the JSON).
+    ///
+    /// The desktop client relies on it: `find_meaningful_commit()`
+    /// (`daemon/sync-mgr.c`) walks past merge commits that have no conflict when
+    /// deciding which commit to show in its "sync finished" notification.
+    pub new_merge: Option<bool>,
+    /// Set on a merge commit whose merge had to rename a conflicting entry
+    /// (`opt.conflict`), i.e. a `SFConflict` file/dir was created.
+    pub conflict: Option<bool>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

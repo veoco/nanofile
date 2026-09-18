@@ -87,6 +87,7 @@ migrations!(
     m20260913_000001_add_source_and_user_agent_to_api_tokens,
     m20260915_000001_sync_token_per_device,
     m20260916_000001_add_pwd_hash_to_repos,
+    m20260917_000001_add_merge_flags_to_commits,
 );
 
 #[cfg(test)]

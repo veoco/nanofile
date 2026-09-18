@@ -55,6 +55,16 @@ fn fs_object_verify_mode() -> FsObjectVerifyMode {
 /// Callers queue on the semaphore; the permit is released when the task ends.
 const MAX_CONCURRENT_REINDEX: usize = 4;
 
+/// Description upstream gives a server-side merge commit with no conflict
+/// (`fast_forward_or_merge()`, `server/http-server.c`).
+///
+/// A conflicting merge would get a generated description instead, but on this
+/// code path upstream's `gen_merge_description()` always returns NULL — the
+/// merge diff against both parents is always empty, because the merge never
+/// changes a file's content-id, only renames a copy — and upstream then falls
+/// back to this same string. See `crate::fs::core::merge` for the details.
+const AUTO_MERGE_DESCRIPTION: &str = "Auto merge by system";
+
 /// Cap on the number of FS objects accepted in a single `recv-fs` pack.
 /// The request body is already bounded, but the entry count drives how many
 /// objects are parsed and inserted, so it is bounded independently.
@@ -665,6 +675,11 @@ impl SyncService {
                     description: data.description.clone(),
                     ctime: data.ctime,
                     version: data.version as i8,
+                    // A client-supplied commit normally carries neither flag;
+                    // upstream's `seaf_commit_from_data` stores them verbatim
+                    // when it does, and so do we.
+                    new_merge: data.new_merge.map(|v| v != 0),
+                    conflict: data.conflict.map(|v| v != 0),
                 })
                 .await?;
         }
@@ -709,6 +724,158 @@ impl SyncService {
     }
 
     // ── Branch update (sync protocol) ──────────────────────────────────
+
+    /// Merge an upload whose parent is no longer the repository HEAD, and
+    /// return `(merged_commit_id, merged_root, diff_base_root, size_delta)`.
+    ///
+    /// This is the merge branch of upstream's `fast_forward_or_merge()`
+    /// (`seafile-server/server/http-server.c`): three-way merge of the client's
+    /// tree with the current HEAD against the commit the client based its upload
+    /// on, recorded as a commit with two parents.
+    async fn merge_branch(
+        &self,
+        repo_id: &str,
+        repo_model: &infra::entity::repo::Model,
+        new_commit: &infra::entity::commit::Model,
+        current_head: Option<&str>,
+        base_root_id: Option<&str>,
+    ) -> Result<(String, String, Option<String>, i64), AppError> {
+        let head_id =
+            current_head.ok_or_else(|| AppError::Internal("merge without HEAD".into()))?;
+        let head_commit = self
+            .find_commit(repo_id, head_id)
+            .await?
+            .ok_or_else(|| AppError::Internal("head commit not found".into()))?;
+
+        let outcome = crate::fs::core::merge::merge_trees(
+            &self.repos,
+            self.db.as_ref(),
+            repo_id,
+            // No base commit (`EMPTY_SHA1` parent, or a library that had no
+            // HEAD when the client based its upload on it) means an empty tree.
+            base_root_id.unwrap_or(EMPTY_SHA1),
+            &head_commit.root_id,
+            &new_commit.root_id,
+            &new_commit.creator_name,
+        )
+        .await?;
+
+        // Blocks newly referenced by the merged tree (the client's own uploads,
+        // which the caller already verified, plus at most head-side entries the
+        // merge renamed), and the size delta the repo still has to absorb: the
+        // stored size already includes `head_root`, so the delta has to be
+        // measured against it rather than against the client's base.
+        let mut missing = Vec::new();
+        let mut delta = 0;
+        self.check_commit_blocks(
+            repo_id,
+            &outcome.merged_root,
+            Some(&head_commit.root_id),
+            &mut missing,
+            &mut delta,
+        )
+        .await?;
+        if !missing.is_empty() {
+            return Err(AppError::BlockMissing);
+        }
+
+        let commit_id = self
+            .create_merge_commit(
+                repo_id,
+                repo_model,
+                new_commit,
+                head_id,
+                &outcome.merged_root,
+                outcome.conflict,
+            )
+            .await?;
+
+        Ok((
+            commit_id,
+            outcome.merged_root,
+            Some(head_commit.root_id),
+            delta,
+        ))
+    }
+
+    /// Insert the commit that records a server-side merge.
+    ///
+    /// Field for field upstream's
+    /// `seaf_commit_new(NULL, repo->id, merged_root, new_commit->creator_name,
+    /// EMPTY_SHA1, desc, 0)` plus `seaf_repo_to_commit()`: the merge is
+    /// attributed to whoever uploaded the commit being merged, its parent is the
+    /// HEAD it was merged with and its second parent is the upload. The
+    /// encryption block is *not* stored — `get_commit` re-synthesises it from
+    /// the repo row through `RepoCrypto` — so only the identity and the two
+    /// merge flags matter here.
+    async fn create_merge_commit(
+        &self,
+        repo_id: &str,
+        repo_model: &infra::entity::repo::Model,
+        new_commit: &infra::entity::commit::Model,
+        head_id: &str,
+        merged_root: &str,
+        conflict: bool,
+    ) -> Result<String, AppError> {
+        use crate::repository::commit::CreateCommitParams;
+
+        let ctime = chrono::Utc::now().timestamp();
+        let data = base::common::CommitData {
+            commit_id: String::new(),
+            repo_id: repo_id.to_string(),
+            root_id: merged_root.to_string(),
+            creator_name: new_commit.creator_name.clone(),
+            creator: EMPTY_SHA1.to_string(),
+            description: AUTO_MERGE_DESCRIPTION.to_string(),
+            ctime,
+            parent_id: Some(head_id.to_string()),
+            second_parent_id: Some(new_commit.commit_id.clone()),
+            repo_name: None,
+            repo_desc: None,
+            repo_category: None,
+            encrypted: None,
+            enc_version: None,
+            magic: None,
+            salt: None,
+            pwd_hash: None,
+            pwd_hash_algo: None,
+            pwd_hash_params: None,
+            key: None,
+            version: repo_model.repo_version,
+            conflict: if conflict { Some(1) } else { None },
+            new_merge: Some(1),
+        };
+        let commit_id = crate::domain::commit::compute_commit_id(&data);
+
+        // Two identical merges can be computed within the same second (a client
+        // retrying a PUT that already succeeded), which yields the same
+        // commit id; the row is then already there and must not be re-inserted.
+        let existing = self
+            .repos
+            .commit
+            .find_by_repo_and_commit_id(repo_id, &commit_id)
+            .await?;
+        if existing.is_none() {
+            self.repos
+                .commit
+                .insert_commit(CreateCommitParams {
+                    repo_id: repo_id.to_string(),
+                    commit_id: commit_id.clone(),
+                    root_id: merged_root.to_string(),
+                    parent_id: Some(head_id.to_string()),
+                    second_parent_id: Some(new_commit.commit_id.clone()),
+                    creator_name: new_commit.creator_name.clone(),
+                    creator: EMPTY_SHA1.to_string(),
+                    description: AUTO_MERGE_DESCRIPTION.to_string(),
+                    ctime,
+                    version: repo_model.repo_version as i8,
+                    new_merge: Some(true),
+                    conflict: if conflict { Some(true) } else { None },
+                })
+                .await?;
+        }
+        Ok(commit_id)
+    }
 
     /// Check file blocks exist for a commit and compute size delta.
     pub async fn check_commit_blocks(
@@ -1028,6 +1195,8 @@ impl SyncService {
 
         const EXCLUDED_ACTIVITY_PREFIXES: &[&str] =
             &["/_Internal", "/images/sdoc", "/images/auto-upload"];
+        // Retries after the first attempt, i.e. up to four attempts, matching
+        // upstream's `MAX_RETRY_COUNT` in `fast_forward_or_merge()`.
         const MAX_BRANCH_RETRY: u32 = 3;
 
         let new_commit = self
@@ -1107,45 +1276,96 @@ impl SyncService {
         loop {
             attempt += 1;
 
-            // Fetch the repo once per CAS attempt: `current_head` gates the
-            // retry loop and `name` is reused below for batch activity logging
-            // (no per-change repo lookup).
+            // Fetch the repo once per CAS attempt: the HEAD value gates the
+            // compare-and-swap and is reused by the merge and by the batch
+            // activity logging below (no per-change repo lookup).
             let repo_model = self
                 .find_repo(repo_id)
                 .await?
                 .ok_or_else(|| AppError::Internal("repo not found".into()))?;
-            let current_head = repo_model.head_commit_id;
-            let repo_name = repo_model.name;
+            // A stored `EMPTY_SHA1` means "no HEAD": nanofile leaves
+            // `head_commit_id` NULL until the first upload, while
+            // `get_head_commit` reports the sentinel to clients.
+            let current_head = repo_model
+                .head_commit_id
+                .clone()
+                .filter(|head| head != EMPTY_SHA1);
+            let repo_name = repo_model.name.clone();
 
-            let is_same_commit = current_head.as_deref() == Some(new_head);
-            if is_same_commit {
+            if current_head.as_deref() == Some(new_head) {
+                // The branch already points at this commit: a retried upload,
+                // not a conflict.
                 events::publish_repo_update(repo_id, new_head.to_string());
                 return Ok(true);
             }
 
-            if current_head.is_some() && new_commit.parent_id != current_head {
-                if attempt < MAX_BRANCH_RETRY {
-                    let delay_ms = rand::rng().random_range(100..=500);
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                    continue;
+            // Upstream compares the uploaded commit's *parent* with HEAD
+            // (`base->commit_id` vs `current_head->commit_id`). A library
+            // without a HEAD has no base at all, which upstream cannot reach
+            // (it creates a "Created library" commit) but nanofile can: the
+            // client's first upload carries the `EMPTY_SHA1` sentinel as parent
+            // and has to be accepted as a fast-forward.
+            let parent_matches_head = matches!(
+                (&new_commit.parent_id, &current_head),
+                (Some(parent), Some(head)) if parent == head
+            );
+
+            let (target_head, target_root, diff_base_root, delta) =
+                if current_head.is_none() || parent_matches_head {
+                    (
+                        new_head.to_string(),
+                        new_commit.root_id.clone(),
+                        base_root_id.clone(),
+                        size_delta,
+                    )
+                } else {
+                    self.merge_branch(
+                        repo_id,
+                        &repo_model,
+                        &new_commit,
+                        current_head.as_deref(),
+                        base_root_id.as_deref(),
+                    )
+                    .await?
+                };
+
+            if !self
+                .repos
+                .repo
+                .test_and_update_head_commit(repo_id, current_head.as_deref(), &target_head)
+                .await?
+            {
+                // Another writer advanced HEAD between the read above and the
+                // swap (a merge can also lose a second race): re-read and, for
+                // a merge, re-merge against the new HEAD — upstream's
+                // `goto retry`. After `MAX_BRANCH_RETRY` retries upstream
+                // reports a server error, and so do we: its only 409 is a GC
+                // conflict, and GC-conflict tracking is disabled on SQLite.
+                if attempt > MAX_BRANCH_RETRY {
+                    return Err(AppError::Internal(format!(
+                        "repository {repo_id} HEAD was updated concurrently more than \
+                         {MAX_BRANCH_RETRY} times"
+                    )));
                 }
-                return Err(AppError::Conflict(
-                    "commit parent_id does not match current HEAD".into(),
-                ));
+                // Upstream: `g_random_int_range(1, 11) * 100` ms.
+                let delay_ms = rand::rng().random_range(1..=10) * 100;
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                continue;
             }
 
-            self.update_head_commit(repo_id, Some(new_head.to_string()))
-                .await?;
+            crate::fs::core::adjust_repo_size(&self.repos, repo_id, delta).await?;
 
-            crate::fs::core::adjust_repo_size(&self.repos, repo_id, size_delta).await?;
-
-            // The parent commit (and thus its root) was already fetched
-            // once above; reuse it instead of re-querying per CAS attempt.
+            // Activity logging and reindexing describe what *this* commit
+            // introduced: for a fast-forward that is the client's diff against
+            // its own base, for a merge it is the merged tree against the HEAD
+            // the client's changes were merged with. The head side's own
+            // history was already recorded when it landed, so diffing against
+            // `base_root_id` in the merge case would double-report it.
             let changes = tree_diff::diff_trees(
                 &self.repos,
                 repo_id,
-                base_root_id.as_deref(),
-                &new_commit.root_id,
+                diff_base_root.as_deref(),
+                &target_root,
             )
             .await
             .unwrap_or_default();
@@ -1196,7 +1416,7 @@ impl SyncService {
                 infra::activity_log::log_activity_batch(
                     self.db.as_ref(),
                     repo_id,
-                    &new_commit.commit_id,
+                    &target_head,
                     &repo_name,
                     user_id,
                     items,
@@ -1260,8 +1480,8 @@ impl SyncService {
                                 repo_id.to_string(),
                                 Some(old_path.to_string()),
                                 Some(change.path.clone()),
-                                base_root_id.clone(),
-                                new_commit.root_id.clone(),
+                                diff_base_root.clone(),
+                                target_root.clone(),
                             );
                         }
                         ("delete", _) => {
@@ -1274,8 +1494,8 @@ impl SyncService {
                                 repo_id.to_string(),
                                 Some(change.path.clone()),
                                 None,
-                                base_root_id.clone(),
-                                new_commit.root_id.clone(),
+                                diff_base_root.clone(),
+                                target_root.clone(),
                             );
                         }
                         _ => {}
@@ -1283,7 +1503,7 @@ impl SyncService {
                 }
             }
 
-            events::publish_repo_update(repo_id, new_head.to_string());
+            events::publish_repo_update(repo_id, target_head);
             return Ok(false);
         }
     }

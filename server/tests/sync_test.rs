@@ -132,6 +132,8 @@ async fn test_head_commits_multi_with_updates() {
         description: sea_orm::Set("test commit".to_string()),
         ctime: sea_orm::Set(now),
         version: sea_orm::Set(1),
+        new_merge: sea_orm::NotSet,
+        conflict: sea_orm::NotSet,
     };
     commit.insert(server.db.as_ref()).await.unwrap();
 

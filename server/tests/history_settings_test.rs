@@ -53,6 +53,8 @@ async fn insert_commit(
         description: Set("test commit".to_string()),
         ctime: Set(ctime),
         version: Set(1),
+        new_merge: sea_orm::NotSet,
+        conflict: sea_orm::NotSet,
     };
     commit.insert(db).await.unwrap();
 }

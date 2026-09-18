@@ -199,7 +199,9 @@ mod tests {
                 creator VARCHAR(40) NOT NULL DEFAULT '0000000000000000000000000000000000000000',
                 description TEXT NOT NULL DEFAULT '',
                 ctime BIGINT NOT NULL,
-                version TINYINT NOT NULL DEFAULT 1
+                version TINYINT NOT NULL DEFAULT 1,
+                new_merge BOOLEAN,
+                conflict BOOLEAN
             );
             CREATE UNIQUE INDEX idx_commits_repo_commit
                 ON commits(repo_id, commit_id);

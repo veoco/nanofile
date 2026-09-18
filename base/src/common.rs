@@ -50,7 +50,7 @@ pub struct DirEntry {
 // ── FS object types (Seafile storage format) ──────────────────────────────
 
 /// A single entry in a directory listing (storage format).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DirEntryData {
     pub id: String,
     pub mode: i32,
@@ -144,4 +144,20 @@ pub struct CommitData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pwd_hash_params: Option<String>,
     pub version: i32,
+    /// `conflict` flag of a server-side merge commit (`seaf_commit_to_data`:
+    /// `if (commit->conflict) set "conflict", 1`).
+    ///
+    /// An `i32` and not a `bool`: the official clients read the field with
+    /// `json_object_get_int_member` → `json_integer_value`, which returns 0 for
+    /// a JSON boolean, so `true` would be read as *false*.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<i32>,
+    /// `new_merge` flag of a server-side merge commit
+    /// (`if (commit->new_merge) set "new_merge", 1`). The desktop client uses
+    /// `second_parent_id && new_merge && !conflict` to pick which commit to
+    /// show in its "sync finished" notification
+    /// (`daemon/sync-mgr.c: find_meaningful_commit`). See `conflict` for why
+    /// this is an integer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_merge: Option<i32>,
 }

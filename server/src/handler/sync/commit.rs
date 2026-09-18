@@ -135,6 +135,8 @@ pub async fn get_commit(
             pwd_hash_algo: crypto.pwd_hash_algo.clone(),
             pwd_hash_params: crypto.pwd_hash_params.clone(),
             version: 1,
+            conflict: None,
+            new_merge: None,
         };
         let json = crate::domain::commit::to_json(&empty_commit);
         return Ok(json.into_bytes());
@@ -171,6 +173,11 @@ pub async fn get_commit(
         pwd_hash_algo: crypto.pwd_hash_algo,
         pwd_hash_params: crypto.pwd_hash_params,
         version: commit_model.version as i32,
+        // Both flags are written as the integer 1, never as `true`: the clients
+        // read them with `json_object_get_int_member()` →
+        // `json_integer_value()`, which returns 0 for a JSON boolean.
+        conflict: commit_model.conflict.map(i32::from),
+        new_merge: commit_model.new_merge.map(i32::from),
     };
 
     let json = crate::domain::commit::to_json(&commit_data);

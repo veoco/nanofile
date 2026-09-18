@@ -137,6 +137,8 @@ async fn test_full_upload_flow() {
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
     let json_str = serde_json::to_string(&commit_data).unwrap();
     let resp = client
@@ -298,6 +300,8 @@ async fn test_incremental_upload() {
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
     let json_str = serde_json::to_string(&commit_data).unwrap();
     let resp = client
@@ -399,6 +403,8 @@ async fn test_incremental_upload_second_commit() {
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
     let json1 = serde_json::to_string(&commit1).unwrap();
     let resp = client
@@ -478,6 +484,8 @@ async fn test_incremental_upload_second_commit() {
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
     let json2 = serde_json::to_string(&commit2).unwrap();
     let resp = client
@@ -553,6 +561,8 @@ async fn test_incremental_upload_second_commit() {
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
     let json3 = serde_json::to_string(&commit3).unwrap();
     let resp = client
@@ -814,6 +824,8 @@ fn commit_with_root(repo_id: &str, root_id: &str, creator_name: &str) -> (String
         pwd_hash_params: None,
         key: None,
         version: 1,
+        conflict: None,
+        new_merge: None,
     };
     let json = serde_json::to_string(&commit_data).unwrap();
     (commit_id, json.into_bytes())
