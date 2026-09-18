@@ -877,7 +877,17 @@ impl SyncService {
         Ok(commit_id)
     }
 
-    /// Check file blocks exist for a commit and compute size delta.
+    /// Check file blocks exist for a commit and compute its size delta.
+    ///
+    /// `size_delta` becomes `size(new_root) - size(base_root)`: this is a
+    /// two-sided tree diff, so a deleted file or a deleted subtree subtracts its
+    /// bytes instead of leaving the library's size inflated forever. Missing
+    /// blocks are reported for the new tree only — a deletion has nothing left to
+    /// upload.
+    ///
+    /// `base_root_id == None` means there is no base to compare against (a
+    /// library's first upload, or a commit whose parent is the `EMPTY_SHA1`
+    /// sentinel): the new tree is then summed whole.
     pub async fn check_commit_blocks(
         &self,
         repo_id: &str,
@@ -886,8 +896,27 @@ impl SyncService {
         missing: &mut Vec<String>,
         size_delta: &mut i64,
     ) -> Result<(), AppError> {
-        if new_root_id == EMPTY_SHA1 {
-            return Ok(());
+        /// An empty directory is the `EMPTY_SHA1` sentinel and has no stored FS
+        /// object: it is "no entries", never a missing object.
+        fn stored_dir(id: &str) -> Option<String> {
+            if id == EMPTY_SHA1 {
+                None
+            } else {
+                Some(id.to_string())
+            }
+        }
+
+        /// One directory pair of the two-sided walk.
+        struct DiffFrame {
+            /// Base directory. `None` = no counterpart, so everything under
+            /// `new_fs_id` is an addition.
+            base_fs_id: Option<String>,
+            /// New directory. `None` = no counterpart, so everything under
+            /// `base_fs_id` was deleted.
+            new_fs_id: Option<String>,
+            /// Path under the new root. Only the new side reports it, as the
+            /// path of a file whose blocks are missing.
+            prefix: String,
         }
 
         if let Some(base_root) = base_root_id {
@@ -895,17 +924,11 @@ impl SyncService {
                 return Ok(());
             }
 
-            struct DiffFrame {
-                base_fs_id: Option<String>,
-                new_fs_id: String,
-                prefix: String,
-            }
-
             // Level frontier: each level fetches all base and new directories
             // with two batched IN queries instead of two queries per frame.
             let mut frontier: Vec<DiffFrame> = vec![DiffFrame {
-                base_fs_id: Some(base_root.to_string()),
-                new_fs_id: new_root_id.to_string(),
+                base_fs_id: stored_dir(base_root),
+                new_fs_id: stored_dir(new_root_id),
                 prefix: String::new(),
             }];
 
@@ -916,7 +939,9 @@ impl SyncService {
                 let mut new_ids = Vec::new();
                 let mut base_ids = Vec::new();
                 for frame in &frontier {
-                    new_ids.push(frame.new_fs_id.clone());
+                    if let Some(new_id) = &frame.new_fs_id {
+                        new_ids.push(new_id.clone());
+                    }
                     if let Some(b) = &frame.base_fs_id {
                         base_ids.push(b.clone());
                     }
@@ -935,20 +960,59 @@ impl SyncService {
                 let mut next: Vec<DiffFrame> = Vec::new();
 
                 for frame in &frontier {
-                    let Some(base_fs) = &frame.base_fs_id else {
-                        let Some(new_dir) = new_map.get(&frame.new_fs_id) else {
-                            continue;
-                        };
+                    // Identical subtrees (including the empty pair) contribute
+                    // nothing and need no further walk.
+                    if frame.base_fs_id == frame.new_fs_id {
+                        continue;
+                    }
+
+                    let base_dir = frame.base_fs_id.as_deref().and_then(|id| base_map.get(id));
+                    let new_dir = frame.new_fs_id.as_deref().and_then(|id| new_map.get(id));
+
+                    // An id naming an object the database does not hold is
+                    // *unknown*, not empty: skipping the pair neither adds nor
+                    // subtracts bytes it cannot account for.
+                    if (frame.base_fs_id.is_some() && base_dir.is_none())
+                        || (frame.new_fs_id.is_some() && new_dir.is_none())
+                    {
+                        continue;
+                    }
+
+                    let child_of = |name: &str| {
+                        if frame.prefix.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{}/{}", frame.prefix, name)
+                        }
+                    };
+
+                    // Deleted subtree (or a root that became an empty directory):
+                    // subtract every entry, recursing into directories.
+                    let Some(new_dir) = new_dir else {
+                        if let Some(base_dir) = base_dir {
+                            for entry in &base_dir.dirents {
+                                if entry.mode & infra::serialization::S_IFDIR != 0 {
+                                    next.push(DiffFrame {
+                                        base_fs_id: stored_dir(&entry.id),
+                                        new_fs_id: None,
+                                        prefix: child_of(&entry.name),
+                                    });
+                                } else {
+                                    *size_delta -= entry.size;
+                                }
+                            }
+                        }
+                        continue;
+                    };
+
+                    // Added subtree: add every entry and check its blocks.
+                    let Some(base_dir) = base_dir else {
                         for entry in &new_dir.dirents {
-                            let child = if frame.prefix.is_empty() {
-                                entry.name.clone()
-                            } else {
-                                format!("{}/{}", frame.prefix, entry.name)
-                            };
+                            let child = child_of(&entry.name);
                             if entry.mode & infra::serialization::S_IFDIR != 0 {
                                 next.push(DiffFrame {
                                     base_fs_id: None,
-                                    new_fs_id: entry.id.clone(),
+                                    new_fs_id: stored_dir(&entry.id),
                                     prefix: child,
                                 });
                             } else {
@@ -959,43 +1023,26 @@ impl SyncService {
                         continue;
                     };
 
-                    if *base_fs == frame.new_fs_id {
-                        continue;
-                    }
-                    if *base_fs == infra::common::EMPTY_SHA1 {
-                        next.push(DiffFrame {
-                            base_fs_id: None,
-                            new_fs_id: frame.new_fs_id.clone(),
-                            prefix: frame.prefix.clone(),
-                        });
-                        continue;
-                    }
-
-                    let (Some(base_dir), Some(new_dir)) =
-                        (base_map.get(base_fs), new_map.get(&frame.new_fs_id))
-                    else {
-                        continue;
-                    };
-
                     let base_entries: HashMap<&str, &base::common::DirEntryData> = base_dir
                         .dirents
                         .iter()
                         .map(|d| (d.name.as_str(), d))
                         .collect();
 
+                    // Names present on both sides, so the sweep below only has to
+                    // look at the entries the new tree deleted.
+                    let mut matched: std::collections::HashSet<&str> =
+                        std::collections::HashSet::with_capacity(base_dir.dirents.len());
+
                     for new_entry in &new_dir.dirents {
-                        let child = if frame.prefix.is_empty() {
-                            new_entry.name.clone()
-                        } else {
-                            format!("{}/{}", frame.prefix, new_entry.name)
-                        };
+                        let child = child_of(&new_entry.name);
                         let is_dir = new_entry.mode & infra::serialization::S_IFDIR != 0;
                         match base_entries.get(new_entry.name.as_str()) {
                             None => {
                                 if is_dir {
                                     next.push(DiffFrame {
                                         base_fs_id: None,
-                                        new_fs_id: new_entry.id.clone(),
+                                        new_fs_id: stored_dir(&new_entry.id),
                                         prefix: child,
                                     });
                                 } else {
@@ -1004,21 +1051,65 @@ impl SyncService {
                                 }
                             }
                             Some(base_entry) => {
+                                matched.insert(base_entry.name.as_str());
                                 if new_entry.id == base_entry.id {
                                     continue;
                                 }
-                                if is_dir && (base_entry.mode & infra::serialization::S_IFDIR != 0)
-                                {
-                                    next.push(DiffFrame {
-                                        base_fs_id: Some(base_entry.id.clone()),
-                                        new_fs_id: new_entry.id.clone(),
+                                let base_is_dir =
+                                    base_entry.mode & infra::serialization::S_IFDIR != 0;
+                                match (base_is_dir, is_dir) {
+                                    // A directory replaced by another directory:
+                                    // diff the two subtrees level by level.
+                                    (true, true) => next.push(DiffFrame {
+                                        base_fs_id: stored_dir(&base_entry.id),
+                                        new_fs_id: stored_dir(&new_entry.id),
                                         prefix: child,
-                                    });
-                                } else {
-                                    *size_delta += new_entry.size - base_entry.size;
-                                    pending_files.push((new_entry.id.clone(), child));
+                                    }),
+                                    // A file replaced by a directory: drop the
+                                    // file's bytes and add the subtree's.
+                                    (false, true) => {
+                                        *size_delta -= base_entry.size;
+                                        next.push(DiffFrame {
+                                            base_fs_id: None,
+                                            new_fs_id: stored_dir(&new_entry.id),
+                                            prefix: child,
+                                        });
+                                    }
+                                    // A directory replaced by a file: a directory
+                                    // entry carries no size of its own, so the
+                                    // whole base subtree has to be subtracted by
+                                    // the deletion frame while the file is added.
+                                    (true, false) => {
+                                        next.push(DiffFrame {
+                                            base_fs_id: stored_dir(&base_entry.id),
+                                            new_fs_id: None,
+                                            prefix: child.clone(),
+                                        });
+                                        *size_delta += new_entry.size;
+                                        pending_files.push((new_entry.id.clone(), child));
+                                    }
+                                    (false, false) => {
+                                        *size_delta += new_entry.size - base_entry.size;
+                                        pending_files.push((new_entry.id.clone(), child));
+                                    }
                                 }
                             }
+                        }
+                    }
+
+                    // Entries the new tree no longer has were deleted.
+                    for base_entry in &base_dir.dirents {
+                        if matched.contains(base_entry.name.as_str()) {
+                            continue;
+                        }
+                        if base_entry.mode & infra::serialization::S_IFDIR != 0 {
+                            next.push(DiffFrame {
+                                base_fs_id: stored_dir(&base_entry.id),
+                                new_fs_id: None,
+                                prefix: child_of(&base_entry.name),
+                            });
+                        } else {
+                            *size_delta -= base_entry.size;
                         }
                     }
                 }
