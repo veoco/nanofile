@@ -47,6 +47,17 @@ pub async fn read_fs_file_data(
     repo_id: &str,
     fs_id: &str,
 ) -> Result<FsFileData, AppError> {
+    // seafile keeps no object for an empty file: `EMPTY_SHA1` is a sentinel
+    // both sides synthesise into a zero-byte file
+    // (`seaf_fs_manager_get_seafile()` returns an empty Seafile for it).
+    if fs_id == EMPTY_SHA1 {
+        return Ok(FsFileData {
+            block_ids: vec![],
+            size: 0,
+            obj_type: SEAF_METADATA_TYPE_FILE,
+            version: 1,
+        });
+    }
     let obj = repos
         .fs_object
         .find_by_repo_and_fs_id(repo_id, fs_id)
@@ -117,19 +128,31 @@ pub async fn read_fs_dir_data_batch(
 }
 
 /// Batch version of `read_fs_file_data` for a list of file ids. Non-file ids
-/// are absent from the result map.
+/// are absent from the result map; an `EMPTY_SHA1` request yields a synthesized
+/// zero-byte file, mirroring the single-id reader.
 pub async fn read_fs_file_data_batch(
     repos: &Repositories,
     repo_id: &str,
     fs_ids: &[String],
 ) -> Result<HashMap<String, FsFileData>, AppError> {
+    let mut out = HashMap::with_capacity(fs_ids.len());
+    if fs_ids.iter().any(|id| id == EMPTY_SHA1) {
+        out.insert(
+            EMPTY_SHA1.to_string(),
+            FsFileData {
+                block_ids: vec![],
+                size: 0,
+                obj_type: SEAF_METADATA_TYPE_FILE,
+                version: 1,
+            },
+        );
+    }
     let ids: Vec<String> = fs_ids
         .iter()
         .filter(|id| *id != EMPTY_SHA1)
         .cloned()
         .collect();
     let map = fetch_fs_object_map(repos, repo_id, &ids).await?;
-    let mut out = HashMap::with_capacity(map.len());
     for (fs_id, obj) in map {
         if obj.obj_type != SEAF_METADATA_TYPE_FILE as i8 {
             continue;

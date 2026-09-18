@@ -2035,6 +2035,63 @@ async fn test_empty_directory_uses_emtpysha1() {
     );
 }
 
+/// A zero-byte file must use the EMPTY_SHA1 sentinel as its id and create no
+/// `seafile` object — that is what a seafile client computes locally
+/// (`seaf_fs_manager_index_blocks()` sets the id to all zeros for a zero-size
+/// file). The reader must still resolve the sentinel so the file downloads as
+/// an empty body.
+#[tokio::test]
+async fn test_empty_file_uses_empty_sha1_and_roundtrips() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "empty.bin", b"")
+        .await;
+    assert!(
+        resp.status().is_success(),
+        "empty upload failed: {}",
+        resp.status()
+    );
+
+    // The listed dirent carries the sentinel id and size 0.
+    let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let entry = entries
+        .iter()
+        .find(|e| e["name"] == "empty.bin")
+        .expect("empty.bin should be listed");
+    assert_eq!(
+        entry["id"].as_str().unwrap(),
+        "0000000000000000000000000000000000000000",
+        "empty file must use EMPTY_SHA1 sentinel"
+    );
+    assert_eq!(entry["size"].as_i64().unwrap(), 0);
+
+    // No fs_object row may be stored for the sentinel.
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let obj = infra::entity::fs_object::Entity::find()
+        .filter(
+            infra::entity::fs_object::Column::FsId.eq("0000000000000000000000000000000000000000"),
+        )
+        .one(f.server.db.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        obj.is_none(),
+        "must not create fs_object for EMPTY_SHA1 sentinel"
+    );
+
+    // Resolving the sentinel yields an empty file, so the download succeeds.
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/empty.bin")
+        .await;
+    assert_eq!(resp.status(), 200, "empty file must be downloadable");
+    assert!(resp.bytes().await.unwrap().is_empty());
+}
+
 // ── Recursive directory listing tests ─────────────────────────────
 
 /// Recursive listing with `recursive=1` returns all entries in a flat list

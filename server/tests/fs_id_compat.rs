@@ -1,129 +1,129 @@
-use base::common::{FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
+//! FS object identity must match seafile byte for byte: a `seafile`/`seafdir`
+//! object id is the SHA-1 of `json_dumps(obj, JSON_SORT_KEYS)`.
+//!
+//! The golden strings below were produced by the **unmodified** upstream code
+//! path (jansson 2.14 `json_dumps(object, JSON_SORT_KEYS)` over the object built
+//! by `create_seafile_json()` / `seaf_dir_to_json()` + `add_to_dirent_array()`)
+//! followed by SHA-1. Key order is alphabetical, members are separated by
+//! `", "`, keys from values by `": "`, and `modifier`/`size` appear only on
+//! regular-file dirents (`S_ISREG`).
 
-/// Verify that FsFileData JSON serialization produces alphabetically sorted
-/// keys matching seafile C's jansson json_dumps(object, JSON_SORT_KEYS).
-///
-/// Seafile reference: seafile-server common/fs-mgr.c seafile_to_json()
-#[test]
-fn test_fs_file_data_json_sorted_keys() {
-    let data = FsFileData {
+use base::common::{
+    DirEntryData, FsDirData, FsFileData, S_IFDIR, S_IFREG, SEAF_METADATA_TYPE_DIR,
+    SEAF_METADATA_TYPE_FILE,
+};
+
+const FILE_JSON: &str = r#"{"block_ids": ["abcdef0123456789abcdef0123456789abcdef01", "1234567890abcdef1234567890abcdef12345678"], "size": 2048, "type": 1, "version": 1}"#;
+const FILE_SHA1: &str = "c1656f97723c903b5736a62b626734027af1d782";
+
+const DIR_JSON: &str = r#"{"dirents": [{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mode": 33188, "modifier": "alice@example.com", "mtime": 1700000000, "name": "a.txt", "size": 123}, {"id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "mode": 16384, "mtime": 1700000001, "name": "sub"}], "type": 3, "version": 1}"#;
+const DIR_SHA1: &str = "927d2119d636f99ed1a54ace24d23f9d399963ed";
+
+fn file_fixture() -> FsFileData {
+    FsFileData {
         block_ids: vec![
             "abcdef0123456789abcdef0123456789abcdef01".into(),
             "1234567890abcdef1234567890abcdef12345678".into(),
         ],
         size: 2048,
-        obj_type: 1,
+        obj_type: SEAF_METADATA_TYPE_FILE,
         version: 1,
-    };
-    let json = serde_json::to_string(&data).unwrap();
-    // Keys must be in alphabetical order: block_ids, size, type, version
-    assert!(
-        json.starts_with("{\"block_ids\":"),
-        "expected keys sorted, got: {json}"
-    );
-    assert!(json.contains("\"size\":2048"), "missing size field: {json}");
-    assert!(json.contains("\"type\":1"), "missing type field: {json}");
-    assert!(
-        json.contains("\"version\":1"),
-        "missing version field: {json}"
-    );
+    }
 }
 
-/// Verify that FsDirData JSON serialization produces alphabetically sorted keys.
-///
-/// Seafile reference: seafile-server common/fs-mgr.c seaf_dir_to_json()
-#[test]
-fn test_fs_dir_data_json_sorted_keys() {
-    let data = FsDirData {
-        dirents: vec![],
+fn dir_fixture() -> FsDirData {
+    FsDirData {
+        dirents: vec![
+            // Regular file: keeps modifier and size.
+            DirEntryData {
+                id: "a".repeat(40),
+                mode: S_IFREG,
+                modifier: "alice@example.com".into(),
+                mtime: 1_700_000_000,
+                name: "a.txt".into(),
+                size: 123,
+            },
+            // Directory: modifier/size are absent from the JSON even though the
+            // in-memory struct carries defaults for them.
+            DirEntryData {
+                id: "b".repeat(40),
+                mode: S_IFDIR,
+                modifier: String::new(),
+                mtime: 1_700_000_001,
+                name: "sub".into(),
+                size: 0,
+            },
+        ],
         obj_type: SEAF_METADATA_TYPE_DIR,
         version: 1,
-    };
-    let json = serde_json::to_string(&data).unwrap();
-    // Keys must be in alphabetical order: dirents, type, version
-    assert!(
-        json.starts_with("{\"dirents\":"),
-        "expected keys sorted, got: {json}"
-    );
-    assert!(json.contains("\"type\":3"), "missing type field: {json}");
-    assert!(
-        json.contains("\"version\":1"),
-        "missing version field: {json}"
-    );
+    }
 }
 
-/// Verify that JSON serialization is deterministic (same input → same hash).
 #[test]
-fn test_fs_data_id_is_deterministic() {
-    let data = FsDirData {
-        dirents: vec![],
-        obj_type: SEAF_METADATA_TYPE_DIR,
+fn file_object_json_and_id_match_seafile() {
+    let (fs_id, json) = server::domain::fs::compute_file(&file_fixture()).unwrap();
+    assert_eq!(json, FILE_JSON, "file object JSON must match jansson");
+    assert_eq!(fs_id, FILE_SHA1, "file object id must be sha1(json)");
+}
+
+#[test]
+fn dir_object_json_and_id_match_seafile() {
+    let (fs_id, json) = server::domain::fs::compute_dir(&dir_fixture()).unwrap();
+    assert_eq!(json, DIR_JSON, "dir object JSON must match jansson");
+    assert_eq!(fs_id, DIR_SHA1, "dir object id must be sha1(json)");
+}
+
+#[test]
+fn compute_fs_id_is_sha1_of_json() {
+    assert_eq!(server::domain::fs::compute_fs_id(FILE_JSON), FILE_SHA1);
+    assert_eq!(server::domain::fs::compute_fs_id(DIR_JSON), DIR_SHA1);
+}
+
+/// A zero-byte file and an empty directory have no object at all: their id is
+/// the `EMPTY_SHA1` sentinel (`seaf_fs_manager_index_blocks()` /
+/// `seaf_dir_save()`), so serialization must refuse to produce one.
+#[test]
+fn empty_file_and_dir_have_no_object() {
+    let empty_file = FsFileData {
+        block_ids: vec![],
+        size: 0,
+        obj_type: SEAF_METADATA_TYPE_FILE,
         version: 1,
     };
-    let json1 = serde_json::to_string(&data).unwrap();
-    let json2 = serde_json::to_string(&data).unwrap();
-    assert_eq!(json1, json2, "to_compact_json must be deterministic");
+    assert!(server::domain::fs::compute_file(&empty_file).is_none());
 
-    let id1 = infra::crypto::fs_id::sha1_hex(json1.as_bytes());
-    let id2 = infra::crypto::fs_id::sha1_hex(json2.as_bytes());
-    assert_eq!(id1, id2, "FS ID from identical data must match");
-}
-
-/// Verify that store_fs_dir_object with an empty dir returns EMPTY_SHA1
-/// sentinel without storing, matching seafile's seaf_dir_save() behavior.
-/// The SHA1 of the JSON representation is NOT all zeros — the sentinel
-/// is assigned explicitly by seafile convention (fs-mgr.c:1455).
-#[test]
-fn test_store_fs_dir_object_empty_dir_returns_emty_sha1() {
-    // This is a compile-time assertion: the store function's behavior
-    // for empty dirs is hardcoded to return EMPTY_SHA1. The SHA1 of
-    // the actual JSON string is irrelevant — seafile never stores it.
     let empty_dir = FsDirData {
         dirents: vec![],
         obj_type: SEAF_METADATA_TYPE_DIR,
         version: 1,
     };
-    let json = serde_json::to_string(&empty_dir).unwrap();
-    let json_hash = infra::crypto::fs_id::sha1_hex(json.as_bytes());
-    // Proving the point: the hash of empty dir JSON is NOT all zeros
-    assert_ne!(
-        json_hash, "0000000000000000000000000000000000000000",
-        "SHA1 of empty dir JSON is not all zeros — the sentinel is assigned by convention, not computed"
-    );
+    assert!(server::domain::fs::compute_dir(&empty_dir).is_none());
 }
 
-/// Smoke test for store_fs_file_object / store_fs_dir_object integration.
-/// These are async and require a DB, so we just test the ID consistency
-/// between to_compact_json + sha1_hex and the struct's own compute_fs_id.
+/// The serialization is deterministic (same input → same bytes → same id).
 #[test]
-fn test_file_data_compute_fs_id_matches_json_hash() {
-    let data = FsFileData {
-        block_ids: vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()],
-        size: 512,
-        obj_type: 1,
-        version: 1,
-    };
-    let json = serde_json::to_string(&data).unwrap();
-    let expected = infra::crypto::fs_id::sha1_hex(json.as_bytes());
-    let actual = infra::crypto::fs_id::sha1_hex(serde_json::to_string(&data).unwrap().as_bytes());
-    assert_eq!(
-        actual, expected,
-        "compute_fs_id must match sha1_hex of JSON"
-    );
+fn fs_object_json_is_deterministic() {
+    for _ in 0..3 {
+        assert_eq!(server::domain::fs::file_to_json(&file_fixture()), FILE_JSON);
+        assert_eq!(server::domain::fs::dir_to_json(&dir_fixture()), DIR_JSON);
+    }
 }
 
+/// Regular files keep `modifier`/`size`; other entry types do not.
 #[test]
-fn test_dir_data_compute_fs_id_matches_json_hash() {
-    let data = FsDirData {
-        dirents: vec![],
-        obj_type: SEAF_METADATA_TYPE_DIR,
-        version: 1,
-    };
-    let json = serde_json::to_string(&data).unwrap();
-    let expected = infra::crypto::fs_id::sha1_hex(json.as_bytes());
-    let actual = infra::crypto::fs_id::sha1_hex(serde_json::to_string(&data).unwrap().as_bytes());
-    assert_eq!(
-        actual, expected,
-        "compute_fs_id must match sha1_hex of JSON"
+fn dir_dirent_file_only_fields_are_conditional() {
+    let json = server::domain::fs::dir_to_json(&dir_fixture());
+    let file_part = json.split("}, {").next().unwrap();
+    assert!(file_part.contains(r#""modifier": "alice@example.com""#));
+    assert!(file_part.contains(r#""size": 123"#));
+
+    let dir_part = json.split("}, {").nth(1).unwrap();
+    assert!(
+        !dir_part.contains("\"modifier\""),
+        "directory dirents must omit modifier: {dir_part}"
+    );
+    assert!(
+        !dir_part.contains("\"size\""),
+        "directory dirents must omit size: {dir_part}"
     );
 }

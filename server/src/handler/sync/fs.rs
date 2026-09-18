@@ -223,9 +223,11 @@ pub async fn check_fs(
         .find_existing_fs_ids(&repo_id, &fs_ids)
         .await?;
 
+    // seafile's `seaf_fs_manager_object_exists()` treats EMPTY_SHA1 as always
+    // present ("Empty file and dir always exists"), so never report it missing.
     let missing: Vec<String> = fs_ids
         .iter()
-        .filter(|fs_id| !existing.contains(fs_id.as_str()))
+        .filter(|fs_id| fs_id.as_str() != EMPTY_SHA1 && !existing.contains(fs_id.as_str()))
         .cloned()
         .collect();
 

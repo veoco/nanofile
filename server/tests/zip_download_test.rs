@@ -112,6 +112,28 @@ async fn test_single_dir_download() {
     assert_eq!(files["subdir/b.txt"], b"hello b");
 }
 
+/// An empty file is an `EMPTY_SHA1` dirent with no fs object; the zip must still
+/// include it as a zero-byte entry (the batch file lookup synthesises it).
+#[tokio::test]
+async fn test_zip_includes_empty_file() {
+    let f = TestFixture::new().await;
+
+    upload(&f, "/", "empty.txt", b"").await;
+    upload(&f, "/", "full.txt", b"data").await;
+
+    let zip_token = request_zip(&f, "/", &["empty.txt", "full.txt"]).await;
+    let zip_resp = f.client.zip_download(&zip_token).await;
+    assert_eq!(zip_resp.status(), 200);
+
+    let (names, files) = parse_zip(&zip_resp.bytes().await.unwrap());
+    assert_eq!(names, vec!["empty.txt", "full.txt"]);
+    assert!(
+        files["empty.txt"].is_empty(),
+        "empty file must be a 0-byte entry"
+    );
+    assert_eq!(files["full.txt"], b"data");
+}
+
 #[tokio::test]
 async fn test_batch_multi_file_download() {
     let f = TestFixture::new().await;

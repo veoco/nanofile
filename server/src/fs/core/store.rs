@@ -31,13 +31,18 @@ pub async fn store_fs_dir_object(
 }
 
 /// Compute fs_id, serialize, and INSERT OR IGNORE into fs_objects.
-/// Returns the fs_id.
+///
+/// A zero-byte file has no `seafile` object in seafile: its id is the
+/// `EMPTY_SHA1` sentinel (see `seaf_fs_manager_index_blocks()`), so nothing is
+/// stored and every caller sees the same id a client computes locally.
 pub async fn store_fs_file_object(
     db: &DatabaseConnection,
     repo_id: &str,
     data: &FsFileData,
 ) -> Result<String, AppError> {
-    let (fs_id, json) = domain::fs::compute_file(data);
+    let Some((fs_id, json)) = domain::fs::compute_file(data) else {
+        return Ok(EMPTY_SHA1.to_string());
+    };
     let _ = db
         .execute_raw(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
