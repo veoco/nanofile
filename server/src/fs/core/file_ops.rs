@@ -760,12 +760,15 @@ mod tests {
     }
 
     /// The streaming path must emit exactly the block ids that the whole-buffer
-    /// `create_file` chunking produces, in order, across more than four blocks
-    /// (so the pipeline concurrency and ordering are both exercised).
+    /// `create_file` chunking produces, in order, for a file that spans more
+    /// than one CDC block. (Many-block pipeline ordering is covered by
+    /// `test_stream_blocks_pipelined_many_blocks_in_order`.)
     #[tokio::test]
     async fn test_write_stream_blocks_matches_create_file_chunking() {
         let (_dir, store) = temp_store();
-        let data = pseudo_data(6 * 1024 * 1024 + 123); // >4 blocks at ~1MiB avg
+        // 12 MiB of pseudo-random data spans two CDC blocks at seafile's
+        // 8 MiB/6 MiB/10 MiB defaults (the first block hits the 10 MiB max).
+        let data = pseudo_data(12 * 1024 * 1024 + 123);
 
         // Reference: create_file's whole-buffer chunking.
         let chunks = infra::storage::cdc::file_chunk_cdc(&data);

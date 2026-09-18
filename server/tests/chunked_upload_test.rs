@@ -491,10 +491,11 @@ async fn test_chunked_upload_streams_in_order_to_blocks() {
     let token = get_upload_token(&f).await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    // ~6 MiB deterministic pseudo-random content spanning several CDC blocks
-    // (the same generator/size as the `file_ops` fixture that provably spans
-    // multiple blocks).
-    let content = pseudo_data(6 * 1024 * 1024 + 123);
+    // 12 MiB deterministic pseudo-random content spanning several CDC blocks at
+    // seafile's official block sizes (8 MiB avg / 6 MiB min / 10 MiB max) — the
+    // same generator/size as the `file_ops` fixture that provably spans
+    // multiple blocks.
+    let content = pseudo_data(12 * 1024 * 1024 + 123);
 
     // Reference: whole-file CDC chunking → expected block ids (block id is the
     // SHA-1 of the block content, matching `write_block`).

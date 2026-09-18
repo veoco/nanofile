@@ -845,9 +845,9 @@ mod tests {
         let repo = "stream-repo-inorder";
         let path = "/big.bin";
 
-        // ~6 MiB so the CDC chunker (min 256 KiB / max 4 MiB, avg ~1 MiB)
-        // reliably spans multiple blocks for this pseudo-random data.
-        let data = pseudo_data(6 * 1024 * 1024 + 123);
+        // 12 MiB so the CDC chunker (seafile defaults: min 6 MiB / max 10 MiB /
+        // avg 8 MiB) reliably spans multiple blocks for this pseudo-random data.
+        let data = pseudo_data(12 * 1024 * 1024 + 123);
         let expected = reference_block_ids(&store, &data).await;
         assert!(expected.len() > 1, "fixture must span multiple blocks");
 
@@ -964,9 +964,10 @@ mod tests {
 
         let repo = "stream-repo-wfail";
         let path = "/f.bin";
-        // Larger than one max-size CDC block (4 MiB) so at least one block is
-        // emitted by the first feed, forcing a block write to be attempted.
-        let data = pseudo_data(4 * 1024 * 1024 + 1);
+        // Larger than one max-size CDC block (seafile default 10 MiB) so at
+        // least one block is emitted by the first feed, forcing a block write
+        // to be attempted.
+        let data = pseudo_data(10 * 1024 * 1024 + 1);
 
         mgr.get_or_create(repo, path, data.len() as u64)
             .await

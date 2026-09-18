@@ -1017,9 +1017,9 @@ async fn test_regression_cdc_determinism() {
     );
 }
 
-/// CDC chunk sizes must respect min/max boundaries.
-/// For a 1MB file: min=256KB, avg=1MB, max=4MB.
-/// Expected 1-4 chunks, each non-last chunk >= 256KB and <= 4MB.
+/// CDC chunk sizes must respect seafile's min/max boundaries.
+/// For a 1MB file (below the 6MB CDC minimum): exactly one block of 1MB;
+/// every block is at most the 10MB CDC maximum.
 #[tokio::test]
 async fn test_regression_cdc_chunk_size_bounds() {
     let server = TestServer::start().await;
@@ -1083,14 +1083,10 @@ async fn test_regression_cdc_chunk_size_bounds() {
         .collect();
     let file_size = file_data["size"].as_i64().unwrap() as usize;
 
-    assert!(
-        !block_ids.is_empty(),
-        "1MB file should produce at least 1 chunk"
-    );
-    assert!(
-        block_ids.len() <= 4,
-        "1MB file should produce at most 4 chunks (min=256KB), got {}",
-        block_ids.len()
+    assert_eq!(
+        block_ids.len(),
+        1,
+        "1MB file is below seafile's 6MB CDC minimum, so it is one block"
     );
 
     // Verify sizes via block-map endpoint
@@ -1108,19 +1104,19 @@ async fn test_regression_cdc_chunk_size_bounds() {
         "sum of block sizes must equal file size"
     );
 
-    // All non-last blocks must be >= 256KB (CDC min)
+    // All non-last blocks must be >= 6MB (CDC min) and every block <= 10MB (max)
     for (i, &size) in block_map_sizes.iter().enumerate() {
         if i < block_map_sizes.len() - 1 {
             assert!(
-                size >= 256 * 1024,
-                "non-last block {} size {} < 256KB min",
+                size >= 6 * 1024 * 1024,
+                "non-last block {} size {} < 6MB min",
                 i,
                 size
             );
         }
         assert!(
-            size <= 4 * 1024 * 1024,
-            "block {} size {} > 4MB max",
+            size <= 10 * 1024 * 1024,
+            "block {} size {} > 10MB max",
             i,
             size
         );
@@ -1142,14 +1138,15 @@ async fn test_regression_cdc_roundtrip() {
 
     let repo_id = common::create_test_repo(&client, &api_token, "CDCRound").await;
 
-    // Test with various file sizes
+    // Test with various file sizes (all below the 6 MiB CDC minimum, so each
+    // is a single block; the round-trip is what is under test here).
     let test_cases: Vec<(usize, &str)> = vec![
         (0, "empty"),
         (1, "single byte"),
         (100, "small"),
-        (256 * 1024, "exactly min chunk"),
-        (400 * 1024, "between min and 2*min"),
-        (512 * 1024, "2*min"),
+        (256 * 1024, "quarter MiB"),
+        (400 * 1024, "400 KiB"),
+        (512 * 1024, "half MiB"),
         (1024 * 1024, "1MB"),
     ];
 

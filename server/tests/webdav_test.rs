@@ -417,10 +417,11 @@ async fn test_put_large_file_crosses_blocks() {
     let client = http();
     let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
 
-    // >4MiB of varied bytes so the streaming CDC chunker spans multiple
-    // blocks — the WebDAV PUT path streams the body straight into block
-    // writes instead of buffering the whole file in memory.
-    let size = 4 * 1024 * 1024 + 123;
+    // >10MiB of varied bytes so the streaming CDC chunker spans multiple
+    // blocks at seafile's official 6 MiB/10 MiB min/max — the WebDAV PUT path
+    // streams the body straight into block writes instead of buffering the
+    // whole file in memory.
+    let size = 10 * 1024 * 1024 + 123;
     let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
     let resp = dav_put(
         &client,

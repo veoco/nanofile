@@ -695,8 +695,9 @@ fn extract_multipart_boundary(headers: &HeaderMap) -> Result<String, AppError> {
 
 /// Stream a multipart file field straight into content-defined blocks in the
 /// block store, returning the block ids and total size, so the file is never
-/// fully buffered in memory. `Chunker::new(0)` uses the default (sub-2GB)
-/// chunk sizing; pass a known size for larger files.
+/// fully buffered in memory. `Chunker::new(0)` uses seafile's fixed official
+/// block sizes (8 MiB avg / 6 MiB min / 10 MiB max), matching what a seafile
+/// client computes for the same content.
 ///
 /// `enc_key` is the library block key for an encrypted repository (see
 /// [`upload_block_key`]); when set, each block is encrypted before it is stored

@@ -3,8 +3,41 @@ use std::sync::LazyLock;
 const POLY: u64 = 0xbfe6b8a5bf378d83;
 const WINDOW_SIZE: usize = 48;
 const BREAK_VALUE: u32 = 0x0013;
-const DEFAULT_MIN_BLOCK: usize = 256 * 1024;
-const DEFAULT_MAX_BLOCK: usize = 4 * 1024 * 1024;
+
+/// seafile's official CDC block sizing.
+///
+/// `common/fs-mgr.c` (server) and `common/fs-mgr.h` (daemon) define
+/// `CDC_AVERAGE_BLOCK_SIZE (1 << 23)` = 8 MiB, `CDC_MIN_BLOCK_SIZE
+/// (6 * (1 << 20))` = 6 MiB and `CDC_MAX_BLOCK_SIZE (10 * (1 << 20))` =
+/// 10 MiB, and `seaf_fs_manager_index_blocks()` always chunks with them
+/// (seafile commit `31dcd928`, "Use 8MB as average block size", 2017).
+///
+/// They are **fixed and independent of file size**. The size-dependent
+/// `calculate_chunk_size()` in `common/fs-mgr.c` is only the legacy (pre-6.1)
+/// fallback consulted by the daemon's `compare_file_content()`, never the
+/// indexing path, so it must not be used to chunk new blocks: doing so makes
+/// the server's block boundaries (and therefore every `seafile` object id)
+/// disagree with what a seafile client computes for the same content.
+pub const SEAFILE_AVG_BLOCK: usize = 8 * 1024 * 1024;
+pub const SEAFILE_MIN_BLOCK: usize = 6 * 1024 * 1024;
+pub const SEAFILE_MAX_BLOCK: usize = 10 * 1024 * 1024;
+
+/// Block-size triple for [`file_chunk_cdc_with`] / [`Chunker::with_sizes`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChunkSizes {
+    pub avg: usize,
+    pub min: usize,
+    pub max: usize,
+}
+
+impl ChunkSizes {
+    /// The triple every seafile client and server has used since 2017.
+    pub const SEAFILE: ChunkSizes = ChunkSizes {
+        avg: SEAFILE_AVG_BLOCK,
+        min: SEAFILE_MIN_BLOCK,
+        max: SEAFILE_MAX_BLOCK,
+    };
+}
 
 /// seafile-compatible Rabin fingerprint.
 ///
@@ -165,20 +198,8 @@ static RABIN_TABLES: LazyLock<(usize, [u64; 256], [u64; 256])> = LazyLock::new(|
     (shift, t, u)
 });
 
-pub fn calculate_chunk_sizes(file_size: usize) -> (usize, usize, usize) {
-    let (avg, min, max) = if file_size >= 8 * 1024 * 1024 * 1024 {
-        (8 * 1024 * 1024, 2 * 1024 * 1024, 16 * 1024 * 1024)
-    } else if file_size >= 4 * 1024 * 1024 * 1024 {
-        (4 * 1024 * 1024, 1024 * 1024, 8 * 1024 * 1024)
-    } else if file_size >= 2 * 1024 * 1024 * 1024 {
-        (2 * 1024 * 1024, 512 * 1024, 4 * 1024 * 1024)
-    } else {
-        (1024 * 1024, DEFAULT_MIN_BLOCK, DEFAULT_MAX_BLOCK)
-    };
-    (avg, min, max)
-}
-
-/// Content-defined chunking matching seafile's `file_chunk_cdc` exactly.
+/// Content-defined chunking matching seafile's `file_chunk_cdc` exactly, using
+/// seafile's official fixed block sizes ([`ChunkSizes::SEAFILE`]).
 ///
 /// Algorithm mirrors the C code's buffer management:
 /// 1. Skip first `min - WINDOW_SIZE` bytes (no break checking)
@@ -186,14 +207,20 @@ pub fn calculate_chunk_sizes(file_size: usize) -> (usize, usize, usize) {
 /// 3. Continue with rolling updates, checking for break points or max size
 /// 4. On break/max: emit chunk, reset, repeat
 pub fn file_chunk_cdc(data: &[u8]) -> Vec<(usize, usize)> {
+    file_chunk_cdc_with(data, ChunkSizes::SEAFILE)
+}
+
+/// [`file_chunk_cdc`] with an explicit block-size triple.
+///
+/// Production code always uses [`ChunkSizes::SEAFILE`]; the parameter exists so
+/// tests can exercise multi-block boundaries on small fixtures without
+/// generating tens of megabytes.
+pub fn file_chunk_cdc_with(data: &[u8], sizes: ChunkSizes) -> Vec<(usize, usize)> {
     let file_size = data.len();
     if file_size == 0 {
         return vec![];
     }
-    // Chunk sizing is fixed and independent of file size so the streaming
-    // `Chunker` and this whole-buffer path always agree for every file size;
-    // the seafile break-point / max-size state machine is unchanged.
-    let (avg, min, max) = calculate_chunk_sizes(0);
+    let ChunkSizes { avg, min, max } = sizes;
     let mask = (avg as u32).wrapping_sub(1);
     let target = BREAK_VALUE & mask;
 
@@ -209,7 +236,8 @@ pub fn file_chunk_cdc(data: &[u8]) -> Vec<(usize, usize)> {
 
         // Compute initial fingerprint at position `min - 1` from scratch (like C's finger)
         let scan_start = chunk_start + min - 1;
-        // scan_start >= min - 1 >= DEFAULT_MIN_BLOCK - 1, so this slice is always valid
+        // `min` is far larger than the Rabin window for every seafile size, so
+        // the last `WINDOW_SIZE` bytes before `scan_start` always exist.
         debug_assert!(
             scan_start >= WINDOW_SIZE - 1,
             "scan_start too small for window"
@@ -287,12 +315,20 @@ pub struct Chunker {
 }
 
 impl Chunker {
-    /// `file_size` drives only the "end of file" test (`next_pos >= file_size`);
-    /// `min`/`max` are fixed defaults so this streaming chunker and the
-    /// whole-buffer [`file_chunk_cdc`] agree for any file size. For an unknown
-    /// size pass `0` and the trailing chunk is produced by [`Chunker::finish`].
+    /// Streaming CDC with seafile's official fixed block sizes
+    /// ([`ChunkSizes::SEAFILE`]). `file_size` drives only the "end of file"
+    /// test (`next_pos >= file_size`); the block sizes do **not** depend on it,
+    /// so this streaming chunker and the whole-buffer [`file_chunk_cdc`] agree
+    /// for any file size. For an unknown size pass `0` and the trailing chunk
+    /// is produced by [`Chunker::finish`].
     pub fn new(file_size: usize) -> Self {
-        let (avg, min, max) = calculate_chunk_sizes(0);
+        Self::with_sizes(file_size, ChunkSizes::SEAFILE)
+    }
+
+    /// [`Chunker::new`] with an explicit block-size triple (tests only; see
+    /// [`file_chunk_cdc_with`]).
+    pub fn with_sizes(file_size: usize, sizes: ChunkSizes) -> Self {
+        let ChunkSizes { avg, min, max } = sizes;
         let mask = (avg as u32).wrapping_sub(1);
         Self {
             file_size,
@@ -437,13 +473,40 @@ impl Chunker {
 mod tests {
     use super::*;
 
+    /// Small block-size triple for boundary/equivalence tests. The production
+    /// defaults (8/6/10 MiB) need ~30 MiB fixtures to span several blocks, so
+    /// these proportional sizes (1 MiB / 256 KiB / 4 MiB) keep the tests fast;
+    /// the production triple itself is locked separately by
+    /// [`test_default_block_sizes_match_seafile`] and
+    /// [`test_default_boundaries_match_seafile_c_reference`].
+    const TEST_SIZES: ChunkSizes = ChunkSizes {
+        avg: 1024 * 1024,
+        min: 256 * 1024,
+        max: 4 * 1024 * 1024,
+    };
+
+    /// Deterministic pseudo-random bytes (no rand dependency), identical to the
+    /// generator used by `test_default_boundaries_match_seafile_c_reference`'s
+    /// C counterpart.
+    fn lcg_bytes(n: usize, seed: u64) -> Vec<u8> {
+        let mut x = seed;
+        (0..n)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (x >> 33) as u8
+            })
+            .collect()
+    }
+
     /// Feed `data` through `Chunker` in slices of `feed_len` bytes and return
     /// the emitted chunks (concatenating them must recover `data`).
-    fn stream_blocks(data: &[u8], feed_len: usize) -> Vec<Vec<u8>> {
+    fn stream_blocks(data: &[u8], feed_len: usize, sizes: ChunkSizes) -> Vec<Vec<u8>> {
         if data.is_empty() {
             return Vec::new();
         }
-        let mut ch = Chunker::new(data.len());
+        let mut ch = Chunker::with_sizes(data.len(), sizes);
         let mut blocks = Vec::new();
         for chunk in data.chunks(feed_len) {
             blocks.extend(ch.feed(chunk));
@@ -459,10 +522,13 @@ mod tests {
     /// whole-buffer `file_chunk_cdc` for the same content — seafile clients
     /// depend on this. Verified under many feed slice sizes to exercise the
     /// feed-boundary (off-by-one) cases.
-    fn assert_chunkers_agree(data: &[u8]) {
-        let expected: Vec<usize> = file_chunk_cdc(data).iter().map(|(_, s)| *s).collect();
+    fn assert_chunkers_agree(data: &[u8], sizes: ChunkSizes) {
+        let expected: Vec<usize> = file_chunk_cdc_with(data, sizes)
+            .iter()
+            .map(|(_, s)| *s)
+            .collect();
         for feed_len in [1usize, 7, 64, 999, 4096] {
-            let blocks = stream_blocks(data, feed_len);
+            let blocks = stream_blocks(data, feed_len, sizes);
             let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
             assert_eq!(sizes, expected, "feed_len={feed_len} len={}", data.len());
             assert_eq!(
@@ -477,41 +543,43 @@ mod tests {
     #[test]
     fn test_chunker_matches_file_chunk_cdc() {
         // Empty file.
-        assert_chunkers_agree(&[]);
+        assert_chunkers_agree(&[], TEST_SIZES);
         // Sub-min-size files.
-        assert_chunkers_agree(&[0u8; 1]);
-        assert_chunkers_agree(&[0u8; 1000]);
-        assert_chunkers_agree(&[0xFFu8; 500]);
+        assert_chunkers_agree(&[0u8; 1], TEST_SIZES);
+        assert_chunkers_agree(&[0u8; 1000], TEST_SIZES);
+        assert_chunkers_agree(&[0xFFu8; 500], TEST_SIZES);
         // Exactly min boundary and just above.
-        assert_chunkers_agree(&(0..256 * 1024).map(|i| i as u8).collect::<Vec<_>>());
-        assert_chunkers_agree(&[0u8; 256 * 1024 + 100]);
+        assert_chunkers_agree(
+            &(0..256 * 1024).map(|i| i as u8).collect::<Vec<_>>(),
+            TEST_SIZES,
+        );
+        assert_chunkers_agree(&[0u8; 256 * 1024 + 100], TEST_SIZES);
         // Alternating / all-ones pattern.
         assert_chunkers_agree(
             &(0..300_000)
                 .map(|i| if i % 2 == 0 { 0xAA } else { 0x55 })
                 .collect::<Vec<_>>(),
+            TEST_SIZES,
         );
-        assert_chunkers_agree(&[0xFFu8; 1_000_000]);
+        assert_chunkers_agree(&[0xFFu8; 1_000_000], TEST_SIZES);
         // Larger pseudo-random content spanning multiple chunks.
         let data: Vec<u8> = (0..3_000_000)
             .map(|i: usize| (i.wrapping_mul(31) ^ (i >> 2) ^ (i.wrapping_mul(7))) as u8)
             .collect();
-        assert_chunkers_agree(&data);
+        assert_chunkers_agree(&data, TEST_SIZES);
     }
 
     /// `stream_file_into_blocks` (the A2 multipart upload path) uses
-    /// `Chunker::new(0)` because the field size isn't known up front. For files
-    /// below 2 GiB `calculate_chunk_sizes(0)` returns the same (avg/min/max) as
-    /// `calculate_chunk_sizes(len)`, so the boundaries must still match
-    /// `file_chunk_cdc(data.len())` exactly — this locks the A2 production path
-    /// to the original whole-buffer CDC.
+    /// `Chunker::new(0)` because the field size isn't known up front, while the
+    /// whole-buffer path uses `file_chunk_cdc`. Both must emit exactly the same
+    /// boundaries for the same content.
     #[test]
     fn test_chunker_new_zero_matches_file_chunk_cdc() {
-        fn feed_zero(data: &[u8], feed_len: usize) -> Vec<Vec<u8>> {
+        fn feed_zero(data: &[u8], feed_len: usize, sizes: ChunkSizes) -> Vec<Vec<u8>> {
             if data.is_empty() {
                 return Vec::new();
             }
-            let mut ch = Chunker::new(0);
+            let mut ch = Chunker::with_sizes(0, sizes);
             let mut blocks = Vec::new();
             for chunk in data.chunks(feed_len) {
                 blocks.extend(ch.feed(chunk));
@@ -523,32 +591,22 @@ mod tests {
             blocks
         }
 
-        // Deterministic pseudo-random bytes (no rand dependency).
-        let lcg = |n: usize, seed: u64| -> Vec<u8> {
-            let mut x = seed;
-            (0..n)
-                .map(|_| {
-                    x = x
-                        .wrapping_mul(6364136223846793005)
-                        .wrapping_add(1442695040888963407);
-                    (x >> 33) as u8
-                })
-                .collect()
-        };
-
         let cases: Vec<(&str, Vec<u8>)> = vec![
             ("empty", Vec::new()),
             ("sub-min", vec![0u8; 1000]),
             ("exact-min", vec![0xABu8; 256 * 1024]),
             ("min-plus-1", vec![0xCDu8; 256 * 1024 + 1]),
-            ("few-MB", lcg(3 * 1024 * 1024 + 123, 99)),
-            ("random-800k", lcg(800_000, 12345)),
+            ("few-MB", lcg_bytes(3 * 1024 * 1024 + 123, 99)),
+            ("random-800k", lcg_bytes(800_000, 12345)),
         ];
 
         for (label, data) in &cases {
-            let expected: Vec<usize> = file_chunk_cdc(data).iter().map(|(_, s)| *s).collect();
+            let expected: Vec<usize> = file_chunk_cdc_with(data, TEST_SIZES)
+                .iter()
+                .map(|(_, s)| *s)
+                .collect();
             for feed_len in [1usize, 3, 17, 64, 4096] {
-                let blocks = feed_zero(data, feed_len);
+                let blocks = feed_zero(data, feed_len, TEST_SIZES);
                 let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
                 assert_eq!(
                     sizes,
@@ -572,9 +630,12 @@ mod tests {
         let data: Vec<u8> = (0..2 * 1024 * 1024)
             .map(|i: usize| (i.wrapping_mul(41) ^ (i >> 3)) as u8)
             .collect();
-        let expected: Vec<usize> = file_chunk_cdc(&data).iter().map(|(_, s)| *s).collect();
+        let expected: Vec<usize> = file_chunk_cdc_with(&data, TEST_SIZES)
+            .iter()
+            .map(|(_, s)| *s)
+            .collect();
         for feed_len in [256 * 1024 - 1, 256 * 1024, 256 * 1024 + 1, 5 * 1024 * 1024] {
-            let blocks = stream_blocks(&data, feed_len);
+            let blocks = stream_blocks(&data, feed_len, TEST_SIZES);
             let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
             assert_eq!(sizes, expected, "feed_len={feed_len}");
             assert_eq!(blocks.concat(), data, "feed_len={feed_len}");
@@ -587,8 +648,11 @@ mod tests {
     #[test]
     fn test_chunker_max_min_known_size() {
         let data = vec![0u8; 4 * 1024 * 1024 + 256 * 1024];
-        let expected: Vec<usize> = file_chunk_cdc(&data).iter().map(|(_, s)| *s).collect();
-        let blocks = stream_blocks(&data, 1024);
+        let expected: Vec<usize> = file_chunk_cdc_with(&data, TEST_SIZES)
+            .iter()
+            .map(|(_, s)| *s)
+            .collect();
+        let blocks = stream_blocks(&data, 1024, TEST_SIZES);
         let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
         assert_eq!(sizes, expected);
         assert_eq!(blocks.concat(), data);
@@ -599,9 +663,12 @@ mod tests {
     #[test]
     fn test_chunker_zero_unknown_size_over_max() {
         let data = vec![0u8; 4 * 1024 * 1024 + 512 * 1024];
-        let expected: Vec<usize> = file_chunk_cdc(&data).iter().map(|(_, s)| *s).collect();
+        let expected: Vec<usize> = file_chunk_cdc_with(&data, TEST_SIZES)
+            .iter()
+            .map(|(_, s)| *s)
+            .collect();
         for feed_len in [64usize, 1024, 4 * 1024 * 1024, 5 * 1024 * 1024] {
-            let mut ch = Chunker::new(0);
+            let mut ch = Chunker::with_sizes(0, TEST_SIZES);
             let mut blocks = Vec::new();
             for slice in data.chunks(feed_len) {
                 blocks.extend(ch.feed(slice));
@@ -616,35 +683,63 @@ mod tests {
         }
     }
 
-    /// With the fixed-default sizing, the streaming chunker's min/max must be
-    /// independent of `file_size` so the known-size (A1 resumable), unknown-size
-    /// (`Chunker::new(0)`, A2 multipart) and whole-buffer `file_chunk_cdc` paths
-    /// all emit identical boundaries.
+    /// seafile's block sizes are fixed constants; the streaming chunker must use
+    /// them (and only them) regardless of `file_size`.
     #[test]
     fn test_chunker_size_independent() {
         let a = Chunker::new(0);
         let b = Chunker::new(2 * 1024 * 1024); // 2 MiB
         let c = Chunker::new(3 * 1024 * 1024 * 1024); // 3 GiB
+        assert_eq!(a.min, SEAFILE_MIN_BLOCK);
+        assert_eq!(a.max, SEAFILE_MAX_BLOCK);
         assert_eq!(a.min, b.min, "min must not depend on file_size");
         assert_eq!(a.max, b.max, "max must not depend on file_size");
         assert_eq!(a.min, c.min, "min must not depend on file_size");
         assert_eq!(a.max, c.max, "max must not depend on file_size");
-        let (_, min, max) = calculate_chunk_sizes(0);
-        assert_eq!(a.min, min);
-        assert_eq!(a.max, max);
     }
 
+    /// The production triple must equal seafile's `CDC_*_BLOCK_SIZE` constants
+    /// (`common/fs-mgr.h`): 8 MiB average, 6 MiB min, 10 MiB max.
     #[test]
-    fn test_chunk_sizes() {
-        let (avg, min, max) = calculate_chunk_sizes(1024 * 1024);
-        assert_eq!(avg, 1024 * 1024);
-        assert_eq!(min, 256 * 1024);
-        assert_eq!(max, 4 * 1024 * 1024);
+    fn test_default_block_sizes_match_seafile() {
+        assert_eq!(ChunkSizes::SEAFILE.avg, 8 * 1024 * 1024);
+        assert_eq!(ChunkSizes::SEAFILE.min, 6 * 1024 * 1024);
+        assert_eq!(ChunkSizes::SEAFILE.max, 10 * 1024 * 1024);
+    }
 
-        let (avg, min, max) = calculate_chunk_sizes(3 * 1024 * 1024 * 1024);
-        assert_eq!(avg, 2 * 1024 * 1024);
-        assert_eq!(min, 512 * 1024);
-        assert_eq!(max, 4 * 1024 * 1024);
+    /// Golden test: block boundaries for 40 MiB of deterministic `lcg_bytes`
+    /// (seed 1) must match, byte for byte, the boundaries produced by the
+    /// **unmodified upstream C implementation** (`seafile common/cdc/cdc.c` +
+    /// `common/cdc/rabin-checksum.c`) run with `block_sz=8 MiB`,
+    /// `block_min_sz=6 MiB`, `block_max_sz=10 MiB`.
+    ///
+    /// This is the compatibility contract: a seafile client chunking the same
+    /// bytes computes these same blocks, so the server-created `seafile` object
+    /// id matches the one the client would derive.
+    #[test]
+    fn test_default_boundaries_match_seafile_c_reference() {
+        const EXPECTED: &[usize] = &[6_431_339, 10_485_760, 10_485_760, 10_485_760, 4_054_421];
+        let data = lcg_bytes(40 * 1024 * 1024, 1);
+
+        let chunks = file_chunk_cdc(&data);
+        let sizes: Vec<usize> = chunks.iter().map(|(_, s)| *s).collect();
+        assert_eq!(sizes, EXPECTED);
+
+        // Offsets must be the running prefix sums.
+        let mut offset = 0usize;
+        for (chunk_offset, size) in &chunks {
+            assert_eq!(*chunk_offset, offset);
+            offset += size;
+        }
+        assert_eq!(offset, data.len());
+
+        // The streaming chunker (the actual upload path) must agree.
+        for feed_len in [4096usize, 65_536, 5 * 1024 * 1024] {
+            let blocks = stream_blocks(&data, feed_len, ChunkSizes::SEAFILE);
+            let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
+            assert_eq!(sizes, EXPECTED, "feed_len={feed_len}");
+            assert_eq!(blocks.concat(), data, "feed_len={feed_len}");
+        }
     }
 
     #[test]
@@ -968,14 +1063,14 @@ mod tests {
     /// Verify CDC boundary conditions: min block size is respected.
     #[test]
     fn test_cdc_min_block_respected() {
-        let data = vec![0u8; 256 * 1024 + 100]; // just above min
-        let chunks = file_chunk_cdc(&data);
+        let data = vec![0u8; TEST_SIZES.min + 100]; // just above min
+        let chunks = file_chunk_cdc_with(&data, TEST_SIZES);
         // With uniform zero data, we may not hit break points.
         // All chunks except possibly the last must be >= min or == max.
         for (i, &(_offset, size)) in chunks.iter().enumerate() {
             if i < chunks.len() - 1 {
                 assert!(
-                    size >= 256 * 1024 || size == 4 * 1024 * 1024,
+                    size >= TEST_SIZES.min || size == TEST_SIZES.max,
                     "non-last chunk {} size {} violated bounds",
                     i,
                     size
