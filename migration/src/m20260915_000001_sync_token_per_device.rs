@@ -125,13 +125,21 @@ mod tests {
 
     /// A database migrated up to — but not including — this migration, so the
     /// old per-`(repo, user)` constraint is still in place.
+    ///
+    /// The stop point is this migration's own position in the chain, not
+    /// `len() - 1`: the latter silently became "everything including this one"
+    /// as soon as another migration was appended after it, at which point the
+    /// old index these tests assert on no longer existed.
     async fn before_this_migration() -> (tempfile::TempDir, DatabaseConnection) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("test.db");
         let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
             .await
             .expect("connect sqlite");
-        let steps = crate::Migrator::migrations().len() as u32 - 1;
+        let steps = crate::migration_names()
+            .iter()
+            .position(|name| *name == "m20260915_000001_sync_token_per_device")
+            .expect("this migration is registered") as u32;
         crate::Migrator::up(&db, Some(steps))
             .await
             .expect("run prior migrations");

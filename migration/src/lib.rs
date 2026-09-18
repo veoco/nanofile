@@ -6,6 +6,15 @@ macro_rules! migrations {
     ($($name:ident),* $(,)?) => {
         $(mod $name;)*
 
+        /// The registered migration module names, in chain order.
+        ///
+        /// Lets a test locate one migration's position — e.g. to stop the chain
+        /// just before it — without hard-coding the chain length, which silently
+        /// broke as soon as another migration was appended.
+        pub fn migration_names() -> Vec<&'static str> {
+            vec![$(stringify!($name)),*]
+        }
+
         pub struct Migrator;
 
         impl MigratorTrait for Migrator {
