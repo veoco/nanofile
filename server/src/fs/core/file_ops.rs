@@ -328,6 +328,7 @@ impl FileOps {
             encrypted: None,
             enc_version: None,
             magic: None,
+            salt: None,
             key: None,
             version: 1,
         };
@@ -671,6 +672,7 @@ impl FileOps {
             encrypted: None,
             enc_version: None,
             magic: None,
+            salt: None,
             key: None,
             version: 1,
         };

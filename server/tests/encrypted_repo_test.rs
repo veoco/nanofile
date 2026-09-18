@@ -221,7 +221,11 @@ async fn test_download_info_encrypted_repo() {
     let resp = f.client.download_info(&f.api_token, &enc_repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["encrypted"], "true");
+    // seahub sends the *number* `1` here (`enc = 1 if repo.encrypted else ''`)
+    // and the desktop client reads the field with `QVariant::toInt()`
+    // (`requests.cpp:173`), so a JSON string would read back as 0 and hide the
+    // encryption from the clone flow.
+    assert_eq!(body["encrypted"], 1);
     assert!(body["magic"].as_str().is_some());
     assert!(body["random_key"].as_str().is_some());
 }
@@ -862,4 +866,230 @@ async fn v1_setpassword_reports_incorrect_password_for_ios() {
         .await;
     assert_eq!(resp.status(), 200, "correct password must succeed");
     assert!(cached_key_is_set(&f, &f.api_token, &enc_repo_id).await);
+}
+
+// ─── Server-side key generation for the bare-`passwd` creation flow ──────────
+
+/// The Android client creates an encrypted library with
+/// `POST /api2/repos/` carrying only `name`/`desc`/`passwd` — no `magic`,
+/// `random_key` or `enc_version` (`NewRepoViewModel.createNewRepo`, which then
+/// reads the generated material back from `GET /api2/repos/{id}/` and calls
+/// `POST /api/v2.1/repos/{id}/set-password/`).
+///
+/// seahub forwards that password to `seafile_api.create_repo(..., passwd,
+/// enc_version=ENCRYPTED_LIBRARY_VERSION, ...)`, i.e. the **server** generates
+/// the keys. Treating `passwd` as noise (as nanofile did) creates a *plain*
+/// library instead, silently discarding the password the user typed.
+#[tokio::test]
+async fn android_bare_passwd_creation_produces_a_usable_encrypted_library() {
+    let f = TestFixture::new().await;
+    let password = "correct horse battery staple";
+
+    let resp = f
+        .client
+        .create_repo_multipart_with_passwd(&f.api_token, "android-enc", password)
+        .await;
+    assert_eq!(resp.status(), 201, "creation must succeed");
+    let created: serde_json::Value = resp.json().await.unwrap();
+    let repo_id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        created["encrypted"], true,
+        "a library created with a password must be encrypted"
+    );
+
+    // The material the client reads back must be complete and self-consistent.
+    let resp = f.client.get_repo(&f.api_token, &repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let info: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(info["encrypted"], true);
+    assert_eq!(info["enc_version"], 2, "server-info advertises version 2");
+    let magic = info["magic"].as_str().unwrap_or_default();
+    let random_key = info["random_key"].as_str().unwrap_or_default();
+    assert_eq!(magic.len(), 64, "magic must be 64 hex chars: {magic}");
+    assert!(
+        magic.chars().all(|c| c.is_ascii_hexdigit()),
+        "magic must be hex"
+    );
+    assert_eq!(
+        random_key.len(),
+        96,
+        "random_key must be 96 hex chars: {random_key}"
+    );
+
+    // The generated magic must verify against the password the client sent,
+    // and only against it (this is the check `set-password` performs).
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{repo_id}/"),
+            Some(&f.api_token),
+            &[("password", password)],
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "the password must unlock the library");
+
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{repo_id}/"),
+            Some(&f.api_token),
+            &[("password", "not the password")],
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "a wrong password must be rejected");
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    assert_eq!(body["error_msg"], "Incorrect password");
+
+    // A bare password must not silently become a v4 library either: v4 is only
+    // produced when the configured version says so.
+    assert!(
+        info.get("salt").is_none() || info["salt"].as_str().unwrap_or("").is_empty(),
+        "enc_version 2 uses the fixed salt: {info}"
+    );
+}
+
+/// The desktop client's clone flow reads `encrypted` with `QVariant::toInt()`
+/// (`requests.cpp:173`), and seahub emits `1` / `''` (not `"true"`/`"false"`).
+/// A JSON string reads back as `0`, so every encrypted library would look
+/// unencrypted at clone time and no password would be requested.
+#[tokio::test]
+async fn download_info_encrypted_field_is_numeric_like_seahub() {
+    let f = TestFixture::new().await;
+    let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "test-password").await;
+
+    let resp = f.client.download_info(&f.api_token, &enc_repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["encrypted"], 1,
+        "encrypted libraries must report the number 1, got {:?}",
+        body["encrypted"]
+    );
+    assert_eq!(body["enc_version"], 2);
+    assert!(body["token"].as_str().is_some_and(|t| !t.is_empty()));
+
+    let plain_id = common::create_test_repo(&f.client, &f.api_token, "plain-lib").await;
+    let resp = f.client.download_info(&f.api_token, &plain_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["encrypted"], "",
+        "seahub sends the empty string for a plain library"
+    );
+}
+
+/// `seaf_commit_to_data()` writes `salt` only for `enc_version >= 3`, and an
+/// official client's `commit_from_json_object()` returns NULL for an
+/// enc_version 3/4 commit whose `salt` is missing or not 64 hex chars — which
+/// makes the whole library history unreadable. Every commit the sync protocol
+/// serves for a v4 library must therefore carry the library's salt.
+#[tokio::test]
+async fn v4_commits_carry_the_library_salt() {
+    let f = TestFixture::new().await;
+
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let salt = key_derivation::generate_repo_salt();
+    let magic = key_derivation::generate_magic(&repo_id, "v4-pass", 4, &salt).unwrap();
+    let random_key = key_derivation::generate_random_key_for_repo("v4-pass", 4, &salt).unwrap();
+    let resp = f
+        .client
+        .create_encrypted_repo_with_params(
+            &f.api_token,
+            &common::client::EncRepoCreate {
+                name: "v4-lib",
+                repo_id: &repo_id,
+                magic: &magic,
+                random_key: &random_key,
+                enc_version: 4,
+                salt: Some(&salt),
+            },
+        )
+        .await;
+    assert_eq!(resp.status(), 201, "v4 library creation must succeed");
+
+    let sync_token = common::get_sync_token(&f.client, &f.api_token, &repo_id).await;
+
+    // A library with no commits yet is served as the null commit; the daemon
+    // parses it with the same validator as a real one, so the encryption block
+    // (including `salt`) has to be complete here too.
+    let resp = f
+        .client
+        .get_sync(
+            &format!(
+                "/seafhttp/repo/{repo_id}/commit/{}",
+                base::common::EMPTY_SHA1
+            ),
+            &sync_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["encrypted"], "true");
+    assert_eq!(body["enc_version"], 4);
+    assert_eq!(
+        body["salt"].as_str().unwrap_or_default(),
+        salt,
+        "the v4 commit must repeat the library salt"
+    );
+    assert_eq!(body["magic"].as_str().unwrap_or_default(), magic);
+    assert_eq!(body["key"].as_str().unwrap_or_default(), random_key);
+
+    // A v2 library must NOT carry a salt: its key is derived from the fixed
+    // salt, and emitting one would make clients take the v3+/v4 code path.
+    let v2_id = create_encrypted_repo(&f, "v2-lib", "v2-pass").await;
+    let sync_token = common::get_sync_token(&f.client, &f.api_token, &v2_id).await;
+    let resp = f
+        .client
+        .get_sync(
+            &format!("/seafhttp/repo/{v2_id}/commit/{}", base::common::EMPTY_SHA1),
+            &sync_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["enc_version"], 2);
+    assert!(
+        body.get("salt").is_none(),
+        "a v2 commit has no per-library salt: {body}"
+    );
+}
+
+/// Upstream answers `444` (SEAF_HTTP_RES_REPO_DELETED) from `commit/HEAD` for a
+/// library that no longer exists; the desktop client maps exactly that status
+/// to SYNC_ERROR_ID_SERVER_REPO_DELETED and offers to remove its local copy
+/// (`sync-mgr.c: on_repo_deleted_on_server`). A 404 is just a retryable
+/// "server error", so the user is never told the library is gone.
+#[tokio::test]
+async fn head_commit_of_a_deleted_library_reports_444() {
+    let f = TestFixture::new().await;
+    let repo_id = common::create_test_repo(&f.client, &f.api_token, "doomed").await;
+    let sync_token = common::get_sync_token(&f.client, &f.api_token, &repo_id).await;
+
+    let resp = f
+        .client
+        .get_sync(
+            &format!("/seafhttp/repo/{repo_id}/commit/HEAD"),
+            &sync_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "sanity: the library exists");
+
+    let resp = f
+        .client
+        .delete(&format!("/api2/repos/{repo_id}/"), Some(&f.api_token))
+        .await;
+    assert!(resp.status().is_success(), "delete failed: {resp:?}");
+
+    let resp = f
+        .client
+        .get_sync(
+            &format!("/seafhttp/repo/{repo_id}/commit/HEAD"),
+            &sync_token,
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        444,
+        "a deleted library must be reported as 444, not 404"
+    );
 }

@@ -131,6 +131,7 @@ async fn test_full_upload_flow() {
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };
@@ -288,6 +289,7 @@ async fn test_incremental_upload() {
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };
@@ -385,6 +387,7 @@ async fn test_incremental_upload_second_commit() {
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };
@@ -460,6 +463,7 @@ async fn test_incremental_upload_second_commit() {
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };
@@ -531,6 +535,7 @@ async fn test_incremental_upload_second_commit() {
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };
@@ -788,6 +793,7 @@ fn commit_with_root(repo_id: &str, root_id: &str, creator_name: &str) -> (String
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };

@@ -180,7 +180,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         // device of its own, so the URL's `client_id` is the only identity the
         // request may carry (used when a client asks for its repository tokens
         // before it has one).
-        let mut auth = SyncAuth::from_token(
+        let mut auth = match SyncAuth::from_token(
             repos,
             &token,
             url_repo_id.as_deref(),
@@ -188,7 +188,27 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             parts.uri.path(),
         )
         .await
-        .map_err(|_| base::error::AppError::Forbidden)?;
+        {
+            Ok(auth) => auth,
+            Err(_) => {
+                // seafile's file-server checks that the library still exists
+                // *before* it validates credentials (`get_head_commit_cb`
+                // queries the Repo table first) and answers
+                // 444 (SEAF_HTTP_RES_REPO_DELETED) when it is gone. The desktop
+                // client turns exactly 444 into SYNC_ERROR_ID_SERVER_REPO_DELETED
+                // and offers to remove its local copy
+                // (`sync-mgr.c: on_repo_deleted_on_server`); anything else is a
+                // retryable generic error. A repository token is deleted
+                // together with its library, so without this check a client
+                // whose library was deleted server-side only ever saw 403.
+                if let Some(url_repo) = &url_repo_id
+                    && repos.repo.find_by_id(url_repo).await?.is_none()
+                {
+                    return Err(base::error::AppError::RepoDeleted);
+                }
+                return Err(base::error::AppError::Forbidden);
+            }
+        };
         if auth.device.is_none() {
             auth.device = client_hint(parts);
         }

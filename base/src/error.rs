@@ -108,6 +108,16 @@ mod into_response_impl {
 
     impl IntoResponse for AppError {
         fn into_response(self) -> Response {
+            // The lock error is only ever produced by the sync protocol's
+            // branch update, where the client regex-matches the body
+            // (`"File (.+) is locked"`, `daemon/http-tx-mgr.c:261`) and puts the
+            // captured group into the per-file sync-error notification. It must
+            // therefore be plain text: an unanchored regex would otherwise
+            // capture the JSON wrapper as part of the path (`"/a/b\"}"`).
+            if let AppError::Locked(path) = &self {
+                return (StatusCode::FORBIDDEN, format!("File {path} is locked")).into_response();
+            }
+
             let (status, body) = match &self {
                 AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, json!({ "error_msg": msg })),
                 AppError::Unauthorized => (
@@ -160,6 +170,10 @@ mod into_response_impl {
                     StatusCode::from_u16(446).unwrap(),
                     json!({ "error_msg": "Blocks missing for uploaded files." }),
                 ),
+                // Unreachable: `Locked` returns early above with the plain-text
+                // body the daemon's error regex requires. Kept for
+                // exhaustiveness (and as the pattern to reuse if that early
+                // return is ever removed).
                 AppError::Locked(path) => (
                     StatusCode::FORBIDDEN,
                     json!({ "error_msg": format!("File {} is locked", path) }),

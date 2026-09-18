@@ -175,8 +175,12 @@ async fn test_download_info_fields_complete() {
     assert!(body["salt"].is_null());
     assert_eq!(body["permission"].as_str().unwrap(), "rw");
 
-    // Encryption-related fields
-    assert_eq!(body["encrypted"].as_str().unwrap(), "false");
+    // Encryption-related fields. seahub's `repo_download_info()` emits
+    // `enc = 1 if repo.encrypted else ''` and the desktop client reads the
+    // value with `QVariant::toInt()` (`requests.cpp:173`), so a plain library
+    // reports the empty string and an encrypted one the number 1 — never a JSON
+    // boolean.
+    assert_eq!(body["encrypted"].as_str().unwrap(), "");
     assert_eq!(body["enc_version"].as_i64().unwrap(), 0);
     assert!(body["magic"].is_null());
     assert!(body["random_key"].is_null());

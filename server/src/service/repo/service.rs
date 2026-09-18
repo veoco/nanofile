@@ -66,7 +66,12 @@ pub struct DownloadInfoResponse {
     pub relay_addr: Option<String>,
     pub relay_port: Option<String>,
     pub enc_version: i32,
-    pub encrypted: String,
+    /// seahub's `repo_download_info()` sends `1` for an encrypted library and
+    /// the **empty string** otherwise, and the desktop client reads this field
+    /// with `QVariant::toInt()` (`requests.cpp:173`). A JSON string `"true"`
+    /// would therefore read back as `0` and every encrypted library would look
+    /// unencrypted at clone time, so the value must stay numeric-ish.
+    pub encrypted: serde_json::Value,
     pub magic: Option<String>,
     pub random_key: Option<String>,
     pub repo_version: i32,
@@ -229,6 +234,11 @@ impl RepoService {
     /// device the request came from, when it reported one: the new repository's
     /// token is issued to it, so it shows up under that device immediately
     /// instead of waiting for the first sync.
+    ///
+    /// `passwd` is the bare-password creation flow (seahub passes it straight to
+    /// `seafile_api.create_repo`): with no client-supplied `magic`/`random_key`
+    /// the server generates the encryption material at
+    /// `server_enc_version`. See the body for why ignoring it is not an option.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_repo(
         db: &DatabaseConnection,
@@ -239,10 +249,12 @@ impl RepoService {
         desc: &str,
         repo_id_opt: Option<String>,
         encrypted_val: i32,
-        enc_version_val: i32,
-        magic: Option<String>,
-        random_key: Option<String>,
-        salt: Option<String>,
+        mut enc_version_val: i32,
+        mut magic: Option<String>,
+        mut random_key: Option<String>,
+        mut salt: Option<String>,
+        passwd: Option<&str>,
+        server_enc_version: i32,
         peer: Option<&PeerStamp>,
         sync_token_ttl_days: u64,
     ) -> Result<(RepoInfo, String), AppError> {
@@ -264,6 +276,60 @@ impl RepoService {
             None => uuid::Uuid::new_v4().to_string(),
         };
         let now = chrono::Utc::now().timestamp();
+
+        // seahub's `seafile_api.create_repo(name, desc, user, passwd,
+        // enc_version=ENCRYPTED_LIBRARY_VERSION, ...)`: when a client asks for
+        // an encrypted library by sending only a password, the **server**
+        // generates the encryption material. The Android client does exactly
+        // this (`NewRepoViewModel.createNewRepo` posts `name`/`desc`/`passwd`
+        // and then reads `magic`/`random_key`/`salt` back from
+        // `GET /api2/repos/{id}/`), as does the desktop client against a
+        // pre-4.4 server. Treating the password as noise would create a plain
+        // library and silently drop the password the user typed.
+        let client_supplied_keys = magic.as_deref().is_some_and(|m| !m.trim().is_empty())
+            || random_key.as_deref().is_some_and(|k| !k.trim().is_empty());
+        let passwd = passwd.filter(|p| !p.is_empty());
+        if let Some(pwd) = passwd
+            && !client_supplied_keys
+        {
+            if !matches!(server_enc_version, 2 | 4) {
+                return Err(AppError::BadRequest(
+                    "server.encrypted_library_version must be 2 or 4 to create a library \
+                     from a bare password"
+                        .into(),
+                ));
+            }
+            enc_version_val = server_enc_version;
+            // enc_version >= 3 uses a per-library random salt; the client reads
+            // it back from the repo object and needs it in every commit.
+            let repo_salt = if enc_version_val >= 3 {
+                infra::crypto::key_derivation::generate_repo_salt()
+            } else {
+                String::new()
+            };
+            magic = Some(
+                infra::crypto::key_derivation::generate_magic(
+                    &repo_id,
+                    pwd,
+                    enc_version_val,
+                    &repo_salt,
+                )
+                .map_err(|e| AppError::BadRequest(format!("magic generation failed: {e}")))?,
+            );
+            random_key = Some(
+                infra::crypto::key_derivation::generate_random_key_for_repo(
+                    pwd,
+                    enc_version_val,
+                    &repo_salt,
+                )
+                .map_err(|e| AppError::BadRequest(format!("random_key generation failed: {e}")))?,
+            );
+            salt = if repo_salt.is_empty() {
+                None
+            } else {
+                Some(repo_salt)
+            };
+        }
 
         // The desktop client sends `enc_version`/`magic`/`random_key` instead
         // of the legacy `encrypted` flag, so a library carrying encryption
@@ -714,10 +780,11 @@ impl RepoService {
             relay_addr: None,
             relay_port: None,
             enc_version: r.enc_version as i32,
+            // seahub: `enc = 1 if repo.encrypted else ''`.
             encrypted: if r.encrypted == 1 {
-                "true".to_string()
+                serde_json::json!(1)
             } else {
-                "false".to_string()
+                serde_json::json!("")
             },
             magic: r.magic,
             random_key: r.random_key,

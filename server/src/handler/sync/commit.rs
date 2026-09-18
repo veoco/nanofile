@@ -43,6 +43,19 @@ pub async fn get_head_commit(
     auth: SyncAuth,
     Path(repo_id): Path<String>,
 ) -> Result<Json<HeadCommitResponse>, AppError> {
+    let svc = state.sync_service();
+
+    // Upstream `get_head_commit_cb()` checks that the library still exists
+    // *before* anything else and answers 444 (SEAF_HTTP_RES_REPO_DELETED) when
+    // it is gone, not 404. The desktop client turns 444 into
+    // SYNC_ERROR_ID_SERVER_REPO_DELETED and offers to remove the local copy
+    // (`sync-mgr.c: on_repo_deleted_on_server`), while 404 only becomes a
+    // generic server error that it retries forever.
+    let repo_model = svc
+        .find_repo(&repo_id)
+        .await?
+        .ok_or(AppError::RepoDeleted)?;
+
     // Defense in depth: `SyncAuth` also binds the token to the URL repo (see
     // `fs_id_list` in `sync/fs.rs`).
     crate::domain::permission::check_repo_read_permission(
@@ -51,12 +64,6 @@ pub async fn get_head_commit(
         auth.user_id,
     )
     .await?;
-
-    let svc = state.sync_service();
-    let repo_model = svc
-        .find_repo(&repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
     let head_commit_id = repo_model
         .head_commit_id
@@ -89,6 +96,34 @@ pub async fn get_commit(
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
+    // `seaf_commit_to_data()` only writes the encryption block for an
+    // encrypted library, and inside it writes `salt` only for
+    // `enc_version >= 3`. The salt is not optional for those versions: an
+    // official client's `commit_from_json_object()` returns NULL when
+    // `enc_version` is 3 or 4 and `salt` is missing or not 64 hex chars, so a
+    // library created with a per-library salt becomes unreadable without it.
+    let encrypted = repo_model.encrypted == 1;
+    let enc_version = if encrypted {
+        Some(repo_model.enc_version as i32)
+    } else {
+        None
+    };
+    let magic = if encrypted {
+        repo_model.magic.clone()
+    } else {
+        None
+    };
+    let key = if encrypted {
+        repo_model.random_key.clone()
+    } else {
+        None
+    };
+    let salt = if encrypted && repo_model.enc_version >= 3 && !repo_model.salt.is_empty() {
+        Some(repo_model.salt.clone())
+    } else {
+        None
+    };
+
     if commit_id == EMPTY_SHA1 {
         let empty_commit = base::common::CommitData {
             commit_id: commit_id.clone(),
@@ -103,14 +138,15 @@ pub async fn get_commit(
             repo_name: Some(repo_model.name.clone()),
             repo_desc: Some(repo_model.description.clone()),
             repo_category: None,
-            encrypted: if repo_model.encrypted == 1 {
+            encrypted: if encrypted {
                 Some("true".to_string())
             } else {
                 None
             },
-            enc_version: Some(repo_model.enc_version as i32),
-            magic: repo_model.magic.clone(),
-            key: repo_model.random_key.clone(),
+            enc_version,
+            magic,
+            salt,
+            key,
             version: 1,
         };
         let json = crate::domain::commit::to_json(&empty_commit);
@@ -135,14 +171,15 @@ pub async fn get_commit(
         repo_name: Some(repo_model.name.clone()),
         repo_desc: Some(repo_model.description.clone()),
         repo_category: None,
-        encrypted: if repo_model.encrypted == 1 {
+        encrypted: if encrypted {
             Some("true".to_string())
         } else {
             None
         },
-        enc_version: Some(repo_model.enc_version as i32),
-        magic: repo_model.magic.clone(),
-        key: repo_model.random_key.clone(),
+        enc_version,
+        magic,
+        salt,
+        key,
         version: commit_model.version as i32,
     };
 

@@ -67,8 +67,22 @@ share_link_enabled = true
 # when set:
 # desktop_custom_brand = "My Company"
 # desktop_custom_logo = "custom/logo.png"   # relative to server root; the client joins it onto the server URL
-# Optional encrypted-library password-hash config — only advertised in
-# /api2/server-info/ when set (used when clients create encrypted libraries):
+# Encrypted-library version advertised in /api2/server-info/ as
+# `encrypted_library_version` (seahub's ENCRYPTED_LIBRARY_VERSION). Official
+# clients take it verbatim as the `enc_version` of a library they create, so it
+# must be a version this server can actually decrypt: 2 (fixed salt) or 4
+# (per-library salt). Seafile's version 3 wraps the library key with
+# AES-128-ECB, which this server rejects. It is also the version used when a
+# client creates an encrypted library by sending only a `passwd` (the Android
+# client does exactly that; the server then generates magic/random_key/salt).
+# Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_VERSION
+encrypted_library_version = 2
+# Encrypted-library password-hash config. NOT IMPLEMENTED: nanofile stores no
+# `pwd_hash` and cannot verify a password against one, so a library created
+# through the pwd_hash flow would be unusable. These keys are never advertised
+# in /api2/server-info/ (a client that saw them omits `magic`, and its creation
+# request would be rejected), and setting them only logs a startup warning;
+# clients use the magic/random_key flow instead.
 # encrypted_library_pwd_hash_algo = "PBKDF2"
 # encrypted_library_pwd_hash_params = "iterations=1000"
 # IPs of trusted reverse proxies (comma-separated). X-Forwarded-For is only

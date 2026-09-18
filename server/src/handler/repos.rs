@@ -138,24 +138,27 @@ pub async fn create_repo(
         serde_json::from_slice(&bytes)
             .map_err(|e| AppError::BadRequest(format!("invalid JSON body: {e}")))?
     } else if content_type.contains("multipart/form-data") {
-        let mut req = CreateRepoRequest {
-            name: String::new(),
-            desc: None,
-            repo_id: None,
-            encrypted: None,
-            enc_version: None,
-            magic: None,
-            random_key: None,
-            salt: None,
-            pwd_hash_algo: None,
-            pwd_hash_params: None,
-            pwd_hash: None,
-            passwd: None,
-        };
-        req.name = extract_multipart_field(&bytes, "name")
-            .ok_or_else(|| AppError::BadRequest("name required".into()))?;
-        req.desc = extract_multipart_field(&bytes, "desc");
-        req
+        // The Android client sends multipart/form-data
+        // (`NewRepoViewModel.createNewRepo`: `name`, optional `desc`, and a
+        // bare `passwd` for an encrypted library). Every field the other
+        // encodings accept has to be read here too — this branch used to look
+        // at `name`/`desc` only, which silently dropped the password and
+        // created a plain library.
+        let field = |name: &str| extract_multipart_field(&bytes, name);
+        CreateRepoRequest {
+            name: field("name").ok_or_else(|| AppError::BadRequest("name required".into()))?,
+            desc: field("desc"),
+            repo_id: field("repo_id"),
+            encrypted: field("encrypted").and_then(|v| v.trim().parse().ok()),
+            enc_version: field("enc_version").and_then(|v| v.trim().parse().ok()),
+            magic: field("magic"),
+            random_key: field("random_key"),
+            salt: field("salt"),
+            pwd_hash_algo: field("pwd_hash_algo"),
+            pwd_hash_params: field("pwd_hash_params"),
+            pwd_hash: field("pwd_hash"),
+            passwd: field("passwd"),
+        }
     } else {
         // Default (and explicit `application/x-www-form-urlencoded`): the
         // desktop client's format.
@@ -177,6 +180,8 @@ pub async fn create_repo(
         repo_req.magic.clone(),
         repo_req.random_key.clone(),
         repo_req.salt.clone(),
+        repo_req.passwd.as_deref(),
+        state.config.server.encrypted_library_version,
         peer.as_ref(),
         state.config.auth.sync_token_ttl_days,
     )
@@ -691,6 +696,8 @@ pub async fn create_default_repo(
                 None,
                 None,
                 None,
+                None,
+                state.config.server.encrypted_library_version,
                 peer.as_ref(),
                 state.config.auth.sync_token_ttl_days,
             )

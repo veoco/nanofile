@@ -13,7 +13,11 @@ async fn test_server_info_public() {
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["version"], "8.0.0");
-    assert_eq!(body["encrypted_library_version"], 3);
+    assert_eq!(
+        body["encrypted_library_version"], 2,
+        "seahub's ENCRYPTED_LIBRARY_VERSION default; clients take it verbatim \
+         as the enc_version of a library they create"
+    );
 
     let features = body["features"].as_array().unwrap();
     assert!(!features.is_empty(), "features should not be empty");
@@ -83,8 +87,39 @@ async fn test_server_info_optional_fields_advertised_when_configured() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["desktop-custom-brand"], "My Brand");
     assert_eq!(body["desktop-custom-logo"], "custom/logo.png");
-    assert_eq!(body["encrypted_library_pwd_hash_algo"], "PBKDF2");
-    assert_eq!(body["encrypted_library_pwd_hash_params"], "iterations=1000");
+    // The hash algorithm is deliberately NOT advertised even when configured:
+    // nanofile stores no `pwd_hash` and cannot verify one, and a client that
+    // saw this key omits `magic` (seafile's
+    // `seafile_generate_magic_and_random_key` generates `pwd_hash` *instead
+    // of* `magic`), so its creation request would be rejected. Advertising it
+    // would therefore break encrypted-library creation rather than enable
+    // anything.
+    for key in [
+        "encrypted_library_pwd_hash_algo",
+        "encrypted_library_pwd_hash_params",
+    ] {
+        assert!(
+            body.get(key).is_none(),
+            "{key} must not be advertised: pwd_hash libraries are not implemented"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_server_info_encrypted_library_version_is_configurable() {
+    let server = common::TestServer::start_with_server_info_config(|cfg| {
+        cfg.encrypted_library_version = 4;
+    })
+    .await;
+    let client = server.client();
+
+    let resp = client.get("/api2/server-info/", None).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["encrypted_library_version"], 4,
+        "clients create libraries at exactly the advertised version"
+    );
 }
 
 #[tokio::test]

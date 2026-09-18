@@ -114,5 +114,14 @@ pub struct CommitData {
     pub magic: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// Per-library random salt of an `enc_version >= 3` library
+    /// (`seaf_commit_to_data`: `if (enc_version >= 3) set "salt"`).
+    ///
+    /// Official clients check this on every commit they read:
+    /// `commit_from_json_object()` returns NULL for `enc_version` 3/4 unless
+    /// `salt` is present and exactly 64 hex chars, so a missing salt makes an
+    /// encrypted library's history unreadable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub salt: Option<String>,
     pub version: i32,
 }

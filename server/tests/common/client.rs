@@ -407,6 +407,28 @@ impl TestClient {
             .unwrap()
     }
 
+    /// POST /api2/repos/ with a bare `passwd` and no encryption material — the
+    /// Android client's encrypted-library creation
+    /// (`NewRepoViewModel.createNewRepo`), where the *server* generates
+    /// `magic`/`random_key`/`salt`.
+    pub async fn create_repo_multipart_with_passwd(
+        &self,
+        token: &str,
+        name: &str,
+        passwd: &str,
+    ) -> reqwest::Response {
+        let form = reqwest::multipart::Form::new()
+            .text("name", name.to_string())
+            .text("passwd", passwd.to_string());
+        self.client
+            .post(format!("{}/api2/repos/", self.base_url))
+            .bearer_auth(token)
+            .multipart(form)
+            .send()
+            .await
+            .unwrap()
+    }
+
     pub async fn list_repos(&self, token: &str) -> reqwest::Response {
         self.client
             .get(format!("{}/api2/repos/", self.base_url))

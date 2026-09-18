@@ -412,6 +412,7 @@ impl TestServer {
                 sso_enabled,
                 desktop_custom_brand: None,
                 desktop_custom_logo: None,
+                encrypted_library_version: 2,
                 encrypted_library_pwd_hash_algo: None,
                 encrypted_library_pwd_hash_params: None,
                 file_search_enabled: true,
@@ -841,6 +842,7 @@ pub async fn sync_commit(
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };

@@ -100,6 +100,7 @@ async fn push_commit(
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };

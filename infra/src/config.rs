@@ -318,10 +318,30 @@ pub struct ServerConfig {
     /// Env: NANOFILE_SERVER_DESKTOP_CUSTOM_LOGO
     #[serde(default)]
     pub desktop_custom_logo: Option<String>,
+    /// Encryption version advertised as `encrypted_library_version` in
+    /// `/api2/server-info/` and used when the **server** generates the keys of
+    /// a library created with a bare `passwd` (seahub's
+    /// `ENCRYPTED_LIBRARY_VERSION`).
+    ///
+    /// Official clients take this value verbatim as the `enc_version` of a
+    /// library they create themselves, and nanofile only implements the two
+    /// versions that use AES-256-CBC: 2 (fixed salt) and 4 (per-library salt).
+    /// Seafile's version 3 is a different cipher (AES-128-ECB for the key
+    /// wrapping) and is rejected by the key schedule, so advertising it makes
+    /// every encrypted-library creation fail; the seahub default is 2.
+    /// Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_VERSION
+    #[serde(default = "default_encrypted_library_version")]
+    pub encrypted_library_version: i32,
     /// Hash algorithm used for encrypted-library passwords, advertised as
     /// `encrypted_library_pwd_hash_algo` in `/api2/server-info/`. The desktop
     /// and Android clients use it (with `encrypted_library_pwd_hash_params`)
     /// when creating encrypted libraries. `None` keeps the key absent.
+    ///
+    /// **Not implemented**: nanofile stores no `pwd_hash` and cannot verify a
+    /// password against one, so a library created through this flow would be
+    /// unusable. The value is therefore *not* advertised (a client that sees it
+    /// omits `magic` and the creation is rejected); a configured value only
+    /// produces a startup warning.
     /// Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO
     #[serde(default)]
     pub encrypted_library_pwd_hash_algo: Option<String>,
@@ -461,6 +481,7 @@ impl Default for ServerConfig {
             sso_enabled: default_true(),
             desktop_custom_brand: None,
             desktop_custom_logo: None,
+            encrypted_library_version: default_encrypted_library_version(),
             encrypted_library_pwd_hash_algo: None,
             encrypted_library_pwd_hash_params: None,
             file_search_enabled: default_true(),
@@ -1006,6 +1027,12 @@ fn default_lockout_duration_secs() -> u64 {
 }
 fn default_true() -> bool {
     true
+}
+
+/// seahub's `ENCRYPTED_LIBRARY_VERSION` default. Only 2 and 4 are supported by
+/// the key schedule in `infra::crypto::key_derivation` (both AES-256-CBC).
+fn default_encrypted_library_version() -> i32 {
+    2
 }
 fn default_five() -> u32 {
     5
@@ -1645,6 +1672,10 @@ impl Config {
         if let Ok(v) = std::env::var("NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS") {
             self.server.encrypted_library_pwd_hash_params = Some(v);
         }
+        env_parse!(
+            "NANOFILE_SERVER_ENCRYPTED_LIBRARY_VERSION",
+            self.server.encrypted_library_version
+        );
         env_parse!("NANOFILE_EMAIL_ENABLED", self.email.enabled);
         env_str!("NANOFILE_UI_DEFAULT_LANGUAGE", self.ui.default_language);
         env_str!("NANOFILE_UI_TRAY_LANGUAGE", self.ui.tray_language);
