@@ -28,6 +28,7 @@ async fn test_commit_serialization_types() {
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };
@@ -59,6 +60,7 @@ async fn test_commit_serialization_null() {
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };
@@ -90,6 +92,7 @@ async fn test_commit_serialization_optional_fields() {
         encrypted: Some("false".to_string()),
         enc_version: Some(2),
         magic: Some("abc123".to_string()),
+        salt: None,
         key: Some("def456".to_string()),
         version: 1,
     };
@@ -126,6 +129,7 @@ async fn test_commit_roundtrip() {
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 2,
     };
@@ -162,6 +166,7 @@ async fn test_compute_commit_id() {
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };
@@ -178,6 +183,62 @@ async fn test_compute_commit_id() {
     assert_ne!(
         commit_id, commit_id3,
         "different data should produce different commit_id"
+    );
+}
+
+/// Golden vector produced by upstream seafile's own `compute_commit_id()`,
+/// compiled verbatim from `seafile-server/common/commit-mgr.c` (the function
+/// plus the upstream `hton64()`), then run on this exact input:
+///
+/// ```text
+/// root_id      = 1111111111111111111111111111111111111111
+/// creator      = 2222222222222222222222222222222222222222
+/// creator_name = user@example.com
+/// description  = "add file"
+/// ctime        = 1700000000
+/// => 9044efa20f6c8b835ffbc2ced9a989e666923e18
+/// ```
+///
+/// The NUL terminators upstream feeds with `strlen (s) + 1` are part of the
+/// hash: the same fields without them hash to
+/// `b5cbc1b1693a0a9f9d376bed9b500dcd6e3f86e4`, which is what nanofile used to
+/// produce (and which no official client would ever produce).
+#[test]
+fn test_compute_commit_id_matches_seafile_c_reference() {
+    let commit = CommitData {
+        commit_id: String::new(),
+        repo_id: "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d".to_string(),
+        root_id: "1".repeat(40),
+        creator_name: "user@example.com".to_string(),
+        creator: "2".repeat(40),
+        description: "add file".to_string(),
+        ctime: 1700000000,
+        parent_id: None,
+        second_parent_id: None,
+        repo_name: None,
+        repo_desc: None,
+        repo_category: None,
+        encrypted: None,
+        enc_version: None,
+        magic: None,
+        salt: None,
+        key: None,
+        version: 1,
+    };
+
+    assert_eq!(
+        server::domain::commit::compute_commit_id(&commit),
+        "9044efa20f6c8b835ffbc2ced9a989e666923e18"
+    );
+
+    // An absent (empty) creator_name is the NULL case upstream skips outright
+    // (upstream reference for the same input with `creator_name = NULL`:
+    // `d716fcdd624f0b4ad8d8bcd958ea0912fd223f7b`).
+    let mut no_name = commit.clone();
+    no_name.creator_name = String::new();
+    assert_eq!(
+        server::domain::commit::compute_commit_id(&no_name),
+        "d716fcdd624f0b4ad8d8bcd958ea0912fd223f7b"
     );
 }
 
@@ -214,6 +275,7 @@ async fn test_put_get_commit_raw_json() {
         encrypted: None,
         enc_version: None,
         magic: None,
+        salt: None,
         key: None,
         version: 1,
     };
