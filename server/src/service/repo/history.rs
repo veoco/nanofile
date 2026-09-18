@@ -348,6 +348,11 @@ impl HistoryService {
         let now = chrono::Utc::now().timestamp();
         let target_size = target_file.size;
 
+        // Repointing the dirent also changes the library's size, which is
+        // maintained incrementally: the entry's size before the update is the
+        // only place the "old" value is still available.
+        let mut previous_size: Option<i64> = None;
+
         FileOps::update_dir_tree_and_commit(
             db,
             repos,
@@ -359,6 +364,7 @@ impl HistoryService {
             crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
             |dirents| {
                 if let Some(d) = dirents.iter_mut().find(|d| d.name == name) {
+                    previous_size = Some(d.size);
                     d.id = target_fs_id.clone();
                     d.size = target_size;
                     d.mtime = now;
@@ -368,6 +374,10 @@ impl HistoryService {
             },
         )
         .await?;
+
+        if let Some(previous_size) = previous_size {
+            crate::fs::core::adjust_repo_size(repos, repo_id, target_size - previous_size).await?;
+        }
 
         activity_log::log_activity(
             db,

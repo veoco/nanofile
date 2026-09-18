@@ -353,6 +353,39 @@ async fn sync_merge_that_deletes_a_head_file_subtracts_it() {
     assert_eq!(account_usage(&f).await, 25);
 }
 
+/// Restoring a historical revision repoints a dirent at another fs id, so the
+/// library's size changes by the difference between the two versions — but the
+/// restore commits without an `adjust_repo_size`, which used to leave the size
+/// at the newer (or older) value.
+#[tokio::test]
+async fn file_revision_restore_adjusts_size_by_the_difference() {
+    let f = TestFixture::new().await;
+
+    let c1 = commit(&f, &[("a.txt", b"0123456789", REG)], &[], None).await;
+    let _c2 = commit(&f, &[("a.txt", b"0123456789abcde", REG)], &[], Some(&c1)).await;
+    assert_eq!(repo_size(&f).await, 15);
+
+    let resp = f
+        .client
+        .post_json(
+            &format!(
+                "/api/v2.1/repos/{}/file/revision/restore/?p=/a.txt&commit_id={}",
+                f.repo_id, c1
+            ),
+            Some(&f.api_token),
+            &serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "restore revision failed");
+
+    assert_eq!(
+        repo_size(&f).await,
+        10,
+        "the restored version's bytes replace the ones the library held"
+    );
+    assert_eq!(account_usage(&f).await, 10);
+}
+
 /// Deleting through a client has to free quota, not just change a number in a
 /// listing: quota is enforced against `SUM(repos.size)`.
 #[tokio::test]
