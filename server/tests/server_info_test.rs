@@ -75,8 +75,8 @@ async fn test_server_info_optional_fields_advertised_when_configured() {
     let server = common::TestServer::start_with_server_info_config(|cfg| {
         cfg.desktop_custom_brand = Some("My Brand".to_string());
         cfg.desktop_custom_logo = Some("custom/logo.png".to_string());
-        cfg.encrypted_library_pwd_hash_algo = Some("PBKDF2".to_string());
-        cfg.encrypted_library_pwd_hash_params = Some("iterations=1000".to_string());
+        cfg.encrypted_library_pwd_hash_algo = Some("pbkdf2_sha256".to_string());
+        cfg.encrypted_library_pwd_hash_params = Some("5000".to_string());
     })
     .await;
     let client = server.client();
@@ -87,22 +87,79 @@ async fn test_server_info_optional_fields_advertised_when_configured() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["desktop-custom-brand"], "My Brand");
     assert_eq!(body["desktop-custom-logo"], "custom/logo.png");
-    // The hash algorithm is deliberately NOT advertised even when configured:
-    // nanofile stores no `pwd_hash` and cannot verify one, and a client that
-    // saw this key omits `magic` (seafile's
-    // `seafile_generate_magic_and_random_key` generates `pwd_hash` *instead
-    // of* `magic`), so its creation request would be rejected. Advertising it
-    // would therefore break encrypted-library creation rather than enable
-    // anything.
-    for key in [
-        "encrypted_library_pwd_hash_algo",
-        "encrypted_library_pwd_hash_params",
-    ] {
+    // Advertised verbatim: a client that sees the algorithm generates a
+    // `pwd_hash` *instead of* a `magic` (seafile's
+    // `seafile_generate_magic_and_random_key`), so the string has to be exactly
+    // what seafile spells.
+    assert_eq!(body["encrypted_library_pwd_hash_algo"], "pbkdf2_sha256");
+    assert_eq!(body["encrypted_library_pwd_hash_params"], "5000");
+}
+
+/// seahub emits `encrypted_library_pwd_hash_params` whenever the algorithm is
+/// configured — as `""` when there is no explicit parameter string — so a client
+/// never sees the pair split.
+#[tokio::test]
+async fn test_server_info_pwd_hash_params_defaults_to_empty_string() {
+    let server = common::TestServer::start_with_server_info_config(|cfg| {
+        cfg.encrypted_library_pwd_hash_algo = Some("argon2id".to_string());
+    })
+    .await;
+    let client = server.client();
+
+    let resp = client.get("/api2/server-info/", None).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["encrypted_library_pwd_hash_algo"], "argon2id");
+    assert_eq!(body["encrypted_library_pwd_hash_params"], "");
+}
+
+/// An algorithm the clients would compare against their own table must be
+/// rejected at startup rather than advertised and then mis-honoured.
+#[test]
+fn test_encrypted_library_config_validation() {
+    use infra::config::Config;
+
+    let mut config = Config::default();
+
+    config.server.encrypted_library_version = 3;
+    assert!(
+        config.server.validate_encrypted_library().is_err(),
+        "enc_version 3 (AES-128-ECB) is not implemented"
+    );
+    config.server.encrypted_library_version = 2;
+    assert!(config.server.validate_encrypted_library().is_ok());
+
+    // Upstream's default: no algorithm means the legacy magic flow.
+    config.server.encrypted_library_pwd_hash_algo = None;
+    assert!(config.server.validate_encrypted_library().is_ok());
+    config.server.encrypted_library_pwd_hash_algo = Some(String::new());
+    assert!(config.server.validate_encrypted_library().is_ok());
+
+    for algo in ["pbkdf2_sha256", "argon2id"] {
+        config.server.encrypted_library_pwd_hash_algo = Some(algo.to_string());
         assert!(
-            body.get(key).is_none(),
-            "{key} must not be advertised: pwd_hash libraries are not implemented"
+            config.server.validate_encrypted_library().is_ok(),
+            "{algo} must be accepted"
         );
     }
+
+    // The clients compare this value verbatim, so a differently-cased or
+    // differently-spelled name would make them fall back to their own table.
+    for algo in ["PBKDF2", "pbkdf2", "scrypt", "argon2i"] {
+        config.server.encrypted_library_pwd_hash_algo = Some(algo.to_string());
+        assert!(
+            config.server.validate_encrypted_library().is_err(),
+            "{algo} must be rejected"
+        );
+    }
+
+    // Parameters are bounded so a library can never be created with a
+    // verification cost that later exhausts the server.
+    config.server.encrypted_library_pwd_hash_algo = Some("argon2id".to_string());
+    config.server.encrypted_library_pwd_hash_params = Some("2,102400,8".to_string());
+    assert!(config.server.validate_encrypted_library().is_ok());
+    config.server.encrypted_library_pwd_hash_params = Some("2,4294967295,8".to_string());
+    assert!(config.server.validate_encrypted_library().is_err());
 }
 
 #[tokio::test]

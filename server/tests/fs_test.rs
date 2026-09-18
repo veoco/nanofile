@@ -101,6 +101,9 @@ async fn push_commit(
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };

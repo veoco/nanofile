@@ -77,14 +77,28 @@ share_link_enabled = true
 # client does exactly that; the server then generates magic/random_key/salt).
 # Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_VERSION
 encrypted_library_version = 2
-# Encrypted-library password-hash config. NOT IMPLEMENTED: nanofile stores no
-# `pwd_hash` and cannot verify a password against one, so a library created
-# through the pwd_hash flow would be unusable. These keys are never advertised
-# in /api2/server-info/ (a client that saw them omits `magic`, and its creation
-# request would be rejected), and setting them only logs a startup warning;
-# clients use the magic/random_key flow instead.
-# encrypted_library_pwd_hash_algo = "PBKDF2"
-# encrypted_library_pwd_hash_params = "iterations=1000"
+# Encrypted-library password-hash config (seahub's
+# ENCRYPTED_LIBRARY_PWD_HASH_ALGO / ENCRYPTED_LIBRARY_PWD_HASH_PARAMS).
+# Advertised in /api2/server-info/ and honoured end to end: the desktop client
+# generates a pwd_hash instead of a magic when it sees the algorithm, and when a
+# client sends only a `passwd` (Android, the web UI) the server hashes it with
+# this algorithm. Leave both unset to keep the legacy magic/random_key flow,
+# which is upstream's default.
+#
+# The algorithm is compared verbatim by the clients, so it must be lowercase and
+# spelled exactly like this: "pbkdf2_sha256" or "argon2id". Any other value
+# aborts startup.
+#
+# `params` format depends on the algorithm: an iteration count for
+# "pbkdf2_sha256" (default 1000), or "time_cost,memory_cost,parallelism" for
+# "argon2id" (default "2,102400,8"). Unset means those defaults. Note the
+# desktop client cannot read this key (it looks for a misspelled variant), so
+# client-created libraries always use the defaults; the configured value applies
+# when the server hashes the password itself.
+# Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO
+#      NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS
+# encrypted_library_pwd_hash_algo = "pbkdf2_sha256"
+# encrypted_library_pwd_hash_params = "1000"
 # IPs of trusted reverse proxies (comma-separated). X-Forwarded-For is only
 # honored for rate limiting when the TCP peer is one of these. Keep empty when
 # the server is exposed directly.

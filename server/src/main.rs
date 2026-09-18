@@ -418,27 +418,12 @@ fn main() -> anyhow::Result<()> {
     }
 
     // ── Encrypted-library wire contract ────────────────────────────────
-    // `encrypted_library_version` is echoed to every client and is taken
-    // verbatim as the `enc_version` of libraries the client creates, so an
-    // unsupported value silently breaks encrypted-library creation.
-    if !matches!(config.server.encrypted_library_version, 2 | 4) {
-        anyhow::bail!(
-            "server.encrypted_library_version = {} is not supported: only 2 (fixed salt) \
-             and 4 (per-library salt) are implemented (both AES-256-CBC). Seafile's \
-             version 3 wraps the library key with AES-128-ECB, which the key schedule \
-             rejects; clients told to use it would create a library this server cannot \
-             open.",
-            config.server.encrypted_library_version
-        );
-    }
-    if config.server.encrypted_library_pwd_hash_algo.is_some() {
-        tracing::warn!(
-            "server.encrypted_library_pwd_hash_algo is set but pwd_hash-based library \
-             passwords are not implemented: nanofile stores no pwd_hash and cannot verify \
-             one. The algorithm is NOT advertised in /api2/server-info/ (a client that saw \
-             it would omit `magic` and its creation would be rejected), so clients fall \
-             back to the magic/random_key flow. Remove the setting to silence this warning."
-        );
+    // `encrypted_library_version` and `encrypted_library_pwd_hash_algo` are
+    // echoed to every client and are taken verbatim as the `enc_version` /
+    // KDF of the libraries the client creates, so an unsupported value
+    // silently breaks encrypted-library creation everywhere.
+    if let Err(message) = config.server.validate_encrypted_library() {
+        anyhow::bail!("{message}");
     }
 
     // Orphan blocks are no longer a quota bypass — every block write is charged

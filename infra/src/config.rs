@@ -333,21 +333,30 @@ pub struct ServerConfig {
     #[serde(default = "default_encrypted_library_version")]
     pub encrypted_library_version: i32,
     /// Hash algorithm used for encrypted-library passwords, advertised as
-    /// `encrypted_library_pwd_hash_algo` in `/api2/server-info/`. The desktop
-    /// and Android clients use it (with `encrypted_library_pwd_hash_params`)
-    /// when creating encrypted libraries. `None` keeps the key absent.
+    /// `encrypted_library_pwd_hash_algo` in `/api2/server-info/` (seahub's
+    /// `ENCRYPTED_LIBRARY_PWD_HASH_ALGO`). The desktop client compares it
+    /// verbatim and, when it is present, generates a `pwd_hash` *instead of* a
+    /// `magic`; Android and the web UI let the server hash a bare `passwd` with
+    /// it. `None` (or an empty string) keeps the legacy `magic` flow, which is
+    /// upstream's default.
     ///
-    /// **Not implemented**: nanofile stores no `pwd_hash` and cannot verify a
-    /// password against one, so a library created through this flow would be
-    /// unusable. The value is therefore *not* advertised (a client that sees it
-    /// omits `magic` and the creation is rejected); a configured value only
-    /// produces a startup warning.
+    /// Accepted values are exactly [`infra`'s `pbkdf2_sha256` and `argon2id`] —
+    /// lowercase, spelled as seafile spells them; anything else fails at
+    /// startup rather than confusing every client.
     /// Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO
     #[serde(default)]
     pub encrypted_library_pwd_hash_algo: Option<String>,
-    /// Hash algorithm parameters (e.g. `iterations=1000`), advertised as
-    /// `encrypted_library_pwd_hash_params` alongside the algo. See
-    /// `encrypted_library_pwd_hash_algo`.
+    /// Parameters of `encrypted_library_pwd_hash_algo`, advertised alongside it
+    /// (seahub's `ENCRYPTED_LIBRARY_PWD_HASH_PARAMS`). Format depends on the
+    /// algorithm: an iteration count for `pbkdf2_sha256`, `t,m,p` for
+    /// `argon2id`. `None` means the algorithm's own defaults (1000, and
+    /// `2,102400,8`).
+    ///
+    /// Note that the desktop client cannot read this key (it looks for
+    /// `encrypted_library_pwd_params`, and assigns the *algorithm* to the value
+    /// it sends back), so client-created libraries always use the defaults; the
+    /// server still honours the configured value when it hashes a bare
+    /// `passwd` itself.
     /// Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS
     #[serde(default)]
     pub encrypted_library_pwd_hash_params: Option<String>,
@@ -497,6 +506,58 @@ impl Default for ServerConfig {
 }
 
 impl ServerConfig {
+    /// Validate the encrypted-library wire contract.
+    ///
+    /// Every one of these values is echoed to clients through
+    /// `/api2/server-info/` and then taken verbatim: `encrypted_library_version`
+    /// becomes the `enc_version` of the libraries a client creates, and
+    /// `encrypted_library_pwd_hash_algo` decides whether it computes a
+    /// `pwd_hash` *instead of* a `magic`. A value nanofile cannot honour
+    /// therefore breaks encrypted-library creation on every client, so it is
+    /// rejected at startup rather than at the first request.
+    ///
+    /// Returns `Err` with a message meant to be shown to the operator.
+    pub fn validate_encrypted_library(&self) -> Result<(), String> {
+        if !matches!(self.encrypted_library_version, 2 | 4) {
+            return Err(format!(
+                "server.encrypted_library_version = {} is not supported: only 2 (fixed salt) \
+                 and 4 (per-library salt) are implemented (both AES-256-CBC). Seafile's \
+                 version 3 wraps the library key with AES-128-ECB, which the key schedule \
+                 rejects; clients told to use it would create a library this server cannot \
+                 open.",
+                self.encrypted_library_version
+            ));
+        }
+
+        let algo = self
+            .encrypted_library_pwd_hash_algo
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default();
+        if algo.is_empty() {
+            // Upstream's default (`ENCRYPTED_LIBRARY_PWD_HASH_ALGO = ""`): the
+            // legacy magic flow, no `pwd_hash` at all.
+            return Ok(());
+        }
+        if !crate::crypto::pwd_hash::is_supported_algo(algo) {
+            return Err(format!(
+                "server.encrypted_library_pwd_hash_algo = '{algo}' is not supported: use \
+                 '{}' or '{}'. The value is compared verbatim by the clients, so it must be \
+                 lowercase and spelled exactly like seafile spells it.",
+                crate::crypto::pwd_hash::ALGO_PBKDF2_SHA256,
+                crate::crypto::pwd_hash::ALGO_ARGON2ID,
+            ));
+        }
+        crate::crypto::pwd_hash::validate_params(
+            algo,
+            self.encrypted_library_pwd_hash_params
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+        )
+        .map_err(|e| format!("server.encrypted_library_pwd_hash_params is invalid: {e}"))
+    }
+
     /// Whether `site_url` is still the built-in default (`http://127.0.0.1:8082`),
     /// i.e. the admin has not configured an external address.
     ///

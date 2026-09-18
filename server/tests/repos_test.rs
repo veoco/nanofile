@@ -728,16 +728,17 @@ async fn test_compat_desktop_plain_repo_without_repo_id() {
 /// `QString::number()` / `setFormParam`:
 ///
 /// ```text
-/// name, desc, enc_version="4", repo_id, magic, random_key, salt,
-/// pwd_hash_algo, pwd_hash_params, pwd_hash
+/// name, desc, enc_version="4", repo_id, magic, random_key, salt
 /// ```
 ///
-/// Note there is **no** `encrypted` field — the client only ever sent that
-/// through `passwd`-based creation. Two things used to break this request:
-/// `enc_version` typed as a number (deserialization failed → 500 for *every*
-/// encrypted create), and the encryption material being ignored (the library
-/// was stored as plaintext, so the client's own key derivation no longer
-/// matched).
+/// (plus `pwd_hash_algo`/`pwd_hash_params`/`pwd_hash` when
+/// `/api2/server-info/` advertises an algorithm, which is covered by
+/// `encrypted_repo_test.rs`.) Note there is **no** `encrypted` field — the
+/// client only ever sent that through `passwd`-based creation. Two things used
+/// to break this request: `enc_version` typed as a number (deserialization
+/// failed → 500 for *every* encrypted create), and the encryption material
+/// being ignored (the library was stored as plaintext, so the client's own key
+/// derivation no longer matched).
 #[tokio::test]
 async fn test_compat_desktop_encrypted_create_form_payload() {
     let f = TestFixture::new().await;
@@ -764,9 +765,6 @@ async fn test_compat_desktop_encrypted_create_form_payload() {
             ("magic", magic.as_str()),
             ("random_key", random_key.as_str()),
             ("salt", salt.as_str()),
-            ("pwd_hash_algo", "PBKDF2"),
-            ("pwd_hash_params", "iterations=1000"),
-            ("pwd_hash", "d".repeat(64).as_str()),
         ])
         .send()
         .await

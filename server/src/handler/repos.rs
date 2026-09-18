@@ -69,8 +69,10 @@ pub struct CreateRepoRequest {
     /// Per-library random salt for `enc_version` 4 libraries (empty/ignored for
     /// v2, which uses a fixed salt). The desktop client sends it for v3/v4.
     pub salt: Option<String>,
-    /// Only used by clients that compute the magic themselves; nanofile derives
-    /// from `magic`/`random_key`, so these are accepted and ignored.
+    /// `pwd_hash` verifier triple a client pre-computed when
+    /// `/api2/server-info/` advertised an algorithm. When `pwd_hash_algo` is
+    /// present the client omits `magic` entirely, and the library is identified
+    /// by this triple from then on.
     pub pwd_hash_algo: Option<String>,
     pub pwd_hash_params: Option<String>,
     pub pwd_hash: Option<String>,
@@ -180,8 +182,13 @@ pub async fn create_repo(
         repo_req.magic.clone(),
         repo_req.random_key.clone(),
         repo_req.salt.clone(),
+        service::PwdHash::from_request(
+            repo_req.pwd_hash.clone(),
+            repo_req.pwd_hash_algo.clone(),
+            repo_req.pwd_hash_params.clone(),
+        ),
         repo_req.passwd.as_deref(),
-        state.config.server.encrypted_library_version,
+        &service::EncryptedLibraryPolicy::from_config(&state.config.server),
         peer.as_ref(),
         state.config.auth.sync_token_ttl_days,
     )
@@ -423,6 +430,12 @@ async fn set_repo_password_with_body(
 /// value the client derives locally), so it is a password oracle and is metered
 /// with the same per-(user, repo) limiter as `?op=setpassword` and the v2.1
 /// `set-password` endpoint.
+///
+/// A `pwd_hash` library (Seafile 11+) has no `magic` at all and is answered with
+/// a 400 here. Upstream cannot check one either — `seaf_passwd_manager_check_passwd`
+/// `strcmp`s against an empty `repo->magic`, which always fails and surfaces as a
+/// 500 — and no official client calls this operation, so the only clients that
+/// unlock a `pwd_hash` library go through `set-password` above.
 pub async fn check_repo_password_v2(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -696,8 +709,9 @@ pub async fn create_default_repo(
                 None,
                 None,
                 None,
+                service::PwdHash::default(),
                 None,
-                state.config.server.encrypted_library_version,
+                &service::EncryptedLibraryPolicy::from_config(&state.config.server),
                 peer.as_ref(),
                 state.config.auth.sync_token_ttl_days,
             )

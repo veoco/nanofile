@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::middleware::auth::SyncAuth;
+use crate::service::repo::service::RepoCrypto;
 use base::common::EMPTY_SHA1;
 use base::error::AppError;
 
@@ -97,32 +98,15 @@ pub async fn get_commit(
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
     // `seaf_commit_to_data()` only writes the encryption block for an
-    // encrypted library, and inside it writes `salt` only for
-    // `enc_version >= 3`. The salt is not optional for those versions: an
-    // official client's `commit_from_json_object()` returns NULL when
-    // `enc_version` is 3 or 4 and `salt` is missing or not 64 hex chars, so a
-    // library created with a per-library salt becomes unreadable without it.
-    let encrypted = repo_model.encrypted == 1;
-    let enc_version = if encrypted {
-        Some(repo_model.enc_version as i32)
-    } else {
-        None
-    };
-    let magic = if encrypted {
-        repo_model.magic.clone()
-    } else {
-        None
-    };
-    let key = if encrypted {
-        repo_model.random_key.clone()
-    } else {
-        None
-    };
-    let salt = if encrypted && repo_model.enc_version >= 3 && !repo_model.salt.is_empty() {
-        Some(repo_model.salt.clone())
-    } else {
-        None
-    };
+    // encrypted library; inside it `magic` is written only when the library has
+    // no `pwd_hash`, `key` for `enc_version >= 2` and `salt` for
+    // `enc_version >= 3`. None of that is optional: an official client's
+    // `commit_from_json_object()` returns NULL when `enc_version` is 3/4 and
+    // `salt` is missing, and `clone-mgr.c` verifies the password against
+    // `pwd_hash` whenever `pwd_hash_algo` is present. `RepoCrypto` owns those
+    // rules so the create/list/download-info paths cannot drift from this one.
+    let crypto = RepoCrypto::from_model(&repo_model);
+    let encrypted = crypto.encrypted;
 
     if commit_id == EMPTY_SHA1 {
         let empty_commit = base::common::CommitData {
@@ -143,10 +127,13 @@ pub async fn get_commit(
             } else {
                 None
             },
-            enc_version,
-            magic,
-            salt,
-            key,
+            enc_version: crypto.enc_version,
+            magic: crypto.magic.clone(),
+            salt: crypto.salt.clone(),
+            key: crypto.key.clone(),
+            pwd_hash: crypto.pwd_hash.clone(),
+            pwd_hash_algo: crypto.pwd_hash_algo.clone(),
+            pwd_hash_params: crypto.pwd_hash_params.clone(),
             version: 1,
         };
         let json = crate::domain::commit::to_json(&empty_commit);
@@ -176,10 +163,13 @@ pub async fn get_commit(
         } else {
             None
         },
-        enc_version,
-        magic,
-        salt,
-        key,
+        enc_version: crypto.enc_version,
+        magic: crypto.magic,
+        salt: crypto.salt,
+        key: crypto.key,
+        pwd_hash: crypto.pwd_hash,
+        pwd_hash_algo: crypto.pwd_hash_algo,
+        pwd_hash_params: crypto.pwd_hash_params,
         version: commit_model.version as i32,
     };
 

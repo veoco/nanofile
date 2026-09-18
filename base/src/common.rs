@@ -123,5 +123,25 @@ pub struct CommitData {
     /// encrypted library's history unreadable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub salt: Option<String>,
+    /// `pwd_hash`-based password verifier of a Seafile 11+ library
+    /// (`seaf_commit_to_data`: `if (commit->pwd_hash) set "pwd_hash", …`).
+    ///
+    /// A library that carries one has **no** `magic`: upstream writes `magic`
+    /// only when `!pwd_hash` (`common/commit-mgr.c`), and
+    /// `commit_from_json_object()` falls back to `magic = pwd_hash` when the
+    /// field is absent. Emitting both would make an official client verify the
+    /// password against `magic`, which no longer exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pwd_hash: Option<String>,
+    /// Algorithm of `pwd_hash`: `pbkdf2_sha256` or `argon2id`, compared verbatim
+    /// by the clients.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pwd_hash_algo: Option<String>,
+    /// Parameters of `pwd_hash_algo`. Omitted (rather than sent as JSON `null`
+    /// like upstream's non-null-safe writer) when the server has no explicit
+    /// value: the clients then fall back to the same defaults, which is what
+    /// upstream's `NULL` achieves there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pwd_hash_params: Option<String>,
     pub version: i32,
 }

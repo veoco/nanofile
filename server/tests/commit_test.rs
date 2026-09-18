@@ -29,6 +29,9 @@ async fn test_commit_serialization_types() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };
@@ -61,6 +64,9 @@ async fn test_commit_serialization_null() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };
@@ -93,6 +99,9 @@ async fn test_commit_serialization_optional_fields() {
         enc_version: Some(2),
         magic: Some("abc123".to_string()),
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: Some("def456".to_string()),
         version: 1,
     };
@@ -130,6 +139,9 @@ async fn test_commit_roundtrip() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 2,
     };
@@ -167,6 +179,9 @@ async fn test_compute_commit_id() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };
@@ -222,6 +237,9 @@ fn test_compute_commit_id_matches_seafile_c_reference() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };
@@ -276,6 +294,9 @@ async fn test_put_get_commit_raw_json() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };

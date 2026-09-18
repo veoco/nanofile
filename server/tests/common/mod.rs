@@ -843,6 +843,9 @@ pub async fn sync_commit(
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };
@@ -916,6 +919,21 @@ impl TestFixture {
     pub async fn new_with_share_link_disabled() -> Self {
         let server =
             TestServer::start_with_server_info_config(|cfg| cfg.share_link_enabled = false).await;
+        Self::from_server(server).await
+    }
+
+    /// Create a full test environment with the encrypted-library policy tweaked
+    /// (`server.encrypted_library_*`), for testing `pwd_hash`-based library
+    /// passwords.
+    pub async fn new_with_encrypted_library_config(
+        tweak: impl FnOnce(&mut infra::config::ServerConfig) + Send + 'static,
+    ) -> Self {
+        Self::from_server(TestServer::start_with_server_info_config(tweak).await).await
+    }
+
+    /// Log in a fresh user against an already-started server and give them one
+    /// library, mirroring [`TestFixture::new`].
+    async fn from_server(server: TestServer) -> Self {
         let client = server.client();
         let db = &*server.db;
 

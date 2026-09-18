@@ -132,6 +132,9 @@ async fn test_full_upload_flow() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };
@@ -290,6 +293,9 @@ async fn test_incremental_upload() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };
@@ -388,6 +394,9 @@ async fn test_incremental_upload_second_commit() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };
@@ -464,6 +473,9 @@ async fn test_incremental_upload_second_commit() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };
@@ -536,6 +548,9 @@ async fn test_incremental_upload_second_commit() {
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };
@@ -794,6 +809,9 @@ fn commit_with_root(repo_id: &str, root_id: &str, creator_name: &str) -> (String
         enc_version: None,
         magic: None,
         salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
         key: None,
         version: 1,
     };

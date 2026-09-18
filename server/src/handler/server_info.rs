@@ -80,12 +80,31 @@ pub async fn server_info(State(state): State<Arc<AppState>>) -> impl IntoRespons
         encrypted_library_version: state.config.server.encrypted_library_version,
         desktop_custom_brand: state.config.server.desktop_custom_brand.clone(),
         desktop_custom_logo: state.config.server.desktop_custom_logo.clone(),
-        // `pwd_hash`-based library passwords are not implemented (no storage and
-        // no verifier), so the algorithm must not be advertised: a client that
-        // sees it generates `pwd_hash` *instead of* `magic`, and its creation
-        // request would be rejected. `main.rs` warns when the setting is present.
-        encrypted_library_pwd_hash_algo: None,
-        encrypted_library_pwd_hash_params: None,
+        // Advertised only when configured, and then honoured end to end: a client
+        // that sees the algorithm generates a `pwd_hash` instead of a `magic`
+        // (seafile's `seafile_generate_magic_and_random_key`), nanofile stores and
+        // re-emits it, and it can verify a password against it.
+        //
+        // seahub emits `encrypted_library_pwd_hash_params` whenever the algorithm
+        // is set, even as `""`; do the same so a client never sees the pair split.
+        encrypted_library_pwd_hash_algo: state
+            .config
+            .server
+            .encrypted_library_pwd_hash_algo
+            .clone(),
+        encrypted_library_pwd_hash_params: state
+            .config
+            .server
+            .encrypted_library_pwd_hash_algo
+            .as_ref()
+            .map(|_| {
+                state
+                    .config
+                    .server
+                    .encrypted_library_pwd_hash_params
+                    .clone()
+                    .unwrap_or_default()
+            }),
         features,
     };
 

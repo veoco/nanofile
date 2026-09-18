@@ -8,7 +8,12 @@ type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
 /// Fixed salt used for enc_version 1 and 2 (same as seafile-server).
 /// Source: /tmp/seafile-server/common/seafile-crypt.c line 24.
-const MAGIC_SALT: [u8; 8] = [0xda, 0x90, 0x45, 0xc3, 0x06, 0xc7, 0xcc, 0x26];
+///
+/// Note: `pwd_hash` (see [`crate::crypto::pwd_hash`]) uses these same 8 bytes
+/// but pads them to 32 with zeros, because `seafile_generate_pwd_hash()` feeds a
+/// NUL-terminated hex string to `hex_to_rawdata()`. Do not reuse this constant
+/// as "the" v2 salt length for both KDFs.
+pub(crate) const MAGIC_SALT: [u8; 8] = [0xda, 0x90, 0x45, 0xc3, 0x06, 0xc7, 0xcc, 0x26];
 
 /// Error type for key derivation operations.
 #[derive(Debug, Error)]
@@ -23,6 +28,10 @@ pub enum CryptoError {
     DecryptionFailed(String),
     #[error("encryption failed: {0}")]
     EncryptionFailed(String),
+    #[error("unsupported password hash algorithm: {0}")]
+    UnsupportedAlgo(String),
+    #[error("password hash failed: {0}")]
+    HashFailed(String),
 }
 
 /// The Seafile encryption protocol supports these versions:

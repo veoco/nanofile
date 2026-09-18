@@ -43,6 +43,22 @@ pub struct RepoInfo {
     pub magic: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub random_key: Option<String>,
+    /// `pwd_hash` verifier of a Seafile 11+ library. Present only when the
+    /// library uses one, in which case `magic` is **absent**.
+    ///
+    /// These three fields are a superset of seahub's `GET /api2/repos/{id}/`
+    /// (which returns only `magic`/`random_key`/`salt`), but they are required
+    /// here: nanofile's `POST /api2/repos/` answers with this shape, and the
+    /// desktop client parses the create response with the same
+    /// `RepoDownloadInfo::fromDict()` it uses for `download-info` — it then
+    /// feeds `pwd_hash*` into the follow-up `cloneRepo()`, which fails with
+    /// "Bad magic" if the algorithm is missing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pwd_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pwd_hash_algo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pwd_hash_params: Option<String>,
     pub repo_version: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lib_need_decrypt: Option<bool>,
@@ -76,6 +92,16 @@ pub struct DownloadInfoResponse {
     pub random_key: Option<String>,
     pub repo_version: i32,
     pub salt: Option<String>,
+    /// `pwd_hash` verifier triple (see [`RepoInfo`]). seahub returns these from
+    /// `repo_download_info()` even when they are empty; the desktop client
+    /// copies the non-empty ones into the clone task's `more_info`, which is the
+    /// only place `clone-mgr.c` learns the algorithm from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pwd_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pwd_hash_algo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pwd_hash_params: Option<String>,
     pub permission: String,
 }
 
@@ -110,6 +136,186 @@ pub struct V21RepoInfo {
 
 pub struct RepoService;
 
+/// The `pwd_hash` verifier triple of a Seafile 11+ encrypted library,
+/// mirroring seafile-server's `RepoCryptInfo` (`server/repo-mgr.c`).
+///
+/// All three values travel together: the algorithm is what tells a client which
+/// KDF to run, and the parameters what to run it with. `params = None` means
+/// "the algorithm's defaults" (upstream stores an SQL NULL for that, and so do
+/// we; the commit then omits the key, which reads back as NULL on the client and
+/// lands on the same defaults).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PwdHash {
+    pub hash: Option<String>,
+    pub algo: Option<String>,
+    pub params: Option<String>,
+}
+
+impl PwdHash {
+    /// Build one from the three wire fields.
+    pub fn from_request(
+        hash: Option<String>,
+        algo: Option<String>,
+        params: Option<String>,
+    ) -> Self {
+        Self { hash, algo, params }
+    }
+
+    /// Treat blank fields as absent (the clients send `""` for anything they do
+    /// not set, and seahub's own `request.data.get(...)` yields `None`), and
+    /// drop a triple that has no algorithm.
+    pub fn normalized(self) -> Self {
+        fn clean(v: Option<String>) -> Option<String> {
+            v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        }
+        let mut out = Self {
+            hash: clean(self.hash),
+            algo: clean(self.algo),
+            params: clean(self.params),
+        };
+        if out.algo.is_none() {
+            // Mirrors `repo_crypt_info_new` + `create_repo_common`: nothing is
+            // read from `crypt_info` unless `pwd_hash_algo` is set, so a client
+            // that sends only `pwd_hash` gets it ignored rather than having an
+            // unusable verifier stored (which would leave the library
+            // unopenable).
+            out.hash = None;
+            out.params = None;
+        }
+        out
+    }
+
+    /// Whether the request carries a usable verifier triple.
+    ///
+    /// Upstream gates *every* `pwd_hash` field on the algorithm
+    /// (`if (crypt_info && crypt_info->pwd_hash_algo)`), so a lone `pwd_hash`
+    /// without an algorithm is not a verifier at all.
+    pub fn is_present(&self) -> bool {
+        self.algo.is_some()
+    }
+
+    /// The three `repos` columns.
+    pub fn to_columns(&self) -> (Option<String>, Option<String>, Option<String>) {
+        (self.hash.clone(), self.algo.clone(), self.params.clone())
+    }
+
+    /// seafile-server's `create_repo_common()` validation for the triple.
+    ///
+    /// * an algorithm outside `{pbkdf2_sha256, argon2id}` is rejected
+    ///   ("Unsupported encryption algothrims")
+    /// * the hash must be exactly 64 characters ("Bad pwd_hash") — we also
+    ///   require ASCII hex, because a 64-character string that is not hex can
+    ///   never equal `hex(derived_key)` and would leave the library silently
+    ///   unopenable
+    /// * the parameters are parsed and bounded (see
+    ///   [`infra::crypto::pwd_hash::validate_params`])
+    pub fn validate(&self) -> Result<(), AppError> {
+        let algo = self
+            .algo
+            .as_deref()
+            .ok_or_else(|| AppError::BadRequest("pwd_hash_algo required with pwd_hash".into()))?;
+        if !infra::crypto::pwd_hash::is_supported_algo(algo) {
+            return Err(AppError::BadRequest(format!(
+                "unsupported pwd_hash algorithm '{algo}'; use '{}' or '{}'",
+                infra::crypto::pwd_hash::ALGO_PBKDF2_SHA256,
+                infra::crypto::pwd_hash::ALGO_ARGON2ID,
+            )));
+        }
+        match self.hash.as_deref() {
+            Some(h) if h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()) => {}
+            _ => {
+                return Err(AppError::BadRequest(
+                    "pwd_hash must be 64 hex characters".into(),
+                ));
+            }
+        }
+        infra::crypto::pwd_hash::validate_params(algo, self.params.as_deref())
+            .map_err(AppError::BadRequest)?;
+        Ok(())
+    }
+}
+
+/// The server-side encrypted-library policy, i.e. seahub's
+/// `ENCRYPTED_LIBRARY_VERSION` / `ENCRYPTED_LIBRARY_PWD_HASH_ALGO` /
+/// `ENCRYPTED_LIBRARY_PWD_HASH_PARAMS`.
+///
+/// Used when a client asks for an encrypted library by sending only a password
+/// (Android, the web UI): the *server* generates the verifier.
+#[derive(Debug, Clone)]
+pub struct EncryptedLibraryPolicy {
+    pub enc_version: i32,
+    /// `None` keeps the legacy `magic` flow, which is upstream's default
+    /// (`ENCRYPTED_LIBRARY_PWD_HASH_ALGO = ""`).
+    pub pwd_hash_algo: Option<String>,
+    pub pwd_hash_params: Option<String>,
+}
+
+impl EncryptedLibraryPolicy {
+    /// Read the policy from the server config, treating empty strings as
+    /// "unset" (seahub passes `ENCRYPTED_LIBRARY_PWD_HASH_ALGO or None`).
+    pub fn from_config(config: &infra::config::ServerConfig) -> Self {
+        fn clean(v: &Option<String>) -> Option<String> {
+            v.as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        }
+        Self {
+            enc_version: config.encrypted_library_version,
+            pwd_hash_algo: clean(&config.encrypted_library_pwd_hash_algo),
+            pwd_hash_params: clean(&config.encrypted_library_pwd_hash_params),
+        }
+    }
+}
+
+/// The encryption block of a library, as every read path needs it.
+///
+/// Centralises the "a `pwd_hash` library has no `magic`" rule: upstream writes
+/// the `magic` commit field only when `!commit->pwd_hash`, and a client that saw
+/// both would verify the password against a `magic` the server never stored.
+#[derive(Debug, Clone, Default)]
+pub struct RepoCrypto {
+    pub encrypted: bool,
+    pub enc_version: Option<i32>,
+    pub magic: Option<String>,
+    pub key: Option<String>,
+    pub salt: Option<String>,
+    pub pwd_hash: Option<String>,
+    pub pwd_hash_algo: Option<String>,
+    pub pwd_hash_params: Option<String>,
+}
+
+impl RepoCrypto {
+    pub fn from_model(r: &repo::Model) -> Self {
+        let encrypted = r.encrypted != 0;
+        if !encrypted {
+            return Self::default();
+        }
+        let pwd_hash = r.pwd_hash.clone();
+        Self {
+            encrypted: true,
+            enc_version: Some(r.enc_version as i32),
+            // Suppressed for a `pwd_hash` library: upstream never emits `magic`
+            // alongside `pwd_hash`, and `commit_from_json_object()` substitutes
+            // `magic = pwd_hash` when the field is missing.
+            magic: if pwd_hash.is_some() {
+                None
+            } else {
+                r.magic.clone()
+            },
+            key: r.random_key.clone(),
+            salt: if r.enc_version >= 3 && !r.salt.is_empty() {
+                Some(r.salt.clone())
+            } else {
+                None
+            },
+            pwd_hash,
+            pwd_hash_algo: r.pwd_hash_algo.clone(),
+            pwd_hash_params: r.pwd_hash_params.clone(),
+        }
+    }
+}
+
 fn build_op_url(site_url: &str, op: &str, token: &str) -> String {
     let base = site_url.trim_end_matches('/');
     format!("{}/{}/{}", base, op, token)
@@ -129,6 +335,7 @@ fn build_repo_info_from_model(
     _extra_fields: bool,
 ) -> RepoInfo {
     let encrypted = r.encrypted != 0;
+    let crypto = RepoCrypto::from_model(r);
     let type_ = if r.owner_id == user_id {
         "repo".to_string()
     } else {
@@ -159,12 +366,11 @@ fn build_repo_info_from_model(
         } else {
             None
         },
-        magic: if encrypted { r.magic.clone() } else { None },
-        random_key: if encrypted {
-            r.random_key.clone()
-        } else {
-            None
-        },
+        magic: crypto.magic.clone(),
+        random_key: crypto.key.clone(),
+        pwd_hash: crypto.pwd_hash.clone(),
+        pwd_hash_algo: crypto.pwd_hash_algo.clone(),
+        pwd_hash_params: crypto.pwd_hash_params.clone(),
         repo_version: r.repo_version,
         lib_need_decrypt: if encrypted { Some(true) } else { None },
         repo_id_dup: None,
@@ -238,7 +444,11 @@ impl RepoService {
     /// `passwd` is the bare-password creation flow (seahub passes it straight to
     /// `seafile_api.create_repo`): with no client-supplied `magic`/`random_key`
     /// the server generates the encryption material at
-    /// `server_enc_version`. See the body for why ignoring it is not an option.
+    /// `policy.enc_version`. See the body for why ignoring it is not an option.
+    ///
+    /// `pwd_hash` is the verifier triple a client pre-computed (the desktop
+    /// client, when `/api2/server-info/` advertises an algorithm); `policy` is
+    /// what the **server** uses when it has to generate the verifier itself.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_repo(
         db: &DatabaseConnection,
@@ -253,8 +463,9 @@ impl RepoService {
         mut magic: Option<String>,
         mut random_key: Option<String>,
         mut salt: Option<String>,
+        pwd_hash: PwdHash,
         passwd: Option<&str>,
-        server_enc_version: i32,
+        policy: &EncryptedLibraryPolicy,
         peer: Option<&PeerStamp>,
         sync_token_ttl_days: u64,
     ) -> Result<(RepoInfo, String), AppError> {
@@ -277,6 +488,8 @@ impl RepoService {
         };
         let now = chrono::Utc::now().timestamp();
 
+        let mut pwd_hash = pwd_hash.normalized();
+
         // seahub's `seafile_api.create_repo(name, desc, user, passwd,
         // enc_version=ENCRYPTED_LIBRARY_VERSION, ...)`: when a client asks for
         // an encrypted library by sending only a password, the **server**
@@ -287,19 +500,20 @@ impl RepoService {
         // pre-4.4 server. Treating the password as noise would create a plain
         // library and silently drop the password the user typed.
         let client_supplied_keys = magic.as_deref().is_some_and(|m| !m.trim().is_empty())
-            || random_key.as_deref().is_some_and(|k| !k.trim().is_empty());
+            || random_key.as_deref().is_some_and(|k| !k.trim().is_empty())
+            || pwd_hash.is_present();
         let passwd = passwd.filter(|p| !p.is_empty());
         if let Some(pwd) = passwd
             && !client_supplied_keys
         {
-            if !matches!(server_enc_version, 2 | 4) {
+            enc_version_val = policy.enc_version;
+            if !matches!(enc_version_val, 2 | 4) {
                 return Err(AppError::BadRequest(
                     "server.encrypted_library_version must be 2 or 4 to create a library \
                      from a bare password"
                         .into(),
                 ));
             }
-            enc_version_val = server_enc_version;
             // enc_version >= 3 uses a per-library random salt; the client reads
             // it back from the repo object and needs it in every commit.
             let repo_salt = if enc_version_val >= 3 {
@@ -307,15 +521,40 @@ impl RepoService {
             } else {
                 String::new()
             };
-            magic = Some(
-                infra::crypto::key_derivation::generate_magic(
+            if let Some(algo) = policy.pwd_hash_algo.as_deref() {
+                // Seafile 11+: a configured algorithm replaces `magic`
+                // (`seaf_repo_manager_create_new_repo` calls
+                // `seafile_generate_pwd_hash` *instead of*
+                // `seafile_generate_magic`). Seadroid and the web UI then need
+                // the server to be able to verify the password it just hashed.
+                infra::crypto::pwd_hash::validate_params(algo, policy.pwd_hash_params.as_deref())
+                    .map_err(AppError::BadRequest)?;
+                let hash = infra::crypto::pwd_hash::derive_pwd_hash(
                     &repo_id,
                     pwd,
                     enc_version_val,
                     &repo_salt,
+                    algo,
+                    policy.pwd_hash_params.as_deref(),
                 )
-                .map_err(|e| AppError::BadRequest(format!("magic generation failed: {e}")))?,
-            );
+                .map_err(|e| AppError::BadRequest(format!("pwd_hash generation failed: {e}")))?;
+                magic = None;
+                pwd_hash = PwdHash {
+                    hash: Some(hash),
+                    algo: Some(algo.to_string()),
+                    params: policy.pwd_hash_params.clone(),
+                };
+            } else {
+                magic = Some(
+                    infra::crypto::key_derivation::generate_magic(
+                        &repo_id,
+                        pwd,
+                        enc_version_val,
+                        &repo_salt,
+                    )
+                    .map_err(|e| AppError::BadRequest(format!("magic generation failed: {e}")))?,
+                );
+            }
             random_key = Some(
                 infra::crypto::key_derivation::generate_random_key_for_repo(
                     pwd,
@@ -336,7 +575,8 @@ impl RepoService {
         // material is encrypted even when the flag is absent (it used to be
         // created as a plain library, making its files unreadable).
         let has_enc_material = magic.as_deref().is_some_and(|m| !m.trim().is_empty())
-            || random_key.as_deref().is_some_and(|k| !k.trim().is_empty());
+            || random_key.as_deref().is_some_and(|k| !k.trim().is_empty())
+            || pwd_hash.is_present();
         let encrypted_val = if encrypted_val != 0 || has_enc_material || enc_version_val >= 2 {
             1
         } else {
@@ -352,22 +592,36 @@ impl RepoService {
                     "unsupported enc_version (only 2 and 4 are supported)".into(),
                 ));
             }
-            let magic_ok = magic
-                .as_deref()
-                .is_some_and(|m| m.len() == 64 && m.chars().all(|c| c.is_ascii_hexdigit()));
+            if pwd_hash.is_present() {
+                // The client computed the verifier itself. Validate it the way
+                // `create_repo_common()` does and drop any `magic` it also sent:
+                // upstream writes the commit's `magic` field only when
+                // `!pwd_hash`, and a client that saw both would verify the
+                // password against a value this server never stored.
+                pwd_hash.validate()?;
+                magic = None;
+            } else {
+                let magic_ok = magic
+                    .as_deref()
+                    .is_some_and(|m| m.len() == 64 && m.chars().all(|c| c.is_ascii_hexdigit()));
+                if !magic_ok {
+                    return Err(AppError::BadRequest("magic must be 64 hex chars".into()));
+                }
+            }
             let random_key_ok = random_key
                 .as_deref()
                 .is_some_and(|k| k.len() == 96 && k.chars().all(|c| c.is_ascii_hexdigit()));
-            if !magic_ok || !random_key_ok {
+            if !random_key_ok {
                 return Err(AppError::BadRequest(
-                    "magic must be 64 hex chars and random_key must be 96 hex chars".into(),
+                    "random_key must be 96 hex chars".into(),
                 ));
             }
             // enc_version 4 uses a per-library random salt that the client
             // generated; losing it would make the library undecryptable (the
-            // client derives `magic`/`random_key` from it), so require and
-            // store it. (nanofile used to accept v4 and silently store an empty
-            // salt, producing a library the client could not open.)
+            // client derives `magic`/`random_key`/`pwd_hash` from it), so
+            // require and store it. (nanofile used to accept v4 and silently
+            // store an empty salt, producing a library the client could not
+            // open.)
             if enc_version_val == 4 && !salt.as_deref().is_some_and(|s| !s.trim().is_empty()) {
                 return Err(AppError::BadRequest(
                     "salt is required for enc_version 4".into(),
@@ -375,6 +629,7 @@ impl RepoService {
             }
         }
 
+        let (pwd_hash_col, pwd_hash_algo_col, pwd_hash_params_col) = pwd_hash.to_columns();
         let params = crate::repository::repo::CreateRepoParams {
             id: repo_id.clone(),
             name: name.clone(),
@@ -385,18 +640,21 @@ impl RepoService {
             magic: magic.clone(),
             random_key: random_key.clone(),
             // v2 libraries use a fixed salt (empty here); v4 stores the
-            // client-generated per-library salt.
+            // client-generated (or server-generated) per-library salt.
             salt: if enc_version_val == 4 {
                 salt.clone().unwrap_or_default()
             } else {
                 String::new()
             },
+            pwd_hash: pwd_hash_col,
+            pwd_hash_algo: pwd_hash_algo_col,
+            pwd_hash_params: pwd_hash_params_col,
             permission: "rw".to_string(),
             created_at: now,
             updated_at: now,
             r#type: "repo".to_string(),
         };
-        repos.repo.create_repo(params).await?;
+        let created = repos.repo.create_repo(params).await?;
 
         repos
             .member
@@ -423,6 +681,10 @@ impl RepoService {
         .ok_or_else(|| AppError::internal("sync token was not resolved"))?;
 
         let encrypted = encrypted_val == 1;
+        // Everything encryption-related is echoed from the row that was just
+        // written, so the create response can never disagree with what later
+        // reads (and therefore the clients) will see.
+        let crypto = RepoCrypto::from_model(&created);
 
         // Log repo creation activity (best-effort)
         activity_log::log_activity(
@@ -438,11 +700,7 @@ impl RepoService {
             owner_name: email.split('@').next().unwrap_or("").to_string(),
             groupid: None,
             encrypted,
-            enc_version: if encrypted {
-                Some(enc_version_val)
-            } else {
-                None
-            },
+            enc_version: crypto.enc_version,
             size: 0,
             mtime: now,
             permission: "rw".to_string(),
@@ -453,13 +711,12 @@ impl RepoService {
             // Echo the stored salt so a client that created a v4 library sees
             // the value its keys were derived from (mirrors the list/get
             // responses, which include `salt` for `enc_version >= 3`).
-            salt: if encrypted && enc_version_val == 4 {
-                salt.clone()
-            } else {
-                None
-            },
-            magic: if encrypted { magic } else { None },
-            random_key: if encrypted { random_key } else { None },
+            salt: crypto.salt.clone(),
+            magic: crypto.magic.clone(),
+            random_key: crypto.key.clone(),
+            pwd_hash: crypto.pwd_hash.clone(),
+            pwd_hash_algo: crypto.pwd_hash_algo.clone(),
+            pwd_hash_params: crypto.pwd_hash_params.clone(),
             repo_version: 1,
             lib_need_decrypt: if encrypted { Some(true) } else { None },
             repo_id_dup: Some(repo_id),
@@ -502,27 +759,20 @@ impl RepoService {
         };
 
         let encrypted = r.encrypted != 0;
+        let crypto = RepoCrypto::from_model(&r);
         let type_ = if r.owner_id == user_id {
             "repo"
         } else {
             "srepo"
         };
-        let enc_version = if encrypted {
-            Some(r.enc_version as i32)
-        } else {
-            None
-        };
+        let enc_version = crypto.enc_version;
         let salt = if encrypted && r.enc_version >= 3 {
             Some(r.salt.clone())
         } else {
             None
         };
-        let magic = if encrypted { r.magic.clone() } else { None };
-        let random_key = if encrypted {
-            r.random_key.clone()
-        } else {
-            None
-        };
+        let magic = crypto.magic.clone();
+        let random_key = crypto.key.clone();
 
         let owner_name = if r.owner_id == user_id {
             email.split('@').next().unwrap_or("").to_string()
@@ -554,6 +804,9 @@ impl RepoService {
             salt,
             magic,
             random_key,
+            pwd_hash: crypto.pwd_hash.clone(),
+            pwd_hash_algo: crypto.pwd_hash_algo.clone(),
+            pwd_hash_params: crypto.pwd_hash_params.clone(),
             repo_version: r.repo_version,
             lib_need_decrypt: if encrypted { Some(true) } else { None },
             repo_id_dup: None,
@@ -771,6 +1024,12 @@ impl RepoService {
         let token_value =
             ensure_sync_token_for(repos, repo_id, user_id, peer, sync_token_ttl_days).await?;
 
+        // A `pwd_hash` library must not advertise a `magic`: the desktop client
+        // copies the non-empty fields of this response into the clone task's
+        // `more_info`, and `clone-mgr.c` verifies against `pwd_hash` when (and
+        // only when) an algorithm is present.
+        let crypto = RepoCrypto::from_model(&r);
+
         Ok(DownloadInfoResponse {
             repo_id: repo_id.to_string(),
             repo_name: r.name,
@@ -786,14 +1045,17 @@ impl RepoService {
             } else {
                 serde_json::json!("")
             },
-            magic: r.magic,
-            random_key: r.random_key,
+            magic: crypto.magic,
+            random_key: crypto.key,
             repo_version: 1,
             salt: if r.salt.is_empty() {
                 None
             } else {
                 Some(r.salt.clone())
             },
+            pwd_hash: crypto.pwd_hash,
+            pwd_hash_algo: crypto.pwd_hash_algo,
+            pwd_hash_params: crypto.pwd_hash_params,
             permission: r.permission,
         })
     }

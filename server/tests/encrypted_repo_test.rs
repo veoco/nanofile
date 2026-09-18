@@ -1,7 +1,7 @@
 mod common;
 
 use common::{TestFixture, create_test_user};
-use infra::crypto::key_derivation;
+use infra::crypto::{key_derivation, pwd_hash};
 
 /// Pre-compute encrypted repo params using the Rust crypto module directly.
 fn make_encrypted_params(repo_id: &str, password: &str) -> (String, String) {
@@ -1092,4 +1092,518 @@ async fn head_commit_of_a_deleted_library_reports_444() {
         444,
         "a deleted library must be reported as 444, not 404"
     );
+}
+
+// ─── `pwd_hash` library passwords (Seafile 11+) ──────────────────────────────
+
+/// The desktop client's POST body when `/api2/server-info/` advertises
+/// `encrypted_library_pwd_hash_algo`.
+///
+/// `create-repo-dialog.cpp` computes `pwd_hash` through seaf-daemon and sends
+/// `pwd_hash_algo`/`pwd_hash_params`/`pwd_hash`, with **no** `magic` and no
+/// `passwd`. It then feeds the *create response* into `cloneRepo()` as
+/// `more_info`, so this response has to carry the algorithm as well — otherwise
+/// `clone-mgr.c` falls into its `check_encryption_args(magic, …)` branch with an
+/// empty magic and fails with "Bad magic" right after a successful creation.
+async fn create_pwd_hash_repo_via_desktop_payload(
+    f: &TestFixture,
+    repo_id: &str,
+    password: &str,
+    algo: &str,
+    params: Option<&str>,
+) -> reqwest::Response {
+    let random_key = key_derivation::generate_random_key_for_repo(password, 2, "").unwrap();
+    // Callers that deliberately send an unusable algorithm or parameters still
+    // need a syntactically valid request, so the hash falls back to a
+    // placeholder: the server must reject on the algorithm/bounds, not on the
+    // hash. Deriving is skipped for those, because an out-of-range
+    // `time_cost`/`memory_cost` would burn real CPU here.
+    let derived = if pwd_hash::validate_params(algo, params).is_ok() {
+        pwd_hash::derive_pwd_hash(repo_id, password, 2, "", algo, params)
+            .unwrap_or_else(|_| "d".repeat(64))
+    } else {
+        "d".repeat(64)
+    };
+
+    // Exactly the client's form fields, in the client's order, all as strings.
+    // `magic` is present but empty: seaf-daemon leaves it at `""` when it takes
+    // the pwd_hash branch.
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}/api2/repos/", f.server.base_url))
+        .bearer_auth(&f.api_token)
+        .form(&[
+            ("name", "desktop-pwd-hash"),
+            ("desc", "desktop-pwd-hash"),
+            ("enc_version", "2"),
+            ("repo_id", repo_id),
+            ("magic", ""),
+            ("random_key", random_key.as_str()),
+            ("pwd_hash_algo", algo),
+            ("pwd_hash_params", params.unwrap_or("")),
+            ("pwd_hash", derived.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn desktop_pwd_hash_create_payload_is_accepted_and_usable() {
+    let f = TestFixture::new().await;
+    let password = "desktop-pwd-hash-password";
+    let repo_id = uuid::Uuid::new_v4().to_string();
+
+    // The desktop sends the *algorithm name* where the parameters belong
+    // (`create-repo-dialog.cpp` assigns `getEncryptedLibraryPwdHashAlgo()` to
+    // `pwd_hash_params`), which upstream parses as the default iteration count.
+    let derived = pwd_hash::derive_pwd_hash(
+        &repo_id,
+        password,
+        2,
+        "",
+        pwd_hash::ALGO_PBKDF2_SHA256,
+        Some(pwd_hash::ALGO_PBKDF2_SHA256),
+    )
+    .unwrap();
+
+    let resp = create_pwd_hash_repo_via_desktop_payload(
+        &f,
+        &repo_id,
+        password,
+        pwd_hash::ALGO_PBKDF2_SHA256,
+        Some(pwd_hash::ALGO_PBKDF2_SHA256),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        201,
+        "desktop pwd_hash create payload must succeed, body={:?}",
+        resp.text().await
+    );
+
+    let created: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(created["repo_id"], repo_id);
+    assert_eq!(created["encrypted"], true);
+    assert_eq!(created["enc_version"], 2);
+    assert_eq!(created["pwd_hash"], derived);
+    assert_eq!(created["pwd_hash_algo"], pwd_hash::ALGO_PBKDF2_SHA256);
+    assert!(
+        created.get("magic").is_none(),
+        "a pwd_hash library has no magic at all: {created}"
+    );
+    let random_key = created["random_key"].as_str().unwrap().to_string();
+
+    // download-info is what the client copies into the clone task's
+    // `more_info`; the clone fails without `pwd_hash_algo`.
+    let resp = f.client.download_info(&f.api_token, &repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let info: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(info["pwd_hash"], derived);
+    assert_eq!(info["pwd_hash_algo"], pwd_hash::ALGO_PBKDF2_SHA256);
+    assert_eq!(info["random_key"], random_key);
+    assert!(
+        info["magic"].is_null(),
+        "download-info must not offer a usable magic for a pwd_hash library: {info}"
+    );
+
+    // The server can verify the password (Android and the web UI rely on this;
+    // the desktop verifies locally against the pwd_hash it was handed).
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &repo_id, password)
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the correct password must unlock the library"
+    );
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &repo_id, "not-the-password")
+        .await;
+    assert_eq!(
+        resp.status(),
+        440,
+        "a wrong password must answer 440 (passwd required), not 200"
+    );
+}
+
+/// The commit JSON of a `pwd_hash` library carries the triple and **no** `magic`
+/// (`seaf_commit_to_data`), which is what an official client reads back into its
+/// own repo object.
+#[tokio::test]
+async fn pwd_hash_commit_carries_the_verifier_and_no_magic() {
+    let f = TestFixture::new().await;
+    let password = "commit-pwd-hash-password";
+    let repo_id = uuid::Uuid::new_v4().to_string();
+
+    let resp = create_pwd_hash_repo_via_desktop_payload(
+        &f,
+        &repo_id,
+        password,
+        pwd_hash::ALGO_PBKDF2_SHA256,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+
+    let sync_token = common::get_sync_token(&f.client, &f.api_token, &repo_id).await;
+    let empty = "0000000000000000000000000000000000000000";
+    let resp = f.client.get_commit(&sync_token, &repo_id, empty).await;
+    assert_eq!(resp.status(), 200);
+    let commit: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(commit["encrypted"], "true");
+    assert_eq!(commit["enc_version"], 2);
+    assert_eq!(commit["pwd_hash_algo"], pwd_hash::ALGO_PBKDF2_SHA256);
+    assert!(
+        commit.get("magic").is_none(),
+        "upstream writes `magic` only when `!pwd_hash`: {commit}"
+    );
+    assert_eq!(commit["pwd_hash"].as_str().unwrap().len(), 64);
+}
+
+/// A client that sends `pwd_hash` *and* a valid `magic` must end up with the
+/// `pwd_hash` only: storing both would make a client verify the password
+/// against a `magic` the server then omits from commits.
+#[tokio::test]
+async fn pwd_hash_create_drops_a_client_supplied_magic() {
+    let f = TestFixture::new().await;
+    let password = "both-verifiers";
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let magic = key_derivation::generate_magic(&repo_id, password, 2, "").unwrap();
+    let random_key = key_derivation::generate_random_key_for_repo(password, 2, "").unwrap();
+    let derived = pwd_hash::derive_pwd_hash(
+        &repo_id,
+        password,
+        2,
+        "",
+        pwd_hash::ALGO_ARGON2ID,
+        Some("2,4096,1"),
+    )
+    .unwrap();
+
+    let resp = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}/api2/repos/", f.server.base_url))
+        .bearer_auth(&f.api_token)
+        .form(&[
+            ("name", "both"),
+            ("enc_version", "2"),
+            ("repo_id", repo_id.as_str()),
+            ("magic", magic.as_str()),
+            ("random_key", random_key.as_str()),
+            ("pwd_hash_algo", pwd_hash::ALGO_ARGON2ID),
+            ("pwd_hash_params", "2,4096,1"),
+            ("pwd_hash", derived.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+
+    let created: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(created["pwd_hash"], derived);
+    assert!(
+        created.get("magic").is_none(),
+        "the client-supplied magic must be dropped: {created}"
+    );
+    // The argon2id verifier works end to end.
+    let resp = f
+        .client
+        .set_repo_password_v2(&f.api_token, &repo_id, password)
+        .await;
+    assert_eq!(resp.status(), 200);
+}
+
+/// A lone `pwd_hash` without an algorithm is ignored, exactly as upstream does
+/// (`create_repo_common()` reads nothing from `crypt_info` unless
+/// `pwd_hash_algo` is set) — the library stays a `magic` library.
+#[tokio::test]
+async fn pwd_hash_without_an_algorithm_is_ignored() {
+    let f = TestFixture::new().await;
+    let password = "lone-hash";
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let magic = key_derivation::generate_magic(&repo_id, password, 2, "").unwrap();
+    let random_key = key_derivation::generate_random_key_for_repo(password, 2, "").unwrap();
+
+    let resp = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}/api2/repos/", f.server.base_url))
+        .bearer_auth(&f.api_token)
+        .form(&[
+            ("name", "lone-hash"),
+            ("enc_version", "2"),
+            ("repo_id", repo_id.as_str()),
+            ("magic", magic.as_str()),
+            ("random_key", random_key.as_str()),
+            ("pwd_hash", "d".repeat(64).as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+
+    let created: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(created["magic"], magic);
+    assert!(
+        created.get("pwd_hash").is_none(),
+        "an unusable verifier must not be stored: {created}"
+    );
+    let resp = f
+        .client
+        .set_repo_password_v2(&f.api_token, &repo_id, password)
+        .await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn pwd_hash_algo_unknown_is_rejected() {
+    let f = TestFixture::new().await;
+
+    // The clients compare the algorithm verbatim, so anything outside the two
+    // seafile spells is "Unsupported encryption algothrims" upstream.
+    for algo in ["PBKDF2", "pbkdf2", "scrypt"] {
+        let repo_id = uuid::Uuid::new_v4().to_string();
+        let resp = create_pwd_hash_repo_via_desktop_payload(&f, &repo_id, "pw", algo, None).await;
+        assert_eq!(
+            resp.status(),
+            400,
+            "'{algo}' must be rejected, body={:?}",
+            resp.text().await
+        );
+    }
+}
+
+#[tokio::test]
+async fn pwd_hash_length_and_hexness_are_enforced() {
+    let f = TestFixture::new().await;
+
+    for bad in [
+        "d".repeat(63),
+        "d".repeat(65),
+        "z".repeat(64),
+        String::new(),
+    ] {
+        let repo_id = uuid::Uuid::new_v4().to_string();
+        let random_key = key_derivation::generate_random_key_for_repo("pw", 2, "").unwrap();
+        let resp = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .post(format!("{}/api2/repos/", f.server.base_url))
+            .bearer_auth(&f.api_token)
+            .form(&[
+                ("name", "bad-hash"),
+                ("enc_version", "2"),
+                ("repo_id", repo_id.as_str()),
+                ("random_key", random_key.as_str()),
+                ("pwd_hash_algo", pwd_hash::ALGO_PBKDF2_SHA256),
+                ("pwd_hash", bad.as_str()),
+            ])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            400,
+            "a {}-char pwd_hash must be rejected",
+            bad.len()
+        );
+    }
+}
+
+/// Parameters are replayed on every later password check, so an unbounded value
+/// is a resource-exhaustion primitive rather than a configuration choice.
+#[tokio::test]
+async fn pwd_hash_params_must_be_within_bounds() {
+    let f = TestFixture::new().await;
+    let cases = [
+        (pwd_hash::ALGO_ARGON2ID, "2,4294967295,8"),
+        (pwd_hash::ALGO_ARGON2ID, "9999999,4096,1"),
+        (pwd_hash::ALGO_PBKDF2_SHA256, "999999999999"),
+    ];
+    for (algo, params) in cases {
+        let repo_id = uuid::Uuid::new_v4().to_string();
+        let resp =
+            create_pwd_hash_repo_via_desktop_payload(&f, &repo_id, "pw", algo, Some(params)).await;
+        assert_eq!(
+            resp.status(),
+            400,
+            "{algo} with params '{params}' must be rejected, body={:?}",
+            resp.text().await
+        );
+    }
+}
+
+/// A bare `passwd` from Android/the web UI is hashed by the **server**, and the
+/// configured algorithm replaces `magic` entirely (seahub passes
+/// `ENCRYPTED_LIBRARY_PWD_HASH_ALGO` into `seafile_api.create_repo`).
+#[tokio::test]
+async fn bare_passwd_creation_uses_the_configured_pwd_hash_algo() {
+    let f = TestFixture::new_with_encrypted_library_config(|cfg| {
+        cfg.encrypted_library_pwd_hash_algo = Some(pwd_hash::ALGO_PBKDF2_SHA256.to_string());
+    })
+    .await;
+    let password = "android-password";
+
+    let resp = f
+        .client
+        .create_repo_multipart_with_passwd(&f.api_token, "android", password)
+        .await;
+    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+
+    let created: serde_json::Value = resp.json().await.unwrap();
+    let repo_id = created["repo_id"].as_str().unwrap().to_string();
+    assert_eq!(created["encrypted"], true);
+    assert_eq!(created["pwd_hash_algo"], pwd_hash::ALGO_PBKDF2_SHA256);
+    assert!(
+        created.get("magic").is_none(),
+        "the configured algorithm replaces magic: {created}"
+    );
+    // No `params` were configured, so the field is absent and clients fall back
+    // to the algorithm's default — exactly what upstream's SQL NULL achieves.
+    assert!(
+        created.get("pwd_hash_params").is_none(),
+        "unconfigured params must stay absent: {created}"
+    );
+
+    let expected = pwd_hash::derive_pwd_hash(
+        &repo_id,
+        password,
+        2,
+        "",
+        pwd_hash::ALGO_PBKDF2_SHA256,
+        None,
+    )
+    .unwrap();
+    assert_eq!(created["pwd_hash"], expected);
+
+    // Android unlocks through the server, so verification has to work.
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &repo_id, password)
+        .await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn bare_passwd_creation_honours_argon2id_and_its_params() {
+    let f = TestFixture::new_with_encrypted_library_config(|cfg| {
+        cfg.encrypted_library_pwd_hash_algo = Some(pwd_hash::ALGO_ARGON2ID.to_string());
+        // Small enough to keep the test quick; the default `2,102400,8` is
+        // covered by the golden-vector unit test.
+        cfg.encrypted_library_pwd_hash_params = Some("2,4096,1".to_string());
+    })
+    .await;
+    let password = "android-argon2";
+
+    let resp = f
+        .client
+        .create_repo_multipart_with_passwd(&f.api_token, "android-argon2", password)
+        .await;
+    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+
+    let created: serde_json::Value = resp.json().await.unwrap();
+    let repo_id = created["repo_id"].as_str().unwrap().to_string();
+    assert_eq!(created["pwd_hash_algo"], pwd_hash::ALGO_ARGON2ID);
+    assert_eq!(created["pwd_hash_params"], "2,4096,1");
+    assert!(created.get("magic").is_none());
+
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &repo_id, password)
+        .await;
+    assert_eq!(resp.status(), 200, "argon2id verification must work");
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &repo_id, "wrong")
+        .await;
+    assert_eq!(resp.status(), 440);
+}
+
+/// Rotating a `pwd_hash` library's password regenerates the verifier with the
+/// same algorithm and leaves `magic` empty.
+#[tokio::test]
+async fn change_password_regenerates_pwd_hash() {
+    let f = TestFixture::new().await;
+    let old_password = "old-password";
+    let new_password = "new-password";
+    let repo_id = uuid::Uuid::new_v4().to_string();
+
+    let resp = create_pwd_hash_repo_via_desktop_payload(
+        &f,
+        &repo_id,
+        old_password,
+        pwd_hash::ALGO_PBKDF2_SHA256,
+        Some("2000"),
+    )
+    .await;
+    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+    let before: serde_json::Value = resp.json().await.unwrap();
+
+    let resp = f
+        .client
+        .change_repo_password(&f.api_token, &repo_id, old_password, new_password)
+        .await;
+    assert_eq!(resp.status(), 200, "change failed: {:?}", resp.text().await);
+
+    let after: serde_json::Value = f
+        .client
+        .get_repo(&f.api_token, &repo_id)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after["pwd_hash_algo"], pwd_hash::ALGO_PBKDF2_SHA256);
+    assert_eq!(after["pwd_hash_params"], "2000");
+    assert_ne!(
+        after["pwd_hash"], before["pwd_hash"],
+        "the verifier must be regenerated for the new password"
+    );
+    assert!(
+        after.get("magic").is_none(),
+        "rotation must not introduce a magic: {after}"
+    );
+
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &repo_id, old_password)
+        .await;
+    assert_eq!(resp.status(), 440, "the old password must stop working");
+    let resp = f
+        .client
+        .set_repo_password_v21(&f.api_token, &repo_id, new_password)
+        .await;
+    assert_eq!(resp.status(), 200, "the new password must work");
+}
+
+/// `?op=checkpassword` compares a caller-supplied magic. A `pwd_hash` library
+/// has none, so upstream fails it too (with a 500 from seahub); nanofile answers
+/// 400 rather than pretending to check. No official client calls this endpoint.
+#[tokio::test]
+async fn pwd_hash_library_checkpassword_reports_missing_magic() {
+    let f = TestFixture::new().await;
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let resp = create_pwd_hash_repo_via_desktop_payload(
+        &f,
+        &repo_id,
+        "pw",
+        pwd_hash::ALGO_PBKDF2_SHA256,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+
+    let resp = f
+        .client
+        .check_repo_password_v2(&f.api_token, &repo_id, &"a".repeat(64))
+        .await;
+    assert_eq!(resp.status(), 400);
 }

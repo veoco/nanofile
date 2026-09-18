@@ -34,11 +34,30 @@ pub struct CreateRepoParams {
     pub magic: Option<String>,
     pub random_key: Option<String>,
     pub salt: String,
+    /// `pwd_hash` verifier triple of a Seafile 11+ encrypted library; all three
+    /// are `None`/NULL for the legacy `magic` flow.
+    pub pwd_hash: Option<String>,
+    pub pwd_hash_algo: Option<String>,
+    pub pwd_hash_params: Option<String>,
     pub permission: String,
     pub created_at: i64,
     pub updated_at: i64,
     /// Repository type (`"repo"` for a normal library).
     pub r#type: String,
+}
+
+/// The password-verifier columns rewritten by a password rotation.
+///
+/// `None` clears the column, which is what switching between the `magic` and
+/// `pwd_hash` flows requires: a library carries one verifier or the other, never
+/// both (upstream writes the `magic` commit field only when `!pwd_hash`).
+#[derive(Default)]
+pub struct UpdateRepoKeysParams {
+    pub magic: Option<String>,
+    pub random_key: Option<String>,
+    pub pwd_hash: Option<String>,
+    pub pwd_hash_algo: Option<String>,
+    pub pwd_hash_params: Option<String>,
 }
 
 #[async_trait]
@@ -75,8 +94,7 @@ pub trait RepoRepository: Send + Sync {
     async fn update_repo_keys(
         &self,
         repo_id: &str,
-        magic: Option<String>,
-        random_key: Option<String>,
+        params: UpdateRepoKeysParams,
     ) -> Result<(), AppError>;
     /// Rename a repo (owner-only).
     async fn rename_repo(&self, repo_id: &str, name: &str, updated_at: i64)
@@ -117,6 +135,9 @@ impl RepoRepository for DbRepoRepository {
             magic: Set(params.magic),
             random_key: Set(params.random_key),
             salt: Set(params.salt),
+            pwd_hash: Set(params.pwd_hash),
+            pwd_hash_algo: Set(params.pwd_hash_algo),
+            pwd_hash_params: Set(params.pwd_hash_params),
             head_commit_id: sea_orm::NotSet,
             permission: Set(params.permission),
             repo_version: Set(1),
@@ -268,15 +289,19 @@ impl RepoRepository for DbRepoRepository {
     async fn update_repo_keys(
         &self,
         repo_id: &str,
-        magic: Option<String>,
-        random_key: Option<String>,
+        params: UpdateRepoKeysParams,
     ) -> Result<(), AppError> {
         let now = chrono::Utc::now().timestamp();
         repo::Entity::update_many()
             .filter(repo::Column::Id.eq(repo_id))
             .set(repo::ActiveModel {
-                magic: Set(magic),
-                random_key: Set(random_key),
+                // `None` clears the column: rotating a `pwd_hash` library's
+                // password must leave `magic` NULL, and vice versa.
+                magic: Set(params.magic),
+                random_key: Set(params.random_key),
+                pwd_hash: Set(params.pwd_hash),
+                pwd_hash_algo: Set(params.pwd_hash_algo),
+                pwd_hash_params: Set(params.pwd_hash_params),
                 updated_at: Set(now),
                 ..Default::default()
             })

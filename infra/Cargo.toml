@@ -37,6 +37,9 @@ hkdf = "0.13"
 sha1 = "0.11"
 sha2 = "0.11"
 pbkdf2 = { version = "0.13", features = ["hmac"] }
+# Only `hash_password_into` is used, which needs nothing but `alloc`; the
+# default features would additionally pull `password-hash`/`getrandom`/`phc`.
+argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
 cipher = { version = "0.5", features = ["block-padding", "alloc"] }
 rand = "0.10"
 hex = "0.4"
