@@ -7,8 +7,6 @@
     windows_subsystem = "windows"
 )]
 
-use axum::extract::DefaultBodyLimit;
-use axum::http::StatusCode;
 use clap::Parser;
 use rand::Rng;
 use sea_orm::{
@@ -20,8 +18,6 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::timeout::TimeoutLayer;
 
 use infra::config::Config;
 use infra::db::establish_connection;
@@ -643,53 +639,7 @@ async fn run_server(
         }
     }
 
-    let app = server::app::app_routes(&state)
-        .layer(DefaultBodyLimit::max(
-            (config.server.max_json_body_mb * 1024 * 1024) as usize,
-        ))
-        .layer(RequestBodyLimitLayer::new(
-            (config.server.max_upload_size_mb * 1024 * 1024) as usize,
-        ))
-        .layer(
-            tower_http::trace::TraceLayer::new_for_http()
-                // Log a redacted path (no query string, token segments masked)
-                // rather than the default full URI, which would put share,
-                // upload, download and SSO capability tokens into the log.
-                .make_span_with(|req: &axum::http::Request<axum::body::Body>| {
-                    tracing::info_span!(
-                        "request",
-                        method = %req.method(),
-                        path = %server::app::redact_request_path(req.uri().path()),
-                        latency = tracing::field::Empty,
-                        status = tracing::field::Empty,
-                    )
-                })
-                .on_request(tower_http::trace::DefaultOnRequest::new().level(tracing::Level::INFO))
-                .on_response(
-                    tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
-                )
-                .on_failure(tower_http::trace::DefaultOnFailure::new().level(tracing::Level::WARN)),
-        )
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            std::time::Duration::from_secs(config.server.request_timeout_secs),
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            server::middleware::security_headers,
-        ))
-        .with_state(state.clone());
-
-    // Optionally bound how long a client may take to send the request body.
-    // Off by default: `request_timeout_secs` already caps the whole handler,
-    // including body reads.
-    let app = if config.server.body_timeout_secs > 0 {
-        app.layer(tower_http::timeout::RequestBodyTimeoutLayer::new(
-            std::time::Duration::from_secs(config.server.body_timeout_secs),
-        ))
-    } else {
-        app
-    };
+    let app = server::app::build_app(state.clone());
 
     let addr = format!("{}:{}", config.server.addr, config.server.port);
     tracing::info!("listening on {}", addr);

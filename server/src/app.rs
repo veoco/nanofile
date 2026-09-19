@@ -123,6 +123,79 @@ pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .fallback(crate::ui::error_page::unknown_path)
 }
 
+/// What the binary serves: [`app_routes`] plus the operational layers.
+///
+/// These are the layers a *deployment* wants rather than a route needs: the
+/// global body limits, request tracing with the path redacted, the whole-request
+/// timeout, and the security headers. They are separable because a test that is
+/// asking "does this request reach this handler" should not have to run on top
+/// of a tracer and a 10-minute timeout to find out.
+pub fn build_app(state: Arc<AppState>) -> Router {
+    let config = &state.config.server;
+
+    let app = app_routes(&state)
+        // The default for every route; the upload-capable groups raised their
+        // own limit in `app_routes`.
+        .layer(DefaultBodyLimit::max(
+            (config.max_json_body_mb * 1024 * 1024) as usize,
+        ))
+        // A hard cap on what a client may send at all, checked before anything
+        // buffers it.
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(
+            (config.max_upload_size_mb * 1024 * 1024) as usize,
+        ))
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(RedactingMakeSpan)
+                .on_request(tower_http::trace::DefaultOnRequest::new().level(tracing::Level::INFO))
+                .on_response(
+                    tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
+                )
+                .on_failure(tower_http::trace::DefaultOnFailure::new().level(tracing::Level::WARN)),
+        )
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(config.request_timeout_secs),
+        ))
+        .layer(from_fn_with_state(
+            state.clone(),
+            crate::middleware::security_headers,
+        ));
+
+    // Optionally bound how long a client may take to send the request body.
+    // Off by default: `request_timeout_secs` already caps the whole handler,
+    // including body reads.
+    let app = if config.body_timeout_secs > 0 {
+        app.layer(tower_http::timeout::RequestBodyTimeoutLayer::new(
+            std::time::Duration::from_secs(config.body_timeout_secs),
+        ))
+    } else {
+        app
+    };
+
+    app.with_state(state)
+}
+
+/// The `make_span` half of the trace layer: a span named from the request, with
+/// the path redacted.
+///
+/// A named type rather than a closure so the field list reads as one thing, and
+/// so the redaction has somewhere to be tested from.
+#[derive(Clone, Copy)]
+struct RedactingMakeSpan;
+
+impl<B> tower_http::trace::MakeSpan<B> for RedactingMakeSpan {
+    fn make_span(&mut self, request: &axum::http::Request<B>) -> tracing::Span {
+        tracing::info_span!(
+            "request",
+            method = %request.method(),
+            path = %redact_request_path(request.uri().path()),
+            latency = tracing::field::Empty,
+            status = tracing::field::Empty,
+        )
+    }
+}
+
 /// Build the CORS layer for the REST API.
 ///
 /// `cors_origins()` returns `[site_url_origin()]` when the configured list is
