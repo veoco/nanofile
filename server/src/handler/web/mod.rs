@@ -12,8 +12,10 @@ pub mod upload;
 pub mod upload_link_view;
 pub mod zip_download;
 
-/// Routes for web file access.
-pub fn web_routes() -> Router<Arc<AppState>> {
+/// The page routes: a share link, an upload link, a file download opened in the
+/// app. These are visited by a browser, so a failure renders the error page
+/// rather than the wire body (see `ui::error_page`).
+pub fn web_page_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
             "/f/{token}",
@@ -35,6 +37,8 @@ pub fn web_routes() -> Router<Arc<AppState>> {
             "/d/{token}/files/{*path}",
             get(share_view::shared_dir_file_view),
         )
+        // Opened by a link in the file list and by the media preview element;
+        // an error body of HTML is as invisible to `<video>` as JSON was.
         .route(
             "/repos/{repo_id}/files/{*path}",
             get(download::repo_file_download),
@@ -47,6 +51,13 @@ pub fn web_routes() -> Router<Arc<AppState>> {
             "/u/{token}/",
             get(upload_link_view::upload_link_view).post(upload_link_view::upload_link_view_post),
         )
+}
+
+/// The endpoints the frontend calls itself (chunked uploads, block uploads,
+/// progress, the zip task). These keep their wire bodies: the browser parses
+/// them, and the error page would be read as a failed response either way.
+pub fn web_api_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/upload-aj/", post(upload::upload_aj))
         .route("/upload-aj/{token}", post(upload::upload_aj_token))
         .route("/upload-api/{token}", post(upload::upload_api))

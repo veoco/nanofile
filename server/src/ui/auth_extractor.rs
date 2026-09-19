@@ -7,12 +7,11 @@
 /// On failure: returns a 302 redirect to `/accounts/login/` instead of 401,
 /// so browsers see the login page rather than a raw error.
 use axum::{
-    RequestPartsExt,
     extract::FromRequestParts,
-    http::request::Parts,
+    http::{HeaderMap, header, request::Parts},
     response::{IntoResponse, Redirect, Response},
 };
-use axum_extra::{TypedHeader, headers::Cookie};
+use axum_extra::headers::{Cookie, Header};
 use std::sync::Arc;
 
 use crate::AppState;
@@ -50,52 +49,63 @@ impl FromRequestParts<Arc<AppState>> for WebUser {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        // Extract the cookie header
-        let cookie_header = parts
-            .extract::<TypedHeader<Cookie>>()
+        let session_token =
+            session_cookie(&parts.headers).ok_or(WebUserRejection::RedirectLogin)?;
+        WebUser::from_session_token(state, &session_token)
             .await
-            .map_err(|_| WebUserRejection::RedirectLogin)?;
+            .ok_or(WebUserRejection::RedirectLogin)
+    }
+}
 
-        let session_token = cookie_header
-            .get("seahub-session")
-            .ok_or(WebUserRejection::RedirectLogin)?;
+/// The `seahub-session` cookie from a request's headers, if it carries one.
+///
+/// The extractor above parses the headers it is handed; the error-page
+/// middleware only has a clone of them (the request itself has already gone to
+/// the handler), so both read the cookie through here.
+pub fn session_cookie(headers: &HeaderMap) -> Option<String> {
+    let mut values = headers.get_all(header::COOKIE).iter();
+    let cookie = Cookie::decode(&mut values).ok()?;
+    cookie.get("seahub-session").map(str::to_string)
+}
 
-        // Look up the API token
+impl WebUser {
+    /// Resolve a session cookie value to the user it belongs to.
+    ///
+    /// `None` for every way a session can fail to identify a usable account:
+    /// unknown token, expired token, a 2FA-pending token (which must not work
+    /// as a full session), a deleted or deactivated user, or a failed lookup.
+    pub async fn from_session_token(state: &Arc<AppState>, session_token: &str) -> Option<Self> {
         let token_record = state
             .repos
             .api_token
             .find_by_token(session_token)
             .await
-            .map_err(|_| WebUserRejection::RedirectLogin)?
-            .ok_or(WebUserRejection::RedirectLogin)?;
+            .ok()??;
 
         // Check expiration
-        if let Some(expires_at) = token_record.expires_at {
-            let now = chrono::Utc::now().timestamp();
-            if now > expires_at {
-                return Err(WebUserRejection::RedirectLogin);
-            }
+        if let Some(expires_at) = token_record.expires_at
+            && chrono::Utc::now().timestamp() > expires_at
+        {
+            return None;
         }
 
         // A 2FA pending token must not be usable as a full session.
         if token_record.is_pending {
-            return Err(WebUserRejection::RedirectLogin);
+            return None;
         }
 
-        // Look up user
         let user_record = state
             .repos
             .user
             .find_by_id(token_record.user_id)
             .await
-            .map_err(|_| WebUserRejection::RedirectLogin)?
-            .ok_or(WebUserRejection::RedirectLogin)?;
+            .ok()??;
 
         if !user_record.is_active {
-            return Err(WebUserRejection::RedirectLogin);
+            return None;
         }
 
-        Ok(WebUser {
+        Some(WebUser {
             user_id: user_record.id,
             email: user_record.email,
             session_token: session_token.to_string(),

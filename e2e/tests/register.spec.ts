@@ -49,6 +49,10 @@ test("an invalid invitation code is rejected", async ({ page }) => {
   await page.locator("#password2").fill("password-123");
   await page.locator("#invitation_code").fill("invalid-code");
   await page.locator('button[type="submit"]').click();
-  // The register endpoint answers with a JSON error_msg.
-  await expect(page.getByText("Invalid invitation code")).toBeVisible();
+  // The form comes back with the reason on it, rather than the wire protocol's
+  // JSON body rendered raw in the browser.
+  await expect(page.locator('[role="alert"]')).toContainText(
+    "Invalid invitation code",
+  );
+  await expect(page.locator("#invitation_code")).toBeVisible();
 });

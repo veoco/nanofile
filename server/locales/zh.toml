@@ -838,3 +838,33 @@ tray.notify_body = "Nanofile 正在系统托盘中运行。"
 tray.elevated_user_fallback = "当前用户"
 tray.elevated_body = "Nanofile 正在以管理员权限运行。\n\n将为账户“{user}”注册开机自动启动,登录时将以普通(非管理员)权限启动。\n\n是否继续?"
 
+
+
+# HTML 错误页。线协议（/api2/、/seafhttp/、同步、WebDAV）仍返回 JSON 或纯文本，
+# 这些键只会渲染进页面。
+err.400.title = "请求无法处理"
+err.400.desc = "无法理解这个请求。请检查地址后重试。"
+err.401.title = "需要登录"
+err.401.desc = "登录状态已失效。请重新登录后继续。"
+err.403.title = "没有访问权限"
+err.403.desc = "你的账号没有访问权限。如果你认为应该有，请联系管理员。"
+err.404.title = "页面不存在"
+err.404.desc = "找不到这个页面。它可能已被移动、重命名或删除。"
+err.408.title = "请求超时"
+err.408.desc = "服务器未能在规定时间内完成。它现在可能正忙。"
+err.413.title = "请求内容过大"
+err.413.desc = "这次请求的内容超过了服务器的限制。"
+err.429.title = "请求过于频繁"
+err.429.desc = "操作有点快。请稍等片刻再试。"
+err.500.title = "出错了"
+err.500.desc = "服务器遇到了意外错误。请稍后重试；如果持续出现，请查看服务器日志。"
+err.action.back = "返回资料库"
+err.action.home = "前往 Nanofile"
+err.action.retry = "重试"
+err.action.signin = "登录"
+# 失效的分享／上传链接不显示 HTTP 状态码：那个数字对服务器有意义，对拿到链接的人
+# 没有意义，所以这两个页面用图标加一句话代替。
+err.link_expired.title = "链接已过期"
+err.link_expired.desc = "这个链接已不再可用。请向分享它的人索取新链接。"
+err.link_gone.title = "链接已失效"
+err.link_gone.desc = "这个链接已经无效，或已被其所有者关闭。"

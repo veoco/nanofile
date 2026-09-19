@@ -1,0 +1,31 @@
+{# The signed-in error page: a library that is gone, a denied request, a 500.
+
+   Renders inside the normal app chrome — topbar, left panel, mobile nav — so
+   the reader can navigate away, and so a failure never strands them on a page
+   with no way out. The block itself is centred in the content area rather than
+   pinned to the top: it replaces the page, it is not a paragraph on one.
+
+   Words come from `error_page.rs`, shared with the anonymous page. #}
+{% extends "base.html" %}
+
+{% block title %}{{ t.tr(title_key) }} | {{ t.tr("app.name") }}{% endblock %}
+
+{% block main_layout %}
+<main role="main" aria-label="{{ t.tr("a11y.main_content") }}"
+      class="flex-1 min-w-0 overflow-y-auto px-4 sm:px-6 pb-20 lg:pb-6">
+    <div class="flex min-h-full items-center justify-center py-10">
+        <div class="empty-state mt-0 max-w-[420px]">
+            <p class="text-[32px] font-semibold leading-none tracking-[-0.04em] tabular-nums text-ink-3">{{ status }}</p>
+            <h1 class="mt-4 text-[15px] font-semibold text-ink">{{ t.tr(title_key) }}</h1>
+            <p class="mx-auto mt-1.5 max-w-[42ch] text-[13px] leading-relaxed text-ink-2">{{ t.tr(desc_key) }}</p>
+            {% if !actions.is_empty() %}
+            <div class="mt-5 flex flex-wrap items-center justify-center gap-2">
+                {% for a in actions %}
+                <a href="{{ a.href }}" class="btn {% if a.primary %}btn-solid{% else %}btn-line{% endif %}">{{ t.tr(a.label_key) }}</a>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</main>
+{% endblock %}

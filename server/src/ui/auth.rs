@@ -4,7 +4,7 @@ use axum::{
     Form,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -810,6 +810,26 @@ pub async fn register_page(
     Ok(Html(html))
 }
 
+/// Re-render the registration form with the reason the submission was refused.
+///
+/// `taken` lets the caller pass a translated string as well as a `&str`; the
+/// form is a plain HTML POST, so the reason has to come back as a page.
+fn register_error(
+    state: &AppState,
+    headers: &HeaderMap,
+    message: impl AsRef<str>,
+) -> Result<Response, AppError> {
+    let tpl = RegisterTemplate {
+        urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(headers, &state.config.ui.default_language),
+        error: Some(message.as_ref().to_string()),
+    };
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Html(html).into_response())
+}
+
 /// POST /accounts/register/ — validate invitation code and create account.
 pub async fn register(
     State(state): State<Arc<AppState>>,
@@ -820,11 +840,12 @@ pub async fn register(
     // CSRF: validate Origin/Referer.
     let origin = state.config.server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
-        return Err(AppError::BadRequest(
+        return register_error(
+            &state,
+            &headers,
             I18n::from_headers(&headers, &state.config.ui.default_language)
-                .tr("auth.invalid_origin")
-                .to_string(),
-        ));
+                .tr("auth.invalid_origin"),
+        );
     }
 
     // Registration closed: refuse before any invitation or password work.
@@ -838,28 +859,30 @@ pub async fn register(
     );
     let rl_key = format!("register:{}", client_ip);
     if state.auth_limiters.registration.is_limited(&rl_key) {
-        return Err(AppError::BadRequest(
+        return register_error(
+            &state,
+            &headers,
             I18n::from_headers(&headers, &state.config.ui.default_language)
-                .tr("auth.registration_too_many")
-                .to_string(),
-        ));
+                .tr("auth.registration_too_many"),
+        );
     }
     state.auth_limiters.registration.record_attempt(&rl_key);
 
     // Validate passwords match before delegating to service.
     if form.password1 != form.password2 {
-        return Err(AppError::BadRequest(
+        return register_error(
+            &state,
+            &headers,
             I18n::from_headers(&headers, &state.config.ui.default_language)
-                .tr("auth.passwords_mismatch")
-                .to_string(),
-        ));
+                .tr("auth.passwords_mismatch"),
+        );
     }
 
     let cfg = &state.config.auth;
 
     // Use RegistrationService for the core logic.
     let reg_service = RegistrationService::new(state.repos.clone());
-    let result = reg_service
+    let result = match reg_service
         .register(RegistrationParams {
             email: form.email,
             password: form.password1,
@@ -868,7 +891,16 @@ pub async fn register(
             require_strong_password: cfg.require_strong_password,
             password_hash_iterations: cfg.password_hash_iterations,
         })
-        .await?;
+        .await
+    {
+        Ok(result) => result,
+        // A refused registration is the reader's to fix — a taken address, a
+        // spent invitation code, a weak password — so the form comes back with
+        // the reason on it. Returning the error would answer a plain HTML form
+        // with the wire protocol's JSON.
+        Err(AppError::BadRequest(message)) => return register_error(&state, &headers, &message),
+        Err(err) => return Err(err),
+    };
 
     // Auto-login — create session token and cookie.
     let now = chrono::Utc::now().timestamp();

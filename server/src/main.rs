@@ -728,9 +728,21 @@ async fn run_server(
     let upload_body_limit = server::body_limit::upload_limit();
     let sync_routes =
         server::handler::sync::sync_routes().layer(DefaultBodyLimit::max(upload_body_limit));
-    let web_routes =
-        server::handler::web::web_routes().layer(DefaultBodyLimit::max(upload_body_limit));
-    let ui_routes = server::ui::ui_routes();
+    // The web page routes are wrapped so a failure renders the error page
+    // instead of the wire body; the endpoints the frontend fetches itself are
+    // not. See `ui::error_page`.
+    let web_api_routes =
+        server::handler::web::web_api_routes().layer(DefaultBodyLimit::max(upload_body_limit));
+    let web_page_routes = server::handler::web::web_page_routes()
+        .layer(DefaultBodyLimit::max(upload_body_limit))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            server::ui::error_page::anonymous_pages,
+        ));
+    let ui_routes = server::ui::ui_routes().layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        server::ui::error_page::session_pages,
+    ));
     let notification_routes = server::notification::notification_routes();
     let webdav_routes =
         server::webdav::webdav_routes().layer(DefaultBodyLimit::max(upload_body_limit));
@@ -746,12 +758,16 @@ async fn run_server(
         .route("/health", get(health_check))
         .merge(api_with_cors)
         .merge(sync_routes)
-        .merge(web_routes)
+        .merge(web_api_routes)
+        .merge(web_page_routes)
         .merge(ui_routes)
         .merge(notification_routes)
         .merge(webdav_routes)
         .merge(server::handler::avatar::image_routes())
         .route("/static/{*path}", get(server::static_assets::serve_static))
+        // No route matched. A browser gets the error page; a client keeps the
+        // empty 404 it has always received.
+        .fallback(server::ui::error_page::unknown_path)
         .layer(DefaultBodyLimit::max(
             (config.server.max_json_body_mb * 1024 * 1024) as usize,
         ))

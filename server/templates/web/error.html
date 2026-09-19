@@ -1,0 +1,36 @@
+{# The anonymous error page: an unknown URL, a dead share or upload link, or any
+   other failure on a page a visitor reached without an account. Rendered in the
+   same shell as the share and upload pages, so an error looks like the rest of
+   what that visitor was already looking at.
+
+   Kept deliberately separate from `error.html` (the signed-in one): the two
+   shells differ in more than a wrapper — one is a centred card on an empty
+   canvas, the other a compact block inside the app's content area. Words on
+   the page (title, description, button labels) come from `error_page.rs` so
+   the two can never say different things about the same failure. #}
+{% extends "web/public_base.html" %}
+
+{% block title %}{{ t.tr(title_key) }} | {{ t.tr("app.name") }}{% endblock %}
+
+{% block content %}
+<div class="px-5 pt-10 pb-8 text-center">
+    {% if glyph %}
+    <span class="mx-auto grid h-11 w-11 place-items-center rounded-full bg-raised text-ink-3">
+        <svg class="h-[22px] w-[22px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+        </svg>
+    </span>
+    {% else %}
+    <p class="text-[40px] font-semibold leading-none tracking-[-0.04em] tabular-nums text-ink-3">{{ status }}</p>
+    {% endif %}
+    <h1 class="mt-5 text-[17px] font-semibold tracking-[-0.01em] text-ink">{{ t.tr(title_key) }}</h1>
+    <p class="mx-auto mt-2 max-w-[36ch] text-[13px] leading-relaxed text-ink-2">{{ t.tr(desc_key) }}</p>
+    {% if !actions.is_empty() %}
+    <div class="mt-6 flex flex-col gap-2">
+        {% for a in actions %}
+        <a href="{{ a.href }}" class="btn {% if a.primary %}btn-solid{% else %}btn-line{% endif %} h-9 w-full text-[13px]">{{ t.tr(a.label_key) }}</a>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

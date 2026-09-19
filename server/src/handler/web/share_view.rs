@@ -147,6 +147,23 @@ fn share_link_unlocked(
     )
 }
 
+/// Turn a link lookup failure into the page the visitor sees.
+///
+/// The two link failures are worded differently — "turned off" and "expired"
+/// are not the same thing to the person holding the link — while a lookup that
+/// failed for another reason (the database, say) stays a 500 rather than being
+/// dressed up as a dead link.
+fn link_error_page(
+    state: &AppState,
+    err: AppError,
+    headers: &HeaderMap,
+) -> Result<Response, AppError> {
+    match crate::service::sharing::share::classify_link_failure(&err) {
+        Some(failure) => Ok(crate::ui::error_page::link_page(failure, state, headers)),
+        None => Err(err),
+    }
+}
+
 /// Resolve file metadata from the repo.
 async fn resolve_file_meta(
     repos: &crate::repository::Repositories,
@@ -169,7 +186,11 @@ pub async fn shared_file_view(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     crate::middleware::ensure_share_links_enabled(&state)?;
-    let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
+    let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
+    {
+        Ok(link) => link,
+        Err(err) => return link_error_page(&state, err, &headers),
+    };
 
     // Password check. The password is accepted only from the
     // `X-Seafile-Sharelink-Password` header or the signed unlock cookie the
@@ -296,7 +317,11 @@ pub async fn shared_file_view_post(
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     crate::middleware::ensure_share_links_enabled(&state)?;
-    let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
+    let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
+    {
+        Ok(link) => link,
+        Err(err) => return link_error_page(&state, err, &headers),
+    };
 
     let password = form
         .get("password")
@@ -401,7 +426,11 @@ pub async fn shared_dir_view(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     crate::middleware::ensure_share_links_enabled(&state)?;
-    let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
+    let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
+    {
+        Ok(link) => link,
+        Err(err) => return link_error_page(&state, err, &headers),
+    };
 
     // Only handle directory shares
     if link.s_type != "d" {
@@ -673,7 +702,11 @@ pub async fn shared_dir_file_view(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     crate::middleware::ensure_share_links_enabled(&state)?;
-    let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
+    let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
+    {
+        Ok(link) => link,
+        Err(err) => return link_error_page(&state, err, &headers),
+    };
 
     if link.s_type != "d" {
         return Err(AppError::NotFound("Not a directory share link".into()));
@@ -744,7 +777,11 @@ pub async fn shared_dir_view_post(
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     crate::middleware::ensure_share_links_enabled(&state)?;
-    let link = crate::service::sharing::share::resolve_share_link(&state.repos, &token).await?;
+    let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
+    {
+        Ok(link) => link,
+        Err(err) => return link_error_page(&state, err, &headers),
+    };
 
     let password = form
         .get("password")

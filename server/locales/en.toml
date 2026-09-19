@@ -839,3 +839,34 @@ tray.notify_title = "Nanofile"
 tray.notify_body = "Nanofile is running in the system tray."
 tray.elevated_user_fallback = "the current user"
 tray.elevated_body = "Nanofile is running with administrator privileges.\n\nLaunch at login will be registered for the account \"{user}\", and will start at login without administrator rights.\n\nContinue?"
+
+
+# HTML error pages. The wire protocol (/api2/, /seafhttp/, sync, WebDAV) keeps
+# its JSON and plain-text bodies; these keys are only ever rendered into a page.
+err.400.title = "Bad request"
+err.400.desc = "That request could not be understood. Check the address and try again."
+err.401.title = "Sign in required"
+err.401.desc = "Your session has ended. Sign in again to pick up where you left off."
+err.403.title = "Permission denied"
+err.403.desc = "Your account does not have access to this. If you think it should, ask an administrator."
+err.404.title = "Page not found"
+err.404.desc = "We could not find that page. It may have been moved, renamed, or deleted."
+err.408.title = "Request timed out"
+err.408.desc = "The server did not finish in time. It may be busy right now."
+err.413.title = "Request too large"
+err.413.desc = "That request was larger than this server accepts."
+err.429.title = "Too many requests"
+err.429.desc = "That was a little fast. Wait a moment and try again."
+err.500.title = "Something went wrong"
+err.500.desc = "The server hit an unexpected error. Try again in a moment; if it keeps happening, check the server log."
+err.action.back = "Back to libraries"
+err.action.home = "Go to Nanofile"
+err.action.retry = "Try again"
+err.action.signin = "Sign in"
+# Shown instead of the HTTP status code on a dead share or upload link: the
+# number means something to the server, not to the person who was handed the
+# link, so these two pages carry a glyph and a sentence instead.
+err.link_expired.title = "Link expired"
+err.link_expired.desc = "This link is no longer available. Ask the person who shared it for a new one."
+err.link_gone.title = "Link unavailable"
+err.link_gone.desc = "This link is not valid any more, or its owner turned it off."

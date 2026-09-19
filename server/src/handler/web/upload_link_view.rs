@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
+use crate::service::sharing::share::{UPLOAD_LINK_EXPIRED, UPLOAD_LINK_NOT_FOUND};
 use base::error::AppError;
 
 // ── Templates ─────────────────────────────────────────────────────────────
@@ -61,18 +62,18 @@ async fn validate_upload_link(
         .upload_link
         .find_by_token(token)
         .await?
-        .ok_or_else(|| AppError::NotFound("Upload link not found".into()))?;
+        .ok_or_else(|| AppError::NotFound(UPLOAD_LINK_NOT_FOUND.into()))?;
 
     // Check expiry
     if let Some(exp) = link.expires_at
         && chrono::Utc::now().timestamp() > exp
     {
-        return Err(AppError::NotFound("Upload link has expired".into()));
+        return Err(AppError::NotFound(UPLOAD_LINK_EXPIRED.into()));
     }
 
     // Check repo exists
     if !state.sync_service().repo_exists(&link.repo_id).await? {
-        return Err(AppError::NotFound("Upload link not found".into()));
+        return Err(AppError::NotFound(UPLOAD_LINK_NOT_FOUND.into()));
     }
 
     // The link acts as its creator, so it must stop resolving once the creator
@@ -87,10 +88,23 @@ async fn validate_upload_link(
     )
     .await
     {
-        return Err(AppError::NotFound("Upload link not found".into()));
+        return Err(AppError::NotFound(UPLOAD_LINK_NOT_FOUND.into()));
     }
 
     Ok(link)
+}
+
+/// Turn a link lookup failure into the page the visitor sees, exactly as the
+/// share-link view does.
+fn link_error_page(
+    state: &AppState,
+    err: AppError,
+    headers: &HeaderMap,
+) -> Result<Response, AppError> {
+    match crate::service::sharing::share::classify_link_failure(&err) {
+        Some(failure) => Ok(crate::ui::error_page::link_page(failure, state, headers)),
+        None => Err(err),
+    }
 }
 
 /// Check whether the supplied password matches the stored hash.
@@ -134,7 +148,10 @@ pub async fn upload_link_view(
     Path(token): Path<String>,
 ) -> Result<Response, AppError> {
     crate::middleware::ensure_share_links_enabled(&state)?;
-    let link = validate_upload_link(&state, &token).await?;
+    let link = match validate_upload_link(&state, &token).await {
+        Ok(link) => link,
+        Err(err) => return link_error_page(&state, err, &headers),
+    };
 
     // Password check: header or signed cookie only, never the query string.
     let provided_pwd = headers
@@ -228,7 +245,10 @@ pub async fn upload_link_view_post(
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     crate::middleware::ensure_share_links_enabled(&state)?;
-    let link = validate_upload_link(&state, &token).await?;
+    let link = match validate_upload_link(&state, &token).await {
+        Ok(link) => link,
+        Err(err) => return link_error_page(&state, err, &headers),
+    };
 
     let password = form
         .get("password")

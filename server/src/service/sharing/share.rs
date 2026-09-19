@@ -704,6 +704,51 @@ pub fn invalidate_link_creator_cache(user_id: i32, repo_id: Option<&str>) {
     });
 }
 
+/// The wire-protocol message for a link that does not resolve. Exposed so the
+/// HTML page can tell "turned off" apart from "expired" without matching a
+/// literal it does not own.
+pub const LINK_NOT_FOUND: &str = "Link not found";
+
+/// The wire-protocol message for a link that ran out of time.
+pub const LINK_EXPIRED: &str = "Link has expired";
+
+/// The same message for upload links, which have their own lookup.
+pub const UPLOAD_LINK_NOT_FOUND: &str = "Upload link not found";
+
+/// The same message for upload links that ran out of time.
+pub const UPLOAD_LINK_EXPIRED: &str = "Upload link has expired";
+
+/// Why a link stopped resolving.
+///
+/// The wire protocol flattens both into one 404 — every Seafile client only
+/// distinguishes "resolves" from "does not" — but an HTML page should not tell
+/// the person holding an expired link the same thing as one holding a link the
+/// owner switched off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkFailure {
+    /// Unknown token, revoked link, deleted library, or a creator who lost
+    /// access. Kept indistinguishable on purpose: the wire response must not
+    /// confirm that a token exists.
+    Unknown,
+    Expired,
+}
+
+/// Classify the result of a share- or upload-link lookup for the HTML pages.
+///
+/// Only a lookup's own `NotFound` is classified: for those calls it always
+/// means "this link does not resolve", so a database or IO failure stays a 500
+/// rather than being dressed up as a dead link. `None` means "not a link
+/// failure — propagate it unchanged".
+pub fn classify_link_failure(err: &AppError) -> Option<LinkFailure> {
+    match err {
+        AppError::NotFound(msg) if msg == LINK_EXPIRED || msg == UPLOAD_LINK_EXPIRED => {
+            Some(LinkFailure::Expired)
+        }
+        AppError::NotFound(_) => Some(LinkFailure::Unknown),
+        _ => None,
+    }
+}
+
 /// Look up a share link, check expiry and that its creator still has access,
 /// return the link model or error.
 pub async fn resolve_share_link(
@@ -714,19 +759,19 @@ pub async fn resolve_share_link(
         .share_link
         .find_by_token(token)
         .await?
-        .ok_or_else(|| AppError::NotFound("Link not found".into()))?;
+        .ok_or_else(|| AppError::NotFound(LINK_NOT_FOUND.into()))?;
 
     if let Some(expires_at) = link.expires_at
         && chrono::Utc::now().timestamp() > expires_at
     {
-        return Err(AppError::NotFound("Link has expired".into()));
+        return Err(AppError::NotFound(LINK_EXPIRED.into()));
     }
 
     // The link acts as its creator, so it must stop resolving once the creator
     // loses access (member removed, account deactivated). "Not found" keeps the
     // response indistinguishable from an unknown token.
     if !link_creator_may_access(repos, link.creator_id, &link.repo_id, false).await {
-        return Err(AppError::NotFound("Link not found".into()));
+        return Err(AppError::NotFound(LINK_NOT_FOUND.into()));
     }
 
     Ok(link)
@@ -762,4 +807,33 @@ pub fn increment_view_cnt(
     tokio::spawn(async move {
         let _ = share_link_repo.increment_view_cnt(link_id).await;
     });
+}
+
+#[cfg(test)]
+mod link_failure_tests {
+    use super::*;
+
+    #[test]
+    fn a_link_failure_is_told_apart_from_a_real_error() {
+        assert_eq!(
+            classify_link_failure(&AppError::NotFound(LINK_EXPIRED.into())),
+            Some(LinkFailure::Expired)
+        );
+        assert_eq!(
+            classify_link_failure(&AppError::NotFound(UPLOAD_LINK_EXPIRED.into())),
+            Some(LinkFailure::Expired)
+        );
+        // Every other NotFound from a lookup is the link itself being gone —
+        // including the ones whose exact text is not spelled out here.
+        assert_eq!(
+            classify_link_failure(&AppError::NotFound("Repo not found".into())),
+            Some(LinkFailure::Unknown)
+        );
+        // A lookup that failed for another reason must stay a 500.
+        assert_eq!(
+            classify_link_failure(&AppError::Internal("db down".into())),
+            None
+        );
+        assert_eq!(classify_link_failure(&AppError::Forbidden), None);
+    }
 }
