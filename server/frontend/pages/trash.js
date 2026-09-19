@@ -104,7 +104,7 @@ async function deleteLibrary(el) {
 
 /** Permanently delete every library in the trash. */
 async function deleteAllLibraries() {
-    var rows = document.querySelectorAll('#tab-libraries tbody tr').length;
+    var rows = document.querySelectorAll('#tab-libraries .nf-prow').length;
     var confirmed = await ConfirmDialog.confirm(
         __t('trash.lib_delete_all'),
         __t('trash.lib_delete_all_confirm', { n: rows }),

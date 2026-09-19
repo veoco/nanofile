@@ -16,7 +16,7 @@ async function openFreshRepo(page: import("@playwright/test").Page): Promise<str
 }
 
 const activityRow = (page: import("@playwright/test").Page, name: string) =>
-  page.locator("main table tbody tr").filter({ hasText: name }).first();
+  page.locator("main .nf-prow").filter({ hasText: name }).first();
 
 test("uploading a file records an activity", async ({ page }) => {
   const repoId = await openFreshRepo(page);

@@ -38,10 +38,10 @@ async function createUploadLink(path: string, description: string): Promise<void
 }
 
 const shareRow = (page: import("@playwright/test").Page, text: string) =>
-  page.locator("#tab-share-links tbody tr").filter({ hasText: text });
+  page.locator("#tab-share-links .nf-prow").filter({ hasText: text });
 
 const uploadRow = (page: import("@playwright/test").Page, text: string) =>
-  page.locator("#tab-upload-links tbody tr").filter({ hasText: text });
+  page.locator("#tab-upload-links .nf-prow").filter({ hasText: text });
 
 test("shares page lists share and upload links in their tabs", async ({ page }) => {
   const shareDesc = `share-desc-${Date.now()}`;

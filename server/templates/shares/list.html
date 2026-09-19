@@ -9,226 +9,178 @@
 <p class="page-subtitle">{{ t.tr("share.manage_desc") }}</p>
 
 <!-- Tab bar -->
-<div class="mt-4 flex gap-4 border-b border-gray-200 dark:border-gray-700">
-    <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium border-b-2 {% if active_tab == "share-links" %}tab-btn--active text-brand-600 dark:text-brand-400 border-brand-600 dark:border-brand-400{% else %}text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300{% endif %}"
+<div class="nf-tabs" role="tablist">
+    <button type="button" role="tab" class="nf-tab"
+            aria-controls="tab-share-links"
+            aria-selected="{% if active_tab == "share-links" %}true{% else %}false{% endif %}"
+            tabindex="{% if active_tab == "share-links" %}0{% else %}-1{% endif %}"
             data-tab="share-links" data-action="tab">
-        {{ t.tr("share.links") }} ({{ share_links.len() }})
+        {{ t.tr("share.links") }} <span class="nf-tab-n num">{{ share_links.len() }}</span>
     </button>
-    <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium border-b-2 {% if active_tab == "upload-links" %}tab-btn--active text-brand-600 dark:text-brand-400 border-brand-600 dark:border-brand-400{% else %}text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300{% endif %}"
+    <button type="button" role="tab" class="nf-tab"
+            aria-controls="tab-upload-links"
+            aria-selected="{% if active_tab == "upload-links" %}true{% else %}false{% endif %}"
+            tabindex="{% if active_tab == "upload-links" %}0{% else %}-1{% endif %}"
             data-tab="upload-links" data-action="tab">
-        {{ t.tr("uploadlink.links") }} ({{ upload_links.len() }})
+        {{ t.tr("uploadlink.links") }} <span class="nf-tab-n num">{{ upload_links.len() }}</span>
     </button>
 </div>
 
-<!-- Share Links table -->
+<!-- Share Links -->
 <div id="tab-share-links" class="tab-content {% if active_tab != "share-links" %}hidden{% endif %}">
 {% if share_links.is_empty() %}
-<div class="empty-state">
-    <svg class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/>
-    </svg>
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("share.no_shares") }}</p>
-    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("share.no_shares_hint") }}</p>
-</div>
-{% endif %}
-
-{% if !share_links.is_empty() %}
-<div class="mt-6">
-    <div class="card overflow-hidden">
-        <table class="table">
-            <thead class="thead">
-                <tr>
-                    <th scope="col" class="th">{{ t.tr("common.library") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.name") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.type") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.created") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.expires") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.description") }}</th>
-                    <th scope="col" class="th text-center">{{ t.tr("common.views") }}</th>
-                    <th scope="col" class="th text-center">{{ t.tr("common.password") }}</th>
-                    <th scope="col" class="th text-right">{{ t.tr("common.actions") }}</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                {% for s in share_links %}
-                <tr class="table-row">
-                    <td class="td text-gray-500 dark:text-gray-400 max-w-0">
-                        <span class="truncate block" title="{{ s.repo_name }}">{{ s.repo_name }}</span>
-                    </td>
-                    <td class="td text-gray-900 dark:text-gray-100 max-w-0">
-                        <a href="{{ s.link_url }}" target="_blank" class="hover:text-brand-500 dark:hover:text-brand-400 truncate block" title="{{ s.path }}">
-                            {{ s.name }}
-                        </a>
-                    </td>
-                    <td class="td text-gray-500 dark:text-gray-400">
-                        {% if s.s_type == "d" %}
-                        <span class="inline-flex items-center gap-1">
-                            {{ icons::icon_folder("h-3.5 w-3.5 text-amber-500") }}
-                            {{ t.tr("common.folder") }}
-                        </span>
-                        {% else %}
-                        <span class="inline-flex items-center gap-1">
-                            <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
-                            {{ t.tr("common.file") }}
-                        </span>
-                        {% endif %}
-                    </td>
-                    <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap"><span data-ts="{{ s.created_at_ts }}"></span></td>
-                    <td class="td {% if s.expires_at != "Never" %}text-red-500{% else %}text-gray-500 dark:text-gray-400{% endif %} whitespace-nowrap">{% if let Some(ts) = s.expires_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}Never{% endif %}</td>
-                    <td class="td text-gray-500 dark:text-gray-400 max-w-0">
-                        {% if s.description.is_some() %}
-                        <span class="truncate block" title="{{ s.description.as_deref().unwrap_or("") }}">{{ s.description.as_deref().unwrap_or("") }}</span>
-                        {% else %}
-                        <span class="text-gray-300 dark:text-gray-600">—</span>
-                        {% endif %}
-                    </td>
-                    <td class="td text-gray-500 dark:text-gray-400 text-center">{{ s.view_cnt }}</td>
-                    <td class="px-4 py-3 text-center">
-                        {% if s.has_password %}
-                        <span class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
-                            {{ icons::icon_lock("h-3.5 w-3.5") }}
-                            {{ t.tr("common.yes") }}
-                        </span>
-                        {% else %}
-                        <span class="text-xs text-gray-400">{{ t.tr("common.no") }}</span>
-                        {% endif %}
-                    </td>
-                    <td class="td text-right">
-                        <div class="flex items-center justify-end gap-1">
-                            <button type="button" class="js-share-edit-btn btn btn-ghost-brand btn-icon"
-                                    data-token="{{ s.token }}"
-                                    data-path="{{ s.path }}"
-                                    data-expires="{{ s.expires_at }}"
-                                    data-description="{{ s.description.as_deref().unwrap_or("") }}"
-                                    title="{{ t.tr("share.edit_link") }}">
-                                {{ icons::icon_pencil("h-3.5 w-3.5") }}
-                            </button>
-                            <form action="/shares/{{ s.token }}/delete/" method="POST" class="delete-form inline" data-confirm="share.delete_confirm">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                <input type="hidden" name="tab" value="{{ active_tab }}">
-                                <button type="submit" class="btn btn-ghost-danger btn-icon" title="{{ t.tr("share.delete_link") }}">
-                                    {{ icons::icon_trash("h-3.5 w-3.5") }}
-                                </button>
-                            </form>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+<div class="nf-list">
+    <div class="nf-empty">
+        {{ icons::icon_share("mx-auto h-10 w-10 text-ink-3") }}
+        <h3>{{ t.tr("share.no_shares") }}</h3>
+        <p>{{ t.tr("share.no_shares_hint") }}</p>
     </div>
 </div>
+{% else %}
+<div class="nf-list">
+    {% for s in share_links %}
+    <div class="nf-prow">
+        <span class="nf-prow-ic">
+            {% if s.s_type == "d" %}
+            {{ icons::icon_folder("w-[15px] h-[15px]") }}
+            {% else %}
+            {{ icons::icon_file("w-[15px] h-[15px]") }}
+            {% endif %}
+        </span>
+        <div class="nf-prow-main">
+            <div class="nf-prow-name">
+                <a href="{{ s.link_url }}" target="_blank" rel="noopener" title="{{ s.path }}">{{ s.name }}</a>
+                {% if s.has_password %}
+                <span class="badge badge-gray shrink-0" title="{{ t.tr("common.password") }}">
+                    {{ icons::icon_lock("w-3 h-3") }}
+                </span>
+                {% endif %}
+            </div>
+            <div class="nf-prow-sub">
+                <span class="t">{{ s.repo_name }}</span>
+                {% if s.description.is_some() %}
+                <span class="sep">&middot;</span>
+                <span class="t" title="{{ s.description.as_deref().unwrap_or("") }}">{{ s.description.as_deref().unwrap_or("") }}</span>
+                {% endif %}
+                <span class="sep">&middot;</span>
+                <span class="t">{{ t.trf("share.views_n", [("n", &s.view_cnt.to_string())]) }}</span>
+            </div>
+        </div>
+        <div class="nf-prow-meta flex items-center gap-3">
+            <span class="w-[112px] text-right" data-ts="{{ s.created_at_ts }}" data-ts-title="{{ s.created_at_ts }}"></span>
+            <span class="w-[112px] text-right{% if s.expires_at_ts.is_some() %} text-err{% endif %}">
+                {% if let Some(ts) = s.expires_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ t.tr("common.never") }}{% endif %}
+            </span>
+        </div>
+        <div class="nf-prow-act">
+            <button type="button" class="js-share-edit-btn btn btn-quiet btn-icon"
+                    data-token="{{ s.token }}"
+                    data-path="{{ s.path }}"
+                    data-expires="{{ s.expires_at }}"
+                    data-description="{{ s.description.as_deref().unwrap_or("") }}"
+                    title="{{ t.tr("share.edit_link") }}" aria-label="{{ t.tr("share.edit_link") }}">
+                {{ icons::icon_pencil("w-3.5 h-3.5") }}
+            </button>
+            <form action="/shares/{{ s.token }}/delete/" method="POST" class="delete-form" data-confirm="share.delete_confirm">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="tab" value="{{ active_tab }}">
+                <button type="submit" class="btn btn-ghost-danger btn-icon"
+                        title="{{ t.tr("share.delete_link") }}" aria-label="{{ t.tr("share.delete_link") }}">
+                    {{ icons::icon_trash("w-3.5 h-3.5") }}
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
 {% endif %}
 </div>
 
-<!-- Upload Links table -->
+<!-- Upload Links -->
 <div id="tab-upload-links" class="tab-content {% if active_tab != "upload-links" %}hidden{% endif %}">
 {% if upload_links.is_empty() %}
-<div class="empty-state">
-    {{ icons::icon_upload("mx-auto h-12 w-12 text-gray-300 dark:text-gray-600") }}
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("uploadlink.no_links") }}</p>
-    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("uploadlink.no_links_hint") }}</p>
-</div>
-{% endif %}
-
-{% if !upload_links.is_empty() %}
-<div class="mt-6">
-    <div class="card overflow-hidden">
-        <table class="table">
-            <thead class="thead">
-                <tr>
-                    <th scope="col" class="th">{{ t.tr("common.library") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.name") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.created") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.expires") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.description") }}</th>
-                    <th scope="col" class="th text-center">{{ t.tr("common.uploads") }}</th>
-                    <th scope="col" class="th text-center">{{ t.tr("common.password") }}</th>
-                    <th scope="col" class="th text-right">{{ t.tr("common.actions") }}</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                {% for u in upload_links %}
-                <tr class="table-row">
-                    <td class="td text-gray-500 dark:text-gray-400 max-w-0">
-                        <span class="truncate block" title="{{ u.repo_name }}">{{ u.repo_name }}</span>
-                    </td>
-                    <td class="td text-gray-900 dark:text-gray-100 max-w-0">
-                        <a href="{{ u.link_url }}" target="_blank" class="hover:text-brand-500 dark:hover:text-brand-400 truncate block" title="{{ u.path }}">
-                            {{ u.name }}
-                        </a>
-                    </td>
-                    <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap"><span data-ts="{{ u.created_at_ts }}"></span></td>
-                    <td class="td {% if u.expires_at != "Never" %}text-red-500{% else %}text-gray-500 dark:text-gray-400{% endif %} whitespace-nowrap">{% if let Some(ts) = u.expires_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}Never{% endif %}</td>
-                    <td class="td text-gray-500 dark:text-gray-400 max-w-0">
-                        {% if u.description.is_some() %}
-                        <span class="truncate block" title="{{ u.description.as_deref().unwrap_or("") }}">{{ u.description.as_deref().unwrap_or("") }}</span>
-                        {% else %}
-                        <span class="text-gray-300 dark:text-gray-600">—</span>
-                        {% endif %}
-                    </td>
-                    <td class="td text-gray-500 dark:text-gray-400 text-center">{{ u.view_cnt }}</td>
-                    <td class="px-4 py-3 text-center">
-                        {% if u.has_password %}
-                        <span class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
-                            {{ icons::icon_lock("h-3.5 w-3.5") }}
-                            {{ t.tr("common.yes") }}
-                        </span>
-                        {% else %}
-                        <span class="text-xs text-gray-400">{{ t.tr("common.no") }}</span>
-                        {% endif %}
-                    </td>
-                    <td class="td text-right">
-                        <div class="flex items-center justify-end gap-1">
-                            <button type="button" class="js-ul-edit-btn btn btn-ghost-brand btn-icon"
-                                    data-token="{{ u.token }}"
-                                    data-path="{{ u.path }}"
-                                    data-expires="{{ u.expires_at }}"
-                                    data-description="{{ u.description.as_deref().unwrap_or("") }}"
-                                    title="{{ t.tr("uploadlink.edit_link") }}">
-                                {{ icons::icon_pencil("h-3.5 w-3.5") }}
-                            </button>
-                            <form action="/shares/upload/{{ u.token }}/delete/" method="POST" class="delete-form inline" data-confirm="uploadlink.delete_confirm">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                <input type="hidden" name="tab" value="{{ active_tab }}">
-                                <button type="submit" class="btn btn-ghost-danger btn-icon" title="{{ t.tr("uploadlink.delete_link") }}">
-                                    {{ icons::icon_trash("h-3.5 w-3.5") }}
-                                </button>
-                            </form>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+<div class="nf-list">
+    <div class="nf-empty">
+        {{ icons::icon_upload("mx-auto h-10 w-10 text-ink-3") }}
+        <h3>{{ t.tr("uploadlink.no_links") }}</h3>
+        <p>{{ t.tr("uploadlink.no_links_hint") }}</p>
     </div>
+</div>
+{% else %}
+<div class="nf-list">
+    {% for u in upload_links %}
+    <div class="nf-prow">
+        <span class="nf-prow-ic">{{ icons::icon_folder("w-[15px] h-[15px]") }}</span>
+        <div class="nf-prow-main">
+            <div class="nf-prow-name">
+                <a href="{{ u.link_url }}" target="_blank" rel="noopener" title="{{ u.path }}">{{ u.name }}</a>
+                {% if u.has_password %}
+                <span class="badge badge-gray shrink-0" title="{{ t.tr("common.password") }}">
+                    {{ icons::icon_lock("w-3 h-3") }}
+                </span>
+                {% endif %}
+            </div>
+            <div class="nf-prow-sub">
+                <span class="t">{{ u.repo_name }}</span>
+                {% if u.description.is_some() %}
+                <span class="sep">&middot;</span>
+                <span class="t" title="{{ u.description.as_deref().unwrap_or("") }}">{{ u.description.as_deref().unwrap_or("") }}</span>
+                {% endif %}
+                <span class="sep">&middot;</span>
+                <span class="t">{{ t.trf("share.views_n", [("n", &u.view_cnt.to_string())]) }}</span>
+            </div>
+        </div>
+        <div class="nf-prow-meta flex items-center gap-3">
+            <span class="w-[112px] text-right" data-ts="{{ u.created_at_ts }}" data-ts-title="{{ u.created_at_ts }}"></span>
+            <span class="w-[112px] text-right{% if u.expires_at_ts.is_some() %} text-err{% endif %}">
+                {% if let Some(ts) = u.expires_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ t.tr("common.never") }}{% endif %}
+            </span>
+        </div>
+        <div class="nf-prow-act">
+            <button type="button" class="js-ul-edit-btn btn btn-quiet btn-icon"
+                    data-token="{{ u.token }}"
+                    data-path="{{ u.path }}"
+                    data-expires="{{ u.expires_at }}"
+                    data-description="{{ u.description.as_deref().unwrap_or("") }}"
+                    title="{{ t.tr("uploadlink.edit_link") }}" aria-label="{{ t.tr("uploadlink.edit_link") }}">
+                {{ icons::icon_pencil("w-3.5 h-3.5") }}
+            </button>
+            <form action="/shares/upload/{{ u.token }}/delete/" method="POST" class="delete-form" data-confirm="uploadlink.delete_confirm">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="tab" value="{{ active_tab }}">
+                <button type="submit" class="btn btn-ghost-danger btn-icon"
+                        title="{{ t.tr("uploadlink.delete_link") }}" aria-label="{{ t.tr("uploadlink.delete_link") }}">
+                    {{ icons::icon_trash("w-3.5 h-3.5") }}
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
 </div>
 {% endif %}
 </div>
 
 <!-- Edit dialog overlay -->
 {% call modal::modal("share-edit-overlay") %}
-        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("share.edit_link_title") }}</h3>
-        <p class="js-edit-share-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
+        <h3 class="text-[14px] font-semibold text-ink mb-1">{{ t.tr("share.edit_link_title") }}</h3>
+        <p class="js-edit-share-path text-[12.5px] text-ink-3 mb-4 break-all"></p>
         <div class="space-y-3">
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("share.token") }} <span class="text-gray-400">{{ t.tr("share.readonly") }}</span></label>
-                <input type="text" id="edit-token-input" readonly
-                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50 dark:bg-surface-700">
+                <label class="form-label mb-1">{{ t.tr("share.token") }} <span class="text-ink-3">{{ t.tr("share.readonly") }}</span></label>
+                <input type="text" id="edit-token-input" readonly class="input">
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.password") }} <span class="text-gray-400">{{ t.tr("share.password_keep") }}</span></label>
+                <label class="form-label mb-1">{{ t.tr("common.password") }} <span class="text-ink-3">{{ t.tr("share.password_keep") }}</span></label>
                 <input type="password" id="edit-password-input" placeholder="{{ t.tr("settings.new_password") }}"
                        class="input">
                 <label class="flex items-center gap-1.5 mt-1.5 cursor-pointer">
-                    <input type="checkbox" id="edit-password-clear" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
-                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ t.tr("share.remove_password") }}</span>
+                    <input type="checkbox" id="edit-password-clear" class="rounded border-line-ctrl">
+                    <span class="text-[12px] text-ink-2">{{ t.tr("share.remove_password") }}</span>
                 </label>
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("share.expires_in") }}</label>
-                <select id="edit-expiry-select"
-                        class="select">
+                <label class="form-label mb-1">{{ t.tr("share.expires_in") }}</label>
+                <select id="edit-expiry-select" class="select">
                     <option value="">{{ t.tr("common.never") }}</option>
                     <option value="1">{{ t.tr("share.expiry_1d") }}</option>
                     <option value="7">{{ t.tr("share.expiry_7d") }}</option>
@@ -237,17 +189,17 @@
                 </select>
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.description") }}</label>
+                <label class="form-label mb-1">{{ t.tr("common.description") }}</label>
                 <input type="text" id="edit-description-input" placeholder="{{ t.tr("share.link_purpose_placeholder") }}"
                        class="input">
             </div>
         </div>
-        <div class="js-edit-share-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
+        <div class="js-edit-share-error hidden mt-3 p-2 rounded-ctl bg-red-50 text-[12px] text-err"></div>
         <div class="mt-4 flex justify-end gap-2">
-            <button type="button" class="js-edit-cancel btn btn-secondary">
+            <button type="button" class="js-edit-cancel btn btn-line">
                 {{ t.tr("common.cancel") }}
             </button>
-            <button type="button" class="js-edit-confirm btn btn-primary">
+            <button type="button" class="js-edit-confirm btn btn-solid">
                 {{ t.tr("common.save") }}
             </button>
         </div>
@@ -255,27 +207,25 @@
 
 <!-- Upload link edit dialog overlay -->
 {% call modal::modal("ul-edit-overlay") %}
-        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("uploadlink.edit_link_title") }}</h3>
-        <p class="js-ul-edit-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
+        <h3 class="text-[14px] font-semibold text-ink mb-1">{{ t.tr("uploadlink.edit_link_title") }}</h3>
+        <p class="js-ul-edit-path text-[12.5px] text-ink-3 mb-4 break-all"></p>
         <div class="space-y-3">
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("share.token") }} <span class="text-gray-400">{{ t.tr("share.readonly") }}</span></label>
-                <input type="text" id="ul-edit-token-input" readonly
-                       class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50 dark:bg-surface-700">
+                <label class="form-label mb-1">{{ t.tr("share.token") }} <span class="text-ink-3">{{ t.tr("share.readonly") }}</span></label>
+                <input type="text" id="ul-edit-token-input" readonly class="input">
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.password") }} <span class="text-gray-400">{{ t.tr("share.password_keep") }}</span></label>
+                <label class="form-label mb-1">{{ t.tr("common.password") }} <span class="text-ink-3">{{ t.tr("share.password_keep") }}</span></label>
                 <input type="password" id="ul-edit-password-input" placeholder="{{ t.tr("settings.new_password") }}"
                        class="input">
                 <label class="flex items-center gap-1.5 mt-1.5 cursor-pointer">
-                    <input type="checkbox" id="ul-edit-password-clear" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
-                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ t.tr("share.remove_password") }}</span>
+                    <input type="checkbox" id="ul-edit-password-clear" class="rounded border-line-ctrl">
+                    <span class="text-[12px] text-ink-2">{{ t.tr("share.remove_password") }}</span>
                 </label>
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("share.expires_in") }}</label>
-                <select id="ul-edit-expiry-select"
-                        class="select">
+                <label class="form-label mb-1">{{ t.tr("share.expires_in") }}</label>
+                <select id="ul-edit-expiry-select" class="select">
                     <option value="">{{ t.tr("common.never") }}</option>
                     <option value="1">{{ t.tr("share.expiry_1d") }}</option>
                     <option value="7">{{ t.tr("share.expiry_7d") }}</option>
@@ -284,17 +234,17 @@
                 </select>
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.description") }}</label>
+                <label class="form-label mb-1">{{ t.tr("common.description") }}</label>
                 <input type="text" id="ul-edit-description-input" placeholder="{{ t.tr("share.link_purpose_placeholder") }}"
                        class="input">
             </div>
         </div>
-        <div class="js-ul-edit-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
+        <div class="js-ul-edit-error hidden mt-3 p-2 rounded-ctl bg-red-50 text-[12px] text-err"></div>
         <div class="mt-4 flex justify-end gap-2">
-            <button type="button" class="js-ul-edit-cancel btn btn-secondary">
+            <button type="button" class="js-ul-edit-cancel btn btn-line">
                 {{ t.tr("common.cancel") }}
             </button>
-            <button type="button" class="js-ul-edit-confirm btn btn-primary">
+            <button type="button" class="js-ul-edit-confirm btn btn-solid">
                 {{ t.tr("common.save") }}
             </button>
         </div>

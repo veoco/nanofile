@@ -8,102 +8,72 @@
 <p class="page-subtitle">{{ t.tr("activity.desc") }}</p>
 
 {% if activities.is_empty() %}
-<div class="empty-state">
-    {{ icons::icon_clock("mx-auto h-12 w-12 text-gray-300 dark:text-gray-600") }}
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("activity.no_activity") }}</p>
-    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("activity.no_activity_hint") }}</p>
+<div class="nf-list mt-5">
+    <div class="nf-empty">
+        {{ icons::icon_clock("mx-auto h-10 w-10 text-ink-3") }}
+        <h3>{{ t.tr("activity.no_activity") }}</h3>
+        <p>{{ t.tr("activity.no_activity_hint") }}</p>
+    </div>
 </div>
 {% else %}
-<div class="mt-6 card overflow-hidden">
-    <table class="table">
-        <thead class="thead">
-            <tr>
-                <th scope="col" class="th">{{ t.tr("common.user") }}</th>
-                <th scope="col" class="th">{{ t.tr("activity.operation") }}</th>
-                <th scope="col" class="th">{{ t.tr("common.file") }}</th>
-                <th scope="col" class="th hidden sm:table-cell">{{ t.tr("common.library") }}</th>
-                <th scope="col" class="th text-right">{{ t.tr("common.time") }}</th>
-            </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-            {% for item in activities %}
-            {% if item.show_day_header %}
-            <tr class="bg-gray-50 dark:bg-surface-700/50">
-                <td colspan="5" class="px-4 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{ item.day_label }}</td>
-            </tr>
+{# One panel, grouped by calendar day. The label already says whether the
+   object was a file, a folder or a library, so the row carries only who, what,
+   where and when. #}
+<div class="nf-list mt-5">
+    {% for item in activities %}
+    {% if item.show_day_header %}
+    <div class="nf-sec">
+        <h2>{{ item.day_label }}</h2>
+        <span class="rule" aria-hidden="true"></span>
+    </div>
+    {% endif %}
+    <div class="nf-prow">
+        <span class="nf-prow-ic rounded-full">
+            {% if !item.author_avatar_url.is_empty() %}
+            <img src="{{ item.author_avatar_url }}" alt="" loading="lazy">
             {% endif %}
-            <tr class="table-row">
-                <td class="td">
-                    <div class="flex items-center gap-2">
-                        {% if !item.author_avatar_url.is_empty() %}
-                        <img src="{{ item.author_avatar_url }}" alt="" class="h-8 w-8 rounded-full">
-                        {% endif %}
-                        <span class="font-medium text-gray-900 dark:text-gray-100">{{ item.author_name }}</span>
-                    </div>
-                </td>
-                <td class="td whitespace-nowrap">
-                    {% if item.op_type == "delete" || item.op_type == "batch_delete" %}
-                    <span class="text-gray-500 dark:text-gray-400">{{ item.operation_label }}</span>
+        </span>
+        <div class="nf-prow-main">
+            <div class="nf-prow-name">
+                {% if item.op_type == "rename" %}
+                    {% if let Some(old_name) = &item.old_name %}
+                    <span class="shrink-0 text-ink-3 line-through">{{ old_name }}</span>
+                    <span class="shrink-0 text-ink-3" aria-hidden="true">&rarr;</span>
+                    <a href="/libraries/{{ item.repo_id }}/files{{ item.path }}">{{ item.name }}</a>
                     {% else %}
-                    <span class="text-brand-500 dark:text-brand-400">{{ item.operation_label }}</span>
+                    <a href="/libraries/{{ item.repo_id }}/files{{ item.path }}">{{ item.name }}</a>
                     {% endif %}
-                </td>
-                <td class="td">
-                    <div class="flex flex-col">
-                        {% if item.op_type == "rename" %}
-                        {% if let Some(old_name) = &item.old_name %}
-                        <div class="flex flex-wrap items-center gap-x-1">
-                            <span class="font-medium text-gray-400 dark:text-gray-500">{{ old_name }}</span>
-                            <span class="text-gray-400 dark:text-gray-500">→</span>
-                            <span class="font-medium text-gray-900 dark:text-gray-100">
-                                {{ item.name }}
-                            </span>
-                        </div>
-                        {% endif %}
-                        {% else if item.detail_items.len() > 0 %}
-                        <div class="flex flex-wrap gap-x-1">
-                            {% for file_name in item.detail_items.iter().take(5) %}
-                            <span class="font-medium text-gray-900 dark:text-gray-100">
-                                {{ file_name }}{% if !loop.last %},{% endif %}
-                            </span>
-                            {% endfor %}
-                            {% if item.detail_items.len() > 5 %}
-                            <span class="text-xs text-gray-400 dark:text-gray-500">+{{ item.detail_items.len() - 5 }} {{ t.tr("activity.more") }}</span>
-                            {% endif %}
-                        </div>
-                        {% else %}
-                        <span class="font-medium text-gray-900 dark:text-gray-100">
-                            {{ item.name }}
-                        </span>
-                        {% endif %}
-                        {% if item.old_repo_name.is_some() %}
-                        <span class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                            {{ t.tr("activity.from") }} {{ item.old_repo_name.as_ref().unwrap() }}
-                        </span>
-                        {% else if item.has_old_path() && item.op_type != "rename" %}
-                        <span class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                            {{ t.tr("activity.from") }} {{ item.old_path_display }}
-                        </span>
-                        {% endif %}
-                        {% if item.obj_type == "dir" %}
-                        <span class="text-xs text-gray-400 dark:text-gray-500">{{ t.tr("activity.directory") }}</span>
-                        {% endif %}
-                    </div>
-                </td>
-                <td class="td text-gray-500 dark:text-gray-400 hidden sm:table-cell">
-                    {% if !item.repo_name.is_empty() %}
-                    <a href="/libraries/{{ item.repo_id }}/files/" class="text-ink underline underline-offset-2 hover:text-ink-2">{{ item.repo_name }}</a>
-                    {% else %}
-                    <span class="text-gray-400 dark:text-gray-500">{{ t.tr("common.deleted_badge") }}</span>
+                {% else if item.detail_items.len() > 0 %}
+                    <span class="base">{% for file_name in item.detail_items.iter().take(4) %}{{ file_name }}{% if !loop.last %}, {% endif %}{% endfor %}</span>
+                    {% if item.detail_items.len() > 4 %}
+                    <span class="badge badge-gray shrink-0">+{{ item.detail_items.len() - 4 }}</span>
                     {% endif %}
-                </td>
-                <td class="td text-right text-gray-500 dark:text-gray-400 whitespace-nowrap" data-ts-title="{{ item.time_ts }}">
-                    {{ item.time_display }}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+                {% else %}
+                    <a href="/libraries/{{ item.repo_id }}/files{{ item.path }}">{{ item.name }}</a>
+                {% endif %}
+            </div>
+            <div class="nf-prow-sub">
+                <span class="t">{% if item.author_name.is_empty() %}{{ t.tr("common.unknown") }}{% else %}{{ item.author_name }}{% endif %}</span>
+                <span class="sep">&middot;</span>
+                <span class="t{% if item.op_type == "delete" || item.op_type == "batch_delete" %} text-err{% endif %}">{{ item.operation_label }}</span>
+                <span class="sep">&middot;</span>
+                {% if !item.repo_name.is_empty() %}
+                <a href="/libraries/{{ item.repo_id }}/files/" class="t">{{ item.repo_name }}</a>
+                {% else %}
+                <span class="badge badge-red shrink-0">{{ t.tr("common.deleted_badge") }}</span>
+                {% endif %}
+                {% if item.old_repo_name.is_some() %}
+                <span class="sep">&middot;</span>
+                <span class="t">{{ t.tr("activity.from") }} {{ item.old_repo_name.as_ref().unwrap() }}</span>
+                {% else if item.has_old_path() && item.op_type != "rename" %}
+                <span class="sep">&middot;</span>
+                <span class="t">{{ t.tr("activity.from") }} {{ item.old_path_display }}</span>
+                {% endif %}
+            </div>
+        </div>
+        <span class="nf-prow-meta" data-ts-title="{{ item.time_ts }}">{{ item.time_display }}</span>
+    </div>
+    {% endfor %}
 </div>
 {% endif %}
 {% endblock %}

@@ -29,7 +29,7 @@ async function deleteAndOpenTrash(
 }
 
 const trashRow = (page: import("@playwright/test").Page, name: string) =>
-  page.locator("main table tbody tr").filter({ hasText: name }).first();
+  page.locator("#tab-files .nf-prow").filter({ hasText: name }).first();
 
 test("deleted files appear in the trash", async ({ page }) => {
   const { name } = await deleteAndOpenTrash(page, "appears");
@@ -83,7 +83,7 @@ async function deleteLibraryAndOpenTab(
 }
 
 const libRow = (page: Page, name: string) =>
-  page.locator("#tab-libraries tbody tr").filter({ hasText: name }).first();
+  page.locator("#tab-libraries .nf-prow").filter({ hasText: name }).first();
 
 test("tab switching shows the deleted libraries", async ({ page }) => {
   const { name } = await deleteLibraryAndOpenTab(page, "tabs");

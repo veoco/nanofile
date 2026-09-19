@@ -72,7 +72,7 @@ test("unstar a file from the starred page", async ({ page }) => {
   await page.goto("/starred/");
   // Prior tests leave starred alpha.txt entries behind, so scope to this test's repo.
   const row = page
-    .locator("main table tbody tr")
+    .locator("main .nf-prow")
     .filter({ has: page.locator(`a[href="/libraries/${repoId}/files/alpha.txt"]`) });
   await expect(row).toBeVisible();
   // Accept the native confirm() the unstar button shows.

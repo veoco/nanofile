@@ -5,166 +5,142 @@
 {% block title %}{{ t.tr("nav.trash") }} | Nanofile{% endblock %}
 
 {% block content %}
-<!-- Header -->
-<div class="sm:flex sm:items-center sm:justify-between">
-    <div>
-        <h1 class="page-title">{{ t.tr("nav.trash") }}</h1>
-        <p class="page-subtitle">{{ t.tr("trash.desc") }}</p>
-    </div>
-</div>
+<h1 class="page-title">{{ t.tr("nav.trash") }}</h1>
+<p class="page-subtitle">{{ t.tr("trash.desc") }}</p>
 
 <!-- Status banners -->
 {% if restored > 0 || failed > 0 %}
-<div class="mt-4 rounded-lg p-4 text-sm {% if failed > 0 %}bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300{% else %}bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300{% endif %}">
-    {% if restored > 0 %}{{ t.trf("trash.restored", [("n", &restored.to_string())]) }}{% endif %}
-    {% if failed > 0 %}{{ t.trf("trash.restore_failed", [("n", &failed.to_string())]) }}{% endif %}
+<div class="nf-banner mt-4 {% if failed > 0 %}is-err{% else %}is-ok{% endif %}" role="status">
+    <p>
+        {% if restored > 0 %}{{ t.trf("trash.restored", [("n", &restored.to_string())]) }}{% endif %}
+        {% if failed > 0 %}{{ t.trf("trash.restore_failed", [("n", &failed.to_string())]) }}{% endif %}
+    </p>
 </div>
 {% endif %}
 {% if cleaned %}
-<div class="mt-4 rounded-lg bg-green-50 dark:bg-green-900/20 p-4 text-sm text-green-700 dark:text-green-300">{{ t.tr("trash.emptied") }}</div>
+<div class="nf-banner is-ok mt-4" role="status"><p>{{ t.tr("trash.emptied") }}</p></div>
 {% endif %}
 {% if lib_restored %}
-<div class="mt-4 rounded-lg bg-green-50 dark:bg-green-900/20 p-4 text-sm text-green-700 dark:text-green-300">{{ t.tr("trash.lib_restored") }}</div>
+<div class="nf-banner is-ok mt-4" role="status"><p>{{ t.tr("trash.lib_restored") }}</p></div>
 {% endif %}
 {% if lib_deleted %}
-<div class="mt-4 rounded-lg bg-green-50 dark:bg-green-900/20 p-4 text-sm text-green-700 dark:text-green-300">{{ t.tr("trash.lib_deleted") }}</div>
+<div class="nf-banner is-ok mt-4" role="status"><p>{{ t.tr("trash.lib_deleted") }}</p></div>
 {% endif %}
 {% if libs_deleted %}
-<div class="mt-4 rounded-lg bg-green-50 dark:bg-green-900/20 p-4 text-sm text-green-700 dark:text-green-300">{{ t.tr("trash.libs_deleted") }}</div>
+<div class="nf-banner is-ok mt-4" role="status"><p>{{ t.tr("trash.libs_deleted") }}</p></div>
 {% endif %}
 
 <!-- Tabs -->
-<div class="mt-4 flex gap-4 border-b border-gray-200 dark:border-gray-700">
-    <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium border-b-2 {% if active_tab == "files" %}tab-btn--active text-brand-600 dark:text-brand-400 border-brand-600 dark:border-brand-400{% else %}text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300{% endif %}"
+<div class="nf-tabs" role="tablist">
+    <button type="button" role="tab" class="nf-tab"
+            aria-controls="tab-files"
+            aria-selected="{% if active_tab == "files" %}true{% else %}false{% endif %}"
+            tabindex="{% if active_tab == "files" %}0{% else %}-1{% endif %}"
             data-tab="files" data-action="tab">
-        {{ t.tr("trash.tab_files") }} ({{ total_count }})
+        {{ t.tr("trash.tab_files") }} <span class="nf-tab-n num">{{ total_count }}</span>
     </button>
-    <button type="button" class="tab-btn pb-2 px-1 text-sm font-medium border-b-2 {% if active_tab == "libraries" %}tab-btn--active text-brand-600 dark:text-brand-400 border-brand-600 dark:border-brand-400{% else %}text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300{% endif %}"
+    <button type="button" role="tab" class="nf-tab"
+            aria-controls="tab-libraries"
+            aria-selected="{% if active_tab == "libraries" %}true{% else %}false{% endif %}"
+            tabindex="{% if active_tab == "libraries" %}0{% else %}-1{% endif %}"
             data-tab="libraries" data-action="tab">
-        {{ t.tr("trash.tab_libraries") }} ({{ deleted_repos.len() }})
+        {{ t.tr("trash.tab_libraries") }} <span class="nf-tab-n num">{{ deleted_repos.len() }}</span>
     </button>
 </div>
 
 <!-- Deleted files -->
 <div id="tab-files" class="tab-content {% if active_tab != "files" %}hidden{% endif %}">
 
-<!-- Search -->
-<div class="mt-4 flex flex-wrap items-center justify-between gap-2">
-    <form action="/trash/" method="GET" class="flex gap-2 max-w-md">
-        <input type="text" name="q" value="{{ query }}"
-               placeholder="{{ t.tr("trash.search_placeholder") }}"
-               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-surface-700 text-gray-900 dark:text-gray-100 focus:border-brand-500 focus:ring-brand-500 text-sm p-2.5">
-        <button type="submit"
-                class="flex-shrink-0 whitespace-nowrap btn btn-primary">
-            {{ t.tr("nav.search") }}
-        </button>
+<div class="nf-filterbar justify-between">
+    <form action="/trash/" method="GET" class="flex items-center gap-2 min-w-0">
+        <label class="nf-search w-full max-w-[300px]">
+            {{ icons::icon_search("w-3.5 h-3.5 flex-shrink-0") }}
+            <input type="text" name="q" value="{{ query }}"
+                   placeholder="{{ t.tr("trash.search_placeholder") }}"
+                   aria-label="{{ t.tr("trash.search_placeholder") }}">
+        </label>
+        <button type="submit" class="btn btn-line btn-sm">{{ t.tr("nav.search") }}</button>
         {% if !query.is_empty() %}
-        <a href="/trash/"
-           class="flex-shrink-0 whitespace-nowrap btn btn-secondary">
-            {{ t.tr("common.clear") }}
-        </a>
+        <a href="/trash/" class="btn btn-quiet btn-sm">{{ t.tr("common.clear") }}</a>
         {% endif %}
     </form>
     {% if !items.is_empty() %}
-    <button type="button" data-action="open-clean-trash"
-            class="flex-shrink-0 whitespace-nowrap btn btn-danger">
+    <button type="button" data-action="open-clean-trash" class="btn btn-danger-outline">
         {{ t.tr("trash.empty_title") }}
     </button>
     {% endif %}
 </div>
 
-<!-- Trash listing -->
 {% if items.is_empty() %}
-<div class="mt-6 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-8 text-center">
-    {% if query.is_empty() %}
-    {{ icons::icon_trash("mx-auto h-12 w-12 text-gray-300 dark:text-gray-600") }}
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("trash.empty") }}</p>
-    {% else %}
-    <p class="text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.trf("search.no_results_for", [("query", &query)]) }}</p>
-    <a href="/trash/" class="mt-2 inline-block text-sm text-ink underline underline-offset-2 hover:text-ink-2">{{ t.tr("trash.clear_search") }}</a>
-    {% endif %}
+<div class="nf-list">
+    <div class="nf-empty">
+        {% if query.is_empty() %}
+        {{ icons::icon_trash("mx-auto h-10 w-10 text-ink-3") }}
+        <h3>{{ t.tr("trash.empty") }}</h3>
+        {% else %}
+        <h3>{{ t.trf("search.no_results_for", [("query", &query)]) }}</h3>
+        <p><a href="/trash/">{{ t.tr("trash.clear_search") }}</a></p>
+        {% endif %}
+    </div>
 </div>
 {% else %}
-<div class="mt-4 card overflow-hidden">
-    <table class="table">
-        <thead class="thead">
-            <tr>
-                <th scope="col" class="th">{{ t.tr("common.name") }}</th>
-                <th scope="col" class="th">{{ t.tr("trash.original_path") }}</th>
-                <th scope="col" class="th hidden md:table-cell">{{ t.tr("common.library") }}</th>
-                <th scope="col" class="th text-right hidden sm:table-cell">{{ t.tr("common.deleted") }}</th>
-                <th scope="col" class="th text-right">{{ t.tr("common.size") }}</th>
-                <th scope="col" class="th text-right">{{ t.tr("common.actions") }}</th>
-            </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-            {% for item in items %}
-            <tr class="table-row">
-                <td class="td">
-                    <div class="flex items-center gap-1">
-                        {% if item.is_dir %}
-                        {{ icons::icon_folder("mr-1 h-5 w-5 flex-shrink-0 text-amber-400") }}
-                        {% else %}
-                        <svg class="mr-1 h-5 w-5 flex-shrink-0 text-gray-400 dark:text-gray-500" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-                        </svg>
-                        {% endif %}
-                        <span class="font-medium text-gray-900 dark:text-gray-100">{{ item.obj_name }}</span>
-                    </div>
-                </td>
-                <td class="td text-gray-500 dark:text-gray-400 truncate max-w-xs">
-                    {{ item.parent_dir }}
-                </td>
-                <td class="td text-gray-500 dark:text-gray-400 hidden md:table-cell">
-                    {% if !item.repo_name.is_empty() %}
-                    <a href="/libraries/{{ item.repo_id }}/files/" class="text-ink underline underline-offset-2 hover:text-ink-2">{{ item.repo_name }}</a>
-                    {% else %}
-                    <span class="text-gray-400 dark:text-gray-500">{{ t.tr("common.deleted_badge") }}</span>
-                    {% endif %}
-                </td>
-                <td class="td text-gray-500 dark:text-gray-400 text-right hidden sm:table-cell whitespace-nowrap">
-                    <span data-ts="{{ item.deleted_time_ts }}"></span>
-                </td>
-                <td class="td text-gray-500 dark:text-gray-400 text-right whitespace-nowrap">
-                    {% if !item.is_dir %}{{ item.size_display }}{% else %}&mdash;{% endif %}
-                </td>
-                <td class="td text-right whitespace-nowrap">
-                    <form action="/trash/restore/" method="POST" class="inline js-restore-form"
-                          data-obj-name="{{ item.obj_name }}"
-                          data-repo-name="{{ item.repo_name }}">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <input type="hidden" name="repo_id" value="{{ item.repo_id }}">
-                        <input type="hidden" name="commit_id" value="{{ item.commit_id }}">
-                        <input type="hidden" name="path" value="{{ item.parent_dir }}/{{ item.obj_name }}">
-                        <button type="submit"
-                                class="btn btn-secondary btn-sm">
-                            <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                            </svg>
-                            {{ t.tr("trash.restore") }}
-                        </button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+<div class="nf-list">
+    {% for item in items %}
+    <div class="nf-prow">
+        <span class="nf-prow-ic">
+            {% if item.is_dir %}
+            {{ icons::icon_folder("w-[15px] h-[15px]") }}
+            {% else %}
+            {{ icons::icon_file("w-[15px] h-[15px]") }}
+            {% endif %}
+        </span>
+        <div class="nf-prow-main">
+            <div class="nf-prow-name"><span class="base">{{ item.obj_name }}</span></div>
+            <div class="nf-prow-sub">
+                {# `/` adds nothing next to the library name, which follows it. #}
+                {% if item.parent_dir != "/" && !item.parent_dir.is_empty() %}
+                <span class="t">{{ item.parent_dir }}</span>
+                <span class="sep">&middot;</span>
+                {% endif %}
+                {% if !item.repo_name.is_empty() %}
+                <a href="/libraries/{{ item.repo_id }}/files/" class="t">{{ item.repo_name }}</a>
+                {% else %}
+                <span class="badge badge-red flex-shrink-0">{{ t.tr("common.deleted_badge") }}</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="nf-prow-meta flex items-center gap-3">
+            <span class="w-[112px] text-right" data-ts="{{ item.deleted_time_ts }}" data-ts-title="{{ item.deleted_time_ts }}"></span>
+            <span class="w-[64px] text-right">{% if !item.is_dir %}{{ item.size_display }}{% else %}&mdash;{% endif %}</span>
+        </div>
+        <div class="nf-prow-act">
+            <form action="/trash/restore/" method="POST" class="js-restore-form"
+                  data-obj-name="{{ item.obj_name }}"
+                  data-repo-name="{{ item.repo_name }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="repo_id" value="{{ item.repo_id }}">
+                <input type="hidden" name="commit_id" value="{{ item.commit_id }}">
+                <input type="hidden" name="path" value="{{ item.parent_dir }}/{{ item.obj_name }}">
+                <button type="submit" class="btn btn-line btn-sm">{{ t.tr("trash.restore") }}</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
 </div>
 
-<!-- Pagination -->
 {% if total_pages > 1 %}
-<div class="mt-4 flex items-center justify-between">
-    <p class="text-sm text-gray-500 dark:text-gray-400">{{ t.trf("common.page_of", [("page", &current_page.to_string()), ("total", &total_pages.to_string())]) }}</p>
+<div class="nf-pager">
+    <span class="m">{{ t.trf("common.page_of", [("page", &current_page.to_string()), ("total", &total_pages.to_string())]) }}</span>
     <div class="flex gap-2">
         {% if current_page > 1 %}
         <a href="/trash/?page={{ current_page - 1 }}&amp;per_page={{ per_page }}{% if !query.is_empty() %}&amp;q={{ query }}{% endif %}"
-           class="btn btn-secondary">
+           class="btn btn-line btn-sm">
             {{ t.tr("common.previous") }}
         </a>
         {% endif %}
         {% if current_page < total_pages %}
         <a href="/trash/?page={{ current_page + 1 }}&amp;per_page={{ per_page }}{% if !query.is_empty() %}&amp;q={{ query }}{% endif %}"
-           class="btn btn-secondary">
+           class="btn btn-line btn-sm">
             {{ t.tr("common.next") }}
         </a>
         {% endif %}
@@ -177,80 +153,61 @@
 <!-- Deleted libraries -->
 <div id="tab-libraries" class="tab-content {% if active_tab != "libraries" %}hidden{% endif %}">
 {% if deleted_repos.is_empty() %}
-<div class="mt-6 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 p-8 text-center">
-    {{ icons::icon_trash("mx-auto h-12 w-12 text-gray-300 dark:text-gray-600") }}
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("trash.lib_empty") }}</p>
-    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("trash.lib_empty_hint") }}</p>
+<div class="nf-list mt-1">
+    <div class="nf-empty">
+        {{ icons::icon_trash("mx-auto h-10 w-10 text-ink-3") }}
+        <h3>{{ t.tr("trash.lib_empty") }}</h3>
+        <p>{{ t.tr("trash.lib_empty_hint") }}</p>
+    </div>
 </div>
 {% else %}
-<div class="mt-4 flex justify-end">
-    <button type="button" data-action="delete-all-libs"
-            class="whitespace-nowrap btn btn-danger">
+<div class="nf-filterbar justify-between">
+    <p class="text-[12px] text-ink-3 max-w-[560px]">{{ t.tr("trash.lib_delete_hint") }}</p>
+    <button type="button" data-action="delete-all-libs" class="btn btn-danger-outline">
         {{ t.tr("trash.lib_delete_all") }}
     </button>
 </div>
-<div class="mt-4 card overflow-hidden">
-    <table class="table">
-        <thead class="thead">
-            <tr>
-                <th scope="col" class="th">{{ t.tr("common.library") }}</th>
-                <th scope="col" class="th text-right hidden sm:table-cell">{{ t.tr("common.deleted") }}</th>
-                <th scope="col" class="th text-right">{{ t.tr("common.size") }}</th>
-                <th scope="col" class="th text-right">{{ t.tr("common.actions") }}</th>
-            </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-            {% for repo in deleted_repos %}
-            <tr class="table-row" data-repo-id="{{ repo.repo_id }}">
-                <td class="td">
-                    <div class="flex items-center gap-1">
-                        {{ icons::icon_folder("mr-1 h-5 w-5 flex-shrink-0 text-amber-400") }}
-                        <span class="font-medium text-gray-900 dark:text-gray-100">{{ repo.repo_name }}</span>
-                    </div>
-                </td>
-                <td class="td text-gray-500 dark:text-gray-400 text-right hidden sm:table-cell whitespace-nowrap">
-                    <span data-ts="{{ repo.deleted_time_ts }}"></span>
-                </td>
-                <td class="td text-gray-500 dark:text-gray-400 text-right whitespace-nowrap">
-                    {{ repo.size_display }}
-                </td>
-                <td class="td text-right whitespace-nowrap">
-                    <button type="button"
-                            class="btn btn-secondary btn-sm"
-                            data-action="restore-lib"
-                            data-repo-id="{{ repo.repo_id }}"
-                            data-repo-name="{{ repo.repo_name }}">
-                        <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                        </svg>
-                        {{ t.tr("trash.restore") }}
-                    </button>
-                    <button type="button"
-                            class="ml-1 btn btn-danger btn-sm"
-                            data-action="delete-lib"
-                            data-repo-id="{{ repo.repo_id }}"
-                            data-repo-name="{{ repo.repo_name }}">
-                        {{ icons::icon_trash("mr-1 h-3.5 w-3.5") }}
-                        {{ t.tr("trash.lib_delete") }}
-                    </button>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+<div class="nf-list">
+    {% for repo in deleted_repos %}
+    <div class="nf-prow" data-repo-id="{{ repo.repo_id }}">
+        <span class="nf-prow-ic">{{ icons::icon_folder("w-[15px] h-[15px]") }}</span>
+        <div class="nf-prow-main">
+            <div class="nf-prow-name"><span class="base">{{ repo.repo_name }}</span></div>
+        </div>
+        <div class="nf-prow-meta flex items-center gap-3">
+            <span class="w-[112px] text-right" data-ts="{{ repo.deleted_time_ts }}" data-ts-title="{{ repo.deleted_time_ts }}"></span>
+            <span class="w-[64px] text-right">{{ repo.size_display }}</span>
+        </div>
+        <div class="nf-prow-act">
+            <button type="button" class="btn btn-line btn-sm"
+                    data-action="restore-lib"
+                    data-repo-id="{{ repo.repo_id }}"
+                    data-repo-name="{{ repo.repo_name }}">
+                {{ icons::icon_refresh("w-3.5 h-3.5") }}
+                {{ t.tr("trash.restore") }}
+            </button>
+            <button type="button" class="btn btn-ghost-danger btn-sm"
+                    data-action="delete-lib"
+                    data-repo-id="{{ repo.repo_id }}"
+                    data-repo-name="{{ repo.repo_name }}">
+                {{ icons::icon_trash("w-3.5 h-3.5") }}
+                {{ t.tr("trash.lib_delete") }}
+            </button>
+        </div>
+    </div>
+    {% endfor %}
 </div>
-<p class="mt-2 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("trash.lib_delete_hint") }}</p>
 {% endif %}
 </div>
 
 <!-- Clean Trash Confirmation Dialog -->
 {% call modal::modal("clean-dialog", labelledby="clean-dialog-title", backdrop_close="hideCleanDialog") %}
-        <h3 id="clean-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("trash.empty_title") }}</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
+        <h3 id="clean-dialog-title" class="text-[14px] font-semibold text-ink mb-1">{{ t.tr("trash.empty_title") }}</h3>
+        <p class="text-[12.5px] text-ink-2 mb-4">
             {{ t.tr("trash.empty_confirm_desc") }}
         </p>
         <div class="mb-4">
-            <label for="clean-repo" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.library") }}</label>
+            <label for="clean-repo" class="form-label mb-1">{{ t.tr("common.library") }}</label>
             <select id="clean-repo" class="select">
                 {% for item in items %}
                 <option value="{{ item.repo_id }}">{{ item.repo_name }}</option>
@@ -258,12 +215,10 @@
             </select>
         </div>
         <div class="flex justify-end gap-2">
-            <button type="button" data-action="close-clean"
-                    class="btn btn-secondary">
+            <button type="button" data-action="close-clean" class="btn btn-line">
                 {{ t.tr("common.cancel") }}
             </button>
-            <button data-action="clean-trash"
-                    class="btn btn-danger">
+            <button data-action="clean-trash" class="btn btn-danger">
                 {{ t.tr("trash.delete_all") }}
             </button>
         </div>
