@@ -1,9 +1,14 @@
 {% extends "base.html" %}
 {% import "settings/includes/nav.html" as settings_nav %}
 
-{# Every settings page is this shell: a title block, the shared navigation, and
-   the page's own content. Pages fill `settings_title`, `settings_subtitle` and
-   `settings_content` instead of repeating the layout.
+{# Every settings page is this shell: a title block, the shared section links,
+   and the page's own content. Pages fill `settings_title`, `settings_subtitle`
+   and `settings_content` instead of repeating the layout.
+
+   The sections are a horizontal row under the title, not a second sidebar. The
+   app already has a permanent left rail (the library tree) on wide screens, and
+   the admin area already answers "one area, several sibling pages" with this
+   same row — a second vertical nav would be a rail inside a rail.
 
    Alerts are deliberately *not* rendered here: the pages do not agree on the
    fields that carry them (some have `error`/`success`, some a redirect flash),
@@ -14,17 +19,12 @@
     <h1 class="page-title">{% block settings_title %}{{ t.tr("settings.title") }}{% endblock %}</h1>
     <p class="page-subtitle">{% block settings_subtitle %}{{ t.tr("settings.subtitle") }}{% endblock %}</p>
 
-    {# A page-wide strip above the sidebar, used by the credentials page for the
-       one thing the owner should act on. Empty by default. #}
+    {% call settings_nav::nav(nav, t, active_page) %}{% endcall %}
+
+    {# A page-wide strip between the sections and the content, used by the
+       credentials page for the one thing the owner should act on. #}
     {% block settings_notice %}{% endblock %}
 
-    <div class="mt-6 flex flex-col gap-6 lg:flex-row lg:gap-8">
-        <div class="flex-shrink-0 lg:w-56">
-            {% call settings_nav::nav(nav, t, active_page) %}{% endcall %}
-        </div>
-        <div class="min-w-0 flex-1">
-            {% block settings_content %}{% endblock %}
-        </div>
-    </div>
+    {% block settings_content %}{% endblock %}
 </div>
 {% endblock %}

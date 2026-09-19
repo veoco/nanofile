@@ -99,9 +99,9 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
     await page.locator('form[action="/settings/two-factor/disable/"] #password').fill(ADMIN_PASSWORD);
     await page.locator('form[action="/settings/two-factor/disable/"] button[type="submit"]').click();
     await page.waitForURL(/\/settings\/$/);
-    // The overview's security card carries the status; the sidebar shows the
-    // same badge, so the assertion has to address the card.
-    const securityCard = page.locator("main .card").filter({ hasText: "Security" }).first();
+    // The overview's security row carries the status; the sidebar shows the
+    // same badge, so the assertion has to address the row.
+    const securityCard = page.locator('main [data-section="security"]').first();
     await expect(securityCard.getByText("Not configured")).toBeVisible();
   } finally {
     await ctx.close();

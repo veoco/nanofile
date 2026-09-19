@@ -38,7 +38,7 @@ test("create a key, see it once, then revoke it", async ({ page }) => {
   expect(secret).toHaveLength(40);
 
   // And the key is listed.
-  const card = page.locator(".card").filter({ hasText: name });
+  const card = page.locator(".nf-xrow").filter({ hasText: name });
   await expect(card).toBeVisible();
   await expect(card).toContainText("file.write");
 
@@ -46,16 +46,16 @@ test("create a key, see it once, then revoke it", async ({ page }) => {
   // (the form redirects, so a refresh re-reads the list).
   await page.reload();
   await expect(page.locator("#new-key-value")).toHaveCount(0);
-  await expect(page.locator(".card").filter({ hasText: name })).toHaveCount(1);
+  await expect(page.locator(".nf-xrow").filter({ hasText: name })).toHaveCount(1);
 
   // Revoke (native confirm), and it disappears.
   page.once("dialog", (dialog) => dialog.accept());
   await page
-    .locator(".card")
+    .locator(".nf-xrow")
     .filter({ hasText: name })
     .locator('form[action$="/revoke/"] button[type="submit"]')
     .click();
-  await expect(page.locator(".card").filter({ hasText: name })).toHaveCount(0);
+  await expect(page.locator(".nf-xrow").filter({ hasText: name })).toHaveCount(0);
 });
 
 test("a preset ticks the matching capabilities", async ({ page }) => {

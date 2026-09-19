@@ -1,46 +1,39 @@
-<!-- Settings navigation.
-     One macro for every settings page, so the pages cannot drift apart. The
-     list is vertical inside the shell's narrow column on wide screens and a
-     horizontally scrollable tab strip on narrow ones. -->
+<!-- Settings section links.
+     One macro for every settings page, so the pages cannot drift apart. This is
+     the admin area's cross-page section bar: the same `.nf-nav` / `.nf-tab`
+     items, `aria-current` for the page you are on, and live counts as dim
+     numbers rather than badges (a count is a number, not a state). -->
 {% macro nav(nav, t, active_page) %}
-<nav role="navigation" aria-label="{{ t.tr("settings.nav_label") }}"
-     class="flex gap-1 overflow-x-auto border-b border-gray-200 dark:border-gray-700 pb-1
-            lg:flex-col lg:gap-0.5 lg:overflow-visible lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
-    <a href="/settings/"
-       class="settings-nav-item {% if nav.active == "settings" %}nav-item-active{% else %}nav-item-inactive{% endif %}">
-        <span class="whitespace-nowrap">{{ t.tr("settings.nav_overview") }}</span>
+<nav class="nf-nav" aria-label="{{ t.tr("settings.nav_label") }}">
+    <a href="/settings/" class="nf-tab"
+       {% if nav.active == "settings" %}aria-current="page"{% endif %}>
+        {{ t.tr("settings.nav_overview") }}
     </a>
-    <a href="/settings/profile/"
-       class="settings-nav-item {% if nav.active == "settings.profile" %}nav-item-active{% else %}nav-item-inactive{% endif %}">
-        <span class="whitespace-nowrap">{{ t.tr("settings.nav_profile") }}</span>
+    <a href="/settings/profile/" class="nf-tab"
+       {% if nav.active == "settings.profile" %}aria-current="page"{% endif %}>
+        {{ t.tr("settings.nav_profile") }}
     </a>
-    <a href="/settings/security/"
-       class="settings-nav-item {% if nav.active == "settings.security" %}nav-item-active{% else %}nav-item-inactive{% endif %}">
-        <span class="whitespace-nowrap flex items-center gap-2">
-            {{ t.tr("settings.nav_security") }}
-            {% if !nav.two_fa_enabled %}
-            <span class="badge badge-gray">{{ t.tr("settings.status_not_configured") }}</span>
-            {% endif %}
-        </span>
+    <a href="/settings/security/" class="nf-tab"
+       {% if nav.active == "settings.security" %}aria-current="page"{% endif %}>
+        {{ t.tr("settings.nav_security") }}
+        {% if !nav.two_fa_enabled %}
+        <span class="nf-tab-n">{{ t.tr("settings.status_not_configured") }}</span>
+        {% endif %}
     </a>
-    <a href="/settings/credentials/"
-       class="settings-nav-item {% if nav.active == "settings.credentials" %}nav-item-active{% else %}nav-item-inactive{% endif %}">
-        <span class="whitespace-nowrap flex items-center gap-2">
-            {{ t.tr("settings.nav_credentials") }}
-            <span class="badge badge-gray">{{ nav.credential_count }}</span>
-        </span>
+    <a href="/settings/credentials/" class="nf-tab"
+       {% if nav.active == "settings.credentials" %}aria-current="page"{% endif %}>
+        {{ t.tr("settings.nav_credentials") }}
+        <span class="nf-tab-n num">{{ nav.credential_count }}</span>
     </a>
-    <a href="/settings/api-keys/"
-       class="settings-nav-item {% if nav.active == "settings.api_keys" %}nav-item-active{% else %}nav-item-inactive{% endif %}">
-        <span class="whitespace-nowrap flex items-center gap-2">
-            {{ t.tr("settings.nav_api_keys") }}
-            <span class="badge badge-gray">{{ nav.api_key_count }}</span>
-        </span>
+    <a href="/settings/api-keys/" class="nf-tab"
+       {% if nav.active == "settings.api_keys" %}aria-current="page"{% endif %}>
+        {{ t.tr("settings.nav_api_keys") }}
+        <span class="nf-tab-n num">{{ nav.api_key_count }}</span>
     </a>
     {% if nav.is_admin %}
-    <a href="/settings/invitations/"
-       class="settings-nav-item {% if nav.active == "settings.invitations" %}nav-item-active{% else %}nav-item-inactive{% endif %}">
-        <span class="whitespace-nowrap">{{ t.tr("settings.nav_invitations") }}</span>
+    <a href="/settings/invitations/" class="nf-tab"
+       {% if nav.active == "settings.invitations" %}aria-current="page"{% endif %}>
+        {{ t.tr("settings.nav_invitations") }}
     </a>
     {% endif %}
 </nav>

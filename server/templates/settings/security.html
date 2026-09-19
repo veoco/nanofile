@@ -7,10 +7,14 @@
 
 {% block settings_content %}
 {% if let Some(flash) = flash %}
-<div role="alert"
-     class="mt-1 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 p-4">
-    <p class="text-sm font-semibold text-green-800 dark:text-green-300">{{ t.tr(flash) }}</p>
-    <p class="mt-1 text-xs text-green-700 dark:text-green-400">{{ t.tr("settings.password_changed_desc") }}</p>
+<div role="alert" class="nf-banner is-ok mb-5">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <div>
+        <p class="font-medium">{{ t.tr(flash) }}</p>
+        <p class="mt-0.5 text-ink-3">{{ t.tr("settings.password_changed_desc") }}</p>
+    </div>
 </div>
 {% endif %}
 
@@ -18,46 +22,39 @@
 {% include "includes/alert_error.html" %}
 {% endif %}
 
-<div class="space-y-6">
+<div class="nf-list">
 
-    {# ── Two-factor ──────────────────────────────────────────────────── #}
-    <div class="card">
-        <div class="card-body">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-                <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.two_factor") }}</h2>
-                {% if two_fa_enabled %}
-                <span class="badge badge-green">{{ t.tr("settings.status_enabled") }}</span>
-                {% else %}
-                <span class="badge badge-gray">{{ t.tr("settings.status_not_configured") }}</span>
-                {% endif %}
-            </div>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("settings.two_factor_desc") }}</p>
-            <a href="/settings/two-factor/" class="btn {% if two_fa_enabled %}btn-secondary{% else %}btn-primary{% endif %} btn-sm mt-4 self-start">
+    <section class="nf-form">
+        <div class="flex flex-wrap items-center gap-2">
+            <h2>{{ t.tr("settings.two_factor") }}</h2>
+            {% if two_fa_enabled %}
+            <span class="badge badge-green">{{ t.tr("settings.status_enabled") }}</span>
+            {% else %}
+            <span class="badge badge-gray">{{ t.tr("settings.status_not_configured") }}</span>
+            {% endif %}
+        </div>
+        <p class="desc">{{ t.tr("settings.two_factor_desc") }}</p>
+        <div class="body">
+            <a href="/settings/two-factor/"
+               class="btn {% if two_fa_enabled %}btn-line{% else %}btn-solid{% endif %}">
                 {{ t.tr("settings.manage_two_factor") }}
             </a>
         </div>
-    </div>
+    </section>
 
-    {# ── Password ────────────────────────────────────────────────────── #}
-    <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.change_password") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("settings.change_password_desc") }}</p>
-            <form action="/settings/password/" method="POST" class="mt-4 space-y-4">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                <div>
-                    <label for="old_password" class="form-label">{{ t.tr("settings.current_password") }}</label>
-                    <input type="password" name="old_password" id="old_password" required autocomplete="current-password"
-                           class="mt-1 input">
-                </div>
-                <div>
-                    <label for="new_password" class="form-label">{{ t.tr("settings.new_password") }}</label>
-                    <input type="password" name="new_password" id="new_password" required autocomplete="new-password"
-                           class="mt-1 input">
-                </div>
-                <button type="submit" class="btn btn-primary">{{ t.tr("settings.change_password") }}</button>
-            </form>
-        </div>
-    </div>
+    <section class="nf-form">
+        <h2>{{ t.tr("settings.change_password") }}</h2>
+        <p class="desc">{{ t.tr("settings.change_password_desc") }}</p>
+        <form action="/settings/password/" method="POST" class="body max-w-sm">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+            <label for="old_password" class="form-label">{{ t.tr("settings.current_password") }}</label>
+            <input type="password" name="old_password" id="old_password" required autocomplete="current-password"
+                   class="mt-1 input">
+            <label for="new_password" class="form-label mt-3">{{ t.tr("settings.new_password") }}</label>
+            <input type="password" name="new_password" id="new_password" required autocomplete="new-password"
+                   class="mt-1 input">
+            <button type="submit" class="btn btn-solid mt-4">{{ t.tr("settings.change_password") }}</button>
+        </form>
+    </section>
 </div>
 {% endblock %}

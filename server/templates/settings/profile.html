@@ -14,62 +14,57 @@
 {% include "includes/alert_success.html" %}
 {% endif %}
 
-<div class="space-y-6">
+{# One panel, three sections: the fields are short enough that separate cards
+   only added scrolling between them. #}
+<div class="nf-list">
 
-    {# ── Avatar ──────────────────────────────────────────────────────── #}
-    <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.avatar") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("settings.avatar_desc") }}</p>
-            <div class="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
-                <img src="/avatars/user/{{ user_email }}/resized/96/" alt=""
-                     class="h-24 w-24 flex-shrink-0 rounded-full object-cover bg-brand-500 ring-2 ring-gray-200 dark:ring-gray-600">
-                <form action="/settings/profile/avatar/" method="POST" enctype="multipart/form-data"
-                      class="flex flex-col gap-y-3">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                    <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif" required
-                           class="block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-4 file:rounded-lg file:border-0 file:bg-brand-500 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-brand-600 file:transition-colors">
-                    <button type="submit" class="self-start btn btn-primary">
-                        {{ t.tr("common.upload") }}
-                    </button>
-                </form>
+    <section class="nf-form">
+        <h2 id="avatar-heading">{{ t.tr("settings.avatar") }}</h2>
+        <p class="desc">{{ t.tr("settings.avatar_desc") }}</p>
+        <form action="/settings/profile/avatar/" method="POST" enctype="multipart/form-data"
+              class="body flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+            <img src="/avatars/user/{{ user_email }}/resized/96/" alt=""
+                 class="h-16 w-16 flex-shrink-0 rounded-full object-cover bg-raised ring-1 ring-line">
+            <div class="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center">
+                <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif" required
+                       aria-labelledby="avatar-heading"
+                       class="nf-file sm:max-w-sm">
+                <button type="submit" class="btn btn-solid flex-shrink-0 self-start">
+                    {{ t.tr("common.upload") }}
+                </button>
             </div>
-        </div>
-    </div>
+        </form>
+    </section>
 
-    {# ── Display name ────────────────────────────────────────────────── #}
-    <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.display_name") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("settings.display_name_desc") }}</p>
-            <form action="/settings/profile/display-name/" method="POST" class="mt-4 space-y-4">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                <div>
-                    <label for="display_name" class="form-label">{{ t.tr("settings.display_name") }}</label>
-                    <input type="text" name="display_name" id="display_name"
-                           value="{{ user_display_name }}"
-                           maxlength="255"
-                           class="mt-1 input">
-                </div>
-                <button type="submit" class="btn btn-primary">{{ t.tr("common.save") }}</button>
-            </form>
-        </div>
-    </div>
+    {# The section heading is the field's label: printing it twice (heading plus
+       a `<label>`) would only repeat the same words in the same panel. #}
+    <section class="nf-form">
+        <h2 id="display-name-heading">{{ t.tr("settings.display_name") }}</h2>
+        <p class="desc">{{ t.tr("settings.display_name_desc") }}</p>
+        <form action="/settings/profile/display-name/" method="POST" class="body">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+            <input type="text" name="display_name" id="display_name"
+                   value="{{ user_display_name }}"
+                   maxlength="255"
+                   aria-labelledby="display-name-heading"
+                   class="input">
+            <button type="submit" class="btn btn-solid mt-3">{{ t.tr("common.save") }}</button>
+        </form>
+    </section>
 
-    {# ── Interface language ──────────────────────────────────────────── #}
-    <div class="card">
-        <div class="card-body">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("settings.language") }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("settings.language_desc") }}</p>
-            <form action="/settings/profile/language/" method="POST" class="mt-4 space-y-4">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                <select name="language" id="language" class="select">
-                    <option value="en" {% if user_language == "en" %}selected{% endif %}>English</option>
-                    <option value="zh" {% if user_language == "zh" %}selected{% endif %}>简体中文</option>
-                </select>
-                <button type="submit" class="btn btn-primary">{{ t.tr("common.save") }}</button>
-            </form>
-        </div>
-    </div>
+    <section class="nf-form">
+        <h2 id="language-heading">{{ t.tr("settings.language") }}</h2>
+        <p class="desc">{{ t.tr("settings.language_desc") }}</p>
+        <form action="/settings/profile/language/" method="POST" class="body">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+            <select name="language" id="language" aria-labelledby="language-heading"
+                    class="select max-w-xs">
+                <option value="en" {% if user_language == "en" %}selected{% endif %}>English</option>
+                <option value="zh" {% if user_language == "zh" %}selected{% endif %}>简体中文</option>
+            </select>
+            <button type="submit" class="btn btn-solid mt-3">{{ t.tr("common.save") }}</button>
+        </form>
+    </section>
 </div>
 {% endblock %}

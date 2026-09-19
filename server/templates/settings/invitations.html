@@ -1,4 +1,5 @@
 {% extends "settings_shell.html" %}
+{% import "includes/icons.html" as icons %}
 
 {% block title %}{{ t.tr("invite.title") }} | Nanofile{% endblock %}
 
@@ -14,84 +15,77 @@
 {% include "includes/alert_success.html" %}
 {% endif %}
 
-<div class="mt-6 max-w-2xl">
-    <form action="/settings/invitations/" method="POST" class="mb-6">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="flex items-end gap-3">
-            <div class="flex-1">
-                <label for="email" class="form-label mb-1">
-                    {{ t.tr("invite.bound_email") }} <span class="text-gray-400 dark:text-gray-500 font-normal">{{ t.tr("invite.optional") }}</span>
+<form action="/settings/invitations/" method="POST" class="nf-list">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <section class="nf-form">
+        <h2>{{ t.tr("invite.generate_code") }}</h2>
+        <p class="desc">{{ t.tr("invite.bound_email_hint") }}</p>
+        <div class="body flex flex-wrap items-end gap-3">
+            <div class="min-w-[16rem] flex-1">
+                <label for="email" class="form-label">
+                    {{ t.tr("invite.bound_email") }} <span class="font-normal text-ink-3">{{ t.tr("invite.optional") }}</span>
                 </label>
                 <input id="email"
                        name="email"
                        type="email"
                        placeholder="{{ t.tr("invite.email_placeholder") }}"
-                       class="input">
+                       class="mt-1 input">
             </div>
-            <button type="submit"
-                    class="btn btn-primary whitespace-nowrap">
-                + {{ t.tr("invite.generate_code") }}
+            <button type="submit" class="btn btn-solid flex-shrink-0">
+                {{ t.tr("invite.generate_code") }}
             </button>
         </div>
-        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            {{ t.tr("invite.bound_email_hint") }}
-        </p>
-    </form>
+    </section>
+</form>
 
+<div class="nf-list mt-4">
     {% if invitations.is_empty() %}
-    <div class="card">
-        <div class="card-body">
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-                {{ t.tr("invite.no_codes") }}
-                {{ t.tr("invite.no_codes_hint") }}
-            </p>
-        </div>
+    <div class="nf-empty">
+        {{ icons::icon_inbox("mx-auto h-10 w-10 text-ink-3") }}
+        <p>{{ t.tr("invite.no_codes") }} {{ t.tr("invite.no_codes_hint") }}</p>
     </div>
-    {% endif %}
-
+    {% else %}
     {% for inv in invitations %}
-    <div class="card {% if !loop.first %}mt-4{% endif %}">
-        <div class="card-body">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-sm font-mono font-semibold inline-block {% if inv.used_by_email.is_some() %}text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-gray-100{% endif %}"><span class="select-all">{{ inv.code }}</span></p>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        {{ t.tr("invite.created") }}: <span class="select-all inline-block" data-ts="{{ inv.created_at_ts }}"></span>
-                    </p>
-                    {% if let Some(email) = inv.bound_email %}
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        {{ t.tr("invite.bound_to") }}: <span class="font-mono">{{- email -}}</span>
-                    </p>
-                    {% else %}
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        {{ t.tr("invite.unrestricted") }}
-                    </p>
-                    {% endif %}
-                    {% if let Some(email) = inv.used_by_email %}
-                    <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                        {{ t.tr("invite.used_by") }}: {{ email }}
-                        {% if let Some(at) = inv.used_at %}
-                        {{ t.tr("invite.at") }} <span class="select-all inline-block">{{ at }}</span>
-                        {% endif %}
-                    </p>
-                    {% else %}
-                    <p class="text-xs text-green-600 dark:text-green-400 mt-1">
-                        {{ t.tr("invite.unused") }}
-                    </p>
-                    {% endif %}
-                </div>
+    <div class="nf-prow{% if inv.used_by_email.is_some() %} is-dead{% endif %}">
+        <span class="nf-prow-ic">{{ icons::icon_inbox("w-3.5 h-3.5") }}</span>
+        <div class="nf-prow-main">
+            <div class="nf-prow-name">
+                {# The code is the first copyable thing in the row: the invitation
+                   test reads it out of the row's first `.select-all`. #}
+                <code class="select-all font-mono text-[13px]">{{ inv.code }}</code>
                 {% if inv.used_by_email.is_none() %}
-                <form action="/settings/invitations/{{ inv.id }}/delete/" method="POST" data-confirm="invite.delete_confirm">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit"
-                            class="btn btn-danger btn-sm">
-                        {{ t.tr("common.delete") }}
-                    </button>
-                </form>
+                <span class="badge badge-green shrink-0">{{ t.tr("invite.unused") }}</span>
+                {% endif %}
+            </div>
+            <div class="nf-prow-sub">
+                {% if let Some(email) = inv.bound_email %}
+                <span class="t">{{ t.tr("invite.bound_to") }} <span class="font-mono">{{- email -}}</span></span>
+                {% else %}
+                <span class="t">{{ t.tr("invite.unrestricted") }}</span>
+                {% endif %}
+                {% if let Some(email) = inv.used_by_email %}
+                <span class="sep">&middot;</span>
+                <span class="t">{{ t.tr("invite.used_by") }} {{ email }}
+                    {%- if let Some(at) = inv.used_at %} {{ t.tr("invite.at") }} {{ at }}{% endif %}</span>
                 {% endif %}
             </div>
         </div>
+        <div class="nf-prow-meta">
+            <span data-ts="{{ inv.created_at_ts }}"></span>
+        </div>
+        <div class="nf-prow-act">
+            {% if inv.used_by_email.is_none() %}
+            <form action="/settings/invitations/{{ inv.id }}/delete/" method="POST" data-confirm="invite.delete_confirm">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="btn btn-ghost-danger btn-icon"
+                        title="{{ t.tr("common.delete") }}" aria-label="{{ t.tr("common.delete") }}">
+                    {{ icons::icon_trash("w-3.5 h-3.5") }}
+                </button>
+            </form>
+            {% endif %}
+        </div>
     </div>
     {% endfor %}
+    {% endif %}
 </div>
 {% endblock %}

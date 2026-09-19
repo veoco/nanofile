@@ -497,15 +497,6 @@ html:not([data-view]) .seg .js-view-list {
   .page-subtitle { @apply mt-1 text-[13px] text-ink-2; }
   .empty-state   { @apply mt-8 text-center; }
 
-  /* Sidebar nav */
-  .nav-item          { @apply flex items-center gap-2 h-[30px] px-2 rounded-ctl text-[13px] transition-colors; }
-  .nav-item-active   { @apply bg-brand-50 text-ink font-medium; }
-  .nav-item-inactive { @apply text-ink-2 hover:bg-raised hover:text-ink; }
-
-  /* Settings navigation — a vertical list on wide screens and a scrollable
-     tab strip on narrow ones, so the same markup serves both. */
-  .settings-nav-item { @apply flex items-center gap-2 px-3 py-2 rounded-ctl text-[13px] transition-colors whitespace-nowrap; }
-
   /* ─── Graphite micro-typography ───────────────────────────────────────── */
   .mono       { @apply font-mono text-[11px] tabular-nums text-ink-3; }
   .num        { @apply tabular-nums; }
@@ -950,10 +941,78 @@ html:not([data-view]) .seg .js-view-list {
     color: var(--color-err);
     border-color: color-mix(in srgb, var(--color-err) 35%, var(--color-line));
   }
+  .nf-banner.is-warn {
+    color: var(--color-warn);
+    border-color: color-mix(in srgb, var(--color-warn) 35%, var(--color-line));
+  }
 
   .nf-filterbar { @apply flex flex-wrap items-center gap-2 mb-3; }
   .nf-pager { @apply flex items-center justify-between gap-3 mt-3; }
   .nf-pager .m { @apply text-[12px] tabular-nums text-ink-3; }
+
+  /* ─── Settings (one shell, seven pages) ───────────────────────────────────
+     Every settings page is panels and rows: the sections are the admin area's
+     horizontal `.nf-nav` bar (no second sidebar), a form is a section inside a
+     panel, and an item that carries its own detail is a row that opens in
+     place instead of a card of its own. */
+
+  /* A row block: the row, plus an optional disclosure underneath it, sharing
+     the panel's hairlines rather than drawing a box of its own. */
+  .nf-xrow { @apply border-b border-line; }
+  .nf-xrow > .nf-prow { @apply border-b-0; }
+  .nf-xrow-more { @apply px-3.5 pb-3; }
+  /* The toggle is a `<summary>`, so the marker has to go. */
+  .nf-xrow-more > summary { list-style: none; }
+  .nf-xrow-more > summary::-webkit-details-marker { display: none; }
+  .nf-expand { @apply mt-2.5; }
+
+  /* A form section inside a panel. `.nf-list` already zeroes the last child's
+     rule, so a panel of sections needs no trailing-border special case. */
+  .nf-form { @apply px-3.5 py-4 border-b border-line; }
+  .nf-form h2 { @apply text-[13px] font-medium text-ink; }
+  .nf-form .desc { @apply mt-0.5 text-[12px] text-ink-3; }
+  .nf-form .body { @apply mt-3; }
+
+  /* A section heading above its own panel. The count stays the first `<span>`
+     inside the `<section>`: the credential-page tests read it from there. */
+  .nf-sh { @apply flex flex-wrap items-baseline gap-x-2 gap-y-1; }
+  .nf-sh h2 { @apply text-[14px] font-semibold tracking-[-0.005em] text-ink; }
+  .nf-sh .n { @apply text-[12px] tabular-nums text-ink-3; }
+  .nf-sh-desc { @apply mt-0.5 text-[12px] text-ink-3; }
+
+  /* Key/value rows inside a panel. */
+  .nf-kv { @apply flex flex-wrap items-baseline gap-x-3 gap-y-1; }
+  .nf-kv .k { @apply w-24 shrink-0 text-[12px] text-ink-3; }
+  .nf-kv .v { @apply min-w-0 text-[12.5px] text-ink-2; }
+  .nf-kv .v .sep { @apply text-ink-3; }
+
+  /* Something the reader has to copy: a TOTP secret, backup codes, a
+     shown-once key. */
+  .nf-code {
+    @apply inline-block rounded-ctl border border-line bg-canvas px-3 py-1.5
+           font-mono text-[12.5px] text-ink break-all select-all;
+  }
+  .nf-codes { @apply grid grid-cols-2 gap-1.5; }
+  .nf-codes code {
+    @apply rounded-ctl border border-line bg-canvas px-2 py-1.5 text-center
+           font-mono text-[12.5px] text-ink select-all;
+  }
+
+  /* `<details>` opener, as a row action rather than a disclosure triangle. */
+  .nf-toggle {
+    @apply inline-flex items-center gap-1.5 h-6 px-2 -ml-2 rounded-ctl border-0 bg-transparent
+           text-[12px] text-ink-3 cursor-pointer select-none;
+  }
+  .nf-toggle:hover { @apply bg-raised text-ink; }
+  .nf-toggle svg { @apply w-3 h-3 transition-transform duration-200; }
+  details[open] > .nf-toggle svg { transform: rotate(90deg); }
+
+  .nf-file {
+    @apply block w-full text-[12px] text-ink-3 cursor-pointer
+           file:mr-3 file:h-7 file:rounded-ctl file:border-0 file:bg-accent
+           file:px-2.5 file:text-[12.5px] file:font-medium file:text-accent-ink
+           hover:file:bg-brand-600;
+  }
 }
 
 /* ─── Details drawer: field shedding before the file name ──────────────────── */
