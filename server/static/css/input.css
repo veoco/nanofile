@@ -858,6 +858,94 @@ html:not([data-view]) .seg .js-view-list {
     @apply text-[10.5px] uppercase tracking-[0.07em] text-ink-3 mb-2 flex items-center gap-1;
   }
   .d-ex-preview { @apply shrink-0 flex items-center justify-center px-4 py-3 min-w-[180px]; }
+
+  /* ─── List pages (starred / trash / activities / shares / search) ─────────
+     These five pages are read as a table but do not need table columns. They
+     borrow the file browser's row anatomy — 28px glyph cell, 13px name, dim
+     tabular metadata, trailing actions — on a hairline panel, which is what
+     lets them drop the six-to-nine column grids they used to be. */
+  .nf-tabs {
+    @apply flex items-center gap-1 mt-4 mb-4 border-b border-line overflow-x-auto;
+  }
+  .nf-tab {
+    @apply inline-flex items-center gap-1.5 h-9 px-2.5 -mb-px border-0 border-b-2 border-transparent
+           bg-transparent text-[13px] text-ink-3 cursor-pointer transition-colors whitespace-nowrap;
+  }
+  .nf-tab:hover { @apply text-ink; }
+  .nf-tab[aria-selected="true"] {
+    @apply text-ink font-medium;
+    border-bottom-color: var(--color-accent);
+  }
+  .nf-tab-n { @apply text-[11px] tabular-nums; }
+  .nf-tab[aria-selected="true"] .nf-tab-n { color: var(--color-ink-2); }
+
+  .nf-list { @apply rounded-box border border-line bg-panel overflow-hidden; }
+  .nf-list > :last-child { border-bottom: 0; }
+  .nf-prow {
+    @apply flex items-center gap-3 px-3.5 py-2 min-h-12 border-b border-line transition-colors;
+  }
+  .nf-prow:hover { @apply bg-raised; }
+  /* A tombstone: the library or object is gone, so the row has no action. */
+  .nf-prow.is-dead { @apply opacity-50; }
+  .nf-prow.is-dead:hover { @apply bg-transparent; }
+  .nf-prow-ic {
+    @apply grid place-items-center w-7 h-7 shrink-0 rounded-ctl bg-raised
+           text-ink-2 text-[11px] font-semibold overflow-hidden;
+  }
+  .nf-prow-ic img { @apply w-full h-full object-cover; }
+  .nf-prow-main { @apply min-w-0 flex-1; }
+  .nf-prow-name { @apply flex items-center gap-1.5 text-[13px] text-ink; }
+  .nf-prow-name a { @apply truncate no-underline text-ink; }
+  .nf-prow-name a:hover { @apply underline; }
+  .nf-prow-name .base { @apply truncate; }
+  .nf-prow-name .ext { @apply shrink-0 text-ink-3; }
+  .nf-prow-sub { @apply flex items-center gap-1.5 text-[12px] text-ink-3 min-w-0; }
+  .nf-prow-sub .t { @apply min-w-0 truncate; }
+  .nf-prow-sub .sep { @apply shrink-0; color: var(--color-line-strong); }
+  .nf-prow-sub a { @apply no-underline text-ink-3; }
+  .nf-prow-sub a:hover { @apply text-ink underline; }
+  /* Search snippet. `mark` ships a browser-default yellow that belongs to no
+     theme, so a tint token replaces it — strong enough to spot while scrolling,
+     which 10% was not. */
+  .nf-prow-hi { @apply mt-0.5 text-[12px] leading-relaxed text-ink-2; }
+  .nf-prow-hi mark {
+    @apply rounded-[3px] px-0.5 font-medium;
+    background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+    color: var(--color-ink);
+  }
+  .nf-prow-meta { @apply shrink-0 text-[12px] tabular-nums text-ink-3 whitespace-nowrap; }
+  .nf-prow-act { @apply shrink-0 flex items-center gap-1; }
+
+  /* Section header inside a panel: label, count, then a rule to the edge. */
+  .nf-sec { @apply flex items-center gap-2.5 px-3.5 pt-3.5 pb-2; }
+  .nf-sec h2 { @apply text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3; }
+  .nf-sec .n { @apply text-[11px] tabular-nums text-ink-3; }
+  .nf-sec .rule { @apply flex-1 h-px bg-line; }
+
+  .nf-empty { @apply px-4 py-14 text-center; }
+  .nf-empty h3 { @apply mt-3 text-[13px] font-medium text-ink-2; }
+  .nf-empty p { @apply mt-1 text-[12px] text-ink-3; }
+  .nf-empty a { @apply text-ink underline underline-offset-2; }
+
+  /* Status strip: one hairline box, colour carried by the text and border. */
+  .nf-banner {
+    @apply flex items-start gap-2.5 rounded-box border border-line bg-panel
+           px-3.5 py-3 text-[12.5px] text-ink-2;
+  }
+  .nf-banner svg { @apply shrink-0 w-4 h-4 mt-px; }
+  .nf-banner a { @apply underline underline-offset-2; color: inherit; }
+  .nf-banner.is-ok {
+    color: var(--color-ok);
+    border-color: color-mix(in srgb, var(--color-ok) 35%, var(--color-line));
+  }
+  .nf-banner.is-err {
+    color: var(--color-err);
+    border-color: color-mix(in srgb, var(--color-err) 35%, var(--color-line));
+  }
+
+  .nf-filterbar { @apply flex flex-wrap items-center gap-2 mb-3; }
+  .nf-pager { @apply flex items-center justify-between gap-3 mt-3; }
+  .nf-pager .m { @apply text-[12px] tabular-nums text-ink-3; }
 }
 
 /* ─── Details drawer: field shedding before the file name ──────────────────── */
@@ -898,4 +986,11 @@ html:not([data-view]) .seg .js-view-list {
   .d-actions {
     @apply w-full ml-0 pl-0 border-l-0 flex-wrap;
   }
+}
+/* List-page rows shed their metadata column under the same width the file list
+   drops its size column: on a phone the row is icon + name + action. */
+@media (max-width: 640px) {
+  .nf-prow { gap: 10px; padding-left: 12px; padding-right: 12px; }
+  .nf-prow-meta { display: none; }
+  .nf-sec { padding-left: 12px; padding-right: 12px; }
 }
