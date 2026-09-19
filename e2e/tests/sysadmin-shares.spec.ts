@@ -14,13 +14,13 @@ test.beforeAll(async () => {
 // this spec's uniquely-named repo.
 const shareRow = (page: import("@playwright/test").Page, name: string) =>
   page
-    .locator("#tab-share-links tbody tr")
+    .locator("#tab-share-links .nf-prow")
     .filter({ hasText: REPO })
     .filter({ hasText: name });
 
 const uploadRow = (page: import("@playwright/test").Page) =>
   page
-    .locator("#tab-upload-links tbody tr")
+    .locator("#tab-upload-links .nf-prow")
     .filter({ hasText: REPO });
 
 test("admin sees and deletes a share link from any user", async ({ page }) => {

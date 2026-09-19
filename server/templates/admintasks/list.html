@@ -7,95 +7,74 @@
 <h1 class="page-title">{{ t.tr("admin.tasks_title") }}</h1>
 <p class="page-subtitle">{{ t.tr("admin.tasks_desc") }}</p>
 
-{% if tasks.is_empty() %}
-<div class="empty-state">
-    {{ icons::icon_clock("mx-auto h-12 w-12 text-gray-300 dark:text-gray-600") }}
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("admin.tasks_none") }}</p>
-    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("admin.tasks_none_hint") }}</p>
-</div>
-{% endif %}
+{% include "includes/admin_nav.html" %}
 
-{% if !tasks.is_empty() %}
-<div class="mt-6">
-    <div class="card overflow-hidden">
-        <table class="table">
-            <thead class="thead">
-                <tr>
-                    <th scope="col" class="th">{{ t.tr("common.name") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.type") }}</th>
-                    <th scope="col" class="th">{{ t.tr("admin.task_interval") }}</th>
-                    <th scope="col" class="th">{{ t.tr("admin.task_last_run") }}</th>
-                    <th scope="col" class="th text-center">{{ t.tr("admin.task_duration") }}</th>
-                    <th scope="col" class="th">{{ t.tr("admin.task_success") }}</th>
-                    <th scope="col" class="th">{{ t.tr("common.error") }}</th>
-                    <th scope="col" class="th text-center">{{ t.tr("admin.task_s_e_t") }}</th>
-                    <th scope="col" class="th text-right">{{ t.tr("common.actions") }}</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                {% for task in tasks %}
-                <tr class="table-row">
-                    <td class="td font-medium text-gray-900 dark:text-gray-100 whitespace-nowrap">{{ task.name }}</td>
-                    <td class="px-4 py-3">
-                        {% if task.kind_label == "Periodic" %}
-                        <span class="badge badge-brand">{{ t.tr("admin.task_periodic") }}</span>
-                        {% else %}
-                        <span class="badge badge-gray">{{ t.tr("admin.task_continuous") }}</span>
-                        {% endif %}
-                    </td>
-                    <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ task.interval_secs_display }}</td>
-                    <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{% if let Some(ts) = task.last_run_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ task.last_run_at }}{% endif %}</td>
-                    <td class="td text-gray-500 dark:text-gray-400 text-center whitespace-nowrap">
-                        {% if task.last_duration_ms > 0 %}
-                        {{ task.last_duration_ms }}ms
-                        {% else %}
-                        <span class="text-gray-300 dark:text-gray-600">—</span>
-                        {% endif %}
-                    </td>
-                    <td class="td max-w-0">
-                        {% if task.last_success_message.is_empty() %}
-                        <span class="text-gray-300 dark:text-gray-600">—</span>
-                        {% else %}
-                        <span class="truncate block text-green-700 dark:text-green-400" title="{{ task.last_success_message }}">{{ task.last_success_message }}</span>
-                        {% endif %}
-                    </td>
-                    <td class="td max-w-0">
-                        {% if task.last_error_message.is_empty() %}
-                        <span class="text-gray-300 dark:text-gray-600">—</span>
-                        {% else %}
-                        <span class="truncate block text-red-600 dark:text-red-400" title="{{ task.last_error_message }}">{{ task.last_error_message }}</span>
-                        {% endif %}
-                    </td>
-                    <td class="td text-gray-500 dark:text-gray-400 text-center whitespace-nowrap">
-                        <span class="text-green-600 dark:text-green-400">{{ task.success_count }}</span>
-                        /
-                        <span class="text-red-500 dark:text-red-400">{{ task.error_count }}</span>
-                        /
-                        <span>{{ task.total_processed }}</span>
-                    </td>
-                    <td class="td text-right">
-                        {% if task.can_trigger %}
-                        <div class="flex items-center justify-end gap-1">
-                            <form action="/sysadmin/tasks/{{ task.name }}/trigger/" method="POST" class="trigger-form inline"
-                                  data-confirm="admin.task_run_confirm" data-confirm-args='{"name":"{{ task.name }}"}'>
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                                <button type="submit" class="btn btn-ghost-brand btn-icon" title="{{ t.tr("admin.task_run_now") }}">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                                    </svg>
-                                </button>
-                            </form>
-                        </div>
-                        {% else %}
-                        <span class="text-xs text-gray-300 dark:text-gray-600">—</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+{% if tasks.is_empty() %}
+<div class="nf-list">
+    <div class="nf-empty">
+        {{ icons::icon_clock("mx-auto h-10 w-10 text-ink-3") }}
+        <h3>{{ t.tr("admin.tasks_none") }}</h3>
+        <p>{{ t.tr("admin.tasks_none_hint") }}</p>
     </div>
+</div>
+{% else %}
+{# Each row carries the nine things the old table spread over nine columns:
+   the interval and last run sit under the name, the duration and the success /
+   error / total triple in the metadata column, and the last message becomes a
+   third line — the label for each number rides in its `title`. #}
+<div class="nf-list">
+    {% for task in tasks %}
+    <div class="nf-prow" data-name="{{ task.name }}">
+        <span class="nf-prow-ic">{{ icons::icon_clock("w-[15px] h-[15px]") }}</span>
+        <div class="nf-prow-main">
+            <div class="nf-prow-name">
+                <span class="base">{{ task.name }}</span>
+                {% if task.kind_label == "Periodic" %}
+                <span class="badge badge-brand shrink-0">{{ t.tr("admin.task_periodic") }}</span>
+                {% else %}
+                <span class="badge badge-gray shrink-0">{{ t.tr("admin.task_continuous") }}</span>
+                {% endif %}
+            </div>
+            <div class="nf-prow-sub">
+                {# A continuous task has no interval, and the server renders its
+                   display value as an em dash — drop the whole segment. #}
+                {% if task.kind_label == "Periodic" %}
+                <span class="t" title="{{ t.tr("admin.task_interval") }}">{{ task.interval_secs_display }}</span>
+                <span class="sep">&middot;</span>
+                {% endif %}
+                <span class="t" title="{{ t.tr("admin.task_last_run") }}" data-last-run>
+                    {% if let Some(ts) = task.last_run_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ task.last_run_at }}{% endif %}
+                </span>
+            </div>
+            {% if !task.last_error_message.is_empty() %}
+            <p class="nf-prow-hi text-err" title="{{ task.last_error_message }}">{{ task.last_error_message }}</p>
+            {% endif %}
+            {% if !task.last_success_message.is_empty() %}
+            <p class="nf-prow-hi" title="{{ task.last_success_message }}">{{ task.last_success_message }}</p>
+            {% endif %}
+        </div>
+        <div class="nf-prow-meta flex items-center gap-3">
+            <span class="w-[64px] text-right" title="{{ t.tr("admin.task_duration") }}">
+                {% if task.last_duration_ms > 0 %}{{ task.last_duration_ms }}ms{% else %}&mdash;{% endif %}
+            </span>
+            <span class="min-w-[96px] text-right" title="{{ t.tr("admin.task_s_e_t") }}">
+                <span class="text-ok">{{ task.success_count }}</span> / <span class="text-err">{{ task.error_count }}</span> / <span>{{ task.total_processed }}</span>
+            </span>
+        </div>
+        <div class="nf-prow-act">
+            {% if task.can_trigger %}
+            <form action="/sysadmin/tasks/{{ task.name }}/trigger/" method="POST" class="trigger-form"
+                  data-confirm="admin.task_run_confirm" data-confirm-args='{"name":"{{ task.name }}"}'>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                <button type="submit" class="btn btn-line btn-sm" title="{{ t.tr("admin.task_run_now") }}">
+                    {{ icons::icon_play("w-3.5 h-3.5") }}
+                    <span class="hidden sm:inline">{{ t.tr("admin.task_run_now") }}</span>
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
 </div>
 {% endif %}
 {% endblock %}

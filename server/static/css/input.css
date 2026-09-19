@@ -869,15 +869,21 @@ html:not([data-view]) .seg .js-view-list {
   }
   .nf-tab {
     @apply inline-flex items-center gap-1.5 h-9 px-2.5 -mb-px border-0 border-b-2 border-transparent
-           bg-transparent text-[13px] text-ink-3 cursor-pointer transition-colors whitespace-nowrap;
+           bg-transparent text-[13px] text-ink-3 no-underline cursor-pointer transition-colors whitespace-nowrap;
   }
   .nf-tab:hover { @apply text-ink; }
-  .nf-tab[aria-selected="true"] {
+  /* `aria-selected` = an in-page tab; `aria-current` = the page you are on. */
+  .nf-tab[aria-selected="true"],
+  .nf-tab[aria-current="page"] {
     @apply text-ink font-medium;
     border-bottom-color: var(--color-accent);
   }
   .nf-tab-n { @apply text-[11px] tabular-nums; }
   .nf-tab[aria-selected="true"] .nf-tab-n { color: var(--color-ink-2); }
+
+  /* Cross-page section links (the admin area). The same `.nf-tab` item without
+     a rail, so a page that also carries in-page tabs does not stack two rules. */
+  .nf-nav { @apply flex items-center gap-1 mb-2 overflow-x-auto; }
 
   .nf-list { @apply rounded-box border border-line bg-panel overflow-hidden; }
   .nf-list > :last-child { border-bottom: 0; }
@@ -901,7 +907,9 @@ html:not([data-view]) .seg .js-view-list {
   .nf-prow-name .ext { @apply shrink-0 text-ink-3; }
   .nf-prow-sub { @apply flex items-center gap-1.5 text-[12px] text-ink-3 min-w-0; }
   .nf-prow-sub .t { @apply min-w-0 truncate; }
-  .nf-prow-sub .sep { @apply shrink-0; color: var(--color-line-strong); }
+  /* The separator is a text glyph, so it lives at the same contrast as the text
+     it separates; the hairline colour measures 1.6:1 and is for rules. */
+  .nf-prow-sub .sep { @apply shrink-0; }
   .nf-prow-sub a { @apply no-underline text-ink-3; }
   .nf-prow-sub a:hover { @apply text-ink underline; }
   /* Search snippet. `mark` ships a browser-default yellow that belongs to no

@@ -4,7 +4,11 @@ import { test, expect } from "@playwright/test";
 // language override), which renders the Periodic/Continuous/Never labels.
 
 const taskRow = (page: import("@playwright/test").Page, name: string) =>
-  page.locator("main table tbody tr", { hasText: name });
+  page.locator(`main .nf-prow[data-name="${name}"]`);
+
+/** The row's last-run cell, filled from `data-ts` by core/local-time.js. */
+const lastRun = (page: import("@playwright/test").Page, name: string) =>
+  taskRow(page, name).locator("[data-last-run]");
 
 test("tasks page lists scheduled periodic and continuous tasks", async ({ page }) => {
   await page.goto("/sysadmin/tasks/");
@@ -19,8 +23,7 @@ test("trigger a periodic task manually", async ({ page }) => {
   await expect(row).toBeVisible();
   // Periodic tasks expose a trigger button (continuous ones don't).
   await expect(row.locator("form.trigger-form")).toBeVisible();
-  // Column 4 is "Last run" (name/type/interval/last_run/...).
-  const lastRunBefore = (await row.locator("td").nth(3).innerText()).trim();
+  const lastRunBefore = (await lastRun(page, "share link cleanup").innerText()).trim();
 
   page.once("dialog", (dialog) => dialog.accept());
   await row.locator('form.trigger-form button[type="submit"]').click();
@@ -29,7 +32,7 @@ test("trigger a periodic task manually", async ({ page }) => {
   // A manual run stamps a new last-run timestamp.
   await expect
     .poll(async () =>
-      (await taskRow(page, "share link cleanup").locator("td").nth(3).innerText()).trim(),
+      (await lastRun(page, "share link cleanup").innerText()).trim(),
     )
     .not.toBe(lastRunBefore);
 });

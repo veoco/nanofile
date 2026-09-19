@@ -5,8 +5,18 @@
 {% block title %}{{ t.tr("admin.title") }} | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="page-title">{{ t.tr("admin.title") }}</h1>
-<p class="page-subtitle">{{ t.tr("admin.desc") }}</p>
+<div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+        <h1 class="page-title">{{ t.tr("admin.title") }}</h1>
+        <p class="page-subtitle">{{ t.tr("admin.desc") }}</p>
+    </div>
+    <button type="button" data-action="open-create" class="btn btn-solid">
+        {{ icons::icon_plus("w-3.5 h-3.5") }}
+        {{ t.tr("admin.new_user") }}
+    </button>
+</div>
+
+{% include "includes/admin_nav.html" %}
 
 {% if let Some(error) = error %}
 {% include "includes/alert_error.html" %}
@@ -15,113 +25,95 @@
 {% include "includes/alert_success.html" %}
 {% endif %}
 
-<!-- New User button -->
-<div class="mt-6 mb-4">
-    <button type="button" data-action="open-create"
-            class="btn btn-primary">
-        + {{ t.tr("admin.new_user") }}
-    </button>
-</div>
-
-<!-- Users table -->
-<div class="card overflow-x-auto">
-    <table class="table">
-        <thead class="thead">
-            <tr>
-                <th scope="col" class="th">{{ t.tr("common.email") }}</th>
-                <th scope="col" class="th">{{ t.tr("common.status") }}</th>
-                <th scope="col" class="th">{{ t.tr("common.role") }}</th>
-                <th scope="col" class="th">{{ t.tr("common.usage") }}</th>
-                <th scope="col" class="th">{{ t.tr("common.quota") }}</th>
-                <th scope="col" class="th">{{ t.tr("common.created") }}</th>
-                <th scope="col" class="th">{{ t.tr("common.last_login") }}</th>
-                <th scope="col" class="th text-right">{{ t.tr("common.actions") }}</th>
-            </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-            {% for u in users %}
-            <tr class="table-row">
-                <td class="td text-gray-900 dark:text-gray-100">{{ u.email }}</td>
-                <td class="px-4 py-3">
-                    {% if u.is_active %}
-                    <span class="badge badge-green">{{ t.tr("common.active") }}</span>
-                    {% else %}
-                    <span class="badge badge-red">{{ t.tr("common.inactive") }}</span>
-                    {% endif %}
-                </td>
-                <td class="px-4 py-3">
-                    {% if u.is_admin %}
-                    <span class="badge badge-brand">{{ t.tr("common.admin") }}</span>
-                    {% else %}
-                    <span class="text-xs text-gray-400">{{ t.tr("common.user") }}</span>
-                    {% endif %}
-                </td>
-                <td class="td text-gray-500 dark:text-gray-400">{{ u.usage_formatted }}</td>
-                <td class="td text-gray-500 dark:text-gray-400">{{ u.quota_formatted }}</td>
-                <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap"><span data-ts="{{ u.created_at_ts }}"></span></td>
-                <td class="td text-gray-500 dark:text-gray-400 whitespace-nowrap">{% if let Some(ts) = u.last_login_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ u.last_login_at }}{% endif %}</td>
-                <td class="td text-right">
-                    <div class="flex items-center justify-end gap-1">
-                        <button type="button" class="btn btn-ghost-brand btn-icon"
-                                data-action="open-edit"
-                                data-id="{{ u.id }}"
-                                data-email="{{ u.email }}"
-                                data-is-admin="{{ u.is_admin }}"
-                                data-is-active="{{ u.is_active }}"
-                                data-quota="{{ u.storage_quota_display }}"
-                                title="{{ t.tr("admin.edit_user") }}">
-                            {{ icons::icon_pencil("h-3.5 w-3.5") }}
-                        </button>
-                        <button type="button" class="btn btn-ghost-danger btn-icon"
-                                data-action="open-delete"
-                                data-id="{{ u.id }}"
-                                data-email="{{ u.email }}"
-                                title="{{ t.tr("admin.delete_user") }}">
-                            {{ icons::icon_trash("h-3.5 w-3.5") }}
-                        </button>
-                    </div>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+<div class="nf-list">
+    {% for u in users %}
+    <div class="nf-prow">
+        <span class="nf-prow-ic rounded-full">
+            <img src="/avatars/user/{{ u.email }}/resized/64/" alt="" loading="lazy">
+        </span>
+        <div class="nf-prow-main">
+            <div class="nf-prow-name">
+                <span class="base">{{ u.email }}</span>
+                {% if u.is_admin %}
+                <span class="tag-admin shrink-0">{{ t.tr("common.admin") }}</span>
+                {% endif %}
+                {% if u.is_active %}
+                <span class="badge badge-green shrink-0">{{ t.tr("common.active") }}</span>
+                {% else %}
+                <span class="badge badge-red shrink-0">{{ t.tr("common.inactive") }}</span>
+                {% endif %}
+            </div>
+            <div class="nf-prow-sub">
+                <span class="t" title="{{ t.tr("common.usage") }}">{{ u.usage_formatted }}</span>
+                <span class="sep">/</span>
+                <span class="t" title="{{ t.tr("common.quota") }}">{{ u.quota_formatted }}</span>
+            </div>
+        </div>
+        <div class="nf-prow-meta flex items-center gap-3">
+            <span class="w-[112px] text-right" data-ts="{{ u.created_at_ts }}" data-ts-title="{{ u.created_at_ts }}"></span>
+            {% if let Some(ts) = u.last_login_at_ts %}
+            <span class="w-[112px] text-right" data-ts="{{ ts }}" data-ts-title="{{ ts }}"></span>
+            {% else %}
+            <span class="w-[112px] text-right">{{ u.last_login_at }}</span>
+            {% endif %}
+        </div>
+        <div class="nf-prow-act">
+            <button type="button" class="btn btn-quiet btn-icon"
+                    data-action="open-edit"
+                    data-id="{{ u.id }}"
+                    data-email="{{ u.email }}"
+                    data-is-admin="{{ u.is_admin }}"
+                    data-is-active="{{ u.is_active }}"
+                    data-quota="{{ u.storage_quota_display }}"
+                    title="{{ t.tr("admin.edit_user") }}" aria-label="{{ t.tr("admin.edit_user") }}">
+                {{ icons::icon_pencil("w-3.5 h-3.5") }}
+            </button>
+            <button type="button" class="btn btn-ghost-danger btn-icon"
+                    data-action="open-delete"
+                    data-id="{{ u.id }}"
+                    data-email="{{ u.email }}"
+                    title="{{ t.tr("admin.delete_user") }}" aria-label="{{ t.tr("admin.delete_user") }}">
+                {{ icons::icon_trash("w-3.5 h-3.5") }}
+            </button>
+        </div>
+    </div>
+    {% endfor %}
 </div>
 
 <!-- Create overlay -->
 {% call modal::modal("create-overlay", backdrop_close="closeCreate") %}
-        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">{{ t.tr("admin.new_user") }}</h3>
+        <h3 class="text-[14px] font-semibold text-ink mb-4">{{ t.tr("admin.new_user") }}</h3>
         <form action="/sysadmin/users/create/" method="POST" class="space-y-3">
             <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.email") }}</label>
+                <label class="form-label mb-1">{{ t.tr("common.email") }}</label>
                 <input type="email" name="email" required
                        class="input">
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("common.password") }}</label>
+                <label class="form-label mb-1">{{ t.tr("common.password") }}</label>
                 <input type="password" name="password" required
                        class="input">
             </div>
             <label class="flex items-center gap-1.5 cursor-pointer">
-                <input type="checkbox" name="is_admin" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
-                <span class="text-xs text-gray-700 dark:text-gray-300">{{ t.tr("common.admin") }}</span>
+                <input type="checkbox" name="is_admin" class="accent-ink">
+                <span class="text-[12.5px] text-ink-2">{{ t.tr("common.admin") }}</span>
             </label>
             <label class="flex items-center gap-1.5 cursor-pointer">
-                <input type="checkbox" name="is_active" checked class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
-                <span class="text-xs text-gray-700 dark:text-gray-300">{{ t.tr("common.active") }}</span>
+                <input type="checkbox" name="is_active" checked class="accent-ink">
+                <span class="text-[12.5px] text-ink-2">{{ t.tr("common.active") }}</span>
             </label>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("admin.storage_quota_label") }}</label>
+                <label class="form-label mb-1">{{ t.tr("admin.storage_quota_label") }}</label>
                 <input type="text" name="storage_quota" placeholder="{{ t.tr("admin.storage_quota_placeholder") }}"
                        class="input">
             </div>
             <div class="flex justify-end gap-2 mt-4">
-                <button type="button" class="js-create-cancel btn btn-secondary"
+                <button type="button" class="js-create-cancel btn btn-line"
                         data-action="close-create">
                     {{ t.tr("common.cancel") }}
                 </button>
-                <button type="submit"
-                        class="btn btn-primary">
+                <button type="submit" class="btn btn-solid">
                     {{ t.tr("common.create") }}
                 </button>
             </div>
@@ -130,30 +122,29 @@
 
 <!-- Edit overlay -->
 {% call modal::modal("edit-overlay", backdrop_close="closeEdit") %}
-        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("admin.edit_user") }}</h3>
-        <p class="js-edit-email text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
+        <h3 class="text-[14px] font-semibold text-ink mb-1">{{ t.tr("admin.edit_user") }}</h3>
+        <p class="js-edit-email text-[12.5px] text-ink-3 mb-4 break-all"></p>
         <form id="edit-form" method="POST" class="space-y-3">
             <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
             <label class="flex items-center gap-1.5 cursor-pointer">
-                <input type="checkbox" name="is_admin" id="edit-is-admin" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
-                <span class="text-xs text-gray-700 dark:text-gray-300">{{ t.tr("common.admin") }}</span>
+                <input type="checkbox" name="is_admin" id="edit-is-admin" class="accent-ink">
+                <span class="text-[12.5px] text-ink-2">{{ t.tr("common.admin") }}</span>
             </label>
             <label class="flex items-center gap-1.5 cursor-pointer">
-                <input type="checkbox" name="is_active" id="edit-is-active" class="rounded border-gray-300 text-brand-500 focus:ring-brand-500">
-                <span class="text-xs text-gray-700 dark:text-gray-300">{{ t.tr("common.active") }}</span>
+                <input type="checkbox" name="is_active" id="edit-is-active" class="accent-ink">
+                <span class="text-[12.5px] text-ink-2">{{ t.tr("common.active") }}</span>
             </label>
             <div>
-                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("admin.storage_quota_label") }}</label>
+                <label class="form-label mb-1">{{ t.tr("admin.storage_quota_label") }}</label>
                 <input type="text" name="storage_quota" id="edit-quota"
                        class="input">
             </div>
             <div class="flex justify-end gap-2 mt-4">
-                <button type="button" class="js-edit-cancel btn btn-secondary"
+                <button type="button" class="js-edit-cancel btn btn-line"
                         data-action="close-edit">
                     {{ t.tr("common.cancel") }}
                 </button>
-                <button type="submit"
-                        class="btn btn-primary">
+                <button type="submit" class="btn btn-solid">
                     {{ t.tr("common.save") }}
                 </button>
             </div>
@@ -162,19 +153,18 @@
 
 <!-- Delete overlay -->
 {% call modal::modal("delete-overlay", backdrop_close="closeDelete") %}
-        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">{{ t.tr("admin.delete_user") }}</h3>
-        <p class="text-sm text-gray-600 dark:text-gray-400">
-            {{ t.tr("admin.delete_confirm_prefix") }} <strong id="delete-email"></strong>{{ t.tr("admin.delete_confirm_suffix") }}
+        <h3 class="text-[14px] font-semibold text-ink mb-2">{{ t.tr("admin.delete_user") }}</h3>
+        <p class="text-[12.5px] text-ink-2">
+            {{ t.tr("admin.delete_confirm_prefix") }} <strong id="delete-email" class="text-ink"></strong>{{ t.tr("admin.delete_confirm_suffix") }}
         </p>
         <form id="delete-form" method="POST" class="mt-4">
             <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
             <div class="flex justify-end gap-2">
-                <button type="button" class="js-delete-cancel btn btn-secondary"
+                <button type="button" class="js-delete-cancel btn btn-line"
                         data-action="close-delete">
                     {{ t.tr("common.cancel") }}
                 </button>
-                <button type="submit"
-                        class="btn btn-danger">
+                <button type="submit" class="btn btn-danger">
                     {{ t.tr("common.delete") }}
                 </button>
             </div>

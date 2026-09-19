@@ -11,13 +11,13 @@ async function createUser(page: import("@playwright/test").Page, suffix: string)
   await page.locator('#create-overlay input[name="email"]').fill(email);
   await page.locator('#create-overlay input[name="password"]').fill("password-123");
   await page.locator('#create-overlay button[type="submit"]').click();
-  const row = page.locator("main table tbody tr").filter({ hasText: email });
+  const row = page.locator("main .nf-prow").filter({ hasText: email });
   await expect(row).toBeVisible();
   return email;
 }
 
 const userRow = (page: import("@playwright/test").Page, email: string) =>
-  page.locator("main table tbody tr").filter({ hasText: email });
+  page.locator("main .nf-prow").filter({ hasText: email });
 
 test("create a new user", async ({ page }) => {
   const email = await createUser(page, "create");
