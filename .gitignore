@@ -23,4 +23,5 @@ e2e/playwright-report/
 /test-results/
 /CLAUDE.md
 /.claude
+AGENTS.local.md
 .zcode/
