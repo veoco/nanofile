@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -9,6 +9,7 @@ use tokio::io::AsyncWriteExt;
 use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::resolve_file_entry;
 use crate::repository::Repositories;
+use crate::thumbnail_util::ThumbFormat;
 use base::common::{EMPTY_SHA1, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 
@@ -80,22 +81,26 @@ impl ThumbnailService {
     /// Deterministic on-disk filename for a thumbnail, matching seahub's
     /// `generate_thumbnail_key()` approach but using MD5(repo_id + path)
     /// instead of a bare path (avoids path-collision bugs).
-    fn thumbnail_file_path(&self, repo_id: &str, path: &str, size: u32) -> PathBuf {
+    ///
+    /// The extension follows the container the bytes were encoded in, so the
+    /// cache directory is readable by an operator (and by `file`).
+    fn thumbnail_file_path(&self, repo_id: &str, path: &str, size: u32, ext: &str) -> PathBuf {
         let hash = thumbnail_key(repo_id, path);
         self.thumbnail_repo_dir(repo_id)
-            .join(format!("{hash}_{size}.png"))
+            .join(format!("{hash}_{size}.{ext}"))
     }
 
     /// Get or generate a thumbnail for a file.
     ///
-    /// Returns the PNG thumbnail data plus a strong ETag (SHA-1 of the bytes)
-    /// so the handler can serve `If-None-Match` conditional requests.
+    /// Returns the thumbnail data, a strong ETag (SHA-1 of the bytes) so the
+    /// handler can serve `If-None-Match` conditional requests, and the
+    /// container the bytes are in so it can set `Content-Type`.
     pub async fn get_thumbnail(
         &self,
         repo_id: &str,
         path: &str,
         size: u32,
-    ) -> Result<(Vec<u8>, String), AppError> {
+    ) -> Result<(Vec<u8>, String, ThumbFormat), AppError> {
         let normalized_path = if path.is_empty() || path == "/" {
             "/".to_string()
         } else if path.starts_with('/') {
@@ -155,7 +160,6 @@ impl ThumbnailService {
             .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
 
         // ── Check if a valid cached thumbnail exists ──
-        let thumbnail_path = self.thumbnail_file_path(repo_id, &normalized_path, size);
         let existing = self
             .repos
             .thumbnail
@@ -163,13 +167,18 @@ impl ThumbnailService {
             .await?;
 
         if let Some(record) = existing {
+            // The container is part of the cache entry: a hit must not decode
+            // the bytes to work out its content type.
+            let format = ThumbFormat::from_db(&record.format);
+            let thumbnail_path =
+                self.thumbnail_file_path(repo_id, &normalized_path, size, format.ext());
             // Staleness check: if source file was modified after the thumbnail was created, regenerate
             if record.file_modified_at >= current_mtime && thumbnail_path.exists() {
                 let data = tokio::fs::read(&thumbnail_path)
                     .await
                     .map_err(|e| AppError::Internal(e.to_string()))?;
                 let etag = etag_for(&data);
-                return Ok((data, etag));
+                return Ok((data, etag, format));
             }
             // Stale — fall through to regenerate
         }
@@ -195,7 +204,7 @@ impl ThumbnailService {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
-        let thumbnail_data = if is_image {
+        let (thumbnail_data, format) = if is_image {
             // Skip huge images and cap the in-memory read; decoding a truncated
             // multi-hundred-MB image would waste CPU and memory for no benefit.
             const MAX_THUMBNAIL_SOURCE: i64 = 32 * 1024 * 1024;
@@ -215,7 +224,7 @@ impl ThumbnailService {
             .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
 
             tokio::task::spawn_blocking(move || {
-                crate::thumbnail_util::generate_thumbnail(&content, size)
+                crate::thumbnail_util::generate_thumbnail_encoded(&content, size)
             })
             .await
             .map_err(|e| AppError::Internal(format!("thumbnail generation panicked: {e}")))?
@@ -235,7 +244,20 @@ impl ThumbnailService {
         // ── Store thumbnail for future requests ──
         let thumbnail_dir = self.thumbnail_repo_dir(repo_id);
         tokio::fs::create_dir_all(&thumbnail_dir).await?;
+        let thumbnail_path =
+            self.thumbnail_file_path(repo_id, &normalized_path, size, format.ext());
         let _ = tokio::fs::write(&thumbnail_path, &thumbnail_data).await;
+
+        // Drop a stale entry in the other container: a size cached before the
+        // encoding followed the pixels (or a file that changed from opaque to
+        // transparent) would otherwise leave an unreadable orphan behind, and
+        // `cleanup()` only runs on delete.
+        for other in [ThumbFormat::Png, ThumbFormat::Jpeg] {
+            if other != format {
+                let stale = self.thumbnail_file_path(repo_id, &normalized_path, size, other.ext());
+                let _ = tokio::fs::remove_file(&stale).await;
+            }
+        }
 
         // ── Upsert database record (if stale, update; if new, insert) ──
         let now = chrono::Utc::now().timestamp();
@@ -247,7 +269,14 @@ impl ThumbnailService {
         {
             self.repos
                 .thumbnail
-                .update_mtime(repo_id, &normalized_path, size as i32, current_mtime, now)
+                .update_mtime(
+                    repo_id,
+                    &normalized_path,
+                    size as i32,
+                    format.as_db(),
+                    current_mtime,
+                    now,
+                )
                 .await?;
             // Delete old-naming disk file if it still exists (migration from old path scheme)
             let legacy_path = self
@@ -262,22 +291,31 @@ impl ThumbnailService {
         } else {
             self.repos
                 .thumbnail
-                .create(repo_id, &normalized_path, size as i32, current_mtime, now)
+                .create(
+                    repo_id,
+                    &normalized_path,
+                    size as i32,
+                    format.as_db(),
+                    current_mtime,
+                    now,
+                )
                 .await?;
         }
 
         let etag = etag_for(&thumbnail_data);
-        Ok((thumbnail_data, etag))
+        Ok((thumbnail_data, etag, format))
     }
 
     /// Generate a thumbnail for an audio/video file via ffmpeg.
     ///
     /// The file is streamed to a scratch file under `temp_dir` so ffmpeg can
     /// seek. For video a frame is captured ~1s in (falling back to the first
-    /// frame); for audio the embedded cover art is extracted. The result is
-    /// fitted/resized to `size` and re-encoded as PNG by the shared image util.
-    /// Returns `NotFound` when ffmpeg is unavailable or no frame/cover exists —
-    /// the UI then falls back to an extension badge / play icon.
+    /// frame); for audio the embedded cover art is extracted. The extracted
+    /// frame is fitted to `size` and encoded by the shared image util (JPEG —
+    /// an extracted frame is opaque), so the caller gets the bytes and their
+    /// container. Returns `NotFound` when ffmpeg is unavailable or no
+    /// frame/cover exists — the UI then falls back to an extension badge / play
+    /// icon.
     async fn generate_media_thumbnail(
         &self,
         repo_id: &str,
@@ -285,7 +323,7 @@ impl ThumbnailService {
         size: u32,
         kind: MediaKind,
         file_data: &FsFileData,
-    ) -> Result<Vec<u8>, AppError> {
+    ) -> Result<(Vec<u8>, ThumbFormat), AppError> {
         if !ffmpeg_available(&self.ffmpeg_path) {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
@@ -347,10 +385,12 @@ impl ThumbnailService {
             .map_err(|e| AppError::Internal(e.to_string()))?;
         let _ = tokio::fs::remove_file(&scratch_png).await;
 
-        tokio::task::spawn_blocking(move || crate::thumbnail_util::generate_thumbnail(&png, size))
-            .await
-            .map_err(|e| AppError::Internal(format!("thumbnail generation panicked: {e}")))?
-            .map_err(|e| AppError::Internal(format!("thumbnail generation failed: {e}")))
+        tokio::task::spawn_blocking(move || {
+            crate::thumbnail_util::generate_thumbnail_encoded(&png, size)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("thumbnail generation panicked: {e}")))?
+        .map_err(|e| AppError::Internal(format!("thumbnail generation failed: {e}")))
     }
 
     /// Remove all cached thumbnails (disk + DB) for a given repo path.
@@ -384,6 +424,152 @@ impl ThumbnailService {
             }
         }
     }
+}
+
+// ─── One-shot legacy-size purge ───────────────────────────────────────────
+
+/// Marker file recording that the legacy-size purge has run for the current set
+/// of retained sizes. Its presence is what makes the purge one-shot rather than
+/// a startup cost on every boot; deleting it re-arms the purge.
+///
+/// The name carries the size set (`.legacy_sizes_purged_48_640`) on purpose:
+/// when a future UI changes the sizes it requests, every entry at the previous
+/// size becomes unreachable, and a new marker name makes the purge run again by
+/// itself instead of leaving those files behind as permanent dead weight. (The
+/// database rows need a new migration for the same reason — a migration is
+/// frozen once it has shipped — which is what
+/// `m20260918_000002_purge_legacy_thumbnail_sizes` is.)
+pub fn legacy_purge_marker() -> String {
+    let sizes: Vec<String> = crate::thumbnail_util::RETAINED_THUMBNAIL_SIZES
+        .iter()
+        .map(|size| size.to_string())
+        .collect();
+    format!(".legacy_sizes_purged_{}", sizes.join("_"))
+}
+
+/// What one pass of the purge did, for the startup log.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ThumbnailCachePurge {
+    /// False when the marker showed a previous pass had already run.
+    pub ran: bool,
+    pub files_removed: u64,
+    pub bytes_freed: u64,
+    pub dirs_removed: u64,
+    /// Files whose name carries no trailing size. Left alone: nothing can
+    /// reference them, but guessing at a cache file's meaning is worse than
+    /// leaving the bytes for an operator to look at.
+    pub unrecognized: u64,
+}
+
+impl ThumbnailCachePurge {
+    pub fn summary(&self) -> String {
+        if !self.ran {
+            return "already purged, skipped".to_string();
+        }
+        format!(
+            "removed {} cache files ({} KiB) for sizes the UI no longer requests, \
+             {} empty directories{}",
+            self.files_removed,
+            self.bytes_freed / 1024,
+            self.dirs_removed,
+            if self.unrecognized > 0 {
+                format!(", {} unrecognized names left alone", self.unrecognized)
+            } else {
+                String::new()
+            }
+        )
+    }
+}
+
+/// Delete thumbnail cache files for sizes the UI no longer requests.
+///
+/// The database half of this lives in the `purge_legacy_thumbnail_sizes`
+/// migration; the file half cannot, because a schema migration has no access to
+/// the configured cache directory. So the rows go during the upgrade and the
+/// bytes go here, on the first start of the new binary.
+///
+/// Guarded by a marker named after the retained sizes (see
+/// [`legacy_purge_marker`]), written only after a pass completes, so a server
+/// that restarts does not walk the cache again — and a pass interrupted halfway
+/// (crash, SIGKILL, disk full) simply finishes on the next start, since deleting
+/// an already-deleted file is a no-op. The marker lives in the cache directory
+/// itself, so pointing a server at a different cache directory re-runs the purge
+/// there, which is what you want.
+///
+/// Only the layout of `thumbnail_dir` is assumed: one directory per repo (the
+/// directory name is a hash, so it is not decoded), each holding
+/// `…_<size>.<ext>` entries. Deeper levels are never descended into, and a file
+/// that does not end in `_<size>` is counted and skipped.
+pub async fn purge_legacy_cache_files(
+    thumbnail_dir: &Path,
+) -> Result<ThumbnailCachePurge, AppError> {
+    let marker = thumbnail_dir.join(legacy_purge_marker());
+    if tokio::fs::try_exists(&marker).await? {
+        return Ok(ThumbnailCachePurge::default());
+    }
+
+    let mut report = ThumbnailCachePurge {
+        ran: true,
+        ..Default::default()
+    };
+
+    let mut repos = tokio::fs::read_dir(thumbnail_dir).await?;
+    while let Some(repo_dir) = repos.next_entry().await? {
+        if !repo_dir.file_type().await?.is_dir() {
+            continue;
+        }
+        let dir = repo_dir.path();
+        let mut kept = 0u64;
+        let mut files = tokio::fs::read_dir(&dir).await?;
+        while let Some(file) = files.next_entry().await? {
+            if !file.file_type().await?.is_file() {
+                // A nested directory keeps its parent alive.
+                kept += 1;
+                continue;
+            }
+            let name = file.file_name();
+            let Some(size) = cache_file_size(&name.to_string_lossy()) else {
+                report.unrecognized += 1;
+                kept += 1;
+                continue;
+            };
+            if crate::thumbnail_util::RETAINED_THUMBNAIL_SIZES.contains(&size) {
+                kept += 1;
+                continue;
+            }
+            let bytes = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+            match tokio::fs::remove_file(file.path()).await {
+                Ok(()) => {
+                    report.files_removed += 1;
+                    report.bytes_freed += bytes;
+                }
+                // Report it and keep going: one locked file must not stop the
+                // sweep. It is still counted as kept, so its directory stays.
+                Err(e) => {
+                    tracing::warn!(
+                        file = %file.path().display(),
+                        "could not remove a stale thumbnail: {e}"
+                    );
+                    kept += 1;
+                }
+            }
+        }
+        if kept == 0 && tokio::fs::remove_dir(&dir).await.is_ok() {
+            report.dirs_removed += 1;
+        }
+    }
+
+    tokio::fs::write(&marker, b"done\n").await?;
+    Ok(report)
+}
+
+/// Size encoded in a cache file name: `…_<size>.<ext>`, which covers both the
+/// hashed scheme (`thumb_<hash>_640.jpg`) and the pre-hash one
+/// (`Field_Photos_pine_256.png`). `None` when the name carries no trailing size.
+fn cache_file_size(name: &str) -> Option<u32> {
+    let stem = name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(name);
+    stem.rsplit_once('_')
+        .and_then(|(_, size)| size.parse::<u32>().ok())
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -789,5 +975,129 @@ mod concurrency_tests {
             MAX_CONCURRENT_THUMBNAILS,
             "the gate should admit exactly the configured number of generators"
         );
+    }
+}
+
+#[cfg(test)]
+mod purge_tests {
+    use super::{cache_file_size, legacy_purge_marker, purge_legacy_cache_files};
+    use std::path::Path;
+
+    /// Both naming schemes (hashed and pre-hash) end in `_<size>.<ext>`; a name
+    /// that carries no trailing size is reported so the purge can skip it.
+    #[test]
+    fn cache_file_size_reads_both_naming_schemes() {
+        assert_eq!(
+            cache_file_size("thumb_e49c1f0fdb7fdd0c0627136cf973f6ff_48.png"),
+            Some(48)
+        );
+        assert_eq!(cache_file_size("thumb_ab_640.jpg"), Some(640));
+        assert_eq!(cache_file_size("Field_Photos_pine_256.png"), Some(256));
+        assert_eq!(cache_file_size("thumb_ab_48"), Some(48));
+        assert_eq!(cache_file_size("notes.txt"), None);
+        assert_eq!(cache_file_size("thumb_ab_.png"), None);
+        assert_eq!(cache_file_size(&legacy_purge_marker()), None);
+    }
+
+    /// The marker names the retained size set, so changing that set re-arms the
+    /// purge without anyone having to remember to bump a version.
+    #[test]
+    fn marker_names_the_retained_sizes() {
+        assert_eq!(legacy_purge_marker(), ".legacy_sizes_purged_48_640");
+    }
+
+    fn write(dir: &Path, name: &str, bytes: usize) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(name), vec![0u8; bytes]).unwrap();
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The purge removes exactly the unreachable sizes, keeps the retained
+    /// ones, never recurses below the per-repo directory, leaves names it
+    /// cannot parse alone, drops a directory it emptied, and does not run twice.
+    #[tokio::test]
+    async fn purge_removes_only_unreachable_sizes_and_runs_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let repo_a = root.join("repo-a");
+        let repo_b = root.join("repo-b");
+
+        write(&repo_a, "thumb_aaa_48.png", 10);
+        write(&repo_a, "thumb_aaa_640.jpg", 20);
+        write(&repo_a, "thumb_aaa_256.png", 100);
+        write(&repo_a, "thumb_bbb_512.png", 200);
+        write(&repo_a, "notes.txt", 5);
+        // A nested level is never descended into, so its contents survive.
+        write(&repo_a.join("nested"), "thumb_ccc_256.png", 50);
+        write(&repo_b, "thumb_ddd_256.png", 7);
+
+        let report = purge_legacy_cache_files(root).await.unwrap();
+        assert!(report.ran);
+        assert_eq!(report.files_removed, 3, "256 and 512 entries only");
+        assert_eq!(report.bytes_freed, 100 + 200 + 7);
+        assert_eq!(report.dirs_removed, 1, "repo-b held nothing else");
+        assert_eq!(report.unrecognized, 1, "notes.txt has no size to read");
+        assert!(report.summary().contains("removed 3 cache files"));
+
+        assert_eq!(
+            names(&repo_a),
+            [
+                "nested",
+                "notes.txt",
+                "thumb_aaa_48.png",
+                "thumb_aaa_640.jpg"
+            ]
+        );
+        assert_eq!(
+            names(&repo_a.join("nested")),
+            ["thumb_ccc_256.png"],
+            "the purge must not walk deeper than one level"
+        );
+        assert!(
+            !repo_b.exists(),
+            "a repo directory emptied by the purge is removed"
+        );
+        assert!(root.join(legacy_purge_marker()).exists());
+
+        // Second start: the marker short-circuits, even with a new stale file.
+        write(&repo_a, "thumb_eee_256.png", 30);
+        let again = purge_legacy_cache_files(root).await.unwrap();
+        assert!(!again.ran, "the marker makes this a one-shot");
+        assert_eq!(again, super::ThumbnailCachePurge::default());
+        assert!(repo_a.join("thumb_eee_256.png").exists());
+    }
+
+    /// A stale file that cannot be removed (a directory in its place, for
+    /// instance) keeps its repo directory alive and is counted as kept, but does
+    /// not abort the sweep.
+    #[tokio::test]
+    async fn an_unremovable_entry_does_not_abort_the_sweep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let repo = root.join("repo-a");
+        // `thumb_x_256.png` as a *directory* — `remove_file` fails on it.
+        std::fs::create_dir_all(repo.join("thumb_x_256.png")).unwrap();
+        write(&repo, "thumb_y_256.png", 12);
+
+        let report = purge_legacy_cache_files(root).await.unwrap();
+        assert_eq!(
+            report.files_removed, 1,
+            "the file beside it was still removed"
+        );
+        assert_eq!(
+            report.dirs_removed, 0,
+            "the directory entry keeps the repo dir"
+        );
+        assert!(repo.join("thumb_x_256.png").is_dir());
     }
 }

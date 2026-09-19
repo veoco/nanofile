@@ -11,42 +11,25 @@ export function setMode(m) {
   var listView = document.querySelector(".js-file-list-view");
   var gridView = document.querySelector(".js-file-grid-view");
   var galleryView = document.querySelector(".js-gallery-view");
-  var btnList = document.querySelector(".js-view-list");
-  var btnGrid = document.querySelector(".js-view-grid");
-  var btnGallery = document.querySelector(".js-view-gallery");
   var sortSection = document.querySelector(".js-sort-section");
-  if (!listView || !gridView || !btnList || !btnGrid) return;
+  if (!listView || !gridView) return;
 
   // Hide sort buttons (Name/Modified/Size) in gallery mode
   if (sortSection) sortSection.classList.toggle("hidden", m === "gallery");
 
-  // Reset all to hidden / inactive
+  // Reset all to hidden; which view is shown is decided here, which view is
+  // *active* in the switcher is decided by `html[data-view]` in CSS — one
+  // source of truth that also survives the AJAX refresh replacing the toolbar.
   listView.classList.add("hidden");
   gridView.classList.add("hidden");
   if (galleryView) galleryView.classList.add("hidden");
-  btnList.classList.remove("text-brand-500");
-  btnList.classList.add("text-gray-400");
-  btnGrid.classList.remove("text-brand-500");
-  btnGrid.classList.add("text-gray-400");
-  if (btnGallery) {
-    btnGallery.classList.remove("text-brand-500");
-    btnGallery.classList.add("text-gray-400");
-  }
 
   if (m === "grid") {
     gridView.classList.remove("hidden");
-    btnGrid.classList.remove("text-gray-400");
-    btnGrid.classList.add("text-brand-500");
   } else if (m === "gallery") {
     if (galleryView) galleryView.classList.remove("hidden");
-    if (btnGallery) {
-      btnGallery.classList.remove("text-gray-400");
-      btnGallery.classList.add("text-brand-500");
-    }
   } else {
     listView.classList.remove("hidden");
-    btnList.classList.remove("text-gray-400");
-    btnList.classList.add("text-brand-500");
   }
   localStorage.setItem("fileViewMode", m);
   document.documentElement.dataset.view = m;
@@ -57,8 +40,8 @@ export function setMode(m) {
 // client-side show/hide with no network round-trip.
 function switchTo(m) {
   setMode(m);
-  var main = document.querySelector("main");
-  if (main) main.scrollTop = 0;
+  var scroller = document.getElementById("nf-list-scroll");
+  if (scroller) scroller.scrollTop = 0;
 }
 
 // Event delegation on document so view toggle works after partial refresh
@@ -87,10 +70,9 @@ function applySortUI(field, order) {
       var isActive = f === field;
       var upArrow = btns[i].querySelector(".js-sort-arrow-up");
       var downArrow = btns[i].querySelector(".js-sort-arrow-down");
-      if (upArrow) upArrow.style.fill = isActive && order === "asc" ? "var(--color-brand-500)" : "var(--color-gray-400)";
-      if (downArrow) downArrow.style.fill = isActive && order === "desc" ? "var(--color-brand-500)" : "var(--color-gray-400)";
-      btns[i].classList.toggle("text-brand-500", isActive);
-      btns[i].classList.toggle("text-gray-400", !isActive);
+      if (upArrow) upArrow.style.fill = isActive && order === "asc" ? "var(--color-accent)" : "var(--color-ink-3)";
+      if (downArrow) downArrow.style.fill = isActive && order === "desc" ? "var(--color-accent)" : "var(--color-ink-3)";
+      btns[i].classList.toggle("on", isActive);
     }
   }
 }

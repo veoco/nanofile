@@ -40,3 +40,20 @@ export function formatLocalDateTime(ts) {
   var min = ("0" + d.getMinutes()).slice(-2);
   return y + "-" + m + "-" + day + " " + h + ":" + min;
 }
+
+// A compact month/day label for places where the full stamp does not fit (the
+// grid tile's meta line): "Sep 19" in en, "9月19日" in zh. Intl picks the month
+// name for the document's language, so this needs no per-locale month table.
+export function formatLocalShortDate(ts) {
+  var d = new Date(ts * 1000);
+  if (isNaN(d.getTime())) return "";
+  var locale = typeof document !== "undefined" && document.documentElement
+    ? document.documentElement.lang
+    : undefined;
+  try {
+    return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(d);
+  } catch (ignored) {
+    // Unsupported locale tag: fall back to the numeric form.
+    return ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+  }
+}

@@ -3,6 +3,7 @@
 // pages (side effects only).
 import { __t } from "./i18n.js";
 import { getCookie } from "./utils.js";
+import { formatFileSize } from "./format.js";
 
 // ─── Mobile left panel toggle ──────────────────────────────────────────
 const menuToggle = document.querySelector(".js-mobile-menu-toggle");
@@ -38,33 +39,34 @@ if (userMenu && userButton) {
     if (dropdown) { dropdown.remove(); return; }
     dropdown = document.createElement("div");
     dropdown.className =
-      "js-user-menu-dropdown absolute right-0 z-dialog mt-2 w-44 origin-top-right rounded-xl bg-white dark:bg-surface-800 py-1 shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-none";
+      "js-user-menu-dropdown absolute right-0 z-dialog mt-2 w-44 origin-top-right rounded-box border border-line bg-panel py-1 focus:outline-none";
 
     // Admin-only: User Management link
     var isAdmin = userMenu.getAttribute("data-is-admin") === "true";
+    var menuItem = "block px-4 h-8 leading-8 text-[13px] text-ink hover:bg-raised";
     if (isAdmin) {
       var adminLink = document.createElement("a");
       adminLink.href = "/sysadmin/users/";
-      adminLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
+      adminLink.className = menuItem;
       adminLink.textContent = __t('ui.user_management');
       dropdown.appendChild(adminLink);
 
       var shareLink = document.createElement("a");
       shareLink.href = "/sysadmin/shares/";
-      shareLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
+      shareLink.className = menuItem;
       shareLink.textContent = __t('ui.share_management');
       dropdown.appendChild(shareLink);
 
       var taskLink = document.createElement("a");
       taskLink.href = "/sysadmin/tasks/";
-      taskLink.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
+      taskLink.className = menuItem;
       taskLink.textContent = __t('ui.task_management');
       dropdown.appendChild(taskLink);
     }
 
     var signOut = document.createElement("a");
     signOut.href = "/accounts/logout/";
-    signOut.className = "block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700";
+    signOut.className = menuItem;
     signOut.textContent = __t('ui.sign_out');
     dropdown.appendChild(signOut);
 
@@ -145,6 +147,26 @@ document.addEventListener("keydown", function (e) {
 });
 
 // ─── Star toggle (event delegation) ────────────────────────────────────
+// The same hook is used by the always-present star in a file row and by the
+// star in the details drawer. The row is the source of truth for `data-starred`
+// (right-panel.js reads it when it renders the drawer), so mirror the new state
+// onto the owning row — otherwise starring a file and then selecting it shows a
+// stale state in the drawer.
+function setStarState(btn, starred) {
+  btn.dataset.starred = starred ? "true" : "false";
+  btn.classList.toggle("on", starred);
+  var svg = btn.querySelector("svg");
+  if (svg) svg.setAttribute("fill", starred ? "currentColor" : "none");
+  btn.title = starred ? __t('ui.unstar') : __t('ui.star');
+  var row = btn.closest(".js-entry-row");
+  if (row) {
+    row.dataset.starred = starred ? "true" : "false";
+    // Grid/gallery tiles keep their action chips visible while starred, so the
+    // state is readable without hovering every tile.
+    row.classList.toggle("starred", starred);
+  }
+}
+
 document.addEventListener("click", async function (e) {
   const btn = e.target.closest("[data-toggle-star]");
   if (!btn) return;
@@ -171,13 +193,7 @@ document.addEventListener("click", async function (e) {
         method: "DELETE",
         headers: { "X-CSRFToken": csrfToken },
       });
-      if (res.ok) {
-        btn.classList.remove("text-yellow-400", "text-amber-400");
-        btn.classList.add("text-gray-300", "hover:text-amber-400", "dark:text-gray-600");
-        btn.querySelector("svg").setAttribute("fill", "none");
-        btn.title = __t('ui.star');
-        btn.dataset.starred = "false";
-      }
+      if (res.ok) setStarState(btn, false);
     } else {
       const res = await fetch("/api/v2.1/starred-items/", {
         method: "POST",
@@ -187,13 +203,7 @@ document.addEventListener("click", async function (e) {
         },
         body: JSON.stringify({ repo_id: repoId, path: path }),
       });
-      if (res.ok) {
-        btn.classList.remove("text-gray-300", "hover:text-amber-400", "dark:text-gray-600");
-        btn.classList.add("text-amber-400");
-        btn.querySelector("svg").setAttribute("fill", "currentColor");
-        btn.title = __t('ui.unstar');
-        btn.dataset.starred = "true";
-      }
+      if (res.ok) setStarState(btn, true);
     }
   } catch (ignored) {
     // Ignore network errors silently
@@ -201,3 +211,38 @@ document.addEventListener("click", async function (e) {
     btn.disabled = false;
   }
 });
+
+// ─── Sidebar storage meter ─────────────────────────────────────────────
+// GET /api2/account/info/ already reports `usage` and `total` in bytes
+// (`total` is -1/0 when the quota is unlimited), so the meter needs no
+// server-side plumbing into every page's template struct. A failed request
+// leaves the block hidden rather than showing a wrong number.
+(function () {
+  var storageEl = document.getElementById("nf-storage");
+  if (!storageEl) return;
+  fetch("/api2/account/info/", { headers: { Accept: "application/json" } })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (info) {
+      if (!info || typeof info.usage !== "number") return;
+      var textEl = document.getElementById("nf-storage-text");
+      var barEl = document.getElementById("nf-storage-bar");
+      var trackEl = document.getElementById("nf-storage-track");
+      var total = typeof info.total === "number" ? info.total : -1;
+      if (total > 0) {
+        if (textEl) {
+          textEl.textContent =
+            formatFileSize(info.usage) + " / " + formatFileSize(total);
+        }
+        if (barEl) {
+          var pct = Math.max(0, Math.min(100, Math.round((info.usage / total) * 100)));
+          barEl.style.width = pct + "%";
+        }
+      } else {
+        // Unlimited quota — usage only, no bar to fill.
+        if (textEl) textEl.textContent = formatFileSize(info.usage);
+        if (trackEl) trackEl.classList.add("hidden");
+      }
+      storageEl.classList.remove("hidden");
+    })
+    .catch(function () { /* leave the block hidden */ });
+})();

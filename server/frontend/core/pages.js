@@ -1,11 +1,10 @@
 // pages — small page-scoped interactions that are shared across all pages
-// (trash restore, repo list filter, new-library dialog). Kept in the common
-// bundle because their triggering elements appear on non-file-browser pages.
+// (trash restore, repo list filter). Kept in the common bundle because their
+// triggering elements appear on non-file-browser pages.
 import { __t } from "./i18n.js";
 import { getCookie } from "./utils.js";
 import { Toast } from "./toast.js";
 import { ConfirmDialog } from "./confirm.js";
-import { registerModalClose } from "./modal.js";
 
 // ─── Trash restore (via API) ────────────────────────────────────────────
 document.addEventListener("submit", async function (e) {
@@ -70,58 +69,6 @@ if (repoFilter) {
   });
 }
 
-// ─── New Library dialog ─────────────────────────────────────────────────
-export function showQuickCreate() {
-  var overlay = document.getElementById("quick-create-overlay");
-  if (!overlay) return;
-  overlay.classList.remove("hidden");
-  var input = document.getElementById("quick-create-input");
-  if (input) { input.value = ""; setTimeout(function () { input.focus(); }, 100); }
-}
-
-export function hideQuickCreate() {
-  var overlay = document.getElementById("quick-create-overlay");
-  if (overlay) overlay.classList.add("hidden");
-}
-
-export function submitQuickCreate() {
-  var input = document.getElementById("quick-create-input");
-  var name = input ? input.value.trim() : "";
-  if (!name) return false;
-  var csrfToken = getCookie("sfcsrftoken");
-  if (!csrfToken) { window.location.href = "/accounts/login/"; return false; }
-  fetch("/api2/repos/", {
-    method: "POST",
-    headers: {
-      "X-CSRFToken": csrfToken,
-      "Content-Type": "application/json;charset=utf-8",
-    },
-    body: JSON.stringify({ name: name }),
-  })
-    .then(function (r) {
-      if (r.ok) { window.location.reload(); }
-      else { r.json().then(function (e) { Toast.error(e.error_msg || __t('ui.failed')); }); }
-    })
-    .catch(function () { Toast.error(__t('ui.network_error')); });
-  hideQuickCreate();
-  return false;
-}
-
-// ─── Quick create (delegated, driven by data-* attributes) ─────────────
-document.addEventListener("submit", function (e) {
-  if (!e.target.closest('[data-form="quick-create"]')) return;
-  e.preventDefault();
-  submitQuickCreate();
-});
-
-document.addEventListener("click", function (e) {
-  var btn = e.target.closest('[data-action="close-quick-create"]');
-  if (!btn) return;
-  hideQuickCreate();
-});
-
-registerModalClose("hideQuickCreate", hideQuickCreate);
-
 // ─── Generic confirm-before-submit ─────────────────────────────────────
 // data-confirm="<i18n key>" plus optional data-confirm-args (JSON) for
 // {placeholder} substitution, e.g. data-confirm-args='{"name":"x"}'.
@@ -149,11 +96,13 @@ document.addEventListener("error", function (e) {
     if (!parent) return;
     parent.innerHTML = '';
     var div = document.createElement('div');
-    div.className = 'text-gray-500 dark:text-gray-400 text-sm py-8';
+    // Tokens, not the legacy `gray-*`/`brand-*` names the rest of this file
+    // predates: the fallback renders inside the preview panel.
+    div.className = 'text-ink-3 text-[13px] py-8 text-center';
     div.appendChild(document.createTextNode(__t('fb.image_failed_to_load') + ' '));
     var a = document.createElement('a');
     a.href = img.dataset.downloadUrl || '#';
-    a.className = 'text-brand-500 hover:underline';
+    a.className = 'text-ink underline underline-offset-2';
     a.textContent = __t('fb.download_instead');
     div.appendChild(a);
     parent.appendChild(div);

@@ -12,6 +12,9 @@ pub struct Model {
     pub path: String,
     #[sea_orm(not_null, default_value = 128)]
     pub size: i32,
+    /// Container the cached bytes are encoded in: `jpeg` or `png`.
+    #[sea_orm(not_null, default_value = "png")]
+    pub format: String,
     #[sea_orm(not_null)]
     pub file_modified_at: i64,
     #[sea_orm(not_null)]

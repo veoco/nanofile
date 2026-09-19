@@ -672,11 +672,14 @@ document.addEventListener("click", function (e) {
   if (!btn) return;
   e.preventDefault();
 
+  // The button lives in the row when rendered by the template, but in the
+  // body-level row menu when opened from the "⋯" — so read the values off the
+  // button itself and only fall back to the row.
   var row = btn.closest(".js-entry-row");
-  if (!row) return;
-  var repoId = row.dataset.repoId;
+  var repoId = btn.dataset.repoId || (row && row.dataset.repoId);
+  var name = btn.dataset.name || (row && row.dataset.name);
+  if (!repoId || !name) return;
   var parentDir = getCurrentDir();
-  var name = row.dataset.name;
 
   zipDownload(repoId, parentDir, [name]);
 });

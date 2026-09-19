@@ -7,6 +7,7 @@ import {
   beshareRepo,
   loginViaUI,
 } from "../helpers/api";
+import { clickRowAction } from "../helpers/details";
 
 let state: ReturnType<typeof readState>;
 let readerEmail: string;
@@ -57,9 +58,7 @@ test("a read-only member cannot delete files in the shared repo", async ({ brows
     await loginViaUI(page, readerEmail, "password-123");
     await page.goto(`/libraries/${sharedRepoId}/files`);
     await page.waitForSelector(".js-entry-row");
-    await page
-      .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="shared.txt"] .js-delete-btn')
-      .click();
+    await clickRowAction(page, "shared.txt", ".js-delete-btn");
     await page.locator(".js-confirm-ok").click();
     // The server rejects the write, so the file stays in place in the UI…
     await expect(

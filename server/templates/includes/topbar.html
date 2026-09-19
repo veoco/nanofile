@@ -1,52 +1,51 @@
 {% import "includes/icons.html" as icons %}
-<header class="sticky top-0 z-header flex h-16 items-center gap-x-3 border-b border-gray-200 bg-white/80 backdrop-blur-sm dark:bg-surface-800/80 dark:border-gray-700 px-4">
+<header class="shrink-0 flex items-center gap-4 h-14 px-4 bg-panel border-b border-line">
     <!-- Mobile menu button + Logo (left side) -->
     <div class="flex items-center gap-2 flex-shrink-0">
-        <button type="button" class="js-mobile-menu-toggle -mx-2 rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-500 lg:hidden dark:hover:bg-surface-700"
+        <button type="button" class="js-mobile-menu-toggle iconbtn -ml-2 lg:hidden"
                 aria-label="{{ t.tr("a11y.toggle_sidebar") }}">
-            {{ icons::icon_menu("h-6 w-6") }}
+            {{ icons::icon_menu("h-5 w-5") }}
         </button>
-        <a href="/libraries/" class="flex items-center gap-2 text-lg font-bold text-gray-900 dark:text-white tracking-tight">
-            <span class="h-8 w-8 rounded-lg bg-brand-500 flex items-center justify-center text-white text-sm font-bold">N</span>
-            <span class="hidden sm:inline">Nanofile</span>
+        <a href="/libraries/" class="flex items-center gap-2.5 no-underline text-ink flex-shrink-0">
+            <span class="brand-mark">N</span>
+            <span class="hidden sm:inline text-[14px] font-semibold tracking-[-0.01em]">Nanofile</span>
         </a>
     </div>
 
-    <!-- Search bar (flex-1, stays center-ish) -->
-    <div class="flex-1 max-w-md mx-2 lg:mx-6">
-        <div class="relative w-full">
-            {{ icons::icon_search("absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400") }}
-            <input type="search" placeholder="{{ t.tr("search.placeholder") }}"
-                   class="js-quick-search w-full rounded-lg border-0 bg-gray-100 dark:bg-surface-700 pl-9 pr-8 py-2 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500"
+    <!-- Search (flex-1, stays center-ish) -->
+    <div class="flex-1 max-w-[420px] mx-2 lg:mx-6">
+        <label class="nf-search w-full">
+            {{ icons::icon_search("w-3.5 h-3.5 flex-shrink-0") }}
+            <input type="search" class="js-quick-search" placeholder="{{ t.tr("search.placeholder") }}"
                    aria-label="{{ t.tr("search.placeholder") }}">
-            <kbd class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 bg-gray-200 dark:bg-surface-600 rounded px-1.5 py-0.5 font-sans hidden sm:inline">/</kbd>
-        </div>
+            <kbd class="hidden sm:inline">/</kbd>
+        </label>
     </div>
 
     <!-- Right-aligned actions -->
-    <div class="flex items-center gap-1 ml-auto">
+    <div class="flex items-center gap-0.5 ml-auto">
         <!-- Settings -->
         <a href="/settings/"
-           class="rounded-md p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
+           class="iconbtn no-underline"
            title="{{ t.tr("nav.settings") }}" aria-label="{{ t.tr("nav.settings") }}">
-            {{ icons::icon_cog("h-5 w-5") }}
+            {{ icons::icon_cog("h-4 w-4") }}
         </a>
 
         <!-- Dark mode toggle -->
-        <button type="button" class="js-dark-toggle rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-500 dark:hover:bg-surface-700 dark:hover:text-gray-300 transition-colors"
+        <button type="button" class="js-dark-toggle iconbtn"
                 aria-label="{{ t.tr("a11y.toggle_dark_mode") }}">
-            {{ icons::icon_moon("h-5 w-5 block dark:hidden") }}
-            {{ icons::icon_sun("h-5 w-5 hidden dark:block") }}
+            {{ icons::icon_moon("h-4 w-4 block dark:hidden") }}
+            {{ icons::icon_sun("h-4 w-4 hidden dark:block") }}
         </button>
 
         <!-- User menu dropdown -->
-        <div class="relative js-user-menu" data-is-admin="{{ is_admin }}">
-            <button type="button" class="js-user-menu-button flex items-center gap-x-2 rounded-full p-1 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors">
+        <div class="relative js-user-menu ml-1" data-is-admin="{{ is_admin }}">
+            <button type="button" class="js-user-menu-button flex items-center gap-x-2 h-8 pl-[3px] pr-2 rounded-full text-[12.5px] text-ink-2 hover:bg-raised transition-colors">
                 <img src="/avatars/user/{{ user_email }}/resized/32/" alt=""
-                     class="h-7 w-7 rounded-full object-cover bg-brand-500">
-                <span class="hidden lg:block">{{ user_email }}</span>
+                     class="h-6 w-6 rounded-full object-cover bg-raised">
+                <span class="hidden lg:block truncate max-w-[180px]">{{ user_email }}</span>
                 {% if is_admin %}
-                <span class="ml-1 badge badge-brand">{{ t.tr("nav.admin") }}</span>
+                <span class="tag-admin">{{ t.tr("nav.admin") }}</span>
                 {% endif %}
             </button>
         </div>

@@ -1,11 +1,13 @@
 {% import "includes/icons.html" as icons %}
 <!DOCTYPE html>
-<html lang="{{ t.lang }}" class="h-full bg-surface-50 dark:bg-surface-900">
+<html lang="{{ t.lang }}" class="h-full bg-canvas">
 <head>
     <script src="{{ urls.theme_init_js }}"></script>
     <style>
-        :where(html) { background-color: #f8fafc; }
-        :where(html.dark) { background-color: #0f172a; }
+        /* First-paint background: app.css has not applied yet, so these are the
+           literal graphite canvas values (see --color-canvas in input.css). */
+        :where(html) { background-color: #fcfcfc; }
+        :where(html.dark) { background-color: #111111; }
     </style>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -15,18 +17,18 @@
     <link rel="stylesheet" href="{{ urls.css }}">
     {% block head_meta %}{% endblock %}
 </head>
-<body class="h-full">
+<body class="h-full overflow-hidden bg-canvas text-ink">
     <!-- Global loading bar (hidden by default) -->
     <div id="loading-bar" class="hidden fixed top-0 left-0 z-top h-0.5 w-full">
-        <div class="h-full bg-brand-500 animate-loading-bar"></div>
+        <div class="h-full bg-accent animate-loading-bar"></div>
     </div>
 
-    <div class="h-screen flex flex-col">
+    <div class="h-dvh flex flex-col">
         {% include "includes/topbar.html" %}
 
-        <div class="flex flex-1 overflow-hidden">
+        <div class="flex flex-1 min-h-0 overflow-hidden">
             <!-- Left Panel — library tree (large screens only) -->
-            <aside class="js-left-panel hidden lg:flex flex-col flex-shrink-0 bg-white dark:bg-surface-800 border-r border-gray-200 dark:border-gray-700"
+            <aside class="js-left-panel hidden lg:flex flex-col flex-shrink-0 bg-panel border-r border-line"
                    style="width: var(--left-panel-width, 240px)">
                 {% include "includes/left_panel.html" %}
             </aside>
@@ -34,7 +36,7 @@
             {% block main_layout %}
             <!-- Main content — page content -->
             <main role="main" aria-label="{{ t.tr("a11y.main_content") }}"
-                  class="flex-1 overflow-y-auto p-4 sm:p-6 pb-20 lg:pb-6">
+                  class="flex-1 min-w-0 overflow-y-auto px-4 py-4 sm:px-6 sm:py-6 pb-20 lg:pb-6">
                 {% block content %}{% endblock %}
             </main>
             {% endblock %}
@@ -42,26 +44,26 @@
     </div>
 
     <!-- Mobile bottom navigation -->
-    <nav class="fixed bottom-0 left-0 right-0 z-dialog bg-white dark:bg-surface-900 border-t border-gray-200 dark:border-gray-700 lg:hidden"
+    <nav class="fixed bottom-0 left-0 right-0 z-dialog bg-panel border-t border-line lg:hidden"
          role="navigation" aria-label="{{ t.tr("a11y.mobile_nav") }}">
         <div class="flex items-center justify-around h-16">
             <a href="/libraries/"
-               class="flex flex-col items-center gap-0.5 text-xs {% if active_page == "repos" %}text-brand-500{% else %}text-gray-400 dark:text-gray-500{% endif %}">
+               class="flex flex-col items-center gap-0.5 text-[11px] {% if active_page == "repos" %}text-ink font-medium{% else %}text-ink-3{% endif %}">
                 {{ icons::icon_folder_outline("h-5 w-5") }}
                 <span>{{ t.tr("nav.files") }}</span>
             </a>
             <a href="/starred/"
-               class="flex flex-col items-center gap-0.5 text-xs {% if active_page == "starred" %}text-brand-500{% else %}text-gray-400 dark:text-gray-500{% endif %}">
+               class="flex flex-col items-center gap-0.5 text-[11px] {% if active_page == "starred" %}text-ink font-medium{% else %}text-ink-3{% endif %}">
                 {{ icons::icon_star("h-5 w-5") }}
                 <span>{{ t.tr("nav.starred") }}</span>
             </a>
             <a href="/activities/"
-               class="flex flex-col items-center gap-0.5 text-xs {% if active_page == "activities" %}text-brand-500{% else %}text-gray-400 dark:text-gray-500{% endif %}">
+               class="flex flex-col items-center gap-0.5 text-[11px] {% if active_page == "activities" %}text-ink font-medium{% else %}text-ink-3{% endif %}">
                 {{ icons::icon_clock("h-5 w-5") }}
                 <span>{{ t.tr("nav.activity") }}</span>
             </a>
             <a href="/settings/"
-               class="flex flex-col items-center gap-0.5 text-xs {% if active_page == "settings" || active_page.starts_with("settings.") %}text-brand-500{% else %}text-gray-400 dark:text-gray-500{% endif %}">
+               class="flex flex-col items-center gap-0.5 text-[11px] {% if active_page == "settings" || active_page.starts_with("settings.") %}text-ink font-medium{% else %}text-ink-3{% endif %}">
                 {{ icons::icon_cog("h-5 w-5") }}
                 <span>{{ t.tr("nav.settings") }}</span>
             </a>

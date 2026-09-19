@@ -8,6 +8,12 @@ import { buildListUrl } from "./urls.js";
 var skeleton = document.querySelector(".js-skeleton");
 var fileListContainer = document.querySelector(".file-list-container");
 
+// The scrolling region is the file-list viewport, not <main>: the breadcrumb
+// and the action toolbar are pinned chrome above it.
+function listScroller() {
+  return document.getElementById("nf-list-scroll");
+}
+
 export function showFileSkeleton() {
   if (skeleton) skeleton.classList.remove("hidden");
   if (fileListContainer) {
@@ -49,8 +55,8 @@ export async function refreshFileList() {
         initInfiniteScroll();
         // A full refresh replaces the list with page 1 — start at the top so
         // the user isn't dropped at the bottom of the re-sorted/reloaded list.
-        var mainEl = document.querySelector("main");
-        if (mainEl) mainEl.scrollTop = 0;
+        var scroller = listScroller();
+        if (scroller) scroller.scrollTop = 0;
       } else {
         window.location.reload();
       }
@@ -211,9 +217,10 @@ export function initInfiniteScroll() {
   }
 }
 
-// Fallback scroll listener on <main> (runs once; <main> is not replaced on refresh)
+// Fallback scroll listener on the list viewport (runs once; it is not replaced
+// on refresh).
 if (!("IntersectionObserver" in window)) {
-  var mainEl = document.querySelector("main");
+  var mainEl = listScroller();
   if (mainEl) {
     mainEl.addEventListener("scroll", onFileListScroll, { passive: true });
   }

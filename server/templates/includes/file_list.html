@@ -1,51 +1,61 @@
 {% import "includes/icons.html" as icons %}
 {% if is_empty %}
 <div class="px-4 py-12 text-center">
-    {{ icons::icon_inbox("mx-auto h-12 w-12 text-gray-300 dark:text-gray-600") }}
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("fb.empty_folder") }}</p>
-    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("fb.empty_folder_hint") }}</p>
+    {{ icons::icon_inbox("mx-auto h-10 w-10 text-ink-3") }}
+    <p class="mt-3 text-[13px] font-medium text-ink-2">{{ t.tr("fb.empty_folder") }}</p>
+    <p class="mt-1 text-[12px] text-ink-3">{{ t.tr("fb.empty_folder_hint") }}</p>
 </div>
 {% else %}
 <!-- Skeleton loading (shown during AJAX refresh) -->
 <div class="js-skeleton hidden">
     {% for i in 0..5 %}
-    <div class="flex items-center gap-3 px-3 py-2">
-        <div class="h-8 w-8 rounded-md bg-gray-200 dark:bg-surface-700 animate-pulse"></div>
+    <div class="flex items-center gap-3 h-9 px-4 border-b border-line">
+        <div class="h-6 w-6 rounded-[4px] bg-raised animate-pulse"></div>
         <div class="flex-1">
-            <div class="h-4 w-3/4 bg-gray-200 dark:bg-surface-700 rounded animate-pulse"></div>
-            <div class="mt-1.5 h-3 w-1/4 bg-gray-200 dark:bg-surface-700 rounded animate-pulse"></div>
+            <div class="h-3.5 w-1/2 bg-raised rounded animate-pulse"></div>
         </div>
     </div>
     {% endfor %}
 </div>
 
-<!-- View toggle + sort + selection actions (sort buttons hidden in gallery mode) -->
-<div class="js-sort-bar flex items-center gap-1 px-4 pt-2 pb-1"
+<!-- Toolbar: view switcher + sort + tag filter + selection.
+     Sticky inside the list scroller so it stays put while rows scroll; it also
+     lives inside `.file-list-container` so an AJAX refresh still re-renders the
+     server-side tag pill state. -->
+<div class="js-sort-bar nf-toolbar"
      data-sort-field="{{ sort_field }}"
      data-sort-order="{{ sort_order }}"
      data-tag-filter="{{ current_tag.as_deref().unwrap_or("") }}">
-    <button class="js-view-list p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 text-brand-500" title="{{ t.tr("fb.list_view") }}" aria-label="{{ t.tr("fb.switch_to_list_view") }}">
-        {{ icons::icon_list("h-4 w-4") }}
-    </button>
-    <button class="js-view-grid p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 text-gray-400" title="{{ t.tr("fb.grid_view") }}" aria-label="{{ t.tr("fb.switch_to_grid_view") }}">
-        {{ icons::icon_grid("h-4 w-4") }}
-    </button>
-    <button class="js-view-gallery p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 text-gray-400" title="{{ t.tr("fb.gallery_view") }}" aria-label="{{ t.tr("fb.switch_to_gallery_view") }}">
-        {{ icons::icon_gallery("h-4 w-4") }}
-    </button>
-    <span class="js-sort-section">
-    <span class="text-gray-300 dark:text-gray-600 select-none">|</span>
-    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 {% if sort_field == "name" %}text-brand-500{% else %}text-gray-400{% endif %}"
+    <div class="seg" role="group" aria-label="{{ t.tr("fb.list_view") }}">
+        <button type="button" class="js-view-list" title="{{ t.tr("fb.list_view") }}" aria-label="{{ t.tr("fb.switch_to_list_view") }}">
+            {{ icons::icon_list("w-3.5 h-3.5") }}
+        </button>
+        <button type="button" class="js-view-grid" title="{{ t.tr("fb.grid_view") }}" aria-label="{{ t.tr("fb.switch_to_grid_view") }}">
+            {{ icons::icon_grid("w-3.5 h-3.5") }}
+        </button>
+        <button type="button" class="js-view-gallery" title="{{ t.tr("fb.gallery_view") }}" aria-label="{{ t.tr("fb.switch_to_gallery_view") }}">
+            {{ icons::icon_gallery("w-3.5 h-3.5") }}
+        </button>
+    </div>
+    <span class="nf-gal-summary">
+        <span class="vsep"></span>
+        <span class="num">{{ gallery_photo_total }}</span> {{ t.tr("fb.photos") }}
+        <span class="nf-gal-dot" aria-hidden="true">&middot;</span>
+        <span class="num">{{ gallery_video_total }}</span> {{ t.tr("fb.videos") }}
+    </span>
+    <span class="js-sort-section flex items-center gap-2">
+    <span class="vsep"></span>
+    <button type="button" class="js-sort-btn tbtn {% if sort_field == "name" %}on{% endif %}"
             data-sort="name">
         {{ t.tr("fb.sort_name") }}
         {{ icons::icon_sort_arrows(up_active=sort_field == "name" && sort_order == "asc", down_active=sort_field == "name" && sort_order == "desc") }}
     </button>
-    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 {% if sort_field == "mtime" %}text-brand-500{% else %}text-gray-400{% endif %}"
+    <button type="button" class="js-sort-btn tbtn {% if sort_field == "mtime" %}on{% endif %}"
             data-sort="mtime">
         {{ t.tr("fb.sort_modified") }}
         {{ icons::icon_sort_arrows(up_active=sort_field == "mtime" && sort_order == "asc", down_active=sort_field == "mtime" && sort_order == "desc") }}
     </button>
-    <button class="js-sort-btn px-1.5 py-1 rounded-md text-xs font-medium hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 {% if sort_field == "size" %}text-brand-500{% else %}text-gray-400{% endif %}"
+    <button type="button" class="js-sort-btn tbtn {% if sort_field == "size" %}on{% endif %}"
             data-sort="size">
         {{ t.tr("fb.sort_size") }}
         {{ icons::icon_sort_arrows(up_active=sort_field == "size" && sort_order == "asc", down_active=sort_field == "size" && sort_order == "desc") }}
@@ -53,14 +63,14 @@
     </span>
     {% if !folder_tags.is_empty() || current_tag.is_some() %}
     <span class="js-tag-filter flex items-center gap-1">
-        <span class="text-gray-300 dark:text-gray-600 select-none">|</span>
+        <span class="vsep"></span>
         {% for tag in folder_tags %}
         <button type="button"
-                class="js-tag-filter-btn px-1.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1
-                {% if current_tag.as_deref() == Some(tag.name.as_str()) %}text-brand-500 bg-brand-50 dark:bg-brand-900/20{% else %}text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300{% endif %}"
+                class="js-tag-filter-btn inline-flex items-center gap-1 h-6 px-2 rounded-ctl text-[12px] font-medium transition-colors
+                {% if current_tag.as_deref() == Some(tag.name.as_str()) %}text-ink bg-raised{% else %}text-ink-3 hover:text-ink hover:bg-raised{% endif %}"
                 data-tag="{{ tag.name }}"
                 title="{{ t.trf("fb.filter_by_tag", [("name", &tag.name)]) }}">
-            <span class="inline-block h-2 w-2 rounded-full" style="background-color: {{ tag.color }};"></span>
+            <span class="inline-block h-2 w-2 rounded-full flex-shrink-0" style="background-color: {{ tag.color }};"></span>
             {{ tag.name }}
             {% if current_tag.as_deref() == Some(tag.name.as_str()) %}
             {{ icons::icon_close("h-2.5 w-2.5") }}
@@ -71,27 +81,25 @@
     {% endif %}
     <div class="flex-1 min-w-0"></div>
     <!-- Selection actions (shown when items are selected) -->
-    <span id="js-selection-info" class="hidden flex items-center gap-1 text-xs text-brand-600 dark:text-brand-400 font-medium whitespace-nowrap">
-        <span class="js-selection-count">0</span> {{ t.tr("fb.selected") }}
-        <span class="text-gray-300 dark:text-gray-600">·</span>
-        <button type="button" class="js-deselect-all hover:underline">{{ t.tr("fb.deselect") }}</button>
+    <span id="js-selection-info" class="hidden items-center gap-2 text-[12.5px] text-ink-2 whitespace-nowrap">
+        <b class="js-selection-count num text-ink">0</b> {{ t.tr("fb.selected") }}
+        <button type="button" class="js-deselect-all underline text-ink-2 hover:text-ink">{{ t.tr("fb.deselect") }}</button>
     </span>
-    <div id="js-selection-actions" class="hidden flex items-center gap-0.5">
-        <button type="button" class="js-batch-download btn btn-ghost-brand btn-icon" title="{{ t.tr("fb.download_selected") }}">
-            {{ icons::icon_download("h-3.5 w-3.5") }}
+    <div id="js-selection-actions" class="hidden items-center gap-0.5">
+        <button type="button" class="js-batch-download btn btn-quiet btn-icon" title="{{ t.tr("fb.download_selected") }}">
+            {{ icons::icon_download("w-3.5 h-3.5") }}
         </button>
-        <button type="button" class="js-batch-delete p-1.5 rounded-md text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" title="{{ t.tr("fb.delete_selected") }}">
-            {{ icons::icon_trash("h-3.5 w-3.5") }}
+        <button type="button" class="js-batch-move btn btn-quiet btn-icon" title="{{ t.tr("fb.move_selected") }}">
+            {{ icons::icon_arrow_right("w-3.5 h-3.5") }}
         </button>
-        <button type="button" class="js-batch-move p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300" title="{{ t.tr("fb.move_selected") }}">
-            {{ icons::icon_arrow_right("h-3.5 w-3.5") }}
+        <button type="button" class="js-batch-copy btn btn-quiet btn-icon" title="{{ t.tr("fb.copy_selected") }}">
+            {{ icons::icon_copy("w-3.5 h-3.5") }}
         </button>
-        <button type="button" class="js-batch-copy p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-surface-700 dark:hover:text-gray-300" title="{{ t.tr("fb.copy_selected") }}">
-            {{ icons::icon_copy("h-3.5 w-3.5") }}
+        <button type="button" class="js-batch-delete btn btn-ghost-danger btn-icon" title="{{ t.tr("fb.delete_selected") }}">
+            {{ icons::icon_trash("w-3.5 h-3.5") }}
         </button>
     </div>
-    <button type="button" id="js-select-all-btn"
-            class="px-2 py-1 text-xs font-medium text-brand-600 dark:text-brand-400 hover:bg-brand-50 dark:hover:bg-brand-900/20 rounded-md transition-colors whitespace-nowrap">
+    <button type="button" id="js-select-all-btn" class="tbtn whitespace-nowrap">
         {{ t.tr("fb.select_all") }}
     </button>
 </div>
@@ -102,8 +110,16 @@
      data-total="{{ total }}"
      data-has-more="{% if has_more %}true{% else %}false{% endif %}">
     {% if render_view != "grid" && render_view != "gallery" %}
+    <div class="nf-row nf-row-head" role="row">
+        <span></span>
+        <span>{{ t.tr("common.name") }}</span>
+        <span class="r">{{ t.tr("common.size") }}</span>
+        <span>{{ t.tr("fb.sort_modified") }}</span>
+        <span></span>
+    </div>
     {% for entry in entries %}
-    <div class="js-entry-row flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-surface-800/50"
+    <div class="js-entry-row nf-row it{% if entry.starred %} starred{% endif %}"
+         role="row"
          data-name="{{ entry.name }}"
          data-type="{{ entry.entry_type }}"
          data-page="{{ page }}"
@@ -121,107 +137,37 @@
          data-is-video="{{ entry.is_video }}"
          data-is-audio="{{ entry.is_audio }}"
          data-record-id="{{ entry.record_id }}">
-        {% if entry.entry_type == "dir" %}
-        <!-- Folder icon -->
-        <div class="h-9 min-w-9 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
-            {{ icons::icon_folder("h-5 w-5 text-amber-600 dark:text-amber-400") }}
-        </div>
-        <div class="flex-1 min-w-0">
-            <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
-               class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate">
-                {{ entry.name }}
-            </a>
-            <div class="text-xs text-gray-400 dark:text-gray-500" data-ts="{{ entry.mtime }}"></div>
-            {% if !entry.tags.is_empty() %}
-            <div class="flex items-center gap-1 mt-1 flex-wrap">
-                {% for tag in entry.tags %}
-                <button type="button" class="js-entry-tag inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium text-gray-700 dark:text-gray-200 hover:opacity-80 transition-opacity"
-                        style="background-color: {{ tag.color }}33;"
-                        data-tag="{{ tag.name }}"
-                        title="{{ t.trf("fb.filter_by_tag", [("name", &tag.name)]) }}">
-                    <span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color: {{ tag.color }};"></span>
-                    {{ tag.name }}
-                </button>
-                {% endfor %}
-            </div>
-            {% endif %}
-        </div>
-        <div class="flex items-center gap-0.5">
-            <button data-toggle-star
-                    data-repo-id="{{ repo_id }}"
-                    data-path="/{{ entry.relative_path }}"
-                    data-starred="{{ entry.starred }}"
-                    class="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors
-                    {% if entry.starred %}text-amber-400{% else %}text-gray-300 hover:text-amber-400 dark:text-gray-600{% endif %}"
-                    title="{% if entry.starred %}{{ t.tr("fb.unstar") }}{% else %}{{ t.tr("fb.star") }}{% endif %}">
-                {{ icons::icon_star("h-3.5 w-3.5", filled=entry.starred) }}
-            </button>
-            <button type="button" class="js-share-btn btn btn-ghost-brand btn-icon"
-                    data-repo-id="{{ repo_id }}"
-                    data-path="/{{ entry.relative_path }}"
-                    data-type="{{ entry.entry_type }}"
-                    title="{{ t.trf("fb.get_share_link_for", [("name", &entry.name)]) }}">
-                {{ icons::icon_link("h-3.5 w-3.5") }}
-            </button>
-            <button type="button" class="p-1.5 rounded-md text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-400 transition-colors"
-                    data-action="open-upload-link"
-                    data-repo-id="{{ repo_id }}"
-                    data-path="/{{ entry.relative_path }}"
-                    title="{{ t.trf("fb.get_upload_link_for", [("name", &entry.name)]) }}">
-                {{ icons::icon_upload("h-3.5 w-3.5") }}
-            </button>
-            <button type="button" class="js-entry-download btn btn-ghost btn-icon"
-                    title="{{ t.trf("fb.download_name", [("name", &entry.name)]) }}">
-                {{ icons::icon_download("h-3.5 w-3.5") }}
-            </button>
-            <button class="js-rename-btn btn btn-ghost btn-icon"
-                    data-path="{{ entry.relative_path }}"
-                    data-name="{{ entry.name }}"
-                    data-type="{{ entry.entry_type }}"
-                    title="{{ t.trf("fb.rename_name", [("name", &entry.name)]) }}">
-                {{ icons::icon_pencil("h-3.5 w-3.5") }}
-            </button>
-            <button class="js-delete-btn btn btn-ghost-danger btn-icon"
-                    data-repo-id="{{ repo_id }}"
-                    data-path="{{ entry.relative_path }}"
-                    data-name="{{ entry.name }}"
-                    data-type="{{ entry.entry_type }}"
-                    title="{{ t.trf("fb.delete_name", [("name", &entry.name)]) }}">
-                {{ icons::icon_trash("h-3.5 w-3.5") }}
-            </button>
-        </div>
-        {% else %}
-        <!-- File icon: extension badge or image thumbnail -->
-        {% if let Some(thumb_url) = entry.image_thumbnail_url %}
-        <div class="h-9 w-9 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden">
-            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy" data-thumb>
-            <span class="js-thb-fallback hidden text-[10px] leading-none font-semibold {{ entry.icon_color }}" title="{{ entry.extension.as_deref().unwrap_or("?") }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(3) }}</span>
-        </div>
-        {% else %}
-        <div class="h-9 w-9 rounded-md bg-gray-100 dark:bg-surface-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
-            <span class="text-[10px] leading-none font-semibold {{ entry.icon_color }}" title="{{ entry.extension.as_deref().unwrap_or("?") }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(3) }}</span>
-        </div>
-        {% endif %}
-        <div class="flex-1 min-w-0">
-            {% if entry.is_previewable %}
-            <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
-               class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate">
-                {{ entry.name }}
-            </a>
+        {# The icon cell must stay the row's first child, with no link or button
+           inside it: the e2e helpers select rows by clicking it. #}
+        <div class="nf-ic">
+            {% if entry.entry_type == "dir" %}
+            {{ icons::icon_folder("w-[15px] h-[15px] text-ink-2") }}
+            {% elif let Some(thumb_url) = entry.image_thumbnail_url %}
+            <img src="{{ thumb_url }}" alt="" class="w-full h-full object-contain" loading="lazy" data-thumb>
+            <span class="js-thb-fallback hidden mono" title="{{ entry.extension.as_deref().unwrap_or("?") }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(3) }}</span>
             {% else %}
-            <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
-               class="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate">
-                {{ entry.name }}
-            </a>
+            {# A generic glyph: the name cell already carries the extension as a
+               dimmed suffix, so a second badge here would just repeat it. #}
+            {{ icons::icon_file("w-[15px] h-[15px] text-ink-2") }}
             {% endif %}
-            <div class="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
-                {% if entry.entry_type == "file" %}<span>{{ entry.size_display }}</span>{% endif %}
-                <span data-ts="{{ entry.mtime }}"></span>
-            </div>
+        </div>
+
+        <div class="nf-name">
+            <button type="button" data-toggle-star
+                    data-repo-id="{{ repo_id }}"
+                    data-path="/{{ entry.relative_path }}"
+                    data-starred="{{ entry.starred }}"
+                    class="nf-star{% if entry.starred %} on{% endif %}"
+                    title="{% if entry.starred %}{{ t.tr("fb.unstar") }}{% else %}{{ t.tr("fb.star") }}{% endif %}">
+                {{ icons::icon_star("w-3 h-3", filled=entry.starred) }}
+            </button>
+            <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
+               class="base hover:underline">{{ entry.name_base }}</a>
+            {% if !entry.ext_display.is_empty() %}<span class="ext">{{ entry.ext_display }}</span>{% endif %}
             {% if !entry.tags.is_empty() %}
-            <div class="flex items-center gap-1 mt-1 flex-wrap">
+            <span class="flex items-center gap-1 min-w-0">
                 {% for tag in entry.tags %}
-                <button type="button" class="js-entry-tag inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium text-gray-700 dark:text-gray-200 hover:opacity-80 transition-opacity"
+                <button type="button" class="js-entry-tag inline-flex items-center gap-1 shrink-0 rounded-[4px] px-1.5 py-0.5 text-[10px] leading-none font-medium text-ink hover:opacity-80 transition-opacity"
                         style="background-color: {{ tag.color }}33;"
                         data-tag="{{ tag.name }}"
                         title="{{ t.trf("fb.filter_by_tag", [("name", &tag.name)]) }}">
@@ -229,69 +175,35 @@
                     {{ tag.name }}
                 </button>
                 {% endfor %}
-            </div>
+            </span>
             {% endif %}
         </div>
-        <div class="flex items-center gap-0.5">
-            <button data-toggle-star
-                    data-repo-id="{{ repo_id }}"
-                    data-path="/{{ entry.relative_path }}"
-                    data-starred="{{ entry.starred }}"
-                    class="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors
-                    {% if entry.starred %}text-amber-400{% else %}text-gray-300 hover:text-amber-400 dark:text-gray-600{% endif %}"
-                    title="{% if entry.starred %}{{ t.tr("fb.unstar") }}{% else %}{{ t.tr("fb.star") }}{% endif %}">
-                {{ icons::icon_star("h-3.5 w-3.5", filled=entry.starred) }}
-            </button>
-            <button type="button" class="js-share-btn btn btn-ghost-brand btn-icon"
-                    data-repo-id="{{ repo_id }}"
-                    data-path="/{{ entry.relative_path }}"
-                    data-type="{{ entry.entry_type }}"
-                    title="{{ t.trf("fb.get_share_link_for", [("name", &entry.name)]) }}">
-                {{ icons::icon_link("h-3.5 w-3.5") }}
-            </button>
-            {% if entry.entry_type == "file" %}
-            <a href="/repos/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}?dl=1"
-               class="btn btn-ghost btn-icon"
-               title="{{ t.trf("fb.download_name", [("name", &entry.name)]) }}">
-                {{ icons::icon_download("h-3.5 w-3.5") }}
-            </a>
-            <button type="button" class="js-history-btn btn btn-ghost-brand btn-icon"
-                    data-repo-id="{{ repo_id }}"
-                    data-path="/{{ entry.relative_path }}"
-                    title="{{ t.trf("fb.view_history_for", [("name", &entry.name)]) }}">
-                {{ icons::icon_clock("h-3.5 w-3.5") }}
-            </button>
-            {% endif %}
-            <button class="js-rename-btn btn btn-ghost btn-icon"
-                    data-path="{{ entry.relative_path }}"
-                    data-name="{{ entry.name }}"
-                    data-type="{{ entry.entry_type }}"
-                    title="{{ t.trf("fb.rename_name", [("name", &entry.name)]) }}">
-                {{ icons::icon_pencil("h-3.5 w-3.5") }}
-            </button>
-            <button class="js-delete-btn btn btn-ghost-danger btn-icon"
-                    data-repo-id="{{ repo_id }}"
-                    data-path="{{ entry.relative_path }}"
-                    data-name="{{ entry.name }}"
-                    data-type="{{ entry.entry_type }}"
-                    title="{{ t.trf("fb.delete_name", [("name", &entry.name)]) }}">
-                {{ icons::icon_trash("h-3.5 w-3.5") }}
-            </button>
-        </div>
-        {% endif %}
+
+        <div class="nf-size">{% if entry.entry_type == "file" %}{{ entry.size_display }}{% else %}&mdash;{% endif %}</div>
+        <span class="nf-when" data-ts="{{ entry.mtime }}"></span>
+
+        <button type="button" class="nf-more" aria-haspopup="menu" aria-expanded="false"
+                title="{{ t.tr("common.actions") }}" aria-label="{{ t.tr("common.actions") }}">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+        </button>
     </div>
     {% endfor %}
     {% endif %}
 </div>
 
-<!-- Grid View (hidden by default) -->
-<div class="js-file-grid-view hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 px-4 pb-4"
+<!-- Grid View (hidden by default).
+
+     Two tile treatments, decided by `entry.tile_kind` (ui/files.rs):
+       - a filled 4:3 box means "there is a picture in here" (image/video)
+       - a hairline outline box means there isn't (folder/document)
+     That is what stops 40% of the page from being solid grey blocks. -->
+<div class="js-file-grid-view nf-grid hidden"
      data-page="{{ page }}"
      data-total="{{ total }}"
      data-has-more="{% if has_more %}true{% else %}false{% endif %}">
     {% if render_view != "list" && render_view != "gallery" %}
     {% for entry in entries %}
-    <div class="js-entry-row relative block rounded-lg p-2.5 hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors cursor-pointer"
+    <div class="js-entry-row nf-tile{% if entry.starred %} starred{% endif %}"
          data-name="{{ entry.name }}"
          data-type="{{ entry.entry_type }}"
          data-page="{{ page }}"
@@ -309,52 +221,73 @@
          data-is-video="{{ entry.is_video }}"
          data-is-audio="{{ entry.is_audio }}"
          data-record-id="{{ entry.record_id }}">
-        {% if entry.entry_type == "dir" %}
-        <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
-            {{ icons::icon_folder("h-14 w-14 text-amber-400") }}
+        <div class="nf-tile-media{% if entry.tile_kind == "dir" || entry.tile_kind == "doc" %} is-outline{% endif %}{% if entry.is_video %} is-video{% endif %}">
+            {% if entry.tile_kind == "dir" %}
+            {{ icons::icon_folder("w-[22px] h-[22px] text-ink-2") }}
+            {% else %}
+            {% if let Some(thumb_url) = entry.image_thumbnail_url_large %}
+            <img src="{{ thumb_url }}" alt="" loading="lazy" data-thumb>
+            {# Revealed by right-panel.js `thumbFailed` when the thumbnail 404s
+               (no ffmpeg, or audio without cover art). #}
+            <span class="nf-thb-fallback js-thb-fallback hidden mono" title="{{ entry.name }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(4) }}</span>
+            {% endif %}
+            {% if entry.is_video %}
+            <span class="nf-play">{{ icons::icon_play("w-3.5 h-3.5") }}</span>
+            {% endif %}
+            {% if entry.tile_kind == "doc" %}
+            <span class="nf-doc">
+                {{ icons::icon_file("w-[22px] h-[22px] text-ink-3") }}
+                <span class="nf-doc-ext mono">{{ entry.extension.as_deref().unwrap_or("?")|truncate(4) }}</span>
+            </span>
+            {% endif %}
+            {% endif %}
+            {% include "includes/entry_tools.html" %}
         </div>
-        {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
-        <div class="aspect-square rounded-md flex items-center justify-center mb-2 overflow-hidden">
-            <img src="{{ thumb_url }}" alt="" class="h-full w-full object-contain" loading="lazy" data-thumb>
-            <span class="js-thb-fallback hidden text-xl font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
-        </div>
-        {% else %}
-        <div class="aspect-square rounded-md bg-gray-50 dark:bg-surface-700 flex items-center justify-center mb-2 overflow-hidden">
-            <span class="text-xl font-semibold {{ entry.icon_color }}">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
-        </div>
-        {% endif %}
-        <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
-           class="block text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-brand-500 dark:hover:text-brand-400 truncate text-center leading-snug">
-            {{ entry.name }}
+        <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}" class="nf-tile-name">
+            <span class="base">{{ entry.name_base }}</span>{% if !entry.ext_display.is_empty() %}<span class="ext">{{ entry.ext_display }}</span>{% endif %}
         </a>
-        {% if entry.entry_type == "file" %}
-        <p class="text-xs text-gray-400 text-center mt-0.5">{{ entry.size_display }}</p>
-        {% endif %}
+        {# `bare` = no size cell, so the date does not get a leading separator. #}
+        <div class="nf-tile-meta{% if entry.entry_type != "file" %} bare{% endif %}">
+            {% if entry.entry_type == "file" %}<span class="num">{{ entry.size_display }}</span>{% endif %}
+            <span class="nf-tile-date num" data-ts-short="{{ entry.mtime }}"></span>
+        </div>
     </div>
     {% endfor %}
     {% endif %}
 </div>
 
-<!-- Gallery View (hidden by default) -->
-<div class="js-gallery-view hidden"
+<!-- Gallery View (hidden by default) — a photo/video contact sheet. Audio is
+     excluded server-side (ui/files.rs `is_gallery_media_dirent`): a sound file
+     has no picture to show and is still reachable in the list and grid. -->
+<div class="js-gallery-view nf-gal hidden"
      data-page="{{ page }}"
      data-total="{{ gallery_total }}"
      data-has-more="{% if gallery_has_more %}true{% else %}false{% endif %}">
-    {% if render_view != "list" && render_view != "grid" %}
+    {% if render_view == "list" || render_view == "grid" %}
+    {# Not populated in a single-view partial render; the AJAX response that
+       replaces this container is always view=gallery or view=all. #}
+    {% else if gallery_groups.is_empty() %}
+    <div class="nf-gal-empty">
+        {{ icons::icon_gallery("mx-auto h-10 w-10 text-ink-3") }}
+        <p class="text-[13px] text-ink-3 mt-3">{{ t.tr("fb.no_photos_or_videos") }}</p>
+    </div>
+    {% else %}
     {% for group in gallery_groups %}
-    <div class="gallery-month-group bg-white dark:bg-surface-900">
-        <div class="sticky top-0 z-sticky bg-white/90 dark:bg-surface-900/90 backdrop-blur-sm px-4 py-3">
-            <h2 class="text-base font-bold text-gray-800 dark:text-gray-200">{{ group.label }}</h2>
+    <div class="nf-gal-group">
+        <div class="nf-gal-head">
+            <h2>{{ group.label }}</h2>
+            <span class="nf-gal-n num">{{ group.entries.len() }}</span>
+            <span class="nf-gal-rule" aria-hidden="true"></span>
         </div>
-        <div class="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-0.5 px-4 pb-6">
-        {% for entry in group.entries %}
-            <div class="js-entry-row group relative block aspect-square overflow-hidden bg-gray-100 dark:bg-surface-700 transition-transform duration-200 hover:scale-[1.04] hover:z-sticky cursor-pointer"
+        <div class="nf-gal-grid">
+            {% for entry in group.entries %}
+            <div class="js-entry-row nf-gal-tile{% if entry.starred %} starred{% endif %}"
                  data-name="{{ entry.name }}"
                  data-type="{{ entry.entry_type }}"
                  data-size="{{ entry.size }}"
                  data-size-display="{{ entry.size_display }}"
                  data-mtime="{{ entry.mtime }}"
-                         data-starred="{{ entry.starred }}"
+                 data-starred="{{ entry.starred }}"
                  data-extension="{{ entry.extension.as_deref().unwrap_or("") }}"
                  data-path="/{{ entry.relative_path }}"
                  data-repo-id="{{ repo_id }}"
@@ -365,45 +298,25 @@
                  data-is-video="{{ entry.is_video }}"
                  data-is-audio="{{ entry.is_audio }}"
                  data-record-id="{{ entry.record_id }}">
-                {% if entry.is_video %}
-                {% if let Some(thumb_url) = entry.image_thumbnail_url_large %}
-                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy" data-thumb>
-                <span class="js-thb-fallback hidden absolute inset-0 items-center justify-center text-gray-400 pointer-events-none">
-                    <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
-                </span>
-                <span class="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <span class="h-8 w-8 rounded-full bg-black/45 flex items-center justify-center">
-                        {{ icons::icon_play("h-4 w-4 text-white") }}
-                    </span>
-                </span>
-                <span class="absolute top-1 right-1 text-[10px] text-white/70 font-medium leading-none">{{ entry.extension.as_deref().unwrap_or("") }}</span>
-                {% else %}
-                <div class="w-full h-full flex items-center justify-center bg-gray-800 dark:bg-gray-900 pointer-events-none">
-                    <span class="absolute top-1 right-1 text-[10px] text-white/70 font-medium leading-none">{{ entry.extension.as_deref().unwrap_or("") }}</span>
-                    {{ icons::icon_play("h-8 w-8 text-white/80") }}
+                <div class="nf-gal-media{% if entry.is_video %} is-video{% endif %}">
+                    {% if let Some(thumb_url) = entry.image_thumbnail_url_large %}
+                    <img src="{{ thumb_url }}" alt="" loading="lazy" data-thumb>
+                    <span class="nf-thb-fallback js-thb-fallback hidden mono" title="{{ entry.name }}">{{ entry.extension.as_deref().unwrap_or("?")|truncate(4) }}</span>
+                    {% endif %}
+                    {% if entry.is_video %}
+                    <span class="nf-play">{{ icons::icon_play("w-4 h-4") }}</span>
+                    {% endif %}
+                    {% include "includes/entry_tools.html" %}
                 </div>
-                {% endif %}
-                {% elif let Some(thumb_url) = entry.image_thumbnail_url_large %}
-                <img src="{{ thumb_url }}" alt="" class="w-full h-full object-cover pointer-events-none" loading="lazy" data-thumb>
-                <span class="js-thb-fallback hidden absolute inset-0 items-center justify-center text-gray-400 pointer-events-none">
-                    <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
-                </span>
-                {% else %}
-                <div class="w-full h-full flex items-center justify-center text-gray-400 pointer-events-none">
-                    <span class="text-xs font-semibold">{{ entry.extension.as_deref().unwrap_or("?") }}</span>
-                </div>
-                {% endif %}
-                <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}"
-                   class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/75 to-transparent px-2 py-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                    <span class="text-xs text-white truncate block leading-tight">{{ entry.name }}</span>
+                {# Always visible: on a bright photo a white-on-image caption is a
+                   contrast gamble, and a hover-only caption is unreachable on
+                   touch and awkward by keyboard. #}
+                <a href="/libraries/{{ repo_id }}/files/{{ entry.relative_path|urlencode }}" class="nf-gal-cap">
+                    <span class="base">{{ entry.name_base }}</span><span class="ext">{{ entry.ext_display }}</span>
                 </a>
             </div>
-        {% endfor %}
+            {% endfor %}
         </div>
-    </div>
-    {% else %}
-    <div class="px-4 py-12 text-center">
-        <p class="text-sm text-gray-400 dark:text-gray-500">{{ t.tr("fb.no_photos_or_videos") }}</p>
     </div>
     {% endfor %}
     {% endif %}
@@ -411,17 +324,15 @@
 
 <!-- Load more (pagination) -->
 {% if has_more %}
-<div class="js-load-more-bar px-4 py-3 text-center border-t border-gray-100 dark:border-gray-700/50">
-    <button type="button" class="js-load-more-btn inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-brand-600 dark:text-brand-400 hover:bg-brand-50 dark:hover:bg-brand-900/20 rounded-md transition-colors">
+<div class="js-load-more-bar px-4 py-3 text-center border-t border-line">
+    <button type="button" class="js-load-more-btn inline-flex items-center gap-1.5 px-3 h-7 text-[12px] font-medium text-ink-2 hover:bg-raised rounded-ctl transition-colors">
         <svg class="js-load-more-spinner hidden h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
         </svg>
         <span>{{ t.tr("fb.load_more") }}</span>
-        <span class="text-gray-400 dark:text-gray-500">(<span class="js-loaded-count">{{ total.min(page as i64 * 200) }}</span> / {{ total }})</span>
+        <span class="text-ink-3 num">(<span class="js-loaded-count">{{ total.min(page as i64 * 200) }}</span> / {{ total }})</span>
     </button>
 </div>
 {% endif %}
 {% endif %}
-
-

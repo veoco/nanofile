@@ -1,7 +1,7 @@
 // local-time — render `[data-ts]` elements (Unix seconds) in the browser's
 // local timezone. The server embeds raw timestamps; this module fills the
 // visible text so users in any timezone see their local time.
-import { formatLocalDateTime } from "./format.js";
+import { formatLocalDateTime, formatLocalShortDate } from "./format.js";
 
 function render(el) {
   var ts = parseInt(el.dataset.ts, 10);
@@ -17,9 +17,20 @@ function renderTitle(el) {
   if (text) el.title = text;
 }
 
+// `data-ts-short` = a compact month/day label for the grid tile's meta line
+// ("Sep 19", "9月19日"). Intl handles the month name in the document's locale,
+// which is what the server can't do without shipping a month table per language.
+function renderShort(el) {
+  var ts = parseInt(el.dataset.tsShort, 10);
+  if (isNaN(ts)) return;
+  var text = formatLocalShortDate(ts);
+  if (text) el.textContent = text;
+}
+
 export function initLocalTime() {
   document.querySelectorAll("[data-ts]").forEach(render);
   document.querySelectorAll("[data-ts-title]").forEach(renderTitle);
+  document.querySelectorAll("[data-ts-short]").forEach(renderShort);
 
   // The file list is refreshed/paginated via AJAX, which swaps in new DOM
   // containing fresh `[data-ts]` elements. Watch the document body (not the
@@ -32,10 +43,12 @@ export function initLocalTime() {
           if (node.nodeType !== 1) return;
           if (node.matches && node.matches("[data-ts]")) render(node);
           if (node.matches && node.matches("[data-ts-title]")) renderTitle(node);
-          var nested = node.querySelectorAll && node.querySelectorAll("[data-ts], [data-ts-title]");
+          if (node.matches && node.matches("[data-ts-short]")) renderShort(node);
+          var nested = node.querySelectorAll && node.querySelectorAll("[data-ts], [data-ts-title], [data-ts-short]");
           if (nested) nested.forEach(function (n) {
             if (n.hasAttribute("data-ts")) render(n);
             if (n.hasAttribute("data-ts-title")) renderTitle(n);
+            if (n.hasAttribute("data-ts-short")) renderShort(n);
           });
         });
       });

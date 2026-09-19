@@ -39,7 +39,7 @@ pub async fn get_thumbnail(
     }
 
     let svc = state.thumbnail_service();
-    let (data, etag) = svc.get_thumbnail(&repo_id, &path, size).await?;
+    let (data, etag, format) = svc.get_thumbnail(&repo_id, &path, size).await?;
 
     // Conditional request: a matching validator short-circuits to 304 without
     // re-sending the thumbnail body (mirrors the download endpoint).
@@ -68,7 +68,9 @@ pub async fn get_thumbnail(
     Ok((
         StatusCode::OK,
         [
-            (header::CONTENT_TYPE, "image/png"),
+            // The container follows the pixels (JPEG when opaque, PNG when the
+            // image actually uses transparency); the cache entry remembers which.
+            (header::CONTENT_TYPE, format.mime()),
             // Matching seahub's THUMBNAIL_CACHE_DAYS=7 → 604800 seconds
             (header::CACHE_CONTROL, "private, max-age=604800"),
             (header::ETAG, &etag),

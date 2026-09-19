@@ -32,7 +32,7 @@
                         {% if item.deleted %}
                         <span class="text-red-500 text-xs">{{ t.tr("common.deleted_badge") }}</span>
                         {% endif %}
-                        <a href="/libraries/{{ item.repo_id }}/files/" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.repo_name }}</a>
+                        <a href="/libraries/{{ item.repo_id }}/files/" class="text-ink underline underline-offset-2 hover:text-ink-2">{{ item.repo_name }}</a>
                     </td>
                     <td class="td text-right">
                         {% if !item.deleted %}
@@ -69,7 +69,7 @@
                         {% if item.deleted %}
                         <span class="text-red-500 text-xs">{{ t.tr("common.deleted_badge") }}</span> {{ item.obj_name }}
                         {% else %}
-                        <a href="/libraries/{{ item.repo_id }}/files/{{ item.obj_name|urlencode }}/" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.obj_name }}</a>
+                        <a href="/libraries/{{ item.repo_id }}/files/{{ item.obj_name|urlencode }}/" class="text-ink underline underline-offset-2 hover:text-ink-2">{{ item.obj_name }}</a>
                         {% endif %}
                     </td>
                     <td class="td text-gray-500 dark:text-gray-400">{{ item.repo_name }}</td>
@@ -108,7 +108,7 @@
                         {% if item.deleted %}
                         <span class="text-red-500 text-xs">{{ t.tr("common.deleted_badge") }}</span> {{ item.obj_name }}
                         {% else %}
-                        <a href="/libraries/{{ item.repo_id }}/files/{{ item.obj_name|urlencode }}" class="text-brand-500 dark:text-brand-400 hover:underline">{{ item.obj_name }}</a>
+                        <a href="/libraries/{{ item.repo_id }}/files/{{ item.obj_name|urlencode }}" class="text-ink underline underline-offset-2 hover:text-ink-2">{{ item.obj_name }}</a>
                         {% endif %}
                     </td>
                     <td class="td text-gray-500 dark:text-gray-400">{{ item.repo_name }}</td>

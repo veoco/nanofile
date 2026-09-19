@@ -209,6 +209,7 @@ function updateSelectionPanel() {
         path: selRow.dataset.path,
         repoId: selRow.dataset.repoId,
         modifierEmail: selRow.dataset.modifierEmail,
+        mtime: selRow.dataset.mtime,
         thumbnailUrl: selRow.dataset.thumbnailUrl,
         thumbnailUrlLarge: selRow.dataset.thumbnailUrlLarge,
         size: selRow.dataset.size,

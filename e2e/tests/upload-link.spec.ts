@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo } from "../helpers/api";
+import { expandDetails } from "../helpers/details";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -44,6 +45,8 @@ test("right panel lists the created upload link", async ({ page }) => {
   await page.goto(`/libraries/${repoId}/files`);
   await page.waitForSelector(".js-entry-row");
   await selectDir(page, "subdir");
+  // The link list lives in the drawer's rich tier.
+  await expandDetails(page);
   const links = page.locator(".js-rp-upload-links-list a[href*='/u/']");
   await expect(links.first()).toBeVisible();
 });

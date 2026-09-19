@@ -614,6 +614,31 @@ async fn run_server(
         }
     }
 
+    // ── One-shot thumbnail cache purge (legacy tile sizes) ─────────────
+    // The DB half runs in the `purge_legacy_thumbnail_sizes` migration; the
+    // bytes on disk can only be removed here, where the cache directory is
+    // known, and only once (a marker file in the cache directory records it).
+    // Spawned rather than awaited: nothing depends on it, it walks a directory
+    // tree whose size we do not control, and deleting a cache file that a
+    // request is about to ask for again is harmless — it is simply regenerated.
+    {
+        let thumbnail_dir = config.storage.thumbnail_dir.clone();
+        tokio::spawn(async move {
+            match server::service::fs::thumbnail::purge_legacy_cache_files(&thumbnail_dir).await {
+                // A no-op pass (fresh install, or nothing left to reclaim) stays
+                // off the INFO log so a normal boot stays quiet.
+                Ok(report) if report.ran => {
+                    tracing::info!("thumbnail cache purge: {}", report.summary())
+                }
+                Ok(_) => tracing::debug!("thumbnail cache purge: already done, skipped"),
+                Err(e) => tracing::warn!(
+                    dir = %thumbnail_dir.display(),
+                    "thumbnail cache purge failed; it will retry on the next start: {e}"
+                ),
+            }
+        });
+    }
+
     let temp_file_manager = server::handler::web::temp_file::TempFileManager::new(
         config.storage.temp_dir.clone(),
         config.storage.max_temp_uploads,

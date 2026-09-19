@@ -5,6 +5,7 @@ import "../browser/view.js";
 import "../browser/list.js";
 import "../browser/selection.js";
 import "../browser/right-panel.js";
+import "../browser/row-menu.js";
 import "../browser/operations.js";
 import "../browser/upload.js";
 import "../browser/upload-link-dialog.js";

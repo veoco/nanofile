@@ -3,8 +3,8 @@
    modules register a `backdrop_close` name with registerModalClose() when
    closing needs extra cleanup beyond hiding the overlay. #}
 {% macro modal(id, z="z-dialog", max_w="max-w-sm", labelledby="", backdrop_close="") %}
-<div id="{{ id }}" class="hidden fixed inset-0 {{ z }} flex items-center justify-center bg-black/30" role="dialog" aria-modal="true"{% if labelledby != "" %} aria-labelledby="{{ labelledby }}"{% endif %}{% if backdrop_close != "" %} data-backdrop-close="{{ backdrop_close }}"{% endif %}>
-    <div class="bg-white dark:bg-surface-800 rounded-lg shadow-lg p-5 w-full {{ max_w }} mx-4" data-modal-card>
+<div id="{{ id }}" class="hidden fixed inset-0 {{ z }} flex items-center justify-center bg-black/40" role="dialog" aria-modal="true"{% if labelledby != "" %} aria-labelledby="{{ labelledby }}"{% endif %}{% if backdrop_close != "" %} data-backdrop-close="{{ backdrop_close }}"{% endif %}>
+    <div class="bg-panel border border-line rounded-box p-5 w-full {{ max_w }} mx-4" data-modal-card style="box-shadow: 0 10px 32px rgb(0 0 0 / 0.18)">
         {{ caller() }}
     </div>
 </div>

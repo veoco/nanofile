@@ -1,0 +1,179 @@
+{% import "includes/icons.html" as icons %}
+{# Details drawer — the erstwhile 300px right panel, re-homed as a horizontal
+   bar pinned to the bottom of the file-manager column.
+
+   It is an OVERLAY (`.nf-details` is absolutely positioned inside `.content`),
+   so opening it reflows nothing: the list keeps its exact height and scroll
+   offset, and the sidebar is not even in this column.
+
+   Layout: a compact summary row (thumbnail | name+path | fields | actions) plus
+   an optional rich tier that expands upward for the things that need room —
+   inline media playback, tags, EXIF, indexed text, share and upload links. The
+   expanded state is remembered per browser.
+
+   Every `.js-rp-*` hook is preserved verbatim: `browser/right-panel.js` looks
+   them all up with `querySelector` inside `.js-rp-content`, and the e2e specs
+   select on them. #}
+<section class="nf-details" id="nf-details" aria-label="{{ t.tr("fb.details") }}">
+
+    {# Kept for right-panel.js's null checks. The drawer is closed by default,
+       so this placeholder is never actually visible. #}
+    <div class="js-rp-placeholder hidden"></div>
+
+    <!-- ── Single selection ───────────────────────────────────────────────── -->
+    <div class="js-rp-content hidden">
+        <div class="d-row">
+            <div class="d-thumb">
+                <img class="js-rp-thumb-img hidden" src="" alt="" data-thumb>
+                <span class="js-rp-ext-badge hidden mono !text-[11px] font-bold"></span>
+                {{ icons::icon_folder("js-rp-folder-icon hidden w-6 h-6") }}
+                <svg class="js-rp-video-icon hidden w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+                <svg class="js-rp-audio-icon hidden w-6 h-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13a3 3 0 01-3 3 3 3 0 01-3-3 3 3 0 013-3V6.5l-8 1.3V18a3 3 0 01-3 3 3 3 0 01-3-3 3 3 0 013-3z"/></svg>
+            </div>
+
+            <div class="d-main">
+                <div class="d-name js-rp-name"></div>
+                <div class="d-sub js-rp-path"></div>
+            </div>
+
+            <div class="d-fields">
+                <div class="d-f"><span class="k">{{ t.tr("fb.type") }}</span><span class="v js-rp-type"></span></div>
+                <div class="d-f"><span class="k">{{ t.tr("common.size") }}</span><span class="v js-rp-size"></span></div>
+                <div class="d-f"><span class="k">{{ t.tr("fb.sort_modified") }}</span><span class="v js-rp-mtime"></span></div>
+            </div>
+
+            <div class="d-actions">
+                <button type="button" class="js-rp-star btn btn-quiet btn-icon" data-starred="false"
+                        title="{{ t.tr("fb.star") }}">
+                    {{ icons::icon_star("js-rp-star-icon w-3.5 h-3.5") }}
+                    <span class="js-rp-star-label sr-only"></span>
+                </button>
+                <button type="button" class="js-rp-history-btn js-history-btn hidden btn btn-quiet">
+                    {{ icons::icon_clock("w-3.5 h-3.5") }}
+                    <span class="hidden xl:inline">{{ t.tr("fb.history") }}</span>
+                </button>
+                <a class="js-rp-download btn btn-solid" href="" target="_blank">
+                    {{ icons::icon_download("w-3.5 h-3.5") }}
+                    <span>{{ t.tr("common.download") }}</span>
+                </a>
+                <button type="button" class="js-rp-share js-share-btn btn btn-line">
+                    {{ icons::icon_link("w-3.5 h-3.5") }}
+                    <span class="hidden xl:inline">{{ t.tr("fb.get_share_link") }}</span>
+                </button>
+                <button type="button" id="rp-upload-link-btn" style="display:none" class="btn btn-line">
+                    {{ icons::icon_upload("w-3.5 h-3.5") }}
+                    <span class="hidden xl:inline">{{ t.tr("fb.get_upload_link") }}</span>
+                </button>
+                <button class="js-rp-delete-btn js-delete-btn btn btn-danger-outline" title="{{ t.tr("common.delete") }}">
+                    {{ icons::icon_trash("w-3.5 h-3.5") }}
+                    <span class="hidden 2xl:inline">{{ t.tr("common.delete") }}</span>
+                </button>
+                <button type="button" class="d-toggle js-d-toggle" aria-expanded="false" aria-controls="nf-details-expand"
+                        title="{{ t.tr("fb.details") }}">
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 15 6-6 6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <button type="button" class="d-close js-deselect-all" title="{{ t.tr("common.close") }}" aria-label="{{ t.tr("common.close") }}">
+                    {{ icons::icon_close("w-3.5 h-3.5") }}
+                </button>
+            </div>
+        </div>
+
+        <!-- ── Rich tier: expanded on demand ──────────────────────────────── -->
+        <div class="d-expand" id="nf-details-expand" hidden>
+            <div class="d-expand-grid">
+
+                <!-- Inline media playback -->
+                <section class="d-ex-preview js-rp-media hidden">
+                    <video class="js-rp-video hidden max-w-[280px] max-h-[260px] rounded-ctl bg-black" controls preload="metadata" playsinline></video>
+                    <div class="js-rp-audio-row hidden w-[240px]">
+                        <audio class="js-rp-audio w-full" controls preload="metadata"></audio>
+                    </div>
+                </section>
+
+                <!-- Tags -->
+                <section class="d-ex js-rp-tags-section hidden">
+                    <h4>{{ icons::icon_tag("w-3.5 h-3.5") }}{{ t.tr("fb.tags") }}</h4>
+                    <div class="js-rp-tags-list flex items-center gap-1.5 flex-wrap min-h-5 mb-2">
+                        <!-- Populated by JS; the "no tags" hint is rendered in this
+                             same row so the height stays stable. -->
+                        <span class="js-rp-no-tags text-[11px] text-ink-3 italic">{{ t.tr("fb.no_tags") }}</span>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <input type="text" class="js-rp-tag-input input !py-1 !text-[11.5px] flex-1 min-w-0"
+                               list="js-rp-tag-options" placeholder="{{ t.tr("fb.add_tag") }}">
+                        <datalist id="js-rp-tag-options"></datalist>
+                        <button type="button" class="js-rp-tag-add btn btn-primary btn-sm">
+                            {{ icons::icon_plus("w-3.5 h-3.5") }}
+                            {{ t.tr("fb.add") }}
+                        </button>
+                    </div>
+                </section>
+
+                <!-- EXIF (images only) -->
+                <section class="d-ex js-rp-exif-section hidden">
+                    <h4>{{ icons::icon_camera("w-3.5 h-3.5") }}{{ t.tr("fb.exif_data") }}</h4>
+                    <div class="js-rp-exif-content space-y-1.5"></div>
+                    <div class="js-rp-no-exif hidden text-[11px] text-ink-3 italic">{{ t.tr("fb.no_exif_data") }}</div>
+                </section>
+
+                <!-- Full-text index -->
+                <section class="d-ex !max-w-[420px] js-rp-index-section hidden">
+                    <h4>{{ icons::icon_file_text("w-3.5 h-3.5") }}{{ t.tr("fb.fulltext_index") }}</h4>
+                    <pre class="js-rp-index-content text-[11.5px] text-ink-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words bg-raised rounded-ctl p-2"></pre>
+                    <div class="js-rp-index-empty hidden text-[11px] text-ink-3 italic">{{ t.tr("fb.not_indexed") }}</div>
+                    <button type="button" class="js-rp-reindex-btn mt-2 btn btn-line btn-sm">
+                        {{ icons::icon_refresh("w-3.5 h-3.5") }}
+                        {{ t.tr("fb.reindex") }}
+                    </button>
+                </section>
+
+                <!-- Share links -->
+                <section class="d-ex js-rp-share-links-section hidden">
+                    <h4>{{ icons::icon_link("w-3.5 h-3.5") }}{{ t.tr("fb.share_links") }}</h4>
+                    <div class="js-rp-share-links-list space-y-1 max-h-32 overflow-y-auto min-h-5">
+                        <div class="js-rp-share-links-loading text-[11px] text-ink-3 italic">{{ t.tr("fb.loading") }}</div>
+                    </div>
+                </section>
+
+                <!-- Upload links (directories only) -->
+                <section class="d-ex js-rp-upload-links-section hidden">
+                    <h4>{{ icons::icon_upload("w-3.5 h-3.5") }}{{ t.tr("fb.upload_links") }}</h4>
+                    <div class="js-rp-upload-links-list space-y-1 max-h-32 overflow-y-auto"></div>
+                    <div class="js-rp-no-upload-links hidden text-[11px] text-ink-3 italic">{{ t.tr("fb.no_upload_links") }}</div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Multiple selection ─────────────────────────────────────────────── -->
+    <div class="js-rp-multi-content hidden">
+        <div class="d-row">
+            <div class="d-thumb">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                    <rect x="8" y="3.5" width="12.5" height="12.5" rx="2"/>
+                    <path d="M16 19.5a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2" stroke-linecap="round"/>
+                </svg>
+            </div>
+            <div class="d-main !max-w-[420px]">
+                <div class="d-name js-rp-multi-count"></div>
+                <div class="d-sub js-rp-multi-list"></div>
+            </div>
+            <div class="d-actions">
+                <button type="button" class="js-batch-download btn btn-solid">
+                    {{ icons::icon_download("w-3.5 h-3.5") }}
+                    <span>{{ t.tr("fb.download_selected_btn") }}</span>
+                </button>
+                <button type="button" class="js-batch-move btn btn-line">{{ t.tr("fb.move_selected") }}</button>
+                <button type="button" class="js-batch-copy btn btn-line">{{ t.tr("fb.copy_selected") }}</button>
+                <button type="button" class="js-batch-reindex btn btn-line">{{ t.tr("fb.reindex_selected") }}</button>
+                <button type="button" class="js-batch-delete btn btn-danger-outline">
+                    {{ icons::icon_trash("w-3.5 h-3.5") }}
+                    <span class="hidden 2xl:inline">{{ t.tr("fb.delete_selected_btn") }}</span>
+                </button>
+                <button type="button" class="d-close js-deselect-all" title="{{ t.tr("common.close") }}" aria-label="{{ t.tr("common.close") }}">
+                    {{ icons::icon_close("w-3.5 h-3.5") }}
+                </button>
+            </div>
+        </div>
+    </div>
+</section>

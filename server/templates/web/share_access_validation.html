@@ -8,17 +8,17 @@
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #f0f5ff 0%, #ffffff 50%, #f5f0ff 100%);
+            background: #fcfcfc;
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
             padding: 1rem;
-            color: #1f2937;
+            color: #202020;
         }
         .card {
             background: white;
-            border-radius: 1rem;
+            border-radius: 8px;
             box-shadow: 0 4px 24px rgba(0,0,0,0.08);
             padding: 2rem;
             width: 100%;
@@ -29,7 +29,7 @@
             width: 48px;
             height: 48px;
             border-radius: 50%;
-            background: #fef2f2;
+            background: #fdf0f0;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -42,13 +42,13 @@
         }
         p {
             font-size: 0.875rem;
-            color: #6b7280;
+            color: #646464;
             margin-bottom: 1.5rem;
         }
         input[type="password"] {
             width: 100%;
             padding: 0.75rem 1rem;
-            border: 1px solid #d1d5db;
+            border: 1px solid #e0e0e0;
             border-radius: 0.75rem;
             font-size: 0.9375rem;
             outline: none;
@@ -56,13 +56,13 @@
             margin-bottom: 0.75rem;
         }
         input[type="password"]:focus {
-            border-color: #6366f1;
-            box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
+            border-color: #202020;
+            box-shadow: 0 0 0 3px rgba(32,32,32,0.06);
         }
         button {
             width: 100%;
             padding: 0.75rem;
-            background: #6366f1;
+            background: #202020;
             color: white;
             border: none;
             border-radius: 0.75rem;
@@ -71,10 +71,10 @@
             cursor: pointer;
             transition: background 0.15s;
         }
-        button:hover { background: #4f46e5; }
+        button:hover { background: #101010; }
         .error {
-            background: #fef2f2;
-            color: #dc2626;
+            background: #fdf0f0;
+            color: #ce2c31;
             padding: 0.5rem 0.75rem;
             border-radius: 0.5rem;
             font-size: 0.8125rem;
@@ -85,7 +85,7 @@
 <body>
     <div class="card">
         <div class="lock-icon">
-            <svg width="24" height="24" fill="none" stroke="#dc2626" viewBox="0 0 24 24">
+            <svg width="24" height="24" fill="none" stroke="#ce2c31" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
             </svg>
         </div>

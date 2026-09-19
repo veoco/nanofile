@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo } from "../helpers/api";
+import { expandDetails } from "../helpers/details";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -22,6 +23,8 @@ async function selectFile(page: import("@playwright/test").Page, name: string) {
 
 async function addTag(page: import("@playwright/test").Page, name: string) {
   await selectFile(page, "alpha.txt");
+  // Tags live in the drawer's rich tier, which starts collapsed.
+  await expandDetails(page);
   await expect(page.locator(".js-rp-tags-section")).toBeVisible();
   await page.locator(".js-rp-tag-input").fill(name);
   await page.locator(".js-rp-tag-add").click();
@@ -81,6 +84,7 @@ test("add a tag completes even when the initial tag list loads slowly", async ({
   // frontend fix it rolls the freshly-added chip back.
   const recDone = page.waitForResponse((r) => r.url().includes("/metadata/record/"));
   await selectFile(page, "bravo.txt");
+  await expandDetails(page);
   await expect(page.locator(".js-rp-tags-section")).toBeVisible();
   await page.locator(".js-rp-tag-input").fill("slowtag");
   await page.locator(".js-rp-tag-add").click();

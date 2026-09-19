@@ -48,6 +48,9 @@ pub struct FileBrowserTemplate {
     /// total/has_more differ from the list/grid all-file counts.
     pub gallery_total: i64,
     pub gallery_has_more: bool,
+    /// Photo/video split for the sort-bar summary shown in gallery mode.
+    pub gallery_photo_total: i64,
+    pub gallery_video_total: i64,
     pub page: u32,
     /// "all" = render all three views (full page), "list" = only list,
     /// "grid" = only grid, "gallery" = only gallery
@@ -87,6 +90,9 @@ pub struct FileBrowserCoreTemplate {
     /// total/has_more differ from the list/grid all-file counts.
     pub gallery_total: i64,
     pub gallery_has_more: bool,
+    /// Photo/video split for the sort-bar summary shown in gallery mode.
+    pub gallery_photo_total: i64,
+    pub gallery_video_total: i64,
     pub page: u32,
     /// "all" = render all three views (full page), "list" = only list,
     /// "grid" = only grid, "gallery" = only gallery
@@ -112,8 +118,14 @@ pub struct PreviewTextTemplate {
     pub file_name: String,
     pub content: String,
     pub repo_id: String,
-    pub current_path: String,
+    /// Unified `/repos/...` URL the preview embeds (or links to).
+    pub content_url: String,
+    /// The same URL with `?dl=1`, for the download action.
+    pub download_url: String,
     pub parent_path: String,
+    /// Crumb trail ending at the file itself, for the shared breadcrumb
+    /// include (its last item renders as the non-link current page).
+    pub breadcrumbs: Vec<BreadcrumbItem>,
     pub size_display: String,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
@@ -130,8 +142,14 @@ pub struct PreviewImageTemplate {
     pub repo_name: String,
     pub file_name: String,
     pub repo_id: String,
-    pub current_path: String,
+    /// Unified `/repos/...` URL the preview embeds (or links to).
+    pub content_url: String,
+    /// The same URL with `?dl=1`, for the download action.
+    pub download_url: String,
     pub parent_path: String,
+    /// Crumb trail ending at the file itself, for the shared breadcrumb
+    /// include (its last item renders as the non-link current page).
+    pub breadcrumbs: Vec<BreadcrumbItem>,
     pub size_display: String,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
@@ -151,8 +169,14 @@ pub struct PreviewMediaTemplate {
     pub repo_name: String,
     pub file_name: String,
     pub repo_id: String,
-    pub current_path: String,
+    /// Unified `/repos/...` URL the preview embeds (or links to).
+    pub content_url: String,
+    /// The same URL with `?dl=1`, for the download action.
+    pub download_url: String,
     pub parent_path: String,
+    /// Crumb trail ending at the file itself, for the shared breadcrumb
+    /// include (its last item renders as the non-link current page).
+    pub breadcrumbs: Vec<BreadcrumbItem>,
     pub size_display: String,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
@@ -178,6 +202,13 @@ pub struct FileEntry {
     pub starred: bool,
     /// File extension in uppercase (e.g. "PDF", "PNG"), None for directories.
     pub extension: Option<String>,
+    /// `name` without its extension, for the two-tone "name + .ext" display.
+    pub name_base: String,
+    /// Lowercase dotted extension (e.g. ".pdf"), empty when there is none.
+    pub ext_display: String,
+    /// Which thumbnail treatment the grid/gallery give this entry: "dir",
+    /// "image", "video" or "doc". See `build_file_entry`.
+    pub tile_kind: &'static str,
     /// Thumbnail URL for image/audio/video files at list-view scale (48px), None otherwise.
     pub image_thumbnail_url: Option<String>,
     /// Thumbnail URL for image/audio/video files at grid-view scale (256px), None otherwise.
@@ -319,10 +350,21 @@ fn sort_dirents(dirents: &mut [DirEntry], sort: &str, sort_order: &str) {
     });
 }
 
-/// A media dirent is a file that can show a thumbnail (image/audio/video).
-fn is_media_dirent(e: &DirEntry) -> bool {
-    e.entry_type == "file"
-        && (is_video_file(&e.name) || is_audio_file(&e.name) || is_thumbnail_image(&e.name))
+/// Thumbnail sizes the file browser asks for — the layout half of the story.
+///
+/// The values and the reasoning behind them live in `thumbnail_util`
+/// (`THUMBNAIL_SIZE_SMALL` / `THUMBNAIL_SIZE_LARGE`), next to
+/// `RETAINED_THUMBNAIL_SIZES`: the cache purge has to agree with this file
+/// about which sizes are still live.
+///
+/// Whether a dirent belongs in the gallery contact sheet.
+///
+/// Audio is deliberately excluded: a photo/video sheet has nothing to show for
+/// a sound file, and it stays reachable in the list and grid views. (The
+/// thumbnail endpoint also 404s for audio without cover art, so an included
+/// `.mp3` would only ever be a grey square with "MP3" on it.)
+fn is_gallery_media_dirent(e: &DirEntry) -> bool {
+    e.entry_type == "file" && (is_video_file(&e.name) || is_thumbnail_image(&e.name))
 }
 
 /// Build the display `FileEntry` for a single dirent (called only on the
@@ -355,21 +397,39 @@ fn build_file_entry(
     let needs_thumb = is_image_file || entry_is_video || entry_is_audio;
     let thumb_url = if needs_thumb {
         Some(format!(
-            "/api2/repos/{}/thumbnail/?p={}&size=48",
+            "/api2/repos/{}/thumbnail/?p={}&size={}",
             repo_id,
-            urlencode_path(&full_path)
+            urlencode_path(&full_path),
+            crate::thumbnail_util::THUMBNAIL_SIZE_SMALL
         ))
     } else {
         None
     };
     let thumb_url_large = if needs_thumb {
         Some(format!(
-            "/api2/repos/{}/thumbnail/?p={}&size=256",
+            "/api2/repos/{}/thumbnail/?p={}&size={}",
             repo_id,
-            urlencode_path(&full_path)
+            urlencode_path(&full_path),
+            crate::thumbnail_util::THUMBNAIL_SIZE_LARGE
         ))
     } else {
         None
+    };
+    let (name_base, ext_display) = split_display_name(&e.name, &e.entry_type);
+    // How the grid/gallery should draw this entry, decided once here so the
+    // templates stay free of nested `if let` chains:
+    //   "dir"   folder glyph
+    //   "image" real thumbnail
+    //   "video" thumbnail if we have one, plus a play badge
+    //   "doc"   hairline outline box with a glyph + extension
+    let tile_kind = if e.entry_type == "dir" {
+        "dir"
+    } else if entry_is_video {
+        "video"
+    } else if needs_thumb {
+        "image"
+    } else {
+        "doc"
     };
     FileEntry {
         name: e.name.clone(),
@@ -382,6 +442,9 @@ fn build_file_entry(
         is_previewable,
         starred: starred_set.contains(&full_path),
         extension: ext,
+        name_base,
+        ext_display,
+        tile_kind,
         image_thumbnail_url: thumb_url,
         image_thumbnail_url_large: thumb_url_large,
         is_video: entry_is_video,
@@ -491,49 +554,30 @@ pub fn is_previewable_file(name: &str) -> bool {
         || name.ends_with(".log")
 }
 
-fn file_icon_color(name: &str) -> &'static str {
-    if is_preview_image_file(name) {
-        "text-purple-500"
-    } else if name.ends_with(".rs")
-        || name.ends_with(".py")
-        || name.ends_with(".js")
-        || name.ends_with(".ts")
-        || name.ends_with(".html")
-        || name.ends_with(".css")
-        || name.ends_with(".go")
-        || name.ends_with(".java")
-        || name.ends_with(".c")
-        || name.ends_with(".cpp")
-        || name.ends_with(".h")
-        || name.ends_with(".rb")
-        || name.ends_with(".php")
-        || name.ends_with(".sh")
-        || name.ends_with(".toml")
-        || name.ends_with(".json")
-        || name.ends_with(".yaml")
-        || name.ends_with(".yml")
-    {
-        "text-blue-500"
-    } else if name.ends_with(".txt")
-        || name.ends_with(".md")
-        || name.ends_with(".pdf")
-        || name.ends_with(".doc")
-        || name.ends_with(".docx")
-        || name.ends_with(".xlsx")
-        || name.ends_with(".csv")
-    {
-        "text-green-500"
-    } else if name.ends_with(".zip")
-        || name.ends_with(".tar")
-        || name.ends_with(".gz")
-        || name.ends_with(".bz2")
-        || name.ends_with(".7z")
-        || name.ends_with(".rar")
-        || name.ends_with(".zst")
-    {
-        "text-orange-500"
-    } else {
-        "text-gray-400"
+/// Colour class for the file-type badge.
+///
+/// Graphite is a zero-chroma UI: chromatic colour is reserved for semantic
+/// state (ok / warn / err), so file types no longer carry a per-kind hue. The
+/// function is kept because the badge is rendered from Rust-side class strings
+/// (which `build.rs` scans for Tailwind) in several templates.
+fn file_icon_color(_name: &str) -> &'static str {
+    "text-ink-2"
+}
+
+/// Split a display name into its stem and a lowercase dotted suffix.
+///
+/// Mirrors `file_extension`'s rules — no suffix, or a suffix containing `/`, is
+/// not an extension — but additionally keeps dotfiles whole (`.bashrc` is a
+/// name, not a stem plus `.bashrc`).
+fn split_display_name(name: &str, entry_type: &str) -> (String, String) {
+    if entry_type != "file" {
+        return (name.to_string(), String::new());
+    }
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() && !ext.contains('/') => {
+            (stem.to_string(), format!(".{}", ext.to_lowercase()))
+        }
+        _ => (name.to_string(), String::new()),
     }
 }
 
@@ -595,6 +639,35 @@ pub fn day_key(timestamp: i64) -> String {
 pub struct BreadcrumbItem {
     pub label: String,
     pub path: String,
+}
+
+/// Crumb trail for a repo path, each item carrying the path up to and including
+/// itself (relative, no leading `/`, so it drops straight into a URL).
+///
+/// Used both for a directory (the browser's trail) and for a file (the preview
+/// page's trail, where the last crumb is the file and renders as the current
+/// page rather than a link).
+fn breadcrumbs_for(path: &str) -> Vec<BreadcrumbItem> {
+    let mut breadcrumbs = Vec::new();
+    if path == "/" {
+        return breadcrumbs;
+    }
+    let mut accum = String::new();
+    for seg in path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+    {
+        if !accum.is_empty() {
+            accum.push('/');
+        }
+        accum.push_str(seg);
+        breadcrumbs.push(BreadcrumbItem {
+            label: seg.to_string(),
+            path: accum.clone(),
+        });
+    }
+    breadcrumbs
 }
 
 // ─── Request types ───────────────────────────────────────────────────────────
@@ -853,9 +926,23 @@ async fn file_browser_inner(
     // paginated. Gallery keeps reverse-chronological order regardless of the
     // configured sort used by list/grid views.
     let mut gallery_slice: Vec<&DirEntry> = Vec::new();
+    let mut gallery_photo_total: i64 = 0;
+    let mut gallery_video_total: i64 = 0;
     let gallery_total: i64 = if render_view == "gallery" || render_view == "all" {
-        let mut media: Vec<&DirEntry> = dirents.iter().filter(|d| is_media_dirent(d)).collect();
+        let mut media: Vec<&DirEntry> = dirents
+            .iter()
+            .filter(|d| is_gallery_media_dirent(d))
+            .collect();
         media.sort_by_key(|d| std::cmp::Reverse(d.mtime)); // mtime descending
+        // Counted over the *whole* folder, not the page, so the sort-bar summary
+        // stays put while the user paginates.
+        for d in &media {
+            if is_video_file(&d.name) {
+                gallery_video_total += 1;
+            } else {
+                gallery_photo_total += 1;
+            }
+        }
         let offset = (page - 1) * per_page;
         if offset < media.len() {
             let end = (offset + per_page).min(media.len());
@@ -924,22 +1011,7 @@ async fn file_browser_inner(
 
     // Build breadcrumb items from current_path.
     // Each item's path is relative (no leading /) for use in URL construction.
-    let mut breadcrumbs: Vec<BreadcrumbItem> = Vec::new();
-    if path != "/" {
-        let trimmed = path.trim_start_matches('/');
-        let segments: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
-        let mut accum = String::new();
-        for seg in &segments {
-            if !accum.is_empty() {
-                accum.push('/');
-            }
-            accum.push_str(seg);
-            breadcrumbs.push(BreadcrumbItem {
-                label: seg.to_string(),
-                path: accum.clone(),
-            });
-        }
-    }
+    let breadcrumbs = breadcrumbs_for(&path);
 
     let csrf_token =
         crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
@@ -958,6 +1030,8 @@ async fn file_browser_inner(
             has_more,
             gallery_total,
             gallery_has_more,
+            gallery_photo_total,
+            gallery_video_total,
             page: page as u32,
             render_view,
             csrf_token,
@@ -990,6 +1064,8 @@ async fn file_browser_inner(
             has_more,
             gallery_total,
             gallery_has_more,
+            gallery_photo_total,
+            gallery_video_total,
             page: page as u32,
             render_view,
             active_page: "repos",
@@ -1056,99 +1132,77 @@ async fn serve_file(
         return Ok(Redirect::to(&content_url(&repo_id, &path, true)).into_response());
     }
 
-    // Audio/video — render a media preview page. The embedded player streams
-    // from the unified /repos/ endpoint (Range-capable), so /libraries/ itself
-    // never serves media bytes and video range requests skip the directory try.
-    if is_video_file(&file_name) || is_audio_file(&file_name) {
-        let is_video = is_video_file(&file_name);
-        let size_display = get_file_size(&state.db, &state.repos, &repo_id, &path)
-            .await
-            .map(format_size)
-            .unwrap_or_else(|_| "?".to_string());
-        let repo_name = state
-            .repos
-            .repo
-            .find_by_id(&repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?
-            .name;
-        let raw_parent = parent_path_from(&path);
-        let parent_path = raw_parent.trim_start_matches('/').to_string();
-        let left_panel_repos = state
-            .left_panel_cache
-            .get_for_user(&state.repos, user.user_id)
-            .await?;
-        let tpl = PreviewMediaTemplate {
-            urls: crate::static_assets::template_urls(),
-            t: I18n::get(user.language.as_deref()),
-            user_email: user.email,
-            is_admin: user.is_admin,
-            repo_name,
-            file_name,
-            repo_id: repo_id.clone(),
-            current_path: path.trim_start_matches('/').to_string(),
-            parent_path,
-            size_display,
-            active_page: "repos",
-            left_panel_repos,
-            current_repo_id: Some(repo_id),
-            is_video,
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
-    }
-
-    // Image preview
+    let is_video = is_video_file(&file_name);
+    let is_audio = is_audio_file(&file_name);
     let is_image = is_preview_image_file(&file_name);
-
-    // Text/code preview
     let is_text = is_previewable_file(&file_name);
 
-    if is_image {
-        let size_display = get_file_size(&state.db, &state.repos, &repo_id, &path)
-            .await
-            .map(format_size)
-            .unwrap_or_else(|_| "?".to_string());
-
-        let repo_name = state
-            .repos
-            .repo
-            .find_by_id(&repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?
-            .name;
-
-        let raw_parent = parent_path_from(&path);
-        let parent_path = raw_parent.trim_start_matches('/').to_string();
-
-        let left_panel_repos = state
-            .left_panel_cache
-            .get_for_user(&state.repos, user.user_id)
-            .await?;
-        let tpl = PreviewImageTemplate {
-            urls: crate::static_assets::template_urls(),
-            t: I18n::get(user.language.as_deref()),
-            user_email: user.email,
-            is_admin: user.is_admin,
-            repo_name,
-            file_name,
-            repo_id: repo_id.clone(),
-            current_path: path.trim_start_matches('/').to_string(),
-            parent_path,
-            size_display,
-            active_page: "repos",
-            left_panel_repos,
-            current_repo_id: Some(repo_id),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
+    if !is_video && !is_audio && !is_image && !is_text {
+        // Non-preview binary files — redirect to the unified content endpoint.
+        // The browser inlines/downloads per Content-Type exactly as before, but
+        // /libraries/ itself never serves bytes.
+        return Ok(Redirect::to(&content_url(&repo_id, &path, false)).into_response());
     }
 
-    if is_text {
+    // Everything the three preview pages share. They render inside the normal
+    // app shell (topbar + library tree), so this is only the page body.
+    let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
+    let size_display = get_file_size(&state.db, &state.repos, &repo_id, &path)
+        .await
+        .map(format_size)
+        .unwrap_or_else(|_| "?".to_string());
+    let repo_name = state
+        .repos
+        .repo
+        .find_by_id(&repo_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?
+        .name;
+    let parent_path = parent_path_from(&path).trim_start_matches('/').to_string();
+    let content = content_url(&repo_id, &path, false);
+    let download = content_url(&repo_id, &path, true);
+    // The trail ends at the file, so the last crumb renders as the current page.
+    let breadcrumbs = breadcrumbs_for(&path);
+    let html = if is_video || is_audio {
+        PreviewMediaTemplate {
+            urls: ctx.urls,
+            t: ctx.t,
+            user_email: ctx.user_email,
+            is_admin: ctx.is_admin,
+            repo_name,
+            file_name: file_name.clone(),
+            repo_id: repo_id.clone(),
+            content_url: content,
+            download_url: download,
+            parent_path,
+            breadcrumbs,
+            size_display,
+            active_page: "repos",
+            left_panel_repos: ctx.left_panel_repos,
+            current_repo_id: Some(repo_id),
+            is_video,
+        }
+        .render()
+    } else if is_image {
+        PreviewImageTemplate {
+            urls: ctx.urls,
+            t: ctx.t,
+            user_email: ctx.user_email,
+            is_admin: ctx.is_admin,
+            repo_name,
+            file_name: file_name.clone(),
+            repo_id: repo_id.clone(),
+            content_url: content,
+            download_url: download,
+            parent_path,
+            breadcrumbs,
+            size_display,
+            active_page: "repos",
+            left_panel_repos: ctx.left_panel_repos,
+            current_repo_id: Some(repo_id),
+        }
+        .render()
+    } else {
         // Cap the preview read so huge text files don't blow up memory.
         let data = Downloader::download_file_limited(
             &state.repos,
@@ -1160,54 +1214,29 @@ async fn serve_file(
         )
         .await
         .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
-        let content = String::from_utf8_lossy(&data).to_string();
-
-        let repo_name = state
-            .repos
-            .repo
-            .find_by_id(&repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?
-            .name;
-
-        let raw_parent = parent_path_from(&path);
-        let parent_path = raw_parent.trim_start_matches('/').to_string();
-
-        let size_display = get_file_size(&state.db, &state.repos, &repo_id, &path)
-            .await
-            .map(format_size)
-            .unwrap_or_else(|_| "?".to_string());
-
-        let left_panel_repos = state
-            .left_panel_cache
-            .get_for_user(&state.repos, user.user_id)
-            .await?;
-        let tpl = PreviewTextTemplate {
-            urls: crate::static_assets::template_urls(),
-            t: I18n::get(user.language.as_deref()),
-            user_email: user.email,
-            is_admin: user.is_admin,
+        PreviewTextTemplate {
+            urls: ctx.urls,
+            t: ctx.t,
+            user_email: ctx.user_email,
+            is_admin: ctx.is_admin,
             repo_name,
-            file_name,
-            content,
+            file_name: file_name.clone(),
+            content: String::from_utf8_lossy(&data).to_string(),
             repo_id: repo_id.clone(),
-            current_path: path.trim_start_matches('/').to_string(),
+            content_url: content,
+            download_url: download,
             parent_path,
+            breadcrumbs,
             size_display,
             active_page: "repos",
-            left_panel_repos,
+            left_panel_repos: ctx.left_panel_repos,
             current_repo_id: Some(repo_id),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
+        }
+        .render()
     }
+    .map_err(|e| AppError::internal(e.to_string()))?;
 
-    // Non-preview binary files — redirect to the unified content endpoint. The
-    // browser inlines/downloads per Content-Type exactly as before, but
-    // /libraries/ itself never serves bytes.
-    Ok(Redirect::to(&content_url(&repo_id, &path, false)).into_response())
+    Ok(Html(html).into_response())
 }
 
 /// Resolve a file's size from the FS tree without downloading its content.
@@ -1318,6 +1347,33 @@ fn urlencode_path(path: &str) -> String {
 mod tests {
     use super::*;
 
+    /// The trail is shared by the browser (a directory) and the full-page
+    /// preview (a file, whose own name is the last crumb): each item carries the
+    /// path up to and including itself, relative and URL-ready.
+    #[test]
+    fn breadcrumbs_accumulate_the_path() {
+        assert!(breadcrumbs_for("/").is_empty());
+        assert!(breadcrumbs_for("").is_empty());
+
+        let trail = breadcrumbs_for("/Field Photos");
+        assert_eq!(trail.len(), 1);
+        assert_eq!(trail[0].label, "Field Photos");
+        assert_eq!(trail[0].path, "Field Photos");
+
+        let trail = breadcrumbs_for("/a/b/c.png");
+        let as_pairs: Vec<(&str, &str)> = trail
+            .iter()
+            .map(|c| (c.label.as_str(), c.path.as_str()))
+            .collect();
+        assert_eq!(
+            as_pairs,
+            vec![("a", "a"), ("b", "a/b"), ("c.png", "a/b/c.png")]
+        );
+
+        // A trailing slash (directory URL) does not add an empty crumb.
+        assert_eq!(breadcrumbs_for("/a/b/").len(), 2);
+    }
+
     fn make_entry(name: &str, entry_type: &str, size: i64, mtime: i64) -> FileEntry {
         FileEntry {
             name: name.to_string(),
@@ -1330,6 +1386,9 @@ mod tests {
             is_previewable: false,
             starred: false,
             extension: None,
+            name_base: name.to_string(),
+            ext_display: String::new(),
+            tile_kind: if entry_type == "dir" { "dir" } else { "doc" },
             image_thumbnail_url: None,
             image_thumbnail_url_large: None,
             is_video: false,

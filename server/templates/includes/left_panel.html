@@ -1,95 +1,86 @@
 {% import "includes/icons.html" as icons %}
-{% import "includes/modal.html" as modal %}
-<!-- Left Panel — Library Tree & Quick Access (loaded dynamically) -->
-<div class="grid h-full" style="grid-template-rows: auto auto minmax(0,1fr) 151px 35px">
+<!-- Left Panel — Library tree & Quick Access.
+
+     Three regions: a fixed head (label + filter), the only scrollable area
+     (the library list), and pinned foot blocks that open with the same
+     hairline. The foot never scrolls, so it stays put however long the library
+     list gets. -->
+<div class="flex flex-col h-full min-h-0">
+
     <!-- Header -->
-    <div class="flex items-center justify-between px-3 py-3 border-b border-gray-200 dark:border-gray-700">
-        <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("nav.libraries") }}</h2>
+    <div class="shrink-0 px-2.5 pt-3.5 pb-2 flex flex-col gap-2">
+        <div class="side-label px-1">{{ t.tr("nav.libraries") }}</div>
+        <label class="flex items-center gap-1.5 h-7 px-2 rounded-ctl border border-line-ctrl text-ink-3">
+            {{ icons::icon_search("w-3.5 h-3.5 flex-shrink-0") }}
+            <input type="text" class="js-repo-filter flex-1 min-w-0 border-0 bg-transparent outline-none text-ink text-[12.5px] placeholder-ink-3"
+                   placeholder="{{ t.tr("nav.filter_repos") }}"
+                   aria-label="{{ t.tr("nav.filter_repos") }}">
+        </label>
     </div>
 
-    <!-- Repo filter -->
-    <div class="px-3 pt-2">
-        <div class="relative">
-            {{ icons::icon_search("absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400") }}
-            <input type="text" class="js-repo-filter w-full rounded-md border-0 bg-gray-100 dark:bg-surface-700 pl-8 pr-2 py-1.5 text-xs text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-brand-500"
-                   placeholder="{{ t.tr("nav.filter_repos") }}">
-        </div>
-    </div>
-
-    <!-- Repository tree list (server-rendered) -->
-    <div class="overflow-y-auto px-3 py-2 space-y-0.5 js-repo-tree">
+    <!-- Repository tree list (server-rendered) — the only scrolling region -->
+    <div class="flex-1 min-h-0 overflow-y-auto px-2 pb-2.5 js-repo-tree">
         {% if left_panel_repos.is_empty() %}
-        <p class="text-xs text-gray-400 dark:text-gray-500 text-center py-4">{{ t.tr("nav.no_libraries") }}</p>
+        <p class="text-[12px] text-ink-3 text-center py-4">{{ t.tr("nav.no_libraries") }}</p>
         {% else %}
         {% for r in left_panel_repos %}
         <div class="js-repo-item" data-repo-id="{{ r.id }}">
             <a href="/libraries/{{ r.id }}/files/"
-               class="nav-item{% if current_repo_id.as_deref() == Some(r.id) %} nav-item-active{% else %} nav-item-inactive{% endif %}">
-                {{ icons::icon_folder("h-4 w-4 flex-shrink-0 text-amber-400") }}
-                <span class="truncate flex-1">{{ r.name }}</span>
-                <span class="text-xs text-gray-400">{{ r.size_display }}</span>
+               class="row-link{% if current_repo_id.as_deref() == Some(r.id) %} on{% endif %}">
+                <span class="ic">{{ icons::icon_folder("w-[15px] h-[15px]") }}</span>
+                <span class="nm">{{ r.name }}</span>
+                <span class="ct">{{ r.size_display }}</span>
             </a>
         </div>
         {% endfor %}
         {% endif %}
     </div>
 
-    <!-- Quick access links -->
-    <div class="border-t border-gray-200 dark:border-gray-700 pt-2 pb-2 px-3 space-y-0.5">
+    <!-- Browse -->
+    <div class="shrink-0 border-t border-line px-2 pt-2 pb-2.5">
+        <div class="side-label px-1.5 pt-1 pb-1.5">{{ t.tr("nav.browse") }}</div>
         <a href="/starred/"
-           class="nav-item{% if active_page == "starred" %} nav-item-active{% else %} nav-item-inactive{% endif %}">
-            {{ icons::icon_star("h-4 w-4 flex-shrink-0") }}
-            <span>{{ t.tr("nav.starred") }}</span>
+           class="row-link{% if active_page == "starred" %} on{% endif %}">
+            <span class="ic">{{ icons::icon_star("w-[15px] h-[15px]") }}</span>
+            <span class="nm">{{ t.tr("nav.starred") }}</span>
         </a>
         <a href="/shares/"
-           class="nav-item{% if active_page == "shares" %} nav-item-active{% else %} nav-item-inactive{% endif %}">
-            {{ icons::icon_share("h-4 w-4 flex-shrink-0") }}
-            <span>{{ t.tr("nav.shares") }}</span>
+           class="row-link{% if active_page == "shares" %} on{% endif %}">
+            <span class="ic">{{ icons::icon_share("w-[15px] h-[15px]") }}</span>
+            <span class="nm">{{ t.tr("nav.shares") }}</span>
         </a>
         <a href="/trash/"
-           class="nav-item{% if active_page == "trash" %} nav-item-active{% else %} nav-item-inactive{% endif %}">
-            {{ icons::icon_trash("h-4 w-4 flex-shrink-0") }}
-            <span>{{ t.tr("nav.trash") }}</span>
+           class="row-link{% if active_page == "trash" %} on{% endif %}">
+            <span class="ic">{{ icons::icon_trash("w-[15px] h-[15px]") }}</span>
+            <span class="nm">{{ t.tr("nav.trash") }}</span>
         </a>
         <a href="/activities/"
-           class="nav-item{% if active_page == "activities" %} nav-item-active{% else %} nav-item-inactive{% endif %}">
-            {{ icons::icon_clock("h-4 w-4 flex-shrink-0") }}
-            <span>{{ t.tr("nav.activity") }}</span>
+           class="row-link{% if active_page == "activities" %} on{% endif %}">
+            <span class="ic">{{ icons::icon_clock("w-[15px] h-[15px]") }}</span>
+            <span class="nm">{{ t.tr("nav.activity") }}</span>
         </a>
+    </div>
+
+    <!-- Storage — filled from GET /api2/account/info/ by core/nav.js. The whole
+         block stays hidden when the quota is unlimited or the request fails. -->
+    <div class="shrink-0 border-t border-line px-2 pt-2 pb-2.5 hidden" id="nf-storage">
+        <div class="flex items-baseline justify-between gap-2 px-1.5">
+            <span class="text-[12px] text-ink-2">{{ t.tr("nav.storage") }}</span>
+            <span class="mono" id="nf-storage-text"></span>
+        </div>
+        <div class="h-[3px] rounded-full bg-line overflow-hidden mx-1.5 mt-2.5 mb-0.5" id="nf-storage-track">
+            <span class="block h-full bg-ink-2" id="nf-storage-bar" style="width:0%"></span>
+        </div>
     </div>
 
     <!-- Version footer -->
-    <div class="border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-surface-900 px-3 py-2.5">
-        <div class="flex items-center justify-between gap-2">
-            <div class="flex items-center gap-2 min-w-0">
-                <svg class="h-3.5 w-3.5 flex-shrink-0 text-brand-500" viewBox="0 0 32 32" fill="currentColor">
-                    <rect x="0" y="0" width="32" height="32" rx="6" fill="currentColor"/>
-                    <text x="16" y="23" text-anchor="middle" font-family="system-ui, sans-serif" font-weight="700" font-size="18" fill="white">N</text>
-                </svg>
-                <span class="text-[11px] leading-none text-gray-400 dark:text-gray-500 select-none">Nanofile {{ urls.version }}</span>
-            </div>
-            <span id="resp-time" class="text-[11px] leading-none text-gray-400 dark:text-gray-500 select-none opacity-0 transition-opacity duration-300"></span>
+    <div class="shrink-0 border-t border-line px-2 pt-2 pb-2.5">
+        <div class="flex items-center justify-between gap-2 px-1.5">
+            <span class="flex items-center gap-[7px] min-w-0 text-[12px] text-ink-2">
+                <span class="grid place-items-center w-[15px] h-[15px] shrink-0 rounded-[4px] bg-accent text-accent-ink text-[9px] font-bold leading-none">N</span>
+                Nanofile {{ urls.version }}
+            </span>
+            <span id="resp-time" class="mono opacity-0 transition-opacity duration-300"></span>
         </div>
     </div>
 </div>
-
-<!-- New Library dialog (self-contained) -->
-{% call modal::modal("quick-create-overlay", z="z-above-dialog", labelledby="quick-create-title", backdrop_close="hideQuickCreate") %}
-        <h3 id="quick-create-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("repo.new_library") }}</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("repo.new_library_desc") }}</p>
-        <form id="quick-create-form" data-form="quick-create">
-            <input id="quick-create-input" type="text" name="name" placeholder="{{ t.tr("repo.name") }}"
-                   class="input"
-                   autofocus>
-            <div class="mt-4 flex justify-end gap-2">
-                <button type="button" data-action="close-quick-create"
-                        class="btn btn-secondary">
-                    {{ t.tr("common.cancel") }}
-                </button>
-                <button type="submit"
-                        class="btn btn-primary">
-                    {{ t.tr("common.create") }}
-                </button>
-            </div>
-        </form>
-{% endcall %}

@@ -9,240 +9,241 @@
 {% endblock %}
 
 {% block main_layout %}
-<!-- File browser: main + right panel in a Grid so the 300px detail column is
-     reserved up front, avoiding layout shift during progressive loading. -->
-<div class="grid flex-1 overflow-hidden grid-rows-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_300px]">
-<!-- Main content — file browser -->
-<main role="main" aria-label="{{ t.tr("a11y.main_content") }}"
-      class="overflow-y-auto p-4 sm:p-6 pb-20 lg:pb-6">
+{# File manager column. `position: relative` + `overflow: hidden` on `.content`
+   is what lets the details drawer live at the bottom edge as an overlay: closed,
+   `.content` clips it below the fold; open, it slides up over the list without
+   changing the list's height or scroll position. #}
+<div class="content" id="nf-content">
+
+<main role="main" aria-label="{{ t.tr("a11y.main_content") }}" id="drop-zone" data-drop-zone
+      class="flex-1 min-w-0 min-h-0 flex flex-col relative bg-canvas">
     {% block content %}
-    {% include "includes/breadcrumb.html" %}
-
-    <div id="drop-zone" data-drop-zone class="relative rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800 overflow-hidden">
-    <div class="border-b border-gray-200 dark:border-gray-700 px-4 py-3">
-        <div class="flex flex-wrap items-center justify-between gap-y-2">
-            <h2 class="text-lg font-medium text-gray-900 dark:text-gray-100">{{ repo_name }}</h2>
-            {% include "includes/toolbar.html" %}
-        </div>
-    </div>
-    <div class="file-list-container">
-        {% include "includes/file_list.html" %}
+    <div class="topline">
+        {% include "includes/breadcrumb.html" %}
+        <span class="spacer"></span>
+        {% include "includes/toolbar.html" %}
     </div>
 
-    <!-- Rename dialog overlay -->
-    {% call modal::modal("rename-overlay", labelledby="rename-dialog-title") %}
-            <h3 id="rename-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("common.rename") }}</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("fb.rename_enter_new_name") }}</p>
-            <form id="rename-dialog-form" action="/libraries/{{ repo_id }}/files/rename/" method="POST">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="current_dir" value="{{ current_path }}">
-                <input type="hidden" name="repo_name" value="{{ repo_name }}">
-                <input type="hidden" id="rename-old-path" name="p" value="">
-                <input id="rename-input" type="text" name="new_name" placeholder="{{ t.tr("fb.rename_new_name_placeholder") }}"
-                       class="input"
-                       autofocus>
-                <div class="mt-4 flex justify-end gap-2">
-                    <button type="button" class="js-rename-cancel btn btn-secondary">
-                        {{ t.tr("common.cancel") }}
-                    </button>
-                    <button type="submit"
-                            class="btn btn-primary">
-                        {{ t.tr("common.save") }}
-                    </button>
-                </div>
-            </form>
-    {% endcall %}
-
-    <!-- Directory picker overlay (for batch move/copy) -->
-    {% call modal::modal("dir-picker-overlay", max_w="max-w-md", labelledby="dir-picker-title") %}
-            <h3 id="dir-picker-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.move_items_title") }}</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">{{ t.tr("fb.move_select_destination") }}</p>
-            <!-- Breadcrumb -->
-            <div id="dir-picker-breadcrumb" class="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 mb-3 overflow-x-auto whitespace-nowrap"></div>
-            <!-- Directory list -->
-            <div id="dir-picker-list" class="max-h-60 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-lg p-1.5 space-y-0.5 mb-4">
-                <div class="text-sm text-gray-400 text-center py-4">{{ t.tr("fb.loading") }}</div>
-            </div>
-            <div class="flex justify-end gap-2">
-                <button type="button" class="js-picker-cancel btn btn-secondary">
-                    {{ t.tr("common.cancel") }}
-                </button>
-                <button type="button" class="js-picker-confirm btn btn-primary">
-                    {{ t.tr("fb.move_here") }}
-                </button>
-            </div>
-    {% endcall %}
-
-    <!-- Share dialog overlay -->
-    {% call modal::modal("share-dialog-overlay", max_w="max-w-sm", labelledby="share-dialog-title") %}
-            <h3 id="share-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.create_share_link") }}</h3>
-            <p class="js-share-dialog-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
-            <div class="space-y-3">
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.password") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
-                    <input type="password" id="share-password-input" placeholder="{{ t.tr("fb.leave_empty_no_password") }}"
-                           class="input">
-                </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.expires_in") }}</label>
-                    <select id="share-expiry-select"
-                            class="select">
-                        <option value="">{{ t.tr("fb.never") }}</option>
-                        <option value="1">{{ t.tr("fb.days_1") }}</option>
-                        <option value="7">{{ t.tr("fb.days_7") }}</option>
-                        <option value="30">{{ t.tr("fb.days_30") }}</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.description") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
-                    <input type="text" id="share-description-input" placeholder="{{ t.tr("fb.what_is_link_for") }}"
-                           class="input">
-                </div>
-            </div>
-            <!-- Link URL display (shown after creation) -->
-            <div id="share-link-display" class="hidden space-y-3">
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.share_link_url") }}</label>
-                    <div class="flex gap-2">
-                        <input type="text" id="share-link-url" readonly
-                               class="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50">
-                        <button type="button" data-action="copy-share-link"
-                                class="btn btn-primary">
-                            {{ t.tr("fb.copy") }}
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="js-share-dialog-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
-            <div class="mt-4 flex justify-end gap-2">
-                <button type="button" class="js-share-cancel btn btn-secondary">
-                    {{ t.tr("common.cancel") }}
-                </button>
-                <button type="button" id="share-delete-btn" class="hidden btn btn-danger disabled:opacity-50">
-                    {{ t.tr("common.delete") }}
-                </button>
-                <button type="button" class="js-share-confirm btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
-                    {{ t.tr("common.create") }}
-                </button>
-            </div>
-    {% endcall %}
-
-    <!-- Upload link dialog overlay -->
-    {% call modal::modal("upload-link-dialog-overlay", max_w="max-w-sm", labelledby="ul-dialog-title") %}
-            <h3 id="ul-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.upload_link") }}</h3>
-            <p class="js-ul-dialog-path text-sm text-gray-500 dark:text-gray-400 mb-4 break-all"></p>
-
-            <!-- Create form -->
-            <div id="ul-create-form" class="space-y-3">
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.password") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
-                    <input type="password" id="ul-password-input" placeholder="{{ t.tr("fb.leave_empty_no_password") }}"
-                           class="input">
-                </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.expires_in") }}</label>
-                    <select id="ul-expiry-select"
-                            class="select">
-                        <option value="">{{ t.tr("fb.never") }}</option>
-                        <option value="1">{{ t.tr("fb.days_1") }}</option>
-                        <option value="7">{{ t.tr("fb.days_7") }}</option>
-                        <option value="30">{{ t.tr("fb.days_30") }}</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.description") }} <span class="text-gray-400">{{ t.tr("fb.optional") }}</span></label>
-                    <input type="text" id="ul-description-input" placeholder="{{ t.tr("fb.what_is_link_for") }}"
-                           class="input">
-                </div>
-            </div>
-
-            <!-- Link display (shown after creation) -->
-            <div id="ul-link-display" class="hidden space-y-3">
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t.tr("fb.upload_link_url") }}</label>
-                    <div class="flex gap-2">
-                        <input type="text" id="ul-link-url" readonly
-                               class="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-surface-700 dark:text-gray-100 text-sm p-2.5 bg-gray-50">
-                        <button type="button" data-action="copy-upload-link"
-                                class="btn btn-primary">
-                            {{ t.tr("fb.copy") }}
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="js-ul-dialog-error hidden mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-600 dark:text-red-400"></div>
-
-            <div class="mt-4 flex justify-end gap-2">
-                <button type="button" class="js-ul-cancel btn btn-secondary">
-                    {{ t.tr("common.cancel") }}
-                </button>
-                <button type="button" id="ul-delete-btn" class="hidden btn btn-danger disabled:opacity-50">
-                    {{ t.tr("common.delete") }}
-                </button>
-                <button type="button" id="ul-create-btn" class="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
-                    {{ t.tr("common.create") }}
-                </button>
-            </div>
-    {% endcall %}
-
-    <!-- History dialog overlay (file version history) -->
-    {% call modal::modal("history-dialog-overlay", max_w="max-w-lg", labelledby="history-dialog-title") %}
-            <div class="flex items-center justify-between mb-1">
-                <h3 id="history-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ t.tr("fb.file_history") }}</h3>
-                <button type="button" class="js-history-close text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" aria-label="{{ t.tr("common.close") }}">
-                    {{ icons::icon_close("h-5 w-5") }}
-                </button>
-            </div>
-            <p class="js-history-path text-sm text-gray-500 dark:text-gray-400 mb-3 break-all"></p>
-            <div class="js-history-list max-h-80 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-lg p-1.5 space-y-0.5 mb-4">
-                <div class="js-history-loading text-sm text-gray-400 text-center py-4">{{ t.tr("fb.loading") }}</div>
-            </div>
-            <div class="flex justify-end gap-2">
-                <button type="button" class="js-history-close btn btn-secondary">
-                    {{ t.tr("common.close") }}
-                </button>
-            </div>
-    {% endcall %}
-
-    <!-- Quick preview dialog overlay (dblclick on a file row) -->
-    <!-- Kept hand-written (not the modal macro): its card is a large
-         full-height flex dialog (rounded-xl, no padding, header + body)
-         that the macro's fixed card layout can't express. -->
-    <div id="quick-preview-overlay" class="hidden fixed inset-0 z-dialog flex items-center justify-center bg-black/30" role="dialog" aria-modal="true" aria-labelledby="quick-preview-title">
-        <div class="relative bg-white dark:bg-surface-800 rounded-xl shadow-xl max-w-4xl w-[min(92vw,900px)] max-h-[90vh] flex flex-col overflow-hidden">
-            <div class="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-                <h3 id="quick-preview-title" class="js-qp-title text-sm font-semibold text-gray-900 dark:text-gray-100 truncate"></h3>
-                <button type="button" class="js-qp-close p-1.5 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-surface-700 transition-colors" aria-label="{{ t.tr("common.close") }}">
-                    {{ icons::icon_close("h-5 w-5") }}
-                </button>
-            </div>
-            <div class="flex-1 overflow-auto flex items-center justify-center p-4 bg-gray-50 dark:bg-surface-900">
-                <img class="js-qp-img hidden max-w-full max-h-[75vh] object-contain" src="" alt="">
-                <video class="js-qp-video hidden max-w-full max-h-[75vh] object-contain bg-black rounded-lg" controls playsinline preload="metadata"></video>
-                <audio class="js-qp-audio hidden w-full" controls preload="metadata"></audio>
-                <pre class="js-qp-text hidden w-full max-h-[70vh] overflow-auto whitespace-pre-wrap break-words text-xs text-gray-700 dark:text-gray-300 bg-white dark:bg-surface-800 rounded-lg p-4"></pre>
-                <div class="js-qp-unsupported hidden text-sm text-gray-400 dark:text-gray-500"></div>
-            </div>
+    <div class="nf-scroll" id="nf-list-scroll">
+        <div class="file-list-container">
+            {% include "includes/file_list.html" %}
         </div>
     </div>
 
     <!-- Drop zone overlay (shown during drag-over) -->
-    <div class="drop-overlay hidden absolute inset-0 z-drop flex items-center justify-center rounded-lg border-2 border-dashed border-brand-500 bg-brand-50/90 dark:bg-brand-500/10">
+    <div class="drop-overlay hidden absolute inset-0 z-drop flex items-center justify-center border-2 border-dashed border-accent bg-canvas/95">
         <div class="text-center">
-            {{ icons::icon_upload("mx-auto h-12 w-12 text-brand-500") }}
-            <p class="mt-3 text-lg font-medium text-gray-700 dark:text-gray-300">{{ t.tr("fb.drop_files_here") }}</p>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t.tr("fb.will_upload_current_dir") }}</p>
+            {{ icons::icon_upload("mx-auto h-10 w-10 text-ink-2") }}
+            <p class="mt-3 text-[15px] font-medium text-ink">{{ t.tr("fb.drop_files_here") }}</p>
+            <p class="mt-1 text-[13px] text-ink-2">{{ t.tr("fb.will_upload_current_dir") }}</p>
         </div>
     </div>
-</div>
     {% endblock %}
 </main>
 
-<aside class="js-right-panel lg:flex lg:flex-col bg-white dark:bg-surface-800 border-l border-gray-200 dark:border-gray-700 overflow-y-auto max-lg:hidden">
-    {% include "includes/right_panel.html" %}
-</aside>
+{% include "includes/details_drawer.html" %}
+
+<!-- ── Dialogs (outside the drop zone so a drag never counts as a file drop) ── -->
+
+<!-- Rename dialog overlay -->
+{% call modal::modal("rename-overlay", labelledby="rename-dialog-title") %}
+        <h3 id="rename-dialog-title" class="text-[15px] font-semibold text-ink mb-1">{{ t.tr("common.rename") }}</h3>
+        <p class="text-[13px] text-ink-2 mb-4">{{ t.tr("fb.rename_enter_new_name") }}</p>
+        <form id="rename-dialog-form" action="/libraries/{{ repo_id }}/files/rename/" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="current_dir" value="{{ current_path }}">
+            <input type="hidden" name="repo_name" value="{{ repo_name }}">
+            <input type="hidden" id="rename-old-path" name="p" value="">
+            <input id="rename-input" type="text" name="new_name" placeholder="{{ t.tr("fb.rename_new_name_placeholder") }}"
+                   class="input"
+                   autofocus>
+            <div class="mt-4 flex justify-end gap-2">
+                <button type="button" class="js-rename-cancel btn btn-secondary">
+                    {{ t.tr("common.cancel") }}
+                </button>
+                <button type="submit"
+                        class="btn btn-primary">
+                    {{ t.tr("common.save") }}
+                </button>
+            </div>
+        </form>
+{% endcall %}
+
+<!-- Directory picker overlay (for batch move/copy) -->
+{% call modal::modal("dir-picker-overlay", max_w="max-w-md", labelledby="dir-picker-title") %}
+        <h3 id="dir-picker-title" class="text-[15px] font-semibold text-ink mb-1">{{ t.tr("fb.move_items_title") }}</h3>
+        <p class="text-[13px] text-ink-2 mb-3">{{ t.tr("fb.move_select_destination") }}</p>
+        <!-- Breadcrumb -->
+        <div id="dir-picker-breadcrumb" class="flex items-center gap-1 text-[13px] text-ink-2 mb-3 overflow-x-auto whitespace-nowrap"></div>
+        <!-- Directory list -->
+        <div id="dir-picker-list" class="max-h-60 overflow-y-auto border border-line rounded-box p-1.5 space-y-0.5 mb-4">
+            <div class="text-[13px] text-ink-3 text-center py-4">{{ t.tr("fb.loading") }}</div>
+        </div>
+        <div class="flex justify-end gap-2">
+            <button type="button" class="js-picker-cancel btn btn-secondary">
+                {{ t.tr("common.cancel") }}
+            </button>
+            <button type="button" class="js-picker-confirm btn btn-primary">
+                {{ t.tr("fb.move_here") }}
+            </button>
+        </div>
+{% endcall %}
+
+<!-- Share dialog overlay -->
+{% call modal::modal("share-dialog-overlay", max_w="max-w-sm", labelledby="share-dialog-title") %}
+        <h3 id="share-dialog-title" class="text-[15px] font-semibold text-ink mb-1">{{ t.tr("fb.create_share_link") }}</h3>
+        <p class="js-share-dialog-path text-[13px] text-ink-2 mb-4 break-all"></p>
+        <div class="space-y-3">
+            <div>
+                <label class="form-label mb-1">{{ t.tr("fb.password") }} <span class="text-ink-3">{{ t.tr("fb.optional") }}</span></label>
+                <input type="password" id="share-password-input" placeholder="{{ t.tr("fb.leave_empty_no_password") }}"
+                       class="input">
+            </div>
+            <div>
+                <label class="form-label mb-1">{{ t.tr("fb.expires_in") }}</label>
+                <select id="share-expiry-select"
+                        class="select">
+                    <option value="">{{ t.tr("fb.never") }}</option>
+                    <option value="1">{{ t.tr("fb.days_1") }}</option>
+                    <option value="7">{{ t.tr("fb.days_7") }}</option>
+                    <option value="30">{{ t.tr("fb.days_30") }}</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label mb-1">{{ t.tr("fb.description") }} <span class="text-ink-3">{{ t.tr("fb.optional") }}</span></label>
+                <input type="text" id="share-description-input" placeholder="{{ t.tr("fb.what_is_link_for") }}"
+                       class="input">
+            </div>
+        </div>
+        <!-- Link URL display (shown after creation) -->
+        <div id="share-link-display" class="hidden space-y-3">
+            <div>
+                <label class="form-label mb-1">{{ t.tr("fb.share_link_url") }}</label>
+                <div class="flex gap-2">
+                    <input type="text" id="share-link-url" readonly
+                           class="input flex-1">
+                    <button type="button" data-action="copy-share-link"
+                            class="btn btn-primary">
+                        {{ t.tr("fb.copy") }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="js-share-dialog-error hidden mt-3 p-2 rounded-ctl bg-red-50 text-[12px] text-red-700"></div>
+        <div class="mt-4 flex justify-end gap-2">
+            <button type="button" class="js-share-cancel btn btn-secondary">
+                {{ t.tr("common.cancel") }}
+            </button>
+            <button type="button" id="share-delete-btn" class="hidden btn btn-danger disabled:opacity-50">
+                {{ t.tr("common.delete") }}
+            </button>
+            <button type="button" class="js-share-confirm btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
+                {{ t.tr("common.create") }}
+            </button>
+        </div>
+{% endcall %}
+
+<!-- Upload link dialog overlay -->
+{% call modal::modal("upload-link-dialog-overlay", max_w="max-w-sm", labelledby="ul-dialog-title") %}
+        <h3 id="ul-dialog-title" class="text-[15px] font-semibold text-ink mb-1">{{ t.tr("fb.upload_link") }}</h3>
+        <p class="js-ul-dialog-path text-[13px] text-ink-2 mb-4 break-all"></p>
+
+        <!-- Create form -->
+        <div id="ul-create-form" class="space-y-3">
+            <div>
+                <label class="form-label mb-1">{{ t.tr("fb.password") }} <span class="text-ink-3">{{ t.tr("fb.optional") }}</span></label>
+                <input type="password" id="ul-password-input" placeholder="{{ t.tr("fb.leave_empty_no_password") }}"
+                       class="input">
+            </div>
+            <div>
+                <label class="form-label mb-1">{{ t.tr("fb.expires_in") }}</label>
+                <select id="ul-expiry-select"
+                        class="select">
+                    <option value="">{{ t.tr("fb.never") }}</option>
+                    <option value="1">{{ t.tr("fb.days_1") }}</option>
+                    <option value="7">{{ t.tr("fb.days_7") }}</option>
+                    <option value="30">{{ t.tr("fb.days_30") }}</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label mb-1">{{ t.tr("fb.description") }} <span class="text-ink-3">{{ t.tr("fb.optional") }}</span></label>
+                <input type="text" id="ul-description-input" placeholder="{{ t.tr("fb.what_is_link_for") }}"
+                       class="input">
+            </div>
+        </div>
+
+        <!-- Link display (shown after creation) -->
+        <div id="ul-link-display" class="hidden space-y-3">
+            <div>
+                <label class="form-label mb-1">{{ t.tr("fb.upload_link_url") }}</label>
+                <div class="flex gap-2">
+                    <input type="text" id="ul-link-url" readonly
+                           class="input flex-1">
+                    <button type="button" data-action="copy-upload-link"
+                            class="btn btn-primary">
+                        {{ t.tr("fb.copy") }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="js-ul-dialog-error hidden mt-3 p-2 rounded-ctl bg-red-50 text-[12px] text-red-700"></div>
+
+        <div class="mt-4 flex justify-end gap-2">
+            <button type="button" class="js-ul-cancel btn btn-secondary">
+                {{ t.tr("common.cancel") }}
+            </button>
+            <button type="button" id="ul-delete-btn" class="hidden btn btn-danger disabled:opacity-50">
+                {{ t.tr("common.delete") }}
+            </button>
+            <button type="button" id="ul-create-btn" class="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
+                {{ t.tr("common.create") }}
+            </button>
+        </div>
+{% endcall %}
+
+<!-- History dialog overlay (file version history) -->
+{% call modal::modal("history-dialog-overlay", max_w="max-w-lg", labelledby="history-dialog-title") %}
+        <div class="flex items-center justify-between mb-1">
+            <h3 id="history-dialog-title" class="text-[15px] font-semibold text-ink">{{ t.tr("fb.file_history") }}</h3>
+            <button type="button" class="js-history-close iconbtn" aria-label="{{ t.tr("common.close") }}">
+                {{ icons::icon_close("h-4 w-4") }}
+            </button>
+        </div>
+        <p class="js-history-path text-[13px] text-ink-2 mb-3 break-all"></p>
+        <div class="js-history-list max-h-80 overflow-y-auto border border-line rounded-box p-1.5 space-y-0.5 mb-4">
+            <div class="js-history-loading text-[13px] text-ink-3 text-center py-4">{{ t.tr("fb.loading") }}</div>
+        </div>
+        <div class="flex justify-end gap-2">
+            <button type="button" class="js-history-close btn btn-secondary">
+                {{ t.tr("common.close") }}
+            </button>
+        </div>
+{% endcall %}
+
+<!-- Quick preview dialog overlay (dblclick on a file row) -->
+<!-- Kept hand-written (not the modal macro): its card is a large
+     full-height flex dialog (header + body) that the macro's fixed card
+     layout can't express. -->
+<div id="quick-preview-overlay" class="hidden fixed inset-0 z-dialog flex items-center justify-center bg-black/40" role="dialog" aria-modal="true" aria-labelledby="quick-preview-title">
+    <div class="relative bg-panel border border-line rounded-box max-w-4xl w-[min(92vw,900px)] max-h-[90vh] flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between px-4 py-2.5 border-b border-line flex-shrink-0">
+            <h3 id="quick-preview-title" class="js-qp-title text-[13px] font-semibold text-ink truncate"></h3>
+            <button type="button" class="js-qp-close iconbtn" aria-label="{{ t.tr("common.close") }}">
+                {{ icons::icon_close("h-4 w-4") }}
+            </button>
+        </div>
+        <div class="flex-1 overflow-auto flex items-center justify-center p-4 bg-canvas">
+            <img class="js-qp-img hidden max-w-full max-h-[75vh] object-contain" src="" alt="">
+            <video class="js-qp-video hidden max-w-full max-h-[75vh] object-contain bg-black rounded-ctl" controls playsinline preload="metadata"></video>
+            <audio class="js-qp-audio hidden w-full" controls preload="metadata"></audio>
+            <pre class="js-qp-text hidden w-full max-h-[70vh] overflow-auto whitespace-pre-wrap break-words text-[12px] text-ink-2 bg-panel rounded-ctl p-4"></pre>
+            <div class="js-qp-unsupported hidden text-[13px] text-ink-3"></div>
+        </div>
+    </div>
+</div>
+
 </div>
 {% endblock %}
 

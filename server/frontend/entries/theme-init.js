@@ -10,11 +10,14 @@
       document.documentElement.classList.add("dark");
     }
     var view = localStorage.getItem("fileViewMode");
-    if (view === "grid" || view === "gallery") {
-      document.documentElement.dataset.view = view;
-    }
+    if (view !== "grid" && view !== "gallery") view = "list";
+    // Always publish the view mode: the CSS marking the active view-switcher
+    // button is keyed on `html[data-view]`, so an unset attribute would leave
+    // the switcher with no active state at all.
+    document.documentElement.dataset.view = view;
   } catch (e) {
     // localStorage can be unavailable (private mode, blocked cookies); the
     // defaults are fine, so never let this break the page.
+    document.documentElement.dataset.view = "list";
   }
 })();

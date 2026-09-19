@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { deleteRepo, readState, seedRepo, uploadFile } from "../helpers/api";
+import { clickRowAction } from "../helpers/details";
 import type { Page } from "@playwright/test";
 
 let state: ReturnType<typeof readState>;
@@ -18,9 +19,7 @@ async function deleteAndOpenTrash(
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", name, "trash me\n");
   await page.goto(`/libraries/${repoId}/files`);
   await page.waitForSelector(".js-entry-row");
-  await page
-    .locator(`.js-file-list-view:not(.hidden) .js-entry-row[data-name="${name}"] .js-delete-btn`)
-    .click();
+  await clickRowAction(page, name, ".js-delete-btn");
   await page.locator(".js-confirm-ok").click();
   await expect(
     page.locator(`.js-file-list-view:not(.hidden) .js-entry-row[data-name="${name}"]`),

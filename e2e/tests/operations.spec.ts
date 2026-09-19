@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo } from "../helpers/api";
+import { clickRowAction } from "../helpers/details";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -15,9 +16,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("delete a file", async ({ page }) => {
-  await page
-    .locator('.js-file-list-view .js-entry-row[data-name="alpha.txt"] .js-delete-btn')
-    .click();
+  await clickRowAction(page, "alpha.txt", ".js-delete-btn");
   await page.locator(".js-confirm-ok").click();
   await expect(
     page.locator('.js-file-list-view .js-entry-row[data-name="alpha.txt"]'),
@@ -25,9 +24,7 @@ test("delete a file", async ({ page }) => {
 });
 
 test("rename a file", async ({ page }) => {
-  await page
-    .locator('.js-file-list-view .js-entry-row[data-name="bravo.txt"] .js-rename-btn')
-    .click();
+  await clickRowAction(page, "bravo.txt", ".js-rename-btn");
   await page.locator("#rename-input").fill("bravo2.txt");
   await page.locator('#rename-dialog-form button[type="submit"]').click();
   await expect(

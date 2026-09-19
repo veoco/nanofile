@@ -6,60 +6,54 @@
 
 {% block content %}
 <div id="repos-page" hidden data-webdav-base-url="{{ webdav_base_url }}"></div>
-<div class="sm:flex sm:items-center sm:justify-between">
+<div class="flex flex-wrap items-center justify-between gap-3">
     <div>
         <h1 class="page-title">{{ t.tr("nav.libraries") }}</h1>
         <p class="page-subtitle">{{ t.tr("repo.browse_desc") }}</p>
     </div>
-    <div class="mt-4 sm:mt-0">
-        <button data-action="show-create"
-                class="btn btn-primary">
-            <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-            </svg>
-            {{ t.tr("repo.new_library") }}
-        </button>
-    </div>
+    <button data-action="show-create"
+            class="btn btn-solid">
+        {{ icons::icon_plus("w-3.5 h-3.5") }}
+        {{ t.tr("repo.new_library") }}
+    </button>
 </div>
 
 {% if repos.is_empty() %}
 <div class="empty-state">
-    {{ icons::icon_folder_outline("mx-auto h-12 w-12 text-gray-300 dark:text-gray-600") }}
-    <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">{{ t.tr("nav.no_libraries") }}</p>
-    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("repo.create_one_hint") }}</p>
+    {{ icons::icon_folder_outline("mx-auto h-10 w-10 text-ink-3") }}
+    <p class="mt-3 text-[13px] font-medium text-ink-2">{{ t.tr("nav.no_libraries") }}</p>
+    <p class="mt-1 text-[12px] text-ink-3">{{ t.tr("repo.create_one_hint") }}</p>
 </div>
 {% else %}
-<div class="mt-6 card overflow-hidden">
-    <ul role="list" class="divide-y divide-gray-200 dark:divide-gray-700">
+<div class="mt-5 border border-line rounded-box overflow-hidden">
+    <ul role="list" class="divide-y divide-line">
         {% for r in repos %}
-        <li class="transition-colors hover:bg-gray-50 dark:hover:bg-surface-700/50">
-            <div class="flex items-center justify-between px-4 py-4">
-                <a href="/libraries/{{ r.id }}/files/" class="flex items-center min-w-0 flex-1 gap-4">
-                    {% if r.encrypted %}
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 flex-shrink-0">
-                        {{ icons::icon_lock("h-5 w-5") }}
-                    </div>
-                    {% else %}
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-100 dark:bg-brand-500/20 text-brand-600 dark:text-brand-400 flex-shrink-0">
-                        {{ icons::icon_folder_outline("h-5 w-5") }}
-                    </div>
-                    {% endif %}
-                    <div class="min-w-0">
-                        <p class="flex items-center gap-2">
-                            <span class="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{{ r.name }}</span>
-                            {% if r.encrypted %}
-                            <span class="badge badge-gray flex-shrink-0">{{ t.tr("repo.encrypted") }}</span>
-                            {% endif %}
-                        </p>
-                        {% if !r.description.is_empty() %}
-                        <p class="truncate text-sm text-gray-500 dark:text-gray-400">{{ r.description }}</p>
+        <li class="transition-colors hover:bg-raised">
+            <div class="flex items-center justify-between gap-4 px-4 h-14">
+                <a href="/libraries/{{ r.id }}/files/" class="flex items-center min-w-0 flex-1 gap-3 no-underline text-ink">
+                    <span class="grid place-items-center w-7 h-7 rounded-ctl bg-raised text-ink-2 flex-shrink-0">
+                        {% if r.encrypted %}
+                        {{ icons::icon_lock("w-[15px] h-[15px]") }}
+                        {% else %}
+                        {{ icons::icon_folder("w-[15px] h-[15px]") }}
                         {% endif %}
-                        <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
+                    </span>
+                    <span class="min-w-0 flex-1">
+                        <span class="flex items-center gap-2">
+                            <span class="truncate text-[13px] font-medium text-ink">{{ r.name }}</span>
+                            {% if r.encrypted %}
+                            <span class="tag-admin flex-shrink-0">{{ t.tr("repo.encrypted") }}</span>
+                            {% endif %}
+                        </span>
+                        {% if !r.description.is_empty() %}
+                        <span class="block truncate text-[12px] text-ink-2">{{ r.description }}</span>
+                        {% endif %}
+                        <span class="block text-[12px] text-ink-3">
                             {{ r.size_display }}<span class="mx-1">·</span><span data-ts="{{ r.mtime }}"></span>
-                        </p>
-                    </div>
+                        </span>
+                    </span>
                 </a>
-                <div class="ml-4 flex-shrink-0 flex items-center gap-1">
+                <div class="flex-shrink-0 flex items-center gap-1.5">
                     <button data-action="show-edit"
                             data-id="{{ r.id }}"
                             data-name="{{ r.name }}"
@@ -67,9 +61,9 @@
                             data-size="{{ r.size_display }}"
                             data-history-limit="{{ r.history_limit }}"
                             data-history-ttl-days="{{ r.history_ttl_days }}"
-                            class="btn btn-secondary btn-sm"
+                            class="btn btn-line btn-sm"
                             title="{{ t.tr("repo.edit_library") }}">
-                        {{ icons::icon_pencil("mr-1 h-3.5 w-3.5") }}
+                        {{ icons::icon_pencil("w-3.5 h-3.5") }}
                         {{ t.tr("common.edit") }}
                     </button>
                     <button data-action="delete-repo"
@@ -77,7 +71,7 @@
                             data-repo-name="{{ r.name }}"
                             class="btn btn-danger-outline btn-sm"
                             title="{{ t.tr("common.delete") }}">
-                        {{ icons::icon_trash("mr-1 h-3.5 w-3.5") }}
+                        {{ icons::icon_trash("w-3.5 h-3.5") }}
                         {{ t.tr("common.delete") }}
                     </button>
                 </div>
@@ -90,8 +84,8 @@
 
 {# ─── Create Library Dialog ─── #}
 {% call modal::modal("create-overlay", labelledby="create-dialog-title", backdrop_close="hideCreateDialog") %}
-        <h3 id="create-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("repo.new_library") }}</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("repo.new_library_desc") }}</p>
+        <h3 id="create-dialog-title" class="text-[15px] font-semibold text-ink mb-1">{{ t.tr("repo.new_library") }}</h3>
+        <p class="text-[13px] text-ink-2 mb-4">{{ t.tr("repo.new_library_desc") }}</p>
         <form action="/libraries/create/" method="POST" data-form="create">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input id="create-input" type="text" name="name" placeholder="{{ t.tr("repo.name") }}"
@@ -112,7 +106,7 @@
 
 {# ─── Edit Library Dialog ─── #}
 {% call modal::modal("edit-overlay", labelledby="edit-dialog-title", backdrop_close="hideEditDialog") %}
-        <h3 id="edit-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">{{ t.tr("repo.edit_library") }}</h3>
+        <h3 id="edit-dialog-title" class="text-[15px] font-semibold text-ink mb-4">{{ t.tr("repo.edit_library") }}</h3>
         <form id="edit-form" action="" method="POST" data-form="edit">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" id="edit-repo-id" name="id" value="">
@@ -129,12 +123,12 @@
                               class="textarea"></textarea>
                 </div>
                 <div>
-                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">{{ t.tr("common.size") }}</p>
-                    <p class="text-sm text-gray-900 dark:text-gray-100" id="edit-size"></p>
+                    <p class="field-label mb-1">{{ t.tr("common.size") }}</p>
+                    <p class="text-[13px] text-ink" id="edit-size"></p>
                 </div>
-                <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
-                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">{{ t.tr("repo.history_settings") }}</p>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">{{ t.tr("repo.history_settings_desc") }}</p>
+                <div class="border-t border-line pt-4">
+                    <p class="field-label mb-1">{{ t.tr("repo.history_settings") }}</p>
+                    <p class="text-[12px] text-ink-2 mb-2">{{ t.tr("repo.history_settings_desc") }}</p>
                     <div class="grid grid-cols-2 gap-2">
                         <div>
                             <label for="edit-history-limit" class="field-label mb-1">{{ t.tr("repo.history_limit") }}</label>
@@ -148,18 +142,18 @@
                         </div>
                     </div>
                 </div>
-                <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
-                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">{{ t.tr("webdav.access") }}</p>
+                <div class="border-t border-line pt-4">
+                    <p class="field-label mb-1">{{ t.tr("webdav.access") }}</p>
                     <div class="flex items-start gap-2 mb-2">
-                        <p id="webdav-url" class="flex-1 min-w-0 text-sm text-gray-600 dark:text-gray-300 break-all"></p>
+                        <p id="webdav-url" class="flex-1 min-w-0 text-[13px] text-ink-2 break-all"></p>
                         <button type="button" id="copy-url-btn" data-action="copy-webdav-url"
-                                class="flex-shrink-0 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-surface-700 px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
+                                class="btn btn-line btn-sm flex-shrink-0">
                             {{ t.tr("webdav.copy") }}
                         </button>
                     </div>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">{{ t.tr("webdav.key_hint") }}</p>
+                    <p class="text-[12px] text-ink-2 mb-2">{{ t.tr("webdav.key_hint") }}</p>
                     <a href="/settings/api-keys/"
-                       class="inline-block rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">
+                       class="btn btn-line btn-sm no-underline">
                         {{ t.tr("webdav.manage_keys") }}
                     </a>
                 </div>

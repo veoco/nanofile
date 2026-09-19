@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatFileSize, formatBitrate, formatHistorySize, formatHistoryTime, formatLocalDateTime } from "./format.js";
+import { formatFileSize, formatBitrate, formatHistorySize, formatHistoryTime, formatLocalDateTime, formatLocalShortDate } from "./format.js";
 
 test("formatFileSize formats B/KB/MB/GB with 1000-based units", () => {
   assert.equal(formatFileSize(0), "0 B");
@@ -53,4 +53,17 @@ test("formatLocalDateTime formats a Unix timestamp as YYYY-MM-DD HH:MM", () => {
 test("formatLocalDateTime returns empty for invalid input", () => {
   assert.equal(formatLocalDateTime(NaN), "");
   assert.equal(formatLocalDateTime(undefined), "");
+});
+
+test("formatLocalShortDate renders a month/day label", () => {
+  // 2026-09-03T12:34:56Z — the day may shift by timezone, so assert the shape.
+  var out = formatLocalShortDate(1756902896);
+  assert.ok(out.length > 0);
+  assert.ok(/\d/.test(out), "keeps the day number: " + out);
+  assert.ok(!out.includes(":"), "no time component: " + out);
+});
+
+test("formatLocalShortDate returns empty for invalid input", () => {
+  assert.equal(formatLocalShortDate(NaN), "");
+  assert.equal(formatLocalShortDate(undefined), "");
 });

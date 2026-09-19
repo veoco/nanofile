@@ -6,21 +6,23 @@
      data-repo-id="{{ repo_id }}"
      data-repo-name="{{ repo_name }}"></div>
 
+<!-- Action group — placed at the right end of the breadcrumb topline. The
+     labels collapse to icons on narrow screens so the row stays one line. -->
 <div class="flex flex-wrap items-center gap-2">
     <button data-action="new-folder"
-            class="btn btn-secondary">
-        {{ icons::icon_folder_plus("mr-1.5 h-4 w-4 text-gray-500") }}
-        {{ t.tr("fb.new_folder") }}
-    </button>
-    <button data-action="upload"
-            class="btn btn-secondary">
-        {{ icons::icon_upload("mr-1.5 h-4 w-4 text-gray-500") }}
-        {{ t.tr("common.upload") }}
+            class="btn btn-line">
+        {{ icons::icon_folder_plus("w-3.5 h-3.5") }}
+        <span class="hidden sm:inline">{{ t.tr("fb.new_folder") }}</span>
     </button>
     <button data-action="upload-folder"
-            class="btn btn-secondary">
-        {{ icons::icon_folder_outline("mr-1.5 h-4 w-4 text-gray-500") }}
-        {{ t.tr("fb.upload_folder") }}
+            class="btn btn-line">
+        {{ icons::icon_folder_outline("w-3.5 h-3.5") }}
+        <span class="hidden sm:inline">{{ t.tr("fb.upload_folder") }}</span>
+    </button>
+    <button data-action="upload"
+            class="btn btn-solid">
+        {{ icons::icon_upload("w-3.5 h-3.5") }}
+        <span class="hidden sm:inline">{{ t.tr("common.upload") }}</span>
     </button>
 
     <!-- File upload input (multiple file selection) -->
@@ -31,29 +33,29 @@
 </div>
 
 <!-- Upload Progress Dialog -->
-<div id="upload-dialog" class="upload-dialog fixed right-4 bottom-4 w-[35rem] max-w-[calc(100vw-2rem)] max-h-96 rounded-lg shadow-lg bg-white z-upload border border-gray-200 transition-[max-height] duration-200 hidden">
-    <div class="shrink-0 flex flex-col bg-gray-50 border-b border-gray-200 cursor-pointer select-none rounded-t-lg" data-action="toggle-minimize">
+<div id="upload-dialog" class="upload-dialog fixed right-4 bottom-4 w-[35rem] max-w-[calc(100vw-2rem)] max-h-96 rounded-box bg-panel z-upload border border-line transition-[max-height] duration-200 hidden">
+    <div class="shrink-0 flex flex-col bg-raised border-b border-line cursor-pointer select-none rounded-t-box" data-action="toggle-minimize">
         <div class="flex items-center justify-between px-3.5 pt-2.5 pb-1.5">
             <div class="flex items-center gap-2.5 min-w-0">
-                <span class="upload-header-status text-sm font-semibold text-gray-700 whitespace-nowrap">{{ t.tr("fb.uploading") }}</span>
-                <span class="upload-bitrate text-xs text-gray-400 whitespace-nowrap"></span>
+                <span class="upload-header-status text-[13px] font-semibold text-ink whitespace-nowrap">{{ t.tr("fb.uploading") }}</span>
+                <span class="upload-bitrate mono whitespace-nowrap"></span>
             </div>
             <div class="flex items-center gap-0.5 shrink-0">
-                <button id="minimize-btn" class="inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 dark:text-gray-500 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 dark:hover:bg-surface-700 hover:border-gray-300 dark:hover:border-gray-600 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-300 dark:active:bg-surface-600 active:scale-[0.88]" data-action="toggle-minimize" title="{{ t.tr("fb.minimize") }}" aria-label="{{ t.tr("fb.minimize") }}">
+                <button id="minimize-btn" class="iconbtn" data-action="toggle-minimize" title="{{ t.tr("fb.minimize") }}" aria-label="{{ t.tr("fb.minimize") }}">
                     {{ icons::icon_minus("h-4 w-4") }}
                 </button>
-                <button class="js-close-progress inline-flex items-center justify-center w-7 h-7 border border-transparent rounded-md text-gray-400 dark:text-gray-500 text-sm cursor-pointer transition-all duration-150 hover:bg-gray-200 dark:hover:bg-surface-700 hover:border-gray-300 dark:hover:border-gray-600 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-300 dark:active:bg-surface-600 active:scale-[0.88]" data-action="close-progress" title="{{ t.tr("common.close") }}" aria-label="{{ t.tr("common.close") }}">
+                <button class="js-close-progress iconbtn" data-action="close-progress" title="{{ t.tr("common.close") }}" aria-label="{{ t.tr("common.close") }}">
                     {{ icons::icon_close("h-4 w-4") }}
                 </button>
             </div>
         </div>
-        <div class="upload-progress-bar-container h-1 bg-gray-200 mx-3.5 mb-2.5">
-            <div class="upload-progress-bar h-full bg-brand-500 rounded" style="width:0%"></div>
+        <div class="upload-progress-bar-container h-1 bg-line mx-3.5 mb-2.5">
+            <div class="upload-progress-bar h-full bg-accent rounded-full" style="width:0%"></div>
         </div>
     </div>
     <div class="flex-1 flex flex-col min-h-0">
-        <div class="upload-dialog-content-bar shrink-0 flex items-center justify-between px-3.5 py-2 border-b border-gray-200">
-            <span class="upload-count text-xs text-gray-400"></span>
+        <div class="upload-dialog-content-bar shrink-0 flex items-center justify-between px-3.5 py-2 border-b border-line">
+            <span class="upload-count mono"></span>
             <div class="upload-content-actions flex items-center gap-1.5"></div>
         </div>
         <div class="upload-dialog-body flex-1 overflow-y-auto px-2"></div>
@@ -62,8 +64,8 @@
 
 <!-- New Folder dialog overlay -->
 {% call modal::modal("new-folder-overlay", z="z-above-upload", labelledby="new-folder-title", backdrop_close="hideNewFolderDialog") %}
-        <h3 id="new-folder-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">{{ t.tr("fb.new_folder") }}</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t.tr("fb.new_folder_enter_name") }}</p>
+        <h3 id="new-folder-title" class="text-[15px] font-semibold text-ink mb-1">{{ t.tr("fb.new_folder") }}</h3>
+        <p class="text-[13px] text-ink-2 mb-4">{{ t.tr("fb.new_folder_enter_name") }}</p>
         <form action="/libraries/{{ repo_id }}/files/new-dir/" method="POST" data-form="new-folder">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="current_dir" value="{{ current_path }}">

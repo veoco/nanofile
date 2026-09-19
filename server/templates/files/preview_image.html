@@ -1,33 +1,32 @@
 {% extends "base.html" %}
+{% import "includes/icons.html" as icons %}
 
 {% block title %}{{ file_name }} | Nanofile{% endblock %}
 
 {% block content %}
-<nav class="flex mb-4 text-sm text-gray-500 flex-wrap items-center">
-    <a href="/libraries/" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">{{ t.tr("nav.libraries") }}</a>
-    <span class="mx-2 flex-shrink-0">/</span>
-    <a href="/libraries/{{ repo_id }}/files/" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">{{ repo_name }}</a>
-    {% if parent_path != "" %}
-    <span class="mx-2 flex-shrink-0">/</span>
-    <a href="/libraries/{{ repo_id }}/files/{{ parent_path|urlencode }}" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">..</a>
-    {% endif %}
-    <span class="mx-2 flex-shrink-0">/</span>
-    <span class="text-gray-900 dark:text-gray-100 font-medium truncate max-w-[200px]">{{ file_name }}</span>
-</nav>
+{% include "includes/breadcrumb.html" %}
 
-<div class="card overflow-hidden">
-    <div class="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center justify-between">
-        <span>{{ file_name }}</span>
-        <div class="flex items-center gap-2">
-            <span class="text-xs text-gray-500 dark:text-gray-400">{{ size_display }}</span>
-            <a href="/libraries/{{ repo_id }}/files/{{ parent_path|urlencode }}" class="text-xs text-brand-500 hover:underline">&larr; {{ t.tr("fb.back_to_folder") }}</a>
-        </div>
-    </div>
-    <div class="p-4 flex justify-center bg-gray-100 dark:bg-surface-700">
-        <img src="/repos/{{ repo_id }}/files/{{ current_path|urlencode }}" alt="{{ file_name }}"
-             class="max-w-full max-h-[80vh] object-contain rounded shadow-sm"
+{# One hairline panel with the same surfaces as the file list: a header row
+   carrying the name, the size and the two actions, then the picture itself. #}
+<section class="nf-preview" aria-label="{{ file_name }}">
+    <header class="nf-preview-head">
+        <h1 class="nf-preview-title" title="{{ file_name }}">{{ file_name }}</h1>
+        <span class="nf-preview-meta num">{{ size_display }}</span>
+        <span class="spacer"></span>
+        <a class="btn btn-line" href="{{ download_url }}">
+            {{ icons::icon_download("w-3.5 h-3.5") }}
+            <span class="hidden sm:inline">{{ t.tr("common.download") }}</span>
+        </a>
+        <a class="btn btn-ghost whitespace-nowrap"
+           href="/libraries/{{ repo_id }}/files/{{ parent_path|urlencode }}">
+            {{ t.tr("fb.back_to_folder") }}
+        </a>
+    </header>
+    <div class="nf-preview-stage">
+        <img src="{{ content_url }}" alt="{{ file_name }}"
+             class="nf-preview-image"
              data-preview-image
-             data-download-url="/repos/{{ repo_id }}/files/{{ current_path|urlencode }}?dl=1">
+             data-download-url="{{ download_url }}">
     </div>
-</div>
+</section>
 {% endblock %}

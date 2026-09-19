@@ -1,0 +1,25 @@
+{# Hover/focus-revealed per-tile actions, shared by the grid and gallery views
+   (the list row keeps its own inline copy so its e2e contract is untouched).
+
+   Neither button needs new JavaScript:
+     - `[data-toggle-star]` is handled by a document-level listener in
+       core/nav.js, which mirrors the new state onto the owning
+       `.js-entry-row` (and toggles its `.starred` class).
+     - `.nf-more` is handled by browser/row-menu.js, which reads
+       type/repo-id/path/name off the owning `.js-entry-row`. The menu itself is
+       mounted on <body>, so the tile's `overflow: hidden` cannot clip it. #}
+<div class="nf-tile-tools">
+    <button type="button" data-toggle-star
+            data-repo-id="{{ repo_id }}"
+            data-path="/{{ entry.relative_path }}"
+            data-starred="{{ entry.starred }}"
+            class="nf-tool-btn nf-star{% if entry.starred %} on{% endif %}"
+            title="{% if entry.starred %}{{ t.tr("fb.unstar") }}{% else %}{{ t.tr("fb.star") }}{% endif %}"
+            aria-label="{% if entry.starred %}{{ t.tr("fb.unstar") }}{% else %}{{ t.tr("fb.star") }}{% endif %}">
+        {{ icons::icon_star("w-3 h-3", filled=entry.starred) }}
+    </button>
+    <button type="button" class="nf-tool-btn nf-more" aria-haspopup="menu" aria-expanded="false"
+            title="{{ t.tr("common.actions") }}" aria-label="{{ t.tr("common.actions") }}">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+    </button>
+</div>

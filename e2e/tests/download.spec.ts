@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo } from "../helpers/api";
+import { clickRowAction, openRowMenu } from "../helpers/details";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -15,22 +16,19 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("download a single file with ?dl=1", async ({ page }) => {
+  await openRowMenu(page, "alpha.txt");
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    page
-      .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="alpha.txt"] a[href*="?dl=1"]')
-      .first()
-      .click(),
+    page.locator('.nf-menu a[href*="?dl=1"]').first().click(),
   ]);
   expect(download.suggestedFilename()).toBe("alpha.txt");
 });
 
 test("download a folder as a zip", async ({ page }) => {
+  await openRowMenu(page, "subdir");
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    page
-      .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="subdir"] .js-entry-download')
-      .click(),
+    page.locator(".nf-menu .js-entry-download").click(),
   ]);
   expect(download.suggestedFilename()).toMatch(/\.zip$/);
 });

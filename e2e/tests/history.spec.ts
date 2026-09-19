@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo, uploadFile } from "../helpers/api";
+import { clickRowAction } from "../helpers/details";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -19,17 +20,13 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("open the file history dialog", async ({ page }) => {
-  await page
-    .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="alpha.txt"] .js-history-btn')
-    .click();
+  await clickRowAction(page, "alpha.txt", ".js-history-btn");
   await expect(page.locator("#history-dialog-overlay")).toBeVisible();
   await expect(page.locator(".js-history-list")).toBeVisible();
 });
 
 test("history lists every revision with download and restore actions", async ({ page }) => {
-  await page
-    .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="alpha.txt"] .js-history-btn')
-    .click();
+  await clickRowAction(page, "alpha.txt", ".js-history-btn");
   // Two uploads → two revision entries, each with a Download link + Restore button.
   const revisions = page.locator(".js-history-list .js-history-restore");
   await expect(revisions).toHaveCount(2);
@@ -37,9 +34,7 @@ test("history lists every revision with download and restore actions", async ({ 
 });
 
 test("restore an older revision reverts the file content", async ({ page }) => {
-  await page
-    .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="alpha.txt"] .js-history-btn')
-    .click();
+  await clickRowAction(page, "alpha.txt", ".js-history-btn");
   // History is newest-first; the last Restore reverts to the original upload.
   await page.locator(".js-history-list .js-history-restore").last().click();
   await page.locator(".js-confirm-ok").click();

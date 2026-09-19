@@ -3,26 +3,286 @@
 /* Use class-based dark mode (toggled via JS on <html>) */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* ─── Custom design tokens ─────────────────────────────────────────────────── */
-@theme {
-  /* Brand — warm indigo (like Dropbox/Notion) */
-  --color-brand-50: #eef2ff;
-  --color-brand-100: #e0e7ff;
-  --color-brand-200: #c7d2fe;
-  --color-brand-300: #a5b4fc;
-  --color-brand-400: #818cf8;
-  --color-brand-500: #6366f1;
-  --color-brand-600: #4f46e5;
-  --color-brand-700: #4338ca;
-  --color-brand-800: #3730a3;
-  --color-brand-900: #312e81;
+/* ═══════════════════════════════════════════════════════════════════════════
+   GRAPHITE — the design system
+   ═══════════════════════════════════════════════════════════════════════════
 
-  /* Surface — neutral slate hierarchy */
-  --color-surface-50: #f8fafc;
-  --color-surface-600: #475569;
-  --color-surface-700: #334155;
-  --color-surface-800: #1e293b;
-  --color-surface-900: #0f172a;
+   Zero-chroma greys for every structural surface; chromatic colour is reserved
+   for semantic state only (ok / warn / err). `--color-canvas` … `--color-err`
+   are the real tokens: new markup uses those utilities directly.
+
+   The `@theme` block declares the LIGHT values. `html.dark` (further down,
+   deliberately unlayered so it outranks the `:root` that Tailwind emits)
+   overrides the same variables, which is what makes a single utility class
+   theme-correct without a `dark:` twin. That in turn is why the tokens must be
+   real CSS variables rather than `@theme inline`: `includes/icons.html` and
+   `frontend/browser/view.js` read `var(--color-brand-500)` /
+   `var(--color-gray-400)` from inline SVG attributes, and `@theme inline` would
+   never emit them.
+
+   The legacy ramps (`gray-*`, `surface-*`, `brand-*`, `red-*`, `green-*`, …)
+   are aliased onto the same values. That is what recolours the ~2,000 legacy
+   utility occurrences across the templates without editing all of them. Each
+   name carries a single role in each theme — verified by audit: the codebase
+   consistently pairs `text-gray-900` with `dark:text-gray-100`, `bg-gray-100`
+   with `dark:bg-surface-700`, and so on, so no name is ever both a light
+   background and a dark foreground. The one name that is both a light text and
+   a light border colour is `gray-600`, which resolves to #6b6b6b — 5.05:1 for
+   text, 4.4:1 for a control boundary. Both roles pass.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+@theme {
+  /* ─── Semantic tokens ──────────────────────────────────────────────────── */
+  --color-canvas: #fcfcfc;
+  --color-panel: #f9f9f9;
+  --color-raised: #f0f0f0;
+  --color-line: #e0e0e0;
+  --color-line-strong: #c8c8c8;
+  --color-line-ctrl: #8f8f8f;
+  --color-ink: #202020;
+  --color-ink-2: #646464;
+  --color-ink-3: #646464; /* deliberately equal to ink-2: Radix gray-10 misses AA */
+  --color-accent: #202020;
+  --color-accent-ink: #ffffff;
+  --color-ok: #218358;
+  --color-warn: #ab6400;
+  --color-err: #ce2c31;
+  --color-err-ink: #ffffff;
+
+  /* ─── Radii ────────────────────────────────────────────────────────────── */
+  --radius-ctl: 6px;
+  --radius-box: 8px;
+
+  /* ─── Legacy: gray / surface ───────────────────────────────────────────── */
+  --color-gray-50: #f7f7f7;
+  --color-gray-100: #f0f0f0;
+  --color-gray-200: #e0e0e0;
+  --color-gray-300: #8f8f8f;
+  --color-gray-400: #646464;
+  --color-gray-500: #646464;
+  --color-gray-600: #6b6b6b;
+  --color-gray-700: #3a3a3a;
+  --color-gray-800: #2a2a2a;
+  --color-gray-900: #202020;
+  --color-surface-50: #fcfcfc;
+  --color-surface-600: #dedede;
+  --color-surface-700: #f0f0f0;
+  --color-surface-800: #f9f9f9;
+  --color-surface-900: #fcfcfc;
+
+  /* ─── Legacy: brand → accent ramp ──────────────────────────────────────── */
+  --color-brand-50: #ebebeb;
+  --color-brand-100: #e6e6e6;
+  --color-brand-200: #c8c8c8;
+  --color-brand-300: #a8a8a8;
+  --color-brand-400: #3a3a3a;
+  --color-brand-500: #202020;
+  --color-brand-600: #101010;
+  --color-brand-700: #202020;
+  --color-brand-800: #1a1a1a;
+  --color-brand-900: #141414;
+
+  /* ─── Legacy: red → err ramp ───────────────────────────────────────────── */
+  --color-red-50: #fdf0f0;
+  --color-red-100: #fbe0e1;
+  --color-red-200: #f5c2c4;
+  --color-red-300: #e88b8f;
+  --color-red-400: #e4585d;
+  --color-red-500: #ce2c31;
+  --color-red-600: #b8252a;
+  --color-red-700: #a01f24;
+  --color-red-800: #8a1a1f;
+  --color-red-900: #6f1418;
+
+  /* ─── Legacy: green → ok ramp ──────────────────────────────────────────── */
+  --color-green-50: #eefaf3;
+  --color-green-100: #d9f2e5;
+  --color-green-200: #b6e6cd;
+  --color-green-300: #7fd0a6;
+  --color-green-400: #46b981;
+  --color-green-500: #218358;
+  --color-green-600: #1c7150;
+  --color-green-700: #17603f;
+  --color-green-800: #12502f;
+  --color-green-900: #0d3d24;
+
+  /* ─── Legacy: emerald → ok ramp ────────────────────────────────────────── */
+  --color-emerald-50: #eefaf3;
+  --color-emerald-100: #d9f2e5;
+  --color-emerald-200: #a7e5c6;
+  --color-emerald-300: #7fd0a6;
+  --color-emerald-400: #219a63;
+  --color-emerald-500: #218358;
+  --color-emerald-600: #176b47;
+  --color-emerald-700: #12563a;
+  --color-emerald-800: #0e442e;
+  --color-emerald-900: #0b3b23;
+
+  /* ─── Legacy: amber → warn ramp ────────────────────────────────────────── */
+  --color-amber-50: #fdf6e3;
+  --color-amber-100: #fbecc6;
+  --color-amber-200: #f5d98a;
+  --color-amber-300: #e8b64a;
+  /* Non-text amber: folder and star glyphs. Darkened from Radix step 9 so the
+     glyph clears 1.4.11's 3:1 against the canvas (the ramp's lighter steps were
+     designed for large fills, not for a 15px outline icon). */
+  --color-amber-400: #c07d00;
+  --color-amber-500: #ab6400;
+  --color-amber-600: #94560a;
+  --color-amber-700: #7c4708;
+  --color-amber-800: #633806;
+  --color-amber-900: #4a2a05;
+
+  /* ─── Legacy: yellow → warn ramp ───────────────────────────────────────── */
+  --color-yellow-50: #fdf7e0;
+  --color-yellow-100: #fbedb3;
+  --color-yellow-200: #f5da6b;
+  --color-yellow-300: #e3bc18;
+  --color-yellow-400: #d4a90c;
+  --color-yellow-500: #ab7d05;
+  --color-yellow-600: #926608;
+  --color-yellow-700: #7a5406;
+  --color-yellow-800: #6b5306;
+  --color-yellow-900: #544102;
+
+  /* ─── Legacy: blue / purple / orange → neutral ─────────────────────────── */
+  --color-blue-50: #f4f4f4;
+  --color-blue-100: #eaeaea;
+  --color-blue-200: #d4d4d4;
+  --color-blue-300: #a8a8a8;
+  --color-blue-400: #8a8a8a;
+  --color-blue-500: #646464;
+  --color-blue-600: #4d4d4d;
+  --color-blue-700: #3a3a3a;
+  --color-blue-800: #2a2a2a;
+  --color-blue-900: #2a2a2a;
+  --color-purple-500: #646464;
+  --color-orange-500: #646464;
+}
+
+/* ─── Dark theme: the same variables, overridden ─────────────────────────────
+   Unlayered on purpose: Tailwind emits the `@theme` values into `:root` inside
+   `@layer theme`, so an unlayered `html.dark` rule wins without `!important`. */
+html.dark {
+  --color-canvas: #111111;
+  --color-panel: #191919;
+  --color-raised: #232323;
+  --color-line: #2a2a2a;
+  --color-line-strong: #3d3d3d;
+  --color-line-ctrl: #666666;
+  --color-ink: #eeeeee;
+  --color-ink-2: #b4b4b4;
+  --color-ink-3: #b4b4b4;
+  --color-accent: #eeeeee;
+  --color-accent-ink: #111111;
+  --color-ok: #3dd68c;
+  --color-warn: #ffca16;
+  --color-err: #ff9592;
+  --color-err-ink: #111111;
+
+  --color-gray-50: #161616;
+  --color-gray-100: #eeeeee;
+  --color-gray-200: #e6e6e6;
+  --color-gray-300: #c8c8c8;
+  --color-gray-400: #b4b4b4;
+  --color-gray-500: #a0a0a0;
+  --color-gray-600: #8a8a8a;
+  --color-gray-700: #2a2a2a;
+  --color-gray-800: #232323;
+  --color-gray-900: #111111;
+  --color-surface-50: #111111;
+  --color-surface-600: #2e2e2e;
+  --color-surface-700: #232323;
+  --color-surface-800: #191919;
+  --color-surface-900: #111111;
+
+  --color-brand-50: #1e1e1e;
+  --color-brand-100: #2e2e2e;
+  --color-brand-200: #3d3d3d;
+  --color-brand-300: #d4d4d4;
+  --color-brand-400: #d4d4d4;
+  --color-brand-500: #eeeeee;
+  --color-brand-600: #ffffff;
+  --color-brand-700: #eeeeee;
+  --color-brand-800: #f5f5f5;
+  --color-brand-900: #3d3d3d;
+
+  --color-red-50: #2b1618;
+  --color-red-100: #3a1b1e;
+  --color-red-200: #5c2a2e;
+  --color-red-300: #ffb4b2;
+  --color-red-400: #ff9592;
+  --color-red-500: #ff9592;
+  --color-red-600: #ffb3b0;
+  --color-red-700: #ffc9c7;
+  --color-red-800: #ffdcda;
+  --color-red-900: #5c2a2e;
+
+  --color-green-50: #12241a;
+  --color-green-100: #17301f;
+  --color-green-200: #1f4733;
+  --color-green-300: #7fd8ab;
+  --color-green-400: #3dd68c;
+  --color-green-500: #3dd68c;
+  --color-green-600: #6ce0a3;
+  --color-green-700: #98e8bd;
+  --color-green-800: #1f4733;
+  --color-green-900: #1f4733;
+
+  --color-emerald-50: #12241a;
+  --color-emerald-100: #17301f;
+  --color-emerald-200: #1f4733;
+  --color-emerald-300: #7fd8ab;
+  --color-emerald-400: #3dd68c;
+  --color-emerald-500: #3dd68c;
+  --color-emerald-600: #6ce0a3;
+  --color-emerald-700: #98e8bd;
+  --color-emerald-800: #1f4733;
+  --color-emerald-900: #1f4733;
+
+  --color-amber-50: #241c0d;
+  --color-amber-100: #3a2c12;
+  --color-amber-200: #55411a;
+  --color-amber-300: #ffca16;
+  --color-amber-400: #ffca16;
+  --color-amber-500: #ffca16;
+  --color-amber-600: #ffd45c;
+  --color-amber-700: #ffe08a;
+  --color-amber-800: #4a3512;
+  --color-amber-900: #4a3512;
+
+  --color-yellow-50: #241f0d;
+  --color-yellow-100: #3a3012;
+  --color-yellow-200: #554a1a;
+  --color-yellow-300: #ffdd4d;
+  --color-yellow-400: #ffca16;
+  --color-yellow-500: #ffca16;
+  --color-yellow-600: #ffd45c;
+  --color-yellow-700: #ffe08a;
+  --color-yellow-800: #4a3f12;
+  --color-yellow-900: #4a3f12;
+
+  --color-blue-50: #161616;
+  --color-blue-100: #2e2e2e;
+  --color-blue-200: #3d3d3d;
+  --color-blue-300: #c8c8c8;
+  --color-blue-400: #b4b4b4;
+  --color-blue-500: #b4b4b4;
+  --color-blue-600: #c8c8c8;
+  --color-blue-700: #d4d4d4;
+  --color-blue-800: #3d3d3d;
+  --color-blue-900: #3d3d3d;
+  --color-purple-500: #b4b4b4;
+  --color-orange-500: #b4b4b4;
+}
+
+/* ─── Layout variables ─────────────────────────────────────────────────────── */
+:root {
+  --left-panel-width: 240px;
+  /* Selection tint: a translucent accent so it composites over whatever the
+     row already sits on, in either theme. */
+  --tint-sel: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  --tint-active: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
 /* ─── Z-index scale ─────────────────────────────────────────────────────
@@ -70,8 +330,7 @@ span[data-ts] {
   display: inline-block;
 }
 /* Block divs (folder rows, search results) render empty with zero height;
-   reserve one line so the row doesn't shift when the text is filled in.
-   Both div[data-ts] usages are text-xs (line-height 1rem). */
+   reserve one line so the row doesn't shift when the text is filled in. */
 div[data-ts] {
   min-height: 1rem;
 }
@@ -79,14 +338,21 @@ div[data-ts] {
 /* ─── Base layer overrides ─────────────────────────────────────────────────── */
 @layer base {
   * {
-    @apply border-gray-200 dark:border-gray-700;
+    border-color: var(--color-line);
+  }
+  :where(html) {
+    background-color: var(--color-canvas);
   }
   body {
-    @apply transition-colors duration-200;
+    @apply bg-canvas text-ink transition-colors duration-200;
   }
   /* Native controls (scrollbars, select, inputs) follow the theme */
   :where(html.dark) {
     color-scheme: dark;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
   }
 }
 
@@ -128,114 +394,508 @@ html[data-view="gallery"] .js-file-list-view,
 html[data-view="gallery"] .js-file-grid-view { display: none !important; }
 html[data-view="gallery"] .js-gallery-view { display: block !important; }
 html[data-view="gallery"] .js-sort-section { display: none !important; }
-html[data-view="grid"] .js-view-list,
-html[data-view="grid"] .js-view-gallery,
-html[data-view="gallery"] .js-view-list,
-html[data-view="gallery"] .js-view-grid { color: var(--color-gray-400) !important; }
-html[data-view="grid"] .js-view-grid,
-html[data-view="gallery"] .js-view-gallery { color: var(--color-brand-500) !important; }
+
+/* The view switcher's active state is driven entirely by `html[data-view]`, a
+   single source of truth that survives the AJAX refresh replacing the toolbar. */
+.seg .js-view-list,
+.seg .js-view-grid,
+.seg .js-view-gallery { color: var(--color-ink-3); background: transparent; }
+html[data-view="grid"] .seg .js-view-grid,
+html[data-view="gallery"] .seg .js-view-gallery,
+html[data-view="list"] .seg .js-view-list,
+html:not([data-view]) .seg .js-view-list {
+  background: var(--color-raised);
+  color: var(--color-ink);
+}
 
 /* Virtual scrolling optimisation — skip off-screen row rendering */
 .js-file-list-view .js-entry-row {
   content-visibility: auto;
-  contain-intrinsic-size: 44px;
+  contain-intrinsic-size: 36px;
 }
 
-/* Selected row in file browser — brand tint to distinguish from hover */
+/* Selected row in file browser — accent tint to distinguish from hover */
 .js-entry-row.selected {
-  background-color: var(--color-brand-50);
-}
-.dark .js-entry-row.selected {
-  background-color: color-mix(in srgb, var(--color-brand-900) 30%, transparent);
+  background-color: var(--tint-sel);
 }
 
 /* Left border indicator for list view selected rows */
 .js-file-list-view .js-entry-row.selected {
-  box-shadow: inset 3px 0 0 0 var(--color-brand-500);
-}
-.dark .js-file-list-view .js-entry-row.selected {
-  box-shadow: inset 3px 0 0 0 var(--color-brand-400);
+  box-shadow: inset 2px 0 0 0 var(--color-accent);
 }
 
-/* Gallery view selected — 4px outline border + background tint */
-.js-gallery-view .js-entry-row.selected {
-  outline: 4px solid var(--color-brand-500);
-  outline-offset: -4px;
-  background-color: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
-}
-.dark .js-gallery-view .js-entry-row.selected {
-  outline: 4px solid var(--color-brand-400);
-  outline-offset: -4px;
-  background-color: color-mix(in srgb, var(--color-brand-400) 20%, transparent);
-}
+/* Grid and gallery tiles: selection is an INSET ring on the media box, so it
+   cannot bleed into a neighbouring tile the way the old 3px gallery outline
+   did, and it survives being drawn on top of a photo. The tile itself must not
+   take the tint — a 12% grey wash over a 227px card was all but invisible. */
+.nf-tile.selected,
+.nf-gal-tile.selected { background-color: transparent; }
+.nf-tile.selected .nf-tile-media,
+.nf-gal-tile.selected .nf-gal-media { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.nf-tile.selected .nf-tile-name,
+.nf-gal-tile.selected .nf-gal-cap { color: var(--color-ink); font-weight: 600; }
 
 /* ─── Reusable component classes ────────────────────────────────────────────
    Extracted from duplicated Tailwind class strings across templates.
    Base attributes are shared via grouped selectors (Tailwind v4's @apply
    cannot reference custom component classes). */
 @layer components {
-  /* Buttons */
-  .btn, .btn-primary, .btn-secondary, .btn-danger, .btn-danger-outline, .btn-ghost, .btn-ghost-brand, .btn-ghost-danger {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium
-           transition-colors
-           focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500
+  /* Buttons — 28px tall, 6px radius, no shadow. */
+  .btn, .btn-primary, .btn-secondary, .btn-danger, .btn-danger-outline, .btn-ghost, .btn-ghost-brand, .btn-ghost-danger, .btn-line, .btn-solid, .btn-quiet {
+    @apply inline-flex items-center justify-center gap-1.5 h-7 px-2.5 rounded-ctl border border-transparent
+           text-[12.5px] font-medium whitespace-nowrap cursor-pointer transition-colors
+           focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent
            disabled:cursor-not-allowed disabled:opacity-50;
   }
-  .btn-primary         { @apply bg-brand-500 text-white hover:bg-brand-600; }
-  .btn-secondary       { @apply border border-gray-300 dark:border-gray-600 bg-white dark:bg-surface-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-surface-600; }
-  .btn-danger          { @apply bg-red-600 text-white hover:bg-red-700; }
-  .btn-danger-outline  { @apply border border-red-200 dark:border-red-900 bg-white dark:bg-surface-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-700; }
-  .btn-ghost        { @apply text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-surface-700 dark:hover:text-gray-300; }
-  .btn-ghost-brand  { @apply text-gray-400 hover:bg-brand-50 hover:text-brand-500 dark:hover:bg-brand-900/20 dark:hover:text-brand-400; }
-  .btn-ghost-danger { @apply text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 dark:hover:text-red-400; }
-  .btn-sm   { @apply px-2.5 py-1.5 text-xs; }
-  .btn-icon { @apply p-1.5 rounded-md; }
+  .btn-primary        { @apply bg-accent text-accent-ink hover:bg-brand-600; }
+  .btn-solid          { @apply bg-accent text-accent-ink hover:bg-brand-600; }
+  .btn-secondary      { @apply border-line-strong text-ink hover:bg-raised; }
+  .btn-line           { @apply border-line-strong text-ink hover:bg-raised; }
+  .btn-quiet          { @apply text-ink-2 hover:bg-raised hover:text-ink; }
+  /* Starred state (details drawer star toggle). */
+  .btn-quiet.on       { color: var(--color-warn); }
+  .btn-danger         { @apply bg-err text-err-ink hover:bg-red-600; }
+  .btn-danger-outline { @apply border-line-strong text-err hover:bg-red-50; }
+  .btn-ghost          { @apply text-ink-2 hover:bg-raised hover:text-ink; }
+  .btn-ghost-brand    { @apply text-ink-2 hover:bg-raised hover:text-ink; }
+  .btn-ghost-danger   { @apply text-ink-2 hover:bg-raised hover:text-err; }
+  .btn-sm   { @apply h-6 px-2 text-[11.5px] gap-1; }
+  .btn-icon { @apply w-7 h-7 p-0; }
 
   /* Form controls */
   .input, .select, .textarea {
-    @apply block w-full rounded-lg border border-gray-300 dark:border-gray-600
-           bg-white dark:bg-surface-700 text-gray-900 dark:text-gray-100 text-sm p-2.5
-           shadow-sm placeholder-gray-400
-           focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500;
+    @apply block w-full rounded-ctl border border-line-ctrl bg-canvas text-ink text-[13px] px-2.5 py-1.5
+           placeholder-ink-3
+           focus:border-accent focus:outline-none;
   }
   .textarea    { @apply resize-none; }
-  .form-label  { @apply block text-sm font-medium text-gray-700 dark:text-gray-300; }
-  .field-label { @apply block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider; }
+  .form-label  { @apply block text-[13px] font-medium text-ink-2; }
+  .field-label { @apply block text-[10.5px] font-medium text-ink-3 uppercase tracking-wider; }
 
-  /* Cards */
-  .card      { @apply rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-surface-800; }
+  /* Cards — hairline border, no shadow. */
+  .card      { @apply rounded-box border border-line bg-panel; }
   .card-body { @apply px-4 py-5 sm:px-6; }
 
   /* Badges */
   .badge, .badge-brand, .badge-green, .badge-red, .badge-gray {
-    @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset;
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-medium ring-1 ring-inset;
   }
-  .badge-brand { @apply bg-brand-50 text-brand-700 ring-brand-600/20 dark:bg-brand-500/10 dark:text-brand-300 dark:ring-brand-400/20; }
-  .badge-green { @apply bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-500/10 dark:text-green-300 dark:ring-green-400/20; }
-  .badge-red   { @apply bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-400/20; }
-  .badge-gray  { @apply bg-gray-50 text-gray-600 ring-gray-500/20 dark:bg-gray-500/10 dark:text-gray-400 dark:ring-gray-400/20; }
+  .badge-brand { @apply bg-brand-50 text-ink ring-line-strong; }
+  .badge-green { @apply bg-green-50 text-green-700 ring-green-600/20; }
+  .badge-red   { @apply bg-red-50 text-red-700 ring-red-600/20; }
+  .badge-gray  { @apply bg-raised text-ink-2 ring-line-strong; }
 
-  /* Tables */
-  .table     { @apply min-w-full divide-y divide-gray-200 dark:divide-gray-700; }
-  .thead     { @apply bg-gray-50 dark:bg-surface-700; }
-  .th        { @apply px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase; }
-  .td        { @apply px-4 py-3 text-sm; }
-  .table-row { @apply hover:bg-gray-50 dark:hover:bg-surface-700/50 transition-colors; }
+  /* Dense hairline tables */
+  .table     { @apply w-full border-collapse text-[13px]; }
+  .thead     { @apply bg-raised; }
+  .th        { @apply px-4 h-9 text-left text-[10.5px] font-medium text-ink-3 uppercase tracking-wider border-b border-line-strong; }
+  .td        { @apply px-4 h-9 text-ink border-b border-line; }
+  .table-row { @apply hover:bg-raised transition-colors; }
 
   /* Page header / empty state */
-  .page-title    { @apply text-2xl font-semibold text-gray-900 dark:text-gray-100; }
-  .page-subtitle { @apply mt-1 text-sm text-gray-500 dark:text-gray-400; }
+  .page-title    { @apply text-[18px] font-semibold tracking-tight text-ink; }
+  .page-subtitle { @apply mt-1 text-[13px] text-ink-2; }
   .empty-state   { @apply mt-8 text-center; }
 
   /* Sidebar nav */
-  .nav-item          { @apply flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors; }
-  .nav-item-active   { @apply bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 font-medium; }
-  .nav-item-inactive { @apply text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-surface-700 hover:text-gray-900 dark:hover:text-gray-100; }
+  .nav-item          { @apply flex items-center gap-2 h-[30px] px-2 rounded-ctl text-[13px] transition-colors; }
+  .nav-item-active   { @apply bg-brand-50 text-ink font-medium; }
+  .nav-item-inactive { @apply text-ink-2 hover:bg-raised hover:text-ink; }
 
   /* Settings navigation — a vertical list on wide screens and a scrollable
      tab strip on narrow ones, so the same markup serves both. */
-  .settings-nav-item { @apply flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors whitespace-nowrap; }
+  .settings-nav-item { @apply flex items-center gap-2 px-3 py-2 rounded-ctl text-[13px] transition-colors whitespace-nowrap; }
+
+  /* ─── Graphite micro-typography ───────────────────────────────────────── */
+  .mono       { @apply font-mono text-[11px] tabular-nums text-ink-3; }
+  .num        { @apply tabular-nums; }
+  .side-label { @apply text-[10.5px] uppercase tracking-[0.07em] text-ink-3; }
+  .micro      { @apply text-[10.5px] uppercase tracking-[0.07em] text-ink-3; }
+
+  /* ─── Sidebar rows (library list + browse block) ─────────────────────── */
+  .row-link {
+    @apply flex items-center gap-[9px] h-[30px] px-[7px] rounded-ctl text-[13px] text-ink-2 no-underline;
+  }
+  .row-link:hover { @apply bg-raised text-ink; }
+  .row-link.on    { background: var(--tint-active); @apply text-ink font-medium; }
+  .row-link .ic   { @apply w-[15px] h-[15px] shrink-0 text-ink-3; }
+  .row-link.on .ic { color: var(--color-accent); }
+  .row-link .nm   { @apply flex-1 min-w-0 truncate; }
+  .row-link .ct   { @apply shrink-0 text-[11px] tabular-nums text-ink-3; }
+
+  /* ─── App shell ──────────────────────────────────────────────────────── */
+  .topbar {
+    @apply shrink-0 flex items-center gap-4 h-14 px-4 bg-panel border-b border-line;
+  }
+  .brand-mark {
+    @apply grid place-items-center w-[26px] h-[26px] rounded-ctl bg-accent text-accent-ink
+           text-[12px] font-bold tracking-[-0.02em];
+  }
+  .nf-search {
+    @apply flex items-center gap-2 h-[30px] px-[9px] rounded-ctl bg-canvas border border-line-ctrl text-ink-3;
+  }
+  .nf-search:focus-within { @apply border-line-strong; }
+  .nf-search input {
+    @apply flex-1 min-w-0 border-0 bg-transparent outline-none text-ink text-[12.5px] placeholder-ink-3;
+  }
+  .nf-search kbd {
+    @apply shrink-0 text-[10.5px] leading-none px-[5px] py-[3px] border border-line rounded-[4px] text-ink-3 font-sans;
+  }
+  .iconbtn {
+    @apply grid place-items-center w-[30px] h-[30px] border-0 rounded-ctl bg-transparent text-ink-2 cursor-pointer;
+  }
+  .iconbtn:hover { @apply bg-raised text-ink; }
+  .tag-admin {
+    @apply text-[10px] font-semibold tracking-[0.04em] uppercase px-1.5 py-0.5 rounded-full
+           border border-line-strong text-ink-2;
+  }
+
+  /* ─── File manager chrome ────────────────────────────────────────────── */
+  .content {
+    @apply flex-1 min-w-0 min-h-0 flex flex-col relative overflow-hidden bg-canvas;
+  }
+  .topline {
+    @apply shrink-0 flex flex-wrap items-center gap-3 px-4 py-2 border-b border-line min-h-12;
+  }
+  .crumbs {
+    @apply flex items-center gap-[7px] text-[13px] text-ink-3 min-w-0;
+  }
+  .crumbs a       { @apply text-ink-3 no-underline; }
+  .crumbs a:hover { @apply text-ink; }
+  .crumbs .cur    { @apply text-ink font-medium; }
+  .crumbs .sep    { @apply text-line-strong; }
+  .spacer         { @apply flex-1; }
+  .vsep           { @apply w-px h-4 bg-line; }
+
+  .nf-toolbar {
+    @apply shrink-0 flex items-center gap-2 h-10 px-4 border-b border-line sticky top-0 z-sticky bg-canvas
+           overflow-x-auto;
+  }
+  .seg {
+    @apply flex gap-px p-0.5 border border-line rounded-ctl;
+  }
+  .seg button {
+    @apply grid place-items-center w-6 h-5 border-0 rounded-[4px] bg-transparent text-ink-3 cursor-pointer;
+  }
+  .seg button:hover { @apply text-ink; }
+  .seg button.on    { @apply bg-raised text-ink; }
+  .tbtn {
+    @apply h-6 px-2 border-0 rounded-ctl bg-transparent text-ink-3 text-[12px] cursor-pointer;
+  }
+  .tbtn:hover { @apply bg-raised text-ink; }
+  .tbtn.on    { @apply text-ink bg-raised; }
+
+  /* ─── File list (list view only; grid/gallery keep their own layout) ─── */
+  .nf-scroll { @apply flex-1 min-h-0 overflow-y-auto relative; }
+  .nf-row {
+    @apply grid items-center gap-3.5 h-9 px-4 border-b border-line cursor-default;
+    grid-template-columns: 24px minmax(0, 1fr) 96px 132px 32px;
+  }
+  .nf-row-head {
+    @apply sticky top-0 z-sticky h-[30px] bg-panel border-b border-line-strong
+           text-[10.5px] uppercase tracking-[0.07em] text-ink-3 cursor-default;
+  }
+  .nf-row-head .r { @apply text-right; }
+  .nf-row.it:hover { @apply bg-raised; }
+  .nf-row.it.sel   { background: var(--tint-sel); box-shadow: inset 2px 0 0 0 var(--color-accent); }
+  .nf-row.it.sel .nf-name { @apply font-medium; }
+  .nf-ic    { @apply flex items-center justify-center w-6 h-6 shrink-0 overflow-hidden; }
+  .nf-name  { @apply flex items-center min-w-0 gap-2 text-[13px]; }
+  .nf-name .base { @apply truncate; }
+  .nf-name .ext  { @apply shrink-0 text-ink-3; }
+  .nf-star  { @apply shrink-0 w-3 h-3 border-0 bg-transparent p-0 cursor-pointer text-ink-3; }
+  .nf-star:hover   { color: var(--color-warn); }
+  .nf-star.on      { color: var(--color-warn); }
+  .nf-size, .nf-when { @apply text-[12px] text-ink-3 tabular-nums; }
+  .nf-size  { @apply text-right; }
+  .nf-more {
+    @apply grid place-items-center w-6 h-6 border-0 rounded-[4px] bg-transparent text-ink-2
+           cursor-pointer justify-self-end;
+  }
+  .nf-more:hover, .nf-row.it.sel .nf-more { @apply bg-raised text-ink; }
+
+  /* ─── Grid view ──────────────────────────────────────────────────────────
+     A borderless tile. The page's hierarchy is carried by the media box:
+     filled = there is a picture in it, hairline outline = there isn't. That is
+     what keeps the 40% of a folder that is folders and documents from reading
+     as a wall of grey blocks. */
+  .nf-grid {
+    @apply gap-2 px-4 pt-3.5 pb-5;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+  .nf-tile { @apply min-w-0 cursor-pointer; }
+  .nf-tile-media {
+    @apply relative overflow-hidden rounded-ctl bg-raised;
+    aspect-ratio: 4 / 3;
+    display: grid;
+    place-items: center;
+  }
+  .nf-tile-media.is-outline {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--color-line);
+  }
+  .nf-tile:hover .nf-tile-media.is-outline { box-shadow: inset 0 0 0 1px var(--color-line-strong); }
+  .nf-tile-media img { @apply block w-full h-full; object-fit: cover; }
+  .nf-tile-name {
+    @apply block mt-1.5 text-[12.5px] text-ink truncate;
+    text-decoration: none;
+  }
+  .nf-tile-name:hover .base { @apply underline; }
+  .nf-tile-name .ext { color: var(--color-ink-3); }
+  .nf-tile-meta { @apply mt-px text-[11px] text-ink-3 tabular-nums truncate; }
+  /* The separator rides with the date text rather than the hairline colour: as a
+     glyph it has to meet the text floor, and 1.6:1 (#c8c8c8 on #fcfcfc) does not. */
+  .nf-tile-date:not(:empty)::before { content: "\00b7"; margin: 0 5px; }
+  .nf-tile-meta.bare .nf-tile-date:not(:empty)::before { content: none; margin: 0; }
+  .nf-doc { @apply flex flex-col items-center gap-1.5; }
+  .nf-doc-ext { @apply text-[11px] font-semibold tracking-[0.04em] text-ink-3; }
+
+  /* Per-tile actions. Revealed on hover and on keyboard focus (an invisible
+     but focusable button is worse than no button), and kept visible for a
+     starred entry so its state is readable at a glance. */
+  .nf-tile-tools {
+    @apply absolute top-1.5 left-1.5 flex gap-1 opacity-0;
+    transition: opacity 0.12s ease;
+  }
+  .nf-tile:hover .nf-tile-tools,
+  .nf-tile:focus-within .nf-tile-tools,
+  .nf-tile.starred .nf-tile-tools,
+  .nf-gal-tile:hover .nf-tile-tools,
+  .nf-gal-tile:focus-within .nf-tile-tools,
+  .nf-gal-tile.starred .nf-tile-tools { opacity: 1; }
+  .nf-tool-btn {
+    @apply grid place-items-center w-[22px] h-[22px] border-0 rounded-[4px]
+           cursor-pointer text-white;
+    background: rgb(0 0 0 / 0.58);
+    backdrop-filter: blur(3px);
+  }
+  /* Measured worst case (a pure-white photo underneath): white on the 58% scrim
+     is 5.33:1. The shipped `text-white/70` chip with no scrim measured 1.00:1. */
+  .nf-tool-btn:hover { background: rgb(0 0 0 / 0.74); }
+  .nf-tool-btn.nf-star.on { color: var(--color-warn); }
+  .nf-tool-btn svg { @apply w-3.5 h-3.5; }
+
+  /* A play badge and the thumbnail-failure badge both sit on top of a photo we
+     do not control, so each one carries its own scrim. The shipped gallery put
+     a bare `text-white/70` chip on the tile: on a white photo that measures
+     1.00:1, i.e. invisible. */
+  .nf-play {
+    @apply grid place-items-center rounded-full text-white pointer-events-none;
+    /* Centred by inset+margin rather than by the container: the grid tile's
+       media box is a grid (which centres it anyway) but the gallery's is not,
+       and a stretch-aligned absolute box keeps both identical. */
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 30px; height: 30px;
+    background: rgb(0 0 0 / 0.55);
+    /* The scrim disc is composited over whatever is underneath. Over a photo
+       that reads fine, but over the dark theme's own tile ground
+       (--color-raised #232323) a 55%-black disc is invisible and only the white
+       triangle floats. A hairline ring defines the disc on every ground. */
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.45);
+  }
+  .nf-thb-fallback {
+    @apply absolute inset-0 flex items-center justify-center text-[12px] font-semibold
+           tracking-[0.04em] text-ink-2 pointer-events-none;
+  }
+  .nf-tile-media.is-video .nf-thb-fallback,
+  .nf-gal-media.is-video .nf-thb-fallback {
+    @apply inset-auto left-1.5 bottom-1.5 rounded-[4px] px-1.5 py-px
+           text-[10px] font-medium text-white;
+    background: rgb(0 0 0 / 0.58);
+  }
+
+  /* ─── Gallery view ───────────────────────────────────────────────────────
+     A photo/video contact sheet. Bigger tiles than the old 10-up mosaic, and
+     the file name lives *under* the picture instead of in a hover overlay: a
+     caption over a bright photo is a contrast gamble, and a hover-only caption
+     is unreachable on touch. */
+  .nf-gal-group + .nf-gal-group { @apply mt-1; }
+  .nf-gal-head {
+    @apply sticky top-0 z-sticky flex items-center gap-2.5 px-4 pt-2.5 pb-2;
+    background: var(--color-canvas);
+  }
+  .nf-gal-head h2 { @apply text-[12px] font-semibold text-ink; }
+  .nf-gal-n { @apply text-[11px] text-ink-3 tabular-nums; }
+  .nf-gal-rule { @apply flex-1 h-px bg-line; }
+  .nf-gal-grid {
+    @apply grid gap-x-3 gap-y-2.5 px-4 pb-5;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  }
+  .nf-gal-tile { @apply min-w-0 cursor-pointer; }
+  .nf-gal-media {
+    @apply relative overflow-hidden rounded-ctl bg-raised;
+    aspect-ratio: 1;
+  }
+  .nf-gal-media img { @apply block w-full h-full; object-fit: cover; }
+  .nf-gal-tile:hover .nf-gal-media { box-shadow: 0 0 0 1px var(--color-line-strong); }
+  .nf-gal-media .nf-play { width: 34px; height: 34px; }
+  .nf-gal-cap {
+    @apply block mt-1.5 text-[11.5px] text-ink-2 truncate;
+    text-decoration: none;
+  }
+  .nf-gal-cap:hover .base { @apply underline; }
+  .nf-gal-cap .ext { color: var(--color-ink-3); }
+  .nf-gal-empty { @apply px-4 py-12 text-center; }
+
+  /* Toolbar summary, shown only in gallery mode (the sort controls are hidden
+     there, so the row would otherwise be empty). */
+  .nf-gal-summary { @apply hidden items-center gap-2 text-[12px] text-ink-3; }
+  .nf-gal-summary .num { color: var(--color-ink-2); }
+  .nf-gal-dot { color: var(--color-line-strong); }
+  html[data-view="gallery"] .nf-gal-summary { @apply flex; }
+
+  /* ─── Full-page file preview (image / media / text) ──────────────────────
+     Reached by clicking a name in the file list. One hairline panel with the
+     same surfaces as the list and the drawer: a header row (name, size,
+     actions) over a stage that holds the picture, the player or the code. */
+  .nf-preview { @apply rounded-box border border-line bg-panel overflow-hidden; }
+  .nf-preview-head {
+    @apply flex flex-wrap items-center gap-x-2.5 gap-y-2 px-3.5 py-2 border-b border-line min-h-12;
+  }
+  .nf-preview-title { @apply text-[13px] font-medium text-ink truncate; }
+  .nf-preview-meta { @apply text-[11.5px] text-ink-3; }
+  .nf-preview-stage {
+    @apply flex items-center justify-center p-4 bg-raised;
+    min-height: 12rem;
+  }
+  .nf-preview-stage.is-audio { min-height: 8rem; }
+  /* Leave room for the page chrome (breadcrumb + header + the mobile bottom
+     nav), so a tall picture never pushes the actions off screen. */
+  .nf-preview-image,
+  .nf-preview-video {
+    @apply max-w-full object-contain rounded-ctl;
+    max-height: calc(100dvh - 16rem);
+  }
+  .nf-preview-text {
+    @apply overflow-auto p-4 text-[12.5px] leading-[1.65] text-ink-2 font-mono;
+    max-height: calc(100dvh - 16rem);
+  }
+
+  /* ─── Row action menu (singleton, mounted on <body>) ─────────────────── */
+  .nf-menu {
+    @apply fixed z-dialog min-w-[168px] py-1 rounded-box border border-line bg-panel
+           text-[13px] text-ink;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  }
+  .nf-menu-item {
+    @apply flex items-center gap-2 w-full px-3 h-8 border-0 bg-transparent text-left
+           text-ink cursor-pointer whitespace-nowrap;
+  }
+  .nf-menu-item:hover { @apply bg-raised; }
+  .nf-menu-item.danger { color: var(--color-err); }
+  .nf-menu-sep { @apply my-1 h-px bg-line; }
+
+  /* ─── Bottom details drawer ──────────────────────────────────────────────
+     An OVERLAY, not a flex row: opening it must not reflow anything. The file
+     list keeps its exact height and scroll position and the sidebar is not even
+     in this column. `.content` clips the closed drawer; while open the list
+     gets matching bottom padding so the final row can still be scrolled clear. */
+  .nf-details {
+    @apply absolute left-0 right-0 bottom-0 z-[5] bg-panel;
+    transform: translateY(100%);
+    visibility: hidden;
+    transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 0.22s;
+  }
+  .content.drawer-open .nf-details {
+    transform: translateY(0);
+    visibility: visible;
+    transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
+  }
+  .content.drawer-open .nf-scroll { padding-bottom: var(--drawer-h, 84px); }
+  .nf-details[hidden] { display: none; }
+  /* The hairline lives on the inner row, not the container: a border on
+     `.nf-details` would keep 1px of height while the drawer is closed. */
+  .d-row {
+    @apply flex items-center gap-[18px] px-4 py-3.5;
+    box-shadow: inset 0 1px 0 var(--color-line);
+  }
+  .d-row[hidden] { display: none; }
+  .d-thumb {
+    @apply grid place-items-center w-[54px] h-[54px] shrink-0 rounded-box
+           border border-line bg-raised text-ink-3 overflow-hidden;
+  }
+  .d-thumb .js-rp-thumb-img { @apply w-full h-full object-contain; }
+  .d-main { @apply min-w-0 flex flex-col gap-[3px] basis-[240px] max-w-[340px]; }
+  .d-name { @apply text-[13.5px] font-semibold tracking-[-0.005em] truncate; }
+  .d-sub  { @apply text-[12px] text-ink-3 truncate; }
+  .d-fields { @apply shrink-0 flex items-stretch; }
+  .d-f      { @apply flex flex-col gap-[3px] px-[18px] border-l border-line; }
+  .d-f .k   { @apply text-[10.5px] uppercase tracking-[0.07em] text-ink-3; }
+  .d-f .v   { @apply text-[12.5px] text-ink tabular-nums whitespace-nowrap; }
+  .d-actions { @apply shrink-0 flex items-center gap-[7px] ml-auto pl-[18px] border-l border-line; }
+  .d-close {
+    @apply grid place-items-center w-7 h-7 ml-[3px] border-0 rounded-ctl bg-transparent text-ink-3 cursor-pointer;
+  }
+  .d-close:hover { @apply bg-raised text-ink; }
+  .d-toggle {
+    @apply inline-flex items-center gap-1 h-7 px-2 rounded-ctl border-0 bg-transparent
+           text-ink-2 text-[12px] cursor-pointer;
+  }
+  .d-toggle:hover { @apply bg-raised text-ink; }
+  .d-toggle svg { @apply transition-transform duration-200; }
+  .d-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+
+  /* Expanded rich tier — still an overlay, so still zero reflow. */
+  .d-expand {
+    @apply border-t border-line overflow-y-auto;
+    max-height: min(320px, 45dvh);
+  }
+  .d-expand[hidden] { display: none; }
+  /* Separators are explicit child borders: Tailwind's `divide-*` utilities are
+     child selectors, and `@apply` cannot express them. */
+  .d-expand-grid {
+    @apply flex items-stretch gap-0;
+  }
+  .d-expand-grid > * { border-right: 1px solid var(--color-line); }
+  .d-expand-grid > *:last-child { border-right: 0; }
+  .d-ex {
+    @apply shrink-0 min-w-[200px] px-4 py-3;
+    max-width: 320px;
+  }
+  .d-ex h4 {
+    @apply text-[10.5px] uppercase tracking-[0.07em] text-ink-3 mb-2 flex items-center gap-1;
+  }
+  .d-ex-preview { @apply shrink-0 flex items-center justify-center px-4 py-3 min-w-[180px]; }
 }
 
-
-
+/* ─── Details drawer: field shedding before the file name ──────────────────── */
+@media (max-width: 1200px) {
+  .d-fields .d-f:nth-child(3) { display: none; }
+}
+@media (max-width: 980px) {
+  .d-fields .d-f:nth-child(2) { display: none; }
+}
+/* The list sheds columns in the same order the drawer sheds fields — metadata
+   before the name, because the name is what the row is scanned for. */
+@media (max-width: 1100px) {
+  .nf-row { grid-template-columns: 24px minmax(0, 1fr) 88px 32px; }
+  .nf-row > :nth-child(4) { display: none; }
+}
+@media (max-width: 720px) {
+  .nf-row { grid-template-columns: 24px minmax(0, 1fr) 32px; gap: 8px; padding: 0 10px; }
+  .nf-row > :nth-child(3) { display: none; }
+}
+/* Grid/gallery tiles fall out of the container width via auto-fill with a
+   200px / 168px minimum. On a phone the 200px minimum would collapse the grid
+   to a single column, which is too sparse for a file browser, so pin it to two
+   and tighten the gutters. */
+@media (max-width: 520px) {
+  .nf-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 10px 12px 16px; }
+  .nf-gal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; padding: 0 12px 16px; }
+  .nf-gal-head { padding-left: 12px; padding-right: 12px; }
+}
+/* Mobile: sit clear of the bottom navigation bar, and stack the drawer's
+   actions under the file name instead of crushing them onto one line. */
+@media (max-width: 1023px) {
+  .nf-details { bottom: 4rem; }
+}
+@media (max-width: 720px) {
+  .d-row { flex-wrap: wrap; gap: 12px; }
+  .d-fields { display: none; }
+  .d-main { flex: 1 1 auto; max-width: none; }
+  .d-actions {
+    @apply w-full ml-0 pl-0 border-l-0 flex-wrap;
+  }
+}

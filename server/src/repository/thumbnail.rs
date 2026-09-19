@@ -19,6 +19,7 @@ pub trait ThumbnailRepository: Send + Sync {
         repo_id: &str,
         path: &str,
         size: i32,
+        format: &str,
         file_modified_at: i64,
         created_at: i64,
     ) -> Result<(), AppError>;
@@ -28,6 +29,7 @@ pub trait ThumbnailRepository: Send + Sync {
         repo_id: &str,
         path: &str,
         size: i32,
+        format: &str,
         file_modified_at: i64,
         now: i64,
     ) -> Result<(), AppError>;
@@ -66,6 +68,7 @@ impl ThumbnailRepository for DbThumbnailRepository {
         repo_id: &str,
         path: &str,
         size: i32,
+        format: &str,
         file_modified_at: i64,
         created_at: i64,
     ) -> Result<(), AppError> {
@@ -74,6 +77,7 @@ impl ThumbnailRepository for DbThumbnailRepository {
             repo_id: Set(repo_id.to_string()),
             path: Set(path.to_string()),
             size: Set(size),
+            format: Set(format.to_string()),
             file_modified_at: Set(file_modified_at),
             created_at: Set(created_at),
         })
@@ -87,6 +91,7 @@ impl ThumbnailRepository for DbThumbnailRepository {
         repo_id: &str,
         path: &str,
         size: i32,
+        format: &str,
         file_modified_at: i64,
         now: i64,
     ) -> Result<(), AppError> {
@@ -95,6 +100,7 @@ impl ThumbnailRepository for DbThumbnailRepository {
             .filter(thumbnail::Column::Path.eq(path))
             .filter(thumbnail::Column::Size.eq(size))
             .set(thumbnail::ActiveModel {
+                format: Set(format.to_string()),
                 file_modified_at: Set(file_modified_at),
                 created_at: Set(now),
                 ..Default::default()

@@ -1,25 +1,27 @@
 {% extends "base.html" %}
+{% import "includes/icons.html" as icons %}
 
 {% block title %}{{ file_name }} | Nanofile{% endblock %}
 
 {% block content %}
-<nav class="flex mb-4 text-sm text-gray-500 flex-wrap items-center">
-    <a href="/libraries/" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">{{ t.tr("nav.libraries") }}</a>
-    <span class="mx-2 flex-shrink-0">/</span>
-    <a href="/libraries/{{ repo_id }}/files/" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">{{ repo_name }}</a>
-    {% if parent_path != "" %}
-    <span class="mx-2 flex-shrink-0">/</span>
-    <a href="/libraries/{{ repo_id }}/files/{{ parent_path|urlencode }}" class="hover:text-brand-500 dark:hover:text-brand-400 flex-shrink-0">..</a>
-    {% endif %}
-    <span class="mx-2 flex-shrink-0">/</span>
-    <span class="text-gray-900 dark:text-gray-100 font-medium truncate max-w-[200px]">{{ file_name }}</span>
-</nav>
+{% include "includes/breadcrumb.html" %}
 
-<div class="card overflow-hidden">
-    <div class="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center justify-between">
-        <span>{{ file_name }}</span>
-        <a href="/libraries/{{ repo_id }}/files/{{ parent_path|urlencode }}" class="text-xs text-brand-500 hover:underline">&larr; {{ t.tr("fb.back_to_folder") }}</a>
-    </div>
-    <pre class="overflow-x-auto p-4 text-sm text-gray-800 dark:text-gray-200"><code>{{ content }}</code></pre>
-</div>
+<section class="nf-preview" aria-label="{{ file_name }}">
+    <header class="nf-preview-head">
+        <h1 class="nf-preview-title" title="{{ file_name }}">{{ file_name }}</h1>
+        <span class="nf-preview-meta num">{{ size_display }}</span>
+        <span class="spacer"></span>
+        <a class="btn btn-line" href="{{ download_url }}">
+            {{ icons::icon_download("w-3.5 h-3.5") }}
+            <span class="hidden sm:inline">{{ t.tr("common.download") }}</span>
+        </a>
+        <a class="btn btn-ghost whitespace-nowrap"
+           href="/libraries/{{ repo_id }}/files/{{ parent_path|urlencode }}">
+            {{ t.tr("fb.back_to_folder") }}
+        </a>
+    </header>
+    {# The text is rendered, not escaped away: `content` is file content, and the
+       code block is inside a `<pre>` so no markup in it is executed. #}
+    <pre class="nf-preview-text"><code>{{ content }}</code></pre>
+</section>
 {% endblock %}

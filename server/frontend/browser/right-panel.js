@@ -1,9 +1,16 @@
-// right-panel — the file-detail side panel (preview, details, tags, share &
-// upload links, index text, EXIF), multi-select panel, and quick preview modal.
+// right-panel — the bottom details drawer: summary + rich tier for a single
+// selection, a batch summary for a multi selection, and the quick-preview modal.
+//
+// The drawer replaced the old 300px right-hand column. It is an OVERLAY pinned
+// to the bottom of the file-manager column, so opening it reflows nothing: the
+// list keeps its exact height and scroll offset. The only thing that changes is
+// `.nf-scroll`'s bottom padding, which reserves room so the final row can still
+// be scrolled clear of the drawer.
 import { __t } from "../core/i18n.js";
 import { escapeHtml, escapeAttr, encodeFilePath, safeColor, parentDirOf } from "../core/utils.js";
 import { apiFetch } from "../core/api.js";
 import { humanType, isQuickPreviewImage, getExifFields } from "../core/file-meta.js";
+import { formatLocalDateTime } from "../core/format.js";
 import { Toast } from "../core/toast.js";
 import { refreshFileList } from "./list.js";
 
@@ -12,9 +19,77 @@ import { refreshFileList } from "./list.js";
 // index text, EXIF, tags) resolve.
 var rpReqId = 0;
 
+// ─── Drawer plumbing ────────────────────────────────────────────────────
+var detailsEl = document.getElementById("nf-details");
+var contentEl = document.getElementById("nf-content");
+var detailsExpandEl = document.getElementById("nf-details-expand");
+
+var EXPAND_KEY = "nfDetailsExpanded";
+
+function isExpanded() {
+  try { return localStorage.getItem(EXPAND_KEY) === "true"; } catch (e) { return false; }
+}
+
+// The rich tier is remembered per browser: it is collapsed by default because
+// the summary answers the common "what is this file" question, but a user who
+// wants tags/EXIF/link lists every time should only have to say so once.
+function setExpanded(expanded) {
+  if (detailsExpandEl) detailsExpandEl.hidden = !expanded;
+  document.querySelectorAll(".js-d-toggle").forEach(function (t) {
+    t.setAttribute("aria-expanded", expanded ? "true" : "false");
+  });
+  try { localStorage.setItem(EXPAND_KEY, expanded ? "true" : "false"); } catch (e) { /* ignore */ }
+}
+
+function syncDrawerHeight() {
+  if (!detailsEl || !contentEl) return;
+  var h = detailsEl.offsetHeight;
+  contentEl.style.setProperty("--drawer-h", h + "px");
+  return h;
+}
+
+function openDrawer() {
+  if (!detailsEl || !contentEl) return;
+  setExpanded(isExpanded());
+  // Measure before revealing: `visibility: hidden` still has layout, and the
+  // reserved padding must match the drawer's real height.
+  syncDrawerHeight();
+  detailsEl.classList.add("open");
+  contentEl.classList.add("drawer-open");
+}
+
+function closeDrawer() {
+  if (!detailsEl || !contentEl) return;
+  detailsEl.classList.remove("open");
+  contentEl.classList.remove("drawer-open");
+  contentEl.style.removeProperty("--drawer-h");
+}
+
+document.addEventListener("click", function (e) {
+  if (!e.target.closest(".js-d-toggle")) return;
+  if (!detailsExpandEl) return;
+  setExpanded(detailsExpandEl.hidden);
+  // The drawer just changed height, so the space reserved at the bottom of the
+  // list must follow in the same frame — reading `offsetHeight` forces the
+  // layout that `hidden` just invalidated, so this needs no rAF.
+  if (detailsEl && detailsEl.classList.contains("open")) syncDrawerHeight();
+});
+
+// Escape clears the selection (which closes the drawer) unless the quick
+// preview modal is the thing on top.
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape") return;
+  if (!detailsEl || !detailsEl.classList.contains("open")) return;
+  var qp = document.getElementById("quick-preview-overlay");
+  if (qp && !qp.classList.contains("hidden")) return;
+  var closeBtn = detailsEl.querySelector(".js-deselect-all");
+  if (closeBtn) closeBtn.click();
+});
+
 export function openRightPanel(d) {
-  // d = { name, type, starred, extension, path, repoId, modifierEmail,
-  //       thumbnailUrl, thumbnailUrlLarge, isPreviewable, downloadUrl, isVideo }
+  // d = { name, type, starred, extension, path, repoId, modifierEmail, mtime,
+  //       thumbnailUrl, thumbnailUrlLarge, isPreviewable, downloadUrl,
+  //       isVideo, isAudio, sizeDisplay, recordId }
 
   var ph = document.querySelector(".js-rp-placeholder");
   var ct = document.querySelector(".js-rp-content");
@@ -38,6 +113,7 @@ export function openRightPanel(d) {
   var audioIcon = ct.querySelector(".js-rp-audio-icon");
   var audioRow = ct.querySelector(".js-rp-audio-row");
   var audioEl = ct.querySelector(".js-rp-audio");
+  var mediaSection = ct.querySelector(".js-rp-media");
 
   // Stop any previously-playing media before switching selection.
   stopRightPanelMedia();
@@ -51,20 +127,28 @@ export function openRightPanel(d) {
   if (audioIcon) audioIcon.classList.add("hidden");
   if (audioRow) audioRow.classList.add("hidden");
 
+  // The summary row only has room for a 54px poster, so playback lives in the
+  // expandable tier; a file is "media" when that tier has something to show.
+  var isMedia = false;
+
   if (d.type === "dir") {
     if (folderIcon) folderIcon.classList.remove("hidden");
   } else if (d.isVideo) {
+    isMedia = true;
     // Inline playback via the Range-capable streaming endpoint; the frame
-    // thumbnail (if any) doubles as the native poster.
+    // thumbnail (if any) doubles as the native poster and the summary image.
     if (videoEl && d.repoId && d.path) {
-      var encPath = encodeFilePath(d.path);
-      videoEl.src = "/repos/" + encodeURIComponent(d.repoId) + "/files/" + encPath;
+      videoEl.src = "/repos/" + encodeURIComponent(d.repoId) + "/files/" + encodeFilePath(d.path);
       videoEl.poster = d.thumbnailUrlLarge || d.thumbnailUrl || "";
       videoEl.classList.remove("hidden");
     }
+    if (d.thumbnailUrlLarge || d.thumbnailUrl) {
+      if (thumbImg) { thumbImg.dataset.extension = d.extension || ""; thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
+    } else if (videoIcon) {
+      videoIcon.classList.remove("hidden");
+    }
   } else if (d.isAudio) {
-    // Cover art (if any) as the poster; otherwise a music note. The player
-    // bar sits just below the preview box.
+    isMedia = true;
     if (audioRow && d.repoId && d.path) {
       audioEl.src = "/repos/" + encodeURIComponent(d.repoId) + "/files/" +
         encodeFilePath(d.path);
@@ -85,45 +169,45 @@ export function openRightPanel(d) {
     extBadge.classList.remove("hidden");
   }
 
+  if (mediaSection) mediaSection.classList.toggle("hidden", !isMedia);
+
   // ── Basic Info ──
   setText(ct, ".js-rp-name", d.name || "");
   setText(ct, ".js-rp-type", humanType(d.type, d.extension));
 
   // ── Starred ──
-  var starBtn = ct.querySelector(".js-rp-starred");
+  // The hook classes are never replaced: `openRightPanel` runs again for every
+  // selection, and clobbering `className` used to make the button stop
+  // updating from the second selection onward.
+  var starBtn = ct.querySelector(".js-rp-star");
   if (starBtn) {
     var isStarred = d.starred === true || d.starred === "true";
     starBtn.dataset.starred = isStarred ? "true" : "false";
     starBtn.dataset.repoId = d.repoId || "";
     starBtn.dataset.path = d.path || "";
     starBtn.setAttribute("data-toggle-star", "");
+    starBtn.classList.toggle("on", isStarred);
     var starIcon = ct.querySelector(".js-rp-star-icon");
     var starLabel = ct.querySelector(".js-rp-star-label");
-    if (starIcon) {
-      starIcon.setAttribute("fill", isStarred ? "currentColor" : "none");
-    }
+    if (starIcon) starIcon.setAttribute("fill", isStarred ? "currentColor" : "none");
     if (starLabel) starLabel.textContent = isStarred ? __t('ui.starred') : __t('ui.not_starred');
-    starBtn.className =
-      "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition-colors " +
-      (isStarred
-        ? "text-amber-500 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30"
-        : "text-gray-400 hover:text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/20");
+    starBtn.title = isStarred ? __t('ui.unstar') : __t('ui.star');
   }
 
   // ── Details ──
   setText(ct, ".js-rp-path", d.path || "");
+  setText(ct, ".js-rp-size", d.type === "dir" ? "—" : (d.sizeDisplay || ""));
 
-  // ── Size ──
-  setText(ct, ".js-rp-size", d.type === "dir" ? "-" : (d.sizeDisplay || ""));
+  var mtime = parseInt(d.mtime, 10);
+  setText(ct, ".js-rp-mtime", isNaN(mtime) ? "" : formatLocalDateTime(mtime));
 
   // ── Actions ──
   // Download
-  var downloadRow = ct.querySelector(".js-rp-download-row");
-  if (downloadRow) downloadRow.classList.remove("hidden");
   var downloadLink = ct.querySelector(".js-rp-download");
   if (downloadLink) {
     downloadLink.href = d.type === "dir" ? "#" : (d.downloadUrl || "#");
-    downloadLink.classList.remove("pointer-events-none", "opacity-50");
+    downloadLink.classList.toggle("pointer-events-none", d.type === "dir");
+    downloadLink.classList.toggle("opacity-50", d.type === "dir");
     downloadLink.dataset.repoId = d.repoId || "";
     downloadLink.dataset.path = d.path || "";
     downloadLink.dataset.name = d.name || "";
@@ -154,8 +238,10 @@ export function openRightPanel(d) {
       historyBtn.dataset.repoId = d.repoId || "";
       historyBtn.dataset.path = d.path || "";
       historyBtn.classList.remove("hidden");
+      historyBtn.classList.add("inline-flex");
     } else {
       historyBtn.classList.add("hidden");
+      historyBtn.classList.remove("inline-flex");
     }
   }
 
@@ -168,7 +254,7 @@ export function openRightPanel(d) {
       // (min-h-5) list row, so the panel layout doesn't shift when the links
       // arrive; only the list content is swapped, not the whole section.
       shareSection.classList.remove("hidden");
-      shareList.innerHTML = '<div class="js-rp-share-links-loading text-xs text-gray-400 dark:text-gray-500 italic">' + escapeHtml(__t('fb.loading')) + '</div>';
+      shareList.innerHTML = '<div class="js-rp-share-links-loading text-[11px] text-ink-3 italic">' + escapeHtml(__t('fb.loading')) + '</div>';
       fetch("/api/v2.1/share-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -176,16 +262,16 @@ export function openRightPanel(d) {
           var links = data || [];
           shareList.innerHTML = "";
           if (links.length === 0) {
-            shareList.innerHTML = '<div class="js-rp-no-share-links text-xs text-gray-400 dark:text-gray-500 italic">' + escapeHtml(__t('fb.no_share_links')) + '</div>';
+            shareList.innerHTML = '<div class="js-rp-no-share-links text-[11px] text-ink-3 italic">' + escapeHtml(__t('fb.no_share_links')) + '</div>';
           } else {
             links.forEach(function (link) {
               var div = document.createElement("div");
               div.className = "flex items-center justify-between py-0.5";
               div.innerHTML =
-                '<a href="' + escapeAttr(link.link || "") + '" target="_blank" class="text-xs text-brand-500 hover:text-brand-600 truncate block">' +
+                '<a href="' + escapeAttr(link.link || "") + '" target="_blank" class="text-[11px] text-ink truncate block hover:underline">' +
                   escapeHtml(link.token || "") +
                 '</a>' +
-                '<span class="text-xs text-gray-400 flex-shrink-0 ml-2">' + (link.view_cnt || 0) + ' views</span>';
+                '<span class="mono flex-shrink-0 ml-2">' + (link.view_cnt || 0) + ' views</span>';
               shareList.appendChild(div);
             });
           }
@@ -226,7 +312,7 @@ export function openRightPanel(d) {
       // row height stays stable — no separate "no tags" line below the input.
       if (fileTagIds.length === 0) {
         tagsList.innerHTML =
-          '<span class="js-rp-no-tags text-xs text-gray-400 dark:text-gray-500 italic">' +
+          '<span class="js-rp-no-tags text-[11px] text-ink-3 italic">' +
           escapeHtml(__t('fb.no_tags')) +
           "</span>";
         return;
@@ -235,7 +321,7 @@ export function openRightPanel(d) {
         var tag = allTags.find(function (t) { return String(t.id) === String(tid); });
         if (!tag) return;
         var chip = document.createElement("span");
-        chip.className = "js-rp-tag-chip inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-gray-700 dark:text-gray-200";
+        chip.className = "js-rp-tag-chip inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10px] font-medium text-ink";
         var tagColor = safeColor(tag.color);
         chip.style.backgroundColor = tagColor + "33";
         chip.innerHTML =
@@ -370,10 +456,10 @@ export function openRightPanel(d) {
               div.className = "flex items-center justify-between py-0.5";
               var linkUrl = link.link || "/u/" + link.token + "/";
               div.innerHTML =
-                '<a href="' + escapeAttr(linkUrl) + '" target="_blank" class="text-xs text-emerald-500 hover:text-emerald-600 truncate block">' +
+                '<a href="' + escapeAttr(linkUrl) + '" target="_blank" class="text-[11px] text-ink truncate block hover:underline">' +
                   escapeHtml(link.token || "") +
                 '</a>' +
-                '<span class="text-xs text-gray-400 flex-shrink-0 ml-2">' + (link.view_cnt || 0) + ' uploads</span>';
+                '<span class="mono flex-shrink-0 ml-2">' + (link.view_cnt || 0) + ' uploads</span>';
               ulList.appendChild(div);
             });
           }
@@ -432,9 +518,9 @@ export function openRightPanel(d) {
           fields.forEach(function (f) {
             hasData = true;
             var div = document.createElement("div");
-            div.className = "flex items-center justify-between";
-            div.innerHTML = '<span class="text-xs text-gray-500 dark:text-gray-400">' + f.label + '</span>' +
-              '<span class="text-xs font-medium text-gray-900 dark:text-gray-100 text-right">' + escapeHtml(f.value) + '</span>';
+            div.className = "flex items-center justify-between gap-3";
+            div.innerHTML = '<span class="text-[11px] text-ink-3">' + f.label + '</span>' +
+              '<span class="text-[11px] font-medium text-ink text-right">' + escapeHtml(f.value) + '</span>';
             exifContent.appendChild(div);
           });
           if (hasData) {
@@ -458,9 +544,11 @@ export function openRightPanel(d) {
   if (uploadLinkBtn) {
     uploadLinkBtn.style.display = d.type === "dir" ? "" : "none";
   }
+
+  openDrawer();
 }
 
-// ─── Multi-select right panel ───────────────────────────────────────────
+// ─── Multi-select summary ───────────────────────────────────────────────
 export function openMultiSelectPanel(selectedItems) {
   // selectedItems = [{ name, type }, ...]
   var ph = document.querySelector(".js-rp-placeholder");
@@ -468,38 +556,31 @@ export function openMultiSelectPanel(selectedItems) {
   var mc = document.querySelector(".js-rp-multi-content");
   if (!ph || !ct || !mc) return;
 
+  // The drawer is no longer replaced by this function, so any in-flight
+  // single-selection responses must be invalidated here too.
+  rpReqId++;
+
   ph.classList.add("hidden");
   ct.classList.add("hidden");
   mc.classList.remove("hidden");
 
   var countEl = mc.querySelector(".js-rp-multi-count");
-  if (countEl) countEl.textContent = selectedItems.length + " item(s) selected";
+  if (countEl) {
+    countEl.textContent = selectedItems.length + " " + __t('fb.selected');
+  }
 
+  // Only a handful of names fit on one line; the list would otherwise push the
+  // buttons off the row for a large selection.
   var listEl = mc.querySelector(".js-rp-multi-list");
   if (listEl) {
-    listEl.innerHTML = "";
-    selectedItems.forEach(function (item) {
-      var div = document.createElement("div");
-      div.className = "flex items-center gap-2 py-0.5";
-      // Folder icon or file extension badge
-      if (item.type === "dir") {
-        var iconSpan = document.createElement("span");
-        iconSpan.className = "h-5 w-5 flex-shrink-0 flex items-center justify-center";
-        iconSpan.innerHTML = '<svg class="h-4 w-4 text-amber-400" fill="currentColor" viewBox="0 0 24 24"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>';
-        div.appendChild(iconSpan);
-      } else {
-        var badgeSpan = document.createElement("span");
-        badgeSpan.className = "h-5 w-5 flex-shrink-0 rounded bg-gray-100 dark:bg-surface-700 flex items-center justify-center text-[9px] leading-none font-semibold text-gray-500 dark:text-gray-400";
-        badgeSpan.textContent = "F";
-        div.appendChild(badgeSpan);
-      }
-      var nameSpan = document.createElement("span");
-      nameSpan.className = "text-xs text-gray-900 dark:text-gray-100 truncate";
-      nameSpan.textContent = item.name + (item.type === "dir" ? "/" : "");
-      div.appendChild(nameSpan);
-      listEl.appendChild(div);
+    var names = selectedItems.slice(0, 4).map(function (item) {
+      return item.name + (item.type === "dir" ? "/" : "");
     });
+    var rest = selectedItems.length - names.length;
+    listEl.textContent = names.join(", ") + (rest > 0 ? " +" + rest : "");
   }
+
+  openDrawer();
 }
 
 // Pause and unload any media element currently playing in the right panel.
@@ -534,8 +615,8 @@ export function thumbFailed(img) {
     fb.classList.add("flex");
     return;
   }
-  // Right-panel thumbnails (e.g. audio without cover art): fall back to the
-  // large extension badge, same as unknown files.
+  // Drawer thumbnails (e.g. audio without cover art): fall back to the
+  // extension badge, same as unknown files.
   var extBadge = document.querySelector(".js-rp-content .js-rp-ext-badge");
   if (extBadge) {
     extBadge.textContent = img.dataset && img.dataset.extension ? img.dataset.extension : "?";
@@ -543,7 +624,7 @@ export function thumbFailed(img) {
   }
 }
 
-// Reset right panel to placeholder state
+// Reset the drawer to its closed state
 export function resetRightPanel() {
   var ph = document.querySelector(".js-rp-placeholder");
   var ct = document.querySelector(".js-rp-content");
@@ -555,6 +636,9 @@ export function resetRightPanel() {
   if (mc) mc.classList.add("hidden");
   var uploadLinkBtn = document.getElementById("rp-upload-link-btn");
   if (uploadLinkBtn) uploadLinkBtn.style.display = "none";
+  // Invalidate in-flight detail requests for the selection being dismissed.
+  rpReqId++;
+  closeDrawer();
 }
 
 // ─── Quick preview modal (dblclick on a file row) ───────────────────────
@@ -735,7 +819,7 @@ setTimeout(function () {
 
 // Thumbnail error fallback — `error` events don't bubble, so capture at the
 // document level. Matches the `<img data-thumb>` markers emitted by file_list
-// and right_panel templates.
+// and details_drawer templates.
 document.addEventListener("error", function (e) {
   var img = e.target;
   if (!img || img.tagName !== "IMG" || !img.hasAttribute("data-thumb")) return;
