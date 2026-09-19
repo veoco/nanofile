@@ -10,30 +10,38 @@
     <link rel="stylesheet" href="{{ urls.css }}">
 </head>
 <body class="h-full bg-canvas text-ink">
-<div class="flex min-h-full items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
-    <div class="w-full max-w-md">
-        <!-- Card -->
-        <div class="bg-panel border border-line px-8 py-10 rounded-box">
-            <!-- Logo -->
-            <div class="flex justify-center mb-6">
-                <div class="h-11 w-11 rounded-box bg-accent flex items-center justify-center">
-                    <span class="text-lg font-bold text-accent-ink">N</span>
-                </div>
+<main class="flex min-h-full items-center justify-center px-4 py-10 sm:py-16">
+    <div class="w-full max-w-[380px]">
+        <div class="card overflow-hidden">
+            {# The brand bar: the app topbar's lockup one size down. The mark is
+               21px against 14px text, i.e. the wordmark's line box — that ratio is
+               what makes the pair read as one unit instead of an oversized icon
+               next to small type. #}
+            <div class="flex h-11 items-center gap-2 border-b border-line bg-raised px-5">
+                <span class="grid h-[21px] w-[21px] place-items-center rounded-ctl bg-accent text-[10px] font-bold text-accent-ink">N</span>
+                <span class="text-[14px] font-semibold tracking-[-0.01em] text-ink">{{ t.tr("app.name") }}</span>
             </div>
 
-            <!-- Heading -->
-            {% block heading %}{% endblock %}
+            {# Title band. Its 8px bottom padding plus the content band's 20px top
+               padding leave 28px between the subtitle and the first field: larger
+               than the 16px between fields, so the head is not read as the form's
+               first row. #}
+            <div class="px-5 pt-5 pb-2">
+                {% block heading %}{% endblock %}
+            </div>
 
-            <!-- Error alert (optional — set `error` in page template) -->
-            {% block error %}{% endblock %}
+            <div class="px-5 pt-5 pb-5">
+                <!-- Error alert (optional — set `error` in page template) -->
+                {% block error %}{% endblock %}
 
-            <!-- Page-specific form / content -->
-            {% block content %}{% endblock %}
+                <!-- Page-specific form / content -->
+                {% block content %}{% endblock %}
+            </div>
+
+            <!-- Secondary links, in their own band -->
+            {% block footer %}{% endblock %}
         </div>
-
-        <!-- Footer links below card -->
-        {% block footer %}{% endblock %}
     </div>
-</div>
+</main>
 </body>
 </html>

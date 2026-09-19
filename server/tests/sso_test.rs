@@ -177,7 +177,10 @@ async fn test_client_sso_full_flow() {
         "confirm page requires an active session"
     );
     let html = resp.text().await.unwrap();
-    assert!(html.contains("Do you want to login to your client?"));
+    // Rendered on the shared auth shell: the client-login copy is the page
+    // title, and the warning is its own strip.
+    assert!(html.contains("Log in to the desktop client"));
+    assert!(html.contains("Continuing signs this browser in as the account"));
     let csrf = extract_form_csrf(&html);
     assert!(!csrf.is_empty(), "confirm page should embed a CSRF token");
 

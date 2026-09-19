@@ -6,12 +6,13 @@
 /// logged-in web session and mint the API token the client polls for.
 use askama::Template;
 use axum::extract::{Form, Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::i18n::I18n;
 use crate::service::auth::csrf;
 use crate::ui::auth_extractor::WebUser;
 
@@ -20,6 +21,9 @@ use crate::ui::auth_extractor::WebUser;
 #[derive(Template)]
 #[template(path = "page/client_login_confirm.html")]
 pub struct ClientLoginConfirmTemplate {
+    /// Pre-computed static asset URLs with cache-busting hashes.
+    pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
     /// HMAC CSRF token for the hidden form field.
     pub csrf_token: String,
     /// Absolute path this form POSTs to.
@@ -37,12 +41,19 @@ pub struct ClientLoginConfirmTemplate {
 
 #[derive(Template)]
 #[template(path = "page/client_login_complete.html")]
-pub struct ClientLoginCompleteTemplate {}
+pub struct ClientLoginCompleteTemplate {
+    pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
+}
 
 #[derive(Template)]
 #[template(path = "page/client_sso_error.html")]
 pub struct ClientSsoErrorTemplate {
-    pub message: String,
+    pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
+    /// Locale key for the failure, not the text: these pages render inside the
+    /// shared auth shell, so their copy has to go through the same table.
+    pub message_key: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -57,23 +68,23 @@ pub struct ClientSsoCompleteForm {
 /// First visit records `accessed_at` (starting the 300s window) and redirects
 /// to the web login page with `next` pointing back to the confirm page.
 /// Subsequent visits show the seahub-compatible "already visited" error.
-pub async fn client_sso(State(state): State<Arc<AppState>>, Path(token): Path<String>) -> Response {
+pub async fn client_sso(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Response {
     if !state.config.server.sso_enabled {
-        return sso_error("Feature is not enabled.").await;
+        return sso_error(&state, &headers, "auth.sso_disabled").await;
     }
 
     let svc = state.sso_service();
     match svc.open_sso_link(&token).await {
         Ok(true) => {}
         Ok(false) => {
-            return sso_error(
-                "This link has already been visited, please click the login button on the client again",
-            )
-            .await;
+            return sso_error(&state, &headers, "auth.sso_link_visited").await;
         }
         Err(_) => {
-            return sso_error("Invalid link, please click the login button on the client again")
-                .await;
+            return sso_error(&state, &headers, "auth.sso_link_invalid").await;
         }
     }
 
@@ -92,18 +103,18 @@ pub async fn client_sso(State(state): State<Arc<AppState>>, Path(token): Path<St
 pub async fn client_sso_complete_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Response {
     let svc = state.sso_service();
     if svc.validate_sso_link_for_completion(&token).await.is_err() {
-        return sso_error(
-            "Invalid or expired link, please click the login button on the client again",
-        )
-        .await;
+        return sso_error(&state, &headers, "auth.sso_link_expired").await;
     }
 
     let csrf_token = csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     let tpl = ClientLoginConfirmTemplate {
+        urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
         csrf_token,
         action: format!("/client-sso/{token}/complete/"),
         requester: svc.sso_link_requester(&token).await,
@@ -115,22 +126,23 @@ pub async fn client_sso_complete_page(
 pub async fn client_sso_complete(
     user: WebUser,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(token): Path<String>,
     Form(form): Form<ClientSsoCompleteForm>,
 ) -> Response {
     if csrf::check_form_csrf(&state, &user.session_token, form.csrf_token.as_deref()).is_err() {
-        return sso_error("Invalid CSRF token.").await;
+        return sso_error(&state, &headers, "common.invalid_csrf").await;
     }
 
     let svc = state.sso_service();
     if svc.complete_sso_link(&token, &user.email).await.is_err() {
-        return sso_error(
-            "Invalid or expired link, please click the login button on the client again",
-        )
-        .await;
+        return sso_error(&state, &headers, "auth.sso_link_expired").await;
     }
 
-    render(ClientLoginCompleteTemplate {})
+    render(ClientLoginCompleteTemplate {
+        urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+    })
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -142,9 +154,11 @@ fn render<T: Template>(tpl: T) -> Response {
     }
 }
 
-async fn sso_error(message: &str) -> Response {
+async fn sso_error(state: &AppState, headers: &HeaderMap, message_key: &'static str) -> Response {
     let tpl = ClientSsoErrorTemplate {
-        message: message.to_string(),
+        urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(headers, &state.config.ui.default_language),
+        message_key,
     };
     match tpl.render() {
         Ok(html) => (StatusCode::BAD_REQUEST, Html(html)).into_response(),

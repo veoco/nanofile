@@ -3,8 +3,8 @@
 {% block title %}{{ t.tr("auth.create_account") }} | Nanofile{% endblock %}
 
 {% block heading %}
-<h1 class="text-center text-2xl font-bold text-gray-900 dark:text-gray-100">{{ t.tr("auth.create_account") }}</h1>
-<p class="mt-1 mb-6 text-center text-sm text-gray-500 dark:text-gray-400">{{ t.tr("auth.register_subtitle") }}</p>
+<h1 class="text-[19px] font-semibold tracking-tight text-ink">{{ t.tr("auth.create_account") }}</h1>
+<p class="mt-1 text-[12.5px] leading-relaxed text-ink-3">{{ t.tr("auth.register_subtitle") }}</p>
 {% endblock %}
 
 {% block error %}
@@ -14,7 +14,7 @@
 {% endblock %}
 
 {% block content %}
-<form class="space-y-5" action="/accounts/register/" method="POST">
+<form class="space-y-4" action="/accounts/register/" method="POST">
     <div>
         <label for="email" class="form-label">{{ t.tr("auth.email_address") }}</label>
         <input id="email"
@@ -22,7 +22,7 @@
                type="email"
                autocomplete="email"
                required
-               class="input">
+               class="input mt-1.5 h-9">
     </div>
 
     <div>
@@ -32,8 +32,8 @@
                type="password"
                autocomplete="new-password"
                required
-               class="input">
-        <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t.tr("auth.password_min_length") }}</p>
+               class="input mt-1.5 h-9">
+        <p class="mt-1 text-[11.5px] text-ink-3">{{ t.tr("auth.password_min_length") }}</p>
     </div>
 
     <div>
@@ -43,29 +43,32 @@
                type="password"
                autocomplete="new-password"
                required
-               class="input">
+               class="input mt-1.5 h-9">
     </div>
 
     <div>
         <label for="invitation_code" class="form-label">{{ t.tr("auth.invitation_code") }}</label>
+        {# Invitation codes are shown in mono everywhere else in the product, so
+           the field that takes one is mono too — and never autocapitalised. #}
         <input id="invitation_code"
                name="invitation_code"
                type="text"
                required
+               spellcheck="false"
+               autocapitalize="off"
                placeholder="{{ t.tr("auth.invitation_code_placeholder") }}"
-               class="input">
+               class="input mt-1.5 h-9 font-mono">
     </div>
 
-    <button type="submit"
-            class="btn btn-primary w-full font-semibold">
+    <button type="submit" class="btn btn-solid h-9 w-full text-[13px]">
         {{ t.tr("auth.create_account") }}
     </button>
 </form>
 {% endblock %}
 
 {% block footer %}
-<div class="mt-6 text-center text-sm">
-    <span class="text-gray-500 dark:text-gray-400">{{ t.tr("auth.already_have_account") }}</span>
-    <a href="/accounts/login/" class="font-medium text-brand-500 dark:text-brand-400 transition hover:text-brand-600">{{ t.tr("auth.sign_in") }}</a>
+<div class="flex items-center justify-between gap-3 border-t border-line px-5 py-3">
+    <span class="text-[12.5px] text-ink-3">{{ t.tr("auth.already_have_account") }}</span>
+    <a href="/accounts/login/" class="text-[12.5px] text-ink underline underline-offset-2 decoration-line-strong">{{ t.tr("auth.sign_in") }}</a>
 </div>
 {% endblock %}

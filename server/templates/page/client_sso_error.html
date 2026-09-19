@@ -1,19 +1,20 @@
-<!DOCTYPE html>
-<html lang="en" class="h-full">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Error | Nanofile</title>
-    <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
-    <link rel="stylesheet" href="/static/css/app.css">
-</head>
-<body class="h-full bg-surface-50 dark:bg-surface-900">
-<div class="flex min-h-full items-center justify-center px-4">
-    <div class="text-center">
-        <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Error</h1>
-        <p class="mt-4 text-lg text-gray-500 dark:text-gray-400">{{ message }}</p>
-        <a href="/libraries/" class="mt-6 btn btn-primary">Go to Libraries</a>
-    </div>
+{% extends "auth_base.html" %}
+
+{% block title %}{{ t.tr("common.error") }} | Nanofile{% endblock %}
+
+{% block heading %}
+<h1 class="text-[19px] font-semibold tracking-tight text-ink">{{ t.tr("common.error") }}</h1>
+{% endblock %}
+
+{% block content %}
+<div class="nf-banner is-err" role="alert">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+    </svg>
+    <p>{{ t.tr(message_key) }}</p>
 </div>
-</body>
-</html>
+
+<a href="/libraries/" class="btn btn-line mt-4 h-9 w-full text-[13px]">
+    {{ t.tr("auth.open_libraries") }}
+</a>
+{% endblock %}
