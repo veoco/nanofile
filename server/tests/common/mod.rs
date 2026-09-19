@@ -519,14 +519,12 @@ impl TestServer {
         let state = Arc::new(AppState::new(db, config, temp_file_manager));
         let block_dir = state.config.storage.block_dir.clone();
 
-        // The same route tree the binary serves. It used to be a copy here,
-        // which meant a change to the router left these tests exercising an
-        // application the server does not run.
-        let app = server::app::app_routes(&state)
-            // Deliberately not the production limits yet — see the follow-up
-            // that switches this to `build_app`.
-            .layer(axum::extract::DefaultBodyLimit::max(512 * 1024 * 1024))
-            .with_state(state.clone());
+        // The application the binary serves, middleware and all. It used to be
+        // a copy of the router behind a permissive 512 MiB body limit, which
+        // meant a route or a middleware could change without these tests
+        // noticing; the limits now come from the config below, so a test that
+        // needs a different one can set it in `tweak`.
+        let app = server::app::build_app(state.clone());
 
         // Debug: Print info about the server
         tracing::info!("TestServer started on port {port}");
@@ -546,10 +544,12 @@ impl TestServer {
             .expect("server failed");
         });
 
-        // Poll until the server is actually ready (typically <1ms).
+        // Poll until the server is actually ready (typically <1ms). `/health`
+        // rather than an API endpoint: it is the route that exists to answer
+        // this question, and it depends on nothing.
         // Use no_proxy() to avoid proxy resolution delays even when
         // http_proxy is set in the environment.
-        let health_url = format!("{}/api2/ping/", base_url);
+        let health_url = format!("{}/health", base_url);
         let health_client = reqwest::Client::builder().no_proxy().build().unwrap();
         for _ in 0..50 {
             if health_client.get(&health_url).send().await.is_ok() {
