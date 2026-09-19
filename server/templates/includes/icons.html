@@ -245,3 +245,21 @@
     <path stroke-linecap="round" stroke-linejoin="round" d="M12 18h.01M8.25 21.75h7.5a1.5 1.5 0 001.5-1.5V3.75a1.5 1.5 0 00-1.5-1.5h-7.5a1.5 1.5 0 00-1.5 1.5v16.5a1.5 1.5 0 001.5 1.5z"/>
 </svg>
 {% endmacro %}
+
+{% macro icon_dots(class="h-4 w-4") %}
+<svg class="{{ class }}" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>
+</svg>
+{% endmacro %}
+
+{% macro icon_chevron_down(class="h-4 w-4") %}
+<svg class="{{ class }}" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 9l6 6 6-6"/>
+</svg>
+{% endmacro %}
+
+{% macro icon_check(class="h-4 w-4") %}
+<svg class="{{ class }}" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+</svg>
+{% endmacro %}

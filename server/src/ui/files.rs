@@ -594,7 +594,7 @@ pub use super::format_size;
 
 /// Relative time matching the Android client's `translateCommitTime`:
 /// "Just now" → N seconds → N minutes → N hours → N days → absolute date
-/// (>= 14 days).
+/// (>= 14 days). A count of 1 gets its own key, so nothing reads "1 days ago".
 pub fn format_relative_time(t: &I18n, now: i64, timestamp: i64) -> String {
     let diff = now - timestamp;
     if diff <= 0 {
@@ -617,15 +617,25 @@ pub fn format_relative_time(t: &I18n, now: i64, timestamp: i64) -> String {
             .unwrap_or_else(|| t.tr("activity.just_now").to_string());
     }
     if days > 0 {
-        return t.trf("activity.days_ago", &[("n", days.to_string())]);
+        return amount(t, days, "activity.day_ago", "activity.days_ago");
     }
     if hours > 0 {
-        return t.trf("activity.hours_ago", &[("n", hours.to_string())]);
+        return amount(t, hours, "activity.hour_ago", "activity.hours_ago");
     }
     if minutes > 0 {
-        return t.trf("activity.minutes_ago", &[("n", minutes.to_string())]);
+        return amount(t, minutes, "activity.minute_ago", "activity.minutes_ago");
     }
-    t.trf("activity.seconds_ago", &[("n", seconds.to_string())])
+    amount(t, seconds, "activity.second_ago", "activity.seconds_ago")
+}
+
+/// "1 day ago", not "1 days ago" — the count is 1 far more often than any other
+/// single value on a list of things you just touched, so it is worth its own key.
+fn amount(t: &I18n, n: i64, one: &str, many: &str) -> String {
+    if n == 1 {
+        t.tr(one).to_string()
+    } else {
+        t.trf(many, &[("n", n.to_string())])
+    }
 }
 
 /// UTC calendar-day key (`YYYY-MM-DD`) used to group activity rows by day.
@@ -1346,6 +1356,35 @@ fn urlencode_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The singular keys exist so a freshly touched item does not read
+    /// "1 days ago"; the 14-day cutoff hands the exact date to the locale's own
+    /// date format (which is why zh gets no ISO dashes).
+    #[test]
+    fn relative_time_singulars_and_cutoff() {
+        let t = I18n::get(None);
+        let now = 1_800_000_000;
+        assert_eq!(format_relative_time(t, now, now), "Just now");
+        assert_eq!(format_relative_time(t, now, now - 1), "1 second ago");
+        assert_eq!(format_relative_time(t, now, now - 2), "2 seconds ago");
+        assert_eq!(format_relative_time(t, now, now - 60), "1 minute ago");
+        assert_eq!(format_relative_time(t, now, now - 3600), "1 hour ago");
+        assert_eq!(format_relative_time(t, now, now - 5 * 3600), "5 hours ago");
+        assert_eq!(format_relative_time(t, now, now - 86400), "1 day ago");
+        assert_eq!(format_relative_time(t, now, now - 3 * 86400), "3 days ago");
+        assert_eq!(
+            format_relative_time(t, now, now - 14 * 86400),
+            "2027-01-01",
+            ">= 14 days falls back to a date"
+        );
+
+        let zh = I18n::get(Some("zh"));
+        assert_eq!(format_relative_time(zh, now, now - 86400), "1 天前");
+        assert_eq!(
+            format_relative_time(zh, now, now - 14 * 86400),
+            "2027年01月01日"
+        );
+    }
 
     /// The trail is shared by the browser (a directory) and the full-page
     /// preview (a file, whose own name is the last crumb): each item carries the

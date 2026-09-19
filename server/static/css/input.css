@@ -372,6 +372,13 @@ html:not([data-view]) .seg .js-view-list {
     @apply shrink-0 flex items-center gap-2 h-10 px-4 border-b border-line sticky top-0 z-sticky bg-canvas
            overflow-x-auto;
   }
+  /* On a page whose <main> already carries the horizontal padding, the toolbar
+     would otherwise double it. `overflow` has to come back to `visible` too:
+     the file browser wants a horizontally scrollable toolbar, but anything
+     anchored under this one (the sort popover) would be clipped by it. The
+     libraries toolbar has a fixed, short set of controls, so it never needs to
+     scroll. */
+  .nf-toolbar.is-inset { @apply px-0; overflow: visible; }
   .seg {
     @apply flex gap-px p-0.5 border border-line rounded-ctl;
   }
@@ -587,6 +594,81 @@ html:not([data-view]) .seg .js-view-list {
   .nf-menu-item:hover { @apply bg-raised; }
   .nf-menu-item.danger { color: var(--color-err); }
   .nf-menu-sep { @apply my-1 h-px bg-line; }
+
+  /* ─── Libraries page ─────────────────────────────────────────────────────
+     The same shape as the file list — dense rows with aligned metadata columns
+     — because it is the same task one level up: pick a container, then scan the
+     containers you have. Rows are 40px rather than the file list's 36px: the
+     extra line is the description, which sits beside the name instead of under
+     it, so every row stays one line high and the names still line up. */
+  .nf-libfind { @apply w-[300px] max-w-[40vw] shrink-0; }
+  .nf-libcount { @apply shrink-0 text-[12px] tabular-nums text-ink-3 whitespace-nowrap; }
+
+  /* Sort: a popover anchored to its own button. The row "⋯" menu is a
+     body-mounted singleton because a scrolling list clips it; the toolbar does
+     not scroll, so this one can stay in flow and needs no measuring. */
+  .nf-pop-wrap { @apply relative shrink-0; }
+  .nf-sortbtn {
+    @apply inline-flex items-center gap-1.5 h-[26px] px-[7px] border-0 rounded-ctl
+           bg-transparent text-[12px] text-ink-2 cursor-pointer;
+  }
+  .nf-sortbtn:hover { @apply bg-raised text-ink; }
+  .nf-sortbtn > svg { @apply w-[11px] h-[11px] text-ink-3; }
+  .nf-pop {
+    @apply absolute right-0 top-[calc(100%+5px)] z-dialog min-w-[172px] py-1
+           rounded-box border border-line bg-panel;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  }
+  .nf-pop[hidden] { display: none; }
+  .nf-pop-item {
+    @apply flex items-center gap-2 w-full h-[30px] px-2.5 border-0 bg-transparent text-left
+           text-[12.5px] text-ink cursor-pointer whitespace-nowrap;
+  }
+  .nf-pop-item:hover { @apply bg-raised; }
+  .nf-pop-item .ck { @apply ml-auto w-3 h-3 opacity-0 text-accent; }
+  .nf-pop-item[aria-checked="true"] .ck { @apply opacity-100; }
+
+  .nf-lib {
+    @apply relative grid items-center gap-3 h-10 pl-3 pr-2 border-b border-line;
+    grid-template-columns: 22px minmax(0, 1fr) 74px 118px 26px;
+  }
+  .nf-lib-body > .nf-lib:last-child { border-bottom: 0; }
+  .nf-lib:not(.nf-lib-head):hover,
+  .nf-lib:not(.nf-lib-head):focus-within { @apply bg-raised; }
+  .nf-lib-head {
+    @apply h-[30px] bg-panel border-line-strong text-[10.5px] uppercase tracking-[0.07em] text-ink-3;
+  }
+  .nf-lib-head .r { @apply text-right; }
+  .nf-lib-ic { @apply grid place-items-center text-ink-3; }
+  .nf-lib-ic svg { @apply w-[15px] h-[15px]; }
+  .nf-lib-main { @apply flex items-center gap-2 min-w-0 text-[13px]; }
+  .nf-lib-nm { @apply text-ink no-underline truncate; }
+  /* The whole row is the click target, but the link stays on the name so
+     middle-click and "copy link address" do the obvious thing. */
+  .nf-lib-nm::after { content: ""; @apply absolute inset-0; }
+  .nf-lib-nm:hover { @apply underline; }
+  .nf-lib-nm:focus-visible { outline: none; }
+  .nf-lib-nm:focus-visible::after { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+  .nf-lib-lock { @apply inline-flex shrink-0 w-3 h-3 text-ink-3; }
+  .nf-lib-tag {
+    @apply inline-flex shrink-0 items-center gap-1 h-[18px] px-1.5 rounded-[4px]
+           bg-raised text-[10.5px] font-medium text-ink-2 whitespace-nowrap;
+  }
+  .nf-lib-tag svg { @apply w-2.5 h-2.5; }
+  .nf-lib-desc { @apply flex-1 min-w-0 truncate text-[12px] text-ink-3; }
+  .nf-lib-size,
+  .nf-lib-when { @apply text-right tabular-nums text-ink-3 whitespace-nowrap; }
+  .nf-lib-size { @apply text-[12px]; }
+  .nf-lib-when { @apply text-[11.5px]; }
+  /* The row's actions stay out of the way until the row is under the pointer or
+     the focus ring — with eleven libraries that is twenty-two fewer buttons.
+     `:focus-within` is what keeps them reachable by keyboard. */
+  .nf-lib > .nf-more { @apply relative z-[1] opacity-0; transition: opacity 0.12s ease; }
+  .nf-lib:hover > .nf-more,
+  .nf-lib:focus-within > .nf-more { @apply opacity-100; }
+  .nf-lib > .nf-more:focus-visible { @apply opacity-100; outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
+  .nf-nonek { @apply py-8 text-center text-[13px] text-ink-3; }
 
   /* ─── Bottom details drawer ──────────────────────────────────────────────
      An OVERLAY, not a flex row: opening it must not reflow anything. The file
@@ -867,10 +949,18 @@ html:not([data-view]) .seg .js-view-list {
 @media (max-width: 1100px) {
   .nf-row { grid-template-columns: 24px minmax(0, 1fr) 88px 32px; }
   .nf-row > :nth-child(4) { display: none; }
+  .nf-lib { grid-template-columns: 22px minmax(0, 1fr) 74px 26px; }
+  .nf-lib > :nth-child(4) { display: none; }
 }
 @media (max-width: 720px) {
   .nf-row { grid-template-columns: 24px minmax(0, 1fr) 32px; gap: 8px; padding: 0 10px; }
   .nf-row > :nth-child(3) { display: none; }
+  .nf-lib { grid-template-columns: 22px minmax(0, 1fr) 26px; gap: 8px; padding: 0 10px; }
+  .nf-lib > :nth-child(3) { display: none; }
+  /* Below this width the description is worth more than the count, and the
+     filter box is the only way to reach a library off-screen. */
+  .nf-libcount { display: none; }
+  .nf-libfind { @apply flex-1 max-w-none; }
 }
 /* Grid/gallery tiles fall out of the container width via auto-fill with a
    200px / 168px minimum. On a phone the 200px minimum would collapse the grid

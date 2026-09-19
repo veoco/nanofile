@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
-use crate::ui::files::format_size;
+use crate::ui::files::{format_relative_time, format_size};
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -38,6 +38,10 @@ pub struct RepoInfo {
     pub size: i64,
     pub size_display: String,
     pub mtime: i64,
+    /// "3 days ago" — the list shows a duration, the exact local time rides
+    /// along as a `data-ts-title` tooltip. Elapsed time is timezone-free, which
+    /// is why this one can be rendered server-side.
+    pub mtime_display: String,
     pub encrypted: bool,
     pub owner_id: i32,
     pub history_limit: i32,
@@ -53,6 +57,8 @@ pub async fn list_repos(
 ) -> Result<Html<String>, AppError> {
     // Find repos where user is a member
     let memberships = state.repos.member.find_by_user_id(user.user_id).await?;
+    let t = I18n::get(user.language.as_deref());
+    let now = chrono::Utc::now().timestamp();
 
     let mut repos = Vec::new();
     for membership in memberships {
@@ -64,6 +70,7 @@ pub async fn list_repos(
                 size: r.size,
                 size_display: format_size(r.size),
                 mtime: r.updated_at,
+                mtime_display: format_relative_time(t, now, r.updated_at),
                 encrypted: r.encrypted != 0,
                 owner_id: r.owner_id,
                 history_limit: r.history_limit,
@@ -86,7 +93,7 @@ pub async fn list_repos(
 
     let tpl = RepoListTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::get(user.language.as_deref()),
+        t,
         user_email: user.email,
         is_admin: user.is_admin,
         repos,
