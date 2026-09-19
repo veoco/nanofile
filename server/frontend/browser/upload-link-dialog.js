@@ -3,6 +3,7 @@
 import { __t } from "../core/i18n.js";
 import { apiFetch } from "../core/api.js";
 import { Toast } from "../core/toast.js";
+import { ConfirmDialog } from "../core/confirm.js";
 
 // ─── Upload Link Dialog ─────────────────────────────────────────────────
 // Module-scoped reference, assigned by the IIFE below so delegated handlers
@@ -97,7 +98,12 @@ var openUploadLinkDialog;
 
   deleteBtn.addEventListener('click', async function () {
     if (!currentToken) return;
-    if (!confirm(__t('fb.confirm_delete_upload_link'))) return;
+    var confirmed = await ConfirmDialog.confirm(
+      __t('common.are_you_sure'),
+      __t('fb.confirm_delete_upload_link'),
+      { confirmText: __t('common.delete'), variant: 'danger' }
+    );
+    if (!confirmed) return;
 
     deleteBtn.disabled = true;
     errorDiv.classList.add('hidden');

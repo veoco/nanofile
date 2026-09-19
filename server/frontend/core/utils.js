@@ -48,5 +48,7 @@ export function unquote(v) {
 export function safeColor(color, fallback) {
   var c = String(color || "");
   if (/^#[0-9a-fA-F]{3,8}$/.test(c)) return c;
-  return fallback || "#e6e6e6";
+  // Neutral mid grey: legible as a dot and as a 20%-alpha pill tint in either
+  // theme, unlike the light grey it used to fall back to.
+  return fallback || "#8f8f8f";
 }

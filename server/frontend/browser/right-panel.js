@@ -327,7 +327,7 @@ export function openRightPanel(d) {
         chip.innerHTML =
           '<span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color:' + escapeAttr(tagColor) + ';"></span>' +
           escapeHtml(tag.name) +
-          '<button type="button" class="js-rp-tag-remove hover:text-red-500" data-tag-id="' + encodeURIComponent(tag.id) + '" title="' + escapeAttr(__t('fb.remove_tag')) + '">' +
+          '<button type="button" class="js-rp-tag-remove hover:text-err" data-tag-id="' + encodeURIComponent(tag.id) + '" title="' + escapeAttr(__t('fb.remove_tag')) + '">' +
           '  <svg class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>' +
           "</button>";
         tagsList.appendChild(chip);
@@ -390,7 +390,7 @@ export function openRightPanel(d) {
         if (existing) {
           p = Promise.resolve(existing.id);
         } else {
-          var colors = ["#ff9800", "#f44336", "#4caf50", "#2196f3", "#9c27b0", "#00bcd4", "#ffeb3b", "#8bc34a", "#ff5722", "#3f51b5"];
+          var colors = ["#e5484d", "#e54d2e", "#e8890c", "#c99a2e", "#46a758", "#12a594", "#0090ff", "#8e4ec6", "#e93d82", "#8f8f8f"];
           var color = colors[Math.floor(Math.random() * colors.length)];
           p = apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/tags/", {
             method: "POST",
@@ -542,7 +542,7 @@ export function openRightPanel(d) {
   // Upload-link button is only meaningful for directories.
   var uploadLinkBtn = document.getElementById("rp-upload-link-btn");
   if (uploadLinkBtn) {
-    uploadLinkBtn.style.display = d.type === "dir" ? "" : "none";
+    uploadLinkBtn.classList.toggle("hidden", d.type !== "dir");
   }
 
   openDrawer();
@@ -635,7 +635,7 @@ export function resetRightPanel() {
   if (ct) ct.classList.add("hidden");
   if (mc) mc.classList.add("hidden");
   var uploadLinkBtn = document.getElementById("rp-upload-link-btn");
-  if (uploadLinkBtn) uploadLinkBtn.style.display = "none";
+  if (uploadLinkBtn) uploadLinkBtn.classList.add("hidden");
   // Invalidate in-flight detail requests for the selection being dismissed.
   rpReqId++;
   closeDrawer();
@@ -771,7 +771,7 @@ document.addEventListener("click", async function (e) {
   if (!repoId || !path) return;
   try {
     btn.disabled = true;
-    btn.textContent = "Indexing...";
+    btn.textContent = __t('ui.indexing');
     var resp = await apiFetch("/api2/repos/" + encodeURIComponent(repoId) + "/file/reindex/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -779,9 +779,9 @@ document.addEventListener("click", async function (e) {
     });
     var result = await resp.json();
     if (result.indexed) {
-      Toast.success("Reindexed");
+      Toast.success(__t('ui.reindexed'));
     } else {
-      Toast.info("File type not supported for indexing");
+      Toast.info(__t('ui.reindex_unsupported'));
     }
     // Reload the indexed content display
     var ct = document.querySelector(".js-rp-content");
@@ -800,7 +800,7 @@ document.addEventListener("click", async function (e) {
       }
     }
   } catch (err) {
-    Toast.error("Reindex failed: " + (err.message || err));
+    Toast.error(__t('ui.reindex_failed', { msg: err.message || err }));
   } finally {
     btn.textContent = __t('ui.reindex');
     btn.disabled = false;
@@ -814,7 +814,7 @@ setTimeout(function () {
   if (!btn) return;
   var selected = document.querySelector(".selected[data-type]");
   var type = selected ? selected.getAttribute("data-type") : "";
-  btn.style.display = type === "dir" ? "" : "none";
+  btn.classList.toggle("hidden", type !== "dir");
 }, 100);
 
 // Thumbnail error fallback — `error` events don't bubble, so capture at the

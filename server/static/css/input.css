@@ -9,26 +9,22 @@
 
    Zero-chroma greys for every structural surface; chromatic colour is reserved
    for semantic state only (ok / warn / err). `--color-canvas` … `--color-err`
-   are the real tokens: new markup uses those utilities directly.
+   are the real tokens: new markup uses those utilities directly. State colour
+   comes in two weights: `--color-{ok,warn,err}` for fills, icons and borders,
+   and `--color-{ok,warn,err}-text` for words (see below).
 
    The `@theme` block declares the LIGHT values. `html.dark` (further down,
    deliberately unlayered so it outranks the `:root` that Tailwind emits)
    overrides the same variables, which is what makes a single utility class
    theme-correct without a `dark:` twin. That in turn is why the tokens must be
    real CSS variables rather than `@theme inline`: `includes/icons.html` and
-   `frontend/browser/view.js` read `var(--color-brand-500)` /
-   `var(--color-gray-400)` from inline SVG attributes, and `@theme inline` would
-   never emit them.
+   `frontend/browser/view.js` set `--color-accent` / `--color-ink-3` on inline
+   SVG attributes, and `@theme inline` would never emit them.
 
    The legacy ramps (`gray-*`, `surface-*`, `brand-*`, `red-*`, `green-*`, …)
-   are aliased onto the same values. That is what recolours the ~2,000 legacy
-   utility occurrences across the templates without editing all of them. Each
-   name carries a single role in each theme — verified by audit: the codebase
-   consistently pairs `text-gray-900` with `dark:text-gray-100`, `bg-gray-100`
-   with `dark:bg-surface-700`, and so on, so no name is ever both a light
-   background and a dark foreground. The one name that is both a light text and
-   a light border colour is `gray-600`, which resolves to #6b6b6b — 5.05:1 for
-   text, 4.4:1 for a control boundary. Both roles pass.
+   are aliased onto the same values, which is what recoloured the old utility
+   names in place. Nothing references them any more — the next commit deletes
+   them.
    ─────────────────────────────────────────────────────────────────────────── */
 
 @theme {
@@ -44,10 +40,18 @@
   --color-ink-3: #646464; /* deliberately equal to ink-2: Radix gray-10 misses AA */
   --color-accent: #202020;
   --color-accent-ink: #ffffff;
+  --color-accent-hover: #101010;
   --color-ok: #218358;
   --color-warn: #ab6400;
   --color-err: #ce2c31;
   --color-err-ink: #ffffff;
+  --color-err-hover: #b8252a;
+  /* Text weights of the state colours. `--color-{ok,warn,err}` are sized for
+     fills and 4.4–4.9:1 on `--color-panel`; a 12px label needs more, so every
+     *word* painted in a state colour uses one of these instead. */
+  --color-ok-text: #12502f;
+  --color-warn-text: #7c4708;
+  --color-err-text: #8a1a1f;
 
   /* ─── Radii ────────────────────────────────────────────────────────────── */
   --radius-ctl: 6px;
@@ -175,10 +179,15 @@ html.dark {
   --color-ink-3: #b4b4b4;
   --color-accent: #eeeeee;
   --color-accent-ink: #111111;
+  --color-accent-hover: #ffffff;
   --color-ok: #3dd68c;
   --color-warn: #ffca16;
   --color-err: #ff9592;
   --color-err-ink: #111111;
+  --color-err-hover: #ffb3b0;
+  --color-ok-text: #3dd68c;
+  --color-warn-text: #ffca16;
+  --color-err-text: #ff9592;
 
   --color-gray-50: #161616;
   --color-gray-100: #eeeeee;
@@ -447,15 +456,15 @@ html:not([data-view]) .seg .js-view-list {
            focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent
            disabled:cursor-not-allowed disabled:opacity-50;
   }
-  .btn-primary        { @apply bg-accent text-accent-ink hover:bg-brand-600; }
-  .btn-solid          { @apply bg-accent text-accent-ink hover:bg-brand-600; }
+  .btn-primary        { @apply bg-accent text-accent-ink hover:bg-accent-hover; }
+  .btn-solid          { @apply bg-accent text-accent-ink hover:bg-accent-hover; }
   .btn-secondary      { @apply border-line-strong text-ink hover:bg-raised; }
   .btn-line           { @apply border-line-strong text-ink hover:bg-raised; }
   .btn-quiet          { @apply text-ink-2 hover:bg-raised hover:text-ink; }
   /* Starred state (details drawer star toggle). */
   .btn-quiet.on       { color: var(--color-warn); }
-  .btn-danger         { @apply bg-err text-err-ink hover:bg-red-600; }
-  .btn-danger-outline { @apply border-line-strong text-err hover:bg-red-50; }
+  .btn-danger         { @apply bg-err text-err-ink hover:bg-err-hover; }
+  .btn-danger-outline { @apply border-line-strong text-err-text hover:bg-err/10; }
   .btn-ghost          { @apply text-ink-2 hover:bg-raised hover:text-ink; }
   .btn-ghost-brand    { @apply text-ink-2 hover:bg-raised hover:text-ink; }
   .btn-ghost-danger   { @apply text-ink-2 hover:bg-raised hover:text-err; }
@@ -480,9 +489,9 @@ html:not([data-view]) .seg .js-view-list {
   .badge, .badge-brand, .badge-green, .badge-red, .badge-gray {
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-medium ring-1 ring-inset;
   }
-  .badge-brand { @apply bg-brand-50 text-ink ring-line-strong; }
-  .badge-green { @apply bg-green-50 text-green-700 ring-green-600/20; }
-  .badge-red   { @apply bg-red-50 text-red-700 ring-red-600/20; }
+  .badge-brand { @apply bg-raised text-ink ring-line-strong; }
+  .badge-green { @apply bg-ok/10 text-ok-text ring-ok/20; }
+  .badge-red   { @apply bg-err/10 text-err-text ring-err/20; }
   .badge-gray  { @apply bg-raised text-ink-2 ring-line-strong; }
 
   /* Dense hairline tables */
@@ -926,25 +935,55 @@ html:not([data-view]) .seg .js-view-list {
   .nf-empty p { @apply mt-1 text-[12px] text-ink-3; }
   .nf-empty a { @apply text-ink underline underline-offset-2; }
 
-  /* Status strip: one hairline box, colour carried by the text and border. */
+  /* Status strip: one hairline box, colour carried by a tint, a border and the
+     text weight. Toasts and compact dialog notes reuse the same three variants
+     through `.nf-toast` / `.nf-note` below, so a state colour is defined once. */
   .nf-banner {
     @apply flex items-start gap-2.5 rounded-box border border-line bg-panel
            px-3.5 py-3 text-[12.5px] text-ink-2;
   }
   .nf-banner svg { @apply shrink-0 w-4 h-4 mt-px; }
   .nf-banner a { @apply underline underline-offset-2; color: inherit; }
-  .nf-banner.is-ok {
-    color: var(--color-ok);
-    border-color: color-mix(in srgb, var(--color-ok) 35%, var(--color-line));
+  .nf-banner.is-ok,
+  .nf-toast.is-ok,
+  .nf-note.is-ok {
+    @apply bg-ok/10 text-ok-text border-ok/35;
   }
-  .nf-banner.is-err {
-    color: var(--color-err);
-    border-color: color-mix(in srgb, var(--color-err) 35%, var(--color-line));
+  .nf-banner.is-err,
+  .nf-toast.is-err,
+  .nf-note.is-err {
+    @apply bg-err/10 text-err-text border-err/35;
   }
-  .nf-banner.is-warn {
-    color: var(--color-warn);
-    border-color: color-mix(in srgb, var(--color-warn) 35%, var(--color-line));
+  .nf-banner.is-warn,
+  .nf-toast.is-warn,
+  .nf-note.is-warn {
+    @apply bg-warn/10 text-warn-text border-warn/35;
   }
+
+  /* Floating notification: the banner variants, pinned to a corner. */
+  .nf-toast {
+    @apply pointer-events-auto flex items-center gap-3 rounded-box border border-line
+           bg-panel px-4 py-3 text-[12.5px] text-ink-2;
+  }
+  .nf-toast svg { @apply shrink-0 w-4 h-4; }
+  .nf-toast .nf-toast-close {
+    @apply shrink-0 rounded-ctl p-1 cursor-pointer opacity-60 transition-opacity
+           hover:opacity-100 focus-visible:outline-2 focus-visible:outline-accent;
+  }
+
+  /* Compact note: dialog validation errors and in-place empty/loading lines. */
+  .nf-note { @apply rounded-ctl border border-transparent bg-raised px-2 py-1.5 text-[12px] text-ink-2; }
+  .nf-note.is-quiet { @apply border-transparent bg-transparent py-4 text-center text-[13px] text-ink-3; }
+
+  /* Directory picker (move/copy): breadcrumb segments and the folder rows. */
+  .nf-picker-path {
+    @apply px-1.5 py-0.5 rounded-ctl cursor-pointer text-ink-2
+           hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-accent;
+  }
+
+  /* Left panel width lives in one variable so the resize handler can override
+     it from CSSOM. */
+  .nf-left-panel { width: var(--left-panel-width, 240px); }
 
   .nf-filterbar { @apply flex flex-wrap items-center gap-2 mb-3; }
   .nf-pager { @apply flex items-center justify-between gap-3 mt-3; }
@@ -1011,7 +1050,7 @@ html:not([data-view]) .seg .js-view-list {
     @apply block w-full text-[12px] text-ink-3 cursor-pointer
            file:mr-3 file:h-7 file:rounded-ctl file:border-0 file:bg-accent
            file:px-2.5 file:text-[12.5px] file:font-medium file:text-accent-ink
-           hover:file:bg-brand-600;
+           hover:file:bg-accent-hover;
   }
 }
 

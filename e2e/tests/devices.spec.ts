@@ -36,10 +36,10 @@ test("unlink a device from the credentials page", async ({ page }) => {
   await card.getByText("Credentials held by this device").click();
   await expect(card).toContainText("Unlinking removes");
 
-  page.once("dialog", (dialog) => dialog.accept());
   await card
     .locator('form[action="/settings/credentials/unlink/"] button[type="submit"]')
     .click();
+  await page.locator(".js-confirm-ok").click();
   await expect(card).toHaveCount(0);
 });
 

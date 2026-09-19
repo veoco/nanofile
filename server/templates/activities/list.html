@@ -55,7 +55,7 @@
             <div class="nf-prow-sub">
                 <span class="t">{% if item.author_name.is_empty() %}{{ t.tr("common.unknown") }}{% else %}{{ item.author_name }}{% endif %}</span>
                 <span class="sep">&middot;</span>
-                <span class="t{% if item.op_type == "delete" || item.op_type == "batch_delete" %} text-err{% endif %}">{{ item.operation_label }}</span>
+                <span class="t{% if item.op_type == "delete" || item.op_type == "batch_delete" %} text-err-text{% endif %}">{{ item.operation_label }}</span>
                 <span class="sep">&middot;</span>
                 {% if !item.repo_name.is_empty() %}
                 <a href="/libraries/{{ item.repo_id }}/files/" class="t">{{ item.repo_name }}</a>

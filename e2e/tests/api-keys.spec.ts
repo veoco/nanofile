@@ -48,13 +48,13 @@ test("create a key, see it once, then revoke it", async ({ page }) => {
   await expect(page.locator("#new-key-value")).toHaveCount(0);
   await expect(page.locator(".nf-xrow").filter({ hasText: name })).toHaveCount(1);
 
-  // Revoke (native confirm), and it disappears.
-  page.once("dialog", (dialog) => dialog.accept());
+  // Revoke through the app's own confirm dialog, and it disappears.
   await page
     .locator(".nf-xrow")
     .filter({ hasText: name })
     .locator('form[action$="/revoke/"] button[type="submit"]')
     .click();
+  await page.locator(".js-confirm-ok").click();
   await expect(page.locator(".nf-xrow").filter({ hasText: name })).toHaveCount(0);
 });
 

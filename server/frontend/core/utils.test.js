@@ -25,12 +25,13 @@ test("safeColor accepts valid hex and rejects anything else", () => {
   assert.equal(safeColor("#abc"), "#abc");
   assert.equal(safeColor("#A1B2C3"), "#A1B2C3");
   assert.equal(safeColor("#abcd"), "#abcd");
-  assert.equal(safeColor("red"), "#e6e6e6");
+  // The fallback is a theme-neutral mid grey, not the old light one.
+  assert.equal(safeColor("red"), "#8f8f8f");
   assert.equal(safeColor("red", "#000000"), "#000000");
-  assert.equal(safeColor(null), "#e6e6e6");
-  assert.equal(safeColor(""), "#e6e6e6");
-  assert.equal(safeColor("#12"), "#e6e6e6");
-  assert.equal(safeColor("#123456789"), "#e6e6e6");
+  assert.equal(safeColor(null), "#8f8f8f");
+  assert.equal(safeColor(""), "#8f8f8f");
+  assert.equal(safeColor("#12"), "#8f8f8f");
+  assert.equal(safeColor("#123456789"), "#8f8f8f");
 });
 
 test("escapeAttr escapes & \" ' < >", () => {

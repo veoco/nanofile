@@ -78,7 +78,7 @@ test("delete a share link", async ({ page }) => {
   await page.goto("/shares/");
   const row = shareRow(page, desc);
   await expect(row).toBeVisible();
-  page.once("dialog", (dialog) => dialog.accept());
   await row.locator('form.delete-form button[type="submit"]').click();
+  await page.locator(".js-confirm-ok").click();
   await expect(row).toHaveCount(0, { timeout: 15_000 });
 });

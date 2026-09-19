@@ -3,12 +3,6 @@
 <html lang="{{ t.lang }}" class="h-full bg-canvas">
 <head>
     <script src="{{ urls.theme_init_js }}"></script>
-    <style>
-        /* First-paint background: app.css has not applied yet, so these are the
-           literal graphite canvas values (see --color-canvas in input.css). */
-        :where(html) { background-color: #fcfcfc; }
-        :where(html.dark) { background-color: #111111; }
-    </style>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Nanofile{% endblock %}</title>
@@ -28,8 +22,7 @@
 
         <div class="flex flex-1 min-h-0 overflow-hidden">
             <!-- Left Panel — library tree (large screens only) -->
-            <aside class="js-left-panel hidden lg:flex flex-col flex-shrink-0 bg-panel border-r border-line"
-                   style="width: var(--left-panel-width, 240px)">
+            <aside class="js-left-panel nf-left-panel hidden lg:flex flex-col flex-shrink-0 bg-panel border-r border-line">
                 {% include "includes/left_panel.html" %}
             </aside>
 

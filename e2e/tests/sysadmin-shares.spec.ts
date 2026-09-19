@@ -31,8 +31,8 @@ test("admin sees and deletes a share link from any user", async ({ page }) => {
   await expect(shareRow(page, "alpha.txt")).toBeVisible();
 
   const row = shareRow(page, "bravo.txt");
-  page.once("dialog", (dialog) => dialog.accept());
   await row.locator('form.delete-form button[type="submit"]').click();
+  await page.locator(".js-confirm-ok").click();
   await expect(shareRow(page, "bravo.txt")).toHaveCount(0);
 });
 
@@ -42,7 +42,7 @@ test("admin sees and deletes an upload link from any user", async ({ page }) => 
   await page.goto("/sysadmin/shares/?tab=upload-links");
   const row = uploadRow(page);
   await expect(row).toBeVisible();
-  page.once("dialog", (dialog) => dialog.accept());
   await row.locator('form.delete-form button[type="submit"]').click();
+  await page.locator(".js-confirm-ok").click();
   await expect(uploadRow(page)).toHaveCount(0);
 });

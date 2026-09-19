@@ -72,18 +72,29 @@ if (repoFilter) {
 // ─── Generic confirm-before-submit ─────────────────────────────────────
 // data-confirm="<i18n key>" plus optional data-confirm-args (JSON) for
 // {placeholder} substitution, e.g. data-confirm-args='{"name":"x"}'.
-document.addEventListener("submit", function (e) {
+// data-confirm-variant="solid" for a non-destructive action (default: danger).
+// The submit is always cancelled up front; when the dialog says yes the form is
+// submitted through the DOM API, which does not re-fire this listener.
+document.addEventListener("submit", async function (e) {
     var form = e.target.closest("[data-confirm]");
     if (!form) return;
+    e.preventDefault();
     var msg;
     if (form.dataset.confirmArgs) {
         msg = __t(form.dataset.confirm, JSON.parse(form.dataset.confirmArgs));
     } else {
         msg = __t(form.dataset.confirm);
     }
-    if (!confirm(msg)) {
-        e.preventDefault();
-    }
+    var confirmed = await ConfirmDialog.confirm(
+        __t('common.are_you_sure'),
+        msg,
+        {
+            confirmText: __t('common.confirm'),
+            variant: form.dataset.confirmVariant || 'danger',
+        }
+    );
+    if (!confirmed) return;
+    HTMLFormElement.prototype.submit.call(form);
 });
 
 // ─── Preview image fallback (data-preview-image) ───────────────────────

@@ -13,11 +13,16 @@ function showCleanDialog() {
 function hideCleanDialog() {
     document.getElementById('clean-dialog').classList.add('hidden');
 }
-function cleanTrash() {
+async function cleanTrash() {
     var select = document.getElementById('clean-repo');
     var repoId = select ? select.value : '';
-    if (!repoId) { alert(__t('trash.select_library')); return; }
-    if (!confirm(__t('trash.delete_all_confirm'))) return;
+    if (!repoId) { Toast.info(__t('trash.select_library')); return; }
+    var confirmed = await ConfirmDialog.confirm(
+        __t('common.are_you_sure'),
+        __t('trash.delete_all_confirm'),
+        { confirmText: __t('common.delete'), variant: 'danger' }
+    );
+    if (!confirmed) return;
     var csrfToken = getCookie('sfcsrftoken');
     if (!csrfToken) {
         window.location.href = '/accounts/login/';
@@ -29,9 +34,9 @@ function cleanTrash() {
         headers: { 'X-CSRFToken': csrfToken },
     }).then(function (r) {
         if (r.ok) window.location.reload();
-        else alert(__t('trash.clean_failed'));
+        else Toast.error(__t('trash.clean_failed'));
     }).catch(function () {
-        alert(__t('common.network_error'));
+        Toast.error(__t('common.network_error'));
     });
 }
 

@@ -25,8 +25,8 @@ test("trigger a periodic task manually", async ({ page }) => {
   await expect(row.locator("form.trigger-form")).toBeVisible();
   const lastRunBefore = (await lastRun(page, "share link cleanup").innerText()).trim();
 
-  page.once("dialog", (dialog) => dialog.accept());
   await row.locator('form.trigger-form button[type="submit"]').click();
+  await page.locator(".js-confirm-ok").click();
   await page.waitForURL(/\/sysadmin\/tasks\/$/);
 
   // A manual run stamps a new last-run timestamp.

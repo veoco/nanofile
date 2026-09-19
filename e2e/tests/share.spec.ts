@@ -42,10 +42,24 @@ test("delete a share link from the dialog", async ({ page }) => {
   await clickRowAction(page, "alpha.txt", ".js-share-btn");
   await page.locator(".js-share-confirm").click();
   await expect(page.locator("#share-link-url")).toHaveValue(/\/f\//);
-  page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#share-delete-btn").click();
+  await page.locator(".js-confirm-ok").click();
   await expect(page.locator("#share-link-display")).toBeHidden();
   await expect(page.locator(".js-share-confirm")).toContainText("Create");
+});
+
+test("reopening the dialog after a create starts a fresh create", async ({ page }) => {
+  await clickRowAction(page, "alpha.txt", ".js-share-btn");
+  await page.locator(".js-share-confirm").click();
+  await expect(page.locator("#share-link-url")).toHaveValue(/\/f\//);
+  // Close without deleting, then reopen: the confirm button has to be back in
+  // create mode rather than stuck in its close mode.
+  await page.locator(".js-share-confirm").click();
+  await expect(page.locator("#share-dialog-overlay")).toBeHidden();
+  await clickRowAction(page, "alpha.txt", ".js-share-btn");
+  await expect(page.locator(".js-share-confirm")).toContainText("Create");
+  await page.locator(".js-share-confirm").click();
+  await expect(page.locator("#share-link-url")).toHaveValue(/\/f\//);
 });
 
 test("right panel lists existing share links for a file", async ({ page }) => {

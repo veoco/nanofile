@@ -1,5 +1,6 @@
 // confirm — custom confirm dialog (replaces native confirm()).
 import { __t } from "./i18n.js";
+import { escapeHtml } from "./utils.js";
 
 var confirmOverlay = null;
 var confirmResolve = null;
@@ -10,13 +11,15 @@ function initConfirmDialog() {
     "hidden fixed inset-0 z-above-dialog flex items-center justify-center bg-black/30";
   confirmOverlay.setAttribute("role", "alertdialog");
   confirmOverlay.setAttribute("aria-modal", "true");
+  confirmOverlay.setAttribute("aria-labelledby", "nf-confirm-title");
+  confirmOverlay.setAttribute("aria-describedby", "nf-confirm-message");
   confirmOverlay.innerHTML =
-    '<div class="bg-white dark:bg-surface-800 rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" onclick="event.stopPropagation()">' +
-    '<h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1 js-confirm-title"></h3>' +
-    '<p class="text-sm text-gray-500 dark:text-gray-400 mb-4 js-confirm-message"></p>' +
+    '<div class="bg-panel border border-line rounded-box p-5 w-full max-w-sm mx-4">' +
+    '<h3 id="nf-confirm-title" class="text-[15px] font-semibold text-ink mb-1 js-confirm-title"></h3>' +
+    '<p id="nf-confirm-message" class="text-[13px] text-ink-2 mb-4 js-confirm-message"></p>' +
     '<div class="flex justify-end gap-2">' +
-    '<button class="js-confirm-cancel rounded-lg bg-white dark:bg-surface-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-600 transition-colors">Cancel</button>' +
-    '<button class="js-confirm-ok rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors"></button>' +
+    '<button type="button" class="js-confirm-cancel btn btn-line">' + escapeHtml(__t("common.cancel")) + "</button>" +
+    '<button type="button" class="js-confirm-ok btn"></button>' +
     "</div></div>";
   document.body.appendChild(confirmOverlay);
 
@@ -48,12 +51,12 @@ function showConfirmDialog(title, message, opts) {
   confirmOverlay.querySelector(".js-confirm-message").textContent = message;
 
   var okBtn = confirmOverlay.querySelector(".js-confirm-ok");
-  okBtn.textContent = opts.confirmText || __t('ui.delete');
+  okBtn.textContent = opts.confirmText || __t("ui.delete");
+  // The variant decides which design-system button the action wears: the
+  // destructive one is `.btn-danger`, everything else `.btn-solid`. Both pair
+  // their own fill with their own ink, so they stay readable in either theme.
   okBtn.className =
-    "js-confirm-ok rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors " +
-    (opts.variant === "danger"
-      ? "bg-red-600 hover:bg-red-700"
-      : "bg-brand-500 hover:bg-brand-600");
+    "js-confirm-ok btn " + (opts.variant === "danger" ? "btn-danger" : "btn-solid");
 
   // Remove old listener by cloning
   var newOk = okBtn.cloneNode(true);

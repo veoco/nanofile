@@ -4,6 +4,8 @@
 import { __t } from "../core/i18n.js";
 import { getCookie } from "../core/utils.js";
 import { registerModalClose } from "../core/modal.js";
+import { Toast } from "../core/toast.js";
+import { ConfirmDialog } from "../core/confirm.js";
 
 var reposPageEl = document.getElementById("repos-page");
 var webdavBaseUrl = reposPageEl ? (reposPageEl.dataset.webdavBaseUrl || "") : "";
@@ -33,10 +35,10 @@ function submitCreate(form) {
         if (resp.ok) {
             window.location.reload();
         } else {
-            alert(__t('repo.create_failed') + resp.status);
+            Toast.error(__t('repo.create_failed') + resp.status);
         }
     }).catch(function () {
-        alert(__t('common.network_error'));
+        Toast.error(__t('common.network_error'));
     });
     return false;
 }
@@ -74,7 +76,7 @@ function submitEdit(form) {
     var repoId = document.getElementById('edit-repo-id').value;
     var newName = document.getElementById('edit-name').value.trim();
     var newDesc = document.getElementById('edit-description').value.trim();
-    if (!newName) { alert(__t('repo.name_empty')); return false; }
+    if (!newName) { Toast.info(__t('repo.name_empty')); return false; }
     hideEditDialog();
     var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
     var historyLimit = numOrNull('edit-history-limit');
@@ -96,21 +98,26 @@ function submitEdit(form) {
         if (resp.ok) {
             window.location.reload();
         } else {
-            alert(__t('repo.update_failed') + resp.status);
+            Toast.error(__t('repo.update_failed') + resp.status);
         }
     }).catch(function () {
-        alert(__t('common.network_error'));
+        Toast.error(__t('common.network_error'));
     });
     return false;
 }
 
-function deleteRepo(btn) {
+async function deleteRepo(btn) {
     var repoId = btn.getAttribute('data-repo-id');
     var repoName = btn.getAttribute('data-repo-name');
     var csrfToken = getCookie('sfcsrftoken');
     if (!csrfToken) { window.location.href = '/accounts/login/'; return; }
 
-    if (!confirm(__t('repo.delete_confirm', { name: repoName }))) return;
+    var confirmed = await ConfirmDialog.confirm(
+        __t('common.are_you_sure'),
+        __t('repo.delete_confirm', { name: repoName }),
+        { confirmText: __t('common.delete'), variant: 'danger' }
+    );
+    if (!confirmed) return;
 
     fetch('/api2/repos/' + repoId + '/', {
         method: 'DELETE',
@@ -120,10 +127,10 @@ function deleteRepo(btn) {
         if (resp.ok) {
             window.location.reload();
         } else {
-            alert(__t('repo.delete_failed') + resp.status);
+            Toast.error(__t('repo.delete_failed') + resp.status);
         }
     }).catch(function () {
-        alert(__t('common.network_error'));
+        Toast.error(__t('common.network_error'));
     });
 }
 

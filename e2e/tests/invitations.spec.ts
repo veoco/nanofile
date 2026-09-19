@@ -11,7 +11,7 @@ test("generate and delete an invitation code", async ({ page }) => {
   await expect(card).toBeVisible();
   await expect(card.locator(".select-all").first()).not.toHaveText("");
 
-  page.once("dialog", (dialog) => dialog.accept());
   await card.locator('form button[type="submit"]').click();
+  await page.locator(".js-confirm-ok").click();
   await expect(card).toHaveCount(0);
 });

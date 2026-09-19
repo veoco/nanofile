@@ -650,7 +650,7 @@ export function updateProgressDialog() {
         bitrateEl.textContent = uploading > 0 ? formatBitrate(currentBitrate) : '';
     } else {
         if (hasFailed) {
-            headerEl.innerHTML = '<span class="text-red-500">' + __t('fb.failed_upload_count', { count: failed }) + '</span>';
+            headerEl.innerHTML = '<span class="text-err-text">' + __t('fb.failed_upload_count', { count: failed }) + '</span>';
         } else {
             headerEl.textContent = __t('fb.all_uploaded');
         }
@@ -681,16 +681,16 @@ export function updateProgressDialog() {
     var actionsEl = dialog.querySelector('.upload-content-actions');
     if (isActive) {
         var pauseBtnHtml = isUploadPaused
-            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" data-action="resume-all">' + __t('fb.resume_all') + '</button>'
-            : '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" data-action="pause-all">' + __t('fb.pause_all') + '</button>';
+            ? '<button class="btn btn-line btn-sm" data-action="resume-all">' + __t('fb.resume_all') + '</button>'
+            : '<button class="btn btn-line btn-sm" data-action="pause-all">' + __t('fb.pause_all') + '</button>';
         var retryAllBtn = hasFailed
-            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" data-action="retry-all">' + __t('fb.retry_all') + '</button>'
+            ? '<button class="btn btn-line btn-sm" data-action="retry-all">' + __t('fb.retry_all') + '</button>'
             : '';
-        var cancelAllBtn = '<button class="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-red-100 hover:border-red-300" data-action="cancel-all">' + __t('fb.cancel_all') + '</button>';
+        var cancelAllBtn = '<button class="btn btn-danger-outline btn-sm" data-action="cancel-all">' + __t('fb.cancel_all') + '</button>';
         actionsEl.innerHTML = pauseBtnHtml + retryAllBtn + cancelAllBtn;
     } else {
         var retryAllBtn = hasFailed
-            ? '<button class="text-xs text-gray-700 bg-white border border-gray-300 rounded-md px-2 py-1 cursor-pointer whitespace-nowrap hover:bg-gray-50 hover:border-gray-400" data-action="retry-all">' + __t('fb.retry_all') + '</button>'
+            ? '<button class="btn btn-line btn-sm" data-action="retry-all">' + __t('fb.retry_all') + '</button>'
             : '';
         actionsEl.innerHTML = retryAllBtn;
     }
@@ -706,70 +706,70 @@ export function updateProgressDialog() {
                 // All bytes sent, server still processing (CDC + commit)
                 statusHtml =
                     '<div class="flex items-center gap-1.5">' +
-                      '<svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24">' +
+                      '<svg class="animate-spin h-4 w-4 text-accent" fill="none" viewBox="0 0 24 24">' +
                         '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
                         '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>' +
                       '</svg>' +
-                      '<span class="text-xs text-blue-600 font-medium">' + __t('fb.processing') + '</span>' +
+                      '<span class="text-xs text-accent font-medium">' + __t('fb.processing') + '</span>' +
                     '</div>';
             } else {
                 var pct = Math.round(item.progress);
                 statusHtml =
                     '<div class="flex items-center gap-2">' +
-                      '<span class="inline-block w-28 h-2 bg-gray-200 rounded-full overflow-hidden">' +
-                        '<span class="block h-full bg-blue-500 rounded-full" style="width:' + pct + '%;transition:width 0.3s ease"></span>' +
+                      '<span class="inline-block w-28 h-2 bg-raised rounded-full overflow-hidden">' +
+                        '<span class="block h-full bg-accent rounded-full" style="width:' + pct + '%;transition:width 0.3s ease"></span>' +
                       '</span>' +
-                      '<span class="text-xs text-gray-500 font-medium w-10 text-right">' + pct + '%</span>' +
+                      '<span class="text-xs text-ink-2 font-medium w-10 text-right">' + pct + '%</span>' +
                     '</div>';
             }
             actionHtml = item.finalizing
                 ? ''  // No pause/cancel during server-side processing
-                : '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-200 active:scale-90 transition-all" data-action="pause" data-id="' + item.id + '" title="' + __t('fb.pause') + '">' +
+                : '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-ink hover:bg-raised active:scale-90 transition-all" data-action="pause" data-id="' + item.id + '" title="' + __t('fb.pause') + '">' +
                   '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>' +
                 '</button>' +
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-err hover:bg-err/10 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
                   '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
                 '</button>';
         } else if (item.state === 'pending') {
-            statusHtml = '<span class="text-xs text-gray-400 italic">' + __t('fb.waiting') + '</span>';
+            statusHtml = '<span class="text-xs text-ink-3 italic">' + __t('fb.waiting') + '</span>';
             actionHtml =
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-err hover:bg-err/10 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
                   '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
                 '</button>';
         } else if (item.state === 'paused') {
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-amber-600 font-medium"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.paused') + '</span>';
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-warn-text font-medium"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.paused') + '</span>';
             actionHtml =
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 active:scale-90 transition-all" data-action="resume" data-id="' + item.id + '" title="' + __t('fb.resume') + '">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-ink hover:bg-raised active:scale-90 transition-all" data-action="resume" data-id="' + item.id + '" title="' + __t('fb.resume') + '">' +
                   '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>' +
                 '</button>' +
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
+                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-err hover:bg-err/10 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
                   '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
                 '</button>';
         } else if (item.state === 'completed') {
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-green-600 font-medium"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.uploaded') + '</span>';
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-ok-text font-medium"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.uploaded') + '</span>';
             actionHtml = '';
         } else if (item.state === 'error') {
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-red-600 font-medium"><svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate max-w-[7rem]">' + escapeHtml(item.error || __t('fb.error')) + '</span></span>';
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-err-text font-medium"><svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate max-w-[7rem]">' + escapeHtml(item.error || __t('fb.error')) + '</span></span>';
             actionHtml =
-                '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" data-action="retry" data-id="' + item.id + '">' +
+                '<button class="btn btn-line btn-sm active:scale-95" data-action="retry" data-id="' + item.id + '">' +
                   '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
                   __t('fb.retry') + '</button>';
         } else { // cancelled
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-gray-400"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' + __t('fb.cancelled') + '</span>';
+            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-ink-3"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' + __t('fb.cancelled') + '</span>';
             actionHtml =
-                '<button class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-blue-100 hover:border-blue-300 active:scale-95 transition-all" data-action="retry" data-id="' + item.id + '">' +
+                '<button class="btn btn-line btn-sm active:scale-95" data-action="retry" data-id="' + item.id + '">' +
                   '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
                   __t('fb.retry') + '</button>';
         }
 
         listHtml +=
-            '<div class="flex items-center gap-3 px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50/70 transition-colors">' +
+            '<div class="flex items-center gap-3 px-3 py-2.5 border-b border-line hover:bg-raised transition-colors">' +
               '<div class="flex-1 min-w-0">' +
                 '<div class="flex items-center gap-2">' +
-                  '<svg class="w-4 h-4 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>' +
-                  '<span class="text-sm text-gray-800 font-medium truncate" title="' + escapeAttr(item.name) + '">' + escapeHtml(item.name) + '</span>' +
+                  '<svg class="w-4 h-4 shrink-0 text-ink-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>' +
+                  '<span class="text-[13px] text-ink font-medium truncate" title="' + escapeAttr(item.name) + '">' + escapeHtml(item.name) + '</span>' +
                 '</div>' +
-                '<div class="ml-6 text-xs text-gray-400 mt-0.5">' + formatFileSize(item.size) + '</div>' +
+                '<div class="ml-6 text-xs text-ink-3 mt-0.5">' + formatFileSize(item.size) + '</div>' +
               '</div>' +
               '<div class="shrink-0">' + statusHtml + '</div>' +
               '<div class="shrink-0 flex items-center gap-0.5">' + actionHtml + '</div>' +

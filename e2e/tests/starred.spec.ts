@@ -75,8 +75,7 @@ test("unstar a file from the starred page", async ({ page }) => {
     .locator("main .nf-prow")
     .filter({ has: page.locator(`a[href="/libraries/${repoId}/files/alpha.txt"]`) });
   await expect(row).toBeVisible();
-  // Accept the native confirm() the unstar button shows.
-  page.once("dialog", (dialog) => dialog.accept());
   await row.locator('button[data-action="unstar"]').click();
+  await page.locator(".js-confirm-ok").click();
   await expect(row).toHaveCount(0);
 });

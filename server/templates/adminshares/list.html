@@ -73,7 +73,7 @@
         </div>
         <div class="nf-prow-meta flex items-center gap-3">
             <span class="w-[112px] text-right" data-ts="{{ s.created_at_ts }}" data-ts-title="{{ s.created_at_ts }}"></span>
-            <span class="w-[112px] text-right{% if s.expires_at_ts.is_some() %} text-err{% endif %}">
+            <span class="w-[112px] text-right{% if s.expires_at_ts.is_some() %} text-err-text{% endif %}">
                 {% if let Some(ts) = s.expires_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ t.tr("common.never") }}{% endif %}
             </span>
         </div>
@@ -131,7 +131,7 @@
         </div>
         <div class="nf-prow-meta flex items-center gap-3">
             <span class="w-[112px] text-right" data-ts="{{ u.created_at_ts }}" data-ts-title="{{ u.created_at_ts }}"></span>
-            <span class="w-[112px] text-right{% if u.expires_at_ts.is_some() %} text-err{% endif %}">
+            <span class="w-[112px] text-right{% if u.expires_at_ts.is_some() %} text-err-text{% endif %}">
                 {% if let Some(ts) = u.expires_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ t.tr("common.never") }}{% endif %}
             </span>
         </div>

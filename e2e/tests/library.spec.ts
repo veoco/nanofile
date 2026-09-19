@@ -69,8 +69,8 @@ test("delete a library", async ({ page }) => {
   await createRepoByName(page, name);
   const li = page.locator("li").filter({ hasText: name });
   await expect(li).toBeVisible();
-  page.once("dialog", (dialog) => dialog.accept());
   await li.locator('button[data-action="delete-repo"]').click();
+  await page.locator(".js-confirm-ok").click();
   await expect(li).toHaveCount(0, { timeout: 15_000 });
 });
 

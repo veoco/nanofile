@@ -47,7 +47,7 @@
                 </span>
             </div>
             {% if !task.last_error_message.is_empty() %}
-            <p class="nf-prow-hi text-err" title="{{ task.last_error_message }}">{{ task.last_error_message }}</p>
+            <p class="nf-prow-hi text-err-text" title="{{ task.last_error_message }}">{{ task.last_error_message }}</p>
             {% endif %}
             {% if !task.last_success_message.is_empty() %}
             <p class="nf-prow-hi" title="{{ task.last_success_message }}">{{ task.last_success_message }}</p>
@@ -58,13 +58,14 @@
                 {% if task.last_duration_ms > 0 %}{{ task.last_duration_ms }}ms{% else %}&mdash;{% endif %}
             </span>
             <span class="min-w-[96px] text-right" title="{{ t.tr("admin.task_s_e_t") }}">
-                <span class="text-ok">{{ task.success_count }}</span> / <span class="text-err">{{ task.error_count }}</span> / <span>{{ task.total_processed }}</span>
+                <span class="text-ok-text">{{ task.success_count }}</span> / <span class="text-err-text">{{ task.error_count }}</span> / <span>{{ task.total_processed }}</span>
             </span>
         </div>
         <div class="nf-prow-act">
             {% if task.can_trigger %}
             <form action="/sysadmin/tasks/{{ task.name }}/trigger/" method="POST" class="trigger-form"
-                  data-confirm="admin.task_run_confirm" data-confirm-args='{"name":"{{ task.name }}"}'>
+                  data-confirm="admin.task_run_confirm" data-confirm-variant="solid"
+                  data-confirm-args='{"name":"{{ task.name }}"}'>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                 <button type="submit" class="btn btn-line btn-sm" title="{{ t.tr("admin.task_run_now") }}">
                     {{ icons::icon_play("w-3.5 h-3.5") }}

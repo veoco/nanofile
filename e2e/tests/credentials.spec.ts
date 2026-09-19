@@ -39,8 +39,8 @@ test("a sync token is visible and can be revoked", async ({ page }) => {
   await expect(row).toBeVisible();
   await expect(row).toContainText("Never synced");
 
-  page.once("dialog", (dialog) => dialog.accept());
   await row.locator('form[action$="/revoke/"] button').click();
+  await page.locator(".js-confirm-ok").click();
   // Only this token is gone: other specs mint sync tokens for the same account
   // through the sync protocol, so the section may still be there. Once the last
   // unowned token goes the whole section is dropped rather than shown empty,

@@ -70,7 +70,7 @@ async function openHistoryDialog(repoId, path) {
   historyPathEl.textContent = path;
   historyOverlay.classList.remove("hidden");
   historyListEl.innerHTML =
-    '<div class="text-sm text-gray-400 text-center py-4">Loading...</div>';
+    '<div class="nf-note is-quiet">' + escapeHtml(__t('common.loading')) + '</div>';
 
   try {
     var res = await apiFetch(
@@ -83,8 +83,8 @@ async function openHistoryDialog(repoId, path) {
     renderHistoryList(body.data || [], repoId, path);
   } catch (err) {
     historyListEl.innerHTML =
-      '<div class="text-sm text-red-500 text-center py-4">Failed to load history: ' +
-      escapeHtml(err.message) +
+      '<div class="nf-note is-err">' +
+      escapeHtml(__t('ui.history_failed', { msg: err.message })) +
       "</div>";
   }
 }
@@ -92,7 +92,7 @@ async function openHistoryDialog(repoId, path) {
 function renderHistoryList(items, repoId, path) {
   if (!items.length) {
     historyListEl.innerHTML =
-      '<div class="text-sm text-gray-400 text-center py-4">No history available</div>';
+      '<div class="nf-note is-quiet">' + escapeHtml(__t('ui.history_empty')) + '</div>';
     return;
   }
   var html = "";
@@ -108,14 +108,14 @@ function renderHistoryList(items, repoId, path) {
       "&commit_id=" +
       encodeURIComponent(commitId);
     html +=
-      '<div class="flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-gray-50 dark:hover:bg-surface-700">' +
+      '<div class="flex items-center justify-between gap-2 px-2 py-2 rounded-ctl hover:bg-raised">' +
       '<div class="min-w-0">' +
-      '<div class="text-sm font-medium text-gray-800 dark:text-gray-200">Version ' +
-      versionNo +
-      '<span class="ml-2 text-xs font-normal text-gray-400">' +
+      '<div class="text-[13px] font-medium text-ink">' +
+      escapeHtml(__t('ui.version_n', { n: versionNo })) +
+      '<span class="ml-2 text-[12px] font-normal text-ink-3">' +
       escapeHtml(item.last_modified_by || "") +
       "</span></div>" +
-      '<div class="text-xs text-gray-400">' +
+      '<div class="text-[12px] text-ink-3">' +
       formatHistoryTime(item.mtime || item.file_mtime || 0) +
       " · " +
       formatHistorySize(item.size || item.file_size || 0) +
@@ -123,8 +123,8 @@ function renderHistoryList(items, repoId, path) {
       '<div class="flex items-center gap-1 flex-shrink-0">' +
       '<a href="' +
       revUrl +
-      '" download class="px-2 py-1 rounded-md text-xs font-medium text-brand-600 dark:text-brand-400 border border-brand-200 dark:border-brand-900/50 hover:bg-brand-50 dark:hover:bg-brand-900/20">Download</a>' +
-      '<button type="button" class="js-history-restore px-2 py-1 rounded-md text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-surface-700" data-commit-id="' +
+      '" download class="btn btn-line btn-sm">' + escapeHtml(__t('common.download')) + '</a>' +
+      '<button type="button" class="js-history-restore btn btn-line btn-sm" data-commit-id="' +
       escapeAttr(commitId) +
       '" data-repo-id="' +
       escapeAttr(repoId) +
@@ -132,7 +132,7 @@ function renderHistoryList(items, repoId, path) {
       escapeAttr(path) +
       '" data-name="' +
       escapeAttr(fileName) +
-      '">Restore</button>' +
+      '">' + escapeHtml(__t('ui.restore')) + '</button>' +
       "</div></div>";
   });
   historyListEl.innerHTML = html;
@@ -214,6 +214,10 @@ var shareCurrentRepoId = "";
 var shareCurrentPath = "";
 var shareCurrentType = "";
 var shareCurrentToken = "";
+// True once a link has been created in this dialog, which switches the primary
+// button from "Create" to "Close". Tracked as state — comparing the button's
+// own label would only work while that label happened to be English.
+var shareLinkShown = false;
 
 document.addEventListener("click", function (e) {
   const btn = e.target.closest(".js-share-btn");
@@ -224,6 +228,7 @@ document.addEventListener("click", function (e) {
   shareCurrentPath = btn.dataset.path;
   shareCurrentType = btn.dataset.type || "file";
   shareCurrentToken = "";
+  shareLinkShown = false;
   var name = shareCurrentPath.split("/").filter(Boolean).pop() || shareCurrentPath;
 
   if (!shareCurrentRepoId || !shareCurrentPath) return;
@@ -258,7 +263,12 @@ if (shareDialog) {
 
   shareDeleteBtn.addEventListener("click", async function () {
     if (!shareCurrentToken) return;
-    if (!confirm(__t('ui.confirm_delete_share'))) return;
+    var confirmed = await ConfirmDialog.confirm(
+      __t('common.are_you_sure'),
+      __t('ui.confirm_delete_share'),
+      { confirmText: __t('common.delete'), variant: 'danger' }
+    );
+    if (!confirmed) return;
 
     shareDeleteBtn.disabled = true;
     shareDialogError.classList.add("hidden");
@@ -269,6 +279,7 @@ if (shareDialog) {
       });
       if (resp.ok) {
         shareCurrentToken = "";
+        shareLinkShown = false;
         if (shareCreateForm) shareCreateForm.classList.remove("hidden");
         if (shareLinkDisplay) shareLinkDisplay.classList.add("hidden");
         shareDeleteBtn.classList.add("hidden");
@@ -289,8 +300,8 @@ if (shareDialog) {
   });
 
   shareConfirmBtn.addEventListener("click", async function () {
-    // If in "Close" mode, just close the dialog
-    if (shareConfirmBtn.textContent === "Close") {
+    // A link is already on screen: the button now only closes the dialog.
+    if (shareLinkShown) {
       shareDialog.classList.add("hidden");
       return;
     }
@@ -310,7 +321,7 @@ if (shareDialog) {
     if (description) body.description = description;
 
     shareConfirmBtn.disabled = true;
-    shareConfirmBtn.textContent = "Creating...";
+    shareConfirmBtn.textContent = __t('ui.creating');
     shareDialogError.classList.add("hidden");
 
     try {
@@ -329,7 +340,8 @@ if (shareDialog) {
         shareLinkUrl.value = shareUrl;
         shareLinkDisplay.classList.remove("hidden");
       }
-      shareConfirmBtn.textContent = "Close";
+      shareLinkShown = true;
+      shareConfirmBtn.textContent = __t('common.close');
       shareCancelBtn.classList.add("hidden");
       shareDeleteBtn.classList.remove("hidden");
     } catch (err) {
@@ -337,8 +349,9 @@ if (shareDialog) {
       shareDialogError.classList.remove("hidden");
     } finally {
       shareConfirmBtn.disabled = false;
-      // Don't reset to "Create" if in Close mode (success path sets it to Close)
-      if (shareConfirmBtn.textContent !== "Close") {
+      // Only a failed create resets the button; the success path leaves it in
+      // its Close state.
+      if (!shareLinkShown) {
         shareConfirmBtn.textContent = __t('ui.create');
       }
     }
@@ -492,12 +505,12 @@ async function loadPickerDirectory(path) {
   var breadcrumbEl = document.getElementById("dir-picker-breadcrumb");
   if (!listEl || !breadcrumbEl) return;
 
-  listEl.innerHTML = '<div class="text-sm text-gray-400 text-center py-4">Loading...</div>';
+  listEl.innerHTML = '<div class="nf-note is-quiet">' + escapeHtml(__t('common.loading')) + '</div>';
   pickerPath = path;
   renderPickerBreadcrumb(path, breadcrumbEl);
 
   var repoId = getRepoId();
-  if (!repoId) { listEl.innerHTML = '<div class="text-sm text-red-500 text-center py-4">Error: no repo</div>'; return; }
+  if (!repoId) { listEl.innerHTML = '<div class="nf-note is-err">' + escapeHtml(__t('ui.picker_no_repo')) + '</div>'; return; }
 
   try {
     var resp = await fetch("/api2/repos/" + encodeURIComponent(repoId) + "/dir/?p=" + encodeURIComponent(path));
@@ -507,30 +520,30 @@ async function loadPickerDirectory(path) {
     var dirs = entries.filter(function (e) { return e.type === "dir"; });
     renderPickerDirList(dirs, listEl);
   } catch (err) {
-    listEl.innerHTML = '<div class="text-sm text-red-500 text-center py-4">Failed to load: ' + escapeHtml(err.message) + '</div>';
+    listEl.innerHTML = '<div class="nf-note is-err">' + escapeHtml(__t('ui.picker_load_failed', { msg: err.message })) + '</div>';
   }
 }
 
 function renderPickerBreadcrumb(path, breadcrumbEl) {
   var parts = path.split("/").filter(Boolean);
-  var html = '<button class="js-picker-nav px-1.5 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-surface-700" data-path="/">/</button>';
+  var html = '<button class="js-picker-nav nf-picker-path" data-path="/">/</button>';
   var accum = "";
   for (var i = 0; i < parts.length; i++) {
     accum += "/" + parts[i];
-    html += '<span class="text-gray-300 dark:text-gray-600">/</span>';
-    html += '<button class="js-picker-nav px-1.5 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-surface-700" data-path="' + escapeAttr(accum) + '">' + escapeHtml(parts[i]) + '</button>';
+    html += '<span class="text-ink-3">/</span>';
+    html += '<button class="js-picker-nav nf-picker-path" data-path="' + escapeAttr(accum) + '">' + escapeHtml(parts[i]) + '</button>';
   }
   breadcrumbEl.innerHTML = html;
 }
 
 function renderPickerDirList(dirs, listEl) {
   if (dirs.length === 0) {
-    listEl.innerHTML = '<div class="text-sm text-gray-400 text-center py-4">No subdirectories</div>';
+    listEl.innerHTML = '<div class="nf-note is-quiet">' + escapeHtml(__t('ui.picker_empty')) + '</div>';
     return;
   }
   listEl.innerHTML = dirs.map(function (d) {
-    return '<div class="js-picker-dir flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer hover:bg-gray-100 dark:hover:bg-surface-700 text-sm text-gray-700 dark:text-gray-300" data-path="' + escapeAttr(d.path || d.name) + '">' +
-      '<svg class="h-4 w-4 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>' +
+    return '<div class="js-picker-dir flex items-center gap-2 px-2 py-1.5 rounded-ctl cursor-pointer hover:bg-raised text-[13px] text-ink" data-path="' + escapeAttr(d.path || d.name) + '">' +
+      '<svg class="h-4 w-4 text-warn shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>' +
       '<span class="truncate">' + escapeHtml(d.name) + '</span>' +
       '</div>';
   }).join("");
@@ -714,7 +727,7 @@ document.addEventListener("click", async function (e) {
   }
 
   btn.disabled = true;
-  btn.textContent = "Indexing...";
+  btn.textContent = __t('ui.indexing');
 
   try {
     var indexedCount = 0;
@@ -736,7 +749,7 @@ document.addEventListener("click", async function (e) {
       Toast.success(__t('ui.reindexed_n', { n: indexedCount }));
     }
     if (skippedCount > 0) {
-      Toast.info(skippedCount + " file(s) skipped (unsupported type)");
+      Toast.info(__t('ui.reindex_skipped', { n: skippedCount }));
     }
   } catch (e) {
     Toast.error(__t('ui.reindex_failed', { msg: e.message || e }));

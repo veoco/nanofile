@@ -67,7 +67,7 @@
                 <span class="t">{{ t.tr("credential.summary_tokens") }} {{ summary.sync_tokens }}</span>
             </div>
             {% if !warning_lines.is_empty() %}
-            <p class="nf-prow-hi text-warn">
+            <p class="nf-prow-hi text-warn-text">
                 {% for line in warning_lines %}
                 {% if !loop.first %}<span class="sep">&middot;</span> {% endif %}{{ line }}
                 {% endfor %}

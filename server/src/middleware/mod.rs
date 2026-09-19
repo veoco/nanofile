@@ -18,12 +18,16 @@ use axum::http::{HeaderValue, header};
 /// the translation table travels as a `type="application/json"` data block,
 /// which is not executable and therefore not subject to `script-src`.
 ///
-/// `style-src` still allows `'unsafe-inline'`. The public share and upload pages
-/// used to be the main reason — each carried its own `<style>` block — and they
-/// now load the shared stylesheet like every other page, so what remains is
-/// `base.html`'s first-paint background rule and the tag colours, which are
-/// runtime data rendered as `style="background-color: ..."` attributes.
-/// Tightening it needs those moved to CSS classes first.
+/// `style-src` still allows `'unsafe-inline'` for one reason: tag colours. A tag
+/// carries an arbitrary hex value from the API (`_tag_color`), and `_tag_color`
+/// reaches the page as a `style="background-color: …"` attribute because no
+/// class can express a value the server learns at request time. Everything else
+/// that used to need the directive is gone — the public pages' `<style>` blocks,
+/// the modal's inline box-shadow, the progress-bar and left-panel width
+/// attributes, and `base.html`'s first-paint background rule (now set from the
+/// theme script). Tightening the directive therefore means restricting tags to a
+/// fixed palette, which would break Seafile clients that write arbitrary
+/// colours.
 ///
 /// Everything else is locked to `'self'` (no fallback to `*`), so remote
 /// script, frame, font and object loading is blocked.

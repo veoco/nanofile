@@ -1,4 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#6366f1"/>
-  <text x="16" y="22" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="18" fill="white">N</text>
+  <!-- Graphite mark: the same "N" tile the left panel footer uses. The tile is
+       a mid grey rather than the near-black accent because a favicon cannot
+       follow `html.dark` — it is rendered in its own document, so it has to
+       hold up on a light and on a dark tab bar alike. -->
+  <rect width="32" height="32" rx="6" fill="#6b6b6b"/>
+  <text x="16" y="22" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="18" fill="#ffffff">N</text>
 </svg>
