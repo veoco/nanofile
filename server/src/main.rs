@@ -7,11 +7,8 @@
     windows_subsystem = "windows"
 )]
 
-use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::http::{Method, StatusCode, header};
-use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::http::StatusCode;
 use clap::Parser;
 use rand::Rng;
 use sea_orm::{
@@ -23,7 +20,6 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
@@ -101,55 +97,6 @@ enum TrayCommand {
 }
 
 type TrayCmdReceiver = std::sync::mpsc::Receiver<TrayCommand>;
-
-async fn health_check() -> impl IntoResponse {
-    StatusCode::OK
-}
-
-/// Path segments immediately preceding a capability token.
-///
-/// Routes such as `/f/{token}`, `/zip/{token}` and `/download-api/{token}` put
-/// the credential itself in the path, so logging the raw URI would write a
-/// usable token into the access log. That token is deliberately not paired with
-/// a session: whoever reads the log can replay it.
-const TOKEN_PATH_PREFIXES: &[&str] = &[
-    "f",
-    "d",
-    "u",
-    "zip",
-    "blks",
-    "download-api",
-    "upload-api",
-    "upload-aj",
-    "update-api",
-    "update-aj",
-    "upload-blks-api",
-    "upload-raw-blks-api",
-    "client-sso",
-    "client-login",
-    "client-sso-link",
-];
-
-/// Replace capability-token path segments with `{token}` for logging.
-///
-/// The query string is dropped by the caller; it may carry a share-link
-/// password or other credentials.
-fn redact_request_path(path: &str) -> String {
-    let segs: Vec<&str> = path.split('/').collect();
-    let mut out = String::with_capacity(path.len());
-    for (i, seg) in segs.iter().enumerate() {
-        if i > 0 {
-            out.push('/');
-        }
-        let prev = if i > 0 { segs[i - 1] } else { "" };
-        if !seg.is_empty() && TOKEN_PATH_PREFIXES.contains(&prev) {
-            out.push_str("{token}");
-        } else {
-            out.push_str(seg);
-        }
-    }
-    out
-}
 
 /// Whether a configured secret has adequate length/entropy.
 ///
@@ -696,78 +643,7 @@ async fn run_server(
         }
     }
 
-    let cors = {
-        // `cors_origins()` returns `[site_url_origin()]` when the
-        // configured list is empty, so this always allows the same-origin
-        // site (and any explicitly configured origins).
-        let origins = state.config.server.cors_origins();
-
-        CorsLayer::new()
-            .allow_origin(AllowOrigin::list(origins.into_iter().filter_map(|o| {
-                o.parse()
-                    .map_err(|e| tracing::warn!("Skipping invalid CORS origin '{}': {:?}", o, e))
-                    .ok()
-            })))
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([
-                header::AUTHORIZATION,
-                header::CONTENT_TYPE,
-                header::HeaderName::from_static("x-requested-with"),
-                header::HeaderName::from_static("x-seafile-otp"),
-                header::HeaderName::from_static("x-seafile-s2fa"),
-                header::HeaderName::from_static("x-seafile-sharelink-password"),
-                header::HeaderName::from_static("x-seafile-2fa-trust-device"),
-            ])
-            .max_age(std::time::Duration::from_secs(
-                state.config.server.cors_max_age_secs,
-            ))
-    };
-
-    // Upload-capable route groups accept bodies up to `max_upload_size_mb`.
-    // The app-wide default below is the much smaller JSON/Form cap.
-    let upload_body_limit = server::body_limit::upload_limit();
-    let sync_routes =
-        server::handler::sync::sync_routes().layer(DefaultBodyLimit::max(upload_body_limit));
-    // The web page routes are wrapped so a failure renders the error page
-    // instead of the wire body; the endpoints the frontend fetches itself are
-    // not. See `ui::error_page`.
-    let web_api_routes =
-        server::handler::web::web_api_routes().layer(DefaultBodyLimit::max(upload_body_limit));
-    let web_page_routes = server::handler::web::web_page_routes()
-        .layer(DefaultBodyLimit::max(upload_body_limit))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            server::ui::error_page::anonymous_pages,
-        ));
-    let ui_routes = server::ui::ui_routes().layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        server::ui::error_page::session_pages,
-    ));
-    let notification_routes = server::notification::notification_routes();
-    let webdav_routes =
-        server::webdav::webdav_routes().layer(DefaultBodyLimit::max(upload_body_limit));
-
-    // CORS is applied only to the REST API routes. It must not wrap
-    // the WebDAV endpoints: tower-http's CorsLayer answers OPTIONS
-    // requests itself, which would shadow the `DAV:`/`Allow:` response
-    // WebDAV clients expect. WebDAV clients are not browsers, so CORS
-    // does not apply to them.
-    let api_with_cors = server::routes::api_routes().layer(cors);
-
-    let app = Router::new()
-        .route("/health", get(health_check))
-        .merge(api_with_cors)
-        .merge(sync_routes)
-        .merge(web_api_routes)
-        .merge(web_page_routes)
-        .merge(ui_routes)
-        .merge(notification_routes)
-        .merge(webdav_routes)
-        .merge(server::handler::avatar::image_routes())
-        .route("/static/{*path}", get(server::static_assets::serve_static))
-        // No route matched. A browser gets the error page; a client keeps the
-        // empty 404 it has always received.
-        .fallback(server::ui::error_page::unknown_path)
+    let app = server::app::app_routes(&state)
         .layer(DefaultBodyLimit::max(
             (config.server.max_json_body_mb * 1024 * 1024) as usize,
         ))
@@ -783,7 +659,7 @@ async fn run_server(
                     tracing::info_span!(
                         "request",
                         method = %req.method(),
-                        path = %redact_request_path(req.uri().path()),
+                        path = %server::app::redact_request_path(req.uri().path()),
                         latency = tracing::field::Empty,
                         status = tracing::field::Empty,
                     )

@@ -519,36 +519,12 @@ impl TestServer {
         let state = Arc::new(AppState::new(db, config, temp_file_manager));
         let block_dir = state.config.storage.block_dir.clone();
 
-        let sync_routes = server::handler::sync::sync_routes();
-        // Mirrors `main.rs`: the page routes render the error page on failure,
-        // the endpoints the frontend fetches itself keep their wire bodies.
-        let web_api_routes = server::handler::web::web_api_routes();
-        let web_page_routes =
-            server::handler::web::web_page_routes().layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                server::ui::error_page::anonymous_pages,
-            ));
-        let ui_routes = server::ui::ui_routes().layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            server::ui::error_page::session_pages,
-        ));
-        let notification_routes = server::notification::notification_routes();
-        let webdav_routes = server::webdav::webdav_routes();
-
-        let app = Router::new()
-            .merge(server::routes::api_routes())
-            .merge(sync_routes)
-            .merge(web_api_routes)
-            .merge(web_page_routes)
-            .merge(ui_routes)
-            .merge(notification_routes)
-            .merge(webdav_routes)
-            .merge(server::handler::avatar::image_routes())
-            .route(
-                "/static/{*path}",
-                axum::routing::get(server::static_assets::serve_static),
-            )
-            .fallback(server::ui::error_page::unknown_path)
+        // The same route tree the binary serves. It used to be a copy here,
+        // which meant a change to the router left these tests exercising an
+        // application the server does not run.
+        let app = server::app::app_routes(&state)
+            // Deliberately not the production limits yet — see the follow-up
+            // that switches this to `build_app`.
             .layer(axum::extract::DefaultBodyLimit::max(512 * 1024 * 1024))
             .with_state(state.clone());
 

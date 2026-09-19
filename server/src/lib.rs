@@ -8,6 +8,7 @@
 #![allow(clippy::too_many_arguments)]
 
 // ── Server crate modules ────────────────────────────────────────────────────
+pub mod app;
 pub mod body_limit;
 pub mod domain;
 pub mod filters;
