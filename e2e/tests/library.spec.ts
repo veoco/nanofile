@@ -162,6 +162,18 @@ test("the list filters and sorts without a round trip", async ({ page }) => {
   expect(sorted).toBe(true);
 });
 
+// The rail's filter is a navigation aid (switch library from inside one). On
+// this page it would be a second box filtering the same set, so it stands down
+// — but only here, and only because the page has a filter of its own.
+test("the rail filter is absent here and the page filter is not", async ({ page }) => {
+  await openLibraries(page);
+  await expect(page.locator(".js-repo-filter")).toHaveCount(0);
+  await expect(page.locator("#repo-filter")).toBeVisible();
+
+  await page.goto("/starred/");
+  await expect(page.locator(".js-repo-filter")).toBeVisible();
+});
+
 test("the row menu is reachable by keyboard", async ({ page }) => {
   await openLibraries(page);
   const row = page.locator("#repo-list > li").first();
