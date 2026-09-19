@@ -536,6 +536,152 @@ async fn test_pending_token_rejected_as_session() {
     );
 }
 
+/// Insert an API token row directly, the way the pending 2FA step does.
+async fn insert_token(
+    db: &sea_orm::DatabaseConnection,
+    user_id: i32,
+    plaintext: &str,
+    created_at: i64,
+    expires_at: Option<i64>,
+    is_pending: bool,
+) {
+    let model = infra::entity::api_token::ActiveModel {
+        id: sea_orm::NotSet,
+        user_id: sea_orm::Set(user_id),
+        token: sea_orm::Set(server::service::auth::token::hash_token(plaintext)),
+        created_at: sea_orm::Set(created_at),
+        expires_at: sea_orm::Set(expires_at),
+        device_id: sea_orm::Set(None),
+        platform: sea_orm::Set(None),
+        device_name: sea_orm::Set(None),
+        client_version: sea_orm::Set(None),
+        is_pending: sea_orm::Set(is_pending),
+        source: sea_orm::Set("web".to_string()),
+        user_agent: sea_orm::Set(None),
+    };
+    model.insert(db).await.unwrap();
+}
+
+/// A client that does not follow redirects and keeps no cookies, so the
+/// response can be inspected directly.
+fn plain_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+}
+
+async fn post_web_2fa(server: &TestServer, pending_cookie: Option<&str>) -> reqwest::Response {
+    let request = plain_client().post(format!("{}/accounts/two-factor-auth/", server.base_url));
+    let request = match pending_cookie {
+        Some(value) => request.header("cookie", format!("seahub-session-pending={value}")),
+        None => request,
+    };
+    request.form(&[("code", "123456")]).send().await.unwrap()
+}
+
+/// Assert the response is the redirect this flow is supposed to produce, and
+/// return the `err=` reason it carries (the `next=` value is the flow's own
+/// business, not this test's).
+fn login_redirect_reason(resp: &reqwest::Response) -> String {
+    assert_eq!(resp.status(), 302, "must be a redirect, not an error page");
+    let location = resp
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        location.starts_with("/accounts/login/?"),
+        "expected the sign-in form, got {location}"
+    );
+    location
+        .split("err=")
+        .nth(1)
+        .unwrap_or_else(|| panic!("no err= in {location}"))
+        .split('&')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+/// The Web UI 2FA step needs a live pending session, so a request without one
+/// has no page of its own to report on. It must land on the sign-in form with
+/// the reason — it used to render a generic "Bad request" that blamed the
+/// request format instead.
+#[tokio::test]
+async fn test_web_2fa_without_pending_session_reports_reason_on_login_form() {
+    let server = TestServer::start().await;
+
+    let resp = post_web_2fa(&server, None).await;
+
+    assert_eq!(login_redirect_reason(&resp), "auth.session_expired");
+    // The dead cookie is cleared so the browser stops resending it.
+    let cookie = resp.headers().get("set-cookie").unwrap().to_str().unwrap();
+    assert!(cookie.starts_with("seahub-session-pending=;"), "{cookie}");
+    assert!(cookie.contains("Max-Age=0"), "{cookie}");
+}
+
+/// An expired pending token is reported the same way, and is deleted so it
+/// cannot be replayed.
+#[tokio::test]
+async fn test_web_2fa_expired_pending_session_reports_reason_and_drops_token() {
+    let server = TestServer::start().await;
+    let user_id = create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+    enable_2fa(server.db.as_ref(), user_id).await;
+
+    let pending = server::service::auth::token::generate_api_token();
+    let now = chrono::Utc::now().timestamp();
+    insert_token(
+        server.db.as_ref(),
+        user_id,
+        &pending,
+        now - 600,
+        Some(now - 300),
+        true,
+    )
+    .await;
+
+    let resp = post_web_2fa(&server, Some(&pending)).await;
+
+    assert_eq!(login_redirect_reason(&resp), "auth.session_expired");
+    let remaining = infra::entity::api_token::Entity::find()
+        .filter(
+            infra::entity::api_token::Column::Token
+                .eq(server::service::auth::token::hash_token(&pending)),
+        )
+        .count(server.db.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(remaining, 0, "the expired pending token must be deleted");
+}
+
+/// Security: a live session token in the `seahub-session-pending` cookie is not
+/// evidence that the password step happened, so the page refuses it.
+#[tokio::test]
+async fn test_web_2fa_rejects_live_token_as_pending_session() {
+    let server = TestServer::start().await;
+    let user_id = create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+    enable_2fa(server.db.as_ref(), user_id).await;
+
+    let live = server::service::auth::token::generate_api_token();
+    let now = chrono::Utc::now().timestamp();
+    insert_token(
+        server.db.as_ref(),
+        user_id,
+        &live,
+        now,
+        Some(now + 86400),
+        false,
+    )
+    .await;
+
+    let resp = post_web_2fa(&server, Some(&live)).await;
+
+    assert_eq!(login_redirect_reason(&resp), "auth.session_expired_alt");
+}
+
 /// Backup codes verify once, consume on use, and reject wrong codes.
 #[tokio::test]
 async fn test_backup_code_verify_and_consume() {

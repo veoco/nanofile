@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import crypto from "node:crypto";
-import { loginViaUI } from "../helpers/api";
+import { loginViaUI, readState } from "../helpers/api";
 import { ADMIN_EMAIL, ADMIN_PASSWORD, BASE_URL } from "../helpers/server";
 
 const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -107,3 +107,50 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
     await ctx.close();
   }
 });
+
+// The pending half-session is only good for five minutes, and the TOTP form has
+// no page to report a dead one on. These check that the reason reaches the
+// visitor as a message on the sign-in form instead of a generic "Bad request".
+for (const [label, cookieValue] of [
+  ["an unknown pending token", "definitely-not-a-real-pending-token"],
+  ["a live session token in the pending cookie", "live-session-token"],
+] as const) {
+  test(`a dead 2FA session is reported on the sign-in form (${label})`, async ({
+    browser,
+  }) => {
+    const state = readState();
+    const ctx = await browser.newContext({ baseURL: BASE_URL });
+    const page = await ctx.newPage();
+    try {
+      await ctx.addCookies([
+        {
+          name: "seahub-session-pending",
+          // The second case presents a real, non-pending token, which the page
+          // must refuse as proof that the password step happened.
+          value: cookieValue === "live-session-token" ? state.adminToken : cookieValue,
+          url: BASE_URL,
+        },
+      ]);
+
+      await page.goto("/accounts/two-factor-auth/");
+      await page.locator("#code").fill("123456");
+      await page
+        .locator('form[action="/accounts/two-factor-auth/"] button[type="submit"]')
+        .click();
+
+      await page.waitForURL(/\/accounts\/login\/\?err=/);
+      expect(page.url()).toContain("err=auth.session_expired_alt");
+      // The sign-in form, with the real reason — not the "Bad request" page.
+      await expect(page.locator("#password")).toBeVisible();
+      await expect(page.locator('[role="alert"]')).toContainText(
+        "Invalid or expired authentication session",
+      );
+      // The dead cookie is cleared, so a reload does not resubmit it.
+      const cookies = await ctx.cookies();
+      const pending = cookies.find((c) => c.name === "seahub-session-pending");
+      expect(pending?.value ?? "").toBe("");
+    } finally {
+      await ctx.close();
+    }
+  });
+}

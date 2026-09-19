@@ -64,6 +64,28 @@ pub struct TwoFactorLoginTemplate {
 #[derive(Deserialize)]
 pub struct LoginNextQuery {
     pub next: Option<String>,
+    /// Why the visitor was sent back to the form, as a locale key listed in
+    /// [`LOGIN_ERROR_KEYS`]. Any other value is ignored, so the error banner
+    /// cannot be used to reflect arbitrary text into the page.
+    pub err: Option<String>,
+}
+
+/// Reasons `/accounts/login/` is willing to display when it is reached by a
+/// redirect. The 2FA step has no page to report a dead pending session on — the
+/// TOTP form needs a live one — so it hands the reason to the sign-in form.
+const LOGIN_ERROR_KEYS: [&str; 4] = [
+    "auth.session_expired",
+    "auth.session_expired_alt",
+    "auth.too_many_verification",
+    "auth.two_factor_not_configured",
+];
+
+/// Translate `?err=` from a redirect, if it names a message we defined.
+fn login_error(query: &LoginNextQuery, t: &I18n) -> Option<String> {
+    let key = query.err.as_deref()?;
+    LOGIN_ERROR_KEYS
+        .contains(&key)
+        .then(|| t.tr(key).to_string())
 }
 
 #[derive(Deserialize)]
@@ -91,10 +113,11 @@ pub async fn login_page(
     headers: HeaderMap,
     Query(query): Query<LoginNextQuery>,
 ) -> Result<Html<String>, AppError> {
+    let t = I18n::from_headers(&headers, &state.config.ui.default_language);
     let tpl = LoginTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
-        error: None,
+        t,
+        error: login_error(&query, t),
         remember_days: state.config.auth.api_token_ttl_days,
         enable_password_reset: state.config.auth.enable_password_reset,
         enable_invitations: state.config.auth.enable_invitations,
@@ -461,6 +484,50 @@ pub async fn two_factor_auth_page(
     Ok(Html(html))
 }
 
+/// Send the visitor back to the sign-in form, optionally with the reason.
+///
+/// A pending 2FA session that cannot be used has no page of its own to report
+/// on, so the sign-in form — where the visitor has to go anyway — carries it.
+/// `next` rides along so the original destination survives the re-login, and
+/// the dead pending cookie is cleared so the browser stops sending it.
+fn back_to_login(
+    next: &str,
+    reason_key: Option<&str>,
+    secure_cookies: bool,
+) -> Result<Response, AppError> {
+    let mut location = String::from("/accounts/login/");
+    let mut sep = "?";
+    if let Some(key) = reason_key {
+        location.push_str(sep);
+        location.push_str("err=");
+        location.push_str(key);
+        sep = "&";
+    }
+    if !next.is_empty() {
+        location.push_str(sep);
+        location.push_str("next=");
+        location.extend(percent_encoding::utf8_percent_encode(
+            next,
+            percent_encoding::NON_ALPHANUMERIC,
+        ));
+    }
+
+    let mut resp_headers = ::axum::http::HeaderMap::new();
+    resp_headers.insert(
+        ::axum::http::header::LOCATION,
+        ::axum::http::HeaderValue::from_str(&location)
+            .map_err(|_| AppError::internal("Failed to create location header"))?,
+    );
+    resp_headers.append(
+        ::axum::http::header::SET_COOKIE,
+        session_cookie("seahub-session-pending", "", Some(0), secure_cookies)
+            .parse::<::axum::http::HeaderValue>()
+            .map_err(|_| AppError::internal("Failed to create pending cookie header"))?,
+    );
+
+    Ok((StatusCode::FOUND, resp_headers).into_response())
+}
+
 /// POST /accounts/two-factor-auth/ — verify TOTP code and create session.
 pub async fn two_factor_auth(
     State(state): State<Arc<AppState>>,
@@ -493,6 +560,11 @@ pub async fn two_factor_auth(
         &state.config.server.trusted_proxies,
     );
 
+    // Every failure from here on means the pending 2FA session cannot be used,
+    // and the TOTP form needs a live one. The reason therefore goes back to the
+    // sign-in form instead of a generic error page that would blame the request.
+    let secure_cookies = state.config.server.secure_cookies();
+
     // Read the pending token from cookie
     let pending_token = headers
         .get("Cookie")
@@ -503,40 +575,26 @@ pub async fn two_factor_auth(
                 .map(|s| s.trim())
                 .find(|s| s.starts_with("seahub-session-pending="))
                 .and_then(|s| s.strip_prefix("seahub-session-pending="))
-        })
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                I18n::from_headers(&headers, &state.config.ui.default_language)
-                    .tr("auth.session_expired")
-                    .into(),
-            )
-        })?;
+        });
+    let Some(pending_token) = pending_token else {
+        return back_to_login(&next, Some("auth.session_expired"), secure_cookies);
+    };
 
     // Look up the pending token
-    let token_record = state
-        .repos
-        .api_token
-        .find_by_token(pending_token)
-        .await
-        .map_err(|_| AppError::internal("database error"))?
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                I18n::from_headers(&headers, &state.config.ui.default_language)
-                    .tr("auth.session_expired_alt")
-                    .into(),
-            )
-        })?;
+    let token_record = match state.repos.api_token.find_by_token(pending_token).await {
+        Ok(Some(record)) => record,
+        Ok(None) => {
+            return back_to_login(&next, Some("auth.session_expired_alt"), secure_cookies);
+        }
+        Err(_) => return Err(AppError::internal("database error")),
+    };
 
     // Check expiration
     if let Some(expires_at) = token_record.expires_at {
         let now = chrono::Utc::now().timestamp();
         if now > expires_at {
             let _ = state.repos.api_token.delete_by_token(pending_token).await;
-            return Err(AppError::BadRequest(
-                I18n::from_headers(&headers, &state.config.ui.default_language)
-                    .tr("auth.session_expired")
-                    .into(),
-            ));
+            return back_to_login(&next, Some("auth.session_expired"), secure_cookies);
         }
     }
 
@@ -546,11 +604,7 @@ pub async fn two_factor_auth(
     // the precondition this page exists to establish (every other consumer of
     // an API token rejects `is_pending`).
     if !token_record.is_pending {
-        return Err(AppError::BadRequest(
-            I18n::from_headers(&headers, &state.config.ui.default_language)
-                .tr("auth.session_expired_alt")
-                .into(),
-        ));
+        return back_to_login(&next, Some("auth.session_expired_alt"), secure_cookies);
     }
 
     let user_id = token_record.user_id;
@@ -560,26 +614,27 @@ pub async fn two_factor_auth(
     if state.auth_limiters.totp.is_limited(&totp_key) {
         // Delete pending token to force re-login
         let _ = state.repos.api_token.delete_by_token(pending_token).await;
-        return Err(AppError::BadRequest(
-            I18n::from_headers(&headers, &state.config.ui.default_language)
-                .tr("auth.too_many_verification")
-                .into(),
-        ));
+        return back_to_login(&next, Some("auth.too_many_verification"), secure_cookies);
     }
 
     // Fetch user's 2FA config
-    let two_fa = state
-        .repos
-        .user_2fa
-        .find_by_user_id(user_id)
-        .await?
-        .ok_or_else(|| AppError::BadRequest("2FA is not configured for this account.".into()))?;
+    let two_fa = state.repos.user_2fa.find_by_user_id(user_id).await?;
+    let Some(two_fa) = two_fa else {
+        // The config was removed between the password step and now, so signing
+        // in again simply passes without a second factor.
+        let _ = state.repos.api_token.delete_by_token(pending_token).await;
+        return back_to_login(
+            &next,
+            Some("auth.two_factor_not_configured"),
+            secure_cookies,
+        );
+    };
 
     if !two_fa.enabled {
         // 2FA was disabled since the pending token was created — proceed to login
         // Delete pending token, redirect to login page
         let _ = state.repos.api_token.delete_by_token(pending_token).await;
-        return Ok((StatusCode::FOUND, [("Location", "/accounts/login/")]).into_response());
+        return back_to_login(&next, None, secure_cookies);
     }
 
     // Fetch user record for email
@@ -1238,4 +1293,35 @@ pub async fn password_reset_complete(
         .render()
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Html(html))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn query(err: Option<&str>) -> LoginNextQuery {
+        LoginNextQuery {
+            next: None,
+            err: err.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn login_error_accepts_only_the_reason_keys_it_defined() {
+        let en = I18n::get(Some("en"));
+        assert_eq!(
+            login_error(&query(Some("auth.session_expired")), en).as_deref(),
+            Some("Authentication session expired. Please log in again.")
+        );
+        assert_eq!(
+            login_error(&query(Some("auth.too_many_verification")), en).as_deref(),
+            Some("Too many verification attempts. Please log in again.")
+        );
+        // Everything else is dropped: the banner must not reflect arbitrary
+        // text from the query string back into the page.
+        assert_eq!(login_error(&query(Some("<b>call 555-0100</b>")), en), None);
+        assert_eq!(login_error(&query(Some("no.such.key")), en), None);
+        assert_eq!(login_error(&query(Some("auth.invalid_code")), en), None);
+        assert_eq!(login_error(&query(None), en), None);
+    }
 }
