@@ -18,10 +18,12 @@ use axum::http::{HeaderValue, header};
 /// the translation table travels as a `type="application/json"` data block,
 /// which is not executable and therefore not subject to `script-src`.
 ///
-/// `style-src` still allows `'unsafe-inline'`: the public share pages carry
-/// their own inline `<style>` block, and tag colours are runtime data rendered
-/// as `style="background-color: ..."` attributes. Tightening it needs those
-/// moved to CSS classes first.
+/// `style-src` still allows `'unsafe-inline'`. The public share and upload pages
+/// used to be the main reason — each carried its own `<style>` block — and they
+/// now load the shared stylesheet like every other page, so what remains is
+/// `base.html`'s first-paint background rule and the tag colours, which are
+/// runtime data rendered as `style="background-color: ..."` attributes.
+/// Tightening it needs those moved to CSS classes first.
 ///
 /// Everything else is locked to `'self'` (no fallback to `*`), so remote
 /// script, frame, font and object loading is blocked.

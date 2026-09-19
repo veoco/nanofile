@@ -1,0 +1,40 @@
+{# The shell for the public, anonymous pages: a share link (/f/, /d/), an upload
+   link (/u/), the link password gate and the client-login confirmation.
+
+   Same shape as `auth_base.html` — a card of hairline-separated bands under the
+   shared brand bar — because these are the other pages a visitor reaches with
+   no account and no chrome. Unlike the auth shell it is wider (a listing needs
+   the room), so the width is a block, and it always carries a footer band.
+
+   Both shells link `urls.css` and load the pre-paint theme script, which is
+   what gives these pages dark mode and the shared components. #}
+<!DOCTYPE html>
+<html lang="{{ t.lang }}" class="h-full">
+<head>
+    <script src="{{ urls.theme_init_js }}"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Nanofile{% endblock %}</title>
+    <meta name="description" content="Nanofile - Seafile-compatible sync server">
+    <link rel="icon" type="image/svg+xml" href="{{ urls.favicon }}">
+    <link rel="stylesheet" href="{{ urls.css }}">
+</head>
+<body class="h-full bg-canvas text-ink">
+<main class="flex min-h-full items-center justify-center px-4 py-8 sm:py-12">
+    <div class="w-full {% block width %}max-w-[480px]{% endblock %}">
+        <div class="card overflow-hidden">
+            {% include "includes/brand_bar.html" %}
+
+            {% block head %}{% endblock %}
+
+            {% block content %}{% endblock %}
+
+            <div class="flex items-center justify-center border-t border-line bg-raised px-5 py-2.5">
+                <span class="text-[11.5px] text-ink-3">{{ t.tr("pub.powered_by") }}</span>
+            </div>
+        </div>
+    </div>
+</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>

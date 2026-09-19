@@ -1,82 +1,30 @@
-<!DOCTYPE html>
-<html lang="{{ t.lang }}" class="h-full">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ t.tr("auth.login_to_client") }} | Nanofile</title>
-    <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: #fcfcfc;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 1rem;
-            color: #202020;
-        }
-        .card {
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-            padding: 2rem;
-            width: 100%;
-            max-width: 420px;
-            text-align: center;
-        }
-        .icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            background: #f0f0f0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 1rem;
-        }
-        h1 { font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem; }
-        p { font-size: 0.875rem; color: #646464; margin-bottom: 1.25rem; line-height: 1.5; }
-        .warning {
-            background: #fdf6e3;
-            color: #ab6400;
-            border: 1px solid #f5d98a;
-            padding: 0.625rem 0.75rem;
-            border-radius: 0.5rem;
-            font-size: 0.8125rem;
-            margin-bottom: 1.25rem;
-            text-align: left;
-        }
-        button {
-            width: 100%;
-            padding: 0.75rem;
-            background: #202020;
-            color: white;
-            border: none;
-            border-radius: 0.75rem;
-            font-size: 0.9375rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-        button:hover { background: #101010; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="icon">
-            <svg width="24" height="24" fill="none" stroke="#101010" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622C17.176 19.29 21 14.591 21 9c0-1.042-.133-2.052-.382-3.016z"/>
-            </svg>
-        </div>
-        <h1>{{ t.tr("auth.login_to_client") }}</h1>
-        <p>{{ t.tr("auth.client_login_confirm_desc") }}</p>
-        <div class="warning">{{ t.tr("auth.client_login_confirm_warning") }}</div>
-        <form action="/client-login/" method="POST">
-            <input type="hidden" name="token" value="{{ token }}">
-            {% if let Some(n) = next %}<input type="hidden" name="next" value="{{ n }}">{% endif %}
-            <button type="submit">{{ t.tr("auth.login_to_client") }}</button>
-        </form>
+{% extends "web/public_base.html" %}
+
+{% block title %}{{ t.tr("auth.login_to_client") }} | {{ t.tr("app.name") }}{% endblock %}
+
+{# Shown when the browser cannot be proven to be the client that asked for the
+   one-time token, so the visitor confirms it by hand. The warning is the point
+   of the page, so it is a banner rather than body text. #}
+{% block head %}
+<div class="px-5 pt-5 pb-2">
+    <h1 class="text-[19px] font-semibold tracking-tight text-ink">{{ t.tr("auth.login_to_client") }}</h1>
+    <p class="mt-1 text-[12.5px] leading-relaxed text-ink-3">{{ t.tr("auth.client_login_confirm_desc") }}</p>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="px-5 pt-4 pb-5">
+    <div class="nf-banner is-warn" role="alert">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+        </svg>
+        <p>{{ t.tr("auth.client_login_confirm_warning") }}</p>
     </div>
-</body>
-</html>
+
+    <form action="/client-login/" method="POST">
+        <input type="hidden" name="token" value="{{ token }}">
+        {% if let Some(n) = next %}<input type="hidden" name="next" value="{{ n }}">{% endif %}
+        <button type="submit" class="btn btn-solid mt-4 h-9 w-full text-[13px]">{{ t.tr("auth.login_to_client") }}</button>
+    </form>
+</div>
+{% endblock %}

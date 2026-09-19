@@ -14,6 +14,7 @@ use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
 use crate::fs::zip::{ZipLimits, acquire_zip_permit, collect_dir_entries, stream_zip};
 use crate::i18n::I18n;
+use crate::ui::files::BreadcrumbItem;
 use crate::ui::format_size;
 use base::common::FsFileData;
 use base::error::AppError;
@@ -63,14 +64,24 @@ struct ShareViewTemplate {
     pub description: Option<String>,
 }
 
+/// The link password gate, shared by the file, folder and upload-link handlers
+/// — one definition, so the three cannot drift.
 #[allow(dead_code)]
 #[derive(Template)]
 #[template(path = "web/share_access_validation.html")]
-struct ShareAccessValidationTemplate {
+pub struct ShareAccessValidationTemplate {
     pub t: &'static I18n,
+    pub urls: &'static crate::static_assets::TemplateUrls,
     pub token: String,
     pub error: Option<String>,
     pub form_action: String,
+}
+
+/// The gate's error value: the localized message when a password was actually
+/// supplied, `None` for the plain first render of the form (a request that
+/// carries no password is not a failure).
+pub(crate) fn wrong_password_error(provided_pwd: Option<&str>, t: &'static I18n) -> Option<String> {
+    provided_pwd.map(|_| t.tr("pub.incorrect_password").to_string())
 }
 
 // ── Handler helpers ───────────────────────────────────────────────────────
@@ -185,15 +196,12 @@ pub async fn shared_file_view(
         }
         // A wrong password supplied via the header gets the form back with the
         // error; a plain GET just gets the form.
-        let error = if provided_pwd.is_some() {
-            Some("Incorrect password".to_string())
-        } else {
-            None
-        };
+        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
         let tpl = ShareAccessValidationTemplate {
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t,
+            urls: crate::static_assets::template_urls(),
             token: token.clone(),
-            error,
+            error: wrong_password_error(provided_pwd, t),
             form_action: format!("/f/{}/", token),
         };
         let html = tpl
@@ -246,9 +254,10 @@ pub async fn shared_file_view(
         .map(|(_, n)| n)
         .unwrap_or(&link.path)
         .to_string();
+    // Uppercase, like the `.nf-doc-ext` tile in the file list.
     let file_ext = file_name
         .rsplit_once('.')
-        .map(|(_, e)| e.to_string())
+        .map(|(_, e)| e.to_uppercase())
         .unwrap_or_else(|| "?".to_string());
     let file_size = _file_data.size;
 
@@ -317,10 +326,12 @@ pub async fn shared_file_view_post(
         // brute force against one link can't slip under the IP-based limit.
         record_link_password_failure(&state, &token)?;
         // Show password form again with error
+        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
         let tpl = ShareAccessValidationTemplate {
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t,
+            urls: crate::static_assets::template_urls(),
             token: token.clone(),
-            error: Some("Incorrect password".to_string()),
+            error: Some(t.tr("pub.incorrect_password").to_string()),
             form_action: format!("/f/{}/", token),
         };
         let html = tpl
@@ -360,6 +371,7 @@ struct SharedDirViewTemplate {
     pub dir_path: String,
     pub parent_path: Option<String>,
     pub entries: Vec<DirEntryInfo>,
+    pub breadcrumbs: Vec<BreadcrumbItem>,
     pub item_count: usize,
     pub has_password: bool,
     pub created_at_ts: i64,
@@ -415,15 +427,12 @@ pub async fn shared_dir_view(
         if provided_pwd.is_some() {
             record_link_password_failure(&state, &token)?;
         }
-        let error = if provided_pwd.is_some() {
-            Some("Incorrect password".to_string())
-        } else {
-            None
-        };
+        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
         let tpl = ShareAccessValidationTemplate {
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t,
+            urls: crate::static_assets::template_urls(),
             token: token.clone(),
-            error,
+            error: wrong_password_error(provided_pwd, t),
             form_action: format!("/d/{}/", token),
         };
         let html = tpl
@@ -541,7 +550,7 @@ pub async fn shared_dir_view(
             dirent
                 .name
                 .rsplit_once('.')
-                .map(|(_, e)| e.to_string())
+                .map(|(_, e)| e.to_uppercase())
                 .unwrap_or_default()
         };
         entries.push(DirEntryInfo {
@@ -582,14 +591,26 @@ pub async fn shared_dir_view(
         Vec::new()
     };
 
-    let dir_name = current_path
-        .rsplit_once('/')
-        .map(|(_, n)| n.to_string())
-        .unwrap_or_else(|| current_path.clone());
-    let dir_name = if dir_name.is_empty() {
-        "/".to_string()
+    let t = I18n::from_headers(&headers, &state.config.ui.default_language);
+
+    // `current_path` is repo-absolute, so the trail is taken relative to the
+    // share's own root — the share URL is the "root" crumb.
+    let share_root =
+        base::sanitize::safe_normalize_path(&link.path).unwrap_or_else(|_| "/".to_string());
+    let relative = current_path
+        .strip_prefix(share_root.trim_end_matches('/'))
+        .unwrap_or(&current_path);
+    let breadcrumbs = crate::ui::files::breadcrumbs_for(relative);
+
+    let dir_name = if current_path == "/" {
+        // A whole-repo share has no folder name of its own; "/" reads as a
+        // path, not a title.
+        t.tr("pub.root").to_string()
     } else {
-        dir_name
+        current_path
+            .rsplit_once('/')
+            .map(|(_, n)| n.to_string())
+            .unwrap_or_else(|| current_path.clone())
     };
 
     let parent_path = if sub_path != "/" {
@@ -615,13 +636,14 @@ pub async fn shared_dir_view(
     // authorisation, so links stay clean (and out of logs/history).
     let download_url = format!("/d/{}/?dl=1", link.token);
     let tpl = SharedDirViewTemplate {
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t,
         urls: crate::static_assets::template_urls(),
         token: link.token.clone(),
         dir_name,
         dir_path: sub_path.to_string(),
         parent_path,
         entries,
+        breadcrumbs,
         item_count,
         has_password: link.password.is_some(),
         created_at_ts: link.created_at,
@@ -753,10 +775,12 @@ pub async fn shared_dir_view_post(
         // bounds guessing against one link. The GET/file paths already record
         // it; the POST path used to be the hole.
         record_link_password_failure(&state, &token)?;
+        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
         let tpl = ShareAccessValidationTemplate {
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t,
+            urls: crate::static_assets::template_urls(),
             token: token.clone(),
-            error: Some("Incorrect password".to_string()),
+            error: Some(t.tr("pub.incorrect_password").to_string()),
             form_action: format!("/d/{}/", token),
         };
         let html = tpl

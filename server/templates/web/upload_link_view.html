@@ -1,238 +1,60 @@
-<!DOCTYPE html>
-<html lang="{{ t.lang }}" class="h-full">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ t.tr("pub.upload_files") }} | Nanofile</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.ico">
-    <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: #fcfcfc;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 1rem;
-            color: #202020;
-        }
-        .card {
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-            padding: 2rem;
-            width: 100%;
-            max-width: 600px;
-            text-align: center;
-        }
-        .folder-icon {
-            width: 64px;
-            height: 64px;
-            border-radius: 12px;
-            background: #fdf6e3;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 1rem;
-        }
-        .folder-icon svg {
-            width: 32px;
-            height: 32px;
-            color: #ab6400;
-        }
-        .dir-name {
-            font-size: 1.125rem;
-            font-weight: 600;
-            word-break: break-all;
-            margin-bottom: 0.25rem;
-            color: #202020;
-        }
-        .subtitle {
-            font-size: 0.875rem;
-            color: #646464;
-            margin-bottom: 1.5rem;
-        }
-        .meta {
-            display: flex;
-            justify-content: center;
-            gap: 1.5rem;
-            margin-bottom: 1.5rem;
-            font-size: 0.8rem;
-            color: #646464;
-        }
-        .meta-item {
-            display: flex;
-            align-items: center;
-            gap: 0.25rem;
-        }
-        .meta-item svg {
-            width: 14px;
-            height: 14px;
-        }
-        .password-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.25rem;
-            padding: 0.2rem 0.5rem;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            background: #fdf6e3;
-            color: #ab6400;
-        }
-        .drop-zone {
-            border: 2px dashed #e0e0e0;
-            border-radius: 8px;
-            padding: 2rem 1rem;
-            text-align: center;
-            cursor: pointer;
-            transition: border-color 0.15s, background 0.15s;
-        }
-        .drop-zone:hover, .drop-zone.dragover {
-            border-color: #202020;
-            background: #f0f0f0;
-        }
-        .drop-zone p { font-size: 0.9375rem; color: #646464; }
-        .drop-zone .or { font-size: 0.8125rem; color: #646464; margin: 0.75rem 0; }
-        .browse-btn {
-            display: inline-block;
-            padding: 0.625rem 1.25rem;
-            background: #202020;
-            color: white;
-            border: none;
-            border-radius: 0.75rem;
-            font-size: 0.875rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-        .browse-btn:hover { background: #101010; }
-        input[type="file"] { display: none; }
-        .limit-hint {
-            font-size: 0.8125rem;
-            color: #646464;
-            margin-bottom: 0.75rem;
-        }
-        .file-list { margin-top: 1rem; text-align: left; }
-        .file-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0.5rem 0.75rem;
-            border-bottom: 1px solid #f0f0f0;
-            font-size: 0.875rem;
-        }
-        .file-item:last-child { border-bottom: none; }
-        .file-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .file-item .size { color: #646464; margin: 0 1rem; white-space: nowrap; }
-        .file-item .progress-bar {
-            width: 100px;
-            height: 6px;
-            background: #e0e0e0;
-            border-radius: 3px;
-            overflow: hidden;
-            margin: 0 0.75rem;
-        }
-        .file-item .progress-bar .fill {
-            height: 100%;
-            background: #202020;
-            border-radius: 3px;
-            transition: width 0.2s;
-            width: 0%;
-        }
-        .file-item .status { font-size: 0.8125rem; min-width: 4rem; text-align: right; }
-        .file-item .status.done { color: #218358; }
-        .file-item .status.error { color: #ce2c31; }
-        .status-bar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-top: 0.75rem;
-            padding-top: 0.75rem;
-            border-top: 1px solid #e0e0e0;
-            font-size: 0.875rem;
-        }
-        .status-bar .count { color: #646464; }
-        .cancel-all-btn {
-            padding: 0.375rem 0.75rem;
-            background: #fdf0f0;
-            color: #ce2c31;
-            border: none;
-            border-radius: 0.5rem;
-            font-size: 0.8125rem;
-            cursor: pointer;
-        }
-        .cancel-all-btn:hover { background: #f5c2c4; }
-        .warning-banner {
-            background: #fdf6e3;
-            color: #ab6400;
-            padding: 0.75rem;
-            border-radius: 0.75rem;
-            font-size: 0.875rem;
-            text-align: center;
-            margin-bottom: 1rem;
-        }
-        .footer {
-            margin-top: 2rem;
-            font-size: 0.75rem;
-            color: #e0e0e0;
-        }
-    </style>
-</head>
-<body>
+{% extends "web/public_base.html" %}
+{% import "includes/icons.html" as icons %}
+
+{% block title %}{{ t.tr("pub.upload_files") }} | {{ t.tr("app.name") }}{% endblock %}
+{% block width %}max-w-[600px]{% endblock %}
+
+{% block head %}
+<div class="px-5 pt-5 pb-2">
+    <h1 class="text-[19px] font-semibold tracking-tight text-ink [overflow-wrap:anywhere]">{{ dir_name }}</h1>
+    <p class="mt-1 text-[12.5px] leading-relaxed text-ink-3">
+        {{ t.tr("pub.upload_files_to_folder") }}
+        {% if has_password %}
+        <span class="text-line-strong">·</span>
+        {{ t.tr("pub.protected") }}
+        {% endif %}
+    </p>
+    {% if max_upload_size_mb > 0 %}
+    <p class="mt-0.5 text-[11.5px] leading-relaxed text-ink-3">{{ t.trf("pub.max_file_size", [("size", &max_upload_size_mb.to_string())]) }}</p>
+    {% endif %}
+    {% if let Some(desc) = description %}
+    <p class="mt-2 text-[12.5px] leading-relaxed text-ink-2 [overflow-wrap:anywhere]">{{ desc }}</p>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="px-5 pt-3 pb-5">
+    {# This page does not load the common bundle, so the strings the upload
+       script writes at runtime travel here as data attributes rather than
+       being hardcoded (English) in the script. #}
     <div id="public-upload-context" hidden
          data-upload-token="{{ token }}"
-         data-max-size-mb="{{ max_upload_size_mb }}"></div>
-    <div class="card">
-        <!-- Folder icon -->
-        <div class="folder-icon">
-            <svg fill="currentColor" viewBox="0 0 24 24">
-                <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
-            </svg>
-        </div>
+         data-max-size-mb="{{ max_upload_size_mb }}"
+         data-msg-queued="{{ t.tr("pub.upload_queued") }}"
+         data-msg-done="{{ t.tr("pub.upload_done") }}"
+         data-msg-failed="{{ t.tr("pub.upload_failed") }}"
+         data-msg-cancelled="{{ t.tr("pub.upload_cancelled") }}"
+         data-msg-count="{{ t.tr("pub.upload_count") }}"
+         data-msg-error-init="{{ t.tr("pub.upload_error_init") }}"
+         data-msg-error-size="{{ t.tr("pub.upload_error_size") }}"></div>
 
-        <!-- Directory name -->
-        <div class="dir-name">{{ dir_name }}</div>
-        <p class="subtitle">{{ t.tr("pub.upload_files_to_folder") }}</p>
-
-        <!-- Metadata -->
-        <div class="meta">
-            {% if let Some(desc) = description %}
-            <span class="meta-item" style="color:#646464;word-break:break-word;">{{ desc }}</span>
-            {% endif %}
-            {% if has_password %}
-            <span class="password-badge">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:12px;height:12px;">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                </svg>
-                {{ t.tr("pub.protected") }}
-            </span>
-            {% endif %}
-        </div>
-
-        {% if max_upload_size_mb > 0 %}
-        <p class="limit-hint">{{ t.trf("pub.max_file_size", [("size", &max_upload_size_mb.to_string())]) }}</p>
-        {% endif %}
-
-        <!-- Drop zone -->
-        <div id="drop-zone" class="drop-zone">
-            <p>{{ t.tr("pub.drag_drop_files") }}</p>
-            <p class="or">{{ t.tr("pub.or") }}</p>
-            <button type="button" class="browse-btn" data-action="pick-files">{{ t.tr("pub.select_files") }}</button>
-            <input type="file" id="file-input" multiple data-action="files-selected">
-        </div>
-
-        <!-- File list & progress -->
-        <div id="file-list" class="file-list"></div>
-        <div id="status-bar" class="status-bar" style="display:none">
-            <span class="count" id="status-count">{{ t.tr("pub.zero_files") }}</span>
-            <button class="cancel-all-btn" id="cancel-all-btn" data-action="cancel-all">{{ t.tr("common.cancel_all") }}</button>
-        </div>
-
-        <div class="footer">{{ t.tr("pub.powered_by") }}</div>
+    <div id="drop-zone"
+         class="rounded-box border-2 border-dashed border-line px-4 py-7 text-center transition-colors hover:border-line-ctrl data-[over=true]:border-line-ctrl data-[over=true]:bg-raised">
+        {{ icons::icon_upload("mx-auto w-6 h-6 text-ink-3") }}
+        <p class="mt-2.5 text-[13px] text-ink-2">{{ t.tr("pub.drag_drop_files") }}</p>
+        <p class="my-2 text-[11.5px] text-ink-3">{{ t.tr("pub.or") }}</p>
+        <button type="button" class="btn btn-solid h-9 text-[13px]" data-action="pick-files">{{ t.tr("pub.select_files") }}</button>
+        <input type="file" id="file-input" class="hidden" multiple data-action="files-selected">
     </div>
 
-    <script src="{{ urls.public_upload_js }}"></script>
-</body>
-</html>
+    <div id="file-list" class="mt-4"></div>
+
+    <div id="status-bar" class="nf-pager hidden">
+        <button class="btn btn-ghost-danger btn-sm" id="cancel-all-btn" data-action="cancel-all">{{ t.tr("common.cancel_all") }}</button>
+        <span class="m" id="status-count"></span>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="{{ urls.public_upload_js }}"></script>{% endblock %}

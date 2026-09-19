@@ -47,7 +47,7 @@ test("password-protected upload link requires the password", async ({ page }) =>
 
   await page.locator('input[name="password"]').fill("wrong");
   await page.locator('button[type="submit"]').click();
-  await expect(page.locator(".error")).toContainText("Incorrect password");
+  await expect(page.locator('[role="alert"]')).toContainText("Incorrect password");
 
   await page.locator('input[name="password"]').fill("secret");
   await page.locator('button[type="submit"]').click();

@@ -63,6 +63,7 @@ fn issuer_matches(token: &str, client_ip: &str) -> bool {
 #[template(path = "web/client_login_confirm.html")]
 struct ClientLoginConfirmTemplate {
     pub t: &'static I18n,
+    pub urls: &'static crate::static_assets::TemplateUrls,
     /// The one-time token being confirmed (echoed into the form).
     pub token: String,
     /// Optional post-login destination, preserved across the confirmation.
@@ -111,6 +112,7 @@ pub async fn client_token_login(
         let allowed_origin = state.config.server.site_url_origin();
         let html = ClientLoginConfirmTemplate {
             t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            urls: crate::static_assets::template_urls(),
             token: token_str.clone(),
             next: params
                 .get("next")

@@ -29,15 +29,7 @@ struct UploadLinkViewTemplate {
     pub description: Option<String>,
 }
 
-#[allow(dead_code)]
-#[derive(Template)]
-#[template(path = "web/share_access_validation.html")]
-struct ShareAccessValidationTemplate {
-    pub t: &'static I18n,
-    pub token: String,
-    pub error: Option<String>,
-    pub form_action: String,
-}
+use super::share_view::{ShareAccessValidationTemplate, wrong_password_error};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -173,15 +165,12 @@ pub async fn upload_link_view(
         if provided_pwd.is_some() {
             super::share_view::record_link_password_failure(&state, &token)?;
         }
-        let error = if provided_pwd.is_some() {
-            Some("Incorrect password".to_string())
-        } else {
-            None
-        };
+        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
         let tpl = ShareAccessValidationTemplate {
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t,
+            urls: crate::static_assets::template_urls(),
             token: token.clone(),
-            error,
+            error: wrong_password_error(provided_pwd, t),
             form_action: format!("/u/{}/", token),
         };
         let html = tpl
@@ -268,10 +257,12 @@ pub async fn upload_link_view_post(
         // Same per-token cap as the share-link POST path: the IP limiter alone
         // does not bound a distributed brute force against one link token.
         crate::handler::web::share_view::record_link_password_failure(&state, &token)?;
+        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
         let tpl = ShareAccessValidationTemplate {
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t,
+            urls: crate::static_assets::template_urls(),
             token: token.clone(),
-            error: Some("Incorrect password".to_string()),
+            error: Some(t.tr("pub.incorrect_password").to_string()),
             form_action: format!("/u/{}/", token),
         };
         let html = tpl

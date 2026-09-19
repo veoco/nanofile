@@ -17,11 +17,14 @@ test.beforeAll(async () => {
 
 test("file share page shows metadata and downloads the file", async ({ page }) => {
   await page.goto(`/f/${fileToken}/`);
-  await expect(page.locator(".file-name")).toHaveText("alpha.txt");
-  await expect(page.locator(".download-btn")).toHaveAttribute("href", /\/f\/.*\?dl=1/);
+  await expect(page.locator("h1")).toHaveText("alpha.txt");
+  // The download action is the page's own `?dl=1` link; assert the href rather
+  // than a class, so a restyle cannot silently point it somewhere else.
+  const downloadLink = page.getByRole("link", { name: "Download", exact: true });
+  await expect(downloadLink).toHaveAttribute("href", /\/f\/.*\?dl=1/);
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    page.locator(".download-btn").click(),
+    downloadLink.click(),
   ]);
   expect(download.suggestedFilename()).toBe("alpha.txt");
 });
@@ -33,34 +36,36 @@ test("password-protected file share requires the password", async ({ page }) => 
   // Wrong password → the form re-renders with an error.
   await page.locator('input[name="password"]').fill("wrong");
   await page.locator('button[type="submit"]').click();
-  await expect(page.locator(".error")).toContainText("Incorrect password");
+  await expect(page.locator('[role="alert"]')).toContainText("Incorrect password");
 
   // Correct password → the file page appears.
   await page.locator('input[name="password"]').fill("secret");
   await page.locator('button[type="submit"]').click();
-  await expect(page.locator(".file-name")).toHaveText("bravo.txt");
+  await expect(page.locator("h1")).toHaveText("bravo.txt");
 });
 
 test("directory share lists entries and navigates into subdirectories", async ({ page }) => {
   await page.goto(`/d/${dirToken}/`);
-  const alpha = page.locator("a.entry", { hasText: "alpha.txt" });
-  const subdir = page.locator("a.entry", { hasText: "subdir" });
+  const alpha = page.locator("a.nf-prow", { hasText: "alpha.txt" });
+  const subdir = page.locator("a.nf-prow", { hasText: "subdir" });
   await expect(alpha).toBeVisible();
   await expect(subdir).toBeVisible();
 
   // Navigate into the subdirectory via ?p=.
   await subdir.click();
   await expect(page).toHaveURL(/\/d\/.*\/\?p=\/subdir/);
-  await expect(page.locator("a.entry", { hasText: "nested.txt" })).toBeVisible();
+  await expect(page.locator("a.nf-prow", { hasText: "nested.txt" })).toBeVisible();
   // A parent (".. (parent)") link is available.
-  await expect(page.locator("a.entry", { hasText: /\(parent\)/ })).toBeVisible();
+  await expect(page.locator("a.nf-prow", { hasText: /\(parent\)/ })).toBeVisible();
 });
 
 test("directory share downloads the whole folder as a zip", async ({ page }) => {
   await page.goto(`/d/${dirToken}/`);
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    page.locator(".download-btn").click(),
+    // The folder page's own ZIP link — the entry rows are `?dl=1` too, so the
+    // selector has to be the action's name rather than its href.
+    page.getByRole("link", { name: "Download ZIP" }).click(),
   ]);
   expect(download.suggestedFilename()).toMatch(/\.zip$/);
 });

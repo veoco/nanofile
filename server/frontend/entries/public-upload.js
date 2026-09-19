@@ -5,6 +5,18 @@
     var ctxEl = document.getElementById('public-upload-context');
     var UPLOAD_TOKEN = ctxEl ? (ctxEl.dataset.uploadToken || '') : '';
     var MAX_SIZE_MB = ctxEl ? parseInt(ctxEl.dataset.maxSizeMb || '0', 10) : 0;
+    // User-visible strings come from the locale files via data attributes: this
+    // page does not load the common bundle, and the statuses must not be
+    // English-only.
+    var MSG = {
+        queued: ctxEl ? (ctxEl.dataset.msgQueued || '') : '',
+        done: ctxEl ? (ctxEl.dataset.msgDone || '') : '',
+        failed: ctxEl ? (ctxEl.dataset.msgFailed || '') : '',
+        cancelled: ctxEl ? (ctxEl.dataset.msgCancelled || '') : '',
+        count: ctxEl ? (ctxEl.dataset.msgCount || '') : '',
+        errorInit: ctxEl ? (ctxEl.dataset.msgErrorInit || '') : '',
+        errorSize: ctxEl ? (ctxEl.dataset.msgErrorSize || '') : '',
+    };
     var files = [];
     var uploadUrl = null;
     var uploading = false;
@@ -21,7 +33,7 @@
             uploadUrl = data.upload_link;
             return uploadUrl;
         } catch (e) {
-            showError('Failed to initialize upload: ' + e.message);
+            showError(MSG.errorInit.replace('{error}', e.message));
             return null;
         }
     }
@@ -36,11 +48,11 @@
     }
 
     var dropZone = document.getElementById('drop-zone');
-    dropZone.addEventListener('dragover', function (e) { e.preventDefault(); dropZone.classList.add('dragover'); });
-    dropZone.addEventListener('dragleave', function (e) { e.preventDefault(); dropZone.classList.remove('dragover'); });
+    dropZone.addEventListener('dragover', function (e) { e.preventDefault(); dropZone.dataset.over = 'true'; });
+    dropZone.addEventListener('dragleave', function (e) { e.preventDefault(); delete dropZone.dataset.over; });
     dropZone.addEventListener('drop', function (e) {
         e.preventDefault();
-        dropZone.classList.remove('dragover');
+        delete dropZone.dataset.over;
         var entries = [];
         for (var i = 0; i < e.dataTransfer.items.length; i++) {
             var item = e.dataTransfer.items[i];
@@ -78,7 +90,7 @@
 
     function addFile(item) {
         if (MAX_SIZE_MB > 0 && item.file.size > MAX_SIZE_MB * 1024 * 1024) {
-            showError('File "' + (item.name || item.file.name) + '" exceeds maximum upload size');
+            showError(MSG.errorSize.replace('{name}', item.name || item.file.name));
             return;
         }
         files.push({
@@ -109,29 +121,45 @@
             .replace(/>/g, '&gt;');
     }
 
+    // The extension tile, matching the server-rendered file rows.
+    function extOf(name) {
+        var dot = String(name).lastIndexOf('.');
+        var ext = dot > 0 ? String(name).slice(dot + 1) : '';
+        return ext ? ext.slice(0, 4).toUpperCase() : '?';
+    }
+
+    function statusOf(f) {
+        if (f.state === 'uploading') return { cls: 'text-ink-3', text: Math.round(f.progress || 0) + '%' };
+        if (f.state === 'completed') return { cls: 'done text-ok', text: MSG.done };
+        if (f.state === 'error') return { cls: 'error text-err', text: MSG.failed };
+        if (f.state === 'cancelled') return { cls: 'text-ink-3', text: MSG.cancelled };
+        return { cls: 'pending text-ink-3', text: MSG.queued };
+    }
+
     function renderFileList() {
         var container = document.getElementById('file-list');
         var html = '';
         files.forEach(function (f) {
-            var sizeStr = formatSize(f.size);
-            var statusHtml = '';
-            if (f.state === 'uploading') {
-                var pct = f.progress || 0;
-                statusHtml = '<div class="progress-bar"><div class="fill" style="width:' + pct + '%"></div></div>';
-            } else if (f.state === 'completed') {
-                statusHtml = '<span class="status done">Done</span>';
-            } else if (f.state === 'error') {
-                statusHtml = '<span class="status error">Failed</span>';
-            } else {
-                statusHtml = '<span class="status">Queued</span>';
-            }
-            html += '<div class="file-item">' +
-                '<span class="name" title="' + escapeAttr(f.name) + '">' + escapeHtml(f.name) + '</span>' +
-                '<span class="size">' + sizeStr + '</span>' +
-                '<div class="status">' + statusHtml + '</div>' +
+            var st = statusOf(f);
+            // The row's own hairline doubles as the progress line while a file
+            // is in flight, so progress needs no column of its own.
+            var bar = f.state === 'uploading'
+                ? '<div class="absolute inset-x-0 bottom-0 h-0.5 bg-raised">' +
+                  '<div class="h-full bg-accent transition-[width] duration-200" style="width:' + (f.progress || 0) + '%"></div>' +
+                  '</div>'
+                : '';
+            html += '<div class="file-item relative flex items-center gap-3 px-3.5 py-2 min-h-12 border-b border-line">' +
+                '<div class="nf-prow-ic">' + escapeHtml(extOf(f.name)) + '</div>' +
+                '<div class="nf-prow-main">' +
+                '<div class="nf-prow-name"><span class="base" title="' + escapeAttr(f.name) + '">' + escapeHtml(f.name) + '</span></div>' +
+                '</div>' +
+                '<div class="shrink-0 whitespace-nowrap text-[12px] tabular-nums text-ink-3">' + formatSize(f.size) + '</div>' +
+                '<div class="status ' + st.cls + ' w-16 shrink-0 text-right text-[12px] tabular-nums">' + escapeHtml(st.text) + '</div>' +
+                bar +
                 '</div>';
         });
         container.innerHTML = html;
+        container.classList.toggle('nf-list', files.length > 0);
         updateStatusBar();
     }
 
@@ -139,9 +167,11 @@
         var bar = document.getElementById('status-bar');
         var total = files.length;
         var done = files.filter(function (f) { return f.state === 'completed'; }).length;
-        if (total === 0) { bar.style.display = 'none'; return; }
-        bar.style.display = 'flex';
-        document.getElementById('status-count').textContent = done + ' / ' + total + ' files';
+        bar.classList.toggle('hidden', total === 0);
+        if (total === 0) return;
+        document.getElementById('status-count').textContent = MSG.count
+            .replace('{done}', String(done))
+            .replace('{total}', String(total));
     }
 
     async function startUpload() {
@@ -210,11 +240,11 @@
     }
 
     function showError(msg) {
-        var container = document.querySelector('.card');
+        var dropZone = document.getElementById('drop-zone');
         var div = document.createElement('div');
-        div.className = 'warning-banner';
+        div.className = 'nf-banner is-err mb-3';
         div.textContent = msg;
-        container.insertBefore(div, container.querySelector('.drop-zone'));
+        dropZone.parentNode.insertBefore(div, dropZone);
         setTimeout(function () { if (div.parentNode) div.remove(); }, 5000);
     }
 

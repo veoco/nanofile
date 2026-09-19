@@ -647,7 +647,7 @@ pub struct BreadcrumbItem {
 /// Used both for a directory (the browser's trail) and for a file (the preview
 /// page's trail, where the last crumb is the file and renders as the current
 /// page rather than a link).
-fn breadcrumbs_for(path: &str) -> Vec<BreadcrumbItem> {
+pub(crate) fn breadcrumbs_for(path: &str) -> Vec<BreadcrumbItem> {
     let mut breadcrumbs = Vec::new();
     if path == "/" {
         return breadcrumbs;

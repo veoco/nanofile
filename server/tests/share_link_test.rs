@@ -1080,7 +1080,7 @@ async fn test_share_dir_view_paginates_large_folder() {
         .await
         .unwrap();
     assert_eq!(
-        page1.matches("class=\"entry-name\"").count(),
+        page1.matches("class=\"nf-prow-name\"").count(),
         200,
         "page 1 should render exactly 200 entries"
     );
@@ -1095,7 +1095,7 @@ async fn test_share_dir_view_paginates_large_folder() {
         .await
         .unwrap();
     assert_eq!(
-        page2.matches("class=\"entry-name\"").count(),
+        page2.matches("class=\"nf-prow-name\"").count(),
         50,
         "page 2 should render the remaining 50 entries"
     );

@@ -1,274 +1,115 @@
-<!DOCTYPE html>
-<html lang="{{ t.lang }}" class="h-full">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ dir_name }} | Nanofile</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.ico">
-    <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: #fcfcfc;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 1rem;
-            color: #202020;
-        }
-        .card {
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-            padding: 2rem;
-            width: 100%;
-            max-width: 420px;
-        }
-        .folder-icon {
-            width: 64px;
-            height: 64px;
-            border-radius: 12px;
-            background: #fdf6e3;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 1rem;
-        }
-        .folder-icon svg { width: 32px; height: 32px; fill: #ab6400; }
-        .dir-name {
-            font-size: 1.125rem;
-            font-weight: 600;
-            word-break: break-all;
-            margin-bottom: 0.25rem;
-            text-align: center;
-        }
-        .dir-summary {
-            font-size: 0.875rem;
-            color: #646464;
-            margin-bottom: 1.5rem;
-            text-align: center;
-        }
-        .meta {
-            display: flex;
-            justify-content: center;
-            gap: 1.5rem;
-            margin-bottom: 1.5rem;
-            font-size: 0.8rem;
-            color: #646464;
-            flex-wrap: wrap;
-        }
-        .meta-item { display: flex; align-items: center; gap: 0.25rem; }
-        .meta-item svg { width: 14px; height: 14px; }
-        .download-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.75rem 2rem;
-            background: #202020;
-            color: white;
-            border: none;
-            border-radius: 0.75rem;
-            font-size: 0.9375rem;
-            font-weight: 500;
-            cursor: pointer;
-            text-decoration: none;
-            transition: background 0.15s;
-        }
-        .download-btn:hover { background: #101010; }
-        .download-btn svg { width: 18px; height: 18px; }
-        .download-btn-wrap { text-align: center; }
-        .password-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.25rem;
-            padding: 0.2rem 0.5rem;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            background: #fdf6e3;
-            color: #ab6400;
-        }
-        /* Divider */
-        .divider {
-            margin: 1.5rem 0 1rem;
-            border: none;
-            border-top: 1px solid #f0f0f0;
-        }
-        /* Breadcrumb */
-        .breadcrumb {
-            display: flex;
-            align-items: center;
-            gap: 0.25rem;
-            font-size: 0.75rem;
-            margin-bottom: 0.75rem;
-            flex-wrap: wrap;
-        }
-        .breadcrumb a { color: #202020; text-decoration: none; }
-        .breadcrumb a:hover { text-decoration: underline; }
-        .breadcrumb span { color: #e0e0e0; }
-        /* Entries */
-        .entry {
-            display: flex;
-            align-items: center;
-            padding: 0.375rem 0.5rem;
-            border-radius: 0.375rem;
-            text-decoration: none;
-            color: inherit;
-            transition: background 0.1s;
-        }
-        .entry:hover { background: #f0f0f0; }
-        .entry-icon {
-            width: 24px;
-            height: 24px;
-            border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            margin-right: 0.5rem;
-            font-size: 8px;
-            font-weight: 700;
-            text-transform: uppercase;
-        }
-        .entry-name {
-            flex: 1;
-            font-size: 0.8125rem;
-            font-weight: 500;
-            word-break: break-all;
-            min-width: 0;
-        }
-        .entry-size {
-            font-size: 0.75rem;
-            color: #646464;
-            margin-left: 0.75rem;
-            white-space: nowrap;
-        }
-        .empty {
-            text-align: center;
-            padding: 2rem 1rem;
-            color: #646464;
-            font-size: 0.8125rem;
-        }
-        .footer {
-            margin-top: 2rem;
-            font-size: 0.75rem;
-            color: #e0e0e0;
-            text-align: center;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <!-- Folder icon -->
-        <div class="folder-icon">
-            <svg viewBox="0 0 24 24"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>
-        </div>
+{% extends "web/public_base.html" %}
+{% import "includes/icons.html" as icons %}
 
-        <!-- Name -->
-        <div class="dir-name">{{ dir_name }}</div>
-        <div class="dir-summary">{% if item_count == 1 %}{{ t.trf("pub.item_count_one", [("count", &item_count.to_string())]) }}{% else %}{{ t.trf("pub.item_count_many", [("count", &item_count.to_string())]) }}{% endif %}</div>
+{% block title %}{{ dir_name }} | {{ t.tr("app.name") }}{% endblock %}
+{% block width %}max-w-[600px]{% endblock %}
 
-        {% if let Some(desc) = description %}
-        <p style="margin-bottom: 1.5rem; font-size: 0.875rem; color: #646464; word-break: break-word; text-align: center;">{{ desc }}</p>
-        {% endif %}
-
-        <!-- Metadata -->
-        <div class="meta">
-            <span class="meta-item">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                <span data-ts="{{ created_at_ts }}"></span>
-            </span>
-            {% if has_password %}
-            <span class="password-badge">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:12px;height:12px;">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                </svg>
+{# A folder share is a listing first: a compact head (name, count, then the
+   dates) with the ZIP action beside it on a wide screen and on its own row on a
+   narrow one, and then the folder itself. The old page put a 64px folder tile,
+   a centred hero, a rule and a second expiry line above the listing, which on a
+   phone pushed the first entry below the fold. #}
+{% block head %}
+<div class="px-5 pt-5 pb-2">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <div class="min-w-0 flex-1">
+            <h1 class="text-[19px] font-semibold tracking-tight text-ink [overflow-wrap:anywhere]">{{ dir_name }}</h1>
+            <p class="mt-1 text-[12.5px] leading-relaxed text-ink-3">
+                {% if item_count == 1 %}{{ t.trf("pub.item_count_one", [("count", &item_count.to_string())]) }}{% else %}{{ t.trf("pub.item_count_many", [("count", &item_count.to_string())]) }}{% endif %}
+                {% if has_password %}
+                <span class="text-line-strong">·</span>
                 {{ t.tr("pub.protected") }}
-            </span>
-            {% endif %}
-        </div>
-
-        <!-- Download ZIP -->
-        <div class="download-btn-wrap">
-            <a href="{{ download_url }}" class="download-btn">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                </svg>
-                {{ t.tr("pub.download_zip") }}
-            </a>
-        </div>
-
-        {% if let Some(ts) = expires_at_ts %}
-        <p style="margin-top: 1rem; font-size: 0.8rem; color: #ce2c31; text-align: center;">
-            {{ t.tr("pub.expires") }}: <span data-ts="{{ ts }}"></span>
-        </p>
-        {% endif %}
-
-        <!-- File browser (always visible) -->
-        <hr class="divider">
-
-        <div class="breadcrumb">
-            <a href="/d/{{ token }}/">{{ t.tr("pub.root") }}</a>
-            {% if dir_path != "/" %}
-            <span>/</span>
-            <span>{{ dir_path }}</span>
-            {% endif %}
-        </div>
-
-        {% if entries.is_empty() %}
-        <div class="empty">{{ t.tr("pub.empty_folder") }}</div>
-        {% else %}
-            {% if let Some(parent) = parent_path %}
-            <a href="/d/{{ token }}/?p={{ parent|urlencode }}" class="entry">
-                <div class="entry-icon" style="background:#f0f0f0;">
-                    <svg width="12" height="12" fill="none" stroke="#646464" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-                    </svg>
-                </div>
-                <span class="entry-name" style="color:#202020;">{{ t.tr("pub.parent_dir") }}</span>
-            </a>
-            {% endif %}
-
-            {% for entry in entries %}
-                {% if entry.is_dir %}
-                <a href="/d/{{ token }}/?p={{ entry.full_path|urlencode }}" class="entry">
-                    <div class="entry-icon" style="background:#fdf6e3;">
-                        <svg width="12" height="12" fill="#ab6400" viewBox="0 0 24 24">
-                            <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
-                        </svg>
-                    </div>
-                    <span class="entry-name">{{ entry.name }}</span>
-                    <span class="entry-size">-</span>
-                </a>
-                {% else %}
-                <a href="/d/{{ token }}/files{{ entry.full_path|urlencode }}?dl=1" class="entry">
-                    <div class="entry-icon" style="background:#f0f0f0;color:#202020;">{{ entry.ext|truncate(4) }}</div>
-                    <span class="entry-name">{{ entry.name }}</span>
-                    <span class="entry-size">{{ entry.size }}</span>
-                </a>
                 {% endif %}
-            {% endfor %}
-        {% endif %}
-
-        {% if has_more || page > 1 %}
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-top:0.75rem;">
-            {% if page > 1 %}
-            <a href="/d/{{ token }}/?{% if dir_path != "/" %}p={{ dir_path }}&{% endif %}page={{ page - 1 }}" class="entry" style="display:inline-flex;width:auto;">{{ t.tr("common.previous") }}</a>
-            {% else %}
-            <span></span>
-            {% endif %}
-            <span style="font-size:0.75rem;color:#646464;">{{ t.trf("common.page_of", [("page", &page.to_string()), ("total", &total_pages.to_string())]) }}</span>
-            {% if has_more %}
-            <a href="/d/{{ token }}/?{% if dir_path != "/" %}p={{ dir_path }}&{% endif %}page={{ page + 1 }}" class="entry" style="display:inline-flex;width:auto;">{{ t.tr("common.next") }}</a>
+                <span class="text-line-strong">·</span>
+                <span>{{ t.tr("pub.shared") }} <span data-ts="{{ created_at_ts }}" data-ts-title="{{ created_at_ts }}"></span></span>
+                {% if let Some(ts) = expires_at_ts %}
+                <span class="text-line-strong">·</span>
+                <span>{{ t.tr("pub.expires") }} <span data-ts="{{ ts }}" data-ts-title="{{ ts }}"></span></span>
+                {% endif %}
+            </p>
+            {% if let Some(desc) = description %}
+            <p class="mt-2 text-[12.5px] leading-relaxed text-ink-2 [overflow-wrap:anywhere]">{{ desc }}</p>
             {% endif %}
         </div>
+        <a href="{{ download_url }}" class="btn btn-line h-9 w-full shrink-0 gap-2 text-[12.5px] sm:w-auto">
+            {{ icons::icon_download("w-4 h-4") }}
+            {{ t.tr("pub.download_zip") }}
+        </a>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="px-5 pt-2.5 pb-5">
+    {# Real crumbs rather than the whole path as one string: each segment is a
+       link back up to itself. #}
+    <nav class="crumbs flex-wrap pb-2.5" aria-label="{{ t.tr("a11y.breadcrumb") }}">
+        <a href="/d/{{ token }}/">{{ t.tr("pub.root") }}</a>
+        {% for crumb in breadcrumbs %}
+        <span class="sep">/</span>
+        {% if loop.last %}
+        <span class="cur">{{ crumb.label }}</span>
+        {% else %}
+        <a href="/d/{{ token }}/?p=/{{ crumb.path|urlencode }}">{{ crumb.label }}</a>
+        {% endif %}
+        {% endfor %}
+    </nav>
+
+    {% if entries.is_empty() %}
+    <div class="nf-list">
+        <div class="nf-empty">
+            <h3>{{ t.tr("pub.empty_folder") }}</h3>
+        </div>
+    </div>
+    {% else %}
+    <div class="nf-list">
+        {% if let Some(parent) = parent_path %}
+        <a href="/d/{{ token }}/?p={{ parent|urlencode }}" class="nf-prow">
+            <div class="nf-prow-ic">{{ icons::icon_arrow_left("w-3.5 h-3.5") }}</div>
+            <div class="nf-prow-main">
+                <div class="nf-prow-name"><span class="base">{{ t.tr("pub.parent_dir") }}</span></div>
+            </div>
+        </a>
         {% endif %}
 
-        <div class="footer">{{ t.tr("pub.powered_by") }}</div>
+        {% for entry in entries %}
+        {% if entry.is_dir %}
+        <a href="/d/{{ token }}/?p={{ entry.full_path|urlencode }}" class="nf-prow">
+            <div class="nf-prow-ic">{{ icons::icon_folder("w-3.5 h-3.5") }}</div>
+            <div class="nf-prow-main">
+                <div class="nf-prow-name"><span class="base">{{ entry.name }}</span></div>
+            </div>
+            {{ icons::icon_arrow_right("shrink-0 w-4 h-4 text-ink-3") }}
+        </a>
+        {% else %}
+        <a href="/d/{{ token }}/files{{ entry.full_path|urlencode }}?dl=1" class="nf-prow">
+            <div class="nf-prow-ic">{{ entry.ext|truncate(4) }}</div>
+            <div class="nf-prow-main">
+                <div class="nf-prow-name"><span class="base">{{ entry.name }}</span></div>
+            </div>
+            {# Not `.nf-prow-meta`: that column is hidden below 640px for the
+               in-app list, but on a share page the size is how a visitor picks
+               what to download. #}
+            <div class="shrink-0 whitespace-nowrap text-[12px] tabular-nums text-ink-3">{{ entry.size }}</div>
+            {{ icons::icon_download("shrink-0 w-4 h-4 text-ink-3") }}
+        </a>
+        {% endif %}
+        {% endfor %}
     </div>
-    <script src="{{ urls.public_share_js }}"></script>
-</body>
-</html>
+
+    {% if has_more || page > 1 %}
+    <div class="nf-pager">
+        {% if page > 1 %}
+        <a href="/d/{{ token }}/?{% if dir_path != "/" %}p={{ dir_path|urlencode }}&amp;{% endif %}page={{ page - 1 }}" class="btn btn-line btn-sm">{{ t.tr("common.previous") }}</a>
+        {% endif %}
+        <span class="m">{{ t.trf("common.page_of", [("page", &page.to_string()), ("total", &total_pages.to_string())]) }}</span>
+        {% if has_more %}
+        <a href="/d/{{ token }}/?{% if dir_path != "/" %}p={{ dir_path|urlencode }}&amp;{% endif %}page={{ page + 1 }}" class="btn btn-line btn-sm">{{ t.tr("common.next") }}</a>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="{{ urls.public_share_js }}"></script>{% endblock %}

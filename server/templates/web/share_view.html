@@ -1,160 +1,43 @@
-<!DOCTYPE html>
-<html lang="{{ t.lang }}" class="h-full">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ file_name }} | Nanofile</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.ico">
-    <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: #fcfcfc;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 1rem;
-            color: #202020;
-        }
-        .card {
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-            padding: 2rem;
-            width: 100%;
-            max-width: 420px;
-            text-align: center;
-        }
-        .file-icon {
-            width: 64px;
-            height: 64px;
-            border-radius: 12px;
-            background: #f0f0f0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 1rem;
-            font-size: 20px;
-            font-weight: 700;
-            color: #202020;
-            text-transform: uppercase;
-        }
-        .file-name {
-            font-size: 1.125rem;
-            font-weight: 600;
-            word-break: break-all;
-            margin-bottom: 0.25rem;
-        }
-        .file-size {
-            font-size: 0.875rem;
-            color: #646464;
-            margin-bottom: 1.5rem;
-        }
-        .meta {
-            display: flex;
-            justify-content: center;
-            gap: 1.5rem;
-            margin-bottom: 1.5rem;
-            font-size: 0.8rem;
-            color: #646464;
-        }
-        .meta-item {
-            display: flex;
-            align-items: center;
-            gap: 0.25rem;
-        }
-        .meta-item svg {
-            width: 14px;
-            height: 14px;
-        }
-        .download-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.75rem 2rem;
-            background: #202020;
-            color: white;
-            border: none;
-            border-radius: 0.75rem;
-            font-size: 0.9375rem;
-            font-weight: 500;
-            cursor: pointer;
-            text-decoration: none;
-            transition: background 0.15s;
-        }
-        .download-btn:hover { background: #101010; }
-        .download-btn svg { width: 18px; height: 18px; }
-        .password-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.25rem;
-            padding: 0.2rem 0.5rem;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            background: #fdf6e3;
-            color: #ab6400;
-        }
-        .footer {
-            margin-top: 2rem;
-            font-size: 0.75rem;
-            color: #e0e0e0;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <!-- File type icon -->
-        <div class="file-icon">
-            {{ file_ext|truncate(4) }}
-        </div>
+{% extends "web/public_base.html" %}
+{% import "includes/icons.html" as icons %}
 
-        <!-- File name -->
-        <div class="file-name">{{ file_name }}</div>
+{% block title %}{{ file_name }} | {{ t.tr("app.name") }}{% endblock %}
 
-        <!-- File size -->
-        <div class="file-size">{{ file_size }}</div>
+{# One file, one action: a file-type tile, the name, what it is, and a
+   full-width download. The type tile is the file list's 28px `.nf-prow-ic`
+   four sizes up, so a shared file looks like the same object its owner sees. #}
+{% block content %}
+<div class="px-5 pt-6 pb-5 text-center">
+    <div class="mx-auto grid h-14 w-14 place-items-center rounded-box bg-raised text-[13px] font-semibold tracking-[0.02em] text-ink-2">{{ file_ext|truncate(4) }}</div>
 
-        {% if let Some(desc) = description %}
-        <p style="margin-bottom: 1.5rem; font-size: 0.875rem; color: #646464; word-break: break-word;">{{ desc }}</p>
+    <h1 class="mt-3.5 text-[18px] font-semibold tracking-tight text-ink [overflow-wrap:anywhere]">{{ file_name }}</h1>
+
+    {# One "about this file" line. `created_at` is the share link's own
+       timestamp, not the file's mtime, so the label says "Shared" rather than
+       implying an upload date. #}
+    <p class="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">
+        <span>{{ file_size }}</span>
+        {% if has_password %}
+        <span class="text-line-strong">·</span>
+        <span>{{ t.tr("pub.protected") }}</span>
         {% endif %}
-
-        <!-- Metadata row -->
-        <div class="meta">
-            <span class="meta-item">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                <span data-ts="{{ created_at_ts }}"></span>
-            </span>
-            {% if has_password %}
-            <span class="password-badge">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:12px;height:12px;">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                </svg>
-                {{ t.tr("pub.protected") }}
-            </span>
-            {% endif %}
-        </div>
-
-        <!-- Download button -->
-        <a href="{{ download_url }}" class="download-btn">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-            </svg>
-            {{ t.tr("common.download") }}
-        </a>
-
-        <!-- Expiry info -->
+        <span class="text-line-strong">·</span>
+        <span>{{ t.tr("pub.shared") }} <span data-ts="{{ created_at_ts }}" data-ts-title="{{ created_at_ts }}"></span></span>
         {% if let Some(ts) = expires_at_ts %}
-        <p style="margin-top: 1rem; font-size: 0.8rem; color: #ce2c31;">
-            {{ t.tr("pub.expires") }}: <span data-ts="{{ ts }}"></span>
-        </p>
+        <span class="text-line-strong">·</span>
+        <span>{{ t.tr("pub.expires") }} <span data-ts="{{ ts }}" data-ts-title="{{ ts }}"></span></span>
         {% endif %}
+    </p>
 
-        <div class="footer">{{ t.tr("pub.powered_by") }}</div>
-    </div>
-    <script src="{{ urls.public_share_js }}"></script>
-</body>
-</html>
+    {% if let Some(desc) = description %}
+    <p class="mt-3 text-[12.5px] leading-relaxed text-ink-2 [overflow-wrap:anywhere]">{{ desc }}</p>
+    {% endif %}
+
+    <a href="{{ download_url }}" class="btn btn-solid mt-5 h-9 w-full gap-2 text-[13px]">
+        {{ icons::icon_download("w-4 h-4") }}
+        {{ t.tr("common.download") }}
+    </a>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="{{ urls.public_share_js }}"></script>{% endblock %}
