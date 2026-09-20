@@ -172,6 +172,13 @@ test("the rail filter is absent here and the page filter is not", async ({ page 
 
   await page.goto("/starred/");
   await expect(page.locator(".js-repo-filter")).toBeVisible();
+
+  // Inside a library the rail filter is the only way to switch libraries, so it
+  // has to come back: the file browser shares `active_page == "repos"` with the
+  // list page above, and only `current_repo_id` tells them apart.
+  const repoId = await createRepo(state.baseURL, state.adminToken, `rail-filter-lib-${Date.now()}`);
+  await page.goto(`/libraries/${repoId}/files/`);
+  await expect(page.locator(".js-repo-filter")).toBeVisible();
 });
 
 test("the row menu is reachable by keyboard", async ({ page }) => {

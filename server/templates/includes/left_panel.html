@@ -14,8 +14,12 @@
            from inside one. On /libraries/ the page filters the same set in its
            own toolbar — and that one is the only filter left once the rail is
            hidden below `lg`, so this one stands down there rather than showing
-           two boxes that can disagree about the same eleven libraries. #}
-        {% if active_page != "repos" %}
+           two boxes that can disagree about the same eleven libraries.
+           Both the list page and the file browser set `active_page == "repos"`,
+           so that alone would also hide the filter while browsing inside a
+           library; `current_repo_id` is what tells the two apart (it is only
+           set once a library is open). #}
+        {% if current_repo_id.is_some() || active_page != "repos" %}
         <label class="flex items-center gap-1.5 h-7 px-2 rounded-ctl border border-line-ctrl text-ink-3">
             {{ icons::icon_search("w-3.5 h-3.5 flex-shrink-0") }}
             <input type="text" class="js-repo-filter flex-1 min-w-0 border-0 bg-transparent outline-none text-ink text-[12.5px] placeholder-ink-3"
