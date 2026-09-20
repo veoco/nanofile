@@ -1,10 +1,11 @@
 /// Admin Web UI — task management (view/trigger all scheduled tasks).
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -24,6 +25,8 @@ pub struct AdmintasksTemplate {
     pub csrf_token: Option<String>,
     pub active_page: &'static str,
     pub tasks: Vec<TaskRow>,
+    pub error: Option<String>,
+    pub success: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
@@ -84,12 +87,46 @@ fn to_task_row(name: &str, kind: &TaskKind, metrics: &TaskMetrics) -> TaskRow {
     }
 }
 
+/// What a POST redirect lands with, so the page can confirm the action. An
+/// unrecognised value — a hand-typed URL, a stale bookmark — renders no banner
+/// rather than echoing the value back into the page.
+#[derive(Deserialize)]
+pub struct TasksQuery {
+    pub action: Option<String>,
+}
+
 /// GET /sysadmin/tasks/ — list all scheduled tasks (admin only).
-pub async fn task_list_page(user: WebUser, State(state): State<Arc<AppState>>) -> Response {
+pub async fn task_list_page(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TasksQuery>,
+) -> Response {
     if !user.is_admin {
         return Redirect::to("/libraries/").into_response();
     }
 
+    let success = match query.action.as_deref() {
+        Some("triggered") => Some(
+            I18n::get(user.language.as_deref())
+                .tr("admin.task_triggered")
+                .to_string(),
+        ),
+        _ => None,
+    };
+
+    match render_page(&state, &user, None, success).await {
+        Ok(resp) => resp,
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Build and render the task list, carrying at most one banner.
+async fn render_page(
+    state: &Arc<AppState>,
+    user: &WebUser,
+    error: Option<String>,
+    success: Option<String>,
+) -> Result<Response, AppError> {
     // Collect metrics from all scheduler handles.
     let handles = state.scheduler.handles();
     let mut tasks = Vec::with_capacity(handles.len());
@@ -98,10 +135,7 @@ pub async fn task_list_page(user: WebUser, State(state): State<Arc<AppState>>) -
         tasks.push(to_task_row(handle.name, &handle.kind, &metrics));
     }
 
-    let ctx = match crate::ui::ctx::build_page_ctx(&state, &user).await {
-        Ok(c) => c,
-        Err(e) => return AppError::internal(e.to_string()).into_response(),
-    };
+    let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
     let tpl = AdmintasksTemplate {
         urls: ctx.urls,
@@ -111,14 +145,16 @@ pub async fn task_list_page(user: WebUser, State(state): State<Arc<AppState>>) -
         csrf_token: Some(ctx.csrf_token),
         active_page: "admintasks",
         tasks,
+        error,
+        success,
         left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
     };
 
-    match tpl.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => AppError::internal(e.to_string()).into_response(),
-    }
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Html(html).into_response())
 }
 
 /// POST /sysadmin/tasks/{name}/trigger/ — trigger a periodic task immediately.
@@ -138,9 +174,17 @@ pub async fn trigger_task(
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
+    // `false` means no task by that name is registered: re-render the list with
+    // the reason rather than answering a browser form with the API's JSON error.
     if !state.scheduler.trigger_now(&name).await {
-        return Err(AppError::NotFound(format!("Task '{name}' not found")));
+        let msg =
+            I18n::get(user.language.as_deref()).trf("admin.task_not_found", &[("name", &name)]);
+        return render_page(&state, &user, Some(msg), None).await;
     }
 
-    Ok((StatusCode::FOUND, [("Location", "/sysadmin/tasks/")]).into_response())
+    Ok((
+        StatusCode::FOUND,
+        [("Location", "/sysadmin/tasks/?action=triggered")],
+    )
+        .into_response())
 }

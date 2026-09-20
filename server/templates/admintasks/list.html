@@ -8,6 +8,13 @@
 <h1 class="page-title">{{ t.tr("admin.tasks_title") }}</h1>
 <p class="page-subtitle">{{ t.tr("admin.tasks_desc") }}</p>
 
+{% if let Some(error) = error %}
+{% include "includes/alert_error.html" %}
+{% endif %}
+{% if let Some(success) = success %}
+{% include "includes/alert_success.html" %}
+{% endif %}
+
 {% if tasks.is_empty() %}
 <div class="nf-list mt-5">
     <div class="nf-empty">
