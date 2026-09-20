@@ -1,0 +1,24 @@
+{# Time macro — the only way a template emits a time.
+
+   The server ships raw Unix seconds and a mode; `core/local-time.js` turns that
+   into text in the viewer's timezone. Never pre-format a time server-side: the
+   server does not know the reader's timezone, and a pre-formatted string cannot
+   be localized.
+
+   Mode:
+     absolute  `YYYY-MM-DD HH:MM` (the default, so it emits no attribute)
+     relative  "3 days ago", then the local date from 14 days out
+     short     the grid tile's "Sep 19" / "9月19日"
+     day       marks a row that starts a new local calendar day (activity page)
+
+   Every mode puts the exact local stamp in `title`. #}
+
+{% macro ts(value, mode="absolute") %}
+<span data-ts="{{ value }}"{% if mode != "absolute" %} data-ts-mode="{{ mode }}"{% endif %}></span>
+{% endmacro %}
+
+{# Same element, but with extra classes for callers that size or align the
+   column themselves. #}
+{% macro ts_class(value, class, mode="absolute") %}
+<span class="{{ class }}" data-ts="{{ value }}"{% if mode != "absolute" %} data-ts-mode="{{ mode }}"{% endif %}></span>
+{% endmacro %}

@@ -189,6 +189,17 @@ test("every row exposes its action button", async ({ page }) => {
   expect(counts.total).toBeGreaterThan(0);
 });
 
+// The drawer's Modified cell goes through the same `data-ts` path as every other
+// time cell: the row's markup is parsed with the page, filled on selection, so
+// without an explicit render pass it would stay empty.
+test("the drawer renders the selected file's local timestamp", async ({ page }) => {
+  await select(page, "alpha.txt");
+  const cell = page.locator(".js-rp-mtime");
+  await expect(cell).toHaveAttribute("data-ts", /^\d+$/);
+  await expect(cell).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  await expect(cell).toHaveAttribute("title", /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+});
+
 test("Escape and the close button both dismiss the drawer", async ({ page }) => {
   await select(page, "alpha.txt");
   await page.keyboard.press("Escape");

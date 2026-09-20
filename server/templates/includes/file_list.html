@@ -1,4 +1,5 @@
 {% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
 {% if is_empty %}
 <div class="px-4 py-12 text-center">
     {{ icons::icon_inbox("mx-auto h-10 w-10 text-ink-3") }}
@@ -180,10 +181,9 @@
         </div>
 
         <div class="nf-size">{% if entry.entry_type == "file" %}{{ entry.size_display }}{% else %}&mdash;{% endif %}</div>
-        {# `data-ts-title` (not `data-ts`): the cell shows the relative form the
-           library list uses, and local-time.js fills the tooltip with the
-           exact local time. #}
-        <span class="nf-when" data-ts-title="{{ entry.mtime }}">{{ entry.mtime_display }}</span>
+        {# The cell shows the form the library list uses (relative, then the
+           local date), while local-time.js also fills the tooltip. #}
+        {{ time::ts_class(entry.mtime, "nf-when", "relative") }}
 
         <button type="button" class="nf-more" aria-haspopup="menu" aria-expanded="false"
                 title="{{ t.tr("common.actions") }}" aria-label="{{ t.tr("common.actions") }}">
@@ -252,7 +252,7 @@
         {# `bare` = no size cell, so the date does not get a leading separator. #}
         <div class="nf-tile-meta{% if entry.entry_type != "file" %} bare{% endif %}">
             {% if entry.entry_type == "file" %}<span class="num">{{ entry.size_display }}</span>{% endif %}
-            <span class="nf-tile-date num" data-ts-short="{{ entry.mtime }}"></span>
+            <span class="nf-tile-date num" data-ts="{{ entry.mtime }}" data-ts-mode="short"></span>
         </div>
     </div>
     {% endfor %}

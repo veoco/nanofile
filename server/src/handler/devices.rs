@@ -8,6 +8,21 @@ use crate::service::credential::{CredentialKind, CredentialService};
 use crate::service::user::DeviceService;
 use base::error::AppError;
 
+/// Format a Unix timestamp as `YYYY-MM-DD HH:MM` (UTC) for the device API's
+/// payload.
+///
+/// This is the only remaining server-side time formatting: the payload is
+/// machine-facing, so it stays UTC and fixed-shape. Everything a person reads in
+/// the Web UI ships raw Unix seconds and is rendered by the browser instead.
+///
+/// Out-of-range timestamps fall back to the Unix epoch instead of panicking.
+fn format_ts(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts, 0)
+        .unwrap_or_default()
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
+}
+
 /// Body of `DELETE /api2/devices/`.
 ///
 /// Two addressing schemes are accepted. A *device* is named by `platform` +
@@ -75,7 +90,7 @@ pub async fn list_devices(
             "device_id": client.device_id,
             "device_name": client.device_name,
             "client_version": client.client_version,
-            "last_accessed": crate::ui::format_ts(client.created_ts),
+            "last_accessed": format_ts(client.created_ts),
             "is_desktop_client": client.is_desktop_client,
         }));
     }

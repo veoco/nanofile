@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
 
 {% block title %}{{ t.tr("starred.title") }} | Nanofile{% endblock %}
 
@@ -39,7 +40,7 @@
                 {% endif %}
             </div>
         </div>
-        <span class="nf-prow-meta" data-ts="{{ item.created_at }}" data-ts-title="{{ item.created_at }}"></span>
+        {{ time::ts_class(item.starred_at, "nf-prow-meta") }}
         <div class="nf-prow-act">
             {% if !item.deleted %}
             <button type="button" data-action="unstar" data-repo-id="{{ item.repo_id }}" data-path="/"
@@ -79,7 +80,7 @@
                 {% endif %}
             </div>
         </div>
-        <span class="nf-prow-meta" data-ts="{{ item.created_at }}" data-ts-title="{{ item.created_at }}"></span>
+        {{ time::ts_class(item.starred_at, "nf-prow-meta") }}
         <div class="nf-prow-act">
             {% if !item.deleted %}
             <button type="button" data-action="unstar" data-repo-id="{{ item.repo_id }}" data-path="{{ item.path }}"
@@ -119,7 +120,7 @@
                 {% endif %}
             </div>
         </div>
-        <span class="nf-prow-meta" data-ts="{{ item.created_at }}" data-ts-title="{{ item.created_at }}"></span>
+        {{ time::ts_class(item.starred_at, "nf-prow-meta") }}
         <div class="nf-prow-act">
             {% if !item.deleted %}
             <button type="button" data-action="unstar" data-repo-id="{{ item.repo_id }}" data-path="{{ item.path }}"

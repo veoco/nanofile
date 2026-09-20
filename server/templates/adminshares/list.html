@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
 
 {% block title %}{{ t.tr("admin.shares_title") }} | Nanofile{% endblock %}
 
@@ -70,9 +71,9 @@
             </div>
         </div>
         <div class="nf-prow-meta flex items-center gap-3">
-            <span class="w-[112px] text-right" data-ts="{{ s.created_at_ts }}" data-ts-title="{{ s.created_at_ts }}"></span>
+            {{ time::ts_class(s.created_at_ts, "w-[112px] text-right") }}
             <span class="w-[112px] text-right{% if s.expires_at_ts.is_some() %} text-err-text{% endif %}">
-                {% if let Some(ts) = s.expires_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ t.tr("common.never") }}{% endif %}
+                {% if let Some(ts) = s.expires_at_ts %}{{ time::ts(ts) }}{% else %}{{ t.tr("common.never") }}{% endif %}
             </span>
         </div>
         <div class="nf-prow-act">
@@ -128,9 +129,9 @@
             </div>
         </div>
         <div class="nf-prow-meta flex items-center gap-3">
-            <span class="w-[112px] text-right" data-ts="{{ u.created_at_ts }}" data-ts-title="{{ u.created_at_ts }}"></span>
+            {{ time::ts_class(u.created_at_ts, "w-[112px] text-right") }}
             <span class="w-[112px] text-right{% if u.expires_at_ts.is_some() %} text-err-text{% endif %}">
-                {% if let Some(ts) = u.expires_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ t.tr("common.never") }}{% endif %}
+                {% if let Some(ts) = u.expires_at_ts %}{{ time::ts(ts) }}{% else %}{{ t.tr("common.never") }}{% endif %}
             </span>
         </div>
         <div class="nf-prow-act">

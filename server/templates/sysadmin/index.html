@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
 {% import "includes/modal.html" as modal %}
 
 {% block title %}{{ t.tr("admin.title") }} | Nanofile{% endblock %}
@@ -48,12 +49,11 @@
             </div>
         </div>
         <div class="nf-prow-meta flex items-center gap-3">
-            <span class="w-[112px] text-right" data-ts="{{ u.created_at_ts }}" data-ts-title="{{ u.created_at_ts }}"></span>
-            {% if let Some(ts) = u.last_login_at_ts %}
-            <span class="w-[112px] text-right" data-ts="{{ ts }}" data-ts-title="{{ ts }}"></span>
-            {% else %}
-            <span class="w-[112px] text-right">{{ u.last_login_at }}</span>
-            {% endif %}
+            {{ time::ts_class(u.created_at_ts, "w-[112px] text-right") }}
+            {% match u.last_login_at_ts %}
+            {% when Some with (ts) %}{{ time::ts_class(ts, "w-[112px] text-right") }}
+            {% when None %}<span class="w-[112px] text-right">{{ t.tr("common.never") }}</span>
+            {% endmatch %}
         </div>
         <div class="nf-prow-act">
             <button type="button" class="btn btn-quiet btn-icon"

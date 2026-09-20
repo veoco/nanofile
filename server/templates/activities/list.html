@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
 
 {% block title %}{{ t.tr("activity.title") }} | Nanofile{% endblock %}
 
@@ -16,18 +17,14 @@
     </div>
 </div>
 {% else %}
-{# One panel, grouped by calendar day. The label already says whether the
-   object was a file, a folder or a library, so the row carries only who, what,
-   where and when. #}
+{# One panel. The server does not group by day: a calendar day depends on the
+   reader's timezone, which only the browser knows, so every row carries its raw
+   timestamp and `core/local-time.js` inserts the local-day headers. The label
+   already says whether the object was a file, a folder or a library, so the row
+   carries only who, what, where and when. #}
 <div class="nf-list mt-5">
     {% for item in activities %}
-    {% if item.show_day_header %}
-    <div class="nf-sec">
-        <h2>{{ item.day_label }}</h2>
-        <span class="rule" aria-hidden="true"></span>
-    </div>
-    {% endif %}
-    <div class="nf-prow">
+    <div class="nf-prow" data-ts-day="{{ item.time_ts }}">
         <span class="nf-prow-ic rounded-full">
             {% if !item.author_avatar_url.is_empty() %}
             <img src="{{ item.author_avatar_url }}" alt="" loading="lazy">
@@ -71,7 +68,7 @@
                 {% endif %}
             </div>
         </div>
-        <span class="nf-prow-meta" data-ts-title="{{ item.time_ts }}">{{ item.time_display }}</span>
+        {{ time::ts_class(item.time_ts, "nf-prow-meta", "relative") }}
     </div>
     {% endfor %}
 </div>

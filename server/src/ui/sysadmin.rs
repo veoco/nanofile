@@ -12,7 +12,6 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::i18n::I18n;
 use crate::service::admin::AdminUserService;
-use crate::ui::format_ts;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -41,8 +40,6 @@ pub struct UserRow {
     pub storage_quota_display: String,
     pub usage_formatted: String,
     pub quota_formatted: String,
-    pub created_at: String,
-    pub last_login_at: String,
     pub created_at_ts: i64,
     pub last_login_at_ts: Option<i64>,
 }
@@ -87,12 +84,6 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
                 storage_quota_display: u.storage_quota.map(|q| q.to_string()).unwrap_or_default(),
                 usage_formatted: crate::ui::files::format_size(u.usage),
                 quota_formatted: quota_display,
-                created_at: format_ts(u.created_at),
-                last_login_at: u.last_login_at.map(format_ts).unwrap_or_else(|| {
-                    I18n::get(user.language.as_deref())
-                        .tr("common.never")
-                        .to_string()
-                }),
                 created_at_ts: u.created_at,
                 last_login_at_ts: u.last_login_at,
             }

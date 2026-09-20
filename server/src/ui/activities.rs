@@ -40,16 +40,9 @@ pub struct ActivityView {
     /// Relative avatar URL (`/avatars/user/{email}/resized/32/`); empty when
     /// the author no longer exists.
     pub author_avatar_url: String,
-    /// Relative-time display, matching the Android client.
-    pub time_display: String,
-    /// Raw Unix seconds, for the local-timezone tooltip.
+    /// Raw Unix seconds. The row renders it in the viewer's timezone, and it is
+    /// also the local-calendar-day boundary the group headers are cut on.
     pub time_ts: i64,
-    /// UTC day key (`YYYY-MM-DD`) for grouping consecutive rows.
-    pub day_key: String,
-    /// Grouping header label (Today / Yesterday / date).
-    pub day_label: String,
-    /// True when this row starts a new day group (differs from the previous row).
-    pub show_day_header: bool,
     /// Number of items in a batch operation (1 for single operations).
     pub batch_count: usize,
     /// File names extracted from detail JSON (empty for single operations).
@@ -138,10 +131,7 @@ pub async fn activities_page(
         .find_recent_by_user(user.user_id, 50)
         .await?;
 
-    let now = chrono::Utc::now().timestamp();
     let t = I18n::get(user.language.as_deref());
-    let today_key = super::files::day_key(now);
-    let yesterday_key = super::files::day_key(now - 86_400);
 
     // Batch-load repo names
     let mut repo_cache: HashMap<String, Option<String>> = HashMap::new();
@@ -164,7 +154,6 @@ pub async fn activities_page(
     }
 
     let mut activities = Vec::with_capacity(events.len());
-    let mut prev_day_key: Option<String> = None;
 
     for e in &events {
         let repo_name = repo_cache
@@ -187,20 +176,6 @@ pub async fn activities_page(
                 .map(|(_, n)| n.to_string())
                 .unwrap_or_default()
         };
-
-        let formatted = super::files::format_relative_time(t, now, e.created_at);
-
-        // Group by UTC calendar day; label recent days (Today/Yesterday).
-        let day_key = super::files::day_key(e.created_at);
-        let day_label = if day_key == today_key {
-            t.tr("activity.today").to_string()
-        } else if day_key == yesterday_key {
-            t.tr("activity.yesterday").to_string()
-        } else {
-            day_key.clone()
-        };
-        let show_day_header = prev_day_key.as_deref() != Some(day_key.as_str());
-        prev_day_key = Some(day_key.clone());
 
         let author_avatar_url = crate::service::user::primary_avatar_url(
             if email.is_empty() { "deleted" } else { &email },
@@ -261,11 +236,7 @@ pub async fn activities_page(
             author_email: email,
             author_name,
             author_avatar_url,
-            time_display: formatted,
             time_ts: e.created_at,
-            day_key,
-            day_label,
-            show_day_header,
             batch_count,
             detail_items,
             old_repo_name,

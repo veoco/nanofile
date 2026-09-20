@@ -14,16 +14,6 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
-fn format_ts(t: &I18n, ts: Option<i64>) -> String {
-    match ts {
-        Some(t) => {
-            let dt = chrono::DateTime::from_timestamp(t, 0).unwrap_or_default();
-            dt.format("%Y-%m-%d %H:%M:%S").to_string()
-        }
-        None => t.tr("common.never").to_string(),
-    }
-}
-
 #[derive(Template)]
 #[template(path = "admintasks/list.html")]
 pub struct AdmintasksTemplate {
@@ -45,7 +35,6 @@ pub struct TaskRow {
     pub run_count: u64,
     pub success_count: u64,
     pub error_count: u64,
-    pub last_run_at: String,
     pub last_run_at_ts: Option<i64>,
     pub last_duration_ms: u64,
     pub last_success_message: String,
@@ -78,7 +67,7 @@ fn kind_label(kind: &TaskKind) -> &'static str {
 }
 
 /// Convert TaskMetrics + metadata into a template-friendly row.
-fn to_task_row(t: &I18n, name: &str, kind: &TaskKind, metrics: &TaskMetrics) -> TaskRow {
+fn to_task_row(name: &str, kind: &TaskKind, metrics: &TaskMetrics) -> TaskRow {
     TaskRow {
         name: name.to_string(),
         kind_label: kind_label(kind).to_string(),
@@ -86,7 +75,6 @@ fn to_task_row(t: &I18n, name: &str, kind: &TaskKind, metrics: &TaskMetrics) -> 
         run_count: metrics.run_count,
         success_count: metrics.success_count,
         error_count: metrics.error_count,
-        last_run_at: format_ts(t, metrics.last_run_at),
         last_run_at_ts: metrics.last_run_at,
         last_duration_ms: metrics.last_duration_ms,
         last_success_message: metrics.last_success_message.clone(),
@@ -107,12 +95,7 @@ pub async fn task_list_page(user: WebUser, State(state): State<Arc<AppState>>) -
     let mut tasks = Vec::with_capacity(handles.len());
     for handle in handles {
         let metrics = handle.metrics().await;
-        tasks.push(to_task_row(
-            I18n::get(user.language.as_deref()),
-            handle.name,
-            &handle.kind,
-            &metrics,
-        ));
+        tasks.push(to_task_row(handle.name, &handle.kind, &metrics));
     }
 
     let ctx = match crate::ui::ctx::build_page_ctx(&state, &user).await {

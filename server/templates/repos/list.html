@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
 {% import "includes/modal.html" as modal %}
 
 {% block title %}{{ t.tr("nav.libraries") }} | Nanofile{% endblock %}
@@ -113,9 +114,9 @@
                 {% endif %}
             </span>
             <span class="nf-lib-size">{{ r.size_display }}</span>
-            {# `data-ts-title` (not `data-ts`): the cell shows a duration, and
-               local-time.js fills the tooltip with the exact local time. #}
-            <span class="nf-lib-when" data-ts-title="{{ r.mtime }}">{{ r.mtime_display }}</span>
+            {# The cell shows a duration, while local-time.js also fills the
+               tooltip with the exact local time. #}
+            {{ time::ts_class(r.mtime, "nf-lib-when", "relative") }}
             <button type="button" class="nf-more" aria-haspopup="menu" aria-expanded="false"
                     title="{{ t.tr("common.actions") }}" aria-label="{{ t.tr("common.actions") }}">
                 {{ icons::icon_dots() }}

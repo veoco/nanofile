@@ -1,5 +1,6 @@
 {% extends "web/public_base.html" %}
 {% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
 
 {% block title %}{{ dir_name }} | {{ t.tr("app.name") }}{% endblock %}
 {% block width %}max-w-[600px]{% endblock %}
@@ -21,10 +22,10 @@
                 {{ t.tr("pub.protected") }}
                 {% endif %}
                 <span class="text-line-strong">·</span>
-                <span>{{ t.tr("pub.shared") }} <span data-ts="{{ created_at_ts }}" data-ts-title="{{ created_at_ts }}"></span></span>
+                <span>{{ t.tr("pub.shared") }} {{ time::ts(created_at_ts) }}</span>
                 {% if let Some(ts) = expires_at_ts %}
                 <span class="text-line-strong">·</span>
-                <span>{{ t.tr("pub.expires") }} <span data-ts="{{ ts }}" data-ts-title="{{ ts }}"></span></span>
+                <span>{{ t.tr("pub.expires") }} {{ time::ts(ts) }}</span>
                 {% endif %}
             </p>
             {% if let Some(desc) = description %}

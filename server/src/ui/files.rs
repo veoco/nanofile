@@ -193,11 +193,6 @@ pub struct FileEntry {
     pub size: i64,
     pub size_display: String,
     pub mtime: i64,
-    /// `mtime` in the relative form the library list uses ("3 days ago", and a
-    /// date past two weeks), with the exact local stamp in the row's tooltip.
-    /// The list is re-rendered from the server on every page, sort and filter
-    /// change, so the label is as fresh as the list itself.
-    pub mtime_display: String,
     pub icon_color: &'static str,
     /// Relative path for use in URL construction, e.g. "Documents/file.txt"
     pub relative_path: String,
@@ -375,8 +370,6 @@ fn is_gallery_media_dirent(e: &DirEntry) -> bool {
 /// Build the display `FileEntry` for a single dirent (called only on the
 /// current page slice after sorting/pagination, so cost scales with page size).
 fn build_file_entry(
-    t: &I18n,
-    now: i64,
     repo_id: &str,
     path: &str,
     e: &DirEntry,
@@ -444,7 +437,6 @@ fn build_file_entry(
         size: e.size,
         size_display: format_size(e.size),
         mtime: e.mtime,
-        mtime_display: format_relative_time(t, now, e.mtime),
         icon_color: file_icon_color(&e.name),
         relative_path,
         is_previewable,
@@ -600,59 +592,6 @@ fn file_extension(name: &str) -> Option<String> {
 
 pub use super::format_size;
 
-/// Relative time matching the Android client's `translateCommitTime`:
-/// "Just now" → N seconds → N minutes → N hours → N days → absolute date
-/// (>= 14 days). A count of 1 gets its own key, so nothing reads "1 days ago".
-pub fn format_relative_time(t: &I18n, now: i64, timestamp: i64) -> String {
-    let diff = now - timestamp;
-    if diff <= 0 {
-        return t.tr("activity.just_now").to_string();
-    }
-    let seconds = diff;
-    let minutes = seconds / 60;
-    let hours = seconds / 3600;
-    let days = seconds / 86400;
-
-    if days >= 14 {
-        return chrono::DateTime::from_timestamp(timestamp, 0)
-            .map(|dt| {
-                if t.lang.starts_with("zh") {
-                    dt.format("%Y年%m月%d日").to_string()
-                } else {
-                    dt.format("%Y-%m-%d").to_string()
-                }
-            })
-            .unwrap_or_else(|| t.tr("activity.just_now").to_string());
-    }
-    if days > 0 {
-        return amount(t, days, "activity.day_ago", "activity.days_ago");
-    }
-    if hours > 0 {
-        return amount(t, hours, "activity.hour_ago", "activity.hours_ago");
-    }
-    if minutes > 0 {
-        return amount(t, minutes, "activity.minute_ago", "activity.minutes_ago");
-    }
-    amount(t, seconds, "activity.second_ago", "activity.seconds_ago")
-}
-
-/// "1 day ago", not "1 days ago" — the count is 1 far more often than any other
-/// single value on a list of things you just touched, so it is worth its own key.
-fn amount(t: &I18n, n: i64, one: &str, many: &str) -> String {
-    if n == 1 {
-        t.tr(one).to_string()
-    } else {
-        t.trf(many, &[("n", n.to_string())])
-    }
-}
-
-/// UTC calendar-day key (`YYYY-MM-DD`) used to group activity rows by day.
-pub fn day_key(timestamp: i64) -> String {
-    chrono::DateTime::from_timestamp(timestamp, 0)
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
-        .unwrap_or_default()
-}
-
 #[derive(Clone)]
 pub struct BreadcrumbItem {
     pub label: String,
@@ -796,7 +735,6 @@ async fn file_browser_inner(
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
     let t = I18n::get(user.language.as_deref());
-    let now = chrono::Utc::now().timestamp();
     let repos = &state.repos;
     verify_repo_access(state.repos.member.as_ref(), user.user_id, &repo_id).await?;
 
@@ -1007,13 +945,13 @@ async fn file_browser_inner(
     // gallery media slice); both views share the same tag/star maps.
     let entries: Vec<FileEntry> = list_slice
         .iter()
-        .map(|d| build_file_entry(t, now, &repo_id, &path, d, &starred_set, &tags_by_path))
+        .map(|d| build_file_entry(&repo_id, &path, d, &starred_set, &tags_by_path))
         .collect();
     let gallery_groups: Vec<GalleryMonthGroup> = group_entries_by_month(
         t,
         gallery_slice
             .iter()
-            .map(|d| build_file_entry(t, now, &repo_id, &path, d, &starred_set, &tags_by_path))
+            .map(|d| build_file_entry(&repo_id, &path, d, &starred_set, &tags_by_path))
             .collect(),
     );
 
@@ -1385,35 +1323,6 @@ mod tests {
         assert_eq!(mime_guess("archive.bin"), "application/octet-stream");
     }
 
-    /// The singular keys exist so a freshly touched item does not read
-    /// "1 days ago"; the 14-day cutoff hands the exact date to the locale's own
-    /// date format (which is why zh gets no ISO dashes).
-    #[test]
-    fn relative_time_singulars_and_cutoff() {
-        let t = I18n::get(None);
-        let now = 1_800_000_000;
-        assert_eq!(format_relative_time(t, now, now), "Just now");
-        assert_eq!(format_relative_time(t, now, now - 1), "1 second ago");
-        assert_eq!(format_relative_time(t, now, now - 2), "2 seconds ago");
-        assert_eq!(format_relative_time(t, now, now - 60), "1 minute ago");
-        assert_eq!(format_relative_time(t, now, now - 3600), "1 hour ago");
-        assert_eq!(format_relative_time(t, now, now - 5 * 3600), "5 hours ago");
-        assert_eq!(format_relative_time(t, now, now - 86400), "1 day ago");
-        assert_eq!(format_relative_time(t, now, now - 3 * 86400), "3 days ago");
-        assert_eq!(
-            format_relative_time(t, now, now - 14 * 86400),
-            "2027-01-01",
-            ">= 14 days falls back to a date"
-        );
-
-        let zh = I18n::get(Some("zh"));
-        assert_eq!(format_relative_time(zh, now, now - 86400), "1 天前");
-        assert_eq!(
-            format_relative_time(zh, now, now - 14 * 86400),
-            "2027年01月01日"
-        );
-    }
-
     /// The trail is shared by the browser (a directory) and the full-page
     /// preview (a file, whose own name is the last crumb): each item carries the
     /// path up to and including itself, relative and URL-ready.
@@ -1448,7 +1357,6 @@ mod tests {
             size,
             size_display: String::new(),
             mtime,
-            mtime_display: String::new(),
             icon_color: "",
             relative_path: String::new(),
             is_previewable: false,

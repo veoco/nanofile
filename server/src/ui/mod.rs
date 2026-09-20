@@ -252,19 +252,5 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
 
 // ── Shared display helpers ─────────────────────────────────────────────
 
-/// Format a Unix timestamp as `YYYY-MM-DD HH:MM` (UTC).
-///
-/// Machine-facing payloads only (the device API). Anything a person reads in
-/// the Web UI renders the raw timestamp via `data-ts`, so the browser can
-/// localize it.
-///
-/// Out-of-range timestamps fall back to the Unix epoch instead of panicking.
-pub(crate) fn format_ts(ts: i64) -> String {
-    chrono::DateTime::from_timestamp(ts, 0)
-        .unwrap_or_default()
-        .format("%Y-%m-%d %H:%M")
-        .to_string()
-}
-
 /// Format a byte count as a human-readable size (`B`/`KB`/`MB`/`GB`/`TB`).
 pub use infra::common::util::format_size;

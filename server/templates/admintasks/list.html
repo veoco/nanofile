@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
 
 {% block title %}{{ t.tr("admin.tasks_title") }} | Nanofile{% endblock %}
 
@@ -41,7 +42,10 @@
                 <span class="sep">&middot;</span>
                 {% endif %}
                 <span class="t" title="{{ t.tr("admin.task_last_run") }}" data-last-run>
-                    {% if let Some(ts) = task.last_run_at_ts %}<span data-ts="{{ ts }}"></span>{% else %}{{ task.last_run_at }}{% endif %}
+                    {% match task.last_run_at_ts %}
+                    {% when Some with (ts) %}{{ time::ts(ts) }}
+                    {% when None %}{{ t.tr("common.never") }}
+                    {% endmatch %}
                 </span>
             </div>
             {% if !task.last_error_message.is_empty() %}

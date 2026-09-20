@@ -41,8 +41,8 @@ test("sort by name toggles file order", async ({ page }) => {
 });
 
 // The Modified column reads like the library list's ("3 days ago", and a date
-// past two weeks): both go through ui::files::format_relative_time, so the two
-// lists cannot drift apart again.
+// past two weeks): both render `data-ts-mode="relative"` through
+// core/local-time.js, so the two lists cannot drift apart again.
 test("the modified column uses the library list's relative form", async ({ page }) => {
   await page.goto(`/libraries/${sizeRepoId}/files`);
   await page.waitForSelector(".js-entry-row");
@@ -52,6 +52,21 @@ test("the modified column uses the library list's relative form", async ({ page 
   // Not the raw stamp the cell used to print.
   await expect(cell).not.toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
   await expect(cell).toHaveAttribute("title", /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+});
+
+// A page left open must not keep claiming "Just now": the relative cells are
+// re-rendered on the minute tick.
+test("a relative timestamp gets older while the page stays open", async ({ page }) => {
+  await page.clock.install();
+  await page.goto(`/libraries/${sizeRepoId}/files`);
+  await page.waitForSelector(".js-entry-row");
+  const cell = page
+    .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="large.txt"] .nf-when');
+  await expect(cell).toHaveText(/Just now|ago$/);
+
+  // Past one minute the label is no longer "Just now".
+  await page.clock.fastForward("02:00");
+  await expect(cell).toHaveText(/minute(s)? ago$/);
 });
 
 test("sort by size ascending then descending", async ({ page }) => {

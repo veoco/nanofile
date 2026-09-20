@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "includes/modal.html" as modal %}
 {% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
 
 {% block title %}{{ t.tr("nav.trash") }} | Nanofile{% endblock %}
 
@@ -110,7 +111,7 @@
             </div>
         </div>
         <div class="nf-prow-meta flex items-center gap-3">
-            <span class="w-[112px] text-right" data-ts="{{ item.deleted_time_ts }}" data-ts-title="{{ item.deleted_time_ts }}"></span>
+            {{ time::ts_class(item.deleted_time_ts, "w-[112px] text-right") }}
             <span class="w-[64px] text-right">{% if !item.is_dir %}{{ item.size_display }}{% else %}&mdash;{% endif %}</span>
         </div>
         <div class="nf-prow-act">
@@ -175,7 +176,7 @@
             <div class="nf-prow-name"><span class="base">{{ repo.repo_name }}</span></div>
         </div>
         <div class="nf-prow-meta flex items-center gap-3">
-            <span class="w-[112px] text-right" data-ts="{{ repo.deleted_time_ts }}" data-ts-title="{{ repo.deleted_time_ts }}"></span>
+            {{ time::ts_class(repo.deleted_time_ts, "w-[112px] text-right") }}
             <span class="w-[64px] text-right">{{ repo.size_display }}</span>
         </div>
         <div class="nf-prow-act">

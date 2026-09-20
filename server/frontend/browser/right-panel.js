@@ -10,8 +10,8 @@ import { __t } from "../core/i18n.js";
 import { escapeHtml, escapeAttr, encodeFilePath, safeColor, parentDirOf } from "../core/utils.js";
 import { apiFetch } from "../core/api.js";
 import { humanType, isQuickPreviewImage, getExifFields } from "../core/file-meta.js";
-import { formatLocalDateTime } from "../core/format.js";
 import { Toast } from "../core/toast.js";
+import { renderAll } from "../core/local-time.js";
 import { refreshFileList } from "./list.js";
 
 // Monotonic id used to discard stale right-panel async responses when the
@@ -198,8 +198,23 @@ export function openRightPanel(d) {
   setText(ct, ".js-rp-path", d.path || "");
   setText(ct, ".js-rp-size", d.type === "dir" ? "—" : (d.sizeDisplay || ""));
 
-  var mtime = parseInt(d.mtime, 10);
-  setText(ct, ".js-rp-mtime", isNaN(mtime) ? "" : formatLocalDateTime(mtime));
+  // The drawer's date cell is left to core/local-time.js, like every other time
+  // cell: this only hands it the raw timestamp. The node was parsed long before
+  // the panel is filled, so it needs an explicit pass — scoped to the drawer,
+  // not `initLocalTime()` again, which would re-scan (and re-observe) the page
+  // on every selection.
+  var mtimeEl = ct.querySelector(".js-rp-mtime");
+  if (mtimeEl) {
+    var mtime = parseInt(d.mtime, 10);
+    if (isNaN(mtime)) {
+      mtimeEl.removeAttribute("data-ts");
+      mtimeEl.textContent = "";
+      mtimeEl.removeAttribute("title");
+    } else {
+      mtimeEl.setAttribute("data-ts", String(mtime));
+      renderAll(mtimeEl);
+    }
+  }
 
   // ── Actions ──
   // Download

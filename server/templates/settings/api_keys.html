@@ -1,5 +1,6 @@
 {% extends "settings_shell.html" %}
 {% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
 
 {% block title %}{{ t.tr("apikey.title") }} | Nanofile{% endblock %}
 
@@ -103,19 +104,19 @@
                 <div class="nf-facts">
                     <div class="f">
                         <span class="k">{{ t.tr("apikey.created") }}</span>
-                        <span class="v" data-ts="{{ key.created_at_ts }}"></span>
+                        {{ time::ts_class(key.created_at_ts, "v") }}
                     </div>
                     <div class="f">
                         <span class="k">{{ t.tr("apikey.expires") }}</span>
                         {% match key.expires_at_ts %}
-                        {% when Some with (ts) %}<span class="v" data-ts="{{ ts }}"></span>
+                        {% when Some with (ts) %}{{ time::ts_class(ts, "v") }}
                         {% when None %}<span class="v">{{ t.tr("common.never") }}</span>
                         {% endmatch %}
                     </div>
                     <div class="f">
                         <span class="k">{{ t.tr("apikey.last_used") }}</span>
                         {% match key.last_used_at_ts %}
-                        {% when Some with (ts) %}<span class="v" data-ts="{{ ts }}"></span>
+                        {% when Some with (ts) %}{{ time::ts_class(ts, "v") }}
                         {% when None %}<span class="v">{{ t.tr("common.never") }}</span>
                         {% endmatch %}
                     </div>

@@ -62,3 +62,39 @@ test("deleting a file records a delete activity", async ({ page }) => {
   await page.goto("/activities/");
   await expect(activityRow(page, name)).toBeVisible();
 });
+
+// The day headers are cut in the browser, on the reader's local calendar day:
+// the server ships the raw timestamp and core/local-time.js inserts the group
+// headers, so a header can never disagree with the stamp on the row below it.
+test("activity rows are grouped on the reader's local calendar day", async ({ page }) => {
+  const repoId = await seedRepo(state.baseURL, state.adminToken, `act-${Date.now()}`);
+  await uploadFile(state.baseURL, state.adminToken, repoId, "/", `grouped-${Date.now()}.txt`, "x");
+  await page.goto("/activities/");
+  await page.waitForSelector("main .nf-prow[data-ts-day]");
+
+  const groups = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll("main .nf-prow[data-ts-day]")).map((row) => {
+      const date = new Date(parseInt(row.dataset.tsDay, 10) * 1000);
+      const key =
+        date.getFullYear() +
+        "-" +
+        ("0" + (date.getMonth() + 1)).slice(-2) +
+        "-" +
+        ("0" + date.getDate()).slice(-2);
+      const prev = row.previousElementSibling;
+      const label = prev && prev.classList.contains("nf-sec") ? prev.textContent.trim() : "";
+      return { key, label, title: row.querySelector("[data-ts]").title };
+    });
+  });
+
+  expect(groups.length).toBeGreaterThan(0);
+  for (const group of groups) {
+    // A header is only where the local day changes — and the row underneath it
+    // renders that same day, in the same timezone.
+    expect(group.label).not.toBe("");
+    if (group.label !== "Today" && group.label !== "Yesterday") {
+      expect(group.label).toBe(group.key);
+    }
+    expect(group.title).toMatch(new RegExp(`^${group.key} \\d{2}:\\d{2}$`));
+  }
+});

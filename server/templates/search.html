@@ -72,7 +72,7 @@
 
             <div class="nf-prow-meta flex items-center gap-3">
                 <span class="w-[64px] text-right" data-f="size">{% if !item.is_dir %}{{ item.size_display }}{% endif %}</span>
-                <span class="w-[112px] text-right" data-f="date" data-ts="{{ item.last_modified }}" data-ts-title="{{ item.last_modified }}"></span>
+                <span class="w-[112px] text-right" data-f="date" data-ts="{{ item.last_modified }}"></span>
             </div>
         </li>
         {% endfor %}

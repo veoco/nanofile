@@ -141,13 +141,26 @@ html.dark {
 }
 
 /* ─── Time display ────────────────────────────────────────────────────────────
-   `[data-ts]` elements are rendered empty by the server and filled by
-   local-time.js with `YYYY-MM-DD HH:MM` (fixed 16 chars). Reserve the width
-   up front so the layout doesn't shift when the text appears.
+   Time cells are rendered empty by the server and filled by local-time.js.
+   Reserve each mode's width up front so the layout doesn't shift when the text
+   appears — and, for the relative form, when it changes on the minute tick.
+
    min-width only affects inline elements once they're inline-block, so scope
    that to spans — block divs (folder rows) must keep their own line. */
-[data-ts] {
-  min-width: 16ch;
+[data-ts]:not([data-ts-mode]),
+[data-ts-mode="absolute"] {
+  min-width: 16ch; /* `YYYY-MM-DD HH:MM` */
+  font-variant-numeric: tabular-nums;
+}
+/* The relative form is the one cell whose text changes while the page is open,
+   so it has to be one width for "Just now" and "3 days ago" alike. */
+[data-ts-mode="relative"] {
+  min-width: 11ch;
+  font-variant-numeric: tabular-nums;
+}
+/* "Sep 19" — sized by its content; the grid tile sets its own. */
+[data-ts-mode="short"] {
+  min-width: 0;
   font-variant-numeric: tabular-nums;
 }
 span[data-ts] {
