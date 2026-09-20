@@ -75,34 +75,58 @@ function setLive(el, isLive) {
   else if (!isLive && idx !== -1) live.splice(idx, 1);
 }
 
-// `data-ts-day`: the element marks a row that starts a new local calendar day,
-// so give it a group header above it.
-function renderDayBoundary(el) {
+// The local calendar day a `data-ts-day` row belongs to, as a stable key.
+function dayKey(el) {
   var ts = parseInt(el.dataset.tsDay, 10);
-  if (isNaN(ts)) return;
-  var key = formatLocalDate(ts);
+  if (isNaN(ts)) return null;
+  return formatLocalDate(ts);
+}
+
+// The day header already sitting directly above `el`, if any.
+function existingHeader(el) {
+  var sib = el.previousElementSibling;
+  return sib && sib.classList.contains("nf-sec") ? sib : null;
+}
+
+// The row above `el` in the feed, skipping any day header between them.
+function previousRow(el) {
+  var sib = el.previousElementSibling;
+  while (sib && sib.classList.contains("nf-sec")) sib = sib.previousElementSibling;
+  return sib && sib.hasAttribute("data-ts-day") ? sib : null;
+}
+
+function dayLabel(key) {
+  var now = Math.floor(Date.now() / 1000);
+  if (key === formatLocalDate(now)) return __t("activity.today");
+  if (key === formatLocalDate(now - 86400)) return __t("activity.yesterday");
+  return key;
+}
+
+// `data-ts-day`: the row opens a group when its local calendar day differs from
+// the row above it. The day's header belongs above that first row only — every
+// later row of the same day has another row directly above it, so comparing
+// against the immediate sibling would label each row as its own group.
+function renderDayBoundary(el) {
+  var key = dayKey(el);
   if (!key) return;
-  var header = el.previousElementSibling;
-  var current = header && header.classList.contains("nf-sec") ? header.textContent.trim() : null;
-  if (
-    current === key ||
-    current === __t("activity.today") ||
-    current === __t("activity.yesterday")
-  ) {
+
+  var header = existingHeader(el);
+
+  var prev = previousRow(el);
+  if (prev && dayKey(prev) === key) {
+    if (header) header.remove();
     return;
   }
-  if (header && header.classList.contains("nf-sec")) header.remove();
 
-  var now = Math.floor(Date.now() / 1000);
-  var text =
-    key === formatLocalDate(now)
-      ? __t("activity.today")
-      : key === formatLocalDate(now - 86400)
-        ? __t("activity.yesterday")
-        : key;
+  // A re-render of the same day must not stack a second header on its first row.
+  if (header && header.dataset.dayKey === key) return;
+  if (header) header.remove();
+
+  var text = dayLabel(key);
 
   var section = document.createElement("div");
   section.className = "nf-sec";
+  section.dataset.dayKey = key;
   var heading = document.createElement("h2");
   heading.textContent = text;
   section.appendChild(heading);

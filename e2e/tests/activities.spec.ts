@@ -88,13 +88,28 @@ test("activity rows are grouped on the reader's local calendar day", async ({ pa
   });
 
   expect(groups.length).toBeGreaterThan(0);
+
+  // A day header belongs above the first row of each local calendar day and
+  // nowhere else: one header per distinct day, never one per row.
+  const seen = new Set<string>();
   for (const group of groups) {
-    // A header is only where the local day changes — and the row underneath it
-    // renders that same day, in the same timezone.
+    // The row's own stamp renders the day its header claims, in the reader's
+    // timezone.
+    expect(group.title).toMatch(new RegExp(`^${group.key} \\d{2}:\\d{2}$`));
+
+    if (seen.has(group.key)) {
+      expect(group.label).toBe("");
+      continue;
+    }
+    seen.add(group.key);
+
     expect(group.label).not.toBe("");
     if (group.label !== "Today" && group.label !== "Yesterday") {
       expect(group.label).toBe(group.key);
     }
-    expect(group.title).toMatch(new RegExp(`^${group.key} \\d{2}:\\d{2}$`));
   }
+  expect(seen.size).toBeGreaterThan(0);
+  // The regression this guards is a header per *row*, so require a day with
+  // more than one row: otherwise the loop above proves nothing.
+  expect(groups.length).toBeGreaterThan(seen.size);
 });
