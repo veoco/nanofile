@@ -89,6 +89,11 @@ html.dark {
 /* ─── Layout variables ─────────────────────────────────────────────────────── */
 :root {
   --left-panel-width: 240px;
+  /* Height of the file browser's sort/view toolbar. It is the outermost sticky
+     layer in the file scroller, and the list column header and gallery month
+     header pin directly under it — with all three at `top: 0` the header (later
+     in the DOM) covered the toolbar instead of stacking below it. */
+  --file-toolbar-h: 2.5rem;
   /* Selection tint: a translucent accent so it composites over whatever the
      row already sits on, in either theme. */
   --tint-sel: color-mix(in srgb, var(--color-accent) 12%, transparent);
@@ -369,8 +374,9 @@ html:not([data-view]) .seg .js-view-list {
   .vsep           { @apply w-px h-4 bg-line; }
 
   .nf-toolbar {
-    @apply shrink-0 flex items-center gap-2 h-10 px-4 border-b border-line sticky top-0 z-sticky bg-canvas
+    @apply shrink-0 flex items-center gap-2 px-4 border-b border-line sticky top-0 z-sticky bg-canvas
            overflow-x-auto;
+    height: var(--file-toolbar-h);
   }
   /* On a page whose <main> already carries the horizontal padding, the toolbar
      would otherwise double it. `overflow` has to come back to `visible` too:
@@ -399,9 +405,13 @@ html:not([data-view]) .seg .js-view-list {
     @apply grid items-center gap-3.5 h-9 px-4 border-b border-line cursor-default;
     grid-template-columns: 24px minmax(0, 1fr) 96px 132px 32px;
   }
+  /* Pins under the toolbar, not over it: `top: 0` would put this row and the
+     toolbar at the same offset, and being later in the DOM it would paint on
+     top — hiding the sort and view controls while the list scrolls. */
   .nf-row-head {
-    @apply sticky top-0 z-sticky h-[30px] bg-panel border-b border-line-strong
+    @apply sticky z-sticky h-[30px] bg-panel border-b border-line-strong
            text-[10.5px] uppercase tracking-[0.07em] text-ink-3 cursor-default;
+    top: var(--file-toolbar-h);
   }
   .nf-row-head .r { @apply text-right; }
   .nf-row.it:hover { @apply bg-raised; }
@@ -521,7 +531,9 @@ html:not([data-view]) .seg .js-view-list {
      is unreachable on touch. */
   .nf-gal-group + .nf-gal-group { @apply mt-1; }
   .nf-gal-head {
-    @apply sticky top-0 z-sticky flex items-center gap-2.5 px-4 pt-2.5 pb-2;
+    @apply sticky z-sticky flex items-center gap-2.5 px-4 pt-2.5 pb-2;
+    /* Same toolbar offset as the list's column header — see `--file-toolbar-h`. */
+    top: var(--file-toolbar-h);
     background: var(--color-canvas);
   }
   .nf-gal-head h2 { @apply text-[12px] font-semibold text-ink; }
