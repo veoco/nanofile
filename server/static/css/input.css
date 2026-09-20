@@ -118,6 +118,11 @@ html.dark {
 @utility z-sticky {
   z-index: 10; /* gallery 吸顶月份头、网格 hover 层 */
 }
+@utility z-drawer {
+  /* 底部详情抽屉。它是个覆盖层,必须盖过滚动区内的一切吸顶头(10) —— 包括
+     滑过它上方那条带的 gallery 月份头 —— 同时仍低于弹窗(50)。 */
+  z-index: 20;
+}
 @utility z-header {
   z-index: 40; /* 顶部栏 sticky */
 }
@@ -710,9 +715,15 @@ html:not([data-view]) .seg .js-view-list {
      An OVERLAY, not a flex row: opening it must not reflow anything. The file
      list keeps its exact height and scroll position and the sidebar is not even
      in this column. `.content` clips the closed drawer; while open the list
-     gets matching bottom padding so the final row can still be scrolled clear. */
+     gets matching bottom padding so the final row can still be scrolled clear.
+
+     `z-drawer` (20), not something under `z-sticky` (10): the drawer only covers
+     the bottom band of the scroller, so list chrome keeps scrolling through that
+     band — the gallery's month header lands there at every month boundary. Below
+     the sticky layer, that header's opaque strip painted its label and rule
+     straight over the drawer. */
   .nf-details {
-    @apply absolute left-0 right-0 bottom-0 z-[5] bg-panel;
+    @apply absolute left-0 right-0 bottom-0 z-drawer bg-panel;
     transform: translateY(100%);
     visibility: hidden;
     transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 0.22s;

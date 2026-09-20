@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { readState, seedRepo, uploadFile } from "../helpers/api";
+import { readState, createRepo, seedRepo, uploadFile } from "../helpers/api";
 import { expandDetails } from "../helpers/details";
+import { backdateFileMtimes } from "../helpers/mtime";
 
 // The details panel moved from a 300px right-hand column to an overlay pinned to
 // the bottom of the file-manager column. The whole point of an overlay is that
@@ -210,4 +211,90 @@ test("Escape and the close button both dismiss the drawer", async ({ page }) => 
   await page.locator(".js-rp-content .js-deselect-all").click();
   await expect(page.locator("#nf-details")).not.toHaveClass(/\bopen\b/);
   await expect(page.locator(".js-entry-row.selected")).toHaveCount(0);
+});
+
+// A valid 1×1 PNG: real media as far as the gallery's entry filter is
+// concerned, and a library needs pictures before it has month groups at all.
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+/**
+ * Move every file whose name starts with `prefix` to a fixed calendar month.
+ *
+ * The gallery's month headers are the only sticky layers that can reach the
+ * strip the drawer covers (see the test below), and staging a month boundary
+ * needs files in two months — nothing in the API sets a dirent's mtime, so the
+ * helper edits the suite's temp DB. The prefixes are unique to this repo so the
+ * patch cannot touch another spec's files.
+ */
+const MONTH_PREFIXES = ["dg1-", "dg2-"] as const;
+
+// The drawer is an overlay, so nothing inside the scroller may paint over it.
+// The gallery's month header is sticky at z-index 10 and the drawer only covers
+// the *bottom* strip of the scroller — so at every month boundary the header
+// scrolls straight through that strip. While the drawer sat below the sticky
+// layer, the header's opaque bar carried its label and its rule across the
+// drawer's row.
+test("the drawer stays above the gallery's sticky month header", async ({ page }) => {
+  const galleryId = await createRepo(
+    state.baseURL,
+    state.adminToken,
+    `drawer-gallery-${Date.now()}`,
+  );
+  for (const prefix of MONTH_PREFIXES) {
+    for (let i = 0; i < 20; i++) {
+      await uploadFile(
+        state.baseURL,
+        state.adminToken,
+        galleryId,
+        "/",
+        `${prefix}${String(i).padStart(2, "0")}.png`,
+        PNG,
+      );
+    }
+  }
+  // March 2025 for the first half; the second half keeps "now".
+  expect(backdateFileMtimes(MONTH_PREFIXES[0], Date.UTC(2025, 2, 15) / 1000)).toBeGreaterThan(0);
+
+  await page.goto(`/libraries/${galleryId}/files/`);
+  await page.waitForSelector(".js-entry-row");
+  await page.locator(".js-view-gallery").click();
+  await expect(page.locator(".nf-gal-head")).toHaveCount(2);
+
+  await page.locator(".nf-gal-tile").first().click();
+  await expect(page.locator("#nf-details")).toHaveClass(/\bopen\b/);
+  await settleDrawer(page);
+
+  // Walk the whole scroller. Wherever a month header is inside the strip the
+  // drawer covers, the drawer has to be what the pointer hits there.
+  const sweep = await page.evaluate(() => {
+    const scroller = document.getElementById("nf-list-scroll") as HTMLElement;
+    const drawer = document.getElementById("nf-details") as HTMLElement;
+    const heads = Array.from(document.querySelectorAll(".nf-gal-head"));
+    const escapes: string[] = [];
+    let overlaps = 0;
+    for (let top = 0; top <= scroller.scrollHeight; top += 40) {
+      scroller.scrollTop = top;
+      const d = drawer.getBoundingClientRect();
+      for (const head of heads) {
+        const h = head.getBoundingClientRect();
+        const y1 = Math.max(d.top, h.top);
+        const y2 = Math.min(d.bottom, h.bottom);
+        if (y2 <= y1) continue;
+        overlaps += 1;
+        const x = Math.round((Math.max(d.left, h.left) + Math.min(d.right, h.right)) / 2);
+        const y = Math.round((y1 + y2) / 2);
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || !drawer.contains(hit)) {
+          escapes.push(`scrollTop=${top} y=${y} hit=${hit?.className ?? "null"}`);
+        }
+      }
+    }
+    return { overlaps, escapes };
+  });
+  // The collision has to have actually happened, or the test proves nothing.
+  expect(sweep.overlaps).toBeGreaterThan(0);
+  expect(sweep.escapes).toEqual([]);
 });
