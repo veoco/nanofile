@@ -78,11 +78,18 @@
          inserting it later shoved the Browse block and the tree's lower edge up
          by its own height on every page load. nav.js only writes the value and
          the fill width, so the row's box never changes; a failed request leaves
-         it blank instead of collapsing it. -->
+         it blank instead of collapsing it.
+
+         The row is centred rather than baseline-aligned, and the value
+         truncates: an empty value is a zero-height flex item, so under baseline
+         alignment the line grew by the value's descent the moment text landed
+         (18px -> 18.5px) and pulled the tree's lower edge and the Browse
+         hairline up with it. Centring makes the row `max(label, value)` in both
+         states, and truncation keeps a long usage string from wrapping it. -->
     <div class="shrink-0 border-t border-line px-2 pt-2 pb-2.5" id="nf-storage">
-        <div class="flex items-baseline justify-between gap-2 px-1.5">
+        <div class="flex items-center justify-between gap-2 px-1.5">
             <span class="text-[12px] text-ink-2">{{ t.tr("nav.storage") }}</span>
-            <span class="mono" id="nf-storage-text"></span>
+            <span class="mono min-w-0 truncate" id="nf-storage-text"></span>
         </div>
         {# The track always renders: hiding it for an unlimited quota would make
            the row's height depend on the response, which is the same jitter one
