@@ -30,9 +30,28 @@ test("sort by name toggles file order", async ({ page }) => {
   await page.locator('.js-sort-btn[data-sort="name"]').click();
   await expect(fileRows.nth(0)).toHaveAttribute("data-name", "delta.txt");
   await expect(fileRows.nth(3)).toHaveAttribute("data-name", "alpha.txt");
-  // After the sort-triggered list refresh, the JS-filled time cells must
-  // still be populated (regression: observer used to die with the container).
-  await expect(fileRows.nth(0).locator("[data-ts]").first()).not.toHaveText("");
+  // After the sort-triggered list refresh, the freshly swapped-in rows must
+  // still have been visited by local-time.js — that is now visible in the
+  // tooltip, the exact local time behind the relative label (regression: the
+  // observer used to die with the container).
+  await expect(fileRows.nth(0).locator(".nf-when")).toHaveAttribute(
+    "title",
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/,
+  );
+});
+
+// The Modified column reads like the library list's ("3 days ago", and a date
+// past two weeks): both go through ui::files::format_relative_time, so the two
+// lists cannot drift apart again.
+test("the modified column uses the library list's relative form", async ({ page }) => {
+  await page.goto(`/libraries/${sizeRepoId}/files`);
+  await page.waitForSelector(".js-entry-row");
+  const cell = page
+    .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="large.txt"] .nf-when');
+  await expect(cell).toHaveText(/Just now|ago$/);
+  // Not the raw stamp the cell used to print.
+  await expect(cell).not.toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  await expect(cell).toHaveAttribute("title", /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
 });
 
 test("sort by size ascending then descending", async ({ page }) => {

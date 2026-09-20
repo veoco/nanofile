@@ -180,7 +180,10 @@
         </div>
 
         <div class="nf-size">{% if entry.entry_type == "file" %}{{ entry.size_display }}{% else %}&mdash;{% endif %}</div>
-        <span class="nf-when" data-ts="{{ entry.mtime }}"></span>
+        {# `data-ts-title` (not `data-ts`): the cell shows the relative form the
+           library list uses, and local-time.js fills the tooltip with the
+           exact local time. #}
+        <span class="nf-when" data-ts-title="{{ entry.mtime }}">{{ entry.mtime_display }}</span>
 
         <button type="button" class="nf-more" aria-haspopup="menu" aria-expanded="false"
                 title="{{ t.tr("common.actions") }}" aria-label="{{ t.tr("common.actions") }}">

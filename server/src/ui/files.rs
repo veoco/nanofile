@@ -193,6 +193,11 @@ pub struct FileEntry {
     pub size: i64,
     pub size_display: String,
     pub mtime: i64,
+    /// `mtime` in the relative form the library list uses ("3 days ago", and a
+    /// date past two weeks), with the exact local stamp in the row's tooltip.
+    /// The list is re-rendered from the server on every page, sort and filter
+    /// change, so the label is as fresh as the list itself.
+    pub mtime_display: String,
     pub icon_color: &'static str,
     /// Relative path for use in URL construction, e.g. "Documents/file.txt"
     pub relative_path: String,
@@ -370,6 +375,8 @@ fn is_gallery_media_dirent(e: &DirEntry) -> bool {
 /// Build the display `FileEntry` for a single dirent (called only on the
 /// current page slice after sorting/pagination, so cost scales with page size).
 fn build_file_entry(
+    t: &I18n,
+    now: i64,
     repo_id: &str,
     path: &str,
     e: &DirEntry,
@@ -437,6 +444,7 @@ fn build_file_entry(
         size: e.size,
         size_display: format_size(e.size),
         mtime: e.mtime,
+        mtime_display: format_relative_time(t, now, e.mtime),
         icon_color: file_icon_color(&e.name),
         relative_path,
         is_previewable,
@@ -788,6 +796,7 @@ async fn file_browser_inner(
     query: FileBrowserQuery,
 ) -> Result<impl IntoResponse, AppError> {
     let t = I18n::get(user.language.as_deref());
+    let now = chrono::Utc::now().timestamp();
     let repos = &state.repos;
     verify_repo_access(state.repos.member.as_ref(), user.user_id, &repo_id).await?;
 
@@ -998,13 +1007,13 @@ async fn file_browser_inner(
     // gallery media slice); both views share the same tag/star maps.
     let entries: Vec<FileEntry> = list_slice
         .iter()
-        .map(|d| build_file_entry(&repo_id, &path, d, &starred_set, &tags_by_path))
+        .map(|d| build_file_entry(t, now, &repo_id, &path, d, &starred_set, &tags_by_path))
         .collect();
     let gallery_groups: Vec<GalleryMonthGroup> = group_entries_by_month(
         t,
         gallery_slice
             .iter()
-            .map(|d| build_file_entry(&repo_id, &path, d, &starred_set, &tags_by_path))
+            .map(|d| build_file_entry(t, now, &repo_id, &path, d, &starred_set, &tags_by_path))
             .collect(),
     );
 
@@ -1439,6 +1448,7 @@ mod tests {
             size,
             size_display: String::new(),
             mtime,
+            mtime_display: String::new(),
             icon_color: "",
             relative_path: String::new(),
             is_previewable: false,
