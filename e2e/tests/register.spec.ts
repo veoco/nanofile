@@ -40,6 +40,21 @@ test("register with an invitation code auto-logs in", async ({ browser, page }) 
   await page.locator("#invitation_code").fill(code);
   await page.locator('button[type="submit"]').click();
   await page.waitForURL(/\/libraries\//);
+
+  // The used code shows its use time on the admin page, localized by the
+  // browser rather than pre-formatted in UTC by the server.
+  const ctx = await browser.newContext({ storageState: "test-results/storage-state.json" });
+  try {
+    const admin = await ctx.newPage();
+    await admin.goto("/settings/invitations/");
+    const row = admin.locator("main .nf-prow").filter({ hasText: email });
+    await expect(row).toContainText("Used by");
+    const usedStamp = row.locator(".nf-prow-sub [data-ts]").first();
+    await expect(usedStamp).toHaveAttribute("data-ts", /^\d+$/);
+    await expect(usedStamp).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  } finally {
+    await ctx.close();
+  }
 });
 
 test("an invalid invitation code is rejected", async ({ page }) => {

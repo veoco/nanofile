@@ -23,11 +23,6 @@ export function formatHistorySize(n) {
   return n + ' B';
 }
 
-export function formatHistoryTime(ts) {
-  var d = new Date(ts * 1000);
-  return d.toLocaleString();
-}
-
 // Format a Unix timestamp (seconds) as `YYYY-MM-DD HH:MM` in the browser's
 // local timezone. Matches the server-side `format_ts` shape but localizes it.
 export function formatLocalDateTime(ts) {

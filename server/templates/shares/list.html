@@ -76,7 +76,6 @@
             <button type="button" class="js-share-edit-btn btn btn-quiet btn-icon"
                     data-token="{{ s.token }}"
                     data-path="{{ s.path }}"
-                    data-expires="{{ s.expires_at }}"
                     data-description="{{ s.description.as_deref().unwrap_or("") }}"
                     title="{{ t.tr("share.edit_link") }}" aria-label="{{ t.tr("share.edit_link") }}">
                 {{ icons::icon_pencil("w-3.5 h-3.5") }}
@@ -140,7 +139,6 @@
             <button type="button" class="js-ul-edit-btn btn btn-quiet btn-icon"
                     data-token="{{ u.token }}"
                     data-path="{{ u.path }}"
-                    data-expires="{{ u.expires_at }}"
                     data-description="{{ u.description.as_deref().unwrap_or("") }}"
                     title="{{ t.tr("uploadlink.edit_link") }}" aria-label="{{ t.tr("uploadlink.edit_link") }}">
                 {{ icons::icon_pencil("w-3.5 h-3.5") }}

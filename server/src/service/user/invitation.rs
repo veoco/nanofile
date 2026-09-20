@@ -6,13 +6,14 @@ use base::error::AppError;
 use infra::entity::invitation_code;
 
 /// Invitation code info returned by the service.
+///
+/// The two timestamps go out raw so the page can render them in the viewer's
+/// timezone; the service does no date formatting of its own.
 pub struct InvitationInfo {
     pub code: String,
     pub bound_email: Option<String>,
-    pub created_at: String,
     pub created_at_ts: i64,
     pub used_by_email: Option<String>,
-    pub used_at: Option<String>,
     pub used_at_ts: Option<i64>,
     pub id: i32,
 }
@@ -49,16 +50,13 @@ impl InvitationService {
         let mut invitations = Vec::with_capacity(codes.len());
         for code in codes {
             let used_by_email = code.used_by.and_then(|uid| email_by_id.get(&uid).cloned());
-            let used_at_display = code.used_at.map(crate::ui::format_ts);
 
             invitations.push(InvitationInfo {
                 id: code.id,
                 code: code.code,
                 bound_email: code.email,
-                created_at: crate::ui::format_ts(code.created_at),
                 created_at_ts: code.created_at,
                 used_by_email,
-                used_at: used_at_display,
                 used_at_ts: code.used_at,
             });
         }

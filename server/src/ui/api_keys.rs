@@ -127,9 +127,10 @@ pub struct ApiKeyCard {
     pub all_repos: bool,
     /// `(repo_id, repo_name, permission)` for each bound library.
     pub repos: Vec<(String, String, String)>,
-    pub created_at: String,
-    pub expires_at: String,
-    pub last_used_at: String,
+    /// Unix seconds; the page renders them in the viewer's timezone.
+    pub created_at_ts: i64,
+    pub expires_at_ts: Option<i64>,
+    pub last_used_at_ts: Option<i64>,
     pub read_only: bool,
     /// Whether the key expires at all (drives the edit form's default).
     pub has_expiry: bool,
@@ -237,7 +238,7 @@ async fn render(
     let keys = ApiKeyService::list(&state.repos, user.user_id).await?;
     let cards = keys
         .into_iter()
-        .map(|key| card_of(key, &repo_names, t))
+        .map(|key| card_of(key, &repo_names))
         .collect();
 
     let left_panel_repos = state
@@ -294,7 +295,7 @@ async fn render(
     Ok(Html(html))
 }
 
-fn card_of(key: ApiKeyView, repo_names: &HashMap<String, String>, t: &I18n) -> ApiKeyCard {
+fn card_of(key: ApiKeyView, repo_names: &HashMap<String, String>) -> ApiKeyCard {
     let repos = key
         .repos
         .iter()
@@ -312,7 +313,6 @@ fn card_of(key: ApiKeyView, repo_names: &HashMap<String, String>, t: &I18n) -> A
         .capabilities
         .iter()
         .all(|id| Capability::from_id(id).is_some_and(|c| !c.is_write()));
-    let never = t.tr("common.never").to_string();
     let has_expiry = key.expires_at.is_some();
     let expiry_days = key.expires_at.map_or(0, |ts| {
         let remaining = (ts - chrono::Utc::now().timestamp()).max(0) as u64;
@@ -325,12 +325,9 @@ fn card_of(key: ApiKeyView, repo_names: &HashMap<String, String>, t: &I18n) -> A
         capabilities: key.capabilities,
         all_repos: key.all_repos,
         repos,
-        created_at: super::format_ts(key.created_at),
-        expires_at: key
-            .expires_at
-            .map(super::format_ts)
-            .unwrap_or(never.clone()),
-        last_used_at: key.last_used_at.map(super::format_ts).unwrap_or(never),
+        created_at_ts: key.created_at,
+        expires_at_ts: key.expires_at,
+        last_used_at_ts: key.last_used_at,
         read_only,
         has_expiry,
         expiry_days,

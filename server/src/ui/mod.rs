@@ -27,7 +27,6 @@ use axum::routing::get;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::i18n::I18n;
 
 /// Build the web UI route tree.
 ///
@@ -255,20 +254,16 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
 
 /// Format a Unix timestamp as `YYYY-MM-DD HH:MM` (UTC).
 ///
+/// Machine-facing payloads only (the device API). Anything a person reads in
+/// the Web UI renders the raw timestamp via `data-ts`, so the browser can
+/// localize it.
+///
 /// Out-of-range timestamps fall back to the Unix epoch instead of panicking.
 pub(crate) fn format_ts(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
         .unwrap_or_default()
         .format("%Y-%m-%d %H:%M")
         .to_string()
-}
-
-/// Format an optional timestamp, showing the localized "never" label when absent.
-pub(crate) fn format_ts_opt(t: &I18n, ts: Option<i64>) -> String {
-    match ts {
-        Some(ts) => format_ts(ts),
-        None => t.tr("common.never").to_string(),
-    }
 }
 
 /// Format a byte count as a human-readable size (`B`/`KB`/`MB`/`GB`/`TB`).

@@ -7,7 +7,6 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::i18n::I18n;
 use base::error::AppError;
-use infra::common::util::timestamp_rfc3339;
 
 use super::auth_extractor::WebUser;
 
@@ -43,7 +42,6 @@ pub struct ActivityView {
     pub author_avatar_url: String,
     /// Relative-time display, matching the Android client.
     pub time_display: String,
-    pub time_iso: String,
     /// Raw Unix seconds, for the local-timezone tooltip.
     pub time_ts: i64,
     /// UTC day key (`YYYY-MM-DD`) for grouping consecutive rows.
@@ -192,8 +190,6 @@ pub async fn activities_page(
 
         let formatted = super::files::format_relative_time(t, now, e.created_at);
 
-        let time_iso = timestamp_rfc3339(e.created_at);
-
         // Group by UTC calendar day; label recent days (Today/Yesterday).
         let day_key = super::files::day_key(e.created_at);
         let day_label = if day_key == today_key {
@@ -266,7 +262,6 @@ pub async fn activities_page(
             author_name,
             author_avatar_url,
             time_display: formatted,
-            time_iso,
             time_ts: e.created_at,
             day_key,
             day_label,

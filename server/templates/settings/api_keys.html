@@ -97,19 +97,27 @@
                     {% endif %}
                 </div>
                 {# The dates are the row's fixed columns: right-aligned and
-                   labelled so they read down the list, not into the name. #}
+                   labelled so they read down the list, not into the name.
+                   `data-ts` so they land in the viewer's timezone; a key with
+                   no expiry and one never used both read as `common.never`. #}
                 <div class="nf-facts">
                     <div class="f">
                         <span class="k">{{ t.tr("apikey.created") }}</span>
-                        <span class="v">{{ key.created_at }}</span>
+                        <span class="v" data-ts="{{ key.created_at_ts }}"></span>
                     </div>
                     <div class="f">
                         <span class="k">{{ t.tr("apikey.expires") }}</span>
-                        <span class="v">{{ key.expires_at }}</span>
+                        {% match key.expires_at_ts %}
+                        {% when Some with (ts) %}<span class="v" data-ts="{{ ts }}"></span>
+                        {% when None %}<span class="v">{{ t.tr("common.never") }}</span>
+                        {% endmatch %}
                     </div>
                     <div class="f">
                         <span class="k">{{ t.tr("apikey.last_used") }}</span>
-                        <span class="v">{{ key.last_used_at }}</span>
+                        {% match key.last_used_at_ts %}
+                        {% when Some with (ts) %}<span class="v" data-ts="{{ ts }}"></span>
+                        {% when None %}<span class="v">{{ t.tr("common.never") }}</span>
+                        {% endmatch %}
                     </div>
                 </div>
                 <div class="nf-prow-act">

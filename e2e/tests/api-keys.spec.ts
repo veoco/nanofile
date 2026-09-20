@@ -2,12 +2,13 @@ import { test, expect } from "@playwright/test";
 import { readState, createRepo } from "../helpers/api";
 
 let state: ReturnType<typeof readState>;
+let repoId: string;
 
 test.beforeAll(async () => {
   state = readState();
   // The scope picker lists the account's libraries; seed one so the page is
   // never empty when this spec runs in isolation.
-  await createRepo(state.baseURL, state.adminToken, `key-lib-${Date.now()}`);
+  repoId = await createRepo(state.baseURL, state.adminToken, `key-lib-${Date.now()}`);
 });
 
 test.beforeEach(async ({ page }) => {
@@ -24,10 +25,11 @@ test("the settings index links to the key page", async ({ page }) => {
 test("create a key, see it once, then revoke it", async ({ page }) => {
   const name = `e2e-key-${Date.now()}`;
   await page.locator("#create-key-name").fill(name);
-  // A read capability and a write capability, plus one library.
+  // A read capability and a write capability, plus this spec's own library
+  // (named by id so an earlier spec's library cannot take the slot).
   await page.locator('#create-key-form input[name="cap__file.read"]').check();
   await page.locator('#create-key-form input[name="cap__file.write"]').check();
-  const repoSelect = page.locator('#create-key-form select[name^="repo__"]').first();
+  const repoSelect = page.locator(`#create-key-form select[name="repo__${repoId}"]`);
   await repoSelect.selectOption("rw");
   await page.locator("#create-key-expiry").selectOption("30");
   await page.locator('#create-key-form button[type="submit"]').click();
@@ -42,9 +44,31 @@ test("create a key, see it once, then revoke it", async ({ page }) => {
   await expect(card).toBeVisible();
   await expect(card).toContainText("file.write");
 
-  // Reload: the secret is gone, the key is not, and no second key appears
-  // (the form redirects, so a refresh re-reads the list).
+  // The row's dates are localized by the browser (`data-ts`), not pre-formatted
+  // in UTC by the server. A freshly minted key has never been used yet.
+  const value = (label: string) =>
+    card.locator(".nf-facts .f").filter({ hasText: label }).locator(".v");
+  await expect(value("Created")).toHaveAttribute("data-ts", /^\d+$/);
+  await expect(value("Created")).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  await expect(value("Expires")).toHaveAttribute("data-ts", /^\d+$/);
+  await expect(value("Expires")).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  await expect(value("Last used")).toHaveText("Never");
+
+  // One request with the key stamps its last-used time, which then renders in
+  // the same local form as the other two dates. The key holds `file.read` for
+  // this library, so list its files.
+  const used = await page.request.get(
+    `${state.baseURL}/api2/repos/${repoId}/dir/?p=/`,
+    { headers: { authorization: `Bearer ${secret}` } },
+  );
+  expect(used.ok()).toBeTruthy();
   await page.reload();
+  await expect(value("Last used")).toHaveAttribute("data-ts", /^\d+$/);
+  await expect(value("Last used")).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+
+  // The reload also drops the one-time secret: the key stays, the plaintext
+  // does not, and no second key appears (the create form redirects, so a
+  // refresh re-reads the list).
   await expect(page.locator("#new-key-value")).toHaveCount(0);
   await expect(page.locator(".nf-xrow").filter({ hasText: name })).toHaveCount(1);
 

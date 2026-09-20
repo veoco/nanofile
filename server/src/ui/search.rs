@@ -47,8 +47,6 @@ pub struct SearchResultItem {
     pub oid: String,
     pub last_modified: i64,
     #[serde(skip)]
-    pub last_modified_readable: String,
-    #[serde(skip)]
     pub size_display: String,
     pub fullpath: String,
     pub size: i64,
@@ -338,9 +336,6 @@ async fn resolve_file_metadata_batch(
             name: entry.name.clone(),
             oid: entry.id.clone(),
             last_modified: entry.mtime,
-            last_modified_readable: chrono::DateTime::from_timestamp(entry.mtime, 0)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                .unwrap_or_else(|| entry.mtime.to_string()),
             size_display: format_size(entry.size),
             fullpath: fullpath.clone(),
             size: entry.size,
@@ -454,9 +449,6 @@ async fn search_fs_tree(
                         name: entry.name.clone(),
                         oid: entry.id.clone(),
                         last_modified: entry.mtime,
-                        last_modified_readable: chrono::DateTime::from_timestamp(entry.mtime, 0)
-                            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                            .unwrap_or_else(|| entry.mtime.to_string()),
                         size_display: format_size(entry.size),
                         fullpath: full_path.clone(),
                         size: entry.size,

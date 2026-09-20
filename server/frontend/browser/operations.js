@@ -3,7 +3,7 @@
 import { __t } from "../core/i18n.js";
 import { getCookie, escapeHtml, escapeAttr, parentDirOf } from "../core/utils.js";
 import { apiFetch } from "../core/api.js";
-import { formatHistorySize, formatHistoryTime } from "../core/format.js";
+import { formatHistorySize, formatLocalDateTime } from "../core/format.js";
 import { Toast } from "../core/toast.js";
 import { ConfirmDialog } from "../core/confirm.js";
 import { refreshFileList } from "./list.js";
@@ -116,7 +116,7 @@ function renderHistoryList(items, repoId, path) {
       escapeHtml(item.last_modified_by || "") +
       "</span></div>" +
       '<div class="text-[12px] text-ink-3">' +
-      formatHistoryTime(item.mtime || item.file_mtime || 0) +
+      formatLocalDateTime(item.mtime || item.file_mtime || 0) +
       " · " +
       formatHistorySize(item.size || item.file_size || 0) +
       "</div></div>" +

@@ -33,6 +33,14 @@ test("history lists every revision with download and restore actions", async ({ 
   await expect(page.locator('.js-history-list a[download]')).toHaveCount(2);
 });
 
+test("a revision's timestamp uses the page's local `YYYY-MM-DD HH:MM` form", async ({ page }) => {
+  await clickRowAction(page, "alpha.txt", ".js-history-btn");
+  // The dialog is built in JS; its time comes from the same formatter as the
+  // file list, not `toLocaleString()` (whose shape varies per browser locale).
+  const time = page.locator(".js-history-list > div > div > div").nth(1);
+  await expect(time).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} · /);
+});
+
 test("restore an older revision reverts the file content", async ({ page }) => {
   await clickRowAction(page, "alpha.txt", ".js-history-btn");
   // History is newest-first; the last Restore reverts to the original upload.

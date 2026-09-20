@@ -70,7 +70,7 @@
                         {% if let Some(email) = inv.used_by_email %}
                         <span class="sep">&middot;</span>
                         <span class="t">{{ t.tr("invite.used_by") }} {{ email }}
-                            {%- if let Some(at) = inv.used_at %} {{ t.tr("invite.at") }} {{ at }}{% endif %}</span>
+                            {%- if let Some(ts) = inv.used_at_ts %} {{ t.tr("invite.at") }} <span data-ts="{{ ts }}"></span>{% endif %}</span>
                         {% endif %}
                     </div>
                 </div>

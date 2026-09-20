@@ -62,7 +62,7 @@ pub struct TrashListTemplate {
 pub struct TrashEntryView {
     pub obj_name: String,
     pub parent_dir: String,
-    pub deleted_time_display: String,
+    /// Raw Unix seconds; the template renders it in the viewer's timezone.
     pub deleted_time_ts: i64,
     pub commit_id: String,
     pub is_dir: bool,
@@ -114,22 +114,15 @@ pub async fn trash_list_page(
     let items: Vec<TrashEntryView> = result
         .items
         .into_iter()
-        .map(|entry| {
-            let deleted_time_display = chrono::DateTime::parse_from_rfc3339(&entry.deleted_time)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                .unwrap_or_else(|_| entry.deleted_time.clone());
-
-            TrashEntryView {
-                obj_name: entry.obj_name,
-                parent_dir: entry.parent_dir,
-                deleted_time_display,
-                deleted_time_ts: entry.deleted_time_ts,
-                commit_id: entry.commit_id,
-                is_dir: entry.is_dir,
-                size_display: format_size(entry.size),
-                repo_id: entry.repo_id,
-                repo_name: entry.repo_name,
-            }
+        .map(|entry| TrashEntryView {
+            obj_name: entry.obj_name,
+            parent_dir: entry.parent_dir,
+            deleted_time_ts: entry.deleted_time_ts,
+            commit_id: entry.commit_id,
+            is_dir: entry.is_dir,
+            size_display: format_size(entry.size),
+            repo_id: entry.repo_id,
+            repo_name: entry.repo_name,
         })
         .collect();
 

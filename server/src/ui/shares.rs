@@ -14,7 +14,6 @@ use crate::i18n::I18n;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
-use super::{format_ts, format_ts_opt};
 
 #[derive(Template)]
 #[template(path = "shares/list.html")]
@@ -38,8 +37,6 @@ pub struct UploadLinkInfo {
     pub repo_name: String,
     pub path: String,
     pub name: String,
-    pub created_at: String,
-    pub expires_at: String,
     pub created_at_ts: i64,
     pub expires_at_ts: Option<i64>,
     pub has_password: bool,
@@ -54,8 +51,6 @@ pub struct ShareLinkInfo {
     pub repo_name: String,
     pub path: String,
     pub name: String,
-    pub created_at: String,
-    pub expires_at: String,
     pub created_at_ts: i64,
     pub expires_at_ts: Option<i64>,
     pub has_password: bool,
@@ -129,8 +124,6 @@ pub async fn list_shares(
                 repo_name: repo_names.get(&s.repo_id).cloned().unwrap_or_default(),
                 path: s.path.clone(),
                 name,
-                created_at: format_ts(s.created_at),
-                expires_at: format_ts_opt(I18n::get(user.language.as_deref()), s.expires_at),
                 created_at_ts: s.created_at,
                 expires_at_ts: s.expires_at,
                 has_password: s.password.is_some(),
@@ -161,8 +154,6 @@ pub async fn list_shares(
                 repo_name: repo_names.get(&u.repo_id).cloned().unwrap_or_default(),
                 path: u.path.clone(),
                 name,
-                created_at: format_ts(u.created_at),
-                expires_at: format_ts_opt(I18n::get(user.language.as_deref()), u.expires_at),
                 created_at_ts: u.created_at,
                 expires_at_ts: u.expires_at,
                 has_password: u.password.is_some(),
