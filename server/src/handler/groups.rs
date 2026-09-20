@@ -1,29 +1,32 @@
-use axum::{
-    Json,
-    extract::{Query, State},
-};
-use serde::Deserialize;
-use std::sync::Arc;
+//! Group routes — retained only as client-compatibility stubs.
+//!
+//! nanofile has no groups. Nothing creates, joins or lists a real one, the
+//! `groups` / `group_members` tables were dropped, and no library can be shared
+//! to a group. These two handlers exist because an official client fails on a
+//! load path without them:
+//!
+//! * `GET /api/v2.1/groups/` — seadroid subscribes to it *before* the library
+//!   list inside `getReposSingleFromServer` (`Objs.java:93-146`, declared at
+//!   `RepoService.java:22-23`). A 404 rejects the whole chain, which clears the
+//!   cached library list and shows "Error when loading libraries"; the SAF
+//!   documents provider fails the same way. It must answer 200 with a
+//!   top-level JSON array.
+//! * `GET /api2/groups/?with_msg=false` — the desktop client's group-share
+//!   dialog (`seafile-client/src/api/requests.cpp:1290`) rejects with "Failed
+//!   to get your groups and contacts information" on a non-2xx. nanofile
+//!   advertises `seafile-pro` (`handler::server_info`), which is what makes
+//!   that dialog reachable.
+//!
+//! Both answer an empty list. `with_repos` keeps its validation so a client
+//! sending something other than 0/1 gets a 400 instead of a silently different
+//! shape.
 
-use crate::AppState;
+use axum::{Json, extract::Query};
+use serde::Deserialize;
+
 use crate::middleware::auth::AuthUser;
-use crate::service::sharing::group;
 use base::error::AppError;
 
-/// GET /api2/groups/
-pub async fn list_groups(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    let result = group::list_groups(&state.repos, auth.user_id).await?;
-    Ok(Json(result))
-}
-
-/// GET /api/v2.1/groups/
-///
-/// Required by the seadroid library-list load chain (`getGroupsAsync`); must
-/// return 200 + an array (empty is fine) rather than 404. `group_quota_usage`
-/// is returned as integer 0 to keep the Android `long` parser happy.
 #[derive(Deserialize)]
 pub struct GroupsV21Query {
     pub with_repos: Option<i64>,
@@ -31,45 +34,19 @@ pub struct GroupsV21Query {
     pub avatar_size: Option<i64>,
 }
 
+/// `GET /api/v2.1/groups/` — always `[]`, in the array shape seadroid parses.
 pub async fn list_groups_v21(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
     Query(query): Query<GroupsV21Query>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     let with_repos = query.with_repos.unwrap_or(0);
     if with_repos != 0 && with_repos != 1 {
         return Err(AppError::BadRequest("with_repos invalid".into()));
     }
-    let result = group::list_groups_v21(&state.repos, auth.user_id, with_repos == 1).await?;
-    Ok(Json(result))
+    Ok(Json(Vec::new()))
 }
 
-/// GET /api2/groupandcontacts/
-pub async fn groups_and_contacts(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let result = group::groups_and_contacts(&state.repos, auth.user_id).await?;
-    Ok(Json(result))
-}
-
-/// GET /api2/search-user/?q=
-#[derive(Deserialize)]
-pub struct SearchUserQuery {
-    pub q: Option<String>,
-}
-
-pub async fn search_user(
-    _auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<SearchUserQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let q = query.q.unwrap_or_default();
-    let users = group::search_user(&state.repos, &q).await?;
-    // The desktop client reads `json_object_get(json, "users")` and silently
-    // ends up with an empty list if the key is missing
-    // (`seafile-client/src/api/requests.cpp:1260-1284`), so the envelope is the
-    // contract — a bare array was accepted and produced nothing. The companion
-    // rate limit lives in `group::search_user`'s caller-side cap.
-    Ok(Json(serde_json::json!({ "users": users })))
+/// `GET /api2/groups/` — always `[]`, in the array shape the desktop client parses.
+pub async fn list_groups(_auth: AuthUser) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    Ok(Json(Vec::new()))
 }

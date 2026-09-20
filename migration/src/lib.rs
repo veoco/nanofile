@@ -90,6 +90,8 @@ migrations!(
     m20260917_000001_add_merge_flags_to_commits,
     m20260918_000001_add_format_to_thumbnails,
     m20260918_000002_purge_legacy_thumbnail_sizes,
+    m20260920_000001_drop_groups_and_contacts,
+    m20260920_000002_purge_foreign_repo_members,
 );
 
 #[cfg(test)]

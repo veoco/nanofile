@@ -13,9 +13,14 @@ use crate::AppState;
 /// - `seafile-pro`: NOT a lie — the desktop client gates the Activities and
 ///   Search tabs on it (`cloud-view.cpp`), the mobile clients gate the
 ///   Activities tab on it (seadroid `MainActivity`, iOS `isActivityEnabled`),
-///   and lock/share menus too. All of those have working backends here
-///   (`/api/v2.1/activities/`, search, sync-protocol lock, sharing), so
-///   dropping it would hide features that actually work.
+///   and lock/share menus too. Those backends exist here
+///   (`/api/v2.1/activities/`, search, sync-protocol lock, share links), so
+///   dropping it would hide features that actually work. It also makes the
+///   desktop client's share dialog reachable: that dialog lists share links and
+///   offers user/group sharing, of which nanofile implements the former — the
+///   group list it fetches is the empty compatibility stub in
+///   [`crate::handler::groups`], and there is no route that creates a
+///   user-to-user share by design.
 /// - `file-search`: gates the desktop Search tab and mobile search. Backend
 ///   search exists; gated by `file_search_enabled`.
 /// - `client-sso-via-local-browser`: implemented; gated by `sso_enabled`.

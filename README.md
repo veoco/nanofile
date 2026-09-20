@@ -26,7 +26,7 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   official mobile apps.
 - **API keys**: one credential type for external clients, managed under *Settings → API Keys*. A key
   carries a set of fine-grained capabilities (`file.read`, `share_link.write`, `sync.token`,
-  `webdav.write`, …; 43 in total, grouped by domain), is either bound to specific libraries — each
+  `webdav.write`, …; 40 in total, grouped by domain), is either bound to specific libraries — each
   with its own read/write ceiling — or to every library the owner can reach, and expires on a
   configurable lifetime. Presets cover the common cases (sync client, WebDAV, CI upload, read-only)
   and stay inside the surface they name: a WebDAV key authenticates with `webdav.*` plus its library
@@ -68,10 +68,10 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
 - **Web UI**: file browser with previews and thumbnails, starred files, activity feed, trash,
   settings (profile, sessions & credentials, 2FA, invitations, API keys), and a **sysadmin panel**
   (users, shares, background tasks). Localized in English and Chinese.
-- **Sharing**: share links (optional password / expiry / view counting), anonymous upload links,
-  user shares with rw/r permissions, custom share permissions. A global `share_link_enabled` switch
-  can disable anonymous share/upload links entirely (existing links become inaccessible and the
-  `share-link-disabled` feature is advertised so clients hide sharing).
+- **Sharing**: share links (optional password / expiry / view counting) and anonymous upload links.
+  A global `share_link_enabled` switch can disable anonymous share/upload links entirely (existing
+  links become inaccessible and the `share-link-disabled` feature is advertised so clients hide
+  sharing). Libraries are per-account: there is no share-to-user or group surface.
 - **Security**: TOTP two-factor auth with backup codes and trusted devices, SSO / "view on website"
   login, invitation-code registration, login rate limiting with lockout, password reset (email-gated),
   hashed session cookies with CSRF protection, path-traversal-safe filename handling.
@@ -111,7 +111,7 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
     the library comes back empty and the server logs why.
   - **Upgrading from an older build**: blocks used to live in one flat, server-wide tree
     (`data/blocks/<2hex>/<id>`). That layout keyed blocks only by content id, so any authenticated
-    user could read any library's block by naming it through a library they *were* a member of.
+    user could read any library's block by naming it through a library they could reach.
     The server now copies each referenced block into the library that owns it, then removes the old
     tree — automatically at startup, before the first request is served. Use
     `nanofile migrate-blocks --dry-run` to pre-flight the copy volume (it prints repositories,
@@ -251,9 +251,8 @@ run it:
   share-link passwords and API tokens are bearer credentials.
 - **File blocks are stored per library** (`data/blocks/repos/<sha1(repo_id)>/…`), and every block
   read/write names the library it belongs to. A block id therefore only grants access through a
-  library the caller is a member of: a removed collaborator who still has another library on the
-  server cannot read the blocks their client cached from the one they lost. This also means
-  deduplication is per library rather than server-wide.
+  library the caller owns, and the blocks one account cached from another account's library are
+  unreachable. This also means deduplication is per library rather than server-wide.
 - **Deleted libraries keep their disk usage until their trash entry is purged.** Garbage collection
   never reclaims the blocks of a library that is still listed in the trash — that is what makes a
   restore serve its files again. Purge the library (or empty the trash) to free the space.
@@ -277,9 +276,8 @@ run it:
   drop every credential the account holds — session tokens, API keys (WebDAV keys included),
   repository sync tokens *and* the in-memory `/download-api/…`, `/upload-api/…` and `/blks/…`
   capability URLs — and a password change/reset also invalidates outstanding password-reset links.
-  Removing a member from a library revokes their sync token and capability URLs for it.
-  - A key bound to a library stops working the moment its owner loses membership, because every
-    request re-checks membership; the binding itself is kept, so re-adding the member restores the
+  - A key bound to a library stops working the moment its owner loses access, because every
+    request re-checks ownership; the binding itself is kept, so restoring access restores the
     key they already hold. Deleting a library removes the keys bound only to it.
   - API keys cannot reach `/api2/api-keys/`: a key that could mint keys could give itself more
     access than it holds. Managing keys requires a browser session.
@@ -352,11 +350,11 @@ Deliberate, documented trade-offs (no code path is unprotected — each is bound
   from an upload that was abandoned before its final chunk stay on disk (the server warns at
   startup). Quota is still charged for them, so this is disk usage, not a bypass; enable `[gc]` to
   reclaim them.
-- **A removed collaborator's client stops syncing until it logs in again.** Unsharing (and
-  deactivation, password change and device wipe) deletes the database sync tokens, so the affected
-  client's next `/seafhttp/` call is refused and it has to re-authenticate. That is intentional —
-  keeping the token alive would keep serving the library through it — and it matches what the
-  official server does when access is revoked.
+- **A revoked client stops syncing until it logs in again.** Deactivation, a password change and a
+  device wipe delete the account's database sync tokens, so the affected client's next `/seafhttp/`
+  call is refused and it has to re-authenticate. That is intentional — keeping the token alive would
+  keep serving the library through it — and it matches what the official server does when access is
+  revoked.
 - **The web UI does not unlock encrypted libraries.** Names can be browsed (Seafile leaves the FS
   tree and commits unencrypted and encrypts only file content), but preview, download and upload
   from a browser answer 440 (`RepoPasswdRequired`) because only the API and the official clients can

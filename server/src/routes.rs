@@ -86,14 +86,6 @@ fn v1_routes() -> Router<Arc<AppState>> {
         .nest("/api2", crate::handler::avatar::api_routes())
         .route("/api2/groups/", get(crate::handler::groups::list_groups))
         .route(
-            "/api2/groupandcontacts/",
-            get(crate::handler::groups::groups_and_contacts),
-        )
-        .route(
-            "/api2/search-user/",
-            get(crate::handler::groups::search_user),
-        )
-        .route(
             "/api2/client-login/",
             post(crate::handler::client_login::client_login),
         )
@@ -119,13 +111,6 @@ fn v1_routes() -> Router<Arc<AppState>> {
         .route(
             "/api2/index-file-text/",
             post(crate::handler::reindex::index_file_text),
-        )
-        .route(
-            "/api2/beshared-repos/{repo_id}/",
-            get(crate::handler::share::list_share_members)
-                .post(crate::handler::share::beshare_repo)
-                .put(crate::handler::share::modify_share_permission)
-                .delete(crate::handler::share::delete_share),
         )
         .nest("/api2", crate::handler::history::repo_history_routes())
         .nest("/api2", crate::handler::devices::devices_routes())
@@ -314,15 +299,6 @@ fn v2_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/v2.1/smart-link/",
             get(crate::handler::smart_link::get_smart_link),
-        )
-        // Custom share permissions
-        .route(
-            "/api/v2.1/repos/{repo_id}/custom-share-permissions/",
-            get(crate::handler::metadata::custom_share_permissions),
-        )
-        .route(
-            "/api/v2.1/repos/{repo_id}/custom-share-permissions/{permission_id}/",
-            get(crate::handler::metadata::custom_share_permission),
         )
         // Metadata record
         .route(

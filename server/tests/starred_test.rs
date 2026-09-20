@@ -570,20 +570,9 @@ async fn test_starred_items_are_filtered_by_current_access() {
     assert_eq!(resp.status(), 200, "owner star failed");
 
     // A second user with write access who stars the same file.
-    common::create_test_user(f.server.db.as_ref(), "starrer@example.com", "password").await;
-    let resp = f
-        .client
-        .post_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({
-                "share_type": "personal",
-                "user": "starrer@example.com",
-                "permission": "rw",
-            }),
-        )
-        .await;
-    assert_eq!(resp.status(), 200, "sharing failed");
+    let starrer_id =
+        common::create_test_user(f.server.db.as_ref(), "starrer@example.com", "password").await;
+    common::add_repo_member(f.server.db.as_ref(), &f.repo_id, starrer_id, "rw").await;
     let resp = f.client.login("starrer@example.com", "password").await;
     let member_token = resp.json::<serde_json::Value>().await.unwrap()["token"]
         .as_str()
@@ -628,16 +617,8 @@ async fn test_starred_items_are_filtered_by_current_access() {
         "the member must see the library while they are a member"
     );
 
-    // The owner removes the member.
-    let resp = f
-        .client
-        .delete_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({"share_type": "personal", "user": "starrer@example.com"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 200, "removing the member failed");
+    // The owner revokes the member's access.
+    common::remove_repo_member(f.server.db.as_ref(), &f.repo_id, starrer_id).await;
 
     // The removed member no longer sees the entry…
     assert!(

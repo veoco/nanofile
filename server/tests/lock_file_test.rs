@@ -167,25 +167,13 @@ async fn test_lock_file_readonly_member_forbidden() {
         .await;
     assert!(resp.status().is_success());
 
-    // Second user, shared as read-only.
-    create_test_user(f.server.db.as_ref(), "ro@example.com", "password").await;
+    // Second user, granted read-only access.
+    let ro_id = create_test_user(f.server.db.as_ref(), "ro@example.com", "password").await;
     let resp = f.client.login("ro@example.com", "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let b_token = body["token"].as_str().unwrap().to_string();
 
-    let resp = f
-        .client
-        .post_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({
-                "share_type": "personal",
-                "user": "ro@example.com",
-                "permission": "r"
-            }),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
+    common::add_repo_member(f.server.db.as_ref(), &f.repo_id, ro_id, "r").await;
 
     let b_sync = get_sync_token(&f.client, &b_token, &f.repo_id).await;
 

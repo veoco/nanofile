@@ -106,9 +106,6 @@
                     {{ icons::icon_lock("w-3 h-3") }}
                 </span>
                 {% endif %}
-                {% if r.owner_id != user_id %}
-                <span class="nf-lib-tag">{{ icons::icon_user("w-2.5 h-2.5") }}{{ t.tr("repo.shared_tag") }}</span>
-                {% endif %}
                 {% if !r.description.is_empty() %}
                 <span class="nf-lib-desc">{{ r.description }}</span>
                 {% endif %}

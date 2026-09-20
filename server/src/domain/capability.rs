@@ -54,9 +54,6 @@ pub enum Capability {
     ShareLinkWrite,
     UploadLinkRead,
     UploadLinkWrite,
-    MemberRead,
-    MemberWrite,
-    GroupRead,
     MetadataRead,
     MetadataWrite,
     TagRead,
@@ -146,7 +143,7 @@ impl Capability {
     /// what the management UI and `/api2/api-keys/catalog/` offer, and offering
     /// a grant nothing consults would be a lie. Ids that were removed for that
     /// reason are listed in [`RETIRED_IDS`].
-    pub const ALL: [Capability; 43] = [
+    pub const ALL: [Capability; 40] = [
         Capability::AccountRead,
         Capability::AccountWrite,
         Capability::DeviceRead,
@@ -167,9 +164,6 @@ impl Capability {
         Capability::ShareLinkWrite,
         Capability::UploadLinkRead,
         Capability::UploadLinkWrite,
-        Capability::MemberRead,
-        Capability::MemberWrite,
-        Capability::GroupRead,
         Capability::MetadataRead,
         Capability::MetadataWrite,
         Capability::TagRead,
@@ -215,9 +209,6 @@ impl Capability {
             Capability::ShareLinkWrite => "share_link.write",
             Capability::UploadLinkRead => "upload_link.read",
             Capability::UploadLinkWrite => "upload_link.write",
-            Capability::MemberRead => "member.read",
-            Capability::MemberWrite => "member.write",
-            Capability::GroupRead => "group.read",
             Capability::MetadataRead => "metadata.read",
             Capability::MetadataWrite => "metadata.write",
             Capability::TagRead => "tag.read",
@@ -273,10 +264,7 @@ impl Capability {
             Capability::ShareLinkRead
             | Capability::ShareLinkWrite
             | Capability::UploadLinkRead
-            | Capability::UploadLinkWrite
-            | Capability::MemberRead
-            | Capability::MemberWrite
-            | Capability::GroupRead => CapabilityDomain::Sharing,
+            | Capability::UploadLinkWrite => CapabilityDomain::Sharing,
             Capability::MetadataRead
             | Capability::MetadataWrite
             | Capability::TagRead
@@ -312,8 +300,6 @@ impl Capability {
                 | Capability::HistoryRead
                 | Capability::ShareLinkRead
                 | Capability::UploadLinkRead
-                | Capability::MemberRead
-                | Capability::GroupRead
                 | Capability::MetadataRead
                 | Capability::TagRead
                 | Capability::StarRead
@@ -340,7 +326,7 @@ impl Capability {
 /// Identifiers that used to be grantable and are not any more.
 ///
 /// A capability is only offered while something actually enforces it. These
-/// three never had an enforcement point:
+/// never had one, or lost the routes that had it:
 ///
 /// * `invitation.read` / `invitation.write` — invitations are a Web-UI,
 ///   session-only, admin feature; there is no invitation route in [`ROUTES`]
@@ -348,6 +334,10 @@ impl Capability {
 /// * `history.manage` — history has exactly two powers, reading a version's
 ///   history (`history.read`) and restoring one (`history.write`); nothing else
 ///   consults it.
+/// * `member.read` / `member.write` / `group.read` — they guarded user-to-user
+///   library sharing and group management, both of which are gone. The two
+///   group routes that remain are stateless compatibility stubs gated on
+///   `library.read`; `related-users` moved to `library.read` too.
 ///
 /// A stored list may still name them, because a key minted from the `full` or
 /// `readonly_all` preset before this build carries them. Such ids are *dropped*
@@ -355,7 +345,14 @@ impl Capability {
 /// consults cannot make a key more permissive than the database says, which is
 /// the property the strict parse otherwise protects. Client input stays strict:
 /// [`CapabilitySet::parse`] rejects a retired id rather than accepting a no-op.
-pub const RETIRED_IDS: &[&str] = &["invitation.read", "invitation.write", "history.manage"];
+pub const RETIRED_IDS: &[&str] = &[
+    "invitation.read",
+    "invitation.write",
+    "history.manage",
+    "member.read",
+    "member.write",
+    "group.read",
+];
 
 /// Capabilities implied by another capability.
 ///
@@ -379,8 +376,6 @@ const IMPLICATIONS: &[(Capability, &[Capability])] = &[
     (Capability::HistoryWrite, &[Capability::HistoryRead]),
     (Capability::ShareLinkWrite, &[Capability::ShareLinkRead]),
     (Capability::UploadLinkWrite, &[Capability::UploadLinkRead]),
-    (Capability::MemberRead, &[Capability::LibraryRead]),
-    (Capability::MemberWrite, &[Capability::MemberRead]),
     (Capability::MetadataRead, &[Capability::LibraryRead]),
     (Capability::MetadataWrite, &[Capability::MetadataRead]),
     (Capability::TagRead, &[Capability::MetadataRead]),
@@ -405,7 +400,7 @@ fn implied_by(capability: Capability) -> &'static [Capability] {
 
 /// A set of capabilities, stored in memory as a bit set.
 ///
-/// `u128` comfortably covers the catalog (43 today); adding a 129th capability
+/// `u128` comfortably covers the catalog (40 today); adding a 129th capability
 /// would be a compile-time error at [`Capability::bit`], which is the intended
 /// prompt to widen the type together with the persisted format.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1094,58 +1089,18 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
     ),
     (
         "GET",
-        "/api2/beshared-repos/{repo_id}/",
-        RouteAccess::Capability(Capability::MemberRead),
-    ),
-    (
-        "POST",
-        "/api2/beshared-repos/{repo_id}/",
-        RouteAccess::Capability(Capability::MemberWrite),
-    ),
-    (
-        "PUT",
-        "/api2/beshared-repos/{repo_id}/",
-        RouteAccess::Capability(Capability::MemberWrite),
-    ),
-    (
-        "DELETE",
-        "/api2/beshared-repos/{repo_id}/",
-        RouteAccess::Capability(Capability::MemberWrite),
-    ),
-    (
-        "GET",
-        "/api/v2.1/repos/{repo_id}/related-users/",
-        RouteAccess::Capability(Capability::MemberRead),
-    ),
-    (
-        "GET",
-        "/api/v2.1/repos/{repo_id}/custom-share-permissions/",
-        RouteAccess::Capability(Capability::MemberRead),
-    ),
-    (
-        "GET",
-        "/api/v2.1/repos/{repo_id}/custom-share-permissions/{permission_id}/",
-        RouteAccess::Capability(Capability::MemberRead),
-    ),
-    (
-        "GET",
         "/api2/groups/",
-        RouteAccess::Capability(Capability::GroupRead),
-    ),
-    (
-        "GET",
-        "/api2/groupandcontacts/",
-        RouteAccess::Capability(Capability::GroupRead),
-    ),
-    (
-        "GET",
-        "/api2/search-user/",
-        RouteAccess::Capability(Capability::GroupRead),
+        RouteAccess::Capability(Capability::LibraryRead),
     ),
     (
         "GET",
         "/api/v2.1/groups/",
-        RouteAccess::Capability(Capability::GroupRead),
+        RouteAccess::Capability(Capability::LibraryRead),
+    ),
+    (
+        "GET",
+        "/api/v2.1/repos/{repo_id}/related-users/",
+        RouteAccess::Capability(Capability::LibraryRead),
     ),
     // ── Metadata and tags ────────────────────────────────────────────────
     (
@@ -1543,8 +1498,6 @@ pub const PRESETS: &[Preset] = &[
             Capability::HistoryRead,
             Capability::ShareLinkRead,
             Capability::UploadLinkRead,
-            Capability::MemberRead,
-            Capability::GroupRead,
             Capability::MetadataRead,
             Capability::TagRead,
             Capability::StarRead,
@@ -1578,9 +1531,6 @@ pub const PRESETS: &[Preset] = &[
             Capability::ShareLinkWrite,
             Capability::UploadLinkRead,
             Capability::UploadLinkWrite,
-            Capability::MemberRead,
-            Capability::MemberWrite,
-            Capability::GroupRead,
             Capability::MetadataRead,
             Capability::MetadataWrite,
             Capability::TagRead,
@@ -1631,7 +1581,7 @@ mod tests {
 
     #[test]
     fn catalog_ids_are_unique_and_round_trip() {
-        assert_eq!(Capability::ALL.len(), 43);
+        assert_eq!(Capability::ALL.len(), 40);
         let mut ids: Vec<&str> = Capability::ALL.iter().map(|c| c.id()).collect();
         ids.sort_unstable();
         ids.dedup();

@@ -1107,23 +1107,11 @@ async fn test_share_dir_view_paginates_large_folder() {
 
 // ==================== Security: repo-filtered link enumeration ====================
 
-/// Create a second user, share the repo with them at `permission`, and return
-/// their login token.
+/// Create a second user, grant them `permission` on the repo, and return their
+/// login token.
 async fn shared_member_token(f: &TestFixture, email: &str, permission: &str) -> String {
-    create_test_user(&f.server.db, email, "password").await;
-    let share_resp = f
-        .client
-        .post_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({
-                "share_type": "personal",
-                "user": email,
-                "permission": permission,
-            }),
-        )
-        .await;
-    assert_eq!(share_resp.status(), 200);
+    let uid = create_test_user(&f.server.db, email, "password").await;
+    common::add_repo_member(&f.server.db, &f.repo_id, uid, permission).await;
 
     let resp = f.client.login(email, "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -1449,110 +1437,7 @@ async fn test_share_link_disabled_blocks_existing_links() {
     );
 }
 
-// ==================== Security: link revocation follows its creator ====================
-
-/// A share/upload link acts **as its creator**, so it must stop resolving the
-/// moment that user loses access to the library (member removed) or can no
-/// longer authenticate (account deactivated).
-///
-/// Before this, a link kept working after its creator was removed, so a removed
-/// collaborator's link — or a link they had handed to a third party — kept
-/// reading the library indefinitely.
-#[tokio::test]
-async fn test_links_are_revoked_when_their_creator_loses_access() {
-    let f = TestFixture::new().await;
-    let content = b"revocable content".to_vec();
-
-    assert!(
-        f.client
-            .upload_file(&f.api_token, &f.repo_id, "/", "revoked.txt", &content)
-            .await
-            .status()
-            .is_success()
-    );
-
-    // A second user with write access creates both link types.
-    let member_token = shared_member_token(&f, "member@example.com", "rw").await;
-    let resp = f
-        .client
-        .post_json(
-            "/api/v2.1/share-links/",
-            Some(&member_token),
-            &serde_json::json!({"repo_id": f.repo_id, "path": "/revoked.txt"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 200, "member share-link creation failed");
-    let share_token = resp.json::<serde_json::Value>().await.unwrap()["token"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let resp = f
-        .client
-        .post_json(
-            "/api/v2.1/upload-links/",
-            Some(&member_token),
-            &serde_json::json!({"repo_id": f.repo_id, "path": "/"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 200, "member upload-link creation failed");
-    let upload_token = resp.json::<serde_json::Value>().await.unwrap()["token"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    // Baseline: both links work while the creator has access.
-    let dl = f
-        .client
-        .get(&format!("/f/{}/?dl=1", share_token), None)
-        .await;
-    assert_eq!(dl.status(), 200);
-    assert_eq!(dl.bytes().await.unwrap().to_vec(), content);
-    assert_eq!(
-        f.client
-            .get(&format!("/u/{}/", upload_token), None)
-            .await
-            .status(),
-        200
-    );
-
-    // The owner removes the member.
-    let resp = f
-        .client
-        .delete_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({"share_type": "personal", "user": "member@example.com"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 200, "removing the member failed");
-
-    // Both links are dead *immediately* — not after a cache TTL.
-    let dl = f
-        .client
-        .get(&format!("/f/{}/?dl=1", share_token), None)
-        .await;
-    assert_eq!(
-        dl.status(),
-        404,
-        "a share link must stop resolving once its creator lost access"
-    );
-    assert_eq!(
-        f.client
-            .get(&format!("/f/{}/", share_token), None)
-            .await
-            .status(),
-        404
-    );
-    assert_eq!(
-        f.client
-            .get(&format!("/u/{}/", upload_token), None)
-            .await
-            .status(),
-        404,
-        "an upload link must stop resolving once its creator lost access"
-    );
-}
+// ==================== Security: a link dies with its creator's access ==================
 
 /// Deactivating the account that created a link revokes the link too, through
 /// the same creator-access check (here via the admin service, which is what the

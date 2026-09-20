@@ -1,12 +1,12 @@
 //! Credential-revocation regression tests.
 //!
 //! Each case here closes a window in which a credential kept working after the
-//! event that was supposed to invalidate it: a deactivation, an unshare, a
-//! device wipe, a password reset.
+//! event that was supposed to invalidate it: a deactivation, a device wipe, a
+//! password reset.
 
 mod common;
 
-use common::{TestFixture, create_test_user};
+use common::TestFixture;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
 /// Set a short-lived access token aside by writing it directly, returning the
@@ -128,91 +128,6 @@ async fn device_wiped_accepts_bearer_and_revokes_sync_tokens() {
         403,
         "the wiped device's sync token must stop working, got {}",
         probe.status()
-    );
-}
-
-/// Unsharing a member must revoke their repository sync token: `check-blocks`
-/// and `locked-files` derive the caller from it, and a token lives up to a year
-/// (`sync_token_ttl_days`). Without this a removed member kept a block-existence
-/// oracle for the library.
-#[tokio::test]
-async fn unshare_revokes_sync_token_and_closes_the_block_oracle() {
-    let f = TestFixture::new().await;
-    create_test_user(&f.server.db, "member@example.com", "password").await;
-
-    // Share the library with the member (rw).
-    let resp = f
-        .client
-        .post_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({
-                "share_type": "personal",
-                "user": "member@example.com",
-                "permission": "rw",
-            }),
-        )
-        .await;
-    assert_eq!(resp.status(), 200, "sharing failed");
-
-    let login = f.client.login("member@example.com", "password").await;
-    let member_token = login.json::<serde_json::Value>().await.unwrap()["token"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let repo_tokens = f
-        .client
-        .get(
-            &format!("/api2/repo-tokens/?repos={}", f.repo_id),
-            Some(&member_token),
-        )
-        .await;
-    let member_sync = repo_tokens
-        .json::<serde_json::Value>()
-        .await
-        .unwrap()
-        .get(&f.repo_id)
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .expect("member sync token");
-
-    // The member can use check-blocks while they are a member.
-    let resp = f
-        .client
-        .post_sync_json(
-            &format!("/seafhttp/repo/{}/check-blocks/", f.repo_id),
-            &member_sync,
-            &serde_json::json!([infra::crypto::fs_id::sha1_hex(b"whatever")]),
-        )
-        .await;
-    assert_eq!(resp.status(), 200, "check-blocks should work while shared");
-
-    // The owner removes the member.
-    let resp = f
-        .client
-        .delete_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({"share_type": "personal", "user": "member@example.com"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 200, "unshare failed");
-
-    // The sync token is gone, so check-blocks fails closed.
-    let resp = f
-        .client
-        .post_sync_json(
-            &format!("/seafhttp/repo/{}/check-blocks/", f.repo_id),
-            &member_sync,
-            &serde_json::json!([infra::crypto::fs_id::sha1_hex(b"whatever")]),
-        )
-        .await;
-    assert_eq!(
-        resp.status(),
-        403,
-        "a removed member's sync token must stop working, got {}",
-        resp.status()
     );
 }
 

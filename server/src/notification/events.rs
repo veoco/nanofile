@@ -27,19 +27,6 @@ pub struct FileLockEvent {
     pub lock_user: String,
 }
 
-/// A folder permission changed event.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FolderPermEvent {
-    pub repo_id: String,
-    pub path: String,
-    #[serde(rename = "type")]
-    pub event_type: String,
-    pub change_event: String,
-    pub user: String,
-    pub group: i32,
-    pub perm: String,
-}
-
 /// A comment update event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommentEvent {
@@ -113,15 +100,6 @@ impl From<FileLockEvent> for NotificationMessage {
     fn from(event: FileLockEvent) -> Self {
         NotificationMessage {
             msg_type: "file-lock-changed".to_string(),
-            content: serde_json::to_value(event).unwrap_or_default(),
-        }
-    }
-}
-
-impl From<FolderPermEvent> for NotificationMessage {
-    fn from(event: FolderPermEvent) -> Self {
-        NotificationMessage {
-            msg_type: "folder-perm-changed".to_string(),
             content: serde_json::to_value(event).unwrap_or_default(),
         }
     }

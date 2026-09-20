@@ -587,8 +587,9 @@ impl SyncAuth {
                 if !authority.allows_repo(url_repo, needed.is_write()) {
                     return Err(StatusCode::FORBIDDEN);
                 }
-                // The key's scope is a ceiling, not a grant: membership still
-                // decides, so a removed collaborator loses access at once.
+                // The key's scope is a ceiling, not a grant: the permission
+                // check still decides, so a revoked account loses access at
+                // once.
                 crate::domain::permission::check_repo_read_permission(
                     repos.member.as_ref(),
                     url_repo,

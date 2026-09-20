@@ -329,21 +329,9 @@ async fn test_put_commit_rejects_oversized_body() {
 async fn test_readonly_member_cannot_write_to_repo() {
     let f = TestFixture::new().await;
 
-    // Share the repo with a second user as read-only.
-    common::create_test_user(&f.server.db, "readonly@test.com", "password").await;
-    let share_resp = f
-        .client
-        .post_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({
-                "share_type": "personal",
-                "user": "readonly@test.com",
-                "permission": "r"
-            }),
-        )
-        .await;
-    assert_eq!(share_resp.status(), 200);
+    // Grant a second user read-only access.
+    let ro_id = common::create_test_user(&f.server.db, "readonly@test.com", "password").await;
+    common::add_repo_member(&f.server.db, &f.repo_id, ro_id, "r").await;
 
     let resp = f.client.login("readonly@test.com", "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -384,20 +372,8 @@ async fn test_readonly_member_cannot_write_to_repo() {
 async fn test_rw_member_can_write_to_repo() {
     let f = TestFixture::new().await;
 
-    common::create_test_user(&f.server.db, "rw@test.com", "password").await;
-    let share_resp = f
-        .client
-        .post_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({
-                "share_type": "personal",
-                "user": "rw@test.com",
-                "permission": "rw"
-            }),
-        )
-        .await;
-    assert_eq!(share_resp.status(), 200);
+    let rw_id = common::create_test_user(&f.server.db, "rw@test.com", "password").await;
+    common::add_repo_member(&f.server.db, &f.repo_id, rw_id, "rw").await;
 
     let resp = f.client.login("rw@test.com", "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();

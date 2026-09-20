@@ -184,7 +184,7 @@ max_connections = 5
 #   NANOFILE_STORAGE_ENCRYPTION_KEY_FILE   (read key from file, safer)
 # Block storage root. Blocks are namespaced per library:
 #   {block_dir}/repos/<sha1(repo_id)>/<2hex>/<block_id>
-# so a block id only grants access through a library the caller is a member of.
+# so a block id only grants access through a library the caller owns.
 # A relative path resolves against the binary's directory, like `[database] url`.
 # Upgrading from a build that used the old flat layout
 # ({block_dir}/<2hex>/<block_id>): the migration runs automatically at startup,

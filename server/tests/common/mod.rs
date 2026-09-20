@@ -613,6 +613,49 @@ pub async fn create_test_user(db: &DatabaseConnection, email: &str, password: &s
     user.insert(db).await.unwrap().id
 }
 
+/// Grant `user_id` access to `repo_id` by inserting the `repo_members` row
+/// directly.
+///
+/// No HTTP surface creates a share any more — the `beshare` endpoint is gone
+/// along with the rest of the user-to-user sharing feature — but the permission
+/// predicates still read this table, so a test that exercises "a non-owner with
+/// `permission` can (or cannot) do X" seeds the row here instead of going
+/// through the API.
+pub async fn add_repo_member(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    user_id: i32,
+    permission: &str,
+) -> i32 {
+    let now = chrono::Utc::now().timestamp();
+    infra::entity::repo_member::ActiveModel {
+        id: sea_orm::NotSet,
+        repo_id: sea_orm::Set(repo_id.to_string()),
+        user_id: sea_orm::Set(user_id),
+        permission: sea_orm::Set(permission.to_string()),
+        created_at: sea_orm::Set(now),
+    }
+    .insert(db)
+    .await
+    .expect("insert repo member")
+    .id
+}
+
+/// Revoke a `repo_members` grant inserted by [`add_repo_member`].
+///
+/// The counterpart of the removed unshare endpoint: the membership row is what
+/// every permission predicate reads, so deleting it directly is exactly the
+/// state the server has to handle after access is withdrawn.
+pub async fn remove_repo_member(db: &DatabaseConnection, repo_id: &str, user_id: i32) {
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    infra::entity::repo_member::Entity::delete_many()
+        .filter(infra::entity::repo_member::Column::RepoId.eq(repo_id))
+        .filter(infra::entity::repo_member::Column::UserId.eq(user_id))
+        .exec(db)
+        .await
+        .expect("delete repo member");
+}
+
 pub async fn create_test_admin(db: &DatabaseConnection, email: &str, password: &str) -> i32 {
     let password_hash =
         server::service::auth::password::hash_password(password, TEST_PBKDF2_ITERATIONS);

@@ -215,7 +215,12 @@ mod tests {
         let (_dir, db) = before_this_migration().await;
         seed(&db).await;
 
-        crate::Migrator::up(&db, None).await.expect("run migration");
+        // Stop after this migration: later ones may rewrite the fixture
+        // (`m20260920_000002` purges non-owner sync tokens) and these tests
+        // assert on the state this migration leaves behind.
+        crate::Migrator::up(&db, Some(1))
+            .await
+            .expect("run migration");
 
         assert_eq!(count_index(&db, "idx_sync_tokens_repo_user_unique").await, 0);
         assert_eq!(count_index(&db, "uidx_sync_tokens_repo_user_peer").await, 1);
@@ -267,7 +272,12 @@ mod tests {
         let (_dir, db) = before_this_migration().await;
         seed(&db).await;
 
-        crate::Migrator::up(&db, None).await.expect("run migration");
+        // Stop after this migration: later ones may rewrite the fixture
+        // (`m20260920_000002` purges non-owner sync tokens) and these tests
+        // assert on the state this migration leaves behind.
+        crate::Migrator::up(&db, Some(1))
+            .await
+            .expect("run migration");
 
         assert_eq!(
             peer_of(&db, "r1", 1).await.as_deref(),
@@ -288,7 +298,12 @@ mod tests {
     async fn the_backfill_never_reassigns() {
         let (_dir, db) = before_this_migration().await;
         seed(&db).await;
-        crate::Migrator::up(&db, None).await.expect("run migration");
+        // Stop after this migration: later ones may rewrite the fixture
+        // (`m20260920_000002` purges non-owner sync tokens) and these tests
+        // assert on the state this migration leaves behind.
+        crate::Migrator::up(&db, Some(1))
+            .await
+            .expect("run migration");
 
         // User 2 gains a device of its own: now the token is unambiguous.
         exec(&db, "DELETE FROM api_tokens WHERE token = 'api-3'")

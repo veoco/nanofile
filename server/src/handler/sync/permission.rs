@@ -30,9 +30,10 @@ pub fn permission_routes() -> Router<Arc<AppState>> {
 /// Checks the user's permission level on the repo. For "upload" ops,
 /// requires write (rw) permission. For "download" ops, requires read (r).
 ///
-/// On a 403 the daemon parses the body's `reason` field to distinguish a
-/// read-only share ("no write permission") from full access-denied — without
-/// it a read-only shared repo would be reported as a generic access error.
+/// On a 403 the daemon parses the body's `reason` field to distinguish "no
+/// write permission" (a read-permission caller asking to upload) from a generic
+/// access-denied — without it the daemon would report every refusal as an
+/// authentication problem.
 pub async fn permission_check(
     State(state): State<Arc<AppState>>,
     _auth: SyncAuth,

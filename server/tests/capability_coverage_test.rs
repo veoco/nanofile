@@ -109,7 +109,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET",    "/api/v2.1/repos/{repo_id}/file/history/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/file/revision/"),
     ("POST",   "/api/v2.1/repos/{repo_id}/file/revision/restore/"),
-    // Links, members, groups.
+    // Links.
     ("GET",    "/api2/shared-links/"),
     ("POST",   "/api2/shared-links/"),
     ("DELETE", "/api2/shared-links/{token}"),
@@ -130,16 +130,8 @@ const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/v2.1/upload-links/{token}/"),
     ("GET",    "/api/v2.1/upload-links/{token}/upload/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/upload-links/"),
-    ("GET",    "/api2/beshared-repos/{repo_id}/"),
-    ("POST",   "/api2/beshared-repos/{repo_id}/"),
-    ("PUT",    "/api2/beshared-repos/{repo_id}/"),
-    ("DELETE", "/api2/beshared-repos/{repo_id}/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/related-users/"),
-    ("GET",    "/api/v2.1/repos/{repo_id}/custom-share-permissions/"),
-    ("GET",    "/api/v2.1/repos/{repo_id}/custom-share-permissions/{permission_id}/"),
     ("GET",    "/api2/groups/"),
-    ("GET",    "/api2/groupandcontacts/"),
-    ("GET",    "/api2/search-user/"),
     ("GET",    "/api/v2.1/groups/"),
     // Metadata and tags.
     ("GET",    "/api/v2.1/repos/{repo_id}/metadata/"),

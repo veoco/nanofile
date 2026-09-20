@@ -3,12 +3,11 @@ use std::sync::Arc;
 
 use crate::Config;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
-use crate::notification::events::FolderPermEvent;
 use crate::repository::Repositories;
 use crate::service::auth::password::hash_password;
 use crate::service::auth::token::generate_share_link_token;
 use base::error::AppError;
-use infra::entity::{share_link, user};
+use infra::entity::share_link;
 
 /// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
@@ -79,13 +78,6 @@ pub struct ShareLinkInfo {
     pub description: Option<String>,
 }
 
-#[derive(Serialize)]
-pub struct ShareMember {
-    pub email: String,
-    pub permission: String,
-    pub created_at: i64,
-}
-
 /// Build an absolute share-link URL, matching seahub's `gen_shared_link()`
 /// (`{service_url}/f/{token}/` or `{service_url}/d/{token}/`). Clients
 /// (notably the Android app) share/copy the `link` field verbatim.
@@ -112,11 +104,6 @@ fn share_link_info_from_model(l: &share_link::Model, base_url: &str) -> ShareLin
         view_cnt: l.view_cnt,
         description: l.description.clone(),
     }
-}
-
-/// Result returned by `beshare_repo`.
-pub struct BeshareResult {
-    pub already_shared: bool,
 }
 
 // ── Share link operations (v2) ────────────────────────────────────────
@@ -374,250 +361,12 @@ pub async fn update_share_link_v21(
     })
 }
 
-// ── Repo sharing operations ──────────────────────────────────────────
-
-/// Share (beshare) a repo with another user.
-pub async fn beshare_repo(
-    repos: &Repositories,
-    notification_manager: Option<&crate::notification::manager::NotificationManager>,
-    repo_id: &str,
-    caller_user_id: i32,
-    user_email: &str,
-    permission: Option<&str>,
-) -> Result<BeshareResult, AppError> {
-    if user_email.is_empty() {
-        return Err(AppError::BadRequest("user email is required".into()));
-    }
-
-    crate::domain::permission::check_repo_owner(repos.member.as_ref(), repo_id, caller_user_id)
-        .await?;
-
-    // Find the target user
-    let target_user = repos
-        .user
-        .find_by_email(user_email)
-        .await?
-        .ok_or_else(|| AppError::BadRequest("user not found".into()))?;
-
-    // Check if the membership already exists
-    let existing = repos
-        .member
-        .find_by_repo_and_user(repo_id, target_user.id)
-        .await?;
-
-    if existing.is_some() {
-        return Ok(BeshareResult {
-            already_shared: true,
-        });
-    }
-
-    // Add repo member
-    let now = chrono::Utc::now().timestamp();
-    // Validate the level like `modify_share_permission` does. Write access
-    // requires exactly "rw" but *read* is granted for any non-NULL value, so an
-    // unvalidated "" / "none" / typo silently produced a read-share instead of
-    // being rejected.
-    let perm = permission.unwrap_or("rw").to_string();
-    if perm != "rw" && perm != "r" {
-        return Err(AppError::BadRequest(
-            "permission must be 'rw' or 'r'".into(),
-        ));
-    }
-
-    repos
-        .member
-        .create_member(crate::repository::member::CreateMemberParams {
-            repo_id: repo_id.to_string(),
-            user_id: target_user.id,
-            permission: perm.clone(),
-            created_at: now,
-        })
-        .await?;
-
-    // Send WebSocket notification about the share change.
-    if let Some(mgr) = notification_manager {
-        let event = FolderPermEvent {
-            repo_id: repo_id.to_string(),
-            path: "/".to_string(),
-            event_type: "user".to_string(),
-            change_event: "add".to_string(),
-            user: user_email.to_string(),
-            group: -1,
-            perm,
-        };
-        mgr.notify(event).await;
-    }
-
-    Ok(BeshareResult {
-        already_shared: false,
-    })
-}
-
-/// List all share members for a repo.
-pub async fn list_share_members(
-    repos: &Repositories,
-    repo_id: &str,
-) -> Result<Vec<ShareMember>, AppError> {
-    let members = repos.member.find_by_repo_id(repo_id).await?;
-
-    // Batch-load all member users in one query instead of one per member.
-    let user_ids: Vec<i32> = members.iter().map(|m| m.user_id).collect();
-    let users: std::collections::HashMap<i32, user::Model> = repos
-        .user
-        .find_by_ids(&user_ids)
-        .await?
-        .into_iter()
-        .map(|u| (u.id, u))
-        .collect();
-
-    let mut result = Vec::new();
-    for m in members {
-        if let Some(u) = users.get(&m.user_id) {
-            result.push(ShareMember {
-                email: u.email.clone(),
-                permission: m.permission,
-                created_at: m.created_at,
-            });
-        }
-    }
-    Ok(result)
-}
-
-/// Modify a user's share permission on a repo.
-pub async fn modify_share_permission(
-    repos: &Repositories,
-    notification_manager: Option<&crate::notification::manager::NotificationManager>,
-    repo_id: &str,
-    caller_user_id: i32,
-    user_email: &str,
-    new_permission: &str,
-) -> Result<(), AppError> {
-    if user_email.is_empty() {
-        return Err(AppError::BadRequest("user email is required".into()));
-    }
-    if new_permission != "rw" && new_permission != "r" {
-        return Err(AppError::BadRequest(
-            "permission must be 'rw' or 'r'".into(),
-        ));
-    }
-
-    crate::domain::permission::check_repo_owner(repos.member.as_ref(), repo_id, caller_user_id)
-        .await?;
-
-    let target_user = repos
-        .user
-        .find_by_email(user_email)
-        .await?
-        .ok_or_else(|| AppError::BadRequest("user not found".into()))?;
-
-    // Verify the target user is a member of this repo.
-    let _member = repos
-        .member
-        .find_by_repo_and_user(repo_id, target_user.id)
-        .await?
-        .ok_or_else(|| AppError::BadRequest("user is not a member of this repo".into()))?;
-
-    repos
-        .member
-        .update_permission(repo_id, target_user.id, new_permission)
-        .await?;
-
-    // Send WebSocket notification about the permission change.
-    if let Some(mgr) = notification_manager {
-        let event = FolderPermEvent {
-            repo_id: repo_id.to_string(),
-            path: "/".to_string(),
-            event_type: "user".to_string(),
-            change_event: "modify".to_string(),
-            user: user_email.to_string(),
-            group: -1,
-            perm: new_permission.to_string(),
-        };
-        mgr.notify(event).await;
-    }
-
-    Ok(())
-}
-
-/// Remove a user's share from a repo.
-///
-/// `password_manager`, when supplied, also drops the removed member's cached
-/// library key. Every read path re-checks membership before using that cache, so
-/// this is defence in depth rather than the primary control.
-pub async fn delete_share(
-    repos: &Repositories,
-    notification_manager: Option<&crate::notification::manager::NotificationManager>,
-    password_manager: Option<&infra::crypto::password_manager::PasswordManager>,
-    repo_id: &str,
-    caller_user_id: i32,
-    user_email: &str,
-) -> Result<(), AppError> {
-    if user_email.is_empty() {
-        return Err(AppError::BadRequest("user email is required".into()));
-    }
-
-    crate::domain::permission::check_repo_owner(repos.member.as_ref(), repo_id, caller_user_id)
-        .await?;
-
-    let target_user = repos
-        .user
-        .find_by_email(user_email)
-        .await?
-        .ok_or_else(|| AppError::BadRequest("user not found".into()))?;
-
-    repos
-        .member
-        .delete_by_repo_and_user(repo_id, target_user.id)
-        .await?;
-
-    // The member's share/upload links must stop resolving at once, not after the
-    // creator-access cache expires.
-    invalidate_link_creator_cache(target_user.id, Some(repo_id));
-
-    // A sync token is bound to (repo, user) for up to `sync_token_ttl_days`
-    // (a year by default) and the `/seafhttp/` endpoints re-derive the caller's
-    // identity from it, so the removed member would otherwise keep a
-    // block-existence oracle (and the locked-file list) for the library long
-    // after losing access.
-    if let Err(e) = repos
-        .sync_token
-        .delete_by_repo_and_user(repo_id, target_user.id)
-        .await
-    {
-        tracing::warn!(
-            "failed to revoke sync tokens for user {} on repo {repo_id}: {e}",
-            target_user.id
-        );
-    }
-
-    // Likewise for the decrypted library key cached for the removed member.
-    if let Some(pm) = password_manager {
-        pm.remove_password(repo_id, target_user.id).await;
-    }
-
-    // Send WebSocket notification about the share deletion.
-    if let Some(mgr) = notification_manager {
-        let event = FolderPermEvent {
-            repo_id: repo_id.to_string(),
-            path: "/".to_string(),
-            event_type: "user".to_string(),
-            change_event: "del".to_string(),
-            user: user_email.to_string(),
-            group: -1,
-            perm: String::new(),
-        };
-        mgr.notify(event).await;
-    }
-
-    Ok(())
-}
-
 /// How long the "may the creator still act on this library" answer is cached.
 ///
 /// This is checked on every anonymous link request, and the answer only changes
-/// when an administrator revokes access — so a short TTL keeps the common path
-/// free of two extra queries while bounding the window in which a revoked
-/// member's links still resolve.
+/// when an administrator revokes access or the library changes hands — so a
+/// short TTL keeps the common path free of two extra queries while bounding the
+/// window in which a revoked account's links still resolve.
 const LINK_CREATOR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Hard cap on the cache, so a flood of distinct links cannot grow it forever.
@@ -633,11 +382,10 @@ static LINK_CREATOR_CACHE: std::sync::LazyLock<LinkCreatorCache> =
 ///
 /// A share/upload link is a capability handed to third parties, but it acts
 /// **as its creator**: it exposes library content (share link) or accepts new
-/// content (upload link) in a library the creator may since have been removed
-/// from, or whose account may have been deactivated. Resolving a link therefore
-/// re-checks the creator rather than trusting the link alone — the same rule the
-/// download and upload tokens already apply, where "the token outlives
-/// membership".
+/// content (upload link) in a library the creator may since have lost, or whose
+/// account may have been deactivated. Resolving a link therefore re-checks the
+/// creator rather than trusting the link alone — the same rule the download and
+/// upload tokens already apply, where "the token outlives the grant".
 ///
 /// Results are cached for [`LINK_CREATOR_CACHE_TTL`] because this runs on every
 /// anonymous request; the revocation window is therefore at most that long.

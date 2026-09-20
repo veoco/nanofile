@@ -9,12 +9,12 @@
 //! - The 60s TTL bounds staleness of `size_display` (the one field that
 //!   changes on the hot upload/sync paths, which deliberately do **not**
 //!   invalidate).
-//! - The 9 handlers that mutate `repo_members` or rename a repo call
-//!   `clear_all()` on success, so membership/repo changes take effect
-//!   immediately (see `handler/repos.rs`, `handler/share.rs`,
-//!   `handler/dir.rs`). Keep that list in sync when adding writers.
-//! - `modify_share_permission` only changes `permission`, which the left panel
-//!   never renders, so it does not invalidate.
+//! - The handlers that create, rename or delete a repo — and the one that turns
+//!   a directory into a sub-library — call `clear_all()` on success, so a repo
+//!   or membership change is visible immediately (see `handler/repos.rs`,
+//!   `handler/dir.rs`). Keep that list in sync when adding writers. Membership
+//!   rows are written only at library creation now that user-to-user sharing is
+//!   gone, so creation is the only membership writer left.
 //! - At `MAX_CACHED_USERS` entries the whole cache is dropped, bounding memory.
 
 use std::collections::HashMap;

@@ -238,10 +238,10 @@ impl SyncService {
             });
         };
 
-        // The permission is the token holder's own membership. The repo owner
-        // has no `repo_members` row, so ownership must be detected explicitly —
-        // defaulting a missing row to "rw" would report rw for a member whose
-        // membership was revoked while they kept a valid token.
+        // The permission is the token holder's own membership. Ownership is
+        // tested explicitly rather than inferred from the row: a token minted
+        // while a grant existed can outlive the grant, and defaulting a missing
+        // row to "rw" would then keep reporting write access for it.
         let owner_id = self
             .repos
             .repo

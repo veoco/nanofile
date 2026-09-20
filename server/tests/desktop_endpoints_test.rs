@@ -132,36 +132,6 @@ async fn test_dir_shared_items_unauthorized() {
     assert_eq!(resp.status(), 401);
 }
 
-/// B.10.7 — POST /api2/beshared-repos/{repo_id}/
-#[tokio::test]
-async fn test_beshared_repos_no_user_returns_400() {
-    let f = TestFixture::new().await;
-
-    let resp = f
-        .client
-        .post_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({"share_type": "personal", "user": ""}),
-        )
-        .await;
-    assert_eq!(resp.status(), 400);
-}
-
-#[tokio::test]
-async fn test_beshared_repos_unauthorized() {
-    let server = common::TestServer::start().await;
-    let client = server.client();
-    let resp = client
-        .post_json(
-            "/api2/beshared-repos/some-repo/",
-            None,
-            &serde_json::json!({"share_type": "personal", "user": "test@test.com"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 401);
-}
-
 /// B.10.3 — GET /api2/repo_history_changes/{repo_id}/?commit_id=
 #[tokio::test]
 async fn test_repo_history_changes_no_commits() {

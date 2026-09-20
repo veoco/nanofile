@@ -18,8 +18,6 @@ pub mod file_lock_timestamp;
 pub mod file_tag;
 pub mod file_trash;
 pub mod fs_object;
-pub mod group;
-pub mod group_member;
 pub mod invitation_code;
 pub mod locked_file;
 pub mod member;
@@ -40,7 +38,6 @@ pub mod upload_link;
 pub mod user;
 pub mod user_2fa;
 pub mod user_2fa_backup_code;
-pub mod user_contact;
 
 use std::sync::Arc;
 
@@ -57,8 +54,6 @@ use crate::repository::file_lock_timestamp::*;
 use crate::repository::file_tag::*;
 use crate::repository::file_trash::*;
 use crate::repository::fs_object::*;
-use crate::repository::group::*;
-use crate::repository::group_member::*;
 use crate::repository::invitation_code::*;
 use crate::repository::locked_file::*;
 use crate::repository::member::*;
@@ -77,7 +72,6 @@ use crate::repository::upload_link::*;
 use crate::repository::user::*;
 use crate::repository::user_2fa::*;
 use crate::repository::user_2fa_backup_code::*;
-use crate::repository::user_contact::*;
 
 use base::error::AppError;
 
@@ -92,9 +86,6 @@ pub struct Repositories {
     pub upload_link: Arc<dyn UploadLinkRepository>,
     pub fs_object: Arc<dyn FsObjectRepository>,
     pub activity: Arc<dyn ActivityRepository>,
-    pub group: Arc<dyn GroupRepository>,
-    pub group_member: Arc<dyn GroupMemberRepository>,
-    pub user_contact: Arc<dyn UserContactRepository>,
     pub thumbnail: Arc<dyn ThumbnailRepository>,
     pub avatar: Arc<dyn AvatarRepository>,
     pub invitation_code: Arc<dyn InvitationCodeRepository>,
@@ -155,9 +146,6 @@ impl Repositories {
             upload_link: Arc::new(DbUploadLinkRepository::new(db.clone())),
             fs_object: Arc::new(DbFsObjectRepository::new(db.clone())),
             activity: Arc::new(DbActivityRepository::new(db.clone())),
-            group: Arc::new(DbGroupRepository::new(db.clone())),
-            group_member: Arc::new(DbGroupMemberRepository::new(db.clone())),
-            user_contact: Arc::new(DbUserContactRepository::new(db.clone())),
             thumbnail: Arc::new(DbThumbnailRepository::new(db.clone())),
             avatar: Arc::new(DbAvatarRepository::new(db.clone())),
             invitation_code: Arc::new(DbInvitationCodeRepository::new(db.clone())),

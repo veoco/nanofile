@@ -21,7 +21,6 @@ pub struct RepoListTemplate {
     pub is_admin: bool,
     pub repos: Vec<RepoInfo>,
     pub active_page: &'static str,
-    pub user_id: i32,
     pub csrf_token: String,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
@@ -40,7 +39,6 @@ pub struct RepoInfo {
     pub mtime: i64,
     /// Whether the library is encrypted.
     pub encrypted: bool,
-    pub owner_id: i32,
     pub history_limit: i32,
     pub history_ttl_days: i32,
 }
@@ -67,7 +65,6 @@ pub async fn list_repos(
                 size_display: format_size(r.size),
                 mtime: r.updated_at,
                 encrypted: r.encrypted != 0,
-                owner_id: r.owner_id,
                 history_limit: r.history_limit,
                 history_ttl_days: r.history_ttl_days,
             });
@@ -101,7 +98,6 @@ pub async fn list_repos(
         is_admin: user.is_admin,
         repos,
         active_page: "repos",
-        user_id: user.user_id,
         csrf_token,
         left_panel_repos,
         current_repo_id: None,

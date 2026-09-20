@@ -15,9 +15,9 @@
 //! ```
 //!
 //! Namespacing by repository is what makes authorization exact — a block id
-//! learned elsewhere (a cached `fs_object`, a revoked collaborator's client
-//! state, a dedup oracle) is simply not reachable through a library the caller
-//! is not a member of. The legacy tree therefore has to go away completely: the
+//! learned elsewhere (a cached `fs_object`, another account's client state, a
+//! dedup oracle) is simply not reachable through a library the caller does not
+//! own. The legacy tree therefore has to go away completely: the
 //! server has no read path for it.
 //!
 //! Properties of this migration:

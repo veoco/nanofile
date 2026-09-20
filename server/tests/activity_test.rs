@@ -68,14 +68,14 @@ fn find_event<'a>(events: &'a [Value], op_type: &str) -> Option<&'a Value> {
     events.iter().find(|ev| ev["op_type"] == op_type)
 }
 
-/// Helper: create second user and return its api_token.
-async fn create_second_user(f: &TestFixture) -> String {
+/// Helper: create second user and return `(user_id, api_token)`.
+async fn create_second_user(f: &TestFixture) -> (i32, String) {
     let db = &*f.server.db;
-    let _uid = create_test_user(db, "user2@test.com", "password2").await;
+    let uid = create_test_user(db, "user2@test.com", "password2").await;
     let resp = f.client.login("user2@test.com", "password2").await;
     assert_eq!(resp.status(), 200);
     let tv: Value = resp.json().await.unwrap();
-    tv["token"].as_str().unwrap().to_string()
+    (uid, tv["token"].as_str().unwrap().to_string())
 }
 
 // ── WebDAV helpers ──────────────────────────────────────────────────────────
@@ -690,22 +690,11 @@ async fn test_activity_cross_user_visibility() {
     let f = TestFixture::new().await;
 
     // Create a second user
-    let api_token2 = create_second_user(&f).await;
+    let (user2_id, api_token2) = create_second_user(&f).await;
 
-    // Share the repo with user2 via beshare API
-    let share_resp = f
-        .client
-        .post_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({
-                "share_type": "user",
-                "user": "user2@test.com",
-                "permission": "rw",
-            }),
-        )
-        .await;
-    assert_eq!(share_resp.status(), 200, "share repo with user2 failed");
+    // Give user2 access to the library directly: there is no share API any
+    // more, but the permission predicates still read `repo_members`.
+    common::add_repo_member(&f.server.db, &f.repo_id, user2_id, "rw").await;
 
     // User1 creates a file in the shared repo
     create_file(&f, "/shared-file.txt").await;
@@ -1565,22 +1554,10 @@ async fn test_activity_edit_distinct_paths() {
 #[tokio::test]
 async fn test_activity_avatar_deleted_user() {
     let f = TestFixture::new().await;
-    let api_token2 = create_second_user(&f).await;
+    let (user2_id, api_token2) = create_second_user(&f).await;
 
-    // Share the repo with user2 so their activity is visible to user1.
-    let share_resp = f
-        .client
-        .post_json(
-            &format!("/api2/beshared-repos/{}/", f.repo_id),
-            Some(&f.api_token),
-            &serde_json::json!({
-                "share_type": "user",
-                "user": "user2@test.com",
-                "permission": "rw",
-            }),
-        )
-        .await;
-    assert_eq!(share_resp.status(), 200, "share repo with user2 failed");
+    // Give user2 access so their activity is visible to user1.
+    common::add_repo_member(&f.server.db, &f.repo_id, user2_id, "rw").await;
 
     // user2 uploads a file in the shared repo (upload path logs an activity).
     let resp = f
@@ -1864,7 +1841,7 @@ async fn test_copy_move_progress_is_owner_only() {
     for i in 1..=2 {
         create_file(&f, &format!("/owned{i}.txt")).await;
     }
-    let other_token = create_second_user(&f).await;
+    let (_, other_token) = create_second_user(&f).await;
 
     // Start an async copy as the owner.
     create_dir(&f, "/owner_only_dest").await;
