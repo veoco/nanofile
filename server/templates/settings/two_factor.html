@@ -1,4 +1,5 @@
 {% extends "settings_shell.html" %}
+{% import "includes/icons.html" as icons %}
 
 {% block title %}{{ t.tr("twofactor.title") }} | Nanofile{% endblock %}
 
@@ -15,27 +16,44 @@
 {% endif %}
 
 {% if enabled %}
-{# ── Active: the state, then the codes, then the way out ──────────────── #}
-<div class="nf-banner is-ok">
-    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-    </svg>
-    <p class="font-medium">{{ t.tr("twofactor.status_enabled") }}</p>
+{# ── On: the state, then the codes, then the way out ──────────────────── #}
+{# The tab strip above already carries the status; this panel says it in
+   words, so the page never leaves the reader guessing which state it is in. #}
+<div class="nf-cards">
+    <section class="nf-form is-wide">
+        <h2>{{ t.tr("settings.status_enabled") }}</h2>
+        <p class="desc">{{ t.tr("twofactor.enabled_desc") }}</p>
+    </section>
 </div>
 
 {# The codes and the way out are independent, so they pair up as panels. #}
 <div class="nf-cards mt-4">
-    {# Backup codes — shown once immediately after enabling #}
-    {% if let Some(codes) = backup_codes %}
     <section class="nf-form">
-        <h2>{{ t.tr("twofactor.backup_codes") }}</h2>
-        <div class="body nf-codes">
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h2>{{ t.tr("twofactor.backup_codes") }}</h2>
+            {% if codes_total > 0 %}
+            <span class="text-[12px] tabular-nums text-ink-3">{{ t.trf("twofactor.codes_left", [("left", codes_left.to_string()), ("total", codes_total.to_string())]) }}</span>
+            {% endif %}
+            {% if backup_codes.is_some() %}
+            <button type="button" class="btn btn-line btn-sm ml-auto"
+                    data-copy="#backup-codes" data-copy-msg="twofactor.copied">
+                {{ icons::icon_copy("w-3 h-3") }}
+                {{ t.tr("twofactor.copy_all") }}
+            </button>
+            {% endif %}
+        </div>
+        <p class="desc">{{ t.tr("twofactor.backup_codes_desc") }}</p>
+        {% if let Some(codes) = backup_codes %}
+        {# Shown once, right after enabling. `data-copy-lines` on the container
+           copies the codes one per line, which is the only sane way to hand ten
+           of them to somebody. #}
+        <div id="backup-codes" class="body nf-codes" data-copy-lines>
             {% for code in codes %}
             <code>{{- code -}}</code>
             {% endfor %}
         </div>
+        {% endif %}
     </section>
-    {% endif %}
 
     <section class="nf-form">
         <h2>{{ t.tr("twofactor.disable_title") }}</h2>
@@ -44,6 +62,7 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
             <label for="password" class="form-label">{{ t.tr("common.password") }}</label>
             <input type="password" name="password" id="password" required
+                   autocomplete="current-password"
                    class="mt-1 input">
             <button type="submit" class="btn btn-danger mt-4">
                 {{ t.tr("twofactor.disable") }}
@@ -54,27 +73,37 @@
 
 {% elif setup_pending %}
 {# ── Setup in progress: scan, then verify ─────────────────────────────── #}
-<div class="nf-banner">
-    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-    </svg>
-    <div>
-        <p class="font-medium">{{ t.tr("twofactor.step1_scan") }}</p>
-        <p class="mt-0.5 text-ink-3">{{ t.tr("twofactor.scan_desc") }}</p>
-    </div>
-</div>
+{# A two-step wizard, not a status page: the pairs read across, and the key to
+   type in by hand belongs with the code it replaces, not in a panel of its
+   own at the bottom. #}
+<div class="nf-cards">
+    <section class="nf-form">
+        <h2>{{ t.tr("twofactor.step1_scan") }}</h2>
+        <p class="desc">{{ t.tr("twofactor.scan_desc") }}</p>
+        {# Generated locally, no external API calls. The SVG paints its own white
+           background, so it stays scannable in the dark theme. #}
+        <div class="body flex justify-center">
+            <img src="/settings/two-factor/qr-code/"
+                 alt="{{ t.tr("twofactor.qr_alt") }}"
+                 class="h-44 w-44 rounded-ctl border border-line"
+                 width="200"
+                 height="200">
+        </div>
 
-{# Pairs read across: the code to scan beside the field that verifies it, then
-   the typed-in alternative beside the recovery codes. #}
-<div class="nf-cards mt-4">
-    {# QR code — generated locally, no external API calls #}
-    <div class="nf-form flex justify-center">
-        <img src="/settings/two-factor/qr-code/"
-             alt="{{ t.tr("twofactor.qr_alt") }}"
-             class="h-48 w-48"
-             width="200"
-             height="200">
-    </div>
+        {% if let Some(secret) = secret %}
+        <div class="mt-4">
+            <p class="form-label">{{ t.tr("twofactor.manual_entry") }}</p>
+            <div class="mt-1.5 flex items-center gap-2">
+                <code id="totp-secret" class="nf-code min-w-0">{{- secret -}}</code>
+                <button type="button" class="btn btn-ghost btn-icon h-6 w-6 shrink-0"
+                        data-copy="#totp-secret" data-copy-msg="twofactor.copied"
+                        title="{{ t.tr("twofactor.copy") }}" aria-label="{{ t.tr("twofactor.copy") }}">
+                    {{ icons::icon_copy("w-3.5 h-3.5") }}
+                </button>
+            </div>
+        </div>
+        {% endif %}
+    </section>
 
     <section class="nf-form">
         <h2>{{ t.tr("twofactor.step2_verify") }}</h2>
@@ -90,39 +119,20 @@
             </button>
         </form>
     </section>
-
-    {% if let Some(secret) = secret %}
-    <section class="nf-form">
-        <h2>{{ t.tr("twofactor.manual_entry") }}</h2>
-        <div class="body">
-            <code class="nf-code">{{- secret -}}</code>
-        </div>
-    </section>
-    {% endif %}
-
-    {% if let Some(codes) = backup_codes %}
-    <section class="nf-form">
-        <h2>{{ t.tr("twofactor.backup_codes") }}</h2>
-        <div class="body nf-codes">
-            {% for code in codes %}
-            <code>{{- code -}}</code>
-            {% endfor %}
-        </div>
-    </section>
-    {% endif %}
 </div>
 
 {% else %}
-{# ── Not configured: starting setup is a POST (no side effects on GET) ── #}
+{# ── Off: what it is, what it takes, and the switch ───────────────────── #}
 <div class="nf-cards">
-    <section class="nf-form">
+    <form action="/settings/two-factor/setup/" method="POST" class="nf-form is-wide">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
         <h2>{{ t.tr("settings.status_not_configured") }}</h2>
-        <p class="desc">{{ t.tr("twofactor.desc") }}</p>
-        <form action="/settings/two-factor/setup/" method="POST" class="body">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+        <p class="desc">{{ t.tr("settings.two_factor_desc") }}</p>
+        <p class="desc">{{ t.tr("twofactor.setup_need") }}</p>
+        <div class="body">
             <button type="submit" class="btn btn-solid">{{ t.tr("twofactor.setup") }}</button>
-        </form>
-    </section>
+        </div>
+    </form>
 </div>
 {% endif %}
 {% endblock %}

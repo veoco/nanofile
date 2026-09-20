@@ -56,6 +56,21 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
   const ctx = await browser.newContext({ baseURL: BASE_URL });
   const page = await ctx.newPage();
   try {
+    // Record clipboard writes rather than reading the real clipboard, which
+    // would need a browser permission this suite does not ask for.
+    await page.addInitScript(() => {
+      (window as any).__copied = [];
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (text: string) => {
+            (window as any).__copied.push(text);
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+
     await loginViaUI(page, ADMIN_EMAIL, ADMIN_PASSWORD);
 
     // GET is read-only now (no side effects): start setup via the POST form,
@@ -78,6 +93,14 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
     // Grab a backup code for the login step.
     const backupCode = (await page.locator("code").first().innerText()).trim();
     expect(backupCode.length).toBeGreaterThan(0);
+
+    // "Copy all" hands over the whole set, one code per line, and says so.
+    await page.locator('button[data-copy="#backup-codes"]').click();
+    await expect(page.locator(".nf-toast p")).toHaveText("Copied");
+    const copied = await page.evaluate(() => (window as any).__copied as string[]);
+    expect(copied.at(-1)?.split("\n")).toEqual(
+      (await page.locator("#backup-codes code").allInnerTexts()).map((c) => c.trim()),
+    );
 
     // Log out, then log in — the flow must ask for a 2FA code.
     await page.goto("/accounts/logout/");

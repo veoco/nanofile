@@ -42,6 +42,9 @@ pub struct TwoFactorTemplate {
     pub backup_codes: Option<Vec<String>>,
     pub error: Option<String>,
     pub success: Option<String>,
+    /// Unused and total backup codes, for the enabled state's summary.
+    pub codes_left: usize,
+    pub codes_total: usize,
     /// CSRF token for the disable form.
     pub csrf_token: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
@@ -84,6 +87,20 @@ async fn render_page(
         None
     };
 
+    // Only the enabled state has codes to account for; the query stays off the
+    // page load in the other two.
+    let (codes_left, codes_total) = if enabled {
+        let stored = state
+            .repos
+            .user_2fa_backup_code
+            .find_by_user(user.user_id)
+            .await?;
+        let left = stored.iter().filter(|code| !code.used).count();
+        (left, stored.len())
+    } else {
+        (0, 0)
+    };
+
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
     let nav =
         super::settings::build_nav(state, user, super::settings::SettingsNav::SECURITY).await?;
@@ -100,6 +117,8 @@ async fn render_page(
         backup_codes,
         error,
         success,
+        codes_left,
+        codes_total,
         csrf_token: Some(ctx.csrf_token),
         left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
@@ -149,7 +168,7 @@ pub async fn setup_2fa(
         .is_some_and(|tf| tf.enabled)
     {
         let msg = I18n::get(user.language.as_deref())
-            .tr("twofactor.status_enabled")
+            .tr("twofactor.already_enabled")
             .to_string();
         return render_page(&user, &state, Some(msg), None, None)
             .await
@@ -160,17 +179,11 @@ pub async fn setup_2fa(
     // secret otherwise (idempotent against double submission).
     TotpManager::get_or_create_2fa(&state.repos, user.user_id).await?;
 
-    render_page(
-        &user,
-        &state,
-        None,
-        Some(
-            "Scan the QR code with your authenticator app, then enter the verification code below to enable.".to_string(),
-        ),
-        None,
-    )
-    .await
-    .map(|html| (StatusCode::OK, html).into_response())
+    // No flash on the way out: the QR and the verification field *are* the
+    // response, and the page says what to do with them.
+    render_page(&user, &state, None, None, None)
+        .await
+        .map(|html| (StatusCode::OK, html).into_response())
 }
 
 /// POST /profile/two-factor/verify — verify TOTP code and enable 2FA.

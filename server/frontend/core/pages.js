@@ -101,13 +101,23 @@ document.addEventListener("submit", async function (e) {
 // For values that are too long to read at phone width but still have to be
 // handed to someone, e.g. an invitation code: the button copies the target's
 // text, which stays in the DOM, so the page degrades to select-and-copy when
-// this module is absent. `data-copy-msg` names the toast to confirm with.
+// this module is absent. `data-copy-msg` names the toast to confirm with, and
+// `data-copy-lines` on the target copies one line per child element, for a
+// grid of separate values.
 document.addEventListener("click", function (e) {
     var btn = e.target.closest("[data-copy]");
     if (!btn) return;
     var target = document.querySelector(btn.dataset.copy);
     if (!target) return;
-    var text = (target.textContent || "").trim();
+    var text;
+    if (target.hasAttribute("data-copy-lines")) {
+        text = Array.prototype.map
+            .call(target.children, function (child) { return child.textContent.trim(); })
+            .filter(Boolean)
+            .join("\n");
+    } else {
+        text = (target.textContent || "").trim();
+    }
     if (!text) return;
     if (navigator.clipboard) navigator.clipboard.writeText(text).catch(function () {});
     if (btn.dataset.copyMsg) Toast.success(__t(btn.dataset.copyMsg));
