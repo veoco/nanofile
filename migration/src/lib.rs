@@ -92,6 +92,7 @@ migrations!(
     m20260918_000002_purge_legacy_thumbnail_sizes,
     m20260920_000001_drop_groups_and_contacts,
     m20260920_000002_purge_foreign_repo_members,
+    m20260921_000001_create_email,
 );
 
 #[cfg(test)]

@@ -15,6 +15,7 @@ use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
 use crate::repository::Repositories;
 use crate::scheduler::{Scheduler, TaskOutput};
+use crate::service::mail::{Mailer, TASK_NAME as MAIL_TASK};
 use infra::config::GcConfig;
 use infra::crypto::password_manager::PasswordManager;
 use infra::storage::DynBlockStorage;
@@ -24,7 +25,9 @@ use infra::storage::encrypting_block_store::BlockEncryptionMode;
 ///
 /// - Continuous: notification event listener.
 /// - Periodic: notification token expiry, password-cache cleanup, expired
-///   share/upload-link cleanup, garbage collection, and index commits.
+///   share/upload-link cleanup, garbage collection, index commits and the
+///   outbound-mail queue.
+#[allow(clippy::too_many_arguments)]
 pub fn register_default_tasks(
     scheduler: &Arc<Scheduler>,
     repos: &Arc<Repositories>,
@@ -38,6 +41,7 @@ pub fn register_default_tasks(
     temp_upload_ttl_hours: u64,
     enc_mode: BlockEncryptionMode,
     block_dir: &Path,
+    mail: Option<&Arc<Mailer>>,
 ) {
     // Continuous: event listener (forwards repo-update events to WebSocket subscribers).
     if let Some(mgr) = notification_manager {
@@ -233,6 +237,27 @@ pub fn register_default_tasks(
                     Err(e) => {
                         TaskOutput::error(format!("Background index commit task failed: {e}"))
                     }
+                }
+            }
+        });
+    }
+
+    // Periodic: deliver queued mail and apply retention (every 30 seconds).
+    //
+    // Only registered when the config switch is on: with mail disabled there is
+    // nothing that could ever be queued, and a permanently idle row in
+    // /sysadmin/tasks/ invites the reader to wonder whether it is broken.
+    if let Some(mail) = mail.filter(|mail| mail.config_enabled()) {
+        let mail = mail.clone();
+        scheduler.spawn_periodic(MAIL_TASK, 30, move || {
+            let mail = mail.clone();
+            async move {
+                match mail.drain_once().await {
+                    Ok(report) if report.attempted() == 0 && report.pruned == 0 => {
+                        TaskOutput::success("no queued mail", None)
+                    }
+                    Ok(report) => TaskOutput::success(report.summary(), Some(report.delivered)),
+                    Err(e) => TaskOutput::error(format!("mail delivery failed: {e}")),
                 }
             }
         });

@@ -289,9 +289,11 @@ max_distinct_usernames_per_ip = 20
 # account.
 # Env: NANOFILE_AUTH_ENABLE_INVITATIONS
 enable_invitations = true
-# Whether the password-reset flow is served at all (it additionally needs an
-# email backend under [email]). When false, `/accounts/password/reset/` and the
-# confirm page answer 404 and no token is minted.
+# Whether the password-reset flow is served at all. It additionally needs a
+# usable email backend: `[email] enabled` must be true *and* the SMTP settings
+# saved at /sysadmin/email/ must be complete, otherwise the "Forgot password?"
+# link is hidden, `/accounts/password/reset/` answers 404 and no token is
+# minted (the startup log warns about exactly this combination).
 # Env: NANOFILE_AUTH_ENABLE_PASSWORD_RESET
 enable_password_reset = true
 # Max anonymous SSO link creations per IP per hour (0 = unlimited).
@@ -336,11 +338,39 @@ tray_language = "auto"
 [email]
 # Environment variables:
 #   NANOFILE_EMAIL_ENABLED
-# Password reset links are ONLY delivered to the account owner's email inbox.
-# Without an email backend configured, the password-reset flow is disabled and
-# the server never returns a reset link (echoing it back would allow account
-# takeover). Set to true only once an SMTP backend is wired up.
+#   NANOFILE_EMAIL_HOST
+#   NANOFILE_EMAIL_PORT
+#   NANOFILE_EMAIL_TLS
+#   NANOFILE_EMAIL_USERNAME
+#   NANOFILE_EMAIL_PASSWORD
+#   NANOFILE_EMAIL_PASSWORD_FILE   (read password from a file, safer)
+#   NANOFILE_EMAIL_FROM_ADDRESS
+#   NANOFILE_EMAIL_FROM_NAME
+#   NANOFILE_EMAIL_TIMEOUT_SECS
+#   NANOFILE_EMAIL_MAX_ATTEMPTS
+#
+# Master switch for outbound mail. It can only be turned on here (or via the
+# environment) — never from the admin Web UI — because sending mail is an
+# operational decision. While it is false the password-reset flow mints no
+# token and no notification is queued.
+#
+# Everything below is a *bootstrap* value: on first start it seeds the settings
+# saved at /sysadmin/email/, and from then on that page is the source of truth
+# (the startup log warns when the two disagree). Password reset links are only
+# ever delivered to the account owner's inbox; the server never returns a reset
+# link in an HTTP response, since echoing it back would allow account takeover.
 enabled = false
+# host = "smtp.example.com"
+# port = 587
+# "starttls" (587), "tls" (implicit TLS, usually 465) or "none" (plaintext —
+# only for a relay on the same machine).
+# tls = "starttls"
+# username = "nanofile@example.com"
+# password = "secret"        # prefer NANOFILE_EMAIL_PASSWORD_FILE
+# from_address = "nanofile@example.com"
+# from_name = "Nanofile"
+# timeout_secs = 10
+# max_attempts = 5
 
 [admin_init]
 # Environment variables:

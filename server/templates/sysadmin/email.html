@@ -1,0 +1,352 @@
+{% extends "base.html" %}
+{% import "includes/icons.html" as icons %}
+{% import "includes/time.html" as time %}
+
+{% block title %}{{ t.tr("admin.email_title") }} | Nanofile{% endblock %}
+
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+        <h1 class="page-title">{{ t.tr("admin.email_title") }}</h1>
+        <p class="page-subtitle">{{ t.tr("admin.email_desc") }}</p>
+    </div>
+    {% if drain_available %}
+    <form action="/sysadmin/email/drain/" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-line">
+            {{ icons::icon_play("w-3.5 h-3.5") }}
+            {{ t.tr("admin.email_drain_now") }}
+        </button>
+    </form>
+    {% endif %}
+</div>
+
+{% if let Some(error) = error %}
+<div class="mt-5">{% include "includes/alert_error.html" %}</div>
+{% endif %}
+{% if let Some(success) = success %}
+<div class="mt-5">{% include "includes/alert_success.html" %}</div>
+{% endif %}
+
+{# The state strip answers the first two questions an administrator has: is mail
+   switched on at all, and would a message leave the server right now. #}
+<div class="nf-cards mt-5">
+    <section class="nf-form">
+        <h2>{{ t.tr("admin.email_status") }}</h2>
+        <div class="body flex flex-col gap-2 text-[13px]">
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.email_config_switch") }}</span>
+                {% if config_enabled %}
+                <span class="badge badge-green">{{ t.tr("admin.email_on") }}</span>
+                {% else %}
+                <span class="badge badge-gray">{{ t.tr("admin.email_off") }}</span>
+                {% endif %}
+            </div>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.email_delivery") }}</span>
+                {% if ready %}
+                <span class="badge badge-green">{{ t.tr("admin.email_ready") }}</span>
+                {% else %}
+                <span class="badge badge-red">{{ t.tr("admin.email_not_ready") }}</span>
+                {% endif %}
+            </div>
+            {% if paused %}
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.email_paused") }}</span>
+                <span class="badge badge-gray">{{ t.tr("admin.email_paused_on") }}</span>
+            </div>
+            {% endif %}
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.email_origin") }}</span>
+                <span class="text-ink-3 text-[12px]">
+                    {% if from_config %}{{ t.tr("admin.email_origin_config") }}
+                    {% else %}{{ t.tr("admin.email_origin_stored") }}{% endif %}
+                </span>
+            </div>
+            {% match updated_at_ts %}
+            {% when Some with (ts) %}
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.email_updated") }}</span>
+                {{ time::ts_class(ts, "text-ink-3 text-[12px]") }}
+            </div>
+            {% when None %}
+            {% endmatch %}
+        </div>
+
+        {# A plaintext relay is a real choice for a localhost relay and a real
+           mistake anywhere else, so it is called out rather than left to the
+           selected option in the form below. #}
+        {% if plaintext %}
+        <p class="nf-prow-hi text-warn-text mt-3">{{ t.tr("admin.email_plaintext_warning") }}</p>
+        {% endif %}
+        {% if password_broken %}
+        <p class="nf-prow-hi text-err-text mt-3">{{ t.tr("admin.email_password_broken") }}</p>
+        {% endif %}
+        {% if !config_enabled %}
+        <p class="nf-prow-hi mt-3">{{ t.tr("admin.email_disabled_hint") }}</p>
+        {% else if let Some(missing) = missing_text %}
+        <p class="nf-prow-hi text-warn-text mt-3">
+            {{ t.tr("admin.email_missing_prefix") }} {{ missing }}
+        </p>
+        {% endif %}
+
+        <div class="body mt-4 pt-4 border-t border-line">
+            <h3 class="text-[13px] font-semibold text-ink mb-2">{{ t.tr("admin.email_test_title") }}</h3>
+            <p class="desc">{{ t.tr("admin.email_test_desc") }}</p>
+            <form action="/sysadmin/email/test/" method="POST" class="flex flex-col gap-2 sm:flex-row">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="status" value="{{ status_filter }}">
+                <input type="hidden" name="page" value="{{ page }}">
+                <input type="email" name="to" value="{{ test_to }}" required
+                       placeholder="{{ t.tr("admin.email_test_placeholder") }}"
+                       aria-label="{{ t.tr("admin.email_test_title") }}" class="input flex-1">
+                <button type="submit" class="btn btn-solid flex-shrink-0"
+                        {% if !config_enabled %}disabled{% endif %}>
+                    {{ t.tr("admin.email_test_send") }}
+                </button>
+            </form>
+        </div>
+    </section>
+
+    <section class="nf-form">
+        <h2>{{ t.tr("admin.email_outbox") }}</h2>
+        <p class="desc">{{ t.tr("admin.email_outbox_desc") }}</p>
+        <div class="body flex flex-col gap-2 text-[13px]">
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.email_status_pending") }}</span>
+                <span class="mono">{{ summary.pending }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.email_status_sent") }}</span>
+                <span class="mono">{{ summary.sent }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.email_status_failed") }}</span>
+                <span class="mono">{{ summary.failed }}</span>
+            </div>
+        </div>
+        <form action="/sysadmin/email/clear/" method="POST" class="body mt-4 pt-4 border-t border-line">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-line btn-sm"
+                    data-confirm="admin.email_clear_confirm" data-confirm-variant="solid">
+                {{ icons::icon_trash("w-3.5 h-3.5") }}
+                {{ t.tr("admin.email_clear_finished") }}
+            </button>
+        </form>
+    </section>
+</div>
+
+{# ── SMTP settings ───────────────────────────────────────────────────── #}
+<section class="nf-form mt-5">
+    <h2>{{ t.tr("admin.email_smtp_title") }}</h2>
+    <p class="desc">{{ t.tr("admin.email_smtp_desc") }}</p>
+    <form action="/sysadmin/email/settings/" method="POST" class="body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="status" value="{{ status_filter }}">
+        <input type="hidden" name="page" value="{{ page }}">
+
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="form-label mb-1" for="host">{{ t.tr("admin.email_host") }}</label>
+                <input type="text" name="host" id="host" value="{{ host }}"
+                       placeholder="smtp.example.com" class="input">
+            </div>
+            <div>
+                <label class="form-label mb-1" for="port">{{ t.tr("admin.email_port") }}</label>
+                <input type="number" name="port" id="port" value="{{ port }}" min="1" max="65535"
+                       class="input">
+            </div>
+            <div>
+                <label class="form-label mb-1" for="tls">{{ t.tr("admin.email_tls") }}</label>
+                <select name="tls" id="tls" class="select">
+                    {% for option in tls_options %}
+                    <option value="{{ option.id }}" {% if tls == option.id %}selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="form-label mb-1" for="username">{{ t.tr("admin.email_username") }}</label>
+                <input type="text" name="username" id="username" value="{{ username }}"
+                       autocomplete="off" class="input">
+            </div>
+            <div>
+                <label class="form-label mb-1" for="password">{{ t.tr("admin.email_password") }}</label>
+                <input type="password" name="password" id="password" value=""
+                       autocomplete="new-password"
+                       placeholder="{% if password_set %}{{ t.tr("admin.email_password_keep") }}{% endif %}"
+                       class="input">
+                {% if password_set %}
+                <label class="flex items-center gap-1.5 cursor-pointer mt-2">
+                    <input type="checkbox" name="clear_password" class="accent-ink">
+                    <span class="text-[12.5px] text-ink-2">{{ t.tr("admin.email_password_clear") }}</span>
+                </label>
+                {% endif %}
+            </div>
+            <div>
+                <label class="form-label mb-1" for="from_address">{{ t.tr("admin.email_from_address") }}</label>
+                <input type="text" name="from_address" id="from_address" value="{{ from_address }}"
+                       placeholder="nanofile@example.com" class="input">
+            </div>
+            <div>
+                <label class="form-label mb-1" for="from_name">{{ t.tr("admin.email_from_name") }}</label>
+                <input type="text" name="from_name" id="from_name" value="{{ from_name }}"
+                       placeholder="Nanofile" class="input">
+            </div>
+            <div>
+                <label class="form-label mb-1" for="timeout_secs">{{ t.tr("admin.email_timeout") }}</label>
+                <input type="number" name="timeout_secs" id="timeout_secs" value="{{ timeout_secs }}"
+                       min="1" max="300" class="input">
+            </div>
+            <div>
+                <label class="form-label mb-1" for="max_attempts">{{ t.tr("admin.email_max_attempts") }}</label>
+                <input type="number" name="max_attempts" id="max_attempts" value="{{ max_attempts }}"
+                       min="1" max="100" class="input">
+            </div>
+        </div>
+
+        <div class="mt-5 pt-4 border-t border-line">
+            <h3 class="text-[13px] font-semibold text-ink mb-1">{{ t.tr("admin.email_notify_title") }}</h3>
+            <p class="desc">{{ t.tr("admin.email_notify_desc") }}</p>
+            <div class="flex flex-col gap-2 mt-2">
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" name="notify_new_device" class="accent-ink mt-0.5"
+                           {% if notify_new_device %}checked{% endif %}>
+                    <span>
+                        <span class="text-[13px] text-ink block">{{ t.tr("admin.email_notify_new_device") }}</span>
+                        <span class="text-[12px] text-ink-3">{{ t.tr("admin.email_notify_new_device_hint") }}</span>
+                    </span>
+                </label>
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" name="notify_new_login" class="accent-ink mt-0.5"
+                           {% if notify_new_login %}checked{% endif %}>
+                    <span>
+                        <span class="text-[13px] text-ink block">{{ t.tr("admin.email_notify_new_login") }}</span>
+                        <span class="text-[12px] text-ink-3">{{ t.tr("admin.email_notify_new_login_hint") }}</span>
+                    </span>
+                </label>
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" name="notify_api_key_created" class="accent-ink mt-0.5"
+                           {% if notify_api_key_created %}checked{% endif %}>
+                    <span>
+                        <span class="text-[13px] text-ink block">{{ t.tr("admin.email_notify_api_key") }}</span>
+                        <span class="text-[12px] text-ink-3">{{ t.tr("admin.email_notify_api_key_hint") }}</span>
+                    </span>
+                </label>
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" name="paused" class="accent-ink mt-0.5"
+                           {% if paused %}checked{% endif %}>
+                    <span>
+                        <span class="text-[13px] text-ink block">{{ t.tr("admin.email_pause") }}</span>
+                        <span class="text-[12px] text-ink-3">{{ t.tr("admin.email_pause_hint") }}</span>
+                    </span>
+                </label>
+            </div>
+        </div>
+
+        <button type="submit" class="btn btn-solid mt-4">{{ t.tr("common.save") }}</button>
+    </form>
+</section>
+
+{# ── Outbox ──────────────────────────────────────────────────────────── #}
+<h2 class="page-title mt-8">{{ t.tr("admin.email_queue_title") }}</h2>
+<p class="page-subtitle">{{ t.tr("admin.email_queue_desc") }}</p>
+
+<div class="flex flex-wrap items-center gap-2 mt-4">
+    {% for filter in filters %}
+    <a href="/sysadmin/email/?status={{ filter.id }}"
+       class="btn btn-sm {% if status_filter == filter.id %}btn-solid{% else %}btn-line{% endif %}">
+        {{ filter.label }}
+    </a>
+    {% endfor %}
+</div>
+
+{% if messages.is_empty() %}
+<div class="nf-list mt-4">
+    <div class="nf-empty">
+        {{ icons::icon_mail("mx-auto h-10 w-10 text-ink-3") }}
+        <h3>{{ t.tr("admin.email_queue_empty") }}</h3>
+        <p>{{ t.tr("admin.email_queue_empty_hint") }}</p>
+    </div>
+</div>
+{% else %}
+<div class="nf-list mt-4">
+    {% for m in messages %}
+    <div class="nf-prow" data-message-id="{{ m.id }}">
+        <span class="nf-prow-ic">{{ icons::icon_mail("w-[15px] h-[15px]") }}</span>
+        <div class="nf-prow-main">
+            <div class="nf-prow-name">
+                <span class="base">{{ m.subject }}</span>
+                <span class="badge badge-gray shrink-0">{{ m.kind }}</span>
+                {% if m.status == "sent" %}
+                <span class="badge badge-green shrink-0">{{ t.tr("admin.email_status_sent") }}</span>
+                {% else if m.status == "failed" %}
+                <span class="badge badge-red shrink-0">{{ t.tr("admin.email_status_failed") }}</span>
+                {% else %}
+                <span class="badge badge-brand shrink-0">{{ t.tr("admin.email_status_pending") }}</span>
+                {% endif %}
+            </div>
+            <div class="nf-prow-sub">
+                <span class="t" title="{{ t.tr("admin.email_recipient") }}">{{ m.to_address }}</span>
+                <span class="sep">&middot;</span>
+                <span class="t" title="{{ t.tr("admin.email_attempts") }}">
+                    {{ t.tr("admin.email_attempts") }} {{ m.attempts }}
+                </span>
+            </div>
+            {% if let Some(err) = m.last_error %}
+            <p class="nf-prow-hi text-err-text" title="{{ err }}">{{ err }}</p>
+            {% endif %}
+        </div>
+        <div class="nf-prow-meta flex items-center gap-3">
+            {{ time::ts_class(m.created_at_ts, "w-[112px] text-right") }}
+            {% match m.sent_at_ts %}
+            {% when Some with (ts) %}{{ time::ts_class(ts, "w-[112px] text-right") }}
+            {% when None %}
+                {% match m.next_attempt_at_ts %}
+                {% when Some with (ts) %}{{ time::ts_class(ts, "w-[112px] text-right") }}
+                {% when None %}<span class="w-[112px] text-right text-ink-3">&mdash;</span>
+                {% endmatch %}
+            {% endmatch %}
+        </div>
+        <div class="nf-prow-act">
+            {% if m.can_retry %}
+            <form action="/sysadmin/email/{{ m.id }}/retry/" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="status" value="{{ status_filter }}">
+                <input type="hidden" name="page" value="{{ page }}">
+                <button type="submit" class="btn btn-line btn-sm" title="{{ t.tr("admin.email_retry") }}">
+                    {{ icons::icon_refresh("w-3.5 h-3.5") }}
+                    <span class="hidden sm:inline">{{ t.tr("admin.email_retry") }}</span>
+                </button>
+            </form>
+            {% endif %}
+            <form action="/sysadmin/email/{{ m.id }}/delete/" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="status" value="{{ status_filter }}">
+                <input type="hidden" name="page" value="{{ page }}">
+                <button type="submit" class="btn btn-quiet btn-icon" title="{{ t.tr("admin.email_delete_row") }}">
+                    {{ icons::icon_trash("w-3.5 h-3.5") }}
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if has_previous || has_next %}
+<div class="flex items-center justify-between gap-2 mt-4">
+    {% if has_previous %}
+    <a href="/sysadmin/email/?status={{ status_filter }}&page={{ page - 1 }}" class="btn btn-line btn-sm">
+        {{ icons::icon_arrow_left("w-3.5 h-3.5") }}
+        {{ t.tr("admin.email_prev_page") }}
+    </a>
+    {% else %}<span></span>{% endif %}
+    {% if has_next %}
+    <a href="/sysadmin/email/?status={{ status_filter }}&page={{ page + 1 }}" class="btn btn-line btn-sm">
+        {{ t.tr("admin.email_next_page") }}
+        {{ icons::icon_arrow_right("w-3.5 h-3.5") }}
+    </a>
+    {% else %}<span></span>{% endif %}
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

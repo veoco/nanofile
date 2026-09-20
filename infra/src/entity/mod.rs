@@ -6,6 +6,8 @@ pub mod avatar;
 pub mod client_login_token;
 pub mod commit;
 pub mod deleted_repo;
+pub mod email_message;
+pub mod email_settings;
 pub mod file_lock_timestamp;
 pub mod file_tag;
 pub mod file_trash;

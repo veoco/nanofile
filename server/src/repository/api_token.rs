@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, Set,
 };
 use std::sync::Arc;
 
@@ -95,6 +96,19 @@ pub trait ApiTokenRepository: Send + Sync {
         &self,
         params: CreateSessionTokenParams,
     ) -> Result<api_token::Model, AppError>;
+
+    /// Whether this account already holds a session for this client device.
+    ///
+    /// Used to decide whether a client sign-in is worth notifying the owner
+    /// about. A `count`, not a list, because the caller never needs the rows —
+    /// and because it runs on the login path, where the answer is usually "no
+    /// new device" and the work should be nil.
+    async fn has_session_for_device(
+        &self,
+        user_id: i32,
+        platform: &str,
+        device_id: &str,
+    ) -> Result<bool, AppError>;
 }
 
 pub struct DbApiTokenRepository {
@@ -237,6 +251,22 @@ impl ApiTokenRepository for DbApiTokenRepository {
         }
         let result = query.exec(self.db.as_ref()).await?;
         Ok(result.rows_affected)
+    }
+
+    async fn has_session_for_device(
+        &self,
+        user_id: i32,
+        platform: &str,
+        device_id: &str,
+    ) -> Result<bool, AppError> {
+        let count = api_token::Entity::find()
+            .filter(api_token::Column::UserId.eq(user_id))
+            .filter(api_token::Column::IsPending.eq(false))
+            .filter(api_token::Column::Platform.eq(platform))
+            .filter(api_token::Column::DeviceId.eq(device_id))
+            .count(self.db.as_ref())
+            .await?;
+        Ok(count > 0)
     }
 
     async fn create_session_token(

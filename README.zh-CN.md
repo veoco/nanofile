@@ -53,13 +53,13 @@ Nanofile 实现了 Seafile 同步协议和 REST API，因此官方 Seafile 桌�
   `/settings/credentials/`；原有的个人资料表单路径仍保留为别名。
 - **WebDAV**（`/dav/...`）：使用上述密钥中的 `webdav.*` 能力认证，由 `webdav_enabled` 控制。
 - **Web UI**：带预览和缩略图的文件浏览器、星标文件、动态流、回收站、设置（个人资料、会话与
-  凭据、2FA、邀请、API 密钥），以及**系统管理后台**（用户、分享、后台任务）。支持中英文界面。
+  凭据、2FA、邀请、API 密钥），以及**系统管理后台**（用户、分享、后台任务、邮件）。支持中英文界面。
 - **分享**：分享链接（可选密码 / 过期时间 / 浏览计数）、匿名上传链接。全局 `share_link_enabled`
   开关可完全禁用匿名分享 / 上传链接（已有链接将不可访问，并广播 `share-link-disabled` 特性让
   客户端隐藏分享功能）。资料库始终属于单个账号：没有面向用户或群组的共享面。
 - **安全**：TOTP 双因素认证（含备用码和受信设备）、SSO / "在网站上查看" 登录、邀请码注册、
-  带锁定机制的登录限流、密码重置（邮件门控）、哈希会话 cookie 与 CSRF 防护、防路径穿越的
-  文件名处理。
+  带锁定机制的登录限流、密码重置（通过邮件投递，见**邮件通知**）、哈希会话 cookie 与 CSRF 防护、
+  防路径穿越的文件名处理。
   - **安全说明**：API、S2FA、SSO 登录和客户端登录的 bearer token 以 SHA-256 哈希存储，因此
     数据库泄露不会得到可用的凭据。同步 token 需要可回显（客户端会重新提交），因此以由
     `secret_key` 派生的 AEAD 密钥**加密**存储；分享链接 token 仍保持明文，因为"我的分享"列表
@@ -187,7 +187,7 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
 | `[storage]` | 块存储、临时、缩略图和头像目录，全局存储配额上限（`max_storage_bytes`，`0` = 不限）、视频缩略图的 ffmpeg 路径、可续传上传临时限制（`max_temp_uploads`、`max_temp_upload_bytes`、`temp_upload_ttl_hours`）、zip 归档上限（`max_zip_entries`、`max_zip_bytes`，`0` = 不限），以及透明静态块加密（`block_encryption_mode` / `encryption_key`）。 |
 | `[auth]` | 密码哈希成本、token TTL、API 密钥有效期预设（`api_key_ttl_presets_days`）及其上限（`api_key_max_ttl_days`，`0` = 不限；非 0 时不允许创建永不过期的密钥）、登录锁定、邀请注册、密码策略，以及每 IP 限流（密码重置、注册、TOTP 验证、分享 / 上传链接密码、匿名分享下载）。 |
 | `[ui]` | 默认 UI 语言（`en` / `zh`）、托盘菜单语言（`tray_language`：`auto` 跟随系统区域设置，`en`/`zh` 强制指定）。 |
-| `[email]` | 邮件后端总开关。密码重置链接只投递到所有者的收件箱，服务器从不回显，因此在存在 SMTP 后端之前重置流程保持禁用。 |
+| `[email]` | 出站邮件总开关，以及首次启动用的 SMTP 默认值（`host`、`port`、`tls`、`username`、`password`、`from_address`、`from_name`、`timeout_secs`、`max_attempts`）。总开关只能在这里或环境变量中打开，不能在管理页面打开。SMTP 默认值用于首次启动时播种 `/sysadmin/email/` 保存的设置，此后以该页面为准（启动日志会在两者不一致时告警）。详见**邮件通知**。 |
 | `[admin_init]` | 可选的首次启动管理员自动创建。密码优先使用 `NANOFILE_ADMIN_INIT_PASSWORD_FILE`。 |
 | `[logging]` | 日志级别、可选轮转日志文件（`file_enabled`、`file`、`max_file_size_mb`、`max_backups`）。 |
 | `[gc]` | 启用 / 调度垃圾回收。 |
@@ -198,6 +198,37 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
 `secret_key` 是唯一主密钥：通知密钥和 CSRF 签名密钥都由它派生。生产环境请用
 `openssl rand -hex 32` 生成唯一值，并通过 `NANOFILE_SERVER_SECRET_KEY` 设置（空值会在启动时
 自动生成随机密钥，这会使重启后会话失效）。
+
+## 邮件通知
+
+Nanofile 可以通过 SMTP 发送四类邮件：**密码重置链接**、**新设备**登录、**新浏览器**登录，以及
+**新建 API 密钥**。所有邮件先写入数据库队列，因此发件箱可以跨重启保留，每次投递尝试都能在
+`/sysadmin/email/`（系统管理 → 邮件管理）看到。
+
+**如何开启。** `[email] enabled`（或 `NANOFILE_EMAIL_ENABLED`）是总开关，只能写在配置文件或环境
+变量里，不能在管理页面打开——这样即使管理员会话被攻破，也无法开始向用户发信。关闭时：密码重置流程
+不会生成任何 token，"忘记密码"链接隐藏，`/accounts/password/reset/` 返回 404，也不会排队任何通知；
+当 `enable_password_reset` 为真而邮件关闭时，启动日志会明确指出这一组合（它会静默吞掉所有重置请求）。
+
+`[email]` 下的 SMTP 值（`host`、`port`、`tls`、`username`、`password`、`from_address`、`from_name`、
+`timeout_secs`、`max_attempts`）是**首次播种**值：首次启动时写入设置行，之后以 `/sysadmin/email/` 为准，
+因此写错主机后无需改文件或重启即可修正。文件与已保存设置不一致时，启动日志会告警。密码建议用
+`NANOFILE_EMAIL_PASSWORD_FILE` 而不是 `NANOFILE_EMAIL_PASSWORD`，以免出现在进程列表里。`tls` 可取
+`starttls`（587 端口）、`tls`（隐式 TLS，通常是 465）或 `none`；证书始终校验，且没有"接受任意证书"
+的开关——暂不支持私有 CA，请使用公共可信证书，或用本机中继并设 `tls = "none"`（管理页面会明确标注
+这是明文）。
+
+**投递内容。** 密码重置链接是账号所有者唯一的 token 副本：服务器从不在 HTTP 响应中返回它，数据库只
+存它的 SHA-256 哈希。排队等待期间，渲染好的报文使用与同步 token 相同的域分离 AEAD 密钥加密，投递
+成功后立即抹除，因此重置链接无法从数据库中读出。*新设备*指客户端上报的 `(platform, device_id)` 组合
+在该账号上从未登录过；*新浏览器*比较的是凭据页面显示的浏览器标识，因此浏览器升级不会重复通知，普通
+的重复登录也不会打扰。三类通知在管理页面各有开关；暂不支持用户级退订。
+
+**投递机制。** 邮件入队后立即在后台尝试一次，之后由周期任务按递增间隔重试（30 秒、1 分钟、2 分钟……
+上限 1 小时），达到 `max_attempts` 后标记为失败并记录原因，可在页面上手动重试。投递语义为
+**至少一次**：投递过程中崩溃、或两个实例共用一个数据库，都可能重复投递——对通知而言无害，而且队列
+页面会让它可见。密码重置请求不会等待 SMTP，这也让响应时间不会泄露邮箱是否存在。已送达和已失败的
+记录分别保留 30 天和 90 天，总行数上限 1000，页面上有"清空已完成"操作。
 
 ## 安全
 
@@ -454,7 +485,9 @@ data/
 
 Playwright 套件会启动一个真实的 `nanofile` 二进制，使用隔离的临时数据库，并在 Chromium 中驱动
 UI，覆盖登录、选择、视图切换、排序 / 过滤、上传、文件操作、分享、历史、预览、标签和搜索。
-失败的运行会在 `e2e/test-results/server.log` 捕获后端日志。
+它还会在 `127.0.0.1:18025` 上运行一个极简 SMTP 服务器（见 `e2e/helpers/mailbox.ts`），让密码重置
+和邮件通知跑在真实的 SMTP 会话上；捕获的邮件写到 `e2e/test-results/mail/*.eml`。失败的运行会在
+`e2e/test-results/server.log` 捕获后端日志。
 
 CI 还强制格式化和 lint 检查：
 

@@ -8,6 +8,7 @@ pub mod auth_extractor;
 pub mod banner;
 pub mod client_login;
 pub mod ctx;
+pub mod email;
 pub mod error_page;
 pub mod files;
 pub mod invitations;
@@ -248,6 +249,32 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route(
             "/sysadmin/tasks/{name}/trigger/",
             axum::routing::post(admintasks::trigger_task),
+        )
+        // Admin — email management (SMTP settings, outbox, notification switches)
+        .route("/sysadmin/email/", get(email::email_page))
+        .route(
+            "/sysadmin/email/settings/",
+            axum::routing::post(email::save_settings),
+        )
+        .route(
+            "/sysadmin/email/test/",
+            axum::routing::post(email::send_test),
+        )
+        .route(
+            "/sysadmin/email/drain/",
+            axum::routing::post(email::drain_now),
+        )
+        .route(
+            "/sysadmin/email/clear/",
+            axum::routing::post(email::clear_finished),
+        )
+        .route(
+            "/sysadmin/email/{id}/retry/",
+            axum::routing::post(email::retry_message),
+        )
+        .route(
+            "/sysadmin/email/{id}/delete/",
+            axum::routing::post(email::delete_message),
         )
 }
 

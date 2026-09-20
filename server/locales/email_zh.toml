@@ -1,0 +1,105 @@
+# 出站邮件文案。与 en.toml 分开存放的原因见 email_en.toml。
+# 键必须与 email_en.toml 保持一致（由 service/mail/i18n.rs 的测试保证）。
+
+email.brand = "Nanofile"
+email.footer = '''
+本邮件由 {site_name} 自动发送。如果不是您本人操作，可以忽略本邮件。
+'''
+email.layout.html = '''<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:24px;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'Noto Sans SC',sans-serif;color:#18181b;">
+<div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e4e4e7;border-radius:10px;padding:28px;">
+<p style="margin:0 0 18px;font-size:15px;font-weight:600;letter-spacing:-0.01em;">{brand}</p>
+{content}
+<hr style="border:0;border-top:1px solid #e4e4e7;margin:24px 0 14px;">
+<p style="margin:0;font-size:12px;line-height:1.6;color:#71717a;">{footer}</p>
+</div>
+</body>
+</html>
+'''
+email.layout.text = '''
+
+--
+{brand}
+{footer}
+'''
+
+email.password_reset.subject = "重置您的 {brand} 密码"
+email.password_reset.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">{name}，您好：</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;">我们收到了这个地址的密码重置请求。下面的链接 {ttl} 天内有效，且只能使用一次。</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;word-break:break-all;"><a href="{link}" style="color:#2563eb;">{link}</a></p>
+<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">请求来自 {ip}，时间 {time}。如果不是您本人操作，无需处理：链接会自行过期，您的密码不会被修改。</p>'''
+email.password_reset.text = '''
+{name}，您好：
+
+我们收到了这个地址的密码重置请求。下面的链接 {ttl} 天内有效，且只能使用一次：
+
+{link}
+
+请求来自 {ip}，时间 {time}。如果不是您本人操作，无需处理：链接会自行过期，您的密码不会被修改。
+'''
+
+email.new_device.subject = "您的 {brand} 账号有新设备登录"
+email.new_device.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">{name}，您好：</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;">有设备首次登录了您的账号：</p>
+<table style="border-collapse:collapse;font-size:13px;line-height:1.7;">
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">设备</td><td>{device}</td></tr>
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">平台</td><td>{platform}</td></tr>
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">时间</td><td>{time}</td></tr>
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">IP 地址</td><td>{ip}</td></tr>
+</table>
+<p style="margin:16px 0 0;font-size:13px;line-height:1.7;color:#71717a;">如果是您本人操作，无需处理。否则请修改密码，并在 {site_url} 的"设置 → 凭据"里移除该设备。</p>'''
+email.new_device.text = '''
+{name}，您好：
+
+有设备首次登录了您的账号：
+
+  设备：    {device}
+  平台：    {platform}
+  时间：    {time}
+  IP 地址： {ip}
+
+如果是您本人操作，无需处理。否则请修改密码，并在"设置 → 凭据"里移除该设备。
+'''
+
+email.api_key_created.subject = "您的 {brand} 账号创建了新的 API 密钥"
+email.api_key_created.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">{name}，您好：</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;">您的账号于 {time} 创建了名为 <strong>{key_name}</strong> 的 API 密钥。</p>
+<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">如果不是您本人操作，请立即在 {site_url} 的"设置 → API 密钥"里吊销它并修改密码。</p>'''
+email.api_key_created.text = '''
+{name}，您好：
+
+您的账号于 {time} 创建了名为"{key_name}"的 API 密钥。
+
+如果不是您本人操作，请立即在"设置 → API 密钥"里吊销它并修改密码。
+'''
+
+email.new_login.subject = "您的 {brand} 账号有新登录"
+email.new_login.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">{name}，您好：</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;">您的账号被一个此前未使用过的浏览器登录：</p>
+<table style="border-collapse:collapse;font-size:13px;line-height:1.7;">
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">浏览器</td><td>{browser}</td></tr>
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">时间</td><td>{time}</td></tr>
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">IP 地址</td><td>{ip}</td></tr>
+</table>
+<p style="margin:16px 0 0;font-size:13px;line-height:1.7;color:#71717a;">如果是您本人操作，无需处理。否则请修改密码，并在 {site_url} 的"设置 → 凭据"里吊销该会话。</p>'''
+email.new_login.text = '''
+{name}，您好：
+
+您的账号被一个此前未使用过的浏览器登录：
+
+  浏览器：  {browser}
+  时间：    {time}
+  IP 地址： {ip}
+
+如果是您本人操作，无需处理。否则请修改密码，并在"设置 → 凭据"里吊销该会话。
+'''
+
+email.test.subject = "{brand} 测试邮件"
+email.test.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">这是一封测试邮件。</p>
+<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">如果您能看到它，说明 {site_url}/sysadmin/email/ 保存的 SMTP 设置可用。发送时间 {time}。</p>'''
+email.test.text = '''
+这是一封测试邮件。
+
+如果您能看到它，说明 {site_url}/sysadmin/email/ 保存的 SMTP 设置可用。发送时间 {time}。
+'''

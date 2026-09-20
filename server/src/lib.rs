@@ -108,6 +108,9 @@ pub struct AppState {
     pub reindex_running: Arc<std::sync::Mutex<HashMap<String, ()>>>,
     /// Per-user TTL cache of the left-panel repo list (web UI).
     pub left_panel_cache: Arc<crate::ui::left_panel_cache::LeftPanelRepoCache>,
+    /// Outbound mail: settings, queue and transport. Always present; whether it
+    /// can actually send is decided by config and the saved settings.
+    pub mail: Arc<crate::service::mail::Mailer>,
 }
 
 /// Progress of a background reindex task (`POST /api2/reindex/`).
@@ -242,8 +245,23 @@ impl AppState {
             None
         };
 
+        // Outbound mail: settings (config bootstrap + the row saved at
+        // `/sysadmin/email/`), the outbox and the SMTP transport.
+        let config = Arc::new(config);
+        let mail = Arc::new(crate::service::mail::Mailer::new(
+            repos.clone(),
+            token_cipher.clone(),
+            config.clone(),
+        ));
+        // The startup diagnostics have to read the settings row, so they run as
+        // a task instead of blocking `new` (which is not async).
+        {
+            let mail = mail.clone();
+            tokio::spawn(async move { mail.log_startup_diagnostics().await });
+        }
+
         // Register all background tasks (event listener, token expiry, cache
-        // cleanup, share/upload link cleanup, gc, index commit).
+        // cleanup, share/upload link cleanup, gc, index commit, mail delivery).
         crate::scheduler_setup::register_default_tasks(
             &scheduler,
             &repos,
@@ -257,6 +275,7 @@ impl AppState {
             config.storage.temp_upload_ttl_hours,
             enc_mode,
             block_dir.as_ref(),
+            Some(&mail),
         );
 
         // In Lazy mode, run the one-shot legacy-block conversion once at startup.
@@ -273,7 +292,7 @@ impl AppState {
         Self {
             repos,
             db,
-            config: Arc::new(config),
+            config,
             block_store,
             block_dir,
             token_manager: Arc::new(AccessTokenManager::new()),
@@ -290,6 +309,7 @@ impl AppState {
             reindex_tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             reindex_running: Arc::new(std::sync::Mutex::new(HashMap::new())),
             left_panel_cache: Arc::new(crate::ui::left_panel_cache::LeftPanelRepoCache::default()),
+            mail,
         }
     }
 

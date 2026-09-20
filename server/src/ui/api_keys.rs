@@ -444,6 +444,12 @@ pub async fn create(
 
     match ApiKeyService::create(&state.repos, &state.config.auth, user.user_id, input).await {
         Ok(created) => {
+            // Tell the owner a key now exists — the secret itself is only ever
+            // shown here, so this is also the record that it was created.
+            state
+                .mail
+                .notify_api_key_created(user.user_id, &created.view.name)
+                .await;
             stash_reveal(
                 user.user_id,
                 created.view.id,

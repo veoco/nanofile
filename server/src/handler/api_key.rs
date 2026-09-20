@@ -133,6 +133,14 @@ pub async fn create_api_key(
     )
     .await?;
 
+    // The owner is told about every way a key can appear, not only the Web UI:
+    // a key created through the API is exactly the case they would not see
+    // otherwise. Best-effort, so mail can never fail key creation.
+    state
+        .mail
+        .notify_api_key_created(auth.user_id, &created.view.name)
+        .await;
+
     let mut response = view_json(&created.view);
     response["key"] = json!(created.secret);
     Ok(Json(response))

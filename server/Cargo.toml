@@ -78,6 +78,19 @@ serde_json = "1"
 toml = "1.1"
 quick-xml = { version = "0.42", features = ["serialize"] }
 
+# Outbound email (settings, notifications, password reset). Rustls rather than
+# native-tls so the binary keeps its "no OpenSSL" property; `hostname` is off
+# because the EHLO name is taken from the configured site URL rather than the
+# machine, and the file transport is a test-only backend that would otherwise
+# put reset links on disk.
+lettre = { version = "0.11", default-features = false, features = [
+    "builder",
+    "smtp-transport",
+    "tokio1",
+    "tokio1-rustls-tls",
+    "tracing",
+] }
+
 rand = "0.10"
 sha1 = "0.11"
 sha2 = "0.11"

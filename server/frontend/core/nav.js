@@ -62,6 +62,12 @@ if (userMenu && userButton) {
       taskLink.className = menuItem;
       taskLink.textContent = __t('ui.task_management');
       dropdown.appendChild(taskLink);
+
+      var emailLink = document.createElement("a");
+      emailLink.href = "/sysadmin/email/";
+      emailLink.className = menuItem;
+      emailLink.textContent = __t('ui.email_management');
+      dropdown.appendChild(emailLink);
     }
 
     var signOut = document.createElement("a");

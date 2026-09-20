@@ -357,6 +357,18 @@ impl ApiTokenRepository for CachingApiTokenRepository {
         self.inner.list_sessions(user_id).await
     }
 
+    async fn has_session_for_device(
+        &self,
+        user_id: i32,
+        platform: &str,
+        device_id: &str,
+    ) -> Result<bool, AppError> {
+        // Read-only, so it neither consults nor invalidates the credential cache.
+        self.inner
+            .has_session_for_device(user_id, platform, device_id)
+            .await
+    }
+
     async fn find_by_id_and_user(
         &self,
         token_id: i32,

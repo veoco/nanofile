@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { SMTP_PORT } from "./mailbox";
 
 export const PORT = 18082;
 export const BASE_URL = `http://127.0.0.1:${PORT}`;
@@ -73,6 +74,19 @@ export async function startServer(
     NANOFILE_ADMIN_INIT_PASSWORD: ADMIN_PASSWORD,
     NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS: "1000",
     NANOFILE_SERVER_SECRET_KEY: SERVER_SECRET_KEY,
+    // Mail is on for the whole suite, pointed at the stub in
+    // `helpers/mailbox.ts`: the password-reset flow and the notifications can
+    // only be tested against a real SMTP conversation. These seed the settings
+    // on first start (no settings row exists yet), so a spec that saves the form
+    // must save equivalent values.
+    NANOFILE_EMAIL_ENABLED: "true",
+    NANOFILE_EMAIL_HOST: "127.0.0.1",
+    NANOFILE_EMAIL_PORT: String(SMTP_PORT),
+    NANOFILE_EMAIL_TLS: "none",
+    NANOFILE_EMAIL_FROM_ADDRESS: "nanofile@test.local",
+    NANOFILE_EMAIL_FROM_NAME: "Nanofile E2E",
+    NANOFILE_EMAIL_TIMEOUT_SECS: "5",
+    NANOFILE_EMAIL_MAX_ATTEMPTS: "3",
     NANOFILE_LOG_LEVEL: process.env.E2E_LOG_LEVEL || "info",
     ...opts.env,
   };

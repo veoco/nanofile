@@ -11,7 +11,13 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-fn parse_translations(src: &str) -> HashMap<String, String> {
+/// Parse a flat locale file into a key/value map.
+///
+/// `pub(crate)` because the outbound-mail dictionary (`service::mail::i18n`) is
+/// a second, deliberately separate set of strings — mail bodies must not be
+/// shipped to the browser in every page's `window.__T` blob — and both should
+/// be parsed exactly the same way.
+pub(crate) fn parse_translations(src: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     if let Ok(value) = toml::from_str::<toml::Value>(src) {
         flatten_toml(&value, "", &mut map);

@@ -119,7 +119,7 @@ pub async fn login_page(
         t,
         error: login_error(&query, t),
         remember_days: state.config.auth.api_token_ttl_days,
-        enable_password_reset: state.config.auth.enable_password_reset,
+        enable_password_reset: password_reset_available(&state).await,
         enable_invitations: state.config.auth.enable_invitations,
         next: query.next.unwrap_or_default(),
     };
@@ -127,6 +127,54 @@ pub async fn login_page(
         .render()
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Html(html))
+}
+
+/// Whether the password-reset flow can actually deliver a link.
+///
+/// The template field this feeds used to be `auth.enable_password_reset` alone,
+/// so an install with the flag on and no mail backend showed a "Forgot
+/// password?" link whose every submission silently did nothing. Reporting the
+/// honesty of the flow is now part of deciding to show it.
+async fn password_reset_available(state: &Arc<AppState>) -> bool {
+    state.config.auth.enable_password_reset && state.mail.ready().await
+}
+
+/// Tell the owner when a browser signs in for the first time.
+///
+/// Must be called *before* the new session row is created: the check compares
+/// the request's browser against the account's existing sessions, and a session
+/// that is already inserted matches itself, which would make every login look
+/// familiar.
+///
+/// Costs nothing while mail is switched off — the switch is consulted before the
+/// session list is read — which is what keeps the default deployment's login
+/// path free of extra queries.
+async fn notify_new_browser(
+    state: &Arc<AppState>,
+    user_id: i32,
+    headers: &HeaderMap,
+    client_ip: &str,
+) {
+    use crate::service::mail::{MailKind, detect};
+
+    if !state.mail.allows(MailKind::NewLogin).await {
+        return;
+    }
+    let agent = user_agent::from_headers(headers);
+    let prior = match state.repos.api_token.list_sessions(user_id).await {
+        Ok(sessions) => sessions,
+        Err(e) => {
+            tracing::warn!("could not list sessions for a new-login check: {e}");
+            return;
+        }
+    };
+    if !detect::is_new_browser(&prior, agent.as_deref()) {
+        return;
+    }
+    state
+        .mail
+        .notify_new_login(user_id, agent.as_deref(), client_ip)
+        .await;
 }
 
 /// Build a session cookie value with optional Secure flag.
@@ -185,7 +233,7 @@ async fn render_login_page(
         t: I18n::from_headers(headers, &state.config.ui.default_language),
         error,
         remember_days: state.config.auth.api_token_ttl_days,
-        enable_password_reset: state.config.auth.enable_password_reset,
+        enable_password_reset: password_reset_available(state).await,
         enable_invitations: state.config.auth.enable_invitations,
         next: next.to_string(),
     };
@@ -378,6 +426,9 @@ pub async fn login(
     }
 
     // ── No 2FA — normal login ───────────────────────────────────────
+    // Before the session is stored, so "have I seen this browser?" can be asked.
+    notify_new_browser(&state, user_record.id, &headers, &client_ip).await;
+
     let session_token = generate_api_token();
     let now = chrono::Utc::now().timestamp();
 
@@ -687,6 +738,10 @@ pub async fn two_factor_auth(
     state.auth_limiters.totp.clear(&totp_key);
     // Delete the pending token
     let _ = state.repos.api_token.delete_by_token(pending_token).await;
+
+    // The second factor was satisfied below; from the owner's point of view this
+    // is still the first sign-in from this browser.
+    notify_new_browser(&state, user_id, &headers, &client_ip).await;
 
     let session_token = generate_api_token();
     let now = chrono::Utc::now().timestamp();
@@ -1069,10 +1124,16 @@ pub struct PasswordResetConfirmForm {
 }
 
 /// GET /accounts/password/reset/ — show the password reset request form.
+///
+/// Answers 404 when the flow cannot deliver a link. Serving the form anyway is
+/// what made a mail-less install look like it had a working reset.
 pub async fn password_reset_page(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Html<String>, AppError> {
+    if !password_reset_available(&state).await {
+        return Err(AppError::NotFound("password reset is unavailable".into()));
+    }
     let tpl = PasswordResetFormTemplate {
         urls: crate::static_assets::template_urls(),
         t: I18n::from_headers(&headers, &state.config.ui.default_language),
@@ -1116,7 +1177,11 @@ pub async fn password_reset(
     // Email delivery is required to hand the reset link to the account owner.
     // Without it, minting a token and echoing the link back would let anyone
     // reset any account. Render the generic page and do not create a token.
-    if !state.config.email.enabled {
+    //
+    // `ready()` is stricter than `email.enabled`: it also requires a configured
+    // SMTP host and sender, so an install that enabled the switch but never
+    // finished configuring it still mints nothing.
+    if !state.mail.ready().await {
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
             t: I18n::from_headers(&headers, &state.config.ui.default_language),
@@ -1147,12 +1212,30 @@ pub async fn password_reset(
     }
     state.auth_limiters.password_reset.record_attempt(&rl_key);
 
-    // Mint a token that will be emailed to the account owner (delivery backend
-    // not yet wired up). The response deliberately does not contain it.
+    // Mint a token and mail it to the account owner. The response deliberately
+    // does not contain the link.
+    //
+    // The send is queued and attempted in the background rather than awaited:
+    // a known address would otherwise take an SMTP round trip that an unknown
+    // one does not, and that timing difference is a user-enumeration oracle —
+    // the very thing the generic page exists to prevent. Failures are visible
+    // on /sysadmin/email/.
     let reset_service = PasswordResetService::new(state.repos.clone());
-    let _result = reset_service
+    let result = reset_service
         .create_reset_token(&form.email, &state.config.server.site_url)
         .await?;
+    if let (Some(user_id), Some(reset_url)) = (result.user_id, result.reset_url) {
+        state
+            .mail
+            .send_password_reset(
+                &form.email,
+                user_id,
+                result.language.as_deref(),
+                &reset_url,
+                Some(&client_ip),
+            )
+            .await;
+    }
 
     let tpl = PasswordResetDoneTemplate {
         urls: crate::static_assets::template_urls(),

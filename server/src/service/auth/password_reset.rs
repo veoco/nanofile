@@ -13,9 +13,19 @@ use base::error::AppError;
 use infra::entity::password_reset_token;
 
 /// Result of password reset token creation.
+///
+/// The caller needs the account and the one-time link to hand the link to its
+/// owner; `None` on both means the address has no account, in which case
+/// nothing was minted and nothing may be sent (that is what keeps the flow from
+/// answering "does this address exist?").
 pub struct PasswordResetTokenResult {
-    pub raw_token: String,
+    /// The account the token was minted for.
+    pub user_id: Option<i32>,
+    /// The one-time reset URL. Never returned over HTTP.
     pub reset_url: Option<String>,
+    /// The account's preferred language, so the message is readable without a
+    /// second lookup.
+    pub language: Option<String>,
 }
 
 /// Service handling password reset operations.
@@ -48,7 +58,7 @@ impl PasswordResetService {
 
     /// Create a password reset token for a user.
     ///
-    /// Returns None if user is not found (to prevent enumeration).
+    /// Returns no link if the user is not found (to prevent enumeration).
     pub async fn create_reset_token(
         &self,
         email: &str,
@@ -57,38 +67,45 @@ impl PasswordResetService {
         // Look up the user
         let user_record = self.repos.user.find_by_email(email).await?;
 
-        let reset_url = if let Some(user) = user_record {
-            let now = chrono::Utc::now().timestamp();
-            let (raw_token, token_hash) = generate_reset_token();
-
-            // Invalidate any previously issued reset links so old tokens stop
-            // working as soon as a new one is requested.
-            let old_tokens = self
-                .repos
-                .password_reset_token
-                .find_by_user(user.id)
-                .await?;
-            for old in old_tokens {
-                self.repos.password_reset_token.delete_by_id(old.id).await?;
-            }
-
-            self.repos
-                .password_reset_token
-                .create(user.id, token_hash, now, now + RESET_TOKEN_TTL_SECONDS)
-                .await?;
-
-            let base = site_url.trim_end_matches('/');
-            let link = format!("{}/accounts/password/reset/{}/", base, raw_token);
-            tracing::info!("Password reset link generated for user {}", user.email);
-            Some(link)
-        } else {
+        // An unknown address mints nothing and reports nothing: the caller
+        // renders the same generic page either way, which is what keeps the
+        // endpoint from answering "does this account exist?".
+        let Some(user) = user_record else {
             tracing::info!("Password reset requested for unknown email: {}", email);
-            None
+            return Ok(PasswordResetTokenResult {
+                user_id: None,
+                reset_url: None,
+                language: None,
+            });
         };
 
+        let now = chrono::Utc::now().timestamp();
+        let (raw_token, token_hash) = generate_reset_token();
+
+        // Invalidate any previously issued reset links so old tokens stop
+        // working as soon as a new one is requested.
+        let old_tokens = self
+            .repos
+            .password_reset_token
+            .find_by_user(user.id)
+            .await?;
+        for old in old_tokens {
+            self.repos.password_reset_token.delete_by_id(old.id).await?;
+        }
+
+        self.repos
+            .password_reset_token
+            .create(user.id, token_hash, now, now + RESET_TOKEN_TTL_SECONDS)
+            .await?;
+
+        let base = site_url.trim_end_matches('/');
+        let link = format!("{}/accounts/password/reset/{}/", base, raw_token);
+        tracing::info!("Password reset link generated for user {}", user.email);
+
         Ok(PasswordResetTokenResult {
-            raw_token: String::new(), // Not needed by caller
-            reset_url,
+            user_id: Some(user.id),
+            reset_url: Some(link),
+            language: user.language,
         })
     }
 

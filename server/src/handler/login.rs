@@ -158,6 +158,12 @@ pub async fn login(
         .and_then(|v| v.to_str().ok())
         == Some("1");
 
+    // The device fields are moved into the service, but the notification built
+    // from them afterwards still needs them.
+    let device_platform = form.platform.clone().unwrap_or_default();
+    let device_id = form.device_id.clone().unwrap_or_default();
+    let device_name = form.device_name.clone().unwrap_or_default();
+
     // ── Call service ─────────────────────────────────────────────────
     let svc = state.login_service();
     let login_result = svc
@@ -178,9 +184,25 @@ pub async fn login(
     // ── Format response ──────────────────────────────────────────────
     match login_result {
         LoginResult::Success {
+            user_id,
             api_token,
             s2fa_token,
+            new_device,
         } => {
+            if new_device {
+                // Best-effort and in the background: the response below must not
+                // wait on a mail server, and a failure must not fail the login.
+                state
+                    .mail
+                    .notify_new_device(
+                        user_id,
+                        &device_platform,
+                        &device_id,
+                        &device_name,
+                        &client_ip,
+                    )
+                    .await;
+            }
             let mut response = Json(LoginResponse { token: api_token }).into_response();
             if let Some(s2fa) = s2fa_token {
                 response.headers_mut().insert(

@@ -67,14 +67,15 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   `webdav_enabled`.
 - **Web UI**: file browser with previews and thumbnails, starred files, activity feed, trash,
   settings (profile, sessions & credentials, 2FA, invitations, API keys), and a **sysadmin panel**
-  (users, shares, background tasks). Localized in English and Chinese.
+  (users, shares, background tasks, email). Localized in English and Chinese.
 - **Sharing**: share links (optional password / expiry / view counting) and anonymous upload links.
   A global `share_link_enabled` switch can disable anonymous share/upload links entirely (existing
   links become inaccessible and the `share-link-disabled` feature is advertised so clients hide
   sharing). Libraries are per-account: there is no share-to-user or group surface.
 - **Security**: TOTP two-factor auth with backup codes and trusted devices, SSO / "view on website"
-  login, invitation-code registration, login rate limiting with lockout, password reset (email-gated),
-  hashed session cookies with CSRF protection, path-traversal-safe filename handling.
+  login, invitation-code registration, login rate limiting with lockout, password reset (delivered by
+  email; see **Email notifications**), hashed session cookies with CSRF protection,
+  path-traversal-safe filename handling.
   - **Security note**: API keys, API, S2FA, SSO-login and client-login bearer tokens are stored as
     SHA-256 hashes, so a leaked database does not yield usable credentials; a freshly created key is
     therefore shown exactly once. Sync tokens stay recoverable
@@ -227,7 +228,7 @@ migration is applied in memory only.
 | `[storage]` | Block store, temp, thumbnail and avatar directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited), ffmpeg path for video thumbnails, resumable-upload temp limits (`max_temp_uploads`, `max_temp_upload_bytes`, `temp_upload_ttl_hours`), zip-archive caps (`max_zip_entries`, `max_zip_bytes`, `0` = unlimited), and transparent at-rest block encryption (`block_encryption_mode` / `encryption_key`). |
 | `[auth]` | Password hashing cost, token TTLs, API-key lifetime presets (`api_key_ttl_presets_days`) and their upper bound (`api_key_max_ttl_days`, `0` = unbounded; when set, non-expiring keys are refused), login lockout, invitation registration, password policy, and per-IP rate limits (password reset, registration, TOTP verification, share/upload-link passwords, anonymous share downloads). |
 | `[ui]` | Default UI language (`en` / `zh`), tray menu language (`tray_language`: `auto` follows the OS locale, `en`/`zh` force one). |
-| `[email]` | Master switch for the email backend. Password-reset links are only delivered to the owner's inbox and are never echoed back by the server, so the reset flow stays disabled until an SMTP backend exists. |
+| `[email]` | Master switch for outbound mail, plus first-start SMTP defaults (`host`, `port`, `tls`, `username`, `password`, `from_address`, `from_name`, `timeout_secs`, `max_attempts`). The switch can only be turned on here (or in the environment) — never from the admin UI. The SMTP values seed the settings saved at `/sysadmin/email/` on first start; after that the page is the source of truth (the startup log says when the two disagree). See **Email notifications**. |
 | `[admin_init]` | Optional first-start admin auto-creation. Prefer `NANOFILE_ADMIN_INIT_PASSWORD_FILE` for the password. |
 | `[logging]` | Log level, optional rotating log file (`file_enabled`, `file`, `max_file_size_mb`, `max_backups`). |
 | `[gc]` | Enable / schedule garbage collection. |
@@ -239,6 +240,47 @@ migration is applied in memory only.
 Generate a unique one for production with `openssl rand -hex 32` and set it via
 `NANOFILE_SERVER_SECRET_KEY` (an empty value auto-generates a random key on startup, which invalidates
 sessions on restart).
+
+## Email notifications
+
+Nanofile can send mail over SMTP for four things: the **password-reset link**, a **new device**
+sign-in, a **new browser** sign-in, and a **newly created API key**. Anything it sends is queued in
+the database first, so the outbox survives a restart and every attempt is visible at
+`/sysadmin/email/` (Sysadmin → Email Management).
+
+**Turning it on.** `[email] enabled` (or `NANOFILE_EMAIL_ENABLED`) is the master switch, and it can
+only be set in the config file or the environment — never from the admin UI, so a compromised admin
+session cannot start mailing your users. With it off, the password-reset flow mints no token at all,
+the "Forgot password?" link is hidden, `/accounts/password/reset/` answers 404, and no notification
+is queued; the startup log says so when `enable_password_reset` is on and mail is off, which is the
+combination that silently swallows reset requests.
+
+The SMTP values under `[email]` (`host`, `port`, `tls`, `username`, `password`, `from_address`,
+`from_name`, `timeout_secs`, `max_attempts`) are *bootstrap* values: they fill the settings row on
+first start, and from then on `/sysadmin/email/` is the source of truth, so a wrong host can be fixed
+without editing the file or restarting. The startup log warns when the file and the saved settings
+disagree. Prefer `NANOFILE_EMAIL_PASSWORD_FILE` over `NANOFILE_EMAIL_PASSWORD` so the secret does not
+appear in a process listing. `tls` is `starttls` (port 587), `tls` (implicit TLS, usually 465) or
+`none`; certificates are always validated, and there is no "accept any certificate" switch — a relay
+with a private CA is not supported yet, so use a publicly trusted certificate or a localhost relay
+with `tls = "none"` (which the admin page labels as plaintext, because it is).
+
+**What is delivered.** The reset link is the account owner's only copy of the token — the server
+never returns it in an HTTP response, and the database stores just its SHA-256 hash. The rendered
+message is encrypted with the same domain-separated AEAD key as repository sync tokens while it waits
+in the outbox, and is erased the moment it is delivered, so a reset link cannot be read out of the
+database. *New device* means a client reported a `(platform, device_id)` pair the account had never
+signed in with; *new browser* compares the browser label the credentials page shows, so a browser
+update does not re-notify and a plain revisit stays quiet. Each of the three notifications has its
+own switch on the admin page, and per-user opt-out does not exist yet.
+
+**Delivery.** Messages are attempted immediately in the background, then retried by a periodic task
+with a growing delay (30s, 1m, 2m … capped at an hour) until `max_attempts` is reached, after which
+the row is marked failed with the reason and can be retried by hand. Delivery is **at-least-once**:
+a crash mid-send, or two servers sharing one database, can deliver a message twice — harmless for a
+notification, and the queue page makes it visible. A reset request never waits on SMTP, which also
+keeps the response time from revealing whether an address exists. Delivered and failed rows are kept
+for 30 and 90 days respectively, capped at 1000 rows, and the page has a "clear finished" action.
 
 ## Security
 
@@ -551,8 +593,10 @@ Tests are split across three layers:
 
 The Playwright suite boots a real `nanofile` binary against an isolated temporary database and drives
 the UI in Chromium, covering login, selection, view switching, sorting/filtering, upload, file
-operations, sharing, history, preview, tags, and search. Failed runs capture the backend log at
-`e2e/test-results/server.log`.
+operations, sharing, history, preview, tags, and search. It also runs a minimal SMTP server on
+`127.0.0.1:18025` (see `e2e/helpers/mailbox.ts`) so that password reset and the email notifications
+are exercised against a real SMTP conversation; captured messages are written to
+`e2e/test-results/mail/*.eml`. Failed runs capture the backend log at `e2e/test-results/server.log`.
 
 Formatting and lint checks are also enforced by CI:
 

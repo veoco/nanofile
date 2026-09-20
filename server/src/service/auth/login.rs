@@ -11,12 +11,32 @@ use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
 use infra::rate_limit::{LoginKeys, LoginRateLimiter};
 
+/// A trimmed `Some` only when the client actually reported a value.
+fn non_empty(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 /// Represents all possible outcomes of a login attempt.
 pub enum LoginResult {
     /// Login succeeded. Includes the API token and an optional S2FA device trust token.
     Success {
+        /// The account the token belongs to, so a caller can act on the login
+        /// (notify the owner, record an audit line) without re-resolving the
+        /// submitted identifier — which may differ from the stored one in case.
+        user_id: i32,
         api_token: String,
         s2fa_token: Option<String>,
+        /// Whether `(platform, device_id)` had never signed in before.
+        ///
+        /// Decided here, before the new session row exists, because this is the
+        /// only place that both knows the device identity and sees the account's
+        /// sessions first. The handler turns it into a notification: the service
+        /// layer stays free of any mail dependency.
+        new_device: bool,
     },
     /// Rate limited — too many failed attempts.
     RateLimited,
@@ -239,6 +259,21 @@ impl LoginService {
             }
         }
 
+        // Ask before inserting: the session about to be created is the *new*
+        // row, and counting it would make every login look familiar.
+        let new_device = match (non_empty(&platform), non_empty(&device_id)) {
+            (Some(platform), Some(device_id)) => {
+                !self
+                    .repos
+                    .api_token
+                    .has_session_for_device(user_record.id, &platform, &device_id)
+                    .await?
+            }
+            // A client that did not identify its device cannot be compared with
+            // anything, so it is never announced as new.
+            _ => false,
+        };
+
         let token_value = generate_api_token();
         let now = chrono::Utc::now().timestamp();
 
@@ -272,8 +307,10 @@ impl LoginService {
             .await?;
 
         Ok(LoginResult::Success {
+            user_id: user_record.id,
             api_token: token_value,
             s2fa_token: issued_s2fa_token,
+            new_device,
         })
     }
 

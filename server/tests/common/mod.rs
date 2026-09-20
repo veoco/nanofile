@@ -501,6 +501,7 @@ impl TestServer {
             admin_init: Default::default(),
             email: infra::config::EmailConfig {
                 enabled: email_enabled,
+                ..Default::default()
             },
             ui: Default::default(),
             sync: Default::default(),

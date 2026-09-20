@@ -10,6 +10,7 @@ import {
   ADMIN_PASSWORD,
 } from "./helpers/server";
 import { login } from "./helpers/api";
+import { startMailServer } from "./helpers/mailbox";
 
 function ensureBinary(): string {
   const repoRoot = path.resolve(process.cwd(), "..");
@@ -28,6 +29,10 @@ export default async function globalSetup() {
   const resultsDir = path.join(process.cwd(), "test-results");
   fs.mkdirSync(resultsDir, { recursive: true });
   fs.rmSync(path.join(resultsDir, "server.log"), { force: true });
+
+  // The SMTP stub comes first: the server reads its mail settings at startup,
+  // and a notification queued before the stub listens would just be a retry.
+  await startMailServer();
 
   const handle = await startServer(binary);
 

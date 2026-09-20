@@ -1,0 +1,115 @@
+# Outbound-mail strings.
+#
+# Kept apart from `en.toml` on purpose: that dictionary is serialized into
+# `window.__T` on every page, and mail bodies are long, HTML-bearing and never
+# needed by the browser. Keys must stay in step with `email_zh.toml`
+# (`service/mail/i18n.rs` proves it).
+
+email.brand = "Nanofile"
+email.footer = '''
+This message was sent automatically by {site_name}. If you did not expect it, you can ignore it.
+'''
+email.layout.html = '''<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:24px;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'Noto Sans SC',sans-serif;color:#18181b;">
+<div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e4e4e7;border-radius:10px;padding:28px;">
+<p style="margin:0 0 18px;font-size:15px;font-weight:600;letter-spacing:-0.01em;">{brand}</p>
+{content}
+<hr style="border:0;border-top:1px solid #e4e4e7;margin:24px 0 14px;">
+<p style="margin:0;font-size:12px;line-height:1.6;color:#71717a;">{footer}</p>
+</div>
+</body>
+</html>
+'''
+email.layout.text = '''
+
+--
+{brand}
+{footer}
+'''
+
+email.password_reset.subject = "Reset your {brand} password"
+email.password_reset.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">Hi {name},</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;">Someone requested a password reset for this address. The link below is valid for {ttl} days and can only be used once.</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;word-break:break-all;"><a href="{link}" style="color:#2563eb;">{link}</a></p>
+<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">Requested from {ip} on {time}. If this was not you, no action is needed — the link expires on its own and your password stays unchanged.</p>'''
+email.password_reset.text = '''
+Hi {name},
+
+Someone requested a password reset for this address. The link below is valid
+for {ttl} days and can only be used once:
+
+{link}
+
+Requested from {ip} on {time}. If this was not you, no action is needed — the
+link expires on its own and your password stays unchanged.
+'''
+
+email.new_device.subject = "New device signed in to your {brand} account"
+email.new_device.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">Hi {name},</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;">A device signed in to your account for the first time:</p>
+<table style="border-collapse:collapse;font-size:13px;line-height:1.7;">
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">Device</td><td>{device}</td></tr>
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">Platform</td><td>{platform}</td></tr>
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">Time</td><td>{time}</td></tr>
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">IP address</td><td>{ip}</td></tr>
+</table>
+<p style="margin:16px 0 0;font-size:13px;line-height:1.7;color:#71717a;">If this was you, nothing needs to be done. Otherwise change your password and remove the device under {site_url} → Settings → Credentials.</p>'''
+email.new_device.text = '''
+Hi {name},
+
+A device signed in to your account for the first time:
+
+  Device:     {device}
+  Platform:   {platform}
+  Time:       {time}
+  IP address: {ip}
+
+If this was you, nothing needs to be done. Otherwise change your password and
+remove the device under Settings -> Credentials.
+'''
+
+email.api_key_created.subject = "A new API key was created for your {brand} account"
+email.api_key_created.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">Hi {name},</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;">An API key named <strong>{key_name}</strong> was created for your account on {time}.</p>
+<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">If this was not you, revoke it now under {site_url} → Settings → API Keys and change your password.</p>'''
+email.api_key_created.text = '''
+Hi {name},
+
+An API key named "{key_name}" was created for your account on {time}.
+
+If this was not you, revoke it now under Settings -> API Keys and change your
+password.
+'''
+
+email.new_login.subject = "New sign-in to your {brand} account"
+email.new_login.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">Hi {name},</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;">Your account was signed in to from a browser it has not used before:</p>
+<table style="border-collapse:collapse;font-size:13px;line-height:1.7;">
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">Browser</td><td>{browser}</td></tr>
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">Time</td><td>{time}</td></tr>
+<tr><td style="padding:2px 10px 2px 0;color:#71717a;">IP address</td><td>{ip}</td></tr>
+</table>
+<p style="margin:16px 0 0;font-size:13px;line-height:1.7;color:#71717a;">If this was you, nothing needs to be done. Otherwise change your password and revoke the session under {site_url} → Settings → Credentials.</p>'''
+email.new_login.text = '''
+Hi {name},
+
+Your account was signed in to from a browser it has not used before:
+
+  Browser:    {browser}
+  Time:       {time}
+  IP address: {ip}
+
+If this was you, nothing needs to be done. Otherwise change your password and
+revoke the session under Settings -> Credentials.
+'''
+
+email.test.subject = "Test message from {brand}"
+email.test.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">This is a test message.</p>
+<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">If you can read it, the SMTP settings saved at {site_url}/sysadmin/email/ work. Sent on {time}.</p>'''
+email.test.text = '''
+This is a test message.
+
+If you can read it, the SMTP settings saved at {site_url}/sysadmin/email/ work.
+Sent on {time}.
+'''

@@ -131,16 +131,83 @@ fn default_tray_language() -> String {
 
 /// Email delivery configuration.
 ///
-/// Password reset links are **only** delivered to the account owner's inbox.
-/// Without a configured email backend the reset feature is disabled: the server
-/// must never echo the reset link back in the HTTP response, since that would
-/// let anyone take over any account.
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+/// Password reset links are **only** delivered to the account owner's inbox:
+/// the server must never echo a reset link back in an HTTP response, since that
+/// would let anyone take over any account.
+///
+/// `enabled` is a hard switch and the only way to turn mail on: an administrator
+/// cannot enable outbound mail from the Web UI, only configure how it is sent.
+/// The connection fields below are *bootstrap* values — they seed the
+/// `email_settings` row on first start and are superseded by whatever
+/// `/sysadmin/email/` saves, so the SMTP host can be corrected without editing
+/// this file or restarting.
+#[derive(Deserialize, Serialize, Clone)]
 pub struct EmailConfig {
-    /// Master switch. When `false` (default) the password-reset flow is
-    /// disabled and requests render a generic page without minting a token.
+    /// Master switch. When `false` (default) the whole mail subsystem is off:
+    /// the password-reset flow renders a generic page without minting a token,
+    /// and no notification is ever queued.
     #[serde(default)]
     pub enabled: bool,
+    /// SMTP host. Empty means "not configured": the subsystem stays inert even
+    /// with `enabled = true`, and the startup log says so.
+    #[serde(default)]
+    pub host: String,
+    #[serde(default = "default_smtp_port")]
+    pub port: u16,
+    /// `"starttls"` (default), `"tls"` (implicit TLS, typically port 465) or
+    /// `"none"`. `"none"` sends credentials and message bodies in the clear —
+    /// acceptable only for a relay on the same machine.
+    #[serde(default = "default_smtp_tls")]
+    pub tls: String,
+    #[serde(default)]
+    pub username: String,
+    /// SMTP password. Prefer `NANOFILE_EMAIL_PASSWORD_FILE` over
+    /// `NANOFILE_EMAIL_PASSWORD` so it does not leak via process listings.
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub from_address: String,
+    #[serde(default)]
+    pub from_name: String,
+    /// Bounds one delivery attempt (connect + send).
+    #[serde(default = "default_smtp_timeout_secs")]
+    pub timeout_secs: u64,
+    /// Delivery attempts before a queued message is marked failed.
+    #[serde(default = "default_smtp_max_attempts")]
+    pub max_attempts: u32,
+}
+
+fn default_smtp_port() -> u16 {
+    587
+}
+
+fn default_smtp_tls() -> String {
+    "starttls".to_string()
+}
+
+fn default_smtp_timeout_secs() -> u64 {
+    10
+}
+
+fn default_smtp_max_attempts() -> u32 {
+    5
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: String::new(),
+            port: default_smtp_port(),
+            tls: default_smtp_tls(),
+            username: String::new(),
+            password: None,
+            from_address: String::new(),
+            from_name: String::new(),
+            timeout_secs: default_smtp_timeout_secs(),
+            max_attempts: default_smtp_max_attempts(),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -1738,6 +1805,36 @@ impl Config {
             self.server.encrypted_library_version
         );
         env_parse!("NANOFILE_EMAIL_ENABLED", self.email.enabled);
+        env_str!("NANOFILE_EMAIL_HOST", self.email.host);
+        env_parse!("NANOFILE_EMAIL_PORT", self.email.port);
+        env_str!("NANOFILE_EMAIL_TLS", self.email.tls);
+        env_str!("NANOFILE_EMAIL_USERNAME", self.email.username);
+        env_str!("NANOFILE_EMAIL_FROM_ADDRESS", self.email.from_address);
+        env_str!("NANOFILE_EMAIL_FROM_NAME", self.email.from_name);
+        env_parse!("NANOFILE_EMAIL_TIMEOUT_SECS", self.email.timeout_secs);
+        env_parse!("NANOFILE_EMAIL_MAX_ATTEMPTS", self.email.max_attempts);
+        // The password is the one SMTP value that is a real secret; a file keeps
+        // it out of the process listing the way the admin-init password does.
+        if let Ok(v) = std::env::var("NANOFILE_EMAIL_PASSWORD") {
+            tracing::warn!(
+                "NANOFILE_EMAIL_PASSWORD is set via environment variable. \
+                 Consider using NANOFILE_EMAIL_PASSWORD_FILE instead, \
+                 which is less likely to leak via process listings or logs."
+            );
+            self.email.password = Some(v);
+        }
+        if let Ok(filepath) = std::env::var("NANOFILE_EMAIL_PASSWORD_FILE") {
+            match std::fs::read_to_string(&filepath) {
+                Ok(password) => self.email.password = Some(password.trim().to_string()),
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to read NANOFILE_EMAIL_PASSWORD_FILE from {}: {}",
+                        filepath,
+                        e
+                    );
+                }
+            }
+        }
         env_str!("NANOFILE_UI_DEFAULT_LANGUAGE", self.ui.default_language);
         env_str!("NANOFILE_UI_TRAY_LANGUAGE", self.ui.tray_language);
         env_str!(
@@ -2616,6 +2713,60 @@ request_timeout_secs = 600
         // A .bak of the pre-write state is kept, like every config write.
         assert!(dir.path().join("config.toml.bak").exists());
     }
+
+    #[test]
+    fn email_defaults_are_off_with_an_undeliverable_shape() {
+        let c = EmailConfig::default();
+        assert!(!c.enabled, "mail is opt-in");
+        assert!(c.host.is_empty());
+        assert!(c.from_address.is_empty());
+        assert!(c.password.is_none());
+        assert_eq!(c.port, 587);
+        assert_eq!(c.tls, "starttls");
+        assert_eq!(c.timeout_secs, 10);
+        assert_eq!(c.max_attempts, 5);
+    }
+
+    #[test]
+    fn email_section_roundtrips_and_fills_missing() {
+        // A config with only the switch gains the new keys on load, and the
+        // optional password stays absent rather than being written as empty.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[email]\nenabled = true\n").unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+        assert!(config.email.enabled);
+        assert_eq!(config.email.port, 587);
+        assert_eq!(config.email.tls, "starttls");
+        assert_eq!(config.email.max_attempts, 5);
+        assert_eq!(config.email.timeout_secs, 10);
+        assert!(config.email.password.is_none());
+
+        let filled = std::fs::read_to_string(&path).unwrap();
+        assert!(filled.contains("enabled = true"));
+        assert!(filled.contains("port = 587"));
+        // The email section gains the defaults but no `password` line: a
+        // `None` is absent from the document rather than written as empty.
+        let email_section = filled
+            .split("[email]")
+            .nth(1)
+            .and_then(|rest| rest.split("\n[").next())
+            .expect("an [email] section");
+        assert!(!email_section.contains("password"), "{email_section}");
+    }
+
+    #[test]
+    fn email_config_never_debugs_its_password() {
+        // `EmailConfig` carries the SMTP password; its `Debug` is redacted so a
+        // `{:?}` on the section cannot print it.
+        let c = EmailConfig {
+            password: Some("smtp-secret".to_string()),
+            ..Default::default()
+        };
+        let rendered = format!("{c:?}");
+        assert!(!rendered.contains("smtp-secret"));
+    }
 }
 
 // ─── Redacting Debug ────────────────────────────────────────────────────────
@@ -2646,4 +2797,7 @@ redacting_debug!(
     DatabaseConfig,
     StorageConfig,
     AdminInitConfig,
+    // Holds the SMTP password, so it joins the redacted set for the same reason
+    // `admin_init` does: a `{:?}` must not be able to print a secret.
+    EmailConfig,
 );
