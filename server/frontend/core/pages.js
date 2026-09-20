@@ -97,6 +97,22 @@ document.addEventListener("submit", async function (e) {
     HTMLFormElement.prototype.submit.call(form);
 });
 
+// ─── Copy-to-clipboard (data-copy="<selector>") ────────────────────────
+// For values that are too long to read at phone width but still have to be
+// handed to someone, e.g. an invitation code: the button copies the target's
+// text, which stays in the DOM, so the page degrades to select-and-copy when
+// this module is absent. `data-copy-msg` names the toast to confirm with.
+document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-copy]");
+    if (!btn) return;
+    var target = document.querySelector(btn.dataset.copy);
+    if (!target) return;
+    var text = (target.textContent || "").trim();
+    if (!text) return;
+    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(function () {});
+    if (btn.dataset.copyMsg) Toast.success(__t(btn.dataset.copyMsg));
+});
+
 // ─── Preview image fallback (data-preview-image) ───────────────────────
 // `error` events don't bubble, so capture at the document level. Builds the
 // fallback with DOM APIs (not innerHTML) to keep the download URL inert.
