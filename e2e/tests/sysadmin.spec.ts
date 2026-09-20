@@ -1,7 +1,14 @@
 import { test, expect } from "@playwright/test";
+import { subtitleGap } from "../helpers/layout";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/sysadmin/users/");
+});
+
+// The subtitle has no bottom margin of its own, so the user table must keep its
+// own top margin or the two touch.
+test("the description sits clear of the user table", async ({ page }) => {
+  expect(await subtitleGap(page)).toBeGreaterThanOrEqual(16);
 });
 
 async function createUser(page: import("@playwright/test").Page, suffix: string): Promise<string> {

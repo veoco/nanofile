@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { subtitleGap } from "../helpers/layout";
 
 // Asserts the default English UI (default_language=en; the admin has no
 // language override), which renders the Periodic/Continuous/Never labels.
@@ -15,6 +16,13 @@ test("tasks page lists scheduled periodic and continuous tasks", async ({ page }
   await expect(taskRow(page, "share link cleanup")).toBeVisible();
   await expect(page.getByText("Periodic").first()).toBeVisible();
   await expect(page.getByText("Continuous").first()).toBeVisible();
+});
+
+// The subtitle has no bottom margin of its own, so the task list must keep its
+// own top margin or the two touch.
+test("the description sits clear of the task table", async ({ page }) => {
+  await page.goto("/sysadmin/tasks/");
+  expect(await subtitleGap(page)).toBeGreaterThanOrEqual(16);
 });
 
 test("trigger a periodic task manually", async ({ page }) => {

@@ -9,7 +9,7 @@
 <p class="page-subtitle">{{ t.tr("admin.tasks_desc") }}</p>
 
 {% if tasks.is_empty() %}
-<div class="nf-list">
+<div class="nf-list mt-5">
     <div class="nf-empty">
         {{ icons::icon_clock("mx-auto h-10 w-10 text-ink-3") }}
         <h3>{{ t.tr("admin.tasks_none") }}</h3>
@@ -21,7 +21,7 @@
    the interval and last run sit under the name, the duration and the success /
    error / total triple in the metadata column, and the last message becomes a
    third line — the label for each number rides in its `title`. #}
-<div class="nf-list">
+<div class="nf-list mt-5">
     {% for task in tasks %}
     <div class="nf-prow" data-name="{{ task.name }}">
         <span class="nf-prow-ic">{{ icons::icon_clock("w-[15px] h-[15px]") }}</span>
