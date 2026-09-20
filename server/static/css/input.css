@@ -874,19 +874,19 @@ html:not([data-view]) .seg .js-view-list {
   /* A row block: the row, plus an optional disclosure underneath it, sharing
      the panel's hairlines rather than drawing a box of its own. */
   .nf-xrow { @apply border-b border-line; }
-  .nf-xrow > .nf-prow { @apply border-b-0; }
+  .nf-xrow .nf-prow { @apply border-b-0; }
   .nf-xrow-more { @apply px-3.5 pb-3; }
   /* The toggle is a `<summary>`, so the marker has to go. */
   .nf-xrow-more > summary { list-style: none; }
   .nf-xrow-more > summary::-webkit-details-marker { display: none; }
   .nf-expand { @apply mt-2.5; }
 
-  /* A row whose opener is an action rather than a label: the `Edit` toggle goes
-     into a second column under the row's buttons instead of sitting on its own
-     line at the left edge, where it read as a stray link. */
-  .nf-xrow-more.is-act { @apply grid grid-cols-[minmax(0,1fr)_auto]; }
-  .nf-xrow-more.is-act > summary { @apply col-start-2 justify-self-end; }
-  .nf-xrow-more.is-act > form { @apply col-span-2; }
+  /* A row that is its own disclosure: the summary is the row, so it keeps the
+     row's flex layout and loses the marker, and the toggle inside it is a label
+     on the row rather than a second control. */
+  summary.nf-prow { list-style: none; }
+  summary.nf-prow::-webkit-details-marker { display: none; }
+  details[open] summary.nf-prow .nf-toggle svg { transform: rotate(90deg); }
 
   /* The fixed half of a row: what the reader checks rather than reads. Labels in
      a column, values right-aligned against the row's edge, so the three dates

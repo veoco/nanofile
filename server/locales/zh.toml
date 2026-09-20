@@ -827,6 +827,7 @@ apikey.show_once_desc = "请立即复制：服务端只保存哈希，之后无�
 apikey.copy = "复制"
 apikey.copied = "已复制"
 apikey.edit = "编辑"
+apikey.edit_title = "编辑 {name}"
 apikey.revoke = "撤销"
 apikey.revoke_confirm = "撤销这个密钥？正在使用它的客户端会立即失去访问权限。"
 apikey.created = "创建于"

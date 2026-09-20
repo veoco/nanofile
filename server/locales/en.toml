@@ -828,6 +828,7 @@ apikey.show_once_desc = "Copy it now: only its hash is stored, so it cannot be s
 apikey.copy = "Copy"
 apikey.copied = "Copied"
 apikey.edit = "Edit"
+apikey.edit_title = "Edit {name}"
 apikey.revoke = "Revoke"
 apikey.revoke_confirm = "Revoke this key? Anything using it loses access immediately."
 apikey.created = "Created"
