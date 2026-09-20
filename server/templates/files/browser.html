@@ -234,11 +234,16 @@
                 {{ icons::icon_close("h-4 w-4") }}
             </button>
         </div>
-        <div class="flex-1 overflow-auto flex items-center justify-center p-4 bg-canvas">
-            <img class="js-qp-img hidden max-w-full max-h-[75vh] object-contain" src="" alt="">
-            <video class="js-qp-video hidden max-w-full max-h-[75vh] object-contain bg-black rounded-ctl" controls playsinline preload="metadata"></video>
+        <!-- Height reserved up front, not content-sized: a <video>/<img> has no
+             intrinsic size until its metadata or bytes arrive, so it lays out at
+             the replaced-element default (300x150) and the dialog jumped to the
+             media's real size a moment later. The media contains itself inside
+             the reserved stage instead. -->
+        <div class="h-[70vh] overflow-auto flex items-center justify-center p-4 bg-canvas">
+            <img class="js-qp-img hidden max-w-full max-h-full object-contain" src="" alt="">
+            <video class="js-qp-video hidden max-w-full max-h-full object-contain bg-black rounded-ctl" controls playsinline preload="metadata"></video>
             <audio class="js-qp-audio hidden w-full" controls preload="metadata"></audio>
-            <pre class="js-qp-text hidden w-full max-h-[70vh] overflow-auto whitespace-pre-wrap break-words text-[12px] text-ink-2 bg-panel rounded-ctl p-4"></pre>
+            <pre class="js-qp-text hidden w-full max-h-full overflow-auto whitespace-pre-wrap break-words text-[12px] text-ink-2 bg-panel rounded-ctl p-4"></pre>
             <div class="js-qp-unsupported hidden text-[13px] text-ink-3"></div>
         </div>
     </div>

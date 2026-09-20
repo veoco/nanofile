@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo, uploadFile } from "../helpers/api";
+import { tinyMp4 } from "../helpers/video";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -35,6 +36,7 @@ test.beforeAll(async () => {
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "photo.png", PNG_1x1);
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "song.wav", minimalWav());
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "clip.mp4", Buffer.from("not really a video"));
+  await uploadFile(state.baseURL, state.adminToken, repoId, "/", "plays.mp4", tinyMp4());
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "note.xyz", "unrecognized\n");
 });
 
@@ -66,8 +68,57 @@ test("audio preview opens the audio player", async ({ page }) => {
 });
 
 test("video preview opens the video player", async ({ page }) => {
-  await dblclickRow(page, "clip.mp4");
+  await dblclickRow(page, "plays.mp4");
   await expect(page.locator(".js-qp-video")).toBeVisible();
+  // A decodable clip must not be reported as unplayable.
+  await expect(page.locator(".js-qp-unsupported")).toBeHidden();
+  await expect
+    .poll(() => page.locator(".js-qp-video").evaluate((v) => (v as HTMLVideoElement).videoWidth))
+    .toBeGreaterThan(0);
+});
+
+// A media element that cannot decode its source fires `error` and otherwise
+// just sits there, so the dialog used to be an empty black box with no
+// explanation. Which files decode is the browser's codec list, not the file
+// extension: an HEVC/H.265 clip plays nowhere on a stock Windows Chrome/Edge
+// even though the phone writes it into the same .mp4/.MOV container as H.264.
+test("an unplayable video says so instead of showing a black box", async ({ page }) => {
+  await dblclickRow(page, "clip.mp4");
+  const message = page.locator(".js-qp-unsupported");
+  await expect(message).toBeVisible();
+  await expect(message).toContainText("H.265/HEVC");
+  await expect(page.locator(".js-qp-video")).toBeHidden();
+});
+
+// The dialog used to be content-sized, so it opened at the media element's
+// default 300x150 box and jumped to the clip's real size once its metadata
+// arrived. The stage now reserves that space up front.
+test("the video dialog is settled before the clip loads", async ({ page }) => {
+  await page.evaluate(() => {
+    (window as any).__qp = [];
+    const video = document.querySelector(".js-qp-video") as HTMLVideoElement;
+    const snap = (tag: string) => {
+      const card = document.querySelector("#quick-preview-overlay > div") as HTMLElement;
+      (window as any).__qp.push({ tag, h: Math.round(card.getBoundingClientRect().height) });
+    };
+    new MutationObserver(() => {
+      if (!video.classList.contains("hidden")) {
+        // Recorded the moment the player is revealed, before its metadata can
+        // have arrived, then again once it has.
+        snap("revealed");
+        video.addEventListener("loadedmetadata", () => snap("metadata"), { once: true });
+      }
+    }).observe(video, { attributes: true, attributeFilter: ["class"] });
+  });
+
+  await dblclickRow(page, "plays.mp4");
+  await page.waitForFunction(() => (window as any).__qp.some((s: any) => s.tag === "metadata"));
+
+  const shots = await page.evaluate(() => (window as any).__qp as { tag: string; h: number }[]);
+  const revealed = shots.find((s) => s.tag === "revealed")!;
+  expect(shots[shots.length - 1].h).toBe(revealed.h);
+  // …and it is already a preview-sized dialog, not a 150px-tall strip.
+  expect(revealed.h).toBeGreaterThan((page.viewportSize()?.height || 0) / 2);
 });
 
 test("unsupported files do not open the quick preview", async ({ page }) => {

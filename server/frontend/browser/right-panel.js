@@ -644,12 +644,12 @@ export function resetRightPanel() {
 // ─── Quick preview modal (dblclick on a file row) ───────────────────────
 var QUICK_PREVIEW_TEXT_LIMIT = 1024 * 1024; // 1MB
 
-function showQuickPreviewUnsupported() {
+function showQuickPreviewUnsupported(messageKey) {
   var overlay = document.getElementById("quick-preview-overlay");
   if (!overlay) return;
   var unsupported = overlay.querySelector(".js-qp-unsupported");
   if (unsupported) {
-    unsupported.textContent = __t("fb.preview_failed");
+    unsupported.textContent = __t(messageKey || "fb.preview_failed");
     unsupported.classList.remove("hidden");
   }
 }
@@ -662,8 +662,8 @@ function resetQuickPreview() {
   var audio = overlay.querySelector(".js-qp-audio");
   var text = overlay.querySelector(".js-qp-text");
   var unsupported = overlay.querySelector(".js-qp-unsupported");
-  if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
-  if (audio) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
+  if (video) { video.pause(); video.removeAttribute("src"); video.load(); video.onerror = null; }
+  if (audio) { audio.pause(); audio.removeAttribute("src"); audio.load(); audio.onerror = null; }
   if (img) { img.removeAttribute("src"); img.onerror = null; }
   if (text) text.textContent = "";
   [img, video, audio, text, unsupported].forEach(function (el) {
@@ -701,9 +701,22 @@ export function openQuickPreview(row) {
   var text = overlay.querySelector(".js-qp-text");
 
   if (isVideo) {
+    // A media element that cannot decode the file fires `error` and just sits
+    // there, so without this the dialog was an empty black box. Which files
+    // decode is the browser's codec list, not the container: an HEVC/H.265 clip
+    // in the same .mp4/.MOV the phone also writes H.264 into plays nowhere on a
+    // stock Windows Chrome/Edge.
+    video.onerror = function () {
+      video.classList.add("hidden");
+      showQuickPreviewUnsupported("fb.media_unsupported");
+    };
     video.src = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
     video.classList.remove("hidden");
   } else if (isAudio) {
+    audio.onerror = function () {
+      audio.classList.add("hidden");
+      showQuickPreviewUnsupported("fb.media_unsupported");
+    };
     audio.src = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
     audio.classList.remove("hidden");
   } else if (isPreviewable && isQuickPreviewImage(name)) {
