@@ -364,7 +364,8 @@ cargo build --release -p server --features tray
 ```
 
 托盘图标和 Windows 可执行文件图标在编译时从 `server/static/img/favicon.svg` 栅格化——仓库中
-不附带任何图片资源。
+不附带任何图片资源。托盘图标跟随桌面主题：浅色桌面用深色标记，深色桌面用反过来的一套
+（macOS 则只提供去掉底板的字形作为 template image，由系统自行反色），主题切换时会自动刷新。
 
 ## Docker
 

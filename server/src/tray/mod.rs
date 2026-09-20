@@ -12,6 +12,10 @@ pub(crate) mod autostart;
 mod icon;
 pub(crate) mod icon_gen;
 mod notify;
+/// macOS gets a template image and lets the system invert it, so the theme
+/// probe only exists where the raster has to carry the colour itself.
+#[cfg(not(target_os = "macos"))]
+mod theme;
 
 #[cfg(target_os = "windows")]
 #[path = "backend_windows.rs"]
@@ -221,6 +225,11 @@ fn create_tray(ctx: &TrayContext, quit_tx: Sender<TrayCommand>) -> anyhow::Resul
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
         .with_tooltip(lang().tr("tray.tooltip"))
+        // macOS menu-bar icons are template images: the system inverts the
+        // glyph for the light/dark menu bar and for the highlighted state, so
+        // the glyph is rendered bare and ON TOP of that inversion. Elsewhere
+        // the flag is ignored and the raster already carries the tile colour.
+        .with_icon_as_template(cfg!(target_os = "macos"))
         .with_icon(icon::tray_icon())
         .build()
         .context("failed to create tray icon")

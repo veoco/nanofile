@@ -4,8 +4,65 @@
 //! the outputs are written to `OUT_DIR`) and by `src/tray` (for the icon size
 //! constant and the unit tests). Pure `std` only — no rendering crates.
 
-/// Edge length of the tray icon rasterized into `$OUT_DIR/tray_icon.rgba`.
+/// Edge length of the tray icon rasterized into `$OUT_DIR/tray_icon_*.rgba`.
 pub const TRAY_ICON_SIZE: u32 = 32;
+
+/// One fill pair of the brand mark: the tile and the glyph.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub struct MarkColors {
+    pub tile: &'static str,
+    pub glyph: &'static str,
+}
+
+/// The two literals `static/img/favicon.svg` carries — its light-theme base,
+/// i.e. `--color-accent` / `--color-accent-ink`. [`recolor`] replaces them, so
+/// the unit tests below keep the file and these constants together.
+#[allow(dead_code)]
+pub const FAVICON_TILE: &str = "#202020";
+#[allow(dead_code)]
+pub const FAVICON_GLYPH: &str = "#ffffff";
+
+/// Tray icon for a light desktop: the plain brand mark.
+#[allow(dead_code)]
+pub const MARK_ON_LIGHT: MarkColors = MarkColors {
+    tile: "#202020",
+    glyph: "#ffffff",
+};
+
+/// Tray icon for a dark desktop: the inverse, i.e. the favicon's own
+/// `prefers-color-scheme: dark` pair.
+#[allow(dead_code)]
+pub const MARK_ON_DARK: MarkColors = MarkColors {
+    tile: "#eeeeee",
+    glyph: "#111111",
+};
+
+/// macOS menu-bar template image: the glyph alone, in black. The system
+/// inverts a template itself for the light/dark menu bar and for the
+/// highlighted state, so a filled tile must not be part of it.
+#[allow(dead_code)]
+pub const MARK_TEMPLATE: MarkColors = MarkColors {
+    tile: "none",
+    glyph: "#000000",
+};
+
+/// Rewrites the mark's two literal fills in `src` (the contents of
+/// `static/img/favicon.svg`). Panics when a literal is missing, so recolouring
+/// the favicon breaks the build instead of silently shipping a wrong icon.
+#[allow(dead_code)]
+pub fn recolor(src: &str, colors: MarkColors) -> String {
+    assert!(
+        src.contains(FAVICON_TILE),
+        "favicon.svg no longer contains {FAVICON_TILE}"
+    );
+    assert!(
+        src.contains(FAVICON_GLYPH),
+        "favicon.svg no longer contains {FAVICON_GLYPH}"
+    );
+    src.replace(FAVICON_TILE, colors.tile)
+        .replace(FAVICON_GLYPH, colors.glyph)
+}
 
 // The following are used by the build-script copy of this module (`build.rs`
 // includes this file via `#[path]`); the runtime copy only needs the constant
@@ -139,5 +196,39 @@ mod tests {
 
         let total: u32 = 6 + 16 * 5 + EXE_ICON_SIZES.iter().map(|&s| dib_len(s)).sum::<u32>();
         assert_eq!(ico.len(), total as usize);
+    }
+
+    /// The favicon is the one file both the browser tab and the tray rasters
+    /// come from, so its literals are what [`recolor`] substitutes. Pin them
+    /// here: a recoloured favicon then fails a test instead of shipping a tray
+    /// icon in the wrong theme colours.
+    #[test]
+    fn favicon_carries_the_substituted_fills() {
+        let svg = include_str!("../../static/img/favicon.svg");
+
+        assert_eq!(MARK_ON_LIGHT.tile, FAVICON_TILE);
+        assert_eq!(MARK_ON_LIGHT.glyph, FAVICON_GLYPH);
+        assert!(svg.contains(FAVICON_TILE), "base tile fill changed");
+        assert!(svg.contains(FAVICON_GLYPH), "base glyph fill changed");
+
+        // The dark variant must equal the favicon's own dark rule, or the tab
+        // and the tray would disagree on what "dark" looks like.
+        assert!(svg.contains(MARK_ON_DARK.tile), "dark tile fill changed");
+        assert!(svg.contains(MARK_ON_DARK.glyph), "dark glyph fill changed");
+    }
+
+    #[test]
+    fn recolor_swaps_both_fills() {
+        let svg = format!(r#"<rect fill="{FAVICON_TILE}"/><path fill="{FAVICON_GLYPH}"/>"#);
+
+        let dark = recolor(&svg, MARK_ON_DARK);
+        assert!(dark.contains(r##"fill="#eeeeee""##));
+        assert!(dark.contains(r##"fill="#111111""##));
+        assert!(!dark.contains(FAVICON_TILE) && !dark.contains(FAVICON_GLYPH));
+
+        // The template keeps the tile element but paints it out.
+        let template = recolor(&svg, MARK_TEMPLATE);
+        assert!(template.contains(r#"fill="none""#));
+        assert!(template.contains(r##"fill="#000000""##));
     }
 }

@@ -262,3 +262,39 @@ pub async fn serve_static(Path(path): Path<String>, headers: HeaderMap) -> Respo
     resp.body(Body::from(file.data))
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "500").into_response())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// First value of an XML attribute `name="…"` in `src`.
+    fn attr<'a>(src: &'a str, name: &str) -> &'a str {
+        let needle = format!("{name}=\"");
+        let start = src
+            .find(&needle)
+            .unwrap_or_else(|| panic!("no {name} attribute"))
+            + needle.len();
+        let end = start + src[start..].find('"').expect("unterminated attribute");
+        &src[start..end]
+    }
+
+    /// `favicon.svg` (also what the tray/exe icons rasterize from) and
+    /// `icon_brand_mark` are two copies of one geometry, so they drift silently:
+    /// the mark once rendered at four different radii and four different glyph
+    /// weights across the tab, the topbar, the rail footer and the brand bar.
+    /// Compare the parts that carry the shape, not the parts that must differ
+    /// (a standalone favicon cannot read the app's CSS variables for colour).
+    #[test]
+    fn favicon_and_in_app_mark_share_one_geometry() {
+        let favicon_file = Assets::get("img/favicon.svg").expect("embedded favicon");
+        let favicon = std::str::from_utf8(&favicon_file.data).unwrap();
+        let icons = include_str!("../templates/includes/icons.html");
+        let start = icons.find("macro icon_brand_mark").expect("brand macro");
+        let mark = &icons[start..];
+        let mark = &mark[..mark.find("endmacro").expect("macro end")];
+
+        assert_eq!(attr(favicon, "viewBox"), attr(mark, "viewBox"));
+        assert_eq!(attr(favicon, "rx"), attr(mark, "rx"));
+        assert_eq!(attr(favicon, "d"), attr(mark, "d"));
+    }
+}

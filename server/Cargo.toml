@@ -161,9 +161,8 @@ path = "src/main.rs"
 sha2 = "0.11"
 # Tray feature build-time dependencies: rasterize static/img/favicon.svg into
 # the tray icon RGBA (all platforms) and the Windows exe icon (via winresource).
-resvg = { version = "0.45", optional = true, default-features = false, features = [
-    "text",
-    "system-fonts",
-] }
+# The mark is a path, not text, so the text / system-fonts features are off: the
+# raster cannot change with the fonts installed on the build machine.
+resvg = { version = "0.45", optional = true, default-features = false }
 tiny-skia = { version = "0.11", optional = true }
 winresource = { version = "0.1", optional = true }

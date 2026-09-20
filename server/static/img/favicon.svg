@@ -1,8 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- Graphite mark: the same "N" tile the left panel footer uses. The tile is
-       a mid grey rather than the near-black accent because a favicon cannot
-       follow `html.dark` — it is rendered in its own document, so it has to
-       hold up on a light and on a dark tab bar alike. -->
-  <rect width="32" height="32" rx="6" fill="#6b6b6b"/>
-  <text x="16" y="22" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="18" fill="#ffffff">N</text>
+  <!-- Graphite mark: the same "N" tile as `templates/includes/icons.html`
+       (icon_brand_mark) — same 32-unit geometry, same rx=6, same glyph path.
+       Keep the two in sync; this file is also what `build.rs` rasterizes into
+       the tray icon and the Windows exe icon.
+
+       A standalone favicon cannot read the app's CSS custom properties, so the
+       fills are literal, and the base pair is the LIGHT theme's accent colour
+       and accent ink. Browsers follow the system theme through the dark rule
+       below; a non-browser rasterizer skips that block, which is why `build.rs`
+       rewrites these two literals to derive each tray variant — see
+       `src/tray/icon_gen.rs`.
+
+       The glyph is a path, not <text>: a font glyph would resolve differently
+       per platform (and per font set on the build machine), which is what made
+       the old marks drift. -->
+  <style>
+    @media (prefers-color-scheme: dark) {
+      .brand-tile { fill: #eeeeee; }
+      .brand-glyph { fill: #111111; }
+    }
+  </style>
+  <rect class="brand-tile" width="32" height="32" rx="6" fill="#202020"/>
+  <path class="brand-glyph" fill="#ffffff" d="M9 9h2.6v14H9zM20.4 9H23v14h-2.6zM9 9h3.4l10.6 14h-3.4z"/>
 </svg>

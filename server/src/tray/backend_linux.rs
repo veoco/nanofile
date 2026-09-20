@@ -13,7 +13,7 @@ pub(super) fn run(ctx: &TrayContext, quit_tx: Sender<crate::TrayCommand>) -> ! {
         tracing::error!("Failed to initialize GTK, running headless: {e}");
         super::park_forever();
     }
-    let _tray = match super::create_tray(ctx, quit_tx) {
+    let tray = match super::create_tray(ctx, quit_tx) {
         Ok(tray) => tray,
         Err(e) => {
             tracing::error!("Tray unavailable, running headless: {e:#}");
@@ -21,6 +21,11 @@ pub(super) fn run(ctx: &TrayContext, quit_tx: Sender<crate::TrayCommand>) -> ! {
         }
     };
     super::notify::started();
+
+    // Follow the desktop between light and dark while we run. The handlers hold
+    // a clone of the (reference-counted) tray icon, so this binding only has to
+    // cover the case where the theme signals could not be connected.
+    super::theme::watch(&tray);
 
     gtk::main();
     std::process::exit(0);

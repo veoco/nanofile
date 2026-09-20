@@ -197,13 +197,19 @@ fn which_node_bin(name: &str) -> Option<(&'static str, Vec<&'static str>)> {
 //
 // The repository ships no binary icon assets: everything the tray and the
 // Windows exe need is rasterized here from `static/img/favicon.svg`:
-//   - `$OUT_DIR/tray_icon.rgba` — straight-alpha 32×32 pixels, included by
-//     `src/tray/icon.rs` via `include_bytes!`
+//   - `$OUT_DIR/tray_icon_on_light.rgba`
+//   - `$OUT_DIR/tray_icon_on_dark.rgba`   — straight-alpha 32×32 pixels for the
+//     two desktop themes, chosen at runtime by `src/tray/theme.rs` and included
+//     by `src/tray/icon.rs` via `include_bytes!`
+//   - `$OUT_DIR/tray_icon_template.rgba`  — the same glyph with no tile, for the
+//     macOS menu bar, which inverts a template image itself
 //   - `$OUT_DIR/nanofile.ico` — multi-size Windows exe icon (DIB entries),
 //     embedded together with version info via winresource
 //
-// Rendering the "N" glyph needs a font; system fonts are used and the icon
-// degrades to the plain rounded square when none are installed.
+// The mark is pure geometry (a rect plus a glyph path), so rasterizing it needs
+// no font and cannot vary with the build machine's installed fonts. The three
+// variants differ only in the two fills, which `icon_gen::recolor` substitutes
+// into the favicon — so the tray cannot drift from the tab.
 
 #[cfg(feature = "tray")]
 #[path = "src/tray/icon_gen.rs"]
@@ -213,17 +219,26 @@ mod icon_gen;
 fn build_tray_icons() {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let svg = std::fs::read(manifest_dir.join("static/img/favicon.svg"))
+    let svg = std::fs::read_to_string(manifest_dir.join("static/img/favicon.svg"))
         .expect("tray feature: failed to read static/img/favicon.svg");
 
-    let rgba = rasterize_svg(&svg, icon_gen::TRAY_ICON_SIZE);
-    std::fs::write(out_dir.join("tray_icon.rgba"), &rgba)
-        .expect("tray: failed to write tray_icon.rgba");
+    for (name, colors) in [
+        ("tray_icon_on_light.rgba", icon_gen::MARK_ON_LIGHT),
+        ("tray_icon_on_dark.rgba", icon_gen::MARK_ON_DARK),
+        ("tray_icon_template.rgba", icon_gen::MARK_TEMPLATE),
+    ] {
+        let variant = icon_gen::recolor(&svg, colors);
+        let rgba = rasterize_svg(variant.as_bytes(), icon_gen::TRAY_ICON_SIZE);
+        std::fs::write(out_dir.join(name), &rgba)
+            .unwrap_or_else(|e| panic!("tray: failed to write {name}: {e}"));
+    }
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // The exe icon is one static asset shown by Explorer and the taskbar, so
+        // it stays the plain brand mark rather than a theme variant.
         let mut images = Vec::new();
         for &size in &icon_gen::EXE_ICON_SIZES {
-            let img = rasterize_svg(&svg, size);
+            let img = rasterize_svg(svg.as_bytes(), size);
             images.push((size, icon_gen::dib_from_rgba(size, &img)));
         }
         let ico = icon_gen::build_ico(&images);
@@ -248,15 +263,13 @@ fn build_tray_icons() {}
 
 /// Rasterizes an SVG into a `size × size` straight-alpha RGBA buffer, fitting
 /// the whole SVG centered into the square.
+///
+/// A non-browser rasterizer skips the favicon's `prefers-color-scheme` block, so
+/// callers pass a [`icon_gen::recolor`]-ed variant whose literal fills already
+/// carry the colours they want.
 #[cfg(feature = "tray")]
 fn rasterize_svg(svg: &[u8], size: u32) -> Vec<u8> {
-    let mut options = resvg::usvg::Options::default();
-    let mut fontdb = resvg::usvg::fontdb::Database::new();
-    fontdb.load_system_fonts();
-    // Generic-font fallback for the "N" glyph when the SVG's requested font
-    // family (Arial) is not installed on the build machine.
-    fontdb.set_sans_serif_family("DejaVu Sans");
-    options.fontdb = std::sync::Arc::new(fontdb);
+    let options = resvg::usvg::Options::default();
 
     let tree = resvg::usvg::Tree::from_data(svg, &options)
         .expect("tray: failed to parse static/img/favicon.svg");

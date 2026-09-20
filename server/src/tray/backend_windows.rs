@@ -16,6 +16,7 @@ use std::sync::mpsc::Sender;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP,
+    WM_SETTINGCHANGE,
 };
 
 use super::{TrayContext, perform_autostart_toggle};
@@ -50,7 +51,7 @@ pub(super) fn run(ctx: &TrayContext, quit_tx: Sender<crate::TrayCommand>) -> ! {
 
     // Keep the TrayIcon alive for the lifetime of the loop; dropping it would
     // remove the icon.
-    let _tray = match super::create_tray(ctx, quit_tx) {
+    let tray = match super::create_tray(ctx, quit_tx) {
         Ok(tray) => tray,
         Err(e) => {
             tracing::error!("Tray unavailable, running headless: {e:#}");
@@ -67,6 +68,16 @@ pub(super) fn run(ctx: &TrayContext, quit_tx: Sender<crate::TrayCommand>) -> ! {
             if msg.message == WM_APP_TOGGLE_AUTOSTART && msg.hwnd.is_null() {
                 perform_autostart_toggle();
                 continue;
+            }
+            // The shell broadcasts this when the taskbar flips between light
+            // and dark (among other settings). GetMessageW with a null filter
+            // also picks it up for the tray's own hidden window, so re-read the
+            // theme here; refreshing on an unrelated setting change is cheap
+            // and idempotent.
+            if msg.message == WM_SETTINGCHANGE
+                && let Err(e) = tray.set_icon(Some(super::icon::tray_icon()))
+            {
+                tracing::warn!("Failed to refresh the tray icon: {e}");
             }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);

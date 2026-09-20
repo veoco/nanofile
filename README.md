@@ -444,7 +444,10 @@ cargo build --release -p server --features tray
 ```
 
 The tray icon and the Windows executable icon are rasterized from `server/static/img/favicon.svg`
-at compile time — no image assets are shipped in the repository.
+at compile time — no image assets are shipped in the repository. The tray icon follows the desktop
+theme: a light desktop gets the dark mark and a dark desktop the inverse (macOS instead gets a bare
+glyph as a template image, which the system inverts itself), and it is refreshed when the theme
+changes.
 
 ## Docker
 
