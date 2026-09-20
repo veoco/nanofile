@@ -297,11 +297,6 @@ async fn render_sysadmin_error(
 ) -> Result<Response, AppError> {
     // Only our own client-facing errors are shown verbatim; an internal failure
     // keeps its detail in the log and shows the translated generic message.
-    let msg = match error {
-        AppError::BadRequest(m) => m,
-        _ => I18n::get(user.language.as_deref())
-            .tr("admin.action_failed")
-            .to_string(),
-    };
+    let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &error);
     render_page(state, user, Some(msg), None).await
 }

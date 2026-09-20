@@ -267,7 +267,7 @@ pub async fn delete_share(
         }
         Ok(_) => {}
         Err(e) => {
-            let msg = action_error(&user, &e);
+            let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &e);
             return render_page(&state, &user, tab, Some(msg), None).await;
         }
     }
@@ -305,7 +305,7 @@ pub async fn delete_upload(
         }
         Ok(_) => {}
         Err(e) => {
-            let msg = action_error(&user, &e);
+            let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &e);
             return render_page(&state, &user, tab, Some(msg), None).await;
         }
     }
@@ -320,16 +320,5 @@ fn deleted_location(tab: &str) -> String {
         "/sysadmin/shares/?tab=upload-links&action=deleted".to_string()
     } else {
         "/sysadmin/shares/?action=deleted".to_string()
-    }
-}
-
-/// The message a failed action shows: our own client-facing errors are safe to
-/// display, anything else gets the translated generic text.
-fn action_error(user: &WebUser, error: &AppError) -> String {
-    match error {
-        AppError::BadRequest(m) => m.clone(),
-        _ => I18n::get(user.language.as_deref())
-            .tr("admin.action_failed")
-            .to_string(),
     }
 }

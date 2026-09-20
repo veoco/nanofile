@@ -5,6 +5,7 @@ pub mod admintasks;
 pub mod api_keys;
 pub mod auth;
 pub mod auth_extractor;
+pub mod banner;
 pub mod client_login;
 pub mod ctx;
 pub mod error_page;
