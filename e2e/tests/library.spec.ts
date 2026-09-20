@@ -86,6 +86,55 @@ test("delete a library", async ({ page }) => {
   await expect(li).toHaveCount(0, { timeout: 15_000 });
 });
 
+test("the list spans the same box as its toolbar", async ({ page }) => {
+  await openLibraries(page);
+
+  // Full-bleed, like the file list inside a library. It used to sit in the
+  // padded document column the Shares/Trash pages use, which left the header
+  // band and the row rules stopping 24px short of both edges, and gave the rows
+  // a further inset of their own on top of the toolbar's.
+  const box = await page.evaluate(() => {
+    const rect = (sel: string) => {
+      const r = document.querySelector(sel)!.getBoundingClientRect();
+      return { left: Math.round(r.left), right: Math.round(window.innerWidth - r.right) };
+    };
+    return {
+      toolbar: rect(".nf-toolbar"),
+      head: rect(".nf-lib-head"),
+      row: rect("#repo-list > li"),
+    };
+  });
+  expect(box.row).toEqual(box.toolbar);
+  expect(box.head).toEqual(box.toolbar);
+});
+
+// The list used to be sorted only in the browser, so the server's membership
+// order painted first and every row jumped once the bundle ran. The default
+// order is the server's now: nothing moves on load.
+test("the default order is already the server-rendered one", async ({ page }) => {
+  const older = `order-old-${Date.now()}`;
+  await createRepo(state.baseURL, state.adminToken, older);
+  await new Promise((r) => setTimeout(r, 1200));
+  const newer = `order-new-${Date.now()}`;
+  await createRepo(state.baseURL, state.adminToken, newer);
+
+  const html = await (await page.request.get("/libraries/")).text();
+  const ssr = [...html.matchAll(/data-name="([^"]+)"[^>]*?data-mtime="(\d+)"/g)].map((m) => ({
+    name: m[1],
+    mtime: Number(m[2]),
+  }));
+  const newerAt = ssr.findIndex((r) => r.name === newer);
+  const olderAt = ssr.findIndex((r) => r.name === older);
+  expect(newerAt).toBeGreaterThanOrEqual(0);
+  expect(newerAt).toBeLessThan(olderAt);
+
+  await openLibraries(page);
+  const dom = await page
+    .locator("#repo-list > li")
+    .evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.name));
+  expect(dom).toEqual(ssr.map((r) => r.name));
+});
+
 test("renders folder icon for normal and lock icon for encrypted libraries", async ({ page }) => {
   const normalName = `icon-normal-${Date.now()}`;
   const encName = `icon-enc-${Date.now()}`;

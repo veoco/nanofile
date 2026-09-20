@@ -4,62 +4,75 @@
 
 {% block title %}{{ t.tr("nav.libraries") }} | Nanofile{% endblock %}
 
-{% block content %}
-<div id="repos-page" hidden data-webdav-base-url="{{ webdav_base_url }}"></div>
-<div class="flex flex-wrap items-center justify-between gap-3">
-    <h1 class="page-title">{{ t.tr("nav.libraries") }}</h1>
-    <button data-action="show-create"
-            class="btn btn-solid">
-        {{ icons::icon_plus("w-3.5 h-3.5") }}
-        {{ t.tr("repo.new_library") }}
-    </button>
-</div>
+{% block main_layout %}
+{# Full-bleed column, like the file list inside a library: this is the same
+   surface one level up, so it gets the same frame — a topline, a toolbar pinned
+   in the scroller, and rows whose separators span the whole content area. A
+   padded document column (the shape the Shares/Trash/Settings pages use) left
+   the list's header band and row rules floating 24px short of both edges. #}
+<div class="content">
+<main role="main" aria-label="{{ t.tr("a11y.main_content") }}"
+      class="flex-1 min-w-0 min-h-0 flex flex-col relative bg-canvas">
+    {% block content %}
+    <div id="repos-page" hidden data-webdav-base-url="{{ webdav_base_url }}"></div>
 
-{% if repos.is_empty() %}
-{# Status, one line of teaching, and the action itself — a hint that points at a
-   button "above" is the one thing an empty state should not need. #}
-<div class="nf-empty">
-    {{ icons::icon_folder_outline("mx-auto h-10 w-10 text-ink-3") }}
-    <h3>{{ t.tr("nav.no_libraries") }}</h3>
-    <p>{{ t.tr("repo.empty_hint") }}</p>
-    <button data-action="show-create"
-            class="btn btn-solid mt-4">
-        {{ icons::icon_plus("w-3.5 h-3.5") }}
-        {{ t.tr("repo.new_library") }}
-    </button>
-</div>
-{% else %}
-<div class="nf-toolbar is-inset">
-    <div class="nf-search nf-libfind">
-        {{ icons::icon_search("w-[13px] h-[13px]") }}
-        <input id="repo-filter" type="search" autocomplete="off"
-               placeholder="{{ t.tr("repo.search_placeholder") }}"
-               aria-label="{{ t.tr("repo.search_placeholder") }}">
-    </div>
-    <span class="nf-libcount" id="repo-count" role="status">{% if repos.len() == 1 %}{{ t.trf("repo.count_one", [("n", "1")]) }}{% else %}{{ t.trf("repo.count_many", [("n", repos.len().to_string())]) }}{% endif %}</span>
-    <span class="spacer"></span>
-    <div class="nf-pop-wrap">
-        <button type="button" class="nf-sortbtn" id="repo-sort-btn"
-                aria-haspopup="true" aria-expanded="false"
-                title="{{ t.tr("repo.sort_by") }}" aria-label="{{ t.tr("repo.sort_by") }}">
-            <span id="repo-sort-label">{{ t.tr("fb.sort_modified") }}</span>
-            {{ icons::icon_chevron_down("w-[11px] h-[11px]") }}
+    <div class="topline">
+        <h1 class="page-title">{{ t.tr("nav.libraries") }}</h1>
+        <span class="spacer"></span>
+        <button data-action="show-create"
+                class="btn btn-solid">
+            {{ icons::icon_plus("w-3.5 h-3.5") }}
+            {{ t.tr("repo.new_library") }}
         </button>
-        <div class="nf-pop" id="repo-sort-pop" role="menu" hidden>
-            <button type="button" class="nf-pop-item" role="menuitemradio" aria-checked="true" data-sort="mtime">
-                {{ t.tr("fb.sort_modified") }}{{ icons::icon_check("ck") }}
+    </div>
+
+    {# `pb-20 lg:pb-0` clears the fixed mobile bottom nav, the same clearance the
+       padded page frame used to give this list. #}
+    <div class="nf-scroll pb-20 lg:pb-0" id="repo-list-scroll">
+    {% if repos.is_empty() %}
+    {# Status, one line of teaching, and the action itself — a hint that points at
+       a button "above" is the one thing an empty state should not need. #}
+    <div class="nf-empty">
+        {{ icons::icon_folder_outline("mx-auto h-10 w-10 text-ink-3") }}
+        <h3>{{ t.tr("nav.no_libraries") }}</h3>
+        <p>{{ t.tr("repo.empty_hint") }}</p>
+        <button data-action="show-create"
+                class="btn btn-solid mt-4">
+            {{ icons::icon_plus("w-3.5 h-3.5") }}
+            {{ t.tr("repo.new_library") }}
+        </button>
+    </div>
+    {% else %}
+    <div class="nf-toolbar no-scroll">
+        <div class="nf-search nf-libfind">
+            {{ icons::icon_search("w-[13px] h-[13px]") }}
+            <input id="repo-filter" type="search" autocomplete="off"
+                   placeholder="{{ t.tr("repo.search_placeholder") }}"
+                   aria-label="{{ t.tr("repo.search_placeholder") }}">
+        </div>
+        <span class="nf-libcount" id="repo-count" role="status">{% if repos.len() == 1 %}{{ t.trf("repo.count_one", [("n", "1")]) }}{% else %}{{ t.trf("repo.count_many", [("n", repos.len().to_string())]) }}{% endif %}</span>
+        <span class="spacer"></span>
+        <div class="nf-pop-wrap">
+            <button type="button" class="nf-sortbtn" id="repo-sort-btn"
+                    aria-haspopup="true" aria-expanded="false"
+                    title="{{ t.tr("repo.sort_by") }}" aria-label="{{ t.tr("repo.sort_by") }}">
+                <span id="repo-sort-label">{{ t.tr("fb.sort_modified") }}</span>
+                {{ icons::icon_chevron_down("w-[11px] h-[11px]") }}
             </button>
-            <button type="button" class="nf-pop-item" role="menuitemradio" aria-checked="false" data-sort="name">
-                {{ t.tr("fb.sort_name") }}{{ icons::icon_check("ck") }}
-            </button>
-            <button type="button" class="nf-pop-item" role="menuitemradio" aria-checked="false" data-sort="size">
-                {{ t.tr("fb.sort_size") }}{{ icons::icon_check("ck") }}
-            </button>
+            <div class="nf-pop" id="repo-sort-pop" role="menu" hidden>
+                <button type="button" class="nf-pop-item" role="menuitemradio" aria-checked="true" data-sort="mtime">
+                    {{ t.tr("fb.sort_modified") }}{{ icons::icon_check("ck") }}
+                </button>
+                <button type="button" class="nf-pop-item" role="menuitemradio" aria-checked="false" data-sort="name">
+                    {{ t.tr("fb.sort_name") }}{{ icons::icon_check("ck") }}
+                </button>
+                <button type="button" class="nf-pop-item" role="menuitemradio" aria-checked="false" data-sort="size">
+                    {{ t.tr("fb.sort_size") }}{{ icons::icon_check("ck") }}
+                </button>
+            </div>
         </div>
     </div>
-</div>
 
-<div>
     <div class="nf-lib nf-lib-head" aria-hidden="true">
         <span></span>
         <span>{{ t.tr("common.name") }}</span>
@@ -108,9 +121,11 @@
         </li>
         {% endfor %}
     </ul>
-</div>
-<p class="nf-nonek" id="repo-no-match" hidden></p>
-{% endif %}
+    <p class="nf-nonek" id="repo-no-match" hidden></p>
+    {% endif %}
+    </div>
+    {% endblock %}
+</main>
 
 {# ─── Create Library Dialog ─── #}
 {% call modal::modal("create-overlay", labelledby="create-dialog-title", backdrop_close="hideCreateDialog") %}
@@ -201,4 +216,5 @@
         </form>
 {% endcall %}
 
+</div>
 {% endblock %}

@@ -378,13 +378,11 @@ html:not([data-view]) .seg .js-view-list {
            overflow-x-auto;
     height: var(--file-toolbar-h);
   }
-  /* On a page whose <main> already carries the horizontal padding, the toolbar
-     would otherwise double it. `overflow` has to come back to `visible` too:
-     the file browser wants a horizontally scrollable toolbar, but anything
-     anchored under this one (the sort popover) would be clipped by it. The
-     libraries toolbar has a fixed, short set of controls, so it never needs to
-     scroll. */
-  .nf-toolbar.is-inset { @apply px-0; overflow: visible; }
+  /* The libraries toolbar has a fixed, short set of controls, so it never needs
+     to scroll — but the sort popover anchored under it would be clipped by
+     `overflow`, which has to stay visible for it. The file browser's toolbar is
+     the one that wants the horizontal scroll. */
+  .nf-toolbar.no-scroll { @apply overflow-visible; }
   .seg {
     @apply flex gap-px p-0.5 border border-line rounded-ctl;
   }
@@ -641,14 +639,18 @@ html:not([data-view]) .seg .js-view-list {
   .nf-pop-item[aria-checked="true"] .ck { @apply opacity-100; }
 
   .nf-lib {
-    @apply relative grid items-center gap-3 h-10 pl-3 pr-2 border-b border-line;
+    @apply relative grid items-center gap-3 h-10 px-4 border-b border-line;
     grid-template-columns: 22px minmax(0, 1fr) 74px 118px 26px;
   }
   .nf-lib-body > .nf-lib:last-child { border-bottom: 0; }
   .nf-lib:not(.nf-lib-head):hover,
   .nf-lib:not(.nf-lib-head):focus-within { @apply bg-raised; }
+  /* Pinned under the toolbar while the list scrolls, like the file list's own
+     header. `z-[1]` and not `z-sticky`: the sort popover hangs below the
+     toolbar and would be painted over by anything at the toolbar's level. */
   .nf-lib-head {
-    @apply h-[30px] bg-panel border-line-strong text-[10.5px] uppercase tracking-[0.07em] text-ink-3;
+    @apply sticky z-[1] h-[30px] bg-panel border-line-strong text-[10.5px] uppercase tracking-[0.07em] text-ink-3;
+    top: var(--file-toolbar-h);
   }
   .nf-lib-head .r { @apply text-right; }
   .nf-lib-ic { @apply grid place-items-center text-ink-3; }

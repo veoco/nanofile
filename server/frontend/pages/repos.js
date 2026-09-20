@@ -201,13 +201,17 @@ function sortValue(row) {
 
 function applySort() {
     if (repoListEl) {
-        repoRows()
-            .sort(function (a, b) {
-                var x = sortValue(a);
-                var y = sortValue(b);
-                return typeof x === "string" ? x.localeCompare(y) : x - y;
-            })
-            .forEach(function (row) { repoListEl.appendChild(row); });
+        var rows = repoRows().sort(function (a, b) {
+            var x = sortValue(a);
+            var y = sortValue(b);
+            return typeof x === "string" ? x.localeCompare(y) : x - y;
+        });
+        // The server renders the default order, so on first load the rows are
+        // usually already in place; re-appending them would only flicker.
+        var moved = rows.some(function (row, i) { return repoListEl.children[i] !== row; });
+        if (moved) {
+            rows.forEach(function (row) { repoListEl.appendChild(row); });
+        }
     }
     if (!sortPop) return;
     sortPop.querySelectorAll(".nf-pop-item").forEach(function (item) {

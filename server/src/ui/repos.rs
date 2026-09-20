@@ -82,6 +82,8 @@ pub async fn list_repos(
     let csrf_token =
         crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
 
+    // The rail keeps the membership order every other page uses; only the page
+    // list is reordered.
     let left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo> = repos
         .iter()
         .map(|r| crate::service::repo::service::LeftPanelRepo {
@@ -90,6 +92,12 @@ pub async fn list_repos(
             size_display: r.size_display.clone(),
         })
         .collect();
+
+    // Render in the list's default order ("last modified", newest first) so the
+    // first paint is already final: sorting only in the browser reordered every
+    // row the moment the bundle ran, which read as a flicker. `sort_by` is
+    // stable, matching the client's `Array.prototype.sort` on tied mtimes.
+    repos.sort_by(|a, b| b.mtime.cmp(&a.mtime));
 
     let tpl = RepoListTemplate {
         urls: crate::static_assets::template_urls(),
