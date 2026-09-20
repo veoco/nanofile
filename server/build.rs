@@ -7,8 +7,9 @@
 ///      (required — the frontend is written as ES modules and must be bundled
 ///      into plain IIFE scripts so inline template scripts keep working)
 ///   3. Tray icons (`tray` feature only): `static/img/favicon.svg` →
-///      `$OUT_DIR/tray_icon.rgba` (+ `$OUT_DIR/nanofile.ico` and version
-///      resources on Windows) — see the "Tray icons" section below
+///      `$OUT_DIR/tray_icon_*.rgba` (+ `$OUT_DIR/nanofile.ico` and, on Windows,
+///      the version resources embedded via winresource) — see the "Tray icons"
+///      section below
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -203,11 +204,12 @@ fn which_node_bin(name: &str) -> Option<(&'static str, Vec<&'static str>)> {
 //     by `src/tray/icon.rs` via `include_bytes!`
 //   - `$OUT_DIR/tray_icon_template.rgba`  — the same glyph with no tile, for the
 //     macOS menu bar, which inverts a template image itself
-//   - `$OUT_DIR/nanofile.ico` — multi-size Windows exe icon (DIB entries),
-//     embedded together with version info via winresource
+//   - `$OUT_DIR/nanofile.ico` — the Windows exe icon: every size the shell asks
+//     for (`icon_gen::EXE_ICON_SIZES`), the largest one a PNG frame, with the
+//     favicon's rim turned on so the tile survives a dark shell
 //
 // The mark is pure geometry (a rect plus a glyph path), so rasterizing it needs
-// no font and cannot vary with the build machine's installed fonts. The three
+// no font and cannot vary with the build machine's installed fonts. The tray
 // variants differ only in the two fills, which `icon_gen::recolor` substitutes
 // into the favicon — so the tray cannot drift from the tab.
 
@@ -228,23 +230,42 @@ fn build_tray_icons() {
         ("tray_icon_template.rgba", icon_gen::MARK_TEMPLATE),
     ] {
         let variant = icon_gen::recolor(&svg, colors);
-        let rgba = rasterize_svg(variant.as_bytes(), icon_gen::TRAY_ICON_SIZE);
+        let pixmap = rasterize_svg(variant.as_bytes(), icon_gen::TRAY_ICON_SIZE);
+        let rgba = straight_alpha(&pixmap);
         std::fs::write(out_dir.join(name), &rgba)
             .unwrap_or_else(|e| panic!("tray: failed to write {name}: {e}"));
     }
 
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        // The exe icon is one static asset shown by Explorer and the taskbar, so
-        // it stays the plain brand mark rather than a theme variant.
-        let mut images = Vec::new();
-        for &size in &icon_gen::EXE_ICON_SIZES {
-            let img = rasterize_svg(svg.as_bytes(), size);
-            images.push((size, icon_gen::dib_from_rgba(size, &img)));
-        }
-        let ico = icon_gen::build_ico(&images);
-        std::fs::write(out_dir.join("nanofile.ico"), ico)
-            .expect("tray: failed to write nanofile.ico");
+    // The exe icon is one static asset shown by Explorer and the taskbar, so it
+    // keeps the plain brand mark — a file icon cannot follow the shell theme.
+    // That is what `exe_mark` is for: the favicon's rim, painted out everywhere
+    // else, outlines the graphite tile on a dark shell.
+    //
+    // Assembled on every platform rather than only on Windows: the rasters, the
+    // AND mask and the PNG frame are platform-independent, so a Linux tray build
+    // (the one CI job that runs this) exercises them instead of leaving the whole
+    // path to a Windows-only build.
+    let mut images = Vec::new();
+    for &size in &icon_gen::EXE_ICON_SIZES {
+        // Per size: the rim is asked for in device pixels, so its geometry
+        // depends on the edge length being rasterized (see `exe_mark`).
+        let exe_mark = icon_gen::exe_mark(&svg, size);
+        let pixmap = rasterize_svg(exe_mark.as_bytes(), size);
+        let payload = if size == icon_gen::EXE_ICON_PNG_SIZE {
+            // Vista and later read the largest entry as a PNG frame; as a DIB it
+            // would be a 256 KiB entry that nothing scales from.
+            pixmap
+                .encode_png()
+                .expect("tray: failed to encode the 256px exe icon frame")
+        } else {
+            icon_gen::dib_from_rgba(size, &straight_alpha(&pixmap))
+        };
+        images.push((size, payload));
+    }
+    let ico = icon_gen::build_ico(&images);
+    std::fs::write(out_dir.join("nanofile.ico"), ico).expect("tray: failed to write nanofile.ico");
 
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         res.set_icon(out_dir.join("nanofile.ico").to_str().unwrap());
         res.set("FileDescription", "Nanofile server");
@@ -261,14 +282,14 @@ fn build_tray_icons() {
 #[cfg(not(feature = "tray"))]
 fn build_tray_icons() {}
 
-/// Rasterizes an SVG into a `size × size` straight-alpha RGBA buffer, fitting
-/// the whole SVG centered into the square.
+/// Rasterizes an SVG into a `size × size` pixmap, fitting the whole SVG centered
+/// into the square.
 ///
 /// A non-browser rasterizer skips the favicon's `prefers-color-scheme` block, so
 /// callers pass a [`icon_gen::recolor`]-ed variant whose literal fills already
 /// carry the colours they want.
 #[cfg(feature = "tray")]
-fn rasterize_svg(svg: &[u8], size: u32) -> Vec<u8> {
+fn rasterize_svg(svg: &[u8], size: u32) -> tiny_skia::Pixmap {
     let options = resvg::usvg::Options::default();
 
     let tree = resvg::usvg::Tree::from_data(svg, &options)
@@ -284,9 +305,15 @@ fn rasterize_svg(svg: &[u8], size: u32) -> Vec<u8> {
         tiny_skia::Transform::from_scale(scale, scale).post_translate(dx, dy),
         &mut pixmap.as_mut(),
     );
+    pixmap
+}
 
-    // tiny-skia stores premultiplied alpha; tray consumers want straight alpha.
-    let mut out = Vec::with_capacity((size * size * 4) as usize);
+/// The pixmap with straight instead of tiny-skia's premultiplied alpha: what
+/// both the tray consumers and an ICO DIB expect. (`Pixmap::encode_png`
+/// demultiplies on its own, so the PNG frame does not go through here.)
+#[cfg(feature = "tray")]
+fn straight_alpha(pixmap: &tiny_skia::Pixmap) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pixmap.data().len());
     for px in pixmap.pixels() {
         let c = px.demultiply();
         out.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);

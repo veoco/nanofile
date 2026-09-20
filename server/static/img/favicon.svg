@@ -21,5 +21,15 @@
     }
   </style>
   <rect class="brand-tile" width="32" height="32" rx="6" fill="#202020"/>
+  <!-- Hairline rim, painted out with stroke-opacity=0 in the tab and in every
+       tray variant; only the Windows exe icon turns it on (`exe_mark` in
+       `src/tray/icon_gen.rs`, which substitutes the literal below). The exe
+       icon is one asset that cannot follow the shell theme, and its graphite
+       tile is the same value as Windows 11's dark shell background, so without
+       the rim the tile loses its silhouette there. Inset by half the stroke so
+       the 32-unit viewBox clips nothing. Its colour is a literal of its own so
+       `recolor` does not rewrite it. -->
+  <rect class="brand-rim" x="0.5" y="0.5" width="31" height="31" rx="5.5"
+        fill="none" stroke="#8c8c8c" stroke-width="1" stroke-opacity="0"/>
   <path class="brand-glyph" fill="#ffffff" d="M9 9h2.6v14H9zM20.4 9H23v14h-2.6zM9 9h3.4l10.6 14h-3.4z"/>
 </svg>
