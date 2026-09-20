@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, createRepo, uploadFile } from "../helpers/api";
+import { backdateFileMtimes } from "../helpers/mtime";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -79,4 +80,80 @@ test("the gallery month header pins at the toolbar's height", async ({ page }) =
     };
   });
   expect(offsets.headTop).toBe(offsets.toolbarHeight);
+});
+
+// `top` only fixes where a sticky header *rests*. A sticky header is also
+// clamped by the bottom edge of the group it belongs to, so at every month
+// boundary the outgoing header slides up across the toolbar's band before it
+// leaves. Both used to be at z-index 10, and the header — later in the DOM — won
+// that tie, dragging its label and its rule over the view switcher mid-scroll.
+test("a month header leaving its group does not paint over the toolbar", async ({ page }) => {
+  const galleryRepoId = await createRepo(
+    state.baseURL,
+    state.adminToken,
+    `sticky-gallery-${Date.now()}`,
+  );
+  for (const prefix of ["sh1-", "sh2-"]) {
+    for (let i = 0; i < 20; i++) {
+      await uploadFile(
+        state.baseURL,
+        state.adminToken,
+        galleryRepoId,
+        "/",
+        `${prefix}${String(i).padStart(2, "0")}.png`,
+        PNG,
+      );
+    }
+  }
+  // Two months, so the gallery has a boundary for a header to leave.
+  expect(backdateFileMtimes("sh1-", Date.UTC(2025, 2, 15) / 1000)).toBeGreaterThan(0);
+
+  await page.goto(`/libraries/${galleryRepoId}/files/`);
+  await page.waitForSelector(".js-entry-row");
+  await page.locator(".js-view-gallery").click();
+  await expect(page.locator(".nf-gal-head")).toHaveCount(2);
+
+  // Walk the whole scroller. Wherever a month header crosses the toolbar's band,
+  // the toolbar has to be what the pointer hits — on the view buttons and
+  // anywhere else along the bar.
+  const sweep = await page.evaluate(() => {
+    const scroller = document.getElementById("nf-list-scroll") as HTMLElement;
+    const bar = document.querySelector(".js-sort-bar") as HTMLElement;
+    const buttons = Array.from(bar.querySelectorAll(".seg button"));
+    const heads = Array.from(document.querySelectorAll(".nf-gal-head"));
+    const escapes: string[] = [];
+    let overlaps = 0;
+    for (let top = 0; top <= scroller.scrollHeight; top += 20) {
+      scroller.scrollTop = top;
+      const b = bar.getBoundingClientRect();
+      for (const head of heads) {
+        const h = head.getBoundingClientRect();
+        const y1 = Math.max(b.top, h.top);
+        const y2 = Math.min(b.bottom, h.bottom);
+        if (y2 <= y1) continue;
+        overlaps += 1;
+        const y = Math.round((y1 + y2) / 2);
+        const probes = [
+          ...buttons.map((el) => {
+            const r = el.getBoundingClientRect();
+            return {
+              x: Math.round(r.left + r.width / 2),
+              label: el.getAttribute("title") ?? "view button",
+            };
+          }),
+          { x: Math.round(b.left + 60), label: "bar" },
+        ];
+        for (const { x, label } of probes) {
+          const hit = document.elementFromPoint(x, y);
+          if (!hit || !bar.contains(hit)) {
+            escapes.push(`scrollTop=${top} ${label}@${x} y=${y} hit=${hit?.className ?? "null"}`);
+          }
+        }
+      }
+    }
+    return { overlaps, escapes };
+  });
+  // The collision has to have actually happened, or the test proves nothing.
+  expect(sweep.overlaps).toBeGreaterThan(0);
+  expect(sweep.escapes).toEqual([]);
 });
