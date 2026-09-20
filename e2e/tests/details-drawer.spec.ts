@@ -160,6 +160,26 @@ test("the last row can be scrolled clear of the drawer", async ({ page }) => {
   expect(lastBottom as number).toBeLessThanOrEqual((g.drawer?.y ?? 0) + 1);
 });
 
+test("the last row clears the mobile bottom nav", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/libraries/${repoId}/files`);
+  await page.waitForSelector(".js-entry-row");
+
+  // At the very end of the scroll the scroller's own reserve has to be what
+  // keeps the final row above the fixed nav, which overlays it.
+  await page.evaluate(() => {
+    const s = document.getElementById("nf-list-scroll");
+    if (s) s.scrollTop = s.scrollHeight;
+  });
+  const box = await page.evaluate(() => {
+    const rows = document.querySelectorAll(".js-file-list-view .js-entry-row");
+    const last = rows[rows.length - 1].getBoundingClientRect();
+    const nav = document.querySelector("nav[role='navigation']")!.getBoundingClientRect();
+    return { lastBottom: Math.round(last.bottom), navTop: Math.round(nav.top) };
+  });
+  expect(box.lastBottom).toBeLessThanOrEqual(box.navTop);
+});
+
 test("every row exposes its action button", async ({ page }) => {
   const counts = await page.evaluate(() => {
     const all = Array.from(document.querySelectorAll(".js-file-list-view .nf-more"));

@@ -26,9 +26,7 @@
         </button>
     </div>
 
-    {# `pb-20 lg:pb-0` clears the fixed mobile bottom nav, the same clearance the
-       padded page frame used to give this list. #}
-    <div class="nf-scroll pb-20 lg:pb-0" id="repo-list-scroll">
+    <div class="nf-scroll" id="repo-list-scroll">
     {% if repos.is_empty() %}
     {# Status, one line of teaching, and the action itself — a hint that points at
        a button "above" is the one thing an empty state should not need. #}

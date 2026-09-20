@@ -398,7 +398,14 @@ html:not([data-view]) .seg .js-view-list {
   .tbtn.on    { @apply text-ink bg-raised; }
 
   /* ─── File list (list view only; grid/gallery keep their own layout) ─── */
-  .nf-scroll { @apply flex-1 min-h-0 overflow-y-auto relative; }
+  .nf-scroll {
+    @apply flex-1 min-h-0 overflow-y-auto relative;
+    /* The bottom nav is fixed over the end of this scroller on small screens, so
+       its height has to be reserved or the final row cannot be reached. Same
+       clearance the padded pages give their <main> with `pb-20`; dropped from
+       `lg` up, where the nav is hidden. */
+    padding-bottom: 5rem;
+  }
   .nf-row {
     @apply grid items-center gap-3.5 h-9 px-4 border-b border-line cursor-default;
     grid-template-columns: 24px minmax(0, 1fr) 96px 132px 32px;
@@ -700,7 +707,7 @@ html:not([data-view]) .seg .js-view-list {
     visibility: visible;
     transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
   }
-  .content.drawer-open .nf-scroll { padding-bottom: var(--drawer-h, 84px); }
+  .content.drawer-open .nf-scroll { padding-bottom: calc(5rem + var(--drawer-h, 84px)); }
   .nf-details[hidden] { display: none; }
   /* The hairline lives on the inner row, not the container: a border on
      `.nf-details` would keep 1px of height while the drawer is closed. */
@@ -998,6 +1005,12 @@ html:not([data-view]) .seg .js-view-list {
    actions under the file name instead of crushing them onto one line. */
 @media (max-width: 1023px) {
   .nf-details { bottom: 4rem; }
+}
+/* From `lg` up there is no bottom nav to clear, so the scroller's reserve comes
+   back to just the drawer — and only while that drawer is open. */
+@media (min-width: 64rem) {
+  .nf-scroll { padding-bottom: 0; }
+  .content.drawer-open .nf-scroll { padding-bottom: var(--drawer-h, 84px); }
 }
 @media (max-width: 720px) {
   .d-row { flex-wrap: wrap; gap: 12px; }
