@@ -206,8 +206,15 @@ test("the list filters and sorts without a round trip", async ({ page }) => {
 test("the rail filter is on every page and filters the rail", async ({ page }) => {
   await openLibraries(page);
   const railFilter = page.locator(".js-repo-filter");
+  const pageFilter = page.locator("#repo-filter");
   await expect(railFilter).toBeVisible();
-  await expect(page.locator("#repo-filter")).toBeVisible();
+  await expect(pageFilter).toBeVisible();
+  // Same control, same copy: the two boxes narrow the same set, so a separately
+  // worded placeholder is only drift.
+  await expect(railFilter).toHaveAttribute(
+    "placeholder",
+    (await pageFilter.getAttribute("placeholder")) ?? "",
+  );
 
   const name = `rail-filter-lib-${Date.now()}`;
   await createRepoByName(page, name);

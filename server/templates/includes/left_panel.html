@@ -10,16 +10,17 @@
     <!-- Header -->
     <div class="shrink-0 px-2.5 pt-3.5 pb-2 flex flex-col gap-2">
         <div class="side-label px-1">{{ t.tr("nav.libraries") }}</div>
-        {# Always rendered: this filter narrows the rail's own tree on every page,
-           /libraries/ included. There the page toolbar carries a second filter
-           over the same set — and that one is the only filter left once the rail
-           is hidden below `lg`. The two filter their own lists and are
-           deliberately not linked. #}
+        {# Always rendered: the filter narrows the rail's own tree on every page,
+           /libraries/ included, where the page toolbar carries a second filter
+           over the same set (the one that survives below `lg`, where the rail is
+           hidden). The two filter their own lists and are not linked, but they
+           are the same control, so they share `repo.search_placeholder`: a
+           separately worded placeholder was only drift. #}
         <label class="flex items-center gap-1.5 h-7 px-2 rounded-ctl border border-line-ctrl text-ink-3">
             {{ icons::icon_search("w-3.5 h-3.5 flex-shrink-0") }}
             <input type="text" class="js-repo-filter flex-1 min-w-0 border-0 bg-transparent outline-none text-ink text-[12.5px] placeholder-ink-3"
-                   placeholder="{{ t.tr("nav.filter_repos") }}"
-                   aria-label="{{ t.tr("nav.filter_repos") }}">
+                   placeholder="{{ t.tr("repo.search_placeholder") }}"
+                   aria-label="{{ t.tr("repo.search_placeholder") }}">
         </label>
     </div>
 
