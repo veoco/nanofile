@@ -211,21 +211,34 @@ test("the list filters and sorts without a round trip", async ({ page }) => {
   expect(sorted).toBe(true);
 });
 
-// The rail's filter is a navigation aid (switch library from inside one). On
-// this page it would be a second box filtering the same set, so it stands down
-// — but only here, and only because the page has a filter of its own.
-test("the rail filter is absent here and the page filter is not", async ({ page }) => {
+// The rail's filter narrows the rail's own tree, and now renders on every page,
+// /libraries/ included. There the page toolbar carries a second filter over the
+// same set; the two are independent, so the rail's query must not touch the
+// page's table.
+test("the rail filter is on every page and filters the rail", async ({ page }) => {
   await openLibraries(page);
-  await expect(page.locator(".js-repo-filter")).toHaveCount(0);
+  const railFilter = page.locator(".js-repo-filter");
+  await expect(railFilter).toBeVisible();
   await expect(page.locator("#repo-filter")).toBeVisible();
+
+  const name = `rail-filter-lib-${Date.now()}`;
+  await createRepoByName(page, name);
+
+  const pageRows = page.locator("#repo-list > li:visible");
+  const pageTotal = await pageRows.count();
+  expect(pageTotal).toBeGreaterThan(1);
+
+  await railFilter.fill(name);
+  await expect(page.locator(".js-repo-item:visible")).toHaveCount(1);
+  await expect(pageRows).toHaveCount(pageTotal);
 
   await page.goto("/starred/");
   await expect(page.locator(".js-repo-filter")).toBeVisible();
 
   // Inside a library the rail filter is the only way to switch libraries, so it
   // has to come back: the file browser shares `active_page == "repos"` with the
-  // list page above, and only `current_repo_id` tells them apart.
-  const repoId = await createRepo(state.baseURL, state.adminToken, `rail-filter-lib-${Date.now()}`);
+  // list page above.
+  const repoId = await createRepo(state.baseURL, state.adminToken, `rail-filter-browse-${Date.now()}`);
   await page.goto(`/libraries/${repoId}/files/`);
   await expect(page.locator(".js-repo-filter")).toBeVisible();
 });
