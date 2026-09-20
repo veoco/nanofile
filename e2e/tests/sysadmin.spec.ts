@@ -32,6 +32,26 @@ test("create a new user", async ({ page }) => {
   await expect(userRow(page, email)).toContainText("Active");
 });
 
+// A successful action lands back on the list with a confirmation, and a failed
+// one re-renders with the reason: neither may pass silently.
+test("a successful create is confirmed", async ({ page }) => {
+  await createUser(page, "created-banner");
+  await expect(page.locator("main .nf-banner.is-ok")).toContainText("User created");
+});
+
+test("a failed create reports why", async ({ page }) => {
+  const email = await createUser(page, "dupe");
+  // The address now exists, so the second create must be rejected.
+  await page.locator('button[data-action="open-create"]').click();
+  await page.locator('#create-overlay input[name="email"]').fill(email);
+  await page.locator('#create-overlay input[name="password"]').fill("password-123");
+  await page.locator('#create-overlay button[type="submit"]').click();
+
+  const banner = page.locator("main .nf-banner.is-err");
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("already exists");
+});
+
 test("edit a user's active status", async ({ page }) => {
   const email = await createUser(page, "edit");
   const row = userRow(page, email);

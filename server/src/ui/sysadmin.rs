@@ -2,7 +2,7 @@
 use askama::Template;
 use axum::{
     Form,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
@@ -44,22 +44,52 @@ pub struct UserRow {
     pub last_login_at_ts: Option<i64>,
 }
 
+/// What a POST redirect lands with, so the page can confirm the action. An
+/// unrecognised value — a hand-typed URL, a stale bookmark — renders no banner
+/// rather than echoing the value back into the page.
+#[derive(Deserialize)]
+pub struct SysAdminQuery {
+    pub action: Option<String>,
+}
+
+fn success_message(t: &I18n, action: Option<&str>) -> Option<String> {
+    let key = match action {
+        Some("created") => "admin.user_created",
+        Some("updated") => "admin.user_updated",
+        Some("deleted") => "admin.user_deleted",
+        _ => return None,
+    };
+    Some(t.tr(key).to_string())
+}
+
 /// GET /sysadmin/users/ — user management page (admin only).
-pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) -> Response {
+pub async fn sysadmin_page(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SysAdminQuery>,
+) -> Response {
     if !user.is_admin {
         return Redirect::to("/libraries/").into_response();
     }
 
-    let svc = AdminUserService::new(state.repos.clone());
-    let users_data = match svc.list_users().await {
-        Ok(u) => u,
-        Err(e) => return AppError::internal(e.to_string()).into_response(),
-    };
+    let success = success_message(I18n::get(user.language.as_deref()), query.action.as_deref());
+    match render_page(&state, &user, None, success).await {
+        Ok(resp) => resp,
+        Err(e) => e.into_response(),
+    }
+}
 
-    let ctx = match crate::ui::ctx::build_page_ctx(&state, &user).await {
-        Ok(c) => c,
-        Err(e) => return AppError::internal(e.to_string()).into_response(),
-    };
+/// Build and render the user management page, carrying at most one banner.
+async fn render_page(
+    state: &Arc<AppState>,
+    user: &WebUser,
+    error: Option<String>,
+    success: Option<String>,
+) -> Result<Response, AppError> {
+    let svc = AdminUserService::new(state.repos.clone());
+    let users_data = svc.list_users().await?;
+
+    let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
     let users: Vec<UserRow> = users_data
         .into_iter()
@@ -98,16 +128,16 @@ pub async fn sysadmin_page(user: WebUser, State(state): State<Arc<AppState>>) ->
         csrf_token: Some(ctx.csrf_token),
         active_page: "sysadmin",
         users,
-        error: None,
-        success: None,
+        error,
+        success,
         left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
     };
 
-    match tpl.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => AppError::internal(e.to_string()).into_response(),
-    }
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Html(html).into_response())
 }
 
 // ─── POST handlers ────────────────────────────────────────────────────────
@@ -157,10 +187,14 @@ pub async fn create_user(
         )
         .await
     {
-        return Ok(render_sysadmin_error(&state, e).await);
+        return render_sysadmin_error(&state, &user, e).await;
     }
 
-    Ok((StatusCode::FOUND, [("Location", "/sysadmin/users/")]).into_response())
+    Ok((
+        StatusCode::FOUND,
+        [("Location", "/sysadmin/users/?action=created")],
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -198,10 +232,14 @@ pub async fn update_user(
         .update_user(user_id, is_admin, is_active, storage_quota)
         .await
     {
-        return Ok(render_sysadmin_error(&state, e).await);
+        return render_sysadmin_error(&state, &user, e).await;
     }
 
-    Ok((StatusCode::FOUND, [("Location", "/sysadmin/users/")]).into_response())
+    Ok((
+        StatusCode::FOUND,
+        [("Location", "/sysadmin/users/?action=updated")],
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -229,10 +267,14 @@ pub async fn delete_user(
     let svc = AdminUserService::new(state.repos.clone());
 
     if let Err(e) = svc.delete_user(user_id).await {
-        return Ok(render_sysadmin_error(&state, e).await);
+        return render_sysadmin_error(&state, &user, e).await;
     }
 
-    Ok((StatusCode::FOUND, [("Location", "/sysadmin/users/")]).into_response())
+    Ok((
+        StatusCode::FOUND,
+        [("Location", "/sysadmin/users/?action=deleted")],
+    )
+        .into_response())
 }
 
 /// Parse an optional storage quota string.
@@ -246,9 +288,20 @@ fn parse_quota(s: Option<&str>) -> Option<i64> {
     }
 }
 
-/// Re-render the sysadmin page with an error message.
-async fn render_sysadmin_error(_state: &Arc<AppState>, _error: AppError) -> Response {
-    // For simplicity, just redirect back — we can't extract WebUser here to
-    // re-render the template with an error message inline.
-    (StatusCode::FOUND, [("Location", "/sysadmin/users/")]).into_response()
+/// Re-render the user management page with the error banner visible, so a
+/// failed create/update/delete says so instead of silently redirecting back.
+async fn render_sysadmin_error(
+    state: &Arc<AppState>,
+    user: &WebUser,
+    error: AppError,
+) -> Result<Response, AppError> {
+    // Only our own client-facing errors are shown verbatim; an internal failure
+    // keeps its detail in the log and shows the translated generic message.
+    let msg = match error {
+        AppError::BadRequest(m) => m,
+        _ => I18n::get(user.language.as_deref())
+            .tr("admin.action_failed")
+            .to_string(),
+    };
+    render_page(state, user, Some(msg), None).await
 }
