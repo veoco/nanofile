@@ -8,6 +8,13 @@
 <h1 class="page-title">{{ t.tr("admin.shares_title") }}</h1>
 <p class="page-subtitle">{{ t.tr("admin.shares_desc") }}</p>
 
+{% if let Some(error) = error %}
+<div class="mt-5">{% include "includes/alert_error.html" %}</div>
+{% endif %}
+{% if let Some(success) = success %}
+<div class="mt-5">{% include "includes/alert_success.html" %}</div>
+{% endif %}
+
 <!-- Tab bar -->
 <div class="nf-tabs" role="tablist">
     <button type="button" role="tab" class="nf-tab"

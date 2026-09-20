@@ -27,6 +27,8 @@ pub struct AdminSharesTemplate {
     pub upload_links: Vec<AdminUploadLinkInfo>,
     pub active_page: &'static str,
     pub active_tab: String,
+    pub error: Option<String>,
+    pub success: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 }
@@ -65,6 +67,15 @@ pub struct AdminUploadLinkInfo {
 #[derive(Deserialize)]
 pub struct AdminSharesQuery {
     pub tab: Option<String>,
+    pub action: Option<String>,
+}
+
+/// The one tab name the page accepts; anything else means the first tab.
+fn normalize_tab(tab: Option<&str>) -> String {
+    match tab {
+        Some("upload-links") => "upload-links".to_string(),
+        _ => "share-links".to_string(),
+    }
 }
 
 /// GET /sysadmin/shares/ — list all share and upload links (admin only).
@@ -77,14 +88,32 @@ pub async fn list_all_shares(
         return Redirect::to("/libraries/").into_response();
     }
 
-    let share_models = match state.repos.share_link.find_all().await {
-        Ok(m) => m,
-        Err(e) => return AppError::internal(format!("db error: {e}")).into_response(),
+    let success = match query.action.as_deref() {
+        Some("deleted") => Some(
+            I18n::get(user.language.as_deref())
+                .tr("admin.link_deleted")
+                .to_string(),
+        ),
+        _ => None,
     };
-    let upload_models = match state.repos.upload_link.find_all().await {
-        Ok(m) => m,
-        Err(e) => return AppError::internal(format!("db error: {e}")).into_response(),
-    };
+
+    let active_tab = normalize_tab(query.tab.as_deref());
+    match render_page(&state, &user, active_tab, None, success).await {
+        Ok(resp) => resp,
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Build and render the share management page, carrying at most one banner.
+async fn render_page(
+    state: &Arc<AppState>,
+    user: &WebUser,
+    active_tab: String,
+    error: Option<String>,
+    success: Option<String>,
+) -> Result<Response, AppError> {
+    let share_models = state.repos.share_link.find_all().await?;
+    let upload_models = state.repos.upload_link.find_all().await?;
 
     // Build creator email lookup
     let mut creator_ids: Vec<i32> = Vec::new();
@@ -184,15 +213,7 @@ pub async fn list_all_shares(
         })
         .collect();
 
-    let active_tab = query
-        .tab
-        .filter(|t| t == "upload-links")
-        .unwrap_or("share-links".to_string());
-
-    let ctx = match crate::ui::ctx::build_page_ctx(&state, &user).await {
-        Ok(c) => c,
-        Err(e) => return AppError::internal(e.to_string()).into_response(),
-    };
+    let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
     let tpl = AdminSharesTemplate {
         urls: ctx.urls,
@@ -204,14 +225,16 @@ pub async fn list_all_shares(
         upload_links,
         active_page: "adminshares",
         active_tab,
+        error,
+        success,
         left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
     };
 
-    match tpl.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => AppError::internal(e.to_string()).into_response(),
-    }
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Html(html).into_response())
 }
 
 /// POST /sysadmin/shares/share/{token}/delete/ — delete any share link (admin).
@@ -231,14 +254,25 @@ pub async fn delete_share(
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
-    // Admin delete — no creator_id check.
-    state.repos.share_link.delete_by_token(&token).await?;
+    // Admin delete — no creator_id check. Zero rows affected means the link is
+    // already gone (a stale page, a double submit): report that instead of a
+    // success that deleted nothing.
+    let tab = normalize_tab(form.get("tab").map(|s| s.as_str()));
+    match state.repos.share_link.delete_by_token(&token).await {
+        Ok(res) if res.rows_affected == 0 => {
+            let msg = I18n::get(user.language.as_deref())
+                .tr("admin.link_not_found")
+                .to_string();
+            return render_page(&state, &user, tab, Some(msg), None).await;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            let msg = action_error(&user, &e);
+            return render_page(&state, &user, tab, Some(msg), None).await;
+        }
+    }
 
-    let redirect = match form.get("tab").map(|s| s.as_str()) {
-        Some("upload-links") => "/sysadmin/shares/?tab=upload-links",
-        _ => "/sysadmin/shares/",
-    };
-    Ok((StatusCode::FOUND, [("Location", redirect)]).into_response())
+    Ok((StatusCode::FOUND, [("Location", deleted_location(&tab))]).into_response())
 }
 
 /// POST /sysadmin/shares/upload/{token}/delete/ — delete any upload link (admin).
@@ -258,12 +292,44 @@ pub async fn delete_upload(
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
-    // Admin delete — no creator_id check.
-    state.repos.upload_link.delete_by_token(&token).await?;
+    // Admin delete — no creator_id check. Zero rows affected means the link is
+    // already gone (a stale page, a double submit): report that instead of a
+    // success that deleted nothing.
+    let tab = normalize_tab(form.get("tab").map(|s| s.as_str()));
+    match state.repos.upload_link.delete_by_token(&token).await {
+        Ok(res) if res.rows_affected == 0 => {
+            let msg = I18n::get(user.language.as_deref())
+                .tr("admin.link_not_found")
+                .to_string();
+            return render_page(&state, &user, tab, Some(msg), None).await;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            let msg = action_error(&user, &e);
+            return render_page(&state, &user, tab, Some(msg), None).await;
+        }
+    }
 
-    let redirect = match form.get("tab").map(|s| s.as_str()) {
-        Some("upload-links") => "/sysadmin/shares/?tab=upload-links",
-        _ => "/sysadmin/shares/",
-    };
-    Ok((StatusCode::FOUND, [("Location", redirect)]).into_response())
+    Ok((StatusCode::FOUND, [("Location", deleted_location(&tab))]).into_response())
+}
+
+/// Where a successful delete lands: back on the tab it came from, with the
+/// success flag the list turns into a banner.
+fn deleted_location(tab: &str) -> String {
+    if tab == "upload-links" {
+        "/sysadmin/shares/?tab=upload-links&action=deleted".to_string()
+    } else {
+        "/sysadmin/shares/?action=deleted".to_string()
+    }
+}
+
+/// The message a failed action shows: our own client-facing errors are safe to
+/// display, anything else gets the translated generic text.
+fn action_error(user: &WebUser, error: &AppError) -> String {
+    match error {
+        AppError::BadRequest(m) => m.clone(),
+        _ => I18n::get(user.language.as_deref())
+            .tr("admin.action_failed")
+            .to_string(),
+    }
 }
