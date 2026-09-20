@@ -881,6 +881,30 @@ html:not([data-view]) .seg .js-view-list {
   .nf-xrow-more > summary::-webkit-details-marker { display: none; }
   .nf-expand { @apply mt-2.5; }
 
+  /* A row whose opener is an action rather than a label: the `Edit` toggle goes
+     into a second column under the row's buttons instead of sitting on its own
+     line at the left edge, where it read as a stray link. */
+  .nf-xrow-more.is-act { @apply grid grid-cols-[minmax(0,1fr)_auto]; }
+  .nf-xrow-more.is-act > summary { @apply col-start-2 justify-self-end; }
+  .nf-xrow-more.is-act > form { @apply col-span-2; }
+
+  /* The fixed half of a row: what the reader checks rather than reads. Labels in
+     a column, values right-aligned against the row's edge, so the three dates
+     line up down the list instead of wrapping into the name. On a phone the
+     block drops under the row and becomes one wrapping line of pairs. */
+  .nf-facts { @apply flex shrink-0 flex-col gap-1 ml-1 mr-2 pl-4 border-l border-line; }
+  .nf-facts .f { @apply grid items-baseline gap-x-3 grid-cols-[5rem_minmax(0,1fr)]; }
+  .nf-facts .k { @apply text-[10.5px] font-medium uppercase tracking-[0.07em] text-ink-3 whitespace-nowrap; }
+  .nf-facts .v { @apply text-right text-[12px] tabular-nums text-ink-2 whitespace-nowrap; }
+  @media (max-width: 640px) {
+    .nf-facts {
+      @apply flex-row flex-wrap basis-full order-last mt-1 ml-0 mr-0 gap-x-4 gap-y-1
+             border-l-0 pl-0;
+    }
+    .nf-facts .f { @apply grid-cols-[auto_auto] gap-x-2; }
+    .nf-facts .v { @apply text-left; }
+  }
+
   /* A form section inside a panel. `.nf-list` already zeroes the last child's
      rule, so a panel of sections needs no trailing-border special case. */
   .nf-form { @apply px-3.5 py-4 border-b border-line; }

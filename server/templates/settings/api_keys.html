@@ -61,7 +61,7 @@
         {# A key is a row that opens in place: the edit form is long, so it lives
            under the row rather than in a box of its own. #}
         <div class="nf-xrow">
-            <div class="nf-prow">
+            <div class="nf-prow flex-wrap">
                 <span class="nf-prow-ic">{{ icons::icon_key("w-3.5 h-3.5") }}</span>
                 <div class="nf-prow-main">
                     {# The badges are `shrink-0`, so on a phone the line has to
@@ -90,12 +90,21 @@
                         <span class="t">{% for repo in key.repos %}{{ repo.1 }} ({{ repo.2 }}){% if !loop.last %}, {% endif %}{% endfor %}</span>
                     </div>
                     {% endif %}
-                    <div class="nf-prow-sub mt-1.5 flex-wrap">
-                        <span class="t">{{ t.tr("apikey.created") }}: {{ key.created_at }}</span>
-                        <span class="sep">&middot;</span>
-                        <span class="t">{{ t.tr("apikey.expires") }}: {{ key.expires_at }}</span>
-                        <span class="sep">&middot;</span>
-                        <span class="t">{{ t.tr("apikey.last_used") }}: {{ key.last_used_at }}</span>
+                </div>
+                {# The dates are the row's fixed columns: right-aligned and
+                   labelled so they read down the list, not into the name. #}
+                <div class="nf-facts">
+                    <div class="f">
+                        <span class="k">{{ t.tr("apikey.created") }}</span>
+                        <span class="v">{{ key.created_at }}</span>
+                    </div>
+                    <div class="f">
+                        <span class="k">{{ t.tr("apikey.expires") }}</span>
+                        <span class="v">{{ key.expires_at }}</span>
+                    </div>
+                    <div class="f">
+                        <span class="k">{{ t.tr("apikey.last_used") }}</span>
+                        <span class="v">{{ key.last_used_at }}</span>
                     </div>
                 </div>
                 <div class="nf-prow-act">
@@ -107,7 +116,7 @@
                 </div>
             </div>
 
-            <details class="nf-xrow-more">
+            <details class="nf-xrow-more is-act">
                 <summary class="nf-toggle">
                     {{ icons::icon_arrow_right("w-3 h-3") }}
                     {{ t.tr("apikey.edit") }}
