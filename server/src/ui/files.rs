@@ -1291,6 +1291,12 @@ async fn get_file_size(
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
 pub(crate) fn mime_guess(filename: &str) -> &'static str {
+    // Case-insensitive: a phone camera writes `IMG_0001.MOV` as readily as
+    // `.mp4`, and matching the raw name served those as
+    // `application/octet-stream` — a header that tells every client the bytes
+    // are neither media nor text, and that sits next to `nosniff`.
+    let filename = filename.to_ascii_lowercase();
+    let filename = filename.as_str();
     if filename.ends_with(".txt")
         || filename.ends_with(".md")
         || filename.ends_with(".rs")
@@ -1356,6 +1362,19 @@ fn urlencode_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Extensions arrive in whatever case the camera chose; the content type is
+    /// what tells a client whether the bytes are media, text or a download.
+    #[test]
+    fn mime_guess_ignores_extension_case() {
+        assert_eq!(mime_guess("clip.mp4"), "video/mp4");
+        assert_eq!(mime_guess("CLIP.MP4"), "video/mp4");
+        assert_eq!(mime_guess("IMG_0001.MOV"), "video/quicktime");
+        assert_eq!(mime_guess("PHOTO.JPG"), "image/jpeg");
+        assert_eq!(mime_guess("notes.TXT"), "text/plain; charset=utf-8");
+        // Unknown stays unknown rather than being guessed at.
+        assert_eq!(mime_guess("archive.bin"), "application/octet-stream");
+    }
 
     /// The singular keys exist so a freshly touched item does not read
     /// "1 days ago"; the 14-day cutoff hands the exact date to the locale's own
