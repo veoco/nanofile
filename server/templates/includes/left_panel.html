@@ -72,13 +72,21 @@
         </a>
     </div>
 
-    <!-- Storage — filled from GET /api2/account/info/ by core/nav.js. The whole
-         block stays hidden when the quota is unlimited or the request fails. -->
-    <div class="shrink-0 border-t border-line px-2 pt-2 pb-2.5 hidden" id="nf-storage">
+    <!-- Storage — text and bar filled from GET /api2/account/info/ by
+         core/nav.js. The row is part of the first paint rather than revealed
+         once that request lands: it sits above the footer in a flex column, so
+         inserting it later shoved the Browse block and the tree's lower edge up
+         by its own height on every page load. nav.js only writes the value and
+         the fill width, so the row's box never changes; a failed request leaves
+         it blank instead of collapsing it. -->
+    <div class="shrink-0 border-t border-line px-2 pt-2 pb-2.5" id="nf-storage">
         <div class="flex items-baseline justify-between gap-2 px-1.5">
             <span class="text-[12px] text-ink-2">{{ t.tr("nav.storage") }}</span>
             <span class="mono" id="nf-storage-text"></span>
         </div>
+        {# The track always renders: hiding it for an unlimited quota would make
+           the row's height depend on the response, which is the same jitter one
+           step later. #}
         <div class="h-[3px] rounded-full bg-line overflow-hidden mx-1.5 mt-2.5 mb-0.5" id="nf-storage-track">
             <span class="block h-full w-0 bg-ink-2" id="nf-storage-bar"></span>
         </div>

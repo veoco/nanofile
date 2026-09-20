@@ -215,34 +215,27 @@ document.addEventListener("click", async function (e) {
 // ─── Sidebar storage meter ─────────────────────────────────────────────
 // GET /api2/account/info/ already reports `usage` and `total` in bytes
 // (`total` is -1/0 when the quota is unlimited), so the meter needs no
-// server-side plumbing into every page's template struct. A failed request
-// leaves the block hidden rather than showing a wrong number.
+// server-side plumbing into every page's template struct. The row itself is
+// server-rendered (see includes/left_panel.html) so it holds its space from the
+// first paint — this only fills in the text and the fill width, never the box.
 (function () {
-  var storageEl = document.getElementById("nf-storage");
-  if (!storageEl) return;
+  var textEl = document.getElementById("nf-storage-text");
+  var barEl = document.getElementById("nf-storage-bar");
+  if (!textEl || !barEl) return;
   fetch("/api2/account/info/", { headers: { Accept: "application/json" } })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
       if (!info || typeof info.usage !== "number") return;
-      var textEl = document.getElementById("nf-storage-text");
-      var barEl = document.getElementById("nf-storage-bar");
-      var trackEl = document.getElementById("nf-storage-track");
       var total = typeof info.total === "number" ? info.total : -1;
       if (total > 0) {
-        if (textEl) {
-          textEl.textContent =
-            formatFileSize(info.usage) + " / " + formatFileSize(total);
-        }
-        if (barEl) {
-          var pct = Math.max(0, Math.min(100, Math.round((info.usage / total) * 100)));
-          barEl.style.width = pct + "%";
-        }
+        textEl.textContent =
+          formatFileSize(info.usage) + " / " + formatFileSize(total);
+        var pct = Math.max(0, Math.min(100, Math.round((info.usage / total) * 100)));
+        barEl.style.width = pct + "%";
       } else {
         // Unlimited quota — usage only, no bar to fill.
-        if (textEl) textEl.textContent = formatFileSize(info.usage);
-        if (trackEl) trackEl.classList.add("hidden");
+        textEl.textContent = formatFileSize(info.usage);
       }
-      storageEl.classList.remove("hidden");
     })
-    .catch(function () { /* leave the block hidden */ });
+    .catch(function () { /* leave the row blank rather than resizing it */ });
 })();
