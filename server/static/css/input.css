@@ -333,10 +333,6 @@ html:not([data-view]) .seg .js-view-list {
   .topbar {
     @apply shrink-0 flex items-center gap-4 h-14 px-4 bg-panel border-b border-line;
   }
-  .brand-mark {
-    @apply grid place-items-center w-[26px] h-[26px] rounded-ctl bg-accent text-accent-ink
-           text-[12px] font-bold tracking-[-0.02em];
-  }
   .nf-search {
     @apply flex items-center gap-2 h-[30px] px-[9px] rounded-ctl bg-canvas border border-line-ctrl text-ink-3;
   }

@@ -1,10 +1,11 @@
+{% import "includes/icons.html" as icons %}
 {# The brand bar for the two anonymous page families — the auth shell and the
    public share/upload shell. Shared so the lockup cannot drift between them.
 
    The mark is 21px against 14px text, i.e. the wordmark's line box: that ratio
    is what makes the pair read as one unit instead of an oversized icon next to
-   small type. #}
+   small type. The mark's own geometry lives in `icons::icon_brand_mark`. #}
 <div class="flex h-11 items-center gap-2 border-b border-line bg-raised px-5">
-    <span class="grid h-[21px] w-[21px] place-items-center rounded-ctl bg-accent text-[10px] font-bold text-accent-ink">N</span>
+    {{ icons::icon_brand_mark("h-[21px] w-[21px] shrink-0") }}
     <span class="text-[14px] font-semibold tracking-[-0.01em] text-ink">{{ t.tr("app.name") }}</span>
 </div>

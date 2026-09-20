@@ -6,8 +6,9 @@
                 aria-label="{{ t.tr("a11y.toggle_sidebar") }}">
             {{ icons::icon_menu("h-5 w-5") }}
         </button>
-        <a href="/libraries/" class="flex items-center gap-2.5 no-underline text-ink flex-shrink-0">
-            <span class="brand-mark">N</span>
+        <a href="/libraries/" class="flex items-center gap-2.5 no-underline text-ink flex-shrink-0"
+           aria-label="{{ t.tr("app.name") }}">
+            {{ icons::icon_brand_mark("h-[26px] w-[26px] shrink-0") }}
             <span class="hidden sm:inline text-[14px] font-semibold tracking-[-0.01em]">Nanofile</span>
         </a>
     </div>

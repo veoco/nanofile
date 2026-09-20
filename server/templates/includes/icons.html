@@ -263,3 +263,23 @@
     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
 </svg>
 {% endmacro %}
+
+{# The brand mark: the "N" tile. This macro is the ONE in-app source of the
+   mark's geometry — the tile radius and the glyph both live in the 32-unit
+   viewBox, so a caller sets only a pixel size and every proportion (corner
+   radius, glyph weight, glyph margin) follows. `static/img/favicon.svg`
+   repeats the same geometry for the standalone tab/tray/exe asset, so the two
+   are edited together.
+
+   The glyph is a path, not `<text>`: a font glyph resolves differently per
+   platform and per rasterizer, which is what let the old marks drift.
+
+   Colour comes from the accent tokens rather than `currentColor` because the
+   tile and the glyph are two tones. Both are theme-correct without a `dark:`
+   twin. #}
+{% macro icon_brand_mark(class="h-4 w-4") %}
+<svg class="{{ class }}" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false">
+    <rect width="32" height="32" rx="6" fill="var(--color-accent)"/>
+    <path fill="var(--color-accent-ink)" d="M9 9h2.6v14H9zM20.4 9H23v14h-2.6zM9 9h3.4l10.6 14h-3.4z"/>
+</svg>
+{% endmacro %}
