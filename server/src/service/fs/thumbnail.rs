@@ -595,12 +595,32 @@ fn max_ffmpeg_source(kind: MediaKind) -> i64 {
     }
 }
 
+/// An ffmpeg child process that never opens a console window.
+///
+/// The Windows tray build is a GUI-subsystem binary (`windows_subsystem =
+/// "windows"` in main.rs), so it has no console of its own — and a child that
+/// is not flagged `CREATE_NO_WINDOW` gets a fresh one, which Windows shows as a
+/// black window that flashes open and closes. Thumbnails are generated on
+/// demand, once per media file (twice when the 1s seek fails), so opening a
+/// folder of videos used to spray those windows across the screen.
+fn ffmpeg_command(ffmpeg: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(ffmpeg);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Whether the configured ffmpeg binary exists and runs. Cached for the
 /// process lifetime (the path comes from config and doesn't change at runtime).
 fn ffmpeg_available(ffmpeg: &str) -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        Command::new(ffmpeg)
+        ffmpeg_command(ffmpeg)
             .arg("-version")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -630,7 +650,7 @@ fn extract_media_frame(
         attempts = vec![Some("1"), None];
     }
     for ss in attempts {
-        let mut cmd = Command::new(ffmpeg);
+        let mut cmd = ffmpeg_command(ffmpeg);
         cmd.arg("-y")
             .arg("-loglevel")
             .arg("error")
