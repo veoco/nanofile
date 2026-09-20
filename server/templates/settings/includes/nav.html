@@ -1,8 +1,9 @@
 <!-- Settings section links.
-     One macro for every settings page, so the pages cannot drift apart. This is
-     the admin area's cross-page section bar: the same `.nf-nav` / `.nf-tab`
-     items, `aria-current` for the page you are on, and live counts as dim
-     numbers rather than badges (a count is a number, not a state). -->
+     One macro for every settings page, so the pages cannot drift apart: the
+     same `.nf-nav` / `.nf-tab` items, `aria-current` for the page you are on,
+     and live counts as dim numbers rather than badges (a count is a number, not
+     a state). It was shared with the admin pages until those dropped their own
+     section bar. -->
 {% macro nav(nav, t, active_page) %}
 <nav class="nf-nav" aria-label="{{ t.tr("settings.nav_label") }}">
     <a href="/settings/" class="nf-tab"
