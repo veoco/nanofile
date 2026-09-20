@@ -128,10 +128,35 @@ export async function loadMoreEntries() {
     );
     if (!newContainer) { btn.disabled = false; if (spinner) spinner.classList.add("hidden"); return; }
 
-    // Append new content: rows for list/grid, month groups for gallery
+    // Append new content: rows for list/grid, month groups for gallery.
     if (view === "gallery") {
-      var groups = newContainer.querySelectorAll(".gallery-month-group");
-      groups.forEach(function (g) { container.appendChild(g); });
+      // The groups the template renders are `.nf-gal-group`; this used to read
+      // the gallery's pre-rebuild class name, matched nothing, and so the
+      // gallery never grew past its first page.
+      //
+      // A page boundary usually falls inside a month, so the incoming page's
+      // first group is the tail of the month already on screen; appending it
+      // as-is would print that month's heading twice and split its count, so
+      // merge its tiles into the last group when the heading matches.
+      newContainer.querySelectorAll(".nf-gal-group").forEach(function (g) {
+        var existing = container.querySelectorAll(".nf-gal-group");
+        var last = existing[existing.length - 1];
+        var grid = last && last.querySelector(".nf-gal-grid");
+        var incoming = g.querySelector(".nf-gal-grid");
+        var lastHead = last && last.querySelector(".nf-gal-head h2");
+        var head = g.querySelector(".nf-gal-head h2");
+        var sameMonth =
+          !!lastHead && !!head && lastHead.textContent.trim() === head.textContent.trim();
+        if (!sameMonth || !grid || !incoming) {
+          container.appendChild(g);
+          return;
+        }
+        incoming.querySelectorAll(".js-entry-row").forEach(function (tile) {
+          grid.appendChild(tile);
+        });
+        var count = last.querySelector(".nf-gal-n");
+        if (count) count.textContent = String(grid.querySelectorAll(".js-entry-row").length);
+      });
     } else {
       var rows = newContainer.querySelectorAll(".js-entry-row");
       rows.forEach(function (row) { container.appendChild(row); });
