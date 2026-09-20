@@ -908,6 +908,31 @@ html:not([data-view]) .seg .js-view-list {
   .nf-sh .n { @apply text-[12px] tabular-nums text-ink-3; }
   .nf-sh-desc { @apply mt-0.5 text-[12px] text-ink-3; }
 
+  /* A labelled row of controls: the group's name in a column of its own, the
+     checkboxes or selects flowing alongside it. The API-key form is thirteen
+     capability domains plus the libraries, and stacking each label above its
+     own line of controls is what made that one form ~850px tall. The label
+     column stacks for a phone, where the controls need the full width. */
+  .nf-opt { @apply flex flex-col gap-1.5; }
+  .nf-opt-row {
+    @apply grid grid-cols-[8rem_minmax(0,1fr)] items-start gap-x-4 gap-y-1;
+  }
+  .nf-opt-row > .v { @apply flex flex-wrap items-center gap-x-4 gap-y-1.5 min-w-0; }
+  /* A row whose label is a name rather than a group heading needs the room. */
+  .nf-opt-row.is-lib { @apply grid-cols-[minmax(0,14rem)_minmax(0,1fr)]; }
+  @media (max-width: 640px) {
+    .nf-opt-row,
+    .nf-opt-row.is-lib { @apply grid-cols-[minmax(0,1fr)]; }
+  }
+
+  /* A run of pills. Same shape as `.nf-lib-tag`, which is the library list's
+     version of the same thing; a capability id is code, so it stays monospace. */
+  .nf-chips { @apply flex flex-wrap items-center gap-1; }
+  .nf-chip {
+    @apply inline-flex shrink-0 items-center h-[18px] px-1.5 rounded-[4px]
+           bg-raised font-mono text-[10.5px] text-ink-2 whitespace-nowrap;
+  }
+
   /* Key/value rows inside a panel. */
   .nf-kv { @apply flex flex-wrap items-baseline gap-x-3 gap-y-1; }
   .nf-kv .k { @apply w-24 shrink-0 text-[12px] text-ink-3; }
