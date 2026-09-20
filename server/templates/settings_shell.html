@@ -5,17 +5,21 @@
    and the page's own content. Pages fill `settings_title`, `settings_subtitle`
    and `settings_content` instead of repeating the layout.
 
+   Full width, like every other page: it used to sit in a centred `max-w-5xl`,
+   which both made this area the one place that did not match the rest of the app
+   and left a wide window mostly empty. What cannot use the width is a form, and
+   those pages arrange their sections as `.nf-cards` instead.
+
    The sections are a horizontal row under the title, not a second sidebar. The
-   app already has a permanent left rail (the library tree) on wide screens, and
-   the admin area already answers "one area, several sibling pages" with this
-   same row — a second vertical nav would be a rail inside a rail.
+   app already has a permanent left rail (the library tree) on wide screens — a
+   second vertical nav would be a rail inside a rail.
 
    Alerts are deliberately *not* rendered here: the pages do not agree on the
    fields that carry them (some have `error`/`success`, some a redirect flash),
    so pretending they did would either force unused fields onto every struct or
    fail to compile on the pages that lack them. #}
 {% block content %}
-<div class="mx-auto max-w-5xl">
+<div>
     <h1 class="page-title">{% block settings_title %}{{ t.tr("settings.title") }}{% endblock %}</h1>
     <p class="page-subtitle">{% block settings_subtitle %}{{ t.tr("settings.subtitle") }}{% endblock %}</p>
 

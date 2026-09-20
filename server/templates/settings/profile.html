@@ -14,11 +14,12 @@
 {% include "includes/alert_success.html" %}
 {% endif %}
 
-{# One panel, three sections: the fields are short enough that separate cards
-   only added scrolling between them. #}
-<div class="nf-list">
+{# Sections are their own panels in a two-up grid once the window is wide enough
+   (see `.nf-cards`). The avatar row reads better across the full width; the two
+   one-field sections pair up underneath it. #}
+<div class="nf-cards">
 
-    <section class="nf-form">
+    <section class="nf-form is-wide">
         <h2 id="avatar-heading">{{ t.tr("settings.avatar") }}</h2>
         <p class="desc">{{ t.tr("settings.avatar_desc") }}</p>
         <form action="/settings/profile/avatar/" method="POST" enctype="multipart/form-data"

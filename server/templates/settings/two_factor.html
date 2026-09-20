@@ -23,9 +23,10 @@
     <p class="font-medium">{{ t.tr("twofactor.status_enabled") }}</p>
 </div>
 
-{# Backup codes — shown once immediately after enabling #}
-{% if let Some(codes) = backup_codes %}
-<div class="nf-list mt-4">
+{# The codes and the way out are independent, so they pair up as panels. #}
+<div class="nf-cards mt-4">
+    {# Backup codes — shown once immediately after enabling #}
+    {% if let Some(codes) = backup_codes %}
     <section class="nf-form">
         <h2>{{ t.tr("twofactor.backup_codes") }}</h2>
         <div class="body nf-codes">
@@ -34,14 +35,12 @@
             {% endfor %}
         </div>
     </section>
-</div>
-{% endif %}
+    {% endif %}
 
-<div class="nf-list mt-4">
     <section class="nf-form">
         <h2>{{ t.tr("twofactor.disable_title") }}</h2>
         <p class="desc">{{ t.tr("twofactor.disable_desc") }}</p>
-        <form action="/settings/two-factor/disable/" method="POST" class="body max-w-sm">
+        <form action="/settings/two-factor/disable/" method="POST" class="body">
             <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
             <label for="password" class="form-label">{{ t.tr("common.password") }}</label>
             <input type="password" name="password" id="password" required
@@ -65,8 +64,10 @@
     </div>
 </div>
 
-{# QR code — generated locally, no external API calls #}
-<div class="nf-list mt-4">
+{# Pairs read across: the code to scan beside the field that verifies it, then
+   the typed-in alternative beside the recovery codes. #}
+<div class="nf-cards mt-4">
+    {# QR code — generated locally, no external API calls #}
     <div class="nf-form flex justify-center">
         <img src="/settings/two-factor/qr-code/"
              alt="{{ t.tr("twofactor.qr_alt") }}"
@@ -74,21 +75,32 @@
              width="200"
              height="200">
     </div>
-</div>
 
-{% if let Some(secret) = secret %}
-<div class="nf-list mt-4">
+    <section class="nf-form">
+        <h2>{{ t.tr("twofactor.step2_verify") }}</h2>
+        <p class="desc">{{ t.tr("twofactor.verify_desc") }}</p>
+        <form action="/settings/two-factor/verify/" method="POST" class="body">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+            <label for="code" class="form-label">{{ t.tr("twofactor.verification_code") }}</label>
+            <input type="text" name="code" id="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code"
+                   required maxlength="6"
+                   class="mt-1 input max-w-[16rem] text-center font-mono tracking-[0.3em]">
+            <button type="submit" class="btn btn-solid mt-4">
+                {{ t.tr("twofactor.enable") }}
+            </button>
+        </form>
+    </section>
+
+    {% if let Some(secret) = secret %}
     <section class="nf-form">
         <h2>{{ t.tr("twofactor.manual_entry") }}</h2>
         <div class="body">
             <code class="nf-code">{{- secret -}}</code>
         </div>
     </section>
-</div>
-{% endif %}
+    {% endif %}
 
-{% if let Some(codes) = backup_codes %}
-<div class="nf-list mt-4">
+    {% if let Some(codes) = backup_codes %}
     <section class="nf-form">
         <h2>{{ t.tr("twofactor.backup_codes") }}</h2>
         <div class="body nf-codes">
@@ -97,29 +109,12 @@
             {% endfor %}
         </div>
     </section>
-</div>
-{% endif %}
-
-<div class="nf-list mt-4">
-    <section class="nf-form">
-        <h2>{{ t.tr("twofactor.step2_verify") }}</h2>
-        <p class="desc">{{ t.tr("twofactor.verify_desc") }}</p>
-        <form action="/settings/two-factor/verify/" method="POST" class="body max-w-sm">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-            <label for="code" class="form-label">{{ t.tr("twofactor.verification_code") }}</label>
-            <input type="text" name="code" id="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code"
-                   required maxlength="6"
-                   class="mt-1 input text-center font-mono tracking-[0.3em]">
-            <button type="submit" class="btn btn-solid mt-4">
-                {{ t.tr("twofactor.enable") }}
-            </button>
-        </form>
-    </section>
+    {% endif %}
 </div>
 
 {% else %}
 {# ── Not configured: starting setup is a POST (no side effects on GET) ── #}
-<div class="nf-list">
+<div class="nf-cards">
     <section class="nf-form">
         <h2>{{ t.tr("settings.status_not_configured") }}</h2>
         <p class="desc">{{ t.tr("twofactor.desc") }}</p>

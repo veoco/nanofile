@@ -17,6 +17,26 @@ test("the overview links into each settings section", async ({ page }) => {
   await expect(page.locator("#display_name")).toBeVisible();
 });
 
+// This area used to sit in a centred `max-w-5xl` — the one place in the app that
+// did not fill its column — which also forced its form sections into a single
+// stack, because one panel across a wide window is a column of over-long fields.
+test("the pages fill the width and pair their sections", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto("/settings/profile/");
+
+  expect((await page.locator("main .nf-cards > .nf-form").first().boundingBox())!.width)
+    .toBeGreaterThan(1200);
+
+  // The avatar row spans the width; the two one-field sections share the next.
+  const cards = page.locator("main .nf-cards > .nf-form");
+  await expect(cards).toHaveCount(3);
+  const tops = await cards.evaluateAll((els) =>
+    els.map((el) => Math.round(el.getBoundingClientRect().top)),
+  );
+  expect(tops[0]).toBeLessThan(tops[1]);
+  expect(tops[1]).toBe(tops[2]);
+});
+
 test("update the display name", async ({ page }) => {
   await page.goto("/settings/profile/");
   const name = `E2E User ${Date.now()}`;

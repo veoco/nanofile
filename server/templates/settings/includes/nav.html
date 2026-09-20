@@ -1,11 +1,11 @@
 <!-- Settings section links.
-     One macro for every settings page, so the pages cannot drift apart: the
-     same `.nf-nav` / `.nf-tab` items, `aria-current` for the page you are on,
-     and live counts as dim numbers rather than badges (a count is a number, not
-     a state). It was shared with the admin pages until those dropped their own
-     section bar. -->
+     One macro for every settings page, so the pages cannot drift apart: the same
+     `.nf-tabs` bar and `.nf-tab` items the shares and trash pages use in-page,
+     with `aria-current` for the page you are on (these are links to sibling
+     pages, not tabs over one panel) and live counts as dim numbers rather than
+     badges (a count is a number, not a state). -->
 {% macro nav(nav, t, active_page) %}
-<nav class="nf-nav" aria-label="{{ t.tr("settings.nav_label") }}">
+<nav class="nf-tabs" aria-label="{{ t.tr("settings.nav_label") }}">
     <a href="/settings/" class="nf-tab"
        {% if nav.active == "settings" %}aria-current="page"{% endif %}>
         {{ t.tr("settings.nav_overview") }}

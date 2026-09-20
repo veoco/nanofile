@@ -15,9 +15,11 @@
 {% include "includes/alert_success.html" %}
 {% endif %}
 
-<form action="/settings/invitations/" method="POST" class="nf-list">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <section class="nf-form">
+{# One section panel, at card width rather than stretching its field across the
+   page (see `.nf-cards`). #}
+<div class="nf-cards">
+    <form action="/settings/invitations/" method="POST" class="nf-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <h2>{{ t.tr("invite.generate_code") }}</h2>
         <p class="desc">{{ t.tr("invite.bound_email_hint") }}</p>
         <div class="body flex flex-wrap items-end gap-3">
@@ -35,8 +37,8 @@
                 {{ t.tr("invite.generate_code") }}
             </button>
         </div>
-    </section>
-</form>
+    </form>
+</div>
 
 <div class="nf-list mt-4">
     {% if invitations.is_empty() %}

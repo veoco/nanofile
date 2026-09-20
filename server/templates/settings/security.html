@@ -22,7 +22,8 @@
 {% include "includes/alert_error.html" %}
 {% endif %}
 
-<div class="nf-list">
+{# Two panels side by side once the window is wide enough (see `.nf-cards`). #}
+<div class="nf-cards">
 
     <section class="nf-form">
         <div class="flex flex-wrap items-center gap-2">
@@ -45,7 +46,9 @@
     <section class="nf-form">
         <h2>{{ t.tr("settings.change_password") }}</h2>
         <p class="desc">{{ t.tr("settings.change_password_desc") }}</p>
-        <form action="/settings/password/" method="POST" class="body max-w-sm">
+        {# Fills the panel: the page used to be the width constraint, and the card
+           is what keeps these fields from turning into a long empty box. #}
+        <form action="/settings/password/" method="POST" class="body">
             <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
             <label for="old_password" class="form-label">{{ t.tr("settings.current_password") }}</label>
             <input type="password" name="old_password" id="old_password" required autocomplete="current-password"

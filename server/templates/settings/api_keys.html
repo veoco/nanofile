@@ -38,7 +38,10 @@
 {% endif %}
 
 {# ── Create ──────────────────────────────────────────────────────────── #}
-<form id="create-key-form" action="/settings/api-keys/create/" method="POST" class="nf-list">
+{# The form is the section grid: one panel per decision, two up once the window
+   is wide enough (see `.nf-cards`). DOM order is the tab order, so Create stays
+   last. #}
+<form id="create-key-form" action="/settings/api-keys/create/" method="POST" class="nf-cards">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
     <section class="nf-form">

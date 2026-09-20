@@ -45,18 +45,19 @@ test("delete a user", async ({ page }) => {
 });
 
 // The three admin pages dropped their own section bar, so the account menu is
-// the only route between them: nothing inside one points at the other two, and
-// a broken link here would strand them.
+// the only route between them: nothing in the page body points at the other two,
+// and a broken link here would strand them. (The menu itself lives in the topbar,
+// outside `main`.)
 test("the account menu reaches the other admin pages", async ({ page }) => {
-  await expect(page.locator(".nf-nav")).toHaveCount(0);
+  await expect(page.locator('main a[href="/sysadmin/shares/"]')).toHaveCount(0);
 
   await page.locator(".js-user-menu-button").click();
   await page.locator('.js-user-menu-dropdown a[href="/sysadmin/shares/"]').click();
   await expect(page).toHaveURL(/\/sysadmin\/shares\//);
-  await expect(page.locator(".nf-nav")).toHaveCount(0);
+  await expect(page.locator('main a[href="/sysadmin/users/"]')).toHaveCount(0);
 
   await page.locator(".js-user-menu-button").click();
   await page.locator('.js-user-menu-dropdown a[href="/sysadmin/tasks/"]').click();
   await expect(page).toHaveURL(/\/sysadmin\/tasks\//);
-  await expect(page.locator(".nf-nav")).toHaveCount(0);
+  await expect(page.locator('main a[href="/sysadmin/users/"]')).toHaveCount(0);
 });

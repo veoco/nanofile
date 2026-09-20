@@ -776,10 +776,6 @@ html:not([data-view]) .seg .js-view-list {
   .nf-tab-n { @apply text-[11px] tabular-nums; }
   .nf-tab[aria-selected="true"] .nf-tab-n { color: var(--color-ink-2); }
 
-  /* Cross-page section links (the admin area). The same `.nf-tab` item without
-     a rail, so a page that also carries in-page tabs does not stack two rules. */
-  .nf-nav { @apply flex items-center gap-1 mb-2 overflow-x-auto; }
-
   .nf-list { @apply rounded-box border border-line bg-panel overflow-hidden; }
   .nf-list > :last-child { border-bottom: 0; }
   .nf-prow {
@@ -885,10 +881,10 @@ html:not([data-view]) .seg .js-view-list {
   .nf-pager .m { @apply text-[12px] tabular-nums text-ink-3; }
 
   /* ─── Settings (one shell, seven pages) ───────────────────────────────────
-     Every settings page is panels and rows: the sections are the admin area's
-     horizontal `.nf-nav` bar (no second sidebar), a form is a section inside a
-     panel, and an item that carries its own detail is a row that opens in
-     place instead of a card of its own. */
+     Every settings page is panels and rows: the sections are a `.nf-tabs` bar of
+     links (no second sidebar), a form is a section panel, and an item that
+     carries its own detail is a row that opens in place instead of a card of its
+     own. */
 
   /* A row block: the row, plus an optional disclosure underneath it, sharing
      the panel's hairlines rather than drawing a box of its own. */
@@ -906,6 +902,19 @@ html:not([data-view]) .seg .js-view-list {
   .nf-form h2 { @apply text-[13px] font-medium text-ink; }
   .nf-form .desc { @apply mt-0.5 text-[12px] text-ink-3; }
   .nf-form .body { @apply mt-3; }
+
+  /* A settings page's sections, as panels in a grid: one column until the window
+     is wide enough for two, and a section that is a list of rows (which cannot
+     be halved) spans both. In the grid a section is its own panel, so the
+     `.nf-list` wrapper a stacked layout needs is not repeated per card. */
+  .nf-cards { @apply grid gap-4 items-start xl:grid-cols-2; }
+  .nf-cards > .nf-form { @apply rounded-box border border-line bg-panel; }
+  .nf-cards > .is-wide { @apply xl:col-span-2; }
+
+  /* A control stops growing with its card: past this a text field is a long
+     empty box. `:where()` keeps the specificity at one class so a deliberate
+     `max-w-*` on the element (the language select) still wins. */
+  .nf-form :where(.input, .select, .textarea) { max-width: 48rem; }
 
   /* A section heading above its own panel. The count stays the first `<span>`
      inside the `<section>`: the credential-page tests read it from there. */
