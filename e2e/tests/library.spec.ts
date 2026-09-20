@@ -35,6 +35,15 @@ async function createRepoByName(page: import("@playwright/test").Page, name: str
   return repoId;
 }
 
+// The list's own name comparison: lowercased code points, the one ui/repos.rs
+// and repos.js share. The browser's collator weights punctuation differently,
+// so `localeCompare` would disagree with the rendered order.
+function byName(a: string, b: string): number {
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
 test("create a new library", async ({ page }) => {
   await openLibraries(page);
   await page.locator('button[data-action="show-create"]').click();
@@ -112,27 +121,21 @@ test("the list spans the same box as its toolbar", async ({ page }) => {
 // order painted first and every row jumped once the bundle ran. The default
 // order is the server's now: nothing moves on load.
 test("the default order is already the server-rendered one", async ({ page }) => {
-  const older = `order-old-${Date.now()}`;
-  await createRepo(state.baseURL, state.adminToken, older);
-  await new Promise((r) => setTimeout(r, 1200));
-  const newer = `order-new-${Date.now()}`;
-  await createRepo(state.baseURL, state.adminToken, newer);
+  // A name that sorts ahead of the seeded `seed-lib-…`, so the server has to
+  // reorder rather than emit membership order.
+  await createRepo(state.baseURL, state.adminToken, `aaa-order-${Date.now()}`);
 
   const html = await (await page.request.get("/libraries/")).text();
-  const ssr = [...html.matchAll(/data-name="([^"]+)"[^>]*?data-mtime="(\d+)"/g)].map((m) => ({
-    name: m[1],
-    mtime: Number(m[2]),
-  }));
-  const newerAt = ssr.findIndex((r) => r.name === newer);
-  const olderAt = ssr.findIndex((r) => r.name === older);
-  expect(newerAt).toBeGreaterThanOrEqual(0);
-  expect(newerAt).toBeLessThan(olderAt);
+  const ssr = [...html.matchAll(/data-name="([^"]+)"/g)].map((m) => m[1]);
+  expect(ssr.length).toBeGreaterThan(1);
+  // The rendered order is the list's own name comparison, not membership order.
+  expect(ssr).toEqual([...ssr].sort(byName));
 
   await openLibraries(page);
   const dom = await page
     .locator("#repo-list > li")
     .evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.name));
-  expect(dom).toEqual(ssr.map((r) => r.name));
+  expect(dom).toEqual(ssr);
 });
 
 test("renders folder icon for normal and lock icon for encrypted libraries", async ({ page }) => {
@@ -178,37 +181,22 @@ test("the list filters and sorts without a round trip", async ({ page }) => {
   await page.locator("#repo-filter").press("Escape");
   await expect(page.locator("#repo-list > li:visible")).toHaveCount(total);
 
-  // The default order is "last modified", newest first. Assert the order rather
-  // than which library is first: repos created in the same second tie, and the
-  // sort is stable, so the winner among equals is arbitrary.
-  const mtimes = await rows.evaluateAll((els) =>
-    els.map((el) => Number((el as HTMLElement).dataset.mtime)),
-  );
-  expect(mtimes).toEqual([...mtimes].sort((a, b) => b - a));
+  // The control is the file list's: one flat text button per field, no popover,
+  // and the name-ascending default is the button marked active.
+  const namesInOrder = () =>
+    rows.evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.name || ""));
+  await expect(page.locator("#repo-sort-pop")).toHaveCount(0);
+  await expect(page.locator(".js-repo-sort-btn")).toHaveCount(3);
+  const nameBtn = page.locator('.js-repo-sort-btn[data-sort="name"]');
+  await expect(nameBtn).toHaveClass(/\bon\b/);
 
-  await page.locator("#repo-sort-btn").click();
-  // The popover has to actually be on top of the list: an ancestor with
-  // `overflow` would clip it, and Playwright's scroll-into-view would hide that
-  // from a plain click.
-  await expect(page.locator("#repo-sort-pop")).toBeVisible();
-  expect(
-    await page.evaluate(() => {
-      const pop = document.getElementById("repo-sort-pop")!;
-      const r = pop.getBoundingClientRect();
-      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      return !!hit && !!hit.closest("#repo-sort-pop");
-    }),
-  ).toBe(true);
-  await page.locator('#repo-sort-pop [data-sort="name"]').click();
-  await expect(page.locator("#repo-sort-label")).toHaveText("Name");
-  // Compare inside the page: the order has to match the browser's own collator,
-  // which is the one the list used.
-  const sorted = await rows.evaluateAll((els) => {
-    const names = els.map((el) => (el as HTMLElement).dataset.name || "");
-    const want = [...names].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-    return names.join("|") === want.join("|");
-  });
-  expect(sorted).toBe(true);
+  const ascending = await namesInOrder();
+  expect(ascending).toEqual([...ascending].sort(byName));
+
+  // Clicking the active field flips the direction.
+  await nameBtn.click();
+  const descending = await namesInOrder();
+  expect(descending).toEqual([...descending].sort((a, b) => byName(b, a)));
 });
 
 // The rail's filter narrows the rail's own tree, and now renders on every page,

@@ -23,7 +23,7 @@ test("valid login redirects to libraries", async ({ page }) => {
   await page.fill('input[name="password"]', ADMIN_PASSWORD);
   await page.locator('button[type="submit"]').click();
   await page.waitForURL(/\/libraries\//);
-  await expect(page.locator("main h1")).toContainText("Libraries");
+  await expect(page.locator("main .crumbs .cur")).toContainText("Libraries");
 });
 
 test("logout redirects to the login page", async ({ page }) => {

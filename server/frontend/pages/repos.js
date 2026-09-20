@@ -8,6 +8,7 @@ import { registerModalClose } from "../core/modal.js";
 import { Toast } from "../core/toast.js";
 import { ConfirmDialog } from "../core/confirm.js";
 import { registerRowMenu, addMenuItem, addMenuSeparator } from "../core/row-menu.js";
+import { nextSortOrder } from "../browser/view-logic.js";
 
 var reposPageEl = document.getElementById("repos-page");
 var webdavBaseUrl = reposPageEl ? (reposPageEl.dataset.webdavBaseUrl || "") : "";
@@ -159,10 +160,10 @@ var repoListEl = document.getElementById("repo-list");
 var filterEl = document.getElementById("repo-filter");
 var countEl = document.getElementById("repo-count");
 var noMatchEl = document.getElementById("repo-no-match");
-var sortBtn = document.getElementById("repo-sort-btn");
-var sortPop = document.getElementById("repo-sort-pop");
-var sortLabel = document.getElementById("repo-sort-label");
-var listState = { key: "mtime", query: "" };
+var sortGroup = document.querySelector(".js-repo-sort");
+// The server renders name-ascending (ui/repos.rs), which is the state the
+// buttons are rendered in and the state this starts from.
+var listState = { key: "name", order: "asc", query: "" };
 
 function repoRows() {
     if (!repoListEl) return [];
@@ -190,22 +191,45 @@ function applyFilter() {
     }
 }
 
-// Newest, largest and A→Z: the order a person scans a library list in. There is
-// no ascending variant — the file list's arrows cover that need; here the
-// question is only ever "what did I touch last / what is eating the disk".
-function sortValue(row) {
-    if (listState.key === "name") return (row.dataset.name || "").toLowerCase();
-    if (listState.key === "size") return -Number(row.dataset.sizeBytes || 0);
-    return -Number(row.dataset.mtime || 0);
+// Name A→Z, largest and newest: the order a person scans a library list in.
+// Name compares lowercased code points — the same order ui/repos.rs renders, so
+// the default paint is not re-sorted — and the direction is the file list's
+// asc/desc toggle.
+function compareRepos(a, b) {
+    var x, y;
+    if (listState.key === "name") {
+        x = (a.dataset.name || "").toLowerCase();
+        y = (b.dataset.name || "").toLowerCase();
+        var byName = x < y ? -1 : x > y ? 1 : 0;
+        return listState.order === "asc" ? byName : -byName;
+    }
+    if (listState.key === "size") {
+        x = Number(a.dataset.sizeBytes || 0);
+        y = Number(b.dataset.sizeBytes || 0);
+    } else {
+        x = Number(a.dataset.mtime || 0);
+        y = Number(b.dataset.mtime || 0);
+    }
+    return listState.order === "asc" ? x - y : y - x;
+}
+
+// Mirrors the file list's sort UI: the active field carries `on`, and the arrow
+// for the current direction is lit.
+function applySortUI() {
+    if (!sortGroup) return;
+    sortGroup.querySelectorAll(".js-repo-sort-btn").forEach(function (btn) {
+        var on = btn.dataset.sort === listState.key;
+        btn.classList.toggle("on", on);
+        var up = btn.querySelector(".js-sort-arrow-up");
+        var down = btn.querySelector(".js-sort-arrow-down");
+        if (up) up.style.fill = on && listState.order === "asc" ? "var(--color-accent)" : "var(--color-ink-3)";
+        if (down) down.style.fill = on && listState.order === "desc" ? "var(--color-accent)" : "var(--color-ink-3)";
+    });
 }
 
 function applySort() {
     if (repoListEl) {
-        var rows = repoRows().sort(function (a, b) {
-            var x = sortValue(a);
-            var y = sortValue(b);
-            return typeof x === "string" ? x.localeCompare(y) : x - y;
-        });
+        var rows = repoRows().sort(compareRepos);
         // The server renders the default order, so on first load the rows are
         // usually already in place; re-appending them would only flicker.
         var moved = rows.some(function (row, i) { return repoListEl.children[i] !== row; });
@@ -213,12 +237,7 @@ function applySort() {
             rows.forEach(function (row) { repoListEl.appendChild(row); });
         }
     }
-    if (!sortPop) return;
-    sortPop.querySelectorAll(".nf-pop-item").forEach(function (item) {
-        var on = item.dataset.sort === listState.key;
-        item.setAttribute("aria-checked", String(on));
-        if (on && sortLabel) sortLabel.textContent = item.textContent.trim();
-    });
+    applySortUI();
 }
 
 // The menu is built here rather than from a server-rendered row, so the row
@@ -267,12 +286,6 @@ registerRowMenu(function (btn) {
     return row ? buildRepoMenu(row) : null;
 });
 
-function closeSortPop() {
-    if (!sortPop || sortPop.hidden) return;
-    sortPop.hidden = true;
-    if (sortBtn) sortBtn.setAttribute("aria-expanded", "false");
-}
-
 if (filterEl) {
     filterEl.addEventListener("input", function () {
         listState.query = filterEl.value;
@@ -289,30 +302,15 @@ if (filterEl) {
     });
 }
 
-if (sortBtn && sortPop) {
-    sortBtn.addEventListener("click", function (e) {
-        e.stopPropagation();
-        sortPop.hidden = !sortPop.hidden;
-        sortBtn.setAttribute("aria-expanded", String(!sortPop.hidden));
-    });
-    sortPop.addEventListener("click", function (e) {
-        var item = e.target.closest(".nf-pop-item");
-        if (!item) return;
-        listState.key = item.dataset.sort;
+if (sortGroup) {
+    sortGroup.addEventListener("click", function (e) {
+        var btn = e.target.closest(".js-repo-sort-btn");
+        if (!btn) return;
+        // Same field flips the direction, a new field starts ascending — the
+        // file list's rule.
+        listState.order = nextSortOrder(btn.dataset.sort, listState.key, listState.order);
+        listState.key = btn.dataset.sort;
         applySort();
-        sortPop.hidden = true;
-        sortBtn.setAttribute("aria-expanded", "false");
-        sortBtn.focus();
-    });
-    document.addEventListener("click", function (e) {
-        if (e.target.closest("#repo-sort-pop") || e.target.closest("#repo-sort-btn")) return;
-        closeSortPop();
-    });
-    document.addEventListener("keydown", function (e) {
-        if (e.key !== "Escape" || sortPop.hidden) return;
-        e.preventDefault();
-        closeSortPop();
-        sortBtn.focus();
     });
 }
 

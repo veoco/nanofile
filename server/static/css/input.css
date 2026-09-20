@@ -343,6 +343,15 @@ html:not([data-view]) .seg .js-view-list {
   .nf-search kbd {
     @apply shrink-0 text-[10.5px] leading-none px-[5px] py-[3px] border border-line rounded-[4px] text-ink-3 font-sans;
   }
+  /* Toolbar filter: the underline is the whole control, unlike the boxed
+     `.nf-search` the topbar and the form pages use. */
+  .nf-find {
+    @apply flex items-center gap-2 h-[30px] min-w-0 border-b border-line text-ink-3;
+  }
+  .nf-find:focus-within { @apply border-line-strong text-ink; }
+  .nf-find input {
+    @apply flex-1 min-w-0 border-0 bg-transparent outline-none text-ink text-[12.5px] placeholder-ink-3;
+  }
   .iconbtn {
     @apply grid place-items-center w-[30px] h-[30px] border-0 rounded-ctl bg-transparent text-ink-2 cursor-pointer;
   }
@@ -374,11 +383,6 @@ html:not([data-view]) .seg .js-view-list {
            overflow-x-auto;
     height: var(--file-toolbar-h);
   }
-  /* The libraries toolbar has a fixed, short set of controls, so it never needs
-     to scroll — but the sort popover anchored under it would be clipped by
-     `overflow`, which has to stay visible for it. The file browser's toolbar is
-     the one that wants the horizontal scroll. */
-  .nf-toolbar.no-scroll { @apply overflow-visible; }
   .seg {
     @apply flex gap-px p-0.5 border border-line rounded-ctl;
   }
@@ -616,30 +620,6 @@ html:not([data-view]) .seg .js-view-list {
      it, so every row stays one line high and the names still line up. */
   .nf-libfind { @apply w-[300px] max-w-[40vw] shrink-0; }
   .nf-libcount { @apply shrink-0 text-[12px] tabular-nums text-ink-3 whitespace-nowrap; }
-
-  /* Sort: a popover anchored to its own button. The row "⋯" menu is a
-     body-mounted singleton because a scrolling list clips it; the toolbar does
-     not scroll, so this one can stay in flow and needs no measuring. */
-  .nf-pop-wrap { @apply relative shrink-0; }
-  .nf-sortbtn {
-    @apply inline-flex items-center gap-1.5 h-[26px] px-[7px] border-0 rounded-ctl
-           bg-transparent text-[12px] text-ink-2 cursor-pointer;
-  }
-  .nf-sortbtn:hover { @apply bg-raised text-ink; }
-  .nf-sortbtn > svg { @apply w-[11px] h-[11px] text-ink-3; }
-  .nf-pop {
-    @apply absolute right-0 top-[calc(100%+5px)] z-dialog min-w-[172px] py-1
-           rounded-box border border-line bg-panel;
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
-  }
-  .nf-pop[hidden] { display: none; }
-  .nf-pop-item {
-    @apply flex items-center gap-2 w-full h-[30px] px-2.5 border-0 bg-transparent text-left
-           text-[12.5px] text-ink cursor-pointer whitespace-nowrap;
-  }
-  .nf-pop-item:hover { @apply bg-raised; }
-  .nf-pop-item .ck { @apply ml-auto w-3 h-3 opacity-0 text-accent; }
-  .nf-pop-item[aria-checked="true"] .ck { @apply opacity-100; }
 
   .nf-lib {
     @apply relative grid items-center gap-3 h-10 px-4 border-b border-line;

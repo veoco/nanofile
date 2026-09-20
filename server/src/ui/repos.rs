@@ -93,11 +93,11 @@ pub async fn list_repos(
         })
         .collect();
 
-    // Render in the list's default order ("last modified", newest first) so the
-    // first paint is already final: sorting only in the browser reordered every
-    // row the moment the bundle ran, which read as a flicker. The sort is
-    // stable, matching the client's `Array.prototype.sort` on tied mtimes.
-    repos.sort_by_key(|a| std::cmp::Reverse(a.mtime));
+    // Render in the list's default order (name, A→Z) so the first paint is
+    // already final: sorting only in the browser reordered every row the moment
+    // the bundle ran, which read as a flicker. Lowercased, this is the same
+    // comparison the file list's name sort uses and the one repos.js repeats.
+    repos.sort_by_key(|a| a.name.to_lowercase());
 
     let tpl = RepoListTemplate {
         urls: crate::static_assets::template_urls(),
