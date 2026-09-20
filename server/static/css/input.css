@@ -94,6 +94,15 @@ html.dark {
      header pin directly under it — with all three at `top: 0` the header (later
      in the DOM) covered the toolbar instead of stacking below it. */
   --file-toolbar-h: 2.5rem;
+  /* One height for every control that can share a line with another: a button,
+     a single-line field, the boxed search field, an icon button, a copyable
+     code box. They used to be sized independently — a 33.5px input beside a
+     28px button, a 30px search field beside a 24px one — which reads as a
+     layout bug rather than as a hierarchy. `--ctl-h` is that height; the
+     dense tiers (`.btn-sm`, `.btn-icon-sm`, `.input-sm`, `.tbtn`,
+     `.nf-toggle`, 4px less) are for row actions that never sit beside a
+     field. */
+  --ctl-h: 1.75rem;
   /* Selection tint: a translucent accent so it composites over whatever the
      row already sits on, in either theme. */
   --tint-sel: color-mix(in srgb, var(--color-accent) 12%, transparent);
@@ -255,12 +264,13 @@ html:not([data-view]) .seg .js-view-list {
    Base attributes are shared via grouped selectors (Tailwind v4's @apply
    cannot reference custom component classes). */
 @layer components {
-  /* Buttons — 28px tall, 6px radius, no shadow. */
+  /* Buttons — `--ctl-h` tall, 6px radius, no shadow. */
   .btn, .btn-primary, .btn-secondary, .btn-danger, .btn-danger-outline, .btn-ghost, .btn-ghost-brand, .btn-ghost-danger, .btn-line, .btn-solid, .btn-quiet {
-    @apply inline-flex items-center justify-center gap-1.5 h-7 px-2.5 rounded-ctl border border-transparent
+    @apply inline-flex items-center justify-center gap-1.5 px-2.5 rounded-ctl border border-transparent
            text-[12.5px] font-medium whitespace-nowrap cursor-pointer transition-colors
            focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent
            disabled:cursor-not-allowed disabled:opacity-50;
+    height: var(--ctl-h);
   }
   .btn-primary        { @apply bg-accent text-accent-ink hover:bg-accent-hover; }
   .btn-solid          { @apply bg-accent text-accent-ink hover:bg-accent-hover; }
@@ -274,16 +284,28 @@ html:not([data-view]) .seg .js-view-list {
   .btn-ghost          { @apply text-ink-2 hover:bg-raised hover:text-ink; }
   .btn-ghost-brand    { @apply text-ink-2 hover:bg-raised hover:text-ink; }
   .btn-ghost-danger   { @apply text-ink-2 hover:bg-raised hover:text-err; }
-  .btn-sm   { @apply h-6 px-2 text-[11.5px] gap-1; }
-  .btn-icon { @apply w-7 h-7 p-0; }
+  .btn-sm   { @apply px-2 text-[11.5px] gap-1; height: calc(var(--ctl-h) - 4px); }
+  .btn-icon { @apply p-0; width: var(--ctl-h); height: var(--ctl-h); }
+  /* The dense icon button: a row action, not a control beside a field. */
+  .btn-icon-sm { @apply p-0; width: calc(var(--ctl-h) - 4px); height: calc(var(--ctl-h) - 4px); }
 
-  /* Form controls */
-  .input, .select, .textarea {
-    @apply block w-full rounded-ctl border border-line-ctrl bg-canvas text-ink text-[13px] px-2.5 py-1.5
-           placeholder-ink-3
-           focus:border-accent focus:outline-none;
+  /* Form controls. A single-line field is exactly as tall as the button that
+     submits it; only the textarea keeps a height of its own. */
+  .input, .select {
+    @apply block w-full rounded-ctl border border-line-ctrl bg-canvas text-ink text-[13px] px-2.5
+           placeholder-ink-3 focus:border-accent focus:outline-none;
+    height: var(--ctl-h);
   }
-  .textarea    { @apply resize-none; }
+  .textarea {
+    @apply block w-full rounded-ctl border border-line-ctrl bg-canvas text-ink text-[13px] px-2.5 py-1.5
+           placeholder-ink-3 focus:border-accent focus:outline-none resize-none;
+  }
+  /* The dense field: the details drawer's tag box, which pairs with `.btn-sm`
+     rather than with a full-size button. */
+  .input-sm {
+    @apply text-[11.5px];
+    height: calc(var(--ctl-h) - 4px);
+  }
   .form-label  { @apply block text-[13px] font-medium text-ink-2; }
   .field-label { @apply block text-[10.5px] font-medium text-ink-3 uppercase tracking-wider; }
 
@@ -334,7 +356,8 @@ html:not([data-view]) .seg .js-view-list {
     @apply shrink-0 flex items-center gap-4 h-14 px-4 bg-panel border-b border-line;
   }
   .nf-search {
-    @apply flex items-center gap-2 h-[30px] px-[9px] rounded-ctl bg-canvas border border-line-ctrl text-ink-3;
+    @apply flex items-center gap-2 px-[9px] rounded-ctl bg-canvas border border-line-ctrl text-ink-3;
+    height: var(--ctl-h);
   }
   .nf-search:focus-within { @apply border-line-strong; }
   .nf-search input {
@@ -346,14 +369,17 @@ html:not([data-view]) .seg .js-view-list {
   /* Toolbar filter: the underline is the whole control, unlike the boxed
      `.nf-search` the topbar and the form pages use. */
   .nf-find {
-    @apply flex items-center gap-2 h-[30px] min-w-0 border-b border-line text-ink-3;
+    @apply flex items-center gap-2 min-w-0 border-b border-line text-ink-3;
+    height: var(--ctl-h);
   }
   .nf-find:focus-within { @apply border-line-strong text-ink; }
   .nf-find input {
     @apply flex-1 min-w-0 border-0 bg-transparent outline-none text-ink text-[12.5px] placeholder-ink-3;
   }
   .iconbtn {
-    @apply grid place-items-center w-[30px] h-[30px] border-0 rounded-ctl bg-transparent text-ink-2 cursor-pointer;
+    @apply grid place-items-center border-0 rounded-ctl bg-transparent text-ink-2 cursor-pointer;
+    width: var(--ctl-h);
+    height: var(--ctl-h);
   }
   .iconbtn:hover { @apply bg-raised text-ink; }
   .tag-admin {
@@ -964,15 +990,19 @@ html:not([data-view]) .seg .js-view-list {
   .nf-kv .v .sep { @apply text-ink-3; }
 
   /* Something the reader has to copy: a TOTP secret, backup codes, a
-     shown-once key. */
+     shown-once key. The box takes the control height so it lines up with the
+     copy button beside it; the line box absorbs it, borders included, which
+     also keeps a wrapped secret readable. */
   .nf-code {
-    @apply inline-block rounded-ctl border border-line bg-canvas px-3 py-1.5
+    @apply inline-block rounded-ctl border border-line bg-canvas px-3
            font-mono text-[12.5px] text-ink break-all select-all;
+    line-height: calc(var(--ctl-h) - 2px);
   }
   .nf-codes { @apply grid grid-cols-2 gap-1.5; }
   .nf-codes code {
-    @apply rounded-ctl border border-line bg-canvas px-2 py-1.5 text-center
+    @apply rounded-ctl border border-line bg-canvas px-2 text-center
            font-mono text-[12.5px] text-ink select-all;
+    line-height: calc(var(--ctl-h) - 2px);
   }
 
   /* `<details>` opener, as a row action rather than a disclosure triangle. */
@@ -986,7 +1016,7 @@ html:not([data-view]) .seg .js-view-list {
 
   .nf-file {
     @apply block w-full text-[12px] text-ink-3 cursor-pointer
-           file:mr-3 file:h-7 file:rounded-ctl file:border-0 file:bg-accent
+           file:mr-3 file:h-[var(--ctl-h)] file:rounded-ctl file:border-0 file:bg-accent
            file:px-2.5 file:text-[12.5px] file:font-medium file:text-accent-ink
            hover:file:bg-accent-hover;
   }

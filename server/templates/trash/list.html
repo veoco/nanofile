@@ -59,9 +59,9 @@
                    placeholder="{{ t.tr("trash.search_placeholder") }}"
                    aria-label="{{ t.tr("trash.search_placeholder") }}">
         </label>
-        <button type="submit" class="btn btn-line btn-sm">{{ t.tr("nav.search") }}</button>
+        <button type="submit" class="btn btn-line">{{ t.tr("nav.search") }}</button>
         {% if !query.is_empty() %}
-        <a href="/trash/" class="btn btn-quiet btn-sm">{{ t.tr("common.clear") }}</a>
+        <a href="/trash/" class="btn btn-quiet">{{ t.tr("common.clear") }}</a>
         {% endif %}
     </form>
     {% if !items.is_empty() %}

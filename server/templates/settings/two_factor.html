@@ -95,7 +95,7 @@
             <p class="form-label">{{ t.tr("twofactor.manual_entry") }}</p>
             <div class="mt-1.5 flex items-center gap-2">
                 <code id="totp-secret" class="nf-code min-w-0">{{- secret -}}</code>
-                <button type="button" class="btn btn-ghost btn-icon h-6 w-6 shrink-0"
+                <button type="button" class="btn btn-ghost btn-icon shrink-0"
                         data-copy="#totp-secret" data-copy-msg="twofactor.copied"
                         title="{{ t.tr("twofactor.copy") }}" aria-label="{{ t.tr("twofactor.copy") }}">
                     {{ icons::icon_copy("w-3.5 h-3.5") }}

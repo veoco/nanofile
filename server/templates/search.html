@@ -14,7 +14,7 @@
                    placeholder="{{ t.tr("search.placeholder") }}"
                    aria-label="{{ t.tr("search.placeholder") }}">
         </label>
-        <button type="submit" class="btn btn-solid btn-sm">{{ t.tr("nav.search") }}</button>
+        <button type="submit" class="btn btn-solid">{{ t.tr("nav.search") }}</button>
         <label class="tbtn inline-flex items-center gap-1.5 cursor-pointer">
             <input type="checkbox" name="search_filename_only" value="true"
                    {% if search_filename_only %}checked{% endif %}
