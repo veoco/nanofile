@@ -18,10 +18,10 @@
 </div>
 
 {% if let Some(error) = error %}
-{% include "includes/alert_error.html" %}
+<div class="mt-5">{% include "includes/alert_error.html" %}</div>
 {% endif %}
 {% if let Some(success) = success %}
-{% include "includes/alert_success.html" %}
+<div class="mt-5">{% include "includes/alert_success.html" %}</div>
 {% endif %}
 
 <div class="nf-list mt-5">

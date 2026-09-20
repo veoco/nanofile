@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { subtitleGap } from "../helpers/layout";
+import { bannerGap, subtitleGap } from "../helpers/layout";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/sysadmin/users/");
@@ -50,6 +50,9 @@ test("a failed create reports why", async ({ page }) => {
   const banner = page.locator("main .nf-banner.is-err");
   await expect(banner).toBeVisible();
   await expect(banner).toContainText("already exists");
+  // The banner is a block in its own right: the description has no bottom
+  // margin, so the banner has to keep its distance.
+  expect(await bannerGap(page)).toBeGreaterThanOrEqual(16);
 });
 
 test("edit a user's active status", async ({ page }) => {

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { subtitleGap } from "../helpers/layout";
+import { bannerGap, subtitleGap } from "../helpers/layout";
 
 // Asserts the default English UI (default_language=en; the admin has no
 // language override), which renders the Periodic/Continuous/Never labels.
@@ -37,6 +37,9 @@ test("trigger a periodic task manually", async ({ page }) => {
   await page.locator(".js-confirm-ok").click();
   await page.waitForURL(/\/sysadmin\/tasks\/\?action=triggered$/);
   await expect(page.locator("main .nf-banner.is-ok")).toContainText("Task triggered");
+  // The banner is a block in its own right: the description has no bottom
+  // margin, so the banner has to keep its distance.
+  expect(await bannerGap(page)).toBeGreaterThanOrEqual(16);
 
   // A manual run stamps a new last-run timestamp.
   await expect

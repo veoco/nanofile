@@ -9,10 +9,10 @@
 <p class="page-subtitle">{{ t.tr("admin.tasks_desc") }}</p>
 
 {% if let Some(error) = error %}
-{% include "includes/alert_error.html" %}
+<div class="mt-5">{% include "includes/alert_error.html" %}</div>
 {% endif %}
 {% if let Some(success) = success %}
-{% include "includes/alert_success.html" %}
+<div class="mt-5">{% include "includes/alert_success.html" %}</div>
 {% endif %}
 
 {% if tasks.is_empty() %}
