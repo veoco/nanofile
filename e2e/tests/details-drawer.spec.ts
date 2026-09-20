@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { readState, createRepo, seedRepo, uploadFile } from "../helpers/api";
 import { expandDetails } from "../helpers/details";
 import { backdateFileMtimes } from "../helpers/mtime";
+import { localStamp } from "../helpers/time";
 
 // The details panel moved from a 300px right-hand column to an overlay pinned to
 // the bottom of the file-manager column. The whole point of an overlay is that
@@ -197,8 +198,8 @@ test("the drawer renders the selected file's local timestamp", async ({ page }) 
   await select(page, "alpha.txt");
   const cell = page.locator(".js-rp-mtime");
   await expect(cell).toHaveAttribute("data-ts", /^\d+$/);
-  await expect(cell).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-  await expect(cell).toHaveAttribute("title", /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  await expect(cell).toHaveText(await localStamp(cell));
+  await expect(cell).toHaveAttribute("title", await localStamp(cell, "tooltip"));
 });
 
 test("Escape and the close button both dismiss the drawer", async ({ page }) => {

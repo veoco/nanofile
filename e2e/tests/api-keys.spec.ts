@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, createRepo } from "../helpers/api";
+import { localStamp } from "../helpers/time";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -49,9 +50,9 @@ test("create a key, see it once, then revoke it", async ({ page }) => {
   const value = (label: string) =>
     card.locator(".nf-facts .f").filter({ hasText: label }).locator(".v");
   await expect(value("Created")).toHaveAttribute("data-ts", /^\d+$/);
-  await expect(value("Created")).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  await expect(value("Created")).toHaveText(await localStamp(value("Created")));
   await expect(value("Expires")).toHaveAttribute("data-ts", /^\d+$/);
-  await expect(value("Expires")).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  await expect(value("Expires")).toHaveText(await localStamp(value("Expires")));
   await expect(value("Last used")).toHaveText("Never");
 
   // One request with the key stamps its last-used time, which then renders in
@@ -64,7 +65,7 @@ test("create a key, see it once, then revoke it", async ({ page }) => {
   expect(used.ok()).toBeTruthy();
   await page.reload();
   await expect(value("Last used")).toHaveAttribute("data-ts", /^\d+$/);
-  await expect(value("Last used")).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  await expect(value("Last used")).toHaveText(await localStamp(value("Last used")));
 
   // The reload also drops the one-time secret: the key stays, the plaintext
   // does not, and no second key appears (the create form redirects, so a

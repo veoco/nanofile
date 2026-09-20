@@ -162,9 +162,12 @@ html.dark {
 
    min-width only affects inline elements once they're inline-block, so scope
    that to spans — block divs (folder rows) must keep their own line. */
+/* Date and time are localized, so the stamp's width follows the language and
+   the 12/24-hour clock ("9/19/25, 3:04 PM" vs "2025/9/19 15:04"). No single
+   reserved width fits them, so the cell sizes to its content; the digits still
+   line up between rows. */
 [data-ts]:not([data-ts-mode]),
 [data-ts-mode="absolute"] {
-  min-width: 16ch; /* `YYYY-MM-DD HH:MM` */
   font-variant-numeric: tabular-nums;
 }
 /* The relative form is the one cell whose text changes while the page is open,

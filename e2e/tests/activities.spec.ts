@@ -73,6 +73,11 @@ test("activity rows are grouped on the reader's local calendar day", async ({ pa
   await page.waitForSelector("main .nf-prow[data-ts-day]");
 
   const groups = await page.evaluate(() => {
+    // The same `Intl` calls core/format.js makes, so a header or tooltip is
+    // checked against the reader's own localization rather than a literal.
+    const lang = document.documentElement.lang;
+    const dateFmt = new Intl.DateTimeFormat(lang, { dateStyle: "medium" });
+    const stampFmt = new Intl.DateTimeFormat(lang, { dateStyle: "medium", timeStyle: "medium" });
     return Array.from(document.querySelectorAll("main .nf-prow[data-ts-day]")).map((row) => {
       const date = new Date(parseInt(row.dataset.tsDay, 10) * 1000);
       const key =
@@ -83,7 +88,13 @@ test("activity rows are grouped on the reader's local calendar day", async ({ pa
         ("0" + date.getDate()).slice(-2);
       const prev = row.previousElementSibling;
       const label = prev && prev.classList.contains("nf-sec") ? prev.textContent.trim() : "";
-      return { key, label, title: row.querySelector("[data-ts]").title };
+      return {
+        key,
+        label,
+        title: row.querySelector("[data-ts]").title,
+        expectedTitle: stampFmt.format(date),
+        expectedDateLabel: dateFmt.format(date),
+      };
     });
   });
 
@@ -93,9 +104,9 @@ test("activity rows are grouped on the reader's local calendar day", async ({ pa
   // nowhere else: one header per distinct day, never one per row.
   const seen = new Set<string>();
   for (const group of groups) {
-    // The row's own stamp renders the day its header claims, in the reader's
+    // The row's own stamp spells out the day its header claims, in the reader's
     // timezone.
-    expect(group.title).toMatch(new RegExp(`^${group.key} \\d{2}:\\d{2}$`));
+    expect(group.title).toBe(group.expectedTitle);
 
     if (seen.has(group.key)) {
       expect(group.label).toBe("");
@@ -105,7 +116,7 @@ test("activity rows are grouped on the reader's local calendar day", async ({ pa
 
     expect(group.label).not.toBe("");
     if (group.label !== "Today" && group.label !== "Yesterday") {
-      expect(group.label).toBe(group.key);
+      expect(group.label).toBe(group.expectedDateLabel);
     }
   }
   expect(seen.size).toBeGreaterThan(0);

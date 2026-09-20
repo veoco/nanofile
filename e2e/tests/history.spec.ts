@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo, uploadFile } from "../helpers/api";
 import { clickRowAction } from "../helpers/details";
+import { localStamp } from "../helpers/time";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -33,12 +34,15 @@ test("history lists every revision with download and restore actions", async ({ 
   await expect(page.locator('.js-history-list a[download]')).toHaveCount(2);
 });
 
-test("a revision's timestamp uses the page's local `YYYY-MM-DD HH:MM` form", async ({ page }) => {
+test("a revision's timestamp uses the page's localized form", async ({ page }) => {
   await clickRowAction(page, "alpha.txt", ".js-history-btn");
   // The dialog is built in JS; its time comes from the same formatter as the
-  // file list, not `toLocaleString()` (whose shape varies per browser locale).
+  // file list — a localized stamp in the reader's timezone, not the fixed
+  // server-side shape and not `toLocaleString()`.
   const time = page.locator(".js-history-list > div > div > div").nth(1);
-  await expect(time).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} · /);
+  const stamp = time.locator("[data-ts]");
+  await expect(stamp).toHaveAttribute("data-ts", /^\d+$/);
+  await expect(time).toContainText(await localStamp(stamp));
 });
 
 test("restore an older revision reverts the file content", async ({ page }) => {

@@ -1,12 +1,12 @@
 {# Time macro — the only way a template emits a time.
 
    The server ships raw Unix seconds and a mode; `core/local-time.js` turns that
-   into text in the viewer's timezone. Never pre-format a time server-side: the
-   server does not know the reader's timezone, and a pre-formatted string cannot
-   be localized.
+   into text in the viewer's timezone and language. Never pre-format a time
+   server-side: the server does not know the reader's timezone or locale.
 
    Mode:
-     absolute  `YYYY-MM-DD HH:MM` (the default, so it emits no attribute)
+     absolute  the reader's localized date and time (the default, so it emits
+               no attribute) — en "9/19/25, 3:04 PM", zh "2025/9/19 15:04"
      relative  "3 days ago", then the local date from 14 days out
      short     the grid tile's "Sep 19" / "9月19日"
      day       marks a row that starts a new local calendar day (activity page)

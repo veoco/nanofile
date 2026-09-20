@@ -4,16 +4,19 @@
 //
 //   <span data-ts="1756902896" data-ts-mode="relative"></span>
 //
-// `data-ts-mode` is `absolute` (the default: `YYYY-MM-DD HH:MM`), `relative`
-// ("3 days ago") or `short` (the grid tile's "Sep 19"), and every mode puts the
-// exact local stamp in the element's `title`. `data-ts-day` is the one other
-// form: a marker on a row that the reader's local calendar day starts there, so
-// a group header belongs above it. The server never pre-formats a time for a
-// person to read; only machine-facing JSON payloads keep RFC3339.
+// `data-ts-mode` is `absolute` (the default: the reader's localized date and
+// time) or `relative` ("3 days ago") or `short` (the grid tile's "Sep 19"), and
+// every mode puts the exact local stamp in the element's `title`. `data-ts-day`
+// is the one other form: a marker on a row that the reader's local calendar day
+// starts there, so a group header belongs above it. The server never
+// pre-formats a time for a person to read; only machine-facing JSON payloads
+// keep RFC3339.
 import { __t } from "./i18n.js";
 import {
   formatLocalDate,
   formatLocalDateTime,
+  formatLocalDateTimeLong,
+  formatLocalMediumDate,
   formatLocalShortDate,
   relativeParts,
 } from "./format.js";
@@ -28,7 +31,7 @@ function seconds(el) {
 }
 
 function title(el, ts) {
-  var text = formatLocalDateTime(ts);
+  var text = formatLocalDateTimeLong(ts);
   if (text) el.title = text;
 }
 
@@ -60,7 +63,7 @@ function render(el) {
 function renderRelative(el, ts) {
   var parts = relativeParts(ts, Math.floor(Date.now() / 1000));
   if (!parts) {
-    var date = formatLocalDate(ts);
+    var date = formatLocalMediumDate(ts);
     if (date) el.textContent = date;
     return false;
   }
@@ -95,11 +98,14 @@ function previousRow(el) {
   return sib && sib.hasAttribute("data-ts-day") ? sib : null;
 }
 
-function dayLabel(key) {
+// The header text for a day bucket. `key` is the ISO form the grouping compares
+// and stays internal; everything a person reads is localized, so an older day
+// gets the reader's own date rather than the raw key.
+function dayLabel(key, ts) {
   var now = Math.floor(Date.now() / 1000);
   if (key === formatLocalDate(now)) return __t("activity.today");
   if (key === formatLocalDate(now - 86400)) return __t("activity.yesterday");
-  return key;
+  return formatLocalMediumDate(ts);
 }
 
 // `data-ts-day`: the row opens a group when its local calendar day differs from
@@ -107,6 +113,7 @@ function dayLabel(key) {
 // later row of the same day has another row directly above it, so comparing
 // against the immediate sibling would label each row as its own group.
 function renderDayBoundary(el) {
+  var ts = parseInt(el.dataset.tsDay, 10);
   var key = dayKey(el);
   if (!key) return;
 
@@ -122,7 +129,7 @@ function renderDayBoundary(el) {
   if (header && header.dataset.dayKey === key) return;
   if (header) header.remove();
 
-  var text = dayLabel(key);
+  var text = dayLabel(key, ts);
 
   var section = document.createElement("div");
   section.className = "nf-sec";

@@ -85,7 +85,12 @@ class FakeElement {
 globalThis.window = {
   __T: { "activity.today": "Today", "activity.yesterday": "Yesterday" },
 };
-globalThis.document = { createElement: (tag) => new FakeElement(tag) };
+// `lang` is what core/format.js hands `Intl`; pinning it keeps the day-header
+// assertion below from following the machine's default locale.
+globalThis.document = {
+  createElement: (tag) => new FakeElement(tag),
+  documentElement: { lang: "en" },
+};
 
 const { renderAll } = await import("./local-time.js");
 
@@ -126,14 +131,14 @@ test("a day header is emitted once per local calendar day", () => {
   renderAll(list);
 
   assert.deepEqual(layout(list), [
-    "H:2020-03-05",
+    "H:Mar 5, 2020",
     "row",
     "row",
     "row",
-    "H:2020-03-04",
+    "H:Mar 4, 2020",
     "row",
     "row",
-    "H:2020-03-02",
+    "H:Mar 2, 2020",
     "row",
   ]);
 });
@@ -158,13 +163,13 @@ test("a stray header between two rows of one day is removed", () => {
 
   const stray = new FakeElement("div");
   stray.className = "nf-sec";
-  stray.textContent = "2020-03-05";
+  stray.textContent = "Mar 5, 2020";
   const secondRow = list.children[2];
   list.insertBefore(stray, secondRow);
 
   renderAll(list);
 
-  assert.deepEqual(layout(list), ["H:2020-03-05", "row", "row"]);
+  assert.deepEqual(layout(list), ["H:Mar 5, 2020", "row", "row"]);
 });
 
 test("the current local day is labelled Today", () => {

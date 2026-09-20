@@ -1,4 +1,5 @@
 import { test, expect, type Browser } from "@playwright/test";
+import { localStamp } from "../helpers/time";
 
 // Registration flows must start unauthenticated.
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -51,7 +52,7 @@ test("register with an invitation code auto-logs in", async ({ browser, page }) 
     await expect(row).toContainText("Used by");
     const usedStamp = row.locator(".nf-prow-sub [data-ts]").first();
     await expect(usedStamp).toHaveAttribute("data-ts", /^\d+$/);
-    await expect(usedStamp).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    await expect(usedStamp).toHaveText(await localStamp(usedStamp));
   } finally {
     await ctx.close();
   }

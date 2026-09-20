@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo, createRepo, uploadFile } from "../helpers/api";
+import { localStamp } from "../helpers/time";
 
 let state: ReturnType<typeof readState>;
 let nameRepoId: string;
@@ -34,10 +35,8 @@ test("sort by name toggles file order", async ({ page }) => {
   // still have been visited by local-time.js — that is now visible in the
   // tooltip, the exact local time behind the relative label (regression: the
   // observer used to die with the container).
-  await expect(fileRows.nth(0).locator(".nf-when")).toHaveAttribute(
-    "title",
-    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/,
-  );
+  const refreshed = fileRows.nth(0).locator(".nf-when");
+  await expect(refreshed).toHaveAttribute("title", await localStamp(refreshed, "tooltip"));
 });
 
 // The Modified column reads like the library list's ("3 days ago", and a date
@@ -51,7 +50,7 @@ test("the modified column uses the library list's relative form", async ({ page 
   await expect(cell).toHaveText(/Just now|ago$/);
   // Not the raw stamp the cell used to print.
   await expect(cell).not.toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-  await expect(cell).toHaveAttribute("title", /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  await expect(cell).toHaveAttribute("title", await localStamp(cell, "tooltip"));
 });
 
 // A page left open must not keep claiming "Just now": the relative cells are
