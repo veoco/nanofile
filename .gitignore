@@ -25,3 +25,9 @@ e2e/playwright-report/
 /.claude
 AGENTS.local.md
 .zcode/
+
+# `migration` is a member of the root Cargo workspace, so Cargo resolves all
+# dependencies through the root Cargo.lock and ignores any lock nested here.
+# The once-committed migration/Cargo.lock was a stale dead artifact; ignore it
+# so it can never be re-added.
+migration/Cargo.lock
