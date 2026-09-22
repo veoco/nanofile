@@ -2,447 +2,81 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-用 Rust 编写的、与 [Seafile](https://www.seafile.com/) 协议兼容的服务器。
+Nanofile 是一个可自行部署的文件同步与分享服务。它兼容 Seafile 的同步协议与接口，官方桌面端、移动端客户端可直接连接；同时自带网页界面，无需另装 seaf-server + seahub。
 
-Nanofile 实现了 Seafile 同步协议和 REST API，因此官方 Seafile 桌面 / 移动客户端以及
-`seaf-cli` 等工具可以直接指向它。它还自带一套 Web UI（文件浏览器、分享、管理后台），
-打包为单个静态二进制文件——无需安装独立的 `seaf-server` + `seahub` 组合。
+## 功能
 
-## 功能特性
-
-- **Seafile 同步协议**（`/seafhttp/`，协议版本 2）：内容寻址的 commit 和 FS 对象、带 SHA-1
-  校验的块传输、打包的 FS 对象、`check-fs` / `check-blocks`、配额与权限预检查、每仓库同步
-  token、文件锁定。
-  - **安全说明**：`/seafhttp/repo/head-commits-multi/` 按协议要求是未认证的——官方桌面客户端
-    调用它时不带任何凭据（seafile `daemon/http-tx-mgr.c`），官方服务器也不校验 token
-    （`server/http-server.c`）；要求认证会导致桌面客户端静默地无法检测远程更新。暴露面有限：
-    库 ID 是 128 位随机 UUID（盲枚举不可行），知道一个 ID 只能确认其存在并暴露 head-commit
-    SHA，而没有仓库同步 token 时该 SHA 无法使用。该端点仍会拒绝非 UUID 的 ID，并将数组上限
-    限制为 4096。
-- **REST API**：旧版 v1（`/api2/*`）和 v2.1（`/api/v2.1/*`）接口，覆盖库、文件、目录、分享、
-  动态、搜索、回收站、设备、头像等——与官方移动应用兼容。
-- **API 密钥**：面向外部客户端的统一凭据，在*设置 → API 密钥*中管理。每个密钥持有一组细粒度
-  能力（`file.read`、`share_link.write`、`sync.token`、`webdav.write` 等共 40 项，按领域分组），
-  可绑定到指定资料库（每个库单独设置读写上限）或该账号可访问的全部资料库，并按可配置的有效期过期。
-  内置同步客户端、WebDAV、CI 上传、只读等预设，且每个预设都严格待在自己名字对应的面内：WebDAV
-  密钥只用 `webdav.*` 加资料库绑定认证，因此 WebDAV 预设只授予这些，而不会顺带给出 REST API。写能力
-  会自动包含对应的读能力；`admin.*` 需要管理员身份；密钥永远不能管理密钥。能力目录只列出真正有强制
-  点的能力——每一项都标出它在哪些路由（或 WebDAV / 同步面）上被校验；因没有强制点而退役的 id 会从已
-  存储的密钥里被丢弃，而不是让密钥直接失效。每个密钥都会记录最后一次被使用的时间（REST 与同步两条
-  路径都记，且限流为每分钟最多写一次），因此"没用过的密钥"是看得出来的。
-- **凭据清单**：*设置 → 会话与凭据* 列出所有能长期访问本账号的凭据——客户端会话、浏览器会话
-  （由 `User-Agent` 生成标签）、资料库同步令牌，以及免二次验证的设备——并可逐个吊销。页面顶部
-  先给出状态摘要，随后把客户端会话、它持有的同步令牌与免二次验证信任归到**持有它们的设备**之下
-  （按 `platform` + `device_id` 匹配，绝不按设备名），因此「这台机器还能做什么」就是一行，
-  「解除连接」就是一次点击。一个资料库在**每台设备**上各有一份同步令牌：令牌签发给请求它的设备
-  （或由第一台拿着「无设备身份」令牌同步的设备认领），因此在客户端真正使用之前就会出现在对应设备
-  之下。只有没有匹配到已知设备的同步令牌与免二次验证信任（即签发时就没有设备身份，或它所属设备
-  的会话已不存在）才会作为*尚未关联设备的同步令牌*、*未知的免二次验证令牌*单独列在下方；没有
-  这类条目时两块分区根本不渲染；已归属设备的条目在设备卡片里展开即可看到，与分区标题里的数字
-  一一对应。批量操作只保留*退出其他所有浏览器会话*（当前会话一定保留）。已过期与超过 30 天未
-  同步的令牌会被标出，未启用两步验证时页面也会提示。API 密钥仍有自己的页面。同样的数据也可通过
-  `GET /api2/credentials/`（需要 `device.read`）与 `DELETE /api2/credentials/{kind}/{id}/`
-  （需要 `device.write`）取得；Seafile 兼容的
-  `GET /api2/devices/` 现在也返回同一份清单，每个条目带 `kind` 标记，并保留原有字段名。以上任何
-  一个都不包含同步令牌的**值**，只有元数据。
-- **设置外壳**：设置区是一个统一外壳，共用同一个侧边导航（窄屏下为可横向滚动的标签条），覆盖
-  `/settings/`（概览）、`/settings/profile/`（头像、显示名、语言）、`/settings/security/`
-  （两步验证状态与密码）、`/settings/credentials/`、`/settings/api-keys/` 与
-  `/settings/invitations/`。修改密码后会回到安全页面，并提示其他设备的会话、其同步令牌与免二次
-  验证信任，以及全部 API 密钥都已被吊销。`/settings/devices/` 会重定向到
-  `/settings/credentials/`；原有的个人资料表单路径仍保留为别名。
-- **WebDAV**（`/dav/...`）：使用上述密钥中的 `webdav.*` 能力认证，由 `webdav_enabled` 控制。
-- **Web UI**：带预览和缩略图的文件浏览器、星标文件、动态流、回收站、设置（个人资料、会话与
-  凭据、2FA、邀请、API 密钥），以及**系统管理后台**（用户、分享、后台任务、邮件、系统管理）。支持中英文界面。
-- **系统管理**（`/sysadmin/settings/`）：所有可在运行时管理的设置，按分区一页，逐项显示当前生效值
-  及其来源。层级从高到低为：环境变量、配置文件（仅 `[settings] config_override_keys` 列出的键）、
-  在此保存的值、内置默认值。除此之外配置文件是**首次启动的播种值**：某个键一旦在此保存过，此后
-  以保存值为准；启动日志会列出两者不一致的键名。大多数设置保存后立即生效；无法立即生效的会明确
-  标注并在下次启动时应用；少数填错会导致无法启动的项（主密钥、数据库连接串、状态目录、初始管理员
-  凭据）只读展示。密钥类字段永不回显——页面只说明是否已设置。
-- **分享**：分享链接（可选密码 / 过期时间 / 浏览计数）、匿名上传链接。全局 `share_link_enabled`
-  开关可完全禁用匿名分享 / 上传链接（已有链接将不可访问，并广播 `share-link-disabled` 特性让
-  客户端隐藏分享功能）。资料库始终属于单个账号：没有面向用户或群组的共享面。
-- **安全**：TOTP 双因素认证（含备用码和受信设备）、SSO / "在网站上查看" 登录、邀请码注册、
-  带锁定机制的登录限流、密码重置（通过邮件投递，见**邮件通知**）、哈希会话 cookie 与 CSRF 防护、
-  防路径穿越的文件名处理。
-  - **安全说明**：API、S2FA、SSO 登录和客户端登录的 bearer token 以 SHA-256 哈希存储，因此
-    数据库泄露不会得到可用的凭据。同步 token 需要可回显（客户端会重新提交），因此以由
-    `secret_key` 派生的 AEAD 密钥**加密**存储；分享链接 token 仍保持明文，因为"我的分享"列表
-    会显示可复制的 URL——与官方 Seafile 的明文 URL 模型一致。**release** 构建下必须显式设置
-    `NANOFILE_SERVER_SECRET_KEY` / `[server] secret_key`（否则拒绝启动，避免用临时密钥派生出
-    无法跨重启解密的密钥）；debug 构建会自动生成。
-- **加密库**：AES-256-CBC 块，带 Seafile 兼容的 `magic` / `random_key`，内存密码缓存带 TTL。
-  - **安全说明**：存储的 `magic` 使用 PBKDF2-SHA256 在 **1000 次迭代** 下派生，这是 Seafile
-    线上协议固定的，无法提高而不破坏客户端互操作。`magic` 是等价于密码的值，因此数据库泄露
-    可让弱密码被离线暴力破解。请使用长而随机的库密码，并优先选择 **enc_version 4**（每库随机
-    盐）而非 v2（固定全局盐）。服务器只接受 enc_version 2/4，并在创建时校验 magic/random_key
-    格式。已知限制：`/api2/repos/` 创建 API 没有 `salt` 字段，因此通过它创建的库按 v2 派生——
-    真正的每库 v4 盐是通过同步协议创建的。
-- **存储与版本管理**：每用户配额、**按库命名空间**的内容寻址块存储
-  （`data/blocks/repos/<sha1(repo_id)>/…`）、完整历史（含版本浏览 / 恢复）、每仓库历史
-  限制与 TTL、垃圾回收（历史修剪 + 不可达 FS 对象清理）、带还原的回收站、已删除库恢复。
-  可选的透明静态块加密（`block_encryption_mode`：`off` / `on` / `lazy`），块 id（逻辑字节的
-  SHA-1）保持不变，因此 Seafile 客户端和内容寻址去重继续正常工作。
-  - **回收站（库级）**：删除库时会保留其内容——提交图和 FS 对象在同一事务里被复制到
-    `deleted_repo_commits` / `deleted_repo_fs_objects`（相当于官方服务端的 `deleted_store/`），
-    块文件留在磁盘上。`POST /api/v2.1/deleted-repos/` 恢复该库（文件、历史、head 提交一并恢复）；
-    `DELETE /api/v2.1/deleted-repos/{repo_id}/` 彻底删除单个库、`DELETE /api/v2.1/deleted-repos/`
-    清空整个回收站，两者都会释放对应的块目录。网页端回收站页新增 **已删除的资料库** 标签页
-    （恢复 / 彻底删除 / 清空库回收站），与"已删除的文件"标签页并列。**在本次构建之前**删除的库
-    从未归档：回收站条目仍可恢复，但恢复出来是空库，服务器会在日志中说明原因。
-  - **从旧版本升级**：块过去存在一个全局扁平的目录树里（`data/blocks/<2 位十六进制>/<id>`）。
-    该布局只按内容 id 索引块，因此任何已认证用户都能借自己所属的库读取其他库的块。现在服务器会
-    把每个被引用的块复制到拥有它的库下，然后删除旧目录树——在启动时、处理第一个请求之前自动完成。
-    可用 `nanofile migrate-blocks --dry-run` 预估复制量，或用 `nanofile migrate-blocks` 在停机状态
-    下手动执行。迁移只做复制（不使用硬链接），可断点续跑，并且只有在确认每个被引用的块都落到新位置
-    后才删除旧目录树；如需回滚路径请先备份 `data/blocks`。去重现在按库进行，跨库重复的内容会在每个
-    库各存一份，磁盘占用会相应增加。
-- **全文搜索**：内置 Tantivy 索引，带 jieba 中文分词器；跨库的文件名和内容搜索。
-- **实时通知**：WebSocket 推送仓库更新、文件锁定、文件夹权限和评论更新。
-- **运维**：可续传 / 分块上传（`Content-Range` 组装）、zip 批量下载、带指标的后台调度器，
-  可从管理后台手动触发。
-
-## 架构
-
-Nanofile 是一个包含四个 crate 的 Cargo workspace：
-
-| Crate | 职责 |
-|-------|------|
-| `base` | 纯基础类型——`AppError`、路径 / 文件名净化、Seafile 存储格式类型和常量。除非启用 `with-axum` 特性，否则无 HTTP 依赖。 |
-| `infra` | 基础设施——SeaORM 实体、内容寻址块存储后端、加密（AES / 密钥派生 / magic）、配置 + 环境变量覆盖、限流、数据库初始化。 |
-| `server` | 应用本体——HTTP 处理器、服务、仓库、同步协议、WebDAV、WebSocket 通知、全文索引器、Askama Web UI。 |
-| `migration` | SeaORM 迁移（从首次启动开始的 schema 演进）。 |
-
-依赖方向：`base → infra → server`（编译期强制）；`migration` 被 `server` 使用。
-
-### Web 前端
-
-UI 是服务端渲染的（Askama），使用 Tailwind CSS 和以 ES 模块编写的模块化 JavaScript 前端：
-
-```
-server/frontend/
-├── core/       # 纯函数（i18n、格式化、文件元数据、API 辅助）——无 DOM，可单元测试
-├── browser/    # DOM 层（列表、选择、右侧面板、操作、上传、查看 …）
-├── entries/    # esbuild 入口点（common.js、file-browser.js）
-```
-
-`server/build.rs` 将 `entries/` 打包为 `static/js/*.bundle.js`（esbuild），并把
-`static/css/input.css` 编译为 `app.css`（Tailwind），然后 `rust-embed` 将两者嵌入二进制。
-esbuild 是**必需**的；Tailwind 可选（见 [开发](#开发)）。
+- **文件同步**：与官方 Seafile 服务器一致，桌面端与移动端客户端自动同步资料库。
+- **网页端**：浏览、预览、下载、收藏，以及动态与回收站。
+- **分享**：分享链接支持密码与过期时间；支持匿名上传链接。
+- **登录安全**：两步验证（TOTP）、受信设备、登录失败锁定。第三方工具（WebDAV、同步客户端）可用 API 密钥接入，无需共享账号密码。
+- **管理后台**：用户、配额、邮件与系统设置。
+- **其他**：资料库加密、全文搜索（含中文分词）、历史版本与回收站、后台垃圾回收。
 
 ## 快速开始
 
+从源码构建：
+
 ```bash
-# 1. 安装前端构建依赖——esbuild 必需；Tailwind 可选但推荐（没有它 UI 会无样式渲染）
-npm install
-
-# 2. 构建服务器（二进制名是 `nanofile`，不是 `server`）
-cargo build --release -p server
-
-# 3. 配置
-cp config.toml.example config.toml   # 按需编辑——见下方"配置"
-
-# 4. 运行
+npm install                       # 前端打包工具（esbuild 必需）
+cargo build --release -p server   # 产物是 nanofile（不是 server）
+cp config.toml.example config.toml
 ./target/release/nanofile
 ```
 
-打开 `http://localhost:8082` 并登录。
-
-需要一个管理员账号。可以在首次启动时通过 `config.toml` 中的 `[admin_init]` 自动创建
-（或使用 `NANOFILE_ADMIN_INIT_EMAIL` / `NANOFILE_ADMIN_INIT_PASSWORD_FILE`），也可以用 CLI
-创建：
+服务监听 http://localhost:8082。首次启动需要一个管理员账号，可用 CLI 创建：
 
 ```bash
+# 交互式输入密码
 ./target/release/nanofile adduser --email admin@example.com
-```
-
-会交互式提示输入口令。想跳过提示可以改用管道或文件——用 `--password` 传参会让口令同时出现在
-shell 历史与本机 `ps` 输出中：
-
-```bash
+# 或免交互
 printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@example.com --password-stdin
-./target/release/nanofile adduser --email admin@example.com --password-file /run/secrets/admin
 ```
 
-传入 `--regular` 可创建非管理员账号。
+`--regular` 创建普通用户账号。预构建容器镜像见「用 Docker 部署」。
 
-## 配置
+## 使用
 
-设置从工作目录下的 `config.toml` 读取。可用 `--config <path>`（优先级最高）或
-`NANOFILE_CONFIG` 环境变量覆盖路径。如果文件缺失，服务器回退到内置默认值，因此可以零配置
-启动——通过 `NANOFILE_*` 环境变量提供所需内容即可。每个键也可以用 `NANOFILE_*` 环境变量
-覆盖——随附的 `config.toml` 在每个键上方的注释中列出了确切的变量名（例如
-`NANOFILE_DATABASE_URL`、`NANOFILE_SERVER_PORT`）。环境变量在运行时始终生效，且永远不会被
-写回文件。
+### 用户
+`adduser` 创建账号，默认为管理员；`[auth]` 中可开启邀请码注册，由用户自行注册。
 
-**管理员可在 `/sysadmin/settings/` 运行时修改的设置**引入第三个来源，优先级顺序固定：
+### 分享
+在网页文件浏览器选中文件或文件夹并选择"分享"，生成分享链接，可设访问密码、过期时间与查看次数。匿名上传链接允许无账号上传到资料库。`share_link_enabled` 设为 false 后，匿名分享与上传链接全部失效，已存在的链接不再可用。
 
-1. 环境变量（`NANOFILE_*`）——最高；页面会把这类值显示为只读，避免"保存成功却不生效"；
-2. 配置文件——仅对 `[settings] config_override_keys` 列出的键（或 `config_policy = "override"` 时的全部键）；
-3. 在该页面保存的值；
-4. 内置默认值。
+### 邮件通知
+邮件通知默认不可用，需先配置 SMTP。配置位置有两处：网页后台"系统管理 → 邮件"（填写 host、端口、账号、密码、发件人等并开启 `enabled`），或环境变量（如 `NANOFILE_EMAIL_ENABLED=1`、`NANOFILE_EMAIL_HOST=…`）。
 
-默认策略 `config_policy = "bootstrap"` 下，配置文件是**首次启动的播种值**：某键保存过之后即以保存
-值为准，此后改文件对该键无效。启动日志会列出文件与保存值不一致的键名，页面上每一行都能"清除已保存
-值"让文件重新生效，因此以文件为准的部署不会被静默覆盖。大多数设置立即生效；不能立即生效的（监听
-地址、日志目标、索引目录）会标注出来并在下次启动时生效。
+启用后发送的邮件包括：密码重置链接、新设备/新浏览器登录提醒、新建 API 密钥通知。密码类值可通过 `*_FILE` 环境变量从文件读取（如 `NANOFILE_EMAIL_PASSWORD_FILE`），不出现在命令行与进程列表中。
 
-**相对状态路径相对于运行中的二进制所在目录解析**，绝不使用工作目录。数据库、`[storage]`
-各目录和 `[index] index_dir` 会在启动时拼接到该目录上：桌面实例的工作目录说明不了安装在
-哪里——Windows 的 `Run` 注册表值甚至无法携带起始目录，否则登录启动的实例会去
-`C:\Windows\System32` 里找 `data/nanofile.db`。如果配置里的相对路径在工作目录下已经存在，
-则完全保持原样，因此升级不会搬动已有部署的状态；要把状态放到别处请显式写成绝对路径。
-`[logging] file` 遵循同一规则（见“日志”）。
+### 账号安全
+"设置 → 安全"开启两步验证并保存备用码；"设置 → 会话与凭据"列出账号当前登录的设备、资料库同步令牌与 API 密钥，可逐个吊销。改密码会吊销其他设备的会话、同步令牌与全部 API 密钥。
 
-升级到新版本时，如果配置格式发生变化，`config.toml` 会在原地自动迁移（保留注释），并先备份为
-`config.toml.bak`；在只读挂载上，迁移仅在内存中应用。
+## 用 Docker 部署
 
-| 配置段 | 用途 |
-|---------|---------|
-| `[server]` | 绑定地址 / 端口、`site_url`（用于下载 / 分享链接和 cookie 的外部 URL——在 TLS 代理后请设为你的 HTTPS 域名）、最大上传大小、请求超时、CORS、WebDAV 开关、功能开关（`sso_enabled`、`file_search_enabled`、`share_link_enabled`、`tray`）、桌面客户端品牌定制（`desktop_custom_brand` / `desktop_custom_logo`）、受信反向代理（`trusted_proxies`）。 |
-| `[database]` | SeaORM/SQLite 连接 URL（默认 `sqlite:data/nanofile.db?mode=rwc`）和连接池大小。 |
-| `[storage]` | 块存储、临时、缩略图和头像目录，全局存储配额上限（`max_storage_bytes`，`0` = 不限）、视频缩略图的 ffmpeg 路径、可续传上传临时限制（`max_temp_uploads`、`max_temp_upload_bytes`、`temp_upload_ttl_hours`）、zip 归档上限（`max_zip_entries`、`max_zip_bytes`，`0` = 不限），以及透明静态块加密（`block_encryption_mode` / `encryption_key`）。 |
-| `[auth]` | 密码哈希成本、token TTL、API 密钥有效期预设（`api_key_ttl_presets_days`）及其上限（`api_key_max_ttl_days`，`0` = 不限；非 0 时不允许创建永不过期的密钥）、登录锁定、邀请注册、密码策略，以及每 IP 限流（密码重置、注册、TOTP 验证、分享 / 上传链接密码、匿名分享下载）。 |
-| `[ui]` | 默认 UI 语言（`en` / `zh`）、托盘菜单语言（`tray_language`：`auto` 跟随系统区域设置，`en`/`zh` 强制指定）。 |
-| `[email]` | 出站邮件的播种值（`enabled`、`host`、`port`、`tls`、`username`、`password`、`from_address`、`from_name`、`timeout_secs`、`max_attempts`，以及 `paused` 和三个 `notify_*` 开关）。在 `/sysadmin/settings/email/` 修改；某键保存过之后以保存值为准。详见**邮件通知**。 |
-| `[admin_init]` | 可选的首次启动管理员自动创建。密码优先使用 `NANOFILE_ADMIN_INIT_PASSWORD_FILE`。 |
-| `[logging]` | 日志级别、可选轮转日志文件（`file_enabled`、`file`、`max_file_size_mb`、`max_backups`）。 |
-| `[gc]` | 启用 / 调度垃圾回收。 |
-| `[index]` | 全文搜索开关（`enabled`）和索引目录。 |
-| `[notification]` | WebSocket 通知设置和 JWT 私钥，以及连接上限（`max_connections`、`max_connections_per_ip`）和未认证连接的订阅超时（`subscribe_timeout_secs`）。 |
-| `[tasks]` | 最大并发后台复制 / 移动任务数（`max_active_tasks`，`0` = 不限；超出请求返回 HTTP 429）。 |
-| `[settings]` | 配置文件与已保存设置的叠加方式：`config_policy`（`bootstrap` = 文件播种、保存值优先；`override` = 文件始终优先）、`config_override_keys`（`bootstrap` 下的逐键例外）和 `refresh_interval_secs`（运行中的实例重读设置表的间隔，用于感知其他实例的改动）。该段不能在管理界面修改——它决定界面保存的含义。 |
+镜像为 `scratch` 容器，仅含 `nanofile` 一个二进制，无配置文件与数据目录，以 `1000:1000` 运行，挂载的数据卷需对该用户可写。
 
-`secret_key` 是唯一主密钥：通知密钥和 CSRF 签名密钥都由它派生。生产环境请用
-`openssl rand -hex 32` 生成唯一值，并通过 `NANOFILE_SERVER_SECRET_KEY` 设置（空值会在启动时
-自动生成随机密钥，这会使重启后会话失效）。
-
-## 邮件通知
-
-Nanofile 可以通过 SMTP 发送四类邮件：**密码重置链接**、**新设备**登录、**新浏览器**登录，以及
-**新建 API 密钥**。所有邮件先写入数据库队列，因此发件箱可以跨重启保留，每次投递尝试都能在
-`/sysadmin/email/`（系统管理 → 邮件管理）看到。
-
-**如何开启。** `enabled` 是总开关，它是 `/sysadmin/settings/email/` 上的一项设置，管理员可以直接开关；
-按上面的分层规则，`NANOFILE_EMAIL_ENABLED` 仍然最高，可用于把某个部署钉死在这个值上。关闭时：密码
-重置流程不会生成任何 token，"忘记密码"链接隐藏，`/accounts/password/reset/` 返回 404，也不会排队
-任何通知；当 `enable_password_reset` 为真而邮件关闭时，启动日志会明确指出这一组合（它会静默吞掉所有
-重置请求）。每次改动都会记录保存人与时间，并写入日志。
-
-`[email]` 下的值（`host`、`port`、`tls`、`username`、`password`、`from_address`、`from_name`、
-`timeout_secs`、`max_attempts`，以及 `paused` 和三个 `notify_*` 开关）是**播种**值：在某个键被保存
-之前由它提供，之后以保存值为准——因此写错主机后无需改文件或重启即可修正，两者不一致时启动日志会
-告警。密码建议用 `NANOFILE_EMAIL_PASSWORD_FILE` 而不是 `NANOFILE_EMAIL_PASSWORD`，以免出现在进程
-列表里；保存的密码在数据库里加密存放，且永不回显到页面。`tls` 可取 `starttls`（587 端口）、`tls`
-（隐式 TLS，通常是 465）或 `none`；证书始终校验，且没有"接受任意证书"的开关——暂不支持私有 CA，请
-使用公共可信证书，或用本机中继并设 `tls = "none"`（设置页面会明确标注这是明文）。
-
-`/sysadmin/email/` 只保留原邮件页的发件箱、投递状态、测试邮件和"立即投递"：配置本身与其他设置放在
-一起，只有一份，不会出现两处不一致。
-
-**投递内容。** 密码重置链接是账号所有者唯一的 token 副本：服务器从不在 HTTP 响应中返回它，数据库只
-存它的 SHA-256 哈希。排队等待期间，渲染好的报文使用与同步 token 相同的域分离 AEAD 密钥加密，投递
-成功后立即抹除，因此重置链接无法从数据库中读出。*新设备*指客户端上报的 `(platform, device_id)` 组合
-在该账号上从未登录过；*新浏览器*比较的是凭据页面显示的浏览器标识，因此浏览器升级不会重复通知，普通
-的重复登录也不会打扰。三类通知在管理页面各有开关；暂不支持用户级退订。
-
-**投递机制。** 邮件入队后立即在后台尝试一次，之后由周期任务按递增间隔重试（30 秒、1 分钟、2 分钟……
-上限 1 小时），达到 `max_attempts` 后标记为失败并记录原因，可在页面上手动重试。投递语义为
-**至少一次**：投递过程中崩溃、或两个实例共用一个数据库，都可能重复投递——对通知而言无害，而且队列
-页面会让它可见。密码重置请求不会等待 SMTP，这也让响应时间不会泄露邮箱是否存在。已送达和已失败的
-记录分别保留 30 天和 90 天，总行数上限 1000，页面上有"清空已完成"操作。
-
-## 安全
-
-单机部署下服务器已给出安全默认值，但有几项取决于你的运行方式：
-
-- **在 nanofile 前面终止 TLS，并把 `site_url` 设为 HTTPS 地址。** 这一个设置同时决定会话/链接
-  cookie 的 `Secure` 属性和 `Strict-Transport-Security`；保持纯 HTTP 时两者都不会下发（局域网
-  部署不应被钉死在它无法提供的 HTTPS 上）。会话、分享链接口令与 API token 都是持有即有效的凭据。
-- **文件块按资料库分开存储**（`data/blocks/repos/<sha1(repo_id)>/…`），每次读写块都必须指明所属
-  资料库。因此块 id 只能通过调用者自己拥有的那个资料库访问，一个账号从另一个账号的资料库缓存下来
-  的块无法读取。这也意味着去重是按资料库进行的，
-  而不是全服务器共享。
-- **已删除的资料库在回收站条目被彻底清除前仍占用磁盘。** 垃圾回收不会回收仍列在回收站中的资料库
-  的块——这正是"恢复后文件依旧可下载"的前提。要释放空间请彻底删除该资料库（或清空回收站）。
-- **`addr = "0.0.0.0"` 是默认值**，因此监听主机的所有接口。若只有反向代理需要访问，请改为
-  `127.0.0.1` 并用防火墙关闭端口。
-- **放在反向代理后请设置 `trusted_proxies`。** 只有当 TCP 对端在列表内时才会采信
-  `X-Forwarded-For`，否则外部无法伪造客户端 IP 绕过按 IP 限流。
-- **`share_link_enabled = false`** 可完全关闭匿名分享/上传链接（既有链接立即失效，已签发的上传链接
-  token 不能再换取上传 URL，已签发的链接 token 也停止接收上传）。`site_url` 未设置时，
-  `allowed_hosts` 用于固定生成绝对下载 URL 的 Host；该列表为空时只回显字面地址
-  （`192.168.1.20`、`[fe80::1]`、`localhost`），因为这类 URL 携带 capability token，而 `Host`
-  头里的 DNS 名称是攻击者可控的。
-- **加密资料库的写入（而不只是读取）同样需要资料库口令。** 在所有 HTTP 上传路径（包括断点续传）
-  上，客户端未先调用 `?op=setpassword` / `set-password/` 之前都会收到 440（"需要资料库口令"，正是
-  Android / iOS 据此重试的状态码），随后写入的块会用以缓存密钥加密后的密文保存。匿名上传链接既不
-  能为加密资料库创建，也不能用于加密资料库：匿名访问者没有可缓存密钥的身份。同步协议不变（客户端
-  本地加密）。
-- **账号处置是彻底的。** 改密/重置口令、停用账号、远程擦除都会吊销该账号持有的全部凭证——会话
-  token、API 密钥（含 WebDAV 密钥）、资料库同步 token *以及*内存中的 `/download-api/…`、
-  `/upload-api/…`、`/blks/…` capability URL；改密/重置还会作废未使用的口令重置链接。
-  - 绑定到某资料库的密钥会在其持有者失去访问权的那一刻停止工作，因为每次请求都会重新校验所有权；
-    绑定关系本身会保留，所以恢复访问后原有密钥即可恢复。删除资料库会一并清理只绑定到
-    它的密钥。
-  - API 密钥无法访问 `/api2/api-keys/`：能签发密钥的密钥就能给自己扩权。管理密钥必须使用浏览器
-    会话。
-- **每个长期凭据都可见、可单独吊销。** 持有者看不见的凭据就是无法吊销的凭据——默认寿命 365 天的
-  资料库同步令牌过去正是如此：设备页只列客户端会话，而同步令牌和 90 天的 2FA 设备信任完全没有
-  读取入口。现在账号 token 会记录**自己从哪来**（`api_tokens.source`），而不再从 `platform`
-  推断——后者只在客户端上报设备信息时才存在，于是浏览器会话、什么都不上报的客户端、桌面客户端
-  的"在网站上查看"，三者此前无法区分，而没有上报 `platform` 的客户端更是哪里都不显示。清单只
-  展示同步令牌的元数据；它存储的值是服务端可解密的密文，因此从不参与序列化。
-- **同一张路由表对所有凭据分类，因此新增端点默认关闭。** 每个请求先解析为一个 `Credential`——
-  浏览器/客户端会话、统一 API 密钥，或资料库同步 token——路由表对三者都生效，而不只对密钥生效。
-  会话本身就是账号，因此满足全部能力，但它同样要经过分类；密钥只拿到自己持有的能力，并按资料库
-  绑定进一步收紧；而表中未登记的路由对所有人一律拒绝。表的缺口会按路由各报告一次，并**让端到端
-  测试失败**（`e2e/global-teardown.ts` 从服务端日志里读回），所以忘记分类新端点会得到一个红的构建，
-  而不是一扇静默敞开的大门。
-- **上传与下载在写入前就已记账。** 尚未被任何 commit 引用的块字节会先记在调用者的配额上，因此
-  "只写块不提交"是被约束的而不是免费的；提交时释放预留，被回收的废弃上传也会释放预留——回收会删除
-  该上传写入的块，但删除前会复查没有任何 FS 对象引用它们，因此绝不会删掉已提交文件仍需要的块。
-- **目录不能被移动或复制进自己的子树。** 树更新是先删后加，子树内的目标会被第一次提交销毁；因此
-  移动与复制都在入口处拒绝，与 WebDAV 行为一致。
-- **桌面客户端"在网站中查看"的 URL 是一个经过校验的重定向。**
-  `/library/{repo-id}/{repo-name}/…` 是 seahub 的写法（第二段名称只是修饰）；它现在会重定向到本
-  服务器自己的 `/libraries/{id}/files/…` 而不是 404，因此桌面端登录后回跳的 `next`
-  （`repo-tree-view.cpp:578`）能真正落到该资料库。重定向只由通过 id 字符集校验的资料库 id 和
-  在资料库内部归一化后的路径拼成，并按段重新百分号编码——两者中的 `%0d%0a` 都无法注入响应头或把
-  浏览器带离本站。
-- **用尽量精简的 `PATH` 运行服务器。** 辅助程序（视频缩略图的 `ffmpeg`、托盘动作的
-  `xdg-open`/`launchctl`）是通过 `PATH` 查找的；请把 `storage.ffmpeg_path` 指向绝对路径，并避免把
-  不可信目录（全局可写的工作目录、`node_modules/.bin`）放进服务器的 `PATH`。
-- **用户较多时请收紧示例中的有限上限**（`max_zip_bytes`、`max_temp_upload_bytes`）；`0` 表示
-  不限制。
-- **release 构建在密钥为临时或占位值时会拒绝启动**：开启块加密时使用临时 `secret_key` 会导致每次
-  重启后已存块永久不可读，配置的密钥形如占位符时同样拒绝。仅本地/CI 可用
-  `NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` 覆盖。
-
-以下是刻意保留并写入文档的取舍（每条都有其他机制兜底，并非无人看管）：
-
-- **加密资料库口令。** 加密资料库的密钥派生迭代次数由同步协议固定为 1000：官方客户端自行派生
-  数据密钥，改动会导致它们的资料库无法解密。`encrypted_library_pwd_hash_algo` /
-  `encrypted_library_pwd_hash_params` 可以对新资料库提高**服务端校验哈希**的代价（桌面端会读
-  取这两个字段；移动端只支持协议版本 ≤ 2），但默认值保持兼容。在线猜测由
-  `repo_password_max_per_hour` 限制。
-- **zip 下载（`/zip/{token}`）属于 capability URL**，与上游 fileserver 的 token 模型一致：一次性、
-  有 TTL、不可猜测、日志中已脱敏。与上游不同的是，消费该 token 时会重新校验请求者对该资料库的权限，
-  因此权限被回收（或账号被停用）的用户即使仍在 token 的一小时 TTL 内也无法再拉取压缩包。请仍把
-  zip 链接当作口令对待。
-- **`head-commits-multi` 与 `check_blocks`** 对匿名/已认证调用方的响应与上游一致（资料库元数据
-  与块存在性）。它们是同步协议必需的，仅通过限流约束请求速率。
-- **未提交上传的记账在内存中。** 尚未被任何 commit 引用的块所占的配额预留（`QuotaCache`）在启动时
-  是空的，因此上传途中重启会忘掉这笔预留，上传者可能以"在途字节"为上限短暂超出配额，直到废弃的
-  上传被回收。已提交的用量是持久化的并会重新读取，所以无法靠重启累积数据。
-- **只有开启 GC 才会回收孤儿块。** `gc.enabled` 默认为 `false`，因此最后一块分片之前被放弃的上传
-  留下的块会一直占磁盘（服务器启动时会告警）。这些字节仍计入配额，所以这是磁盘占用问题而不是绕过；
-  需要回收请启用 `[gc]`。
-- **被吊销的客户端需要重新登录才能继续同步。** 停用账号、改密、远程擦除会删除该账号数据库中的
-  同步 token，因此该客户端的下一次 `/seafhttp/` 调用会被拒绝，必须重新认证。这是刻意的——保留
-  token 就等于继续通过它提供该资料库——也与官方服务器在权限被回收时的行为一致。
-- **Web UI 不提供加密资料库的解锁。** 目录与文件名可以浏览（Seafile 只加密文件内容，不加密 FS 树与
-  commit），但浏览器里的预览、下载与上传都会收到 440（`RepoPasswdRequired`），因为只有 API 与官方
-  客户端才能把资料库口令交给服务器，UI 里没有口令输入界面。UI 会把它标记为加密，而不是让它看起来
-  只是不可用。
-- **`validate_origin` 仍接受没有 `Origin`/`Referer` 的请求。** 登录、注册、口令重置表单也会被非浏览器
-  调用（curl、集成测试）提交，因此不能把头缺失当作敌意。攻击者的浏览器一定会带上该头，代码在它存在时
-  会校验；而需要认证的状态变更端点还额外要求与会话绑定的 CSRF token。
-- **断点续传只以 `(repo_id, path)` 为键。** 同一资料库的两个可写用户可能在临时上传表里撞车并互相
-  干扰对方的续传状态。影响范围限于单个资料库（不泄露跨用户数据，键也不含任何秘密），为每个上传调用点
-  贯穿一个 user id 的改动被判定不值得。
-- **配置中的密钥在内存里是普通字符串**（服务器主密钥、通知密钥、静态加密密钥、数据库 URL、
-  管理员口令），进程退出前不做清零；而 token/TOTP/块加密所用的派生密钥会被清零。要清理常驻
-  配置需要把密钥类型贯穿整个配置结构，在威胁模型下收益有限（能读进程内存的攻击者已经拿下了
-  运行中的服务器）。
-
-## 日志
-
-无头运行（服务器、Docker、CLI 子命令）照常输出到 stdout，由 `[logging] level`（或
-`NANOFILE_LOG_LEVEL`）控制。
-
-桌面（托盘）运行改为输出到大小受限的轮转文件：
-
-- 默认位置是 **nanofile 二进制旁边** 的 `nanofile.log`；首次运行时解析出的绝对路径会写回
-  `config.toml`（`[logging] file`），因此登录启动的实例无论工作目录如何都使用同一文件，你
-  也可以在那里修改。
-- `[logging] file` 接受显式路径；相对路径相对于二进制所在目录解析（绝不使用工作目录，这对
-  自动启动的实例没有意义）——与其他所有相对状态路径的规则一致（见“配置”）。
-- `max_file_size_mb`（默认 10）限制每个文件大小；超过后轮转为 `nanofile.log.1`、`.2`、…，
-  保留 `max_backups`（默认 3）个旧文件。`max_backups = 0` 表示原地截断。
-- `file_enabled = true/false` 强制文件 / stdout 输出；未设置表示自动（桌面模式用文件，否则用
-  stdout）。如果日志文件无法打开（例如二进制目录只读），服务器回退到工作目录，再回退到
-  stdout。
-
-## 系统托盘（可选）
-
-名称以 `-tray` 结尾的发布归档（Windows / macOS / Linux-amd64）包含可选系统托盘图标，通过
-`tray` 特性编译进去。普通构建完全不包含托盘代码，因此没有桌面的服务器不受影响。
-
-右键点击托盘图标会打开一个菜单（翻译为系统语言——中文系统显示中文菜单；可用 `[ui]` 中的
-`tray_language = "en"/"zh"` 强制语言）：
-
-- **打开 Web UI**——在默认浏览器中打开 `site_url`
-- **开机自启**（可勾选）——为当前用户注册 / 注销自启动：
-  - Windows：`HKCU\...\CurrentVersion\Run` 注册表值（无需管理员权限）。当服务器以提升权限
-    （"以管理员身份运行"）运行时，注册前会弹窗确认，因为该条目属于提升后的账户；登录启动的
-    实例始终以非提升权限运行。
-  - macOS：`~/Library/LaunchAgents/com.nanofile.nanofile.plist` 下的 LaunchAgent
-  - Linux：`~/.config/autostart/nanofile.desktop` 下的 XDG 自启动条目（GNOME 和 KDE）
-- **打开配置文件**——在资源管理器 / Finder / 文件管理器中显示实际使用的配置文件
-- **退出**——触发与 Ctrl+C 相同的优雅关闭
-
-自启动条目始终指向正在运行的二进制，并传入 `--config <绝对路径>`，因此自动启动的实例无论
-工作目录如何都使用同一配置；该配置里的相对状态路径同样相对于二进制所在目录解析（见
-“配置”），所以登录启动的实例与手动启动打开的是同一个数据库和块存储。
-
-注意事项：
-
-- 用 `[server]` 中的 `tray = false`（或 `NANOFILE_SERVER_TRAY=false`）关闭托盘，例如用于应保持
-  不可见的自动启动实例。
-- 在 Linux 上托盘需要桌面会话；没有 `DISPLAY`/`WAYLAND_DISPLAY`（或桌面会话损坏）时，服务器
-  记录警告并以无头方式运行，而不是失败。
-- GNOME 只有安装了 "AppIndicator and KStatusNotifierItem Support" 扩展才显示托盘图标；KDE
-  Plasma 开箱即用。
-- 在 Windows 上，`-tray` 构建是 GUI 子系统二进制：永远不会出现控制台窗口（双击、自启动或
-  终端）。日志写入轮转日志文件（见"日志"）。`--version` 或 `adduser` 提示等纯 CLI 输出只有
-  从终端启动时才可见（二进制会重新附加到终端，但 `cmd` 不会等待进程）——如需完整控制台，
-  请使用普通（非 `-tray`）构建，其行为与之前完全一致。
-
-自行构建托盘变体（Linux 还需要 `libgtk-3-dev` 和 `libayatana-appindicator3-dev`）：
-
-```bash
-cargo build --release -p server --features tray
-```
-
-托盘图标和 Windows 可执行文件图标在编译时从 `server/static/img/favicon.svg` 栅格化——仓库中
-不附带任何图片资源。托盘图标跟随桌面主题：浅色桌面用深色标记，深色桌面用反过来的一套
-（macOS 则只提供去掉底板的字形作为 template image，由系统自行反色），主题切换时会自动刷新。
-
-## Docker
-
-发布镜像是一个 `scratch` 容器，只包含 `nanofile` 二进制——没有配置文件或数据目录。容器以
-`1000:1000` 运行，因此数据卷必须对该用户可写（从旧版本升级时执行
-`chown -R 1000:1000 ./data`，或用 `--user "$(id -u):$(id -g)"` 对齐你自己的账号）。挂载一个
-配置文件和一个持久化数据卷，并将数据路径指向该卷：
+主密钥（`secret_key`）生成一次并长期保存：它用于加密会话、邮件与静态块。更换后所有会话登出、同步客户端失效、已加密块无法解密。
 
 ```bash
 mkdir -p data
+openssl rand -hex 32 > nanofile-secret
+chmod 600 nanofile-secret
+
 docker run -d --name nanofile \
   -p 8082:8082 \
   -v "$PWD/data:/data" \
   -v "$PWD/config.toml:/etc/nanofile/config.toml:ro" \
+  -v "$PWD/nanofile-secret:/run/secrets/nanofile-secret:ro" \
   -e NANOFILE_CONFIG=/etc/nanofile/config.toml \
   -e NANOFILE_DATABASE_URL='sqlite:/data/nanofile.db?mode=rwc' \
   -e NANOFILE_STORAGE_BLOCK_DIR=/data/blocks \
   -e NANOFILE_STORAGE_TEMP_DIR=/data/temp \
   -e NANOFILE_INDEX_INDEX_DIR=/data/index \
-  -e NANOFILE_SERVER_SECRET_KEY="$(openssl rand -hex 32)" \
+  -e NANOFILE_SERVER_SECRET_KEY="$(cat nanofile-secret)" \
   ghcr.io/<owner>/nanofile:latest
 ```
 
-或者完全不使用配置文件——内置默认值填充其余部分，其他一切来自环境变量：
+配置文件可选，其余由内置默认值填充：
 
 ```bash
 docker run -d --name nanofile \
@@ -451,82 +85,73 @@ docker run -d --name nanofile \
   -e NANOFILE_DATABASE_URL='sqlite:/data/nanofile.db?mode=rwc' \
   -e NANOFILE_STORAGE_BLOCK_DIR=/data/blocks \
   -e NANOFILE_STORAGE_TEMP_DIR=/data/temp \
-  -e NANOFILE_SERVER_SECRET_KEY="$(openssl rand -hex 32)" \
+  -e NANOFILE_SERVER_SECRET_KEY="$(cat nanofile-secret)" \
   ghcr.io/<owner>/nanofile:latest
 ```
 
-## CLI
+`nanofile-secret` 为上方生成、跨启动复用的持久值。
+
+## 配置
+
+配置来源为工作目录下的 `config.toml`（复制 `config.toml.example` 修改，每个键上方的注释给出对应环境变量名），或 `NANOFILE_*` 环境变量（优先级最高、不写回文件）。容器部署主要依赖环境变量。
+
+常用项：
+
+- `site_url`：对外访问地址（HTTPS 域名），决定会话 cookie 的 `Secure` 属性与 HSTS 是否启用，也用于生成分享链接。
+- 绑定地址与端口（`[server]` 的 `addr`/`port`）：默认 `0.0.0.0:8082`。
+- 存储目录（`[storage]`）：默认位于二进制所在目录的 `data/` 下；相对路径相对于二进制所在目录解析，绝对路径可放到其他位置。
+- `secret_key`：主密钥（见「用 Docker 部署」）。
+
+大部分设置立即生效；监听地址、日志与索引目录在重启后生效。网页"系统管理 → 设置"可修改部分运行期设置，保存值优先于配置文件同名项。
+
+升级时若配置格式变化，`config.toml` 就地更新（保留注释），原文件备份为 `config.toml.bak`。
+
+配置段：`[server]` 网络与功能开关；`[database]` 数据库连接；`[storage]` 存储目录与配额；`[auth]` 登录/密码/限流；`[ui]` 语言；`[email]` 发信；`[admin_init]` 首次启动自动建管理员；`[logging]` 日志；`[gc]` 垃圾回收；`[index]` 搜索；`[notification]` 通知；`[tasks]` 后台任务。具体键名见 `config.toml.example`。
+
+## 安全
+
+- 部署在 HTTPS 反向代理后时，将 `site_url` 设为 HTTPS 地址。该设置决定会话 cookie 的 `Secure` 属性与 HSTS 是否启用。会话、分享密码与 API 密钥均为持有即有效的凭据。
+- 默认绑定 `0.0.0.0`；仅由反向代理访问时，改用 `127.0.0.1` 并关闭防火墙对应端口。
+- 反向代理后需设置 `trusted_proxies`，否则 `X-Forwarded-For` 可被伪造，绕过按 IP 的限流。
+- 加密资料库上传同样需要资料库密码；未提供时网页预览与下载返回 440，匿名上传链接不可用于加密库。
+- 改密码、停用账号或远程擦除会吊销该账号持有的全部登录：其他设备、同步客户端、API 密钥，以及未使用的重置链接。
+- release 构建在未设置 `secret_key` 时拒绝启动；debug 构建自动生成，但会话无法跨重启保留。`NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` 仅用于本地与 CI。
+
+## 命令行
 
 ```
 nanofile [--config <path>]          启动服务器（默认）
-nanofile [--config <path>] adduser  创建用户（默认管理员；--regular 创建普通用户）
-                                    口令：默认交互式输入，也可用
-                                    --password-stdin / --password-file <path>
+nanofile [--config <path>] adduser  建用户（默认管理员；--regular 建普通用户）
+                                    密码：交互输入，或 --password-stdin / --password-file <path>
 nanofile [--config <path>] migrate-blocks [--dry-run]
-                                    把旧的全局扁平块目录树迁移为按库布局
-                                    （服务器启动时也会自动执行；--dry-run 只报告不落盘）
+                                     把旧版"所有库共用一个块目录"迁移成"每个库独立目录"
+                                     （一般启动时自动做；--dry-run 只预览不执行）
 ```
 
-## 数据布局
+## 数据目录
 
-所有状态都位于安装目录下——即运行中的二进制所在目录，相对状态路径就是相对于它解析的
-（见“配置”）——除非某个配置段写了绝对路径。默认值如下：
+默认数据位于二进制所在目录的 `data/`，相对路径均相对该目录解析；配置段可指定绝对路径。
 
 ```
 data/
-├── nanofile.db        # SQLite 数据库（WAL 模式，文件权限 0600）
+├── nanofile.db        # 数据库（WAL 模式，权限 0600）
 ├── nanofile.db-wal    # WAL 日志
-├── blocks/            # 内容寻址块存储：repos/{sha1(repo_id)}/{2 位十六进制前缀}/{40 位 SHA-1}
-├── temp/              # 可续传 / 分块上传暂存
-├── thumbnails/        # 生成的图片 / 视频缩略图缓存
-├── avatars/           # 用户头像图片
-└── index/             # Tantivy 全文搜索索引
+├── blocks/            # 文件块：repos/{库id的sha1}/{2位前缀}/{40位SHA-1}
+├── temp/              # 上传临时文件
+├── thumbnails/        # 缩略图缓存
+├── avatars/           # 头像
+└── index/             # 全文搜索索引
 ```
 
 ## 开发
 
-前端构建作为 `cargo build` 的一部分运行（见 [Web 前端](#web-前端)）：
+**架构**：Cargo workspace，四个 crate——`base`（基础类型）、`infra`（数据库/存储/加密/配置）、`server`（HTTP 服务、同步协议、WebDAV、Web 界面）、`migration`（数据库迁移）。依赖方向 `base → infra → server`。
 
-- **esbuild** 将 `frontend/entries/*.js` 打包为 `static/js/*.bundle.js`。它是必需的——如果
-  esbuild 不在 `PATH` 或 `node_modules/.bin` 中，构建会 panic。用 `npm install` 安装。
-- **Tailwind** 将 `static/css/input.css` 编译为 `app.css`。它是可选的——如果 Tailwind CLI 不可
-  用，构建仍会成功，但 UI 会无样式渲染。
+**前端**：网页由 Askama 服务端渲染 + Tailwind + `server/frontend/` 下的模块化 JS 组成。`server/build.rs` 用 esbuild 把 `frontend/entries/*.js` 打包进二进制（esbuild 必需，Tailwind 可选）。改前端后需重新 `cargo build`，无热重载。
 
-`build.rs` 通过 `rerun-if-changed` 跟踪 `frontend/`、`static/css/` 和 `templates/`，因此编辑
-前端源码会在下次 `cargo build` 时触发重新打包。没有热重载——资源嵌入在二进制中，因此需要
-重新构建才能应用前端改动。
+**测试**：`cargo test --workspace`（Rust）、`node --test "server/frontend/**/*.test.js"`（前端）、`cd e2e && npx playwright test`（浏览器端到端）。CI 还会跑 `cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings`。
 
-## 测试
-
-测试分为三层：
-
-| 层 | 命令 | CI 任务 |
-|-------|---------|--------|
-| Rust 单元 + 集成 | `cargo test --workspace` | `test` |
-| 前端单元 | `node --test "server/frontend/**/*.test.js"`（零依赖 `node:test`） | `frontend-test` |
-| 浏览器端到端 | `cd e2e && npm install && npx playwright install --with-deps chromium && npx playwright test` | `e2e` |
-
-Playwright 套件会启动一个真实的 `nanofile` 二进制，使用隔离的临时数据库，并在 Chromium 中驱动
-UI，覆盖登录、选择、视图切换、排序 / 过滤、上传、文件操作、分享、历史、预览、标签和搜索。
-它还会在 `127.0.0.1:18025` 上运行一个极简 SMTP 服务器（见 `e2e/helpers/mailbox.ts`），让密码重置
-和邮件通知跑在真实的 SMTP 会话上；捕获的邮件写到 `e2e/test-results/mail/*.eml`。失败的运行会在
-`e2e/test-results/server.log` 捕获后端日志。
-
-CI 还强制格式化和 lint 检查：
-
-```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-```
-
-## CI 与发布
-
-- **`ci.yml`**（push / PR 到 `main`、`master`、`develop`）：格式化、clippy（`-D warnings`）、
-  前端单元测试、Playwright e2e 和 Rust 测试套件。
-- **`nightly.yml`**（每日 / 手动）：多架构发布构建（Linux amd64/arm64/loong64 × gnu/musl、
-  macOS arm64、Windows amd64），并向 `ghcr.io` 发布 OCI 镜像（`:edge`、`:sha-<sha>`）。
-- **`release.yml`**（tag `v*.*.*` / 手动）：相同的多架构构建，外加带自动生成变更日志的 GitHub
-  发布和带版本号的镜像（`:latest`、`:vX.Y.Z`、`:vX.Y`）。
+**CI 与发布**：`ci.yml` 在 push/PR 时跑测试；`nightly.yml` 每日构建多架构镜像（`:edge`）；`release.yml` 在版本 tag 发布带版本号的镜像与 GitHub Release。
 
 ## 许可证
 

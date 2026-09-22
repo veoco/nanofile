@@ -2,542 +2,63 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-A wire-compatible [Seafile](https://www.seafile.com/) server written in Rust.
-
-Nanofile speaks the Seafile sync protocol and REST APIs, so official Seafile desktop / mobile
-clients and tools like `seaf-cli` can point at it directly. It also ships its own web UI
-(file browser, sharing, admin panel) as a single static binary — no separate `seaf-server` +
-`seahub` stack to install.
+Nanofile is a self-hosted file sync and sharing server. It implements the Seafile sync protocol and APIs, so the official Seafile desktop and mobile clients connect to it directly, and it includes its own web interface without a separate seaf-server + seahub stack.
 
 ## Features
 
-- **Seafile sync protocol** (`/seafhttp/`, protocol version 2): content-addressed commits and FS
-  objects, block transfer with SHA-1 verification, packed FS objects, `check-fs` / `check-blocks`,
-  quota & permission pre-checks, per-repo sync tokens, file locking.
-  - **Security note**: `/seafhttp/repo/head-commits-multi/` is unauthenticated by protocol
-    requirement — the official desktop client calls it with no credentials (seafile
-    `daemon/http-tx-mgr.c`), and the official server validates no token (`server/http-server.c`);
-    requiring auth would make desktop clients silently stop detecting remote updates. Exposure is
-    bounded: library IDs are 128-bit random UUIDs (blind enumeration is infeasible), and knowing an
-    ID only confirms existence and reveals the head-commit SHA, which is unusable without a repo
-    sync token. The endpoint still rejects non-UUID ids and caps the array at 4096.
-- **REST API**: legacy v1 (`/api2/*`) and v2.1 (`/api/v2.1/*`) surfaces covering libraries, files,
-  directories, sharing, activities, search, trash, devices, avatars and more — compatible with the
-  official mobile apps.
-- **API keys**: one credential type for external clients, managed under *Settings → API Keys*. A key
-  carries a set of fine-grained capabilities (`file.read`, `share_link.write`, `sync.token`,
-  `webdav.write`, …; 40 in total, grouped by domain), is either bound to specific libraries — each
-  with its own read/write ceiling — or to every library the owner can reach, and expires on a
-  configurable lifetime. Presets cover the common cases (sync client, WebDAV, CI upload, read-only)
-  and stay inside the surface they name: a WebDAV key authenticates with `webdav.*` plus its library
-  binding and nothing else, so the WebDAV presets grant exactly that rather than also handing out the
-  REST API. Write capabilities imply their read counterpart; `admin.*` needs an admin; a key can never
-  manage keys. The catalog only lists capabilities something enforces — each entry names the routes
-  (or WebDAV/sync surface) that consult it, and ids retired for having no enforcement point are
-  dropped from stored keys instead of breaking them. Each key records when it was last presented — on
-  the REST and sync surfaces alike, throttled to at most one write per minute — so an unused key is
-  visible as one.
-- **Credential inventory**: *Settings → Sessions & Credentials* lists everything long-lived that can
-  reach the account — client sessions, browser sessions (labelled from their `User-Agent`), repository
-  sync tokens, and the devices that skip two-factor — and revokes any one of them. The page opens with
-  a summary strip, then groups client sessions, their sync tokens and their 2FA trust under the device
-  that owns them (matched by `platform` + `device_id`, never by name), so "what can this machine still
-  do?" is one row and "unlink" is one click. A repository has one sync token *per device*: it is issued
-  to the device that asked for it (or claimed by the first device to sync with a token minted without
-  one), so it appears under its device before it is ever used. Only sync tokens and 2FA trusts that
-  match no known device are listed below as *unattributed repository sync tokens* and *unknown
-  two-factor trust tokens* — that means a credential issued without a device identity, or one whose
-  device no longer has a session — and those sections are not rendered at all when there
-  are none; a credential that does belong to a device is visible inside its card, and each section
-  heading counts exactly the rows under it. The one bulk action left is *sign out other browser
-  sessions* (the acting session always survives). Expired and 30-days-quiet tokens are flagged, and the
-  page warns while two-factor is off. API keys keep their own
-  page. The same data is available as `GET /api2/credentials/` (needs `device.read`) and
-  `DELETE /api2/credentials/{kind}/{id}/` (needs `device.write`), and `GET /api2/devices/` — the
-  Seafile-compatible surface — now returns the same inventory with a `kind` tag on each entry, keeping
-  the field names it always had. Sync-token *values* are never part of any of them, only metadata.
-- **Settings shell**: the settings area is one shell with a shared sidebar (a scrollable tab strip on
-  narrow screens) across `/settings/` (overview), `/settings/profile/` (avatar, display name,
-  language), `/settings/security/` (two-factor state and password), `/settings/credentials/`,
-  `/settings/api-keys/` and `/settings/invitations/`. Changing the password lands back on the security
-  page with a notice that other devices, their sync tokens, their 2FA trusts and all API keys were
-  revoked. `/settings/devices/` redirects to `/settings/credentials/`; the old profile form paths
-  remain as aliases.
-- **WebDAV** (`/dav/...`) authenticated with those keys (`webdav.*` capabilities), gated by
-  `webdav_enabled`.
-- **Web UI**: file browser with previews and thumbnails, starred files, activity feed, trash,
-  settings (profile, sessions & credentials, 2FA, invitations, API keys), and a **sysadmin panel**
-  (users, shares, background tasks, email, system management). Localized in English and Chinese.
-- **System management** (`/sysadmin/settings/`): every setting that can be managed at runtime, on
-  one page per area, with the effective value of each one and where it came from. The layers are, in
-  order: an environment variable, the config file (only for the keys `[settings]
-  config_override_keys` names), the value saved here, and the built-in default. The config file is
-  otherwise a first-start *seed*: a saved value wins from then on, and the startup log names the keys
-  where the two disagree. Most settings take effect immediately; the ones that cannot say so and are
-  applied at the next start, and the handful that could brick an install from the wrong value (the
-  master secret, the database URL, the state directories, the initial-admin credentials) are shown
-  read-only. Secrets are never rendered back — the page says whether one is set, not what it is.
-- **Sharing**: share links (optional password / expiry / view counting) and anonymous upload links.
-  A global `share_link_enabled` switch can disable anonymous share/upload links entirely (existing
-  links become inaccessible and the `share-link-disabled` feature is advertised so clients hide
-  sharing). Libraries are per-account: there is no share-to-user or group surface.
-- **Security**: TOTP two-factor auth with backup codes and trusted devices, SSO / "view on website"
-  login, invitation-code registration, login rate limiting with lockout, password reset (delivered by
-  email; see **Email notifications**), hashed session cookies with CSRF protection,
-  path-traversal-safe filename handling.
-  - **Security note**: API keys, API, S2FA, SSO-login and client-login bearer tokens are stored as
-    SHA-256 hashes, so a leaked database does not yield usable credentials; a freshly created key is
-    therefore shown exactly once. Sync tokens stay recoverable
-    (clients re-present them), so they are encrypted at rest with an AEAD key derived from
-    `secret_key`; share-link tokens remain plaintext because the "my shares" list shows the
-    copyable URL — matching official Seafile's plaintext URL model. In **release** builds
-    `NANOFILE_SERVER_SECRET_KEY` / `[server] secret_key` is **required** (startup fails rather than
-    deriving keys from an ephemeral secret); debug builds auto-generate one.
-- **Encrypted libraries**: AES-256-CBC blocks with Seafile-compatible `magic` / `random_key`,
-  in-memory password cache with TTL.
-  - **Security note**: the stored `magic` is derived with PBKDF2-SHA256 at **1000 iterations**,
-    which the Seafile wire protocol fixes and cannot be raised without breaking client interop.
-    `magic` is a password-equivalent value, so a leaked database lets weak passwords be brute-forced
-    offline. Use a long, random library password, and prefer **enc_version 4** (per-library random
-    salt) over v2 (a fixed global salt). The server only accepts enc_version 2/4 and validates the
-    magic/random_key format on creation. Known limitation: the `/api2/repos/` create API has no
-    `salt` field, so a library created through it derives as if v2 — real per-library v4 salts are
-    created through the sync protocol.
-- **Storage & versioning**: per-user quotas, content-addressed block store **namespaced per
-  library** (`data/blocks/repos/<sha1(repo_id)>/…`), full history with revision browse / restore,
-  per-repo history limits and TTL, garbage collection (history pruning + unreachable FS-object
-  cleanup), trash with revert, deleted-library restore. Optional transparent at-rest encryption for
-  file blocks (`block_encryption_mode`: `off` / `on` / `lazy`), with the block id (SHA-1 of logical
-  bytes) unchanged so Seafile clients and content-addressed dedup keep working.
-  - **Library trash**: deleting a library keeps its content. Its commit graph and FS objects are
-    copied into `deleted_repo_commits` / `deleted_repo_fs_objects` (the equivalent of the official
-    server's `deleted_store/`) in the same transaction that removes the library, and its blocks stay
-    on disk. `POST /api/v2.1/deleted-repos/` restores the library with its files, history and head
-    commit; `DELETE /api/v2.1/deleted-repos/{repo_id}/` purges one library and
-    `DELETE /api/v2.1/deleted-repos/` empties the trash, in both cases reclaiming the blocks.
-    The trash page has a **Deleted Libraries** tab for this (restore / delete permanently / empty
-    the trash), next to the deleted-files tab.
-    Libraries deleted *before* this build were never archived: their trash entries still restore, but
-    the library comes back empty and the server logs why.
-  - **Upgrading from an older build**: blocks used to live in one flat, server-wide tree
-    (`data/blocks/<2hex>/<id>`). That layout keyed blocks only by content id, so any authenticated
-    user could read any library's block by naming it through a library they could reach.
-    The server now copies each referenced block into the library that owns it, then removes the old
-    tree — automatically at startup, before the first request is served. Use
-    `nanofile migrate-blocks --dry-run` to pre-flight the copy volume (it prints repositories,
-    blocks, and bytes) and `nanofile migrate-blocks` to run it explicitly with the server stopped.
-    The migration copies (never hard-links), is resumable, and only deletes the old tree after every
-    referenced block is confirmed in its new location; back up `data/blocks` first if you want a
-    rollback path. Because deduplication is now per library, content duplicated across libraries is
-    stored once per library — expect disk usage to grow accordingly.
-- **Full-text search**: built-in Tantivy index with a jieba Chinese tokenizer; filename and content
-  search across libraries.
-- **Real-time notifications**: WebSocket push for repo updates, file locks, folder permissions and
-  comment updates.
-- **Ops**: resumable / chunked uploads (`Content-Range` assembly), zip batch downloads, background
-  scheduler with metrics and manual triggers from the admin UI.
+- **File sync**: desktop and mobile clients keep libraries in sync automatically, as with an official Seafile server.
+- **Web interface**: browse, preview, download, star, activity feed, trash.
+- **Sharing**: share links with optional password, expiry and view count; anonymous upload links.
+- **Sign-in security**: TOTP two-factor authentication, trusted devices, login lockout. API keys let third-party tools (WebDAV, sync clients) connect without sharing the account password.
+- **Admin console**: users, quotas, mail delivery and system settings.
+- **Other**: encrypted libraries, full-text search with Chinese tokenization, file history and trash, background garbage collection.
 
-## Architecture
+## Quick start
 
-Nanofile is a Cargo workspace of four crates:
-
-| Crate | Role |
-|-------|------|
-| `base` | Pure base types — `AppError`, path/filename sanitization, Seafile storage-format types and constants. No HTTP dependency unless the `with-axum` feature is enabled. |
-| `infra` | Infrastructure — SeaORM entities, content-addressed block storage backend, crypto (AES / key derivation / magic), config + env-var overrides, rate limiting, DB setup. |
-| `server` | The application — HTTP handlers, services, repositories, sync protocol, WebDAV, WebSocket notifications, full-text indexer, Askama web UI. |
-| `migration` | SeaORM migrations (schema evolution from first launch). |
-
-Dependency direction: `base → infra → server` (compile-time enforced); `migration` is used by `server`.
-
-### Web frontend
-
-The UI is server-rendered (Askama) with Tailwind CSS and a modular JavaScript frontend written as
-ES modules:
-
-```
-server/frontend/
-├── core/       # pure functions (i18n, formatting, file-meta, API helpers) — no DOM, unit-testable
-├── browser/    # DOM layer (list, selection, right-panel, operations, upload, view …)
-├── entries/    # esbuild entry points (common.js, file-browser.js)
-```
-
-`server/build.rs` bundles the `entries/` into `static/js/*.bundle.js` (esbuild) and compiles
-`static/css/input.css` into `app.css` (Tailwind), then `rust-embed` embeds both into the binary.
-esbuild is **required**; Tailwind is optional (see [Development](#development)).
-
-## Quick Start
+Build from source:
 
 ```bash
-# 1. Install frontend build dependencies — esbuild is required; Tailwind is
-#    optional but recommended (without it the UI renders unstyled)
-npm install
-
-# 2. Build the server (binary name is `nanofile`, not `server`)
-cargo build --release -p server
-
-# 3. Configure
-cp config.toml.example config.toml   # edit to suit — see Configuration below
-
-# 4. Run
+npm install                       # frontend bundler (esbuild is required)
+cargo build --release -p server   # binary is `nanofile`, not `server`
+cp config.toml.example config.toml
 ./target/release/nanofile
 ```
 
-Open `http://localhost:8082` and log in.
-
-An admin account is needed. Either auto-create one on first startup via `[admin_init]` in
-`config.toml` (or `NANOFILE_ADMIN_INIT_EMAIL` / `NANOFILE_ADMIN_INIT_PASSWORD_FILE`), or create one
-with the CLI:
+The server listens on http://localhost:8082. An admin account is required and can be created with the CLI:
 
 ```bash
+# password prompt
 ./target/release/nanofile adduser --email admin@example.com
-```
-
-It prompts for the password. To avoid the prompt, pipe it in or point at a file — a password passed
-as `--password` is also visible in the shell history and in `ps` output on the same host:
-
-```bash
+# or non-interactive
 printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@example.com --password-stdin
-./target/release/nanofile adduser --email admin@example.com --password-file /run/secrets/admin
 ```
 
-Pass `--regular` to create a non-admin account.
+`--regular` creates a non-admin account. A prebuilt container image is described under **Deploy with Docker**.
 
-## Configuration
+## Usage
 
-Settings are read from `config.toml` in the working directory. Override the path with
-`--config <path>` (highest priority) or the `NANOFILE_CONFIG` environment variable. If the file is
-missing, the server falls back to built-in defaults, so it can start with zero config — supply
-whatever you need via `NANOFILE_*` environment variables. Every key can also be overridden with
-a `NANOFILE_*` environment variable — the shipped `config.toml.example` lists the exact variable name
-in a comment above each key (e.g. `NANOFILE_DATABASE_URL`, `NANOFILE_SERVER_PORT`). Environment
-variables always win and are never written into the file.
+### Users
+`adduser` creates an account, admin by default. Invitation-code registration can be enabled in `[auth]` for self-registration.
 
-**Settings an administrator can change live at `/sysadmin/settings/`** add a third source, and the
-order between them is fixed:
+### Sharing
+Selecting a file or folder in the web file browser and choosing "Share" produces a share link, which supports a password, an expiry and a view count. Anonymous upload links accept uploads into a library without an account. Setting `share_link_enabled` to false disables anonymous share and upload links, and existing links stop resolving.
 
-1. an environment variable (`NANOFILE_*`) — highest, and the page shows such a value read-only so a
-   save cannot silently do nothing;
-2. the config file — but only for the keys `[settings] config_override_keys` names (or every key,
-   with `config_policy = "override"`);
-3. the value saved on that page;
-4. the built-in default.
+### Email notifications
+Mail is off until SMTP is configured. Two places configure it: the web admin page "System Management → Email" (host, port, account, password, sender, then `enabled`), or environment variables such as `NANOFILE_EMAIL_ENABLED=1` and `NANOFILE_EMAIL_HOST=…`.
 
-Under the default `config_policy = "bootstrap"` the file is a *first-start seed*: a value saved on
-the page wins for that key from then on, and editing the file afterwards has no effect on it. The
-startup log lists the keys where the file and the saved value disagree, and every row on the page
-offers to clear the saved value so the file applies again — so a file-managed deployment is never
-silently overridden. Most settings take effect immediately; a change that cannot (the listener, the
-log target, an index directory) is marked and applied at the next start.
+Once enabled, the server sends: password-reset links, new-device and new-browser sign-in notices, and a notice when an API key is created. Password values can be read from a file through a `*_FILE` variable (`NANOFILE_EMAIL_PASSWORD_FILE`), which keeps them out of the command line and process list.
 
-**Relative state paths resolve against the directory of the running binary**, never the working
-directory. The database, the `[storage]` directories and `[index] index_dir` are joined onto that
-directory at startup, because the working directory of a desktop instance says nothing about the
-installation — a Windows `Run` registry value cannot even carry a start directory, so a login-started
-instance would otherwise look for `data/nanofile.db` inside `C:\Windows\System32`. A configuration
-whose relative paths already exist under its working directory is left exactly as configured, so
-upgrading never moves an existing deployment's state; use absolute paths to place state somewhere
-else deliberately. `[logging] file` follows the same rule (see Logging).
+### Account security
+"Settings → Security" enables two-factor authentication and issues backup codes. "Settings → Sessions & Credentials" lists the devices signed in to the account, its repository sync tokens and its API keys, each individually revocable. Changing the password revokes other devices, sync tokens and all API keys.
 
-The live `config.toml` is deliberately not tracked by git: it holds the master `secret_key` (and
-optionally the admin-init, notification and storage-encryption keys). Copy the example, keep your
-own copy out of version control.
+## Deploy with Docker
 
-On upgrade to a newer release, `config.toml` is automatically migrated in place (comments preserved)
-when the config format changed, backed up as `config.toml.bak` first; on a read-only mount the
-migration is applied in memory only.
+The image is a `scratch` container holding only the `nanofile` binary, with no config file or data directory. It runs as uid/gid `1000:1000`, so the mounted data volume must be writable by that user.
 
-| Section | Purpose |
-|---------|---------|
-| `[server]` | Bind address/port, `site_url` (external URL used for download/share links and cookies — set to your HTTPS domain behind a TLS proxy), max upload size, request timeout, CORS, WebDAV switch, feature switches (`sso_enabled`, `file_search_enabled`, `share_link_enabled`, `tray`), desktop-client branding (`desktop_custom_brand` / `desktop_custom_logo`), trusted reverse proxies (`trusted_proxies`). |
-| `[database]` | SeaORM/SQLite connection URL (default `sqlite:data/nanofile.db?mode=rwc`) and pool size. |
-| `[storage]` | Block store, temp, thumbnail and avatar directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited), ffmpeg path for video thumbnails, resumable-upload temp limits (`max_temp_uploads`, `max_temp_upload_bytes`, `temp_upload_ttl_hours`), zip-archive caps (`max_zip_entries`, `max_zip_bytes`, `0` = unlimited), and transparent at-rest block encryption (`block_encryption_mode` / `encryption_key`). |
-| `[auth]` | Password hashing cost, token TTLs, API-key lifetime presets (`api_key_ttl_presets_days`) and their upper bound (`api_key_max_ttl_days`, `0` = unbounded; when set, non-expiring keys are refused), login lockout, invitation registration, password policy, and per-IP rate limits (password reset, registration, TOTP verification, share/upload-link passwords, anonymous share downloads). |
-| `[ui]` | Default UI language (`en` / `zh`), tray menu language (`tray_language`: `auto` follows the OS locale, `en`/`zh` force one). |
-| `[email]` | Seed values for outbound mail (`enabled`, `host`, `port`, `tls`, `username`, `password`, `from_address`, `from_name`, `timeout_secs`, `max_attempts`, `paused`, `notify_new_device`, `notify_api_key_created`, `notify_new_login`). Edited at `/sysadmin/settings/email/`, which supersedes the file for any value saved there. See **Email notifications**. |
-| `[admin_init]` | Optional first-start admin auto-creation. Prefer `NANOFILE_ADMIN_INIT_PASSWORD_FILE` for the password. |
-| `[logging]` | Log level, optional rotating log file (`file_enabled`, `file`, `max_file_size_mb`, `max_backups`). |
-| `[gc]` | Enable / schedule garbage collection. |
-| `[index]` | Full-text search switch (`enabled`) and index directory. |
-| `[notification]` | WebSocket notification settings and JWT private key, plus connection caps (`max_connections`, `max_connections_per_ip`) and the unauthenticated-connection subscribe timeout (`subscribe_timeout_secs`). |
-| `[tasks]` | Max concurrent background copy/move tasks (`max_active_tasks`, `0` = unlimited; excess requests get HTTP 429). |
-| `[settings]` | How the config file and the saved settings layer: `config_policy` (`bootstrap` = the file seeds, a saved value wins; `override` = the file always wins), `config_override_keys` (per-key exceptions under `bootstrap`) and `refresh_interval_secs` (how often a running instance re-reads the table, for a change made elsewhere). Not editable from the admin UI — it decides what a save there means. |
-
-`secret_key` is the single master key: the notification key and CSRF signing key are derived from it.
-Generate a unique one for production with `openssl rand -hex 32` and set it via
-`NANOFILE_SERVER_SECRET_KEY` (an empty value auto-generates a random key on startup, which invalidates
-sessions on restart).
-
-## Email notifications
-
-Nanofile can send mail over SMTP for four things: the **password-reset link**, a **new device**
-sign-in, a **new browser** sign-in, and a **newly created API key**. Anything it sends is queued in
-the database first, so the outbox survives a restart and every attempt is visible at
-`/sysadmin/email/` (Sysadmin → Email Management).
-
-**Turning it on.** `enabled` is the master switch. It is one of the settings at
-`/sysadmin/settings/email/`, so an administrator can flip it — under the layers above, a
-`NANOFILE_EMAIL_ENABLED` variable still wins, which is how a deployment pins it. With it off, the
-password-reset flow mints no token at all, the "Forgot password?" link is hidden,
-`/accounts/password/reset/` answers 404, and no notification is queued; the startup log says so when
-`enable_password_reset` is on and mail is off, which is the combination that silently swallows reset
-requests. Every change is attributed to the administrator who made it and logged.
-
-The SMTP values under `[email]` (`host`, `port`, `tls`, `username`, `password`, `from_address`,
-`from_name`, `timeout_secs`, `max_attempts`, plus `paused` and the three `notify_*` switches) are
-*seed* values: they supply a key until something is saved for it, and from then on the saved value
-wins — so a wrong host is fixed on the page, without editing the file or restarting, and the startup
-log warns when the two disagree. Prefer `NANOFILE_EMAIL_PASSWORD_FILE` over `NANOFILE_EMAIL_PASSWORD`
-so the secret does not appear in a process listing; the saved value is encrypted at rest and is never
-rendered back into the page. `tls` is `starttls` (port 587), `tls` (implicit TLS, usually 465) or
-`none`; certificates are always validated, and there is no "accept any certificate" switch — a relay
-with a private CA is not supported yet, so use a publicly trusted certificate or a localhost relay
-with `tls = "none"` (which the settings page labels as plaintext, because it is).
-
-`/sysadmin/email/` is what is left of the old email page: the delivery state, the outbox, the test
-message and the "deliver now" button. The configuration itself lives with every other setting, so
-there is only one copy of it to look at.
-
-**What is delivered.** The reset link is the account owner's only copy of the token — the server
-never returns it in an HTTP response, and the database stores just its SHA-256 hash. The rendered
-message is encrypted with the same domain-separated AEAD key as repository sync tokens while it waits
-in the outbox, and is erased the moment it is delivered, so a reset link cannot be read out of the
-database. *New device* means a client reported a `(platform, device_id)` pair the account had never
-signed in with; *new browser* compares the browser label the credentials page shows, so a browser
-update does not re-notify and a plain revisit stays quiet. Each of the three notifications has its
-own switch on the admin page, and per-user opt-out does not exist yet.
-
-**Delivery.** Messages are attempted immediately in the background, then retried by a periodic task
-with a growing delay (30s, 1m, 2m … capped at an hour) until `max_attempts` is reached, after which
-the row is marked failed with the reason and can be retried by hand. Delivery is **at-least-once**:
-a crash mid-send, or two servers sharing one database, can deliver a message twice — harmless for a
-notification, and the queue page makes it visible. A reset request never waits on SMTP, which also
-keeps the response time from revealing whether an address exists. Delivered and failed rows are kept
-for 30 and 90 days respectively, capped at 1000 rows, and the page has a "clear finished" action.
-
-## Security
-
-The server ships secure defaults for a single-node deployment, but a few things depend on how you
-run it:
-
-- **Terminate TLS in front of nanofile and set `site_url` to the HTTPS URL.** That one setting
-  drives `Secure` on session/link cookies and enables `Strict-Transport-Security`; left as plain
-  HTTP, neither is sent (a LAN deployment must not be pinned to HTTPS it cannot serve). Sessions,
-  share-link passwords and API tokens are bearer credentials.
-- **File blocks are stored per library** (`data/blocks/repos/<sha1(repo_id)>/…`), and every block
-  read/write names the library it belongs to. A block id therefore only grants access through a
-  library the caller owns, and the blocks one account cached from another account's library are
-  unreachable. This also means deduplication is per library rather than server-wide.
-- **Deleted libraries keep their disk usage until their trash entry is purged.** Garbage collection
-  never reclaims the blocks of a library that is still listed in the trash — that is what makes a
-  restore serve its files again. Purge the library (or empty the trash) to free the space.
-- **`addr = "0.0.0.0"` is the default** so the server is reachable on the host's interfaces. Bind
-  `127.0.0.1` when a reverse proxy is the only intended entry point, and firewall the port otherwise.
-- **Behind a reverse proxy, set `trusted_proxies`.** `X-Forwarded-For` is only honoured when the TCP
-  peer is listed there, so client-IP rate limiting cannot be spoofed from outside.
-- **`share_link_enabled = false`** turns off anonymous share/upload links entirely (existing links
-  stop resolving, an existing upload-link token can no longer be exchanged for an upload URL, and an
-  already-minted link token stops accepting uploads). `allowed_hosts` pins the host names used to
-  build absolute download URLs when `site_url` is unset; while it is empty only a literal address
-  (`192.168.1.20`, `[fe80::1]`, `localhost`) is echoed, because those URLs carry a capability token
-  and a DNS name in the `Host` header is attacker-influenceable.
-- **Encrypted libraries require the library password for writes, not just reads.** Every HTTP upload
-  path (including resumable ones) refuses with 440 — "library password needed", the status Android
-  and iOS act on — until the client has called `?op=setpassword` / `set-password/`, and the blocks are
-  then stored as ciphertext encrypted with the cached key. Anonymous upload links cannot be created
-  for, or used against, an encrypted library: there is no per-visitor key cache to draw on. The sync
-  protocol is unchanged (clients encrypt locally).
-- **Account remediation is complete.** A password change or reset, a deactivation and a device wipe
-  drop every credential the account holds — session tokens, API keys (WebDAV keys included),
-  repository sync tokens *and* the in-memory `/download-api/…`, `/upload-api/…` and `/blks/…`
-  capability URLs — and a password change/reset also invalidates outstanding password-reset links.
-  - A key bound to a library stops working the moment its owner loses access, because every
-    request re-checks ownership; the binding itself is kept, so restoring access restores the
-    key they already hold. Deleting a library removes the keys bound only to it.
-  - API keys cannot reach `/api2/api-keys/`: a key that could mint keys could give itself more
-    access than it holds. Managing keys requires a browser session.
-- **Every long-lived credential is visible and individually revocable.** A credential its owner
-  cannot see is one they cannot revoke, which is how a 365-day repository sync token used to be: the
-  devices page listed client sessions only, and neither sync tokens nor 90-day 2FA device trusts had
-  any read path at all. Account tokens now record *where they came from* (`api_tokens.source`)
-  instead of having it inferred from `platform`, which is set only when a client reports device
-  details — a browser session, a client that reported nothing and the desktop client's "view on
-  website" handoff were otherwise indistinguishable, and a client that reported no `platform` was
-  not listed anywhere. The inventory reports sync tokens by metadata only; their stored value is a
-  ciphertext the server can decrypt, so it is never serialised.
-- **One route table classifies every credential, so a new endpoint fails closed.** A request is
-  resolved to a `Credential` — a session, a unified API key, or a repository sync token — and the
-  route table is consulted for all of them, not only for keys. A session is the account itself and
-  therefore satisfies every capability, but it is still classified; a key gets exactly the
-  capabilities it carries, narrowed per library by its bindings; and a route that nobody classified
-  is refused to everyone. A gap in the table is reported once per route and **fails the end-to-end
-  run** (`e2e/global-teardown.ts` reads it back out of the server log), so forgetting to classify a
-  new endpoint is a red build rather than a silently open door.
-- **Uploads and downloads are charged before they are written.** Bytes in the block store that no
-  commit references yet are reserved against the uploader's quota, so "write blocks and never commit"
-  is bounded rather than free; the reservation is released when the upload commits, or when an
-  abandoned upload is reaped — the reap deletes the blocks that upload wrote, after re-checking that
-  no FS object references them, so it can never remove a block a committed file needs.
-- **A folder cannot be moved or copied into its own subtree.** The tree update removes then re-adds,
-  so the destination inside the subtree would be destroyed by the first commit; both move and copy
-  are rejected up front, as WebDAV already did.
-- **The desktop client's "view on website" URL is a validated redirect.**
-  `/library/{repo-id}/{repo-name}/…` is seahub's spelling (the name segment is decorative); it now
-  redirects to this server's own `/libraries/{id}/files/…` instead of 404ing, so the post-login
-  `next` value the desktop client sends (`repo-tree-view.cpp:578`) lands on the library. The
-  redirect is built only from a repository id that passes an id-alphabet check and a path that
-  normalizes inside the repository, then percent-encoded per segment — a `%0d%0a` in either can
-  therefore never inject a header or point the browser off-site.
-- **Run the server with a minimal `PATH`.** Helper binaries (`ffmpeg` for video thumbnails,
-  `xdg-open`/`launchctl` for tray actions) are looked up through `PATH`; point
-  `storage.ffmpeg_path` at an absolute path and keep untrusted directories (a world-writable
-  working directory, `node_modules/.bin`) out of the server's `PATH`.
-- **Tighten the example's finite caps if you serve many users** (`max_zip_bytes`,
-  `max_temp_upload_bytes`); `0` means unlimited.
-- **In release builds the server refuses to start with an ephemeral or placeholder `secret_key`**
-  when block encryption is enabled (an ephemeral key is regenerated on every start, which would make
-  every stored block permanently unreadable) or when the configured key looks like a placeholder.
-  `NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` overrides that for local/CI use only.
-
-Deliberate, documented trade-offs (no code path is unprotected — each is bounded by something else):
-
-- **Encrypted-library passwords.** The key-derivation iteration count for encrypted libraries is
-  fixed at 1000 by the sync protocol: the official clients derive the data key themselves, so
-  changing it would make their libraries unreadable. `encrypted_library_pwd_hash_algo` /
-  `encrypted_library_pwd_hash_params` can raise the cost of the *server-side verification* hash for
-  newly created libraries (the desktop client reads those fields; mobile clients only support
-  protocol version ≤ 2), but the defaults stay compatible. Online guessing is bounded by
-  `repo_password_max_per_hour` instead.
-- **Zip downloads (`/zip/{token}`) are capability URLs**, exactly like upstream's file-server
-  tokens: single-use, expiring, unguessable and redacted from the logs. Unlike upstream, the
-  requester's library permission is re-checked when the token is consumed, so a user whose access
-  was revoked (or whose account was deactivated) inside the token's one-hour TTL cannot still pull
-  the archive. Treat a zip URL like a password anyway.
-- **`head-commits-multi` and `check_blocks`** answer anonymous/authenticated callers the same way
-  upstream does (library metadata and block existence). They are required by the sync protocol;
-  rate limiting bounds the request rate.
-- **Uncommitted-upload accounting lives in memory.** Quota reservations for blocks that no commit
-  references yet (`QuotaCache`) are rebuilt empty on start, so a restart in the middle of an upload
-  forgets that reservation and the uploader could exceed their quota by the in-flight amount until
-  the abandoned upload is reaped. Committed usage is persisted and re-read, so this cannot be used
-  to accumulate data across restarts.
-- **Nothing reclaims orphan blocks unless GC is on.** `gc.enabled` defaults to `false`, so blocks
-  from an upload that was abandoned before its final chunk stay on disk (the server warns at
-  startup). Quota is still charged for them, so this is disk usage, not a bypass; enable `[gc]` to
-  reclaim them.
-- **A revoked client stops syncing until it logs in again.** Deactivation, a password change and a
-  device wipe delete the account's database sync tokens, so the affected client's next `/seafhttp/`
-  call is refused and it has to re-authenticate. That is intentional — keeping the token alive would
-  keep serving the library through it — and it matches what the official server does when access is
-  revoked.
-- **The web UI does not unlock encrypted libraries.** Names can be browsed (Seafile leaves the FS
-  tree and commits unencrypted and encrypts only file content), but preview, download and upload
-  from a browser answer 440 (`RepoPasswdRequired`) because only the API and the official clients can
-  hand the server the library password — there is no password prompt in the UI. The library is shown
-  as encrypted rather than silently unusable.
-- **`validate_origin` still accepts requests without an `Origin`/`Referer`.** The login, register
-  and password-reset forms are posted by non-browser callers too (curl, integration tests), so an
-  absent header cannot be treated as hostile. An attacker's browser always sends one, and it is
-  checked when present; the authenticated state-changing endpoints additionally require the
-  session-bound CSRF token.
-- **Resumable uploads are keyed by `(repo_id, path)` only.** Two writers with write access to the
-  same library could collide in the temporary-upload map and interfere with each other's resumable
-  state. It is confined to one library (no cross-user data is exposed, the key is not derived from
-  anything secret) and the extra bookkeeping was judged not worth threading a user id through every
-  upload call site.
-- **Configuration secrets are held in memory as ordinary strings** (server secret, notification
-  key, at-rest encryption key, database URL, admin password) and are not zeroed on drop; the
-  derived AEAD keys used by the token/TOTP/block ciphers are cleared. Scrubbing the live
-  configuration would need a secret-typed config throughout and buys little against the threat
-  model (an attacker reading process memory already has the running server).
-
-## Logging
-
-Headless runs (servers, Docker, CLI subcommands) log to stdout as before, controlled by
-`[logging] level` (or `NANOFILE_LOG_LEVEL`).
-
-Desktop (tray) runs log to a size-capped rotating file instead:
-
-- The default location is `nanofile.log` **next to the nanofile binary**; the resolved absolute path
-  is written back into `config.toml` (`[logging] file`) on first run, so login-started instances
-  always use the same file regardless of their working directory, and you can change it there.
-- `[logging] file` accepts an explicit path; a relative one resolves against the binary's directory
-  (never the working directory, which is meaningless for auto-started instances) — the same rule
-  every other relative state path follows (see Configuration).
-- `max_file_size_mb` (default 10) caps each file; once exceeded it rotates to `nanofile.log.1`,
-  `.2`, … with `max_backups` (default 3) older files kept. `max_backups = 0` truncates in place.
-- `file_enabled = true/false` forces file/stdout output; unset means automatic (file in desktop
-  mode, stdout otherwise). If the log file cannot be opened (e.g. a read-only binary directory),
-  the server falls back to the working directory, then to stdout.
-
-## System Tray (optional)
-
-Release archives whose name ends in `-tray` (Windows / macOS / Linux-amd64) include an optional
-system tray icon, compiled in with the `tray` feature. Plain builds contain no tray code at all,
-so servers without a desktop are unaffected.
-
-Right-clicking the tray icon opens a menu with (translated to the system language — Chinese systems
-get Chinese menus; force a language with `tray_language = "en"/"zh"` in `[ui]`):
-
-- **Open Web UI** — opens `site_url` in the default browser
-- **Launch at Login** (checkable) — registers/unregisters auto-start for the current user:
-  - Windows: `HKCU\...\CurrentVersion\Run` registry value (no admin rights needed). When the server
-    runs elevated ("Run as administrator"), a dialog asks for confirmation before registering, since
-    the entry then belongs to the elevated account; a login-started instance always runs without
-    elevation.
-  - macOS: a LaunchAgent at `~/Library/LaunchAgents/com.nanofile.nanofile.plist`
-  - Linux: an XDG autostart entry at `~/.config/autostart/nanofile.desktop` (GNOME and KDE)
-- **Open Config File** — reveals the config file actually in use (in Explorer / Finder / the file manager)
-- **Quit** — triggers the same graceful shutdown as Ctrl+C
-
-The auto-start entries always point at the running binary and pass `--config <absolute path>`, so
-the auto-started instance uses the same config regardless of its working directory. Relative state
-paths in that config resolve against the binary's directory as well (see Configuration), so the
-login-started instance opens the same database and block store as a manual start.
-
-Notes:
-
-- Toggle the tray off with `tray = false` in `[server]` (or `NANOFILE_SERVER_TRAY=false`), e.g. for
-  an auto-started instance that should stay invisible.
-- On Linux the tray needs a desktop session; without `DISPLAY`/`WAYLAND_DISPLAY` (or when the
-  desktop session is broken) the server logs a warning and runs headless instead of failing.
-- GNOME only shows tray icons with the "AppIndicator and KStatusNotifierItem Support" extension
-  installed; KDE Plasma supports them out of the box.
-- On Windows, `-tray` builds are GUI-subsystem binaries: no console window ever appears (double-click,
-  auto-start, or terminal). Logs go to the rotating log file (see Logging). CLI-only output such as
-  `--version` or `adduser` prompts is only visible when launched from a terminal (the binary
-  reattaches to it, but `cmd` does not wait for the process) — for full console use the plain
-  (non-`-tray`) build, which behaves exactly as before.
-
-To build the tray variant yourself (Linux additionally needs `libgtk-3-dev` and
-`libayatana-appindicator3-dev`):
-
-```bash
-cargo build --release -p server --features tray
-```
-
-The tray icon and the Windows executable icon are rasterized from `server/static/img/favicon.svg`
-at compile time — no image assets are shipped in the repository. The tray icon follows the desktop
-theme: a light desktop gets the dark mark and a dark desktop the inverse (macOS instead gets a bare
-glyph as a template image, which the system inverts itself), and it is refreshed when the theme
-changes.
-
-## Docker
-
-The release image is a `scratch` container holding only the `nanofile` binary — no config file or
-data directory. It runs as uid/gid `1000:1000`, so the data volume must be writable by that user
-(`chown -R 1000:1000 ./data` when upgrading an older deployment, or pass
-`--user "$(id -u):$(id -g)"` to match your own account). Mount a config file and a persistent data
-volume, and point the data paths at the volume:
-
-**Create the master secret once and keep it.** It derives the session/CSRF keys, the notification
-JWT keys, the sync-token encryption key and the at-rest storage key, so generating a new one on every
-start logs everybody out, breaks every sync client and makes existing 2FA enrolments and at-rest
-encrypted blocks undecryptable:
+The master secret is generated once and kept: it encrypts sessions, mail and at-rest blocks. Rotating it logs out every session, breaks sync clients and makes encrypted blocks unreadable.
 
 ```bash
 mkdir -p data
-# One-time, persisted (mode 0600): rotating this value is a destructive operation.
 openssl rand -hex 32 > nanofile-secret
 chmod 600 nanofile-secret
 
@@ -555,8 +76,7 @@ docker run -d --name nanofile \
   ghcr.io/<owner>/nanofile:latest
 ```
 
-Or with no config file at all — built-in defaults fill the rest, everything else comes from
-environment variables:
+A config file is optional; built-in defaults fill the rest:
 
 ```bash
 docker run -d --name nanofile \
@@ -569,83 +89,69 @@ docker run -d --name nanofile \
   ghcr.io/<owner>/nanofile:latest
 ```
 
-(`nanofile-secret` is the persisted value created above — never regenerate it per start.)
+`nanofile-secret` is the value generated above and is reused across starts.
 
-## CLI
+## Configuration
+
+Settings come from `config.toml` in the working directory (copy `config.toml.example`; each key's comment gives its environment-variable name) or from `NANOFILE_*` environment variables, which take precedence and are never written back to the file. Container deployments rely on the environment variables.
+
+Frequently changed keys:
+
+- `site_url`: the external URL (HTTPS domain). It controls the `Secure` attribute on session cookies, enables HSTS, and is used to build share links.
+- Bind address and port (`[server]` `addr` / `port`): default `0.0.0.0:8082`.
+- Storage directories (`[storage]`): default under `data/` in the binary's directory. Relative paths resolve against the binary's directory; absolute paths place state elsewhere.
+- `secret_key`: the master key (see **Deploy with Docker**).
+
+Most settings apply immediately; the listener, log target and index directory apply at the next start. Some runtime settings are also editable at "System Management → Settings" in the web interface, where a saved value overrides the same key in the config file.
+
+On upgrade, a changed config format is migrated in place with comments preserved, and the previous file is kept as `config.toml.bak`.
+
+Sections: `[server]` networking and feature switches; `[database]` connection; `[storage]` directories and quotas; `[auth]` login, password and rate limits; `[ui]` language; `[email]` mail; `[admin_init]` first-start admin; `[logging]` logs; `[gc]` garbage collection; `[index]` search; `[notification]` notifications; `[tasks]` background tasks. Exact keys are listed in `config.toml.example`.
+
+## Security
+
+- When the server runs behind an HTTPS reverse proxy, `site_url` is set to the HTTPS address. That setting controls the `Secure` cookie attribute and HSTS. Sessions, share passwords and API tokens are bearer credentials.
+- The default bind address is `0.0.0.0`. Where only a reverse proxy should reach the server, `127.0.0.1` plus a closed firewall port restricts it.
+- Behind a reverse proxy, `trusted_proxies` determines whether `X-Forwarded-For` is honoured. Without it, client IPs can be spoofed to bypass per-IP rate limits.
+- Encrypted libraries require the library password for uploads as well as reads. Without it, web preview and download return 440, and anonymous upload links cannot be created for or used against an encrypted library.
+- A password change, deactivation or device wipe revokes every credential the account holds: other devices, sync clients and API keys, plus unused reset links.
+- Release builds refuse to start without `secret_key`. Debug builds generate one, but sessions do not survive a restart. `NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` covers local and CI use.
+
+## Command line
 
 ```
-nanofile [--config <path>]           Start the server (default)
-nanofile [--config <path>] adduser   Create a user (admin by default; --regular for a normal user)
-                                     Password: interactive prompt by default, or
-                                     --password-stdin / --password-file <path>
+nanofile [--config <path>]           start the server (default)
+nanofile [--config <path>] adduser   create a user (admin by default; --regular for a normal user)
+                                     password: interactive, or --password-stdin / --password-file <path>
 nanofile [--config <path>] migrate-blocks [--dry-run]
-                                     Move blocks from the legacy flat layout to the per-library
-                                     layout (normally done automatically at startup; --dry-run only
-                                     reports what would be copied)
+                                     move from the shared block directory to the per-library layout
+                                     (normally done automatically at startup; --dry-run previews only)
 ```
 
-## Data Layout
+## Data directory
 
-All state lives under the installation directory — the directory of the running binary, which is what
-relative state paths resolve against (see Configuration) — unless a section names an absolute path.
-Defaults shown:
+State lives under the binary's directory in `data/` by default, since relative paths resolve against that directory. A section can name absolute paths instead.
 
 ```
 data/
-├── nanofile.db        # SQLite database (WAL mode, file mode 0600)
+├── nanofile.db        # database (WAL mode, mode 0600)
 ├── nanofile.db-wal    # WAL journal
-├── blocks/            # block store: repos/{sha1(repo_id)}/{2-hex prefix}/{40-hex SHA-1}
-├── temp/              # resumable / chunked upload staging
-├── thumbnails/        # generated image / video thumbnail cache
-├── avatars/           # user avatar images
-└── index/             # Tantivy full-text search index
+├── blocks/            # file blocks: repos/{sha1(repo_id)}/{2-hex prefix}/{40-hex SHA-1}
+├── temp/              # upload staging
+├── thumbnails/        # thumbnail cache
+├── avatars/           # avatars
+└── index/             # full-text search index
 ```
 
 ## Development
 
-The frontend build runs as part of `cargo build` (see [Web frontend](#web-frontend)):
+**Architecture**: a Cargo workspace of four crates — `base` (base types), `infra` (database, storage, crypto, config), `server` (HTTP, sync protocol, WebDAV, web interface), `migration` (database migrations). Dependency direction: `base → infra → server`.
 
-- **esbuild** bundles `frontend/entries/*.js` into `static/js/*.bundle.js`. It is required — the
-  build panics if esbuild is not on `PATH` or in `node_modules/.bin`. Install with `npm install`.
-- **Tailwind** compiles `static/css/input.css` into `app.css`. It is optional — if the Tailwind CLI
-  is unavailable the build still succeeds and the UI renders unstyled.
+**Frontend**: the web interface is server-rendered (Askama) with Tailwind CSS and modular JavaScript under `server/frontend/`. `server/build.rs` bundles `frontend/entries/*.js` into the binary with esbuild (required; Tailwind optional). Frontend changes require a `cargo build`; there is no hot reload.
 
-`build.rs` tracks `frontend/`, `static/css/`, and `templates/` via `rerun-if-changed`, so editing
-frontend source triggers a re-bundle on the next `cargo build`. There is no hot reload — the assets
-are embedded in the binary, so a rebuild is required to pick up frontend changes.
+**Testing**: `cargo test --workspace` for Rust, `node --test "server/frontend/**/*.test.js"` for frontend units, and `cd e2e && npx playwright test` for browser end-to-end. CI also runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.
 
-## Testing
-
-Tests are split across three layers:
-
-| Layer | Command | CI job |
-|-------|---------|--------|
-| Rust unit + integration | `cargo test --workspace` | `test` |
-| Frontend unit | `node --test "server/frontend/**/*.test.js"` (zero-dependency `node:test`) | `frontend-test` |
-| Browser end-to-end | `cd e2e && npm install && npx playwright install --with-deps chromium && npx playwright test` | `e2e` |
-
-The Playwright suite boots a real `nanofile` binary against an isolated temporary database and drives
-the UI in Chromium, covering login, selection, view switching, sorting/filtering, upload, file
-operations, sharing, history, preview, tags, and search. It also runs a minimal SMTP server on
-`127.0.0.1:18025` (see `e2e/helpers/mailbox.ts`) so that password reset and the email notifications
-are exercised against a real SMTP conversation; captured messages are written to
-`e2e/test-results/mail/*.eml`. Failed runs capture the backend log at `e2e/test-results/server.log`.
-
-Formatting and lint checks are also enforced by CI:
-
-```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-```
-
-## CI & Releases
-
-- **`ci.yml`** (push / PR to `main`, `master`, `develop`): formatting, clippy (`-D warnings`),
-  frontend unit tests, Playwright e2e, and the Rust test suite.
-- **`nightly.yml`** (daily / manual): multi-arch release builds (Linux amd64/arm64/loong64 ×
-  gnu/musl, macOS arm64, Windows amd64) and publishes OCI images to `ghcr.io` (`:edge`, `:sha-<sha>`).
-- **`release.yml`** (tag `v*.*.*` / manual): the same multi-arch builds plus a GitHub release with an
-  auto-generated changelog and versioned images (`:latest`, `:vX.Y.Z`, `:vX.Y`).
+**CI and releases**: `ci.yml` runs the test suites on push and pull requests; `nightly.yml` builds multi-architecture images daily (`:edge`); `release.yml` publishes versioned images and a GitHub release on a version tag.
 
 ## License
 
