@@ -9,6 +9,18 @@ pub const CONFIG_PATH_ENV: &str = "NANOFILE_CONFIG";
 /// Default config path when neither `--config` nor `NANOFILE_CONFIG` is set.
 pub const DEFAULT_CONFIG_PATH: &str = "config.toml";
 
+/// The catalog keys the environment supplied a value for.
+///
+/// Needed because a value's *origin* cannot be recovered from the value itself:
+/// an environment variable and a config-file entry can hold the same string.
+pub type EnvKeys = std::collections::BTreeSet<&'static str>;
+
+/// A loaded configuration plus where its environment overrides came from.
+pub struct LoadedConfig {
+    pub config: Config,
+    pub env_keys: EnvKeys,
+}
+
 #[derive(Deserialize, Serialize, Clone, Default)]
 pub struct Config {
     #[serde(default)]
@@ -37,6 +49,56 @@ pub struct Config {
     pub ui: UiConfig,
     #[serde(default)]
     pub sync: SyncConfig,
+    #[serde(default)]
+    pub settings: SettingsConfig,
+}
+
+/// How the config file and the `settings` table layer with each other.
+///
+/// The file is *bootstrap* by default: it supplies the value of any key the
+/// database has no row for, and stops mattering for a key once one is saved.
+/// `config_policy = "override"` (or a key in `config_override_keys`) reverses
+/// that for the keys it names, which is the escape hatch for an operator who
+/// keeps a deployment file-managed. The environment always wins over both.
+///
+/// This section is deliberately *not* managed from the admin UI: it is the
+/// policy that decides what the UI's saves mean, so it has to come from outside
+/// the layer the UI writes to.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SettingsConfig {
+    /// `"bootstrap"` (default) or `"override"`.
+    /// Env: NANOFILE_SETTINGS_CONFIG_POLICY
+    #[serde(default = "default_config_policy")]
+    pub config_policy: String,
+    /// Keys the config file wins over the database for while
+    /// `config_policy = "bootstrap"` (e.g. `["server.site_url"]`).
+    /// Env: NANOFILE_SETTINGS_CONFIG_OVERRIDE_KEYS (comma-separated)
+    #[serde(default)]
+    pub config_override_keys: Vec<String>,
+    /// Seconds between re-reads of the `settings` table, so a change made on
+    /// another instance (or restored from a backup) is picked up without a
+    /// restart. `0` disables the periodic read.
+    /// Env: NANOFILE_SETTINGS_REFRESH_INTERVAL_SECS
+    #[serde(default = "default_settings_refresh_interval")]
+    pub refresh_interval_secs: u64,
+}
+
+fn default_config_policy() -> String {
+    "bootstrap".to_string()
+}
+
+fn default_settings_refresh_interval() -> u64 {
+    30
+}
+
+impl Default for SettingsConfig {
+    fn default() -> Self {
+        Self {
+            config_policy: default_config_policy(),
+            config_override_keys: Vec::new(),
+            refresh_interval_secs: default_settings_refresh_interval(),
+        }
+    }
 }
 
 /// Sync-protocol hardening knobs.
@@ -175,6 +237,23 @@ pub struct EmailConfig {
     /// Delivery attempts before a queued message is marked failed.
     #[serde(default = "default_smtp_max_attempts")]
     pub max_attempts: u32,
+    /// Stop delivery without clearing the SMTP settings. A paused server still
+    /// mints password-reset tokens (the recipient can retry once delivery
+    /// resumes) but sends nothing.
+    #[serde(default)]
+    pub paused: bool,
+    /// Notify the account owner when a client device signs in for the first
+    /// time. The password-reset link is not a notification and is not gated by
+    /// these switches.
+    #[serde(default = "default_true")]
+    pub notify_new_device: bool,
+    /// Notify the account owner when an API key is created.
+    #[serde(default = "default_true")]
+    pub notify_api_key_created: bool,
+    /// Notify the account owner when a browser signs in from a fingerprint the
+    /// account had not used before.
+    #[serde(default = "default_true")]
+    pub notify_new_login: bool,
 }
 
 fn default_smtp_port() -> u16 {
@@ -206,6 +285,10 @@ impl Default for EmailConfig {
             from_name: String::new(),
             timeout_secs: default_smtp_timeout_secs(),
             max_attempts: default_smtp_max_attempts(),
+            paused: false,
+            notify_new_device: true,
+            notify_api_key_created: true,
+            notify_new_login: true,
         }
     }
 }
@@ -1498,10 +1581,19 @@ impl Config {
     }
 
     pub fn load() -> anyhow::Result<Self> {
+        Self::load_tracked().map(|loaded| loaded.config)
+    }
+
+    /// [`Self::load`] plus the set of catalog keys the environment supplied.
+    ///
+    /// The tracked form is what the server uses: without knowing which values
+    /// came from the environment, an admin page cannot say whether a database
+    /// save would take effect.
+    pub fn load_tracked() -> anyhow::Result<LoadedConfig> {
         load_dotenv();
         let path =
             std::env::var(CONFIG_PATH_ENV).unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
-        Self::load_from(&path)
+        Self::load_from_tracked(&path)
     }
 
     /// Load a config file. Missing fields are filled with built-in defaults and
@@ -1514,6 +1606,12 @@ impl Config {
     /// overrides) so the server can start with zero config; other I/O errors
     /// (and unparseable/corrupt files) still fail.
     pub fn load_from(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        Self::load_from_tracked(path).map(|loaded| loaded.config)
+    }
+
+    /// [`Self::load_from`] plus the set of catalog keys the environment
+    /// supplied. See [`Self::load_tracked`].
+    pub fn load_from_tracked(path: impl AsRef<Path>) -> anyhow::Result<LoadedConfig> {
         let path = path.as_ref();
         let original = match std::fs::read_to_string(path) {
             Ok(s) => s,
@@ -1523,9 +1621,10 @@ impl Config {
                     path.display()
                 );
                 let mut config = Config::default();
-                config.apply_env_overrides();
+                let mut env_keys = EnvKeys::new();
+                config.apply_env_overrides(&mut env_keys);
                 config.normalize();
-                return Ok(config);
+                return Ok(LoadedConfig { config, env_keys });
             }
             Err(e) => {
                 return Err(anyhow::anyhow!("failed to read {}: {e}", path.display()));
@@ -1561,343 +1660,81 @@ impl Config {
                 }
             }
         }
-        config.apply_env_overrides();
+        let mut env_keys = EnvKeys::new();
+        config.apply_env_overrides(&mut env_keys);
         config.normalize();
-        Ok(config)
+        Ok(LoadedConfig { config, env_keys })
     }
 
-    fn apply_env_overrides(&mut self) {
-        macro_rules! env_str {
-            ($name:expr, $target:expr) => {
-                if let Ok(v) = std::env::var($name) {
-                    $target = v;
-                }
+    /// Apply every `NANOFILE_*` override.
+    ///
+    /// Driven from [`crate::settings::CATALOG`], so a setting cannot exist
+    /// without its variable being read — the admin UI shows the very variable
+    /// name the server consults, and the two cannot drift apart.
+    /// `env_keys` records which catalog keys the environment supplied, which is
+    /// what makes a value's origin reportable.
+    ///
+    /// A value that does not parse is ignored with a warning: a typo in the
+    /// environment must not stop the process from starting. The `*_FILE`
+    /// secrets are read after the plain variables, so the file wins — that is
+    /// what keeps a secret out of a process listing.
+    fn apply_env_overrides(&mut self, env_keys: &mut EnvKeys) {
+        for def in crate::settings::CATALOG {
+            let Some(var) = def.env else { continue };
+            let Ok(value) = std::env::var(var) else {
+                continue;
             };
+            if def.kind == crate::settings::Kind::Secret
+                && let Some(file_var) = def.env_file
+            {
+                tracing::warn!(
+                    "{var} is set via environment variable. Consider using {file_var} \
+                     instead, which is less likely to leak via process listings or logs."
+                );
+            }
+            match (def.set)(self, &value) {
+                Ok(()) => {
+                    env_keys.insert(def.key);
+                }
+                Err(e) => tracing::warn!("ignoring {var}: {e}"),
+            }
         }
 
-        macro_rules! env_parse {
-            ($name:expr, $target:expr) => {
-                if let Ok(v) = std::env::var($name)
-                    && let Ok(p) = v.parse()
-                {
-                    $target = p;
-                }
+        for def in crate::settings::CATALOG {
+            let Some(var) = def.env_file else { continue };
+            let Ok(path) = std::env::var(var) else {
+                continue;
             };
-        }
-
-        macro_rules! env_path {
-            ($name:expr, $target:expr) => {
-                if let Ok(v) = std::env::var($name) {
-                    $target = PathBuf::from(v);
-                }
-            };
-        }
-
-        env_str!("NANOFILE_SERVER_ADDR", self.server.addr);
-        env_str!("NANOFILE_SERVER_VERSION", self.server.version);
-        env_parse!("NANOFILE_SERVER_PORT", self.server.port);
-        env_parse!(
-            "NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB",
-            self.server.max_upload_size_mb
-        );
-        env_parse!(
-            "NANOFILE_SERVER_MAX_JSON_BODY_MB",
-            self.server.max_json_body_mb
-        );
-        env_parse!(
-            "NANOFILE_SERVER_MAX_CHUNK_SIZE_MB",
-            self.server.max_chunk_size_mb
-        );
-        env_str!("NANOFILE_SERVER_SITE_URL", self.server.site_url);
-        env_str!("NANOFILE_SERVER_SECRET_KEY", self.server.secret_key);
-        env_parse!(
-            "NANOFILE_SERVER_REQUEST_TIMEOUT_SECS",
-            self.server.request_timeout_secs
-        );
-        env_parse!(
-            "NANOFILE_SERVER_HEADER_READ_TIMEOUT_SECS",
-            self.server.header_read_timeout_secs
-        );
-        env_parse!(
-            "NANOFILE_SERVER_BODY_TIMEOUT_SECS",
-            self.server.body_timeout_secs
-        );
-        env_str!("NANOFILE_DATABASE_URL", self.database.url);
-        env_parse!(
-            "NANOFILE_DATABASE_MAX_CONNECTIONS",
-            self.database.max_connections
-        );
-        env_path!("NANOFILE_STORAGE_BLOCK_DIR", self.storage.block_dir);
-        env_path!("NANOFILE_STORAGE_TEMP_DIR", self.storage.temp_dir);
-        env_path!("NANOFILE_STORAGE_THUMBNAIL_DIR", self.storage.thumbnail_dir);
-        env_path!("NANOFILE_STORAGE_AVATAR_DIR", self.storage.avatar_dir);
-        env_str!("NANOFILE_STORAGE_FFMPEG_PATH", self.storage.ffmpeg_path);
-        env_str!(
-            "NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE",
-            self.storage.block_encryption_mode
-        );
-
-        // Block at-rest encryption master key. Direct-env usage gets a warning
-        // (it can leak via process listings), and the key is never serialized
-        // back into config.toml or its `.bak`. The `*_FILE` variant is
-        // preferred, mirroring NANOFILE_ADMIN_INIT_PASSWORD_FILE.
-        if let Ok(v) = std::env::var("NANOFILE_STORAGE_ENCRYPTION_KEY") {
-            tracing::warn!(
-                "NANOFILE_STORAGE_ENCRYPTION_KEY is set via environment variable. \
-                 Consider using NANOFILE_STORAGE_ENCRYPTION_KEY_FILE instead, \
-                 which is less likely to leak via process listings or logs."
-            );
-            self.storage.encryption_key = Some(v);
-        }
-        if let Ok(filepath) = std::env::var("NANOFILE_STORAGE_ENCRYPTION_KEY_FILE") {
-            match std::fs::read_to_string(&filepath) {
-                Ok(key) => {
-                    self.storage.encryption_key = Some(key.trim().to_string());
-                }
+            match std::fs::read_to_string(&path) {
+                Ok(secret) => match (def.set)(self, secret.trim()) {
+                    Ok(()) => {
+                        env_keys.insert(def.key);
+                    }
+                    Err(e) => tracing::warn!("ignoring {var}: {e}"),
+                },
                 Err(e) => {
-                    tracing::error!(
-                        "Failed to read NANOFILE_STORAGE_ENCRYPTION_KEY_FILE from {}: {}",
-                        filepath,
-                        e
-                    );
+                    tracing::error!("Failed to read {var} from {path}: {e}");
                 }
             }
         }
-        env_parse!(
-            "NANOFILE_STORAGE_MAX_STORAGE_BYTES",
-            self.storage.max_storage_bytes
-        );
-        env_parse!(
-            "NANOFILE_STORAGE_MAX_TEMP_UPLOADS",
-            self.storage.max_temp_uploads
-        );
-        env_parse!(
-            "NANOFILE_STORAGE_MAX_TEMP_UPLOAD_BYTES",
-            self.storage.max_temp_upload_bytes
-        );
-        env_parse!(
-            "NANOFILE_STORAGE_TEMP_UPLOAD_TTL_HOURS",
-            self.storage.temp_upload_ttl_hours
-        );
-        env_parse!(
-            "NANOFILE_STORAGE_MAX_ZIP_ENTRIES",
-            self.storage.max_zip_entries
-        );
-        env_parse!("NANOFILE_STORAGE_MAX_ZIP_BYTES", self.storage.max_zip_bytes);
-        env_parse!(
-            "NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS",
-            self.auth.password_hash_iterations
-        );
-        env_parse!(
-            "NANOFILE_AUTH_API_TOKEN_TTL_DAYS",
-            self.auth.api_token_ttl_days
-        );
-        env_parse!(
-            "NANOFILE_AUTH_SYNC_TOKEN_TTL_DAYS",
-            self.auth.sync_token_ttl_days
-        );
-        env_parse!(
-            "NANOFILE_AUTH_API_KEY_MAX_TTL_DAYS",
-            self.auth.api_key_max_ttl_days
-        );
-        env_parse!(
-            "NANOFILE_AUTH_MAX_LOGIN_ATTEMPTS",
-            self.auth.max_login_attempts
-        );
-        env_parse!(
-            "NANOFILE_AUTH_LOCKOUT_DURATION_SECS",
-            self.auth.lockout_duration_secs
-        );
-        env_parse!(
-            "NANOFILE_AUTH_MAX_DISTINCT_USERNAMES_PER_IP",
-            self.auth.max_distinct_usernames_per_ip
-        );
-        env_parse!(
-            "NANOFILE_AUTH_WEBDAV_MAX_FAILURES_PER_5MIN",
-            self.auth.webdav_max_failures_per_5min
-        );
-        env_parse!(
-            "NANOFILE_AUTH_SSO_LINK_MAX_PER_HOUR",
-            self.auth.sso_link_max_per_hour
-        );
-        env_parse!(
-            "NANOFILE_AUTH_ENABLE_INVITATIONS",
-            self.auth.enable_invitations
-        );
-        env_parse!(
-            "NANOFILE_AUTH_ENABLE_PASSWORD_RESET",
-            self.auth.enable_password_reset
-        );
-        env_parse!(
-            "NANOFILE_AUTH_PASSWORD_MIN_LENGTH",
-            self.auth.password_min_length
-        );
-        env_parse!(
-            "NANOFILE_AUTH_REQUIRE_STRONG_PASSWORD",
-            self.auth.require_strong_password
-        );
-        env_str!("NANOFILE_LOG_LEVEL", self.logging.level);
-        if let Ok(v) = std::env::var("NANOFILE_LOG_FILE_ENABLED")
-            && let Ok(p) = v.parse::<bool>()
+
+        // The `[settings]` policy is not a catalog entry: it decides what a
+        // database row means, so it can only come from outside that layer.
+        if let Ok(v) = std::env::var("NANOFILE_SETTINGS_CONFIG_POLICY") {
+            self.settings.config_policy = v;
+        }
+        if let Ok(v) = std::env::var("NANOFILE_SETTINGS_CONFIG_OVERRIDE_KEYS") {
+            self.settings.config_override_keys = v
+                .split(',')
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+        if let Ok(v) = std::env::var("NANOFILE_SETTINGS_REFRESH_INTERVAL_SECS")
+            && let Ok(parsed) = v.trim().parse::<u64>()
         {
-            self.logging.file_enabled = Some(p);
-        }
-        if let Ok(v) = std::env::var("NANOFILE_LOG_FILE") {
-            self.logging.file = Some(PathBuf::from(v));
-        }
-        env_parse!("NANOFILE_GC_ENABLED", self.gc.enabled);
-        env_parse!("NANOFILE_GC_INTERVAL_HOURS", self.gc.interval_hours);
-        env_parse!("NANOFILE_NOTIFICATION_ENABLED", self.notification.enabled);
-        env_str!(
-            "NANOFILE_NOTIFICATION_PRIVATE_KEY",
-            self.notification.private_key
-        );
-        env_parse!(
-            "NANOFILE_NOTIFICATION_PING_INTERVAL",
-            self.notification.ping_interval
-        );
-        env_parse!(
-            "NANOFILE_NOTIFICATION_CLIENT_TIMEOUT",
-            self.notification.client_timeout
-        );
-        env_parse!(
-            "NANOFILE_NOTIFICATION_MAX_CONNECTIONS",
-            self.notification.max_connections
-        );
-        env_parse!(
-            "NANOFILE_NOTIFICATION_MAX_CONNECTIONS_PER_IP",
-            self.notification.max_connections_per_ip
-        );
-        env_parse!(
-            "NANOFILE_NOTIFICATION_SUBSCRIBE_TIMEOUT_SECS",
-            self.notification.subscribe_timeout_secs
-        );
-        env_parse!("NANOFILE_TASKS_MAX_ACTIVE", self.tasks.max_active_tasks);
-        env_parse!("NANOFILE_INDEX_ENABLED", self.index.enabled);
-        env_path!("NANOFILE_INDEX_INDEX_DIR", self.index.index_dir);
-        env_parse!("NANOFILE_CORS_MAX_AGE_SECS", self.server.cors_max_age_secs);
-        env_parse!("NANOFILE_SERVER_WEBDAV_ENABLED", self.server.webdav_enabled);
-        env_parse!("NANOFILE_SERVER_TRAY", self.server.tray);
-        env_parse!("NANOFILE_SERVER_SSO_ENABLED", self.server.sso_enabled);
-        env_parse!(
-            "NANOFILE_SERVER_FILE_SEARCH_ENABLED",
-            self.server.file_search_enabled
-        );
-        env_parse!(
-            "NANOFILE_SERVER_SHARE_LINK_ENABLED",
-            self.server.share_link_enabled
-        );
-        // Optional server-info fields: an empty env var keeps the field absent.
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_DESKTOP_CUSTOM_BRAND") {
-            self.server.desktop_custom_brand = Some(v);
-        }
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_DESKTOP_CUSTOM_LOGO") {
-            self.server.desktop_custom_logo = Some(v);
-        }
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO") {
-            self.server.encrypted_library_pwd_hash_algo = Some(v);
-        }
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS") {
-            self.server.encrypted_library_pwd_hash_params = Some(v);
-        }
-        env_parse!(
-            "NANOFILE_SERVER_ENCRYPTED_LIBRARY_VERSION",
-            self.server.encrypted_library_version
-        );
-        env_parse!("NANOFILE_EMAIL_ENABLED", self.email.enabled);
-        env_str!("NANOFILE_EMAIL_HOST", self.email.host);
-        env_parse!("NANOFILE_EMAIL_PORT", self.email.port);
-        env_str!("NANOFILE_EMAIL_TLS", self.email.tls);
-        env_str!("NANOFILE_EMAIL_USERNAME", self.email.username);
-        env_str!("NANOFILE_EMAIL_FROM_ADDRESS", self.email.from_address);
-        env_str!("NANOFILE_EMAIL_FROM_NAME", self.email.from_name);
-        env_parse!("NANOFILE_EMAIL_TIMEOUT_SECS", self.email.timeout_secs);
-        env_parse!("NANOFILE_EMAIL_MAX_ATTEMPTS", self.email.max_attempts);
-        // The password is the one SMTP value that is a real secret; a file keeps
-        // it out of the process listing the way the admin-init password does.
-        if let Ok(v) = std::env::var("NANOFILE_EMAIL_PASSWORD") {
-            tracing::warn!(
-                "NANOFILE_EMAIL_PASSWORD is set via environment variable. \
-                 Consider using NANOFILE_EMAIL_PASSWORD_FILE instead, \
-                 which is less likely to leak via process listings or logs."
-            );
-            self.email.password = Some(v);
-        }
-        if let Ok(filepath) = std::env::var("NANOFILE_EMAIL_PASSWORD_FILE") {
-            match std::fs::read_to_string(&filepath) {
-                Ok(password) => self.email.password = Some(password.trim().to_string()),
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to read NANOFILE_EMAIL_PASSWORD_FILE from {}: {}",
-                        filepath,
-                        e
-                    );
-                }
-            }
-        }
-        env_str!("NANOFILE_UI_DEFAULT_LANGUAGE", self.ui.default_language);
-        env_str!("NANOFILE_UI_TRAY_LANGUAGE", self.ui.tray_language);
-        env_str!(
-            "NANOFILE_SYNC_VERIFY_FS_OBJECTS",
-            self.sync.verify_fs_objects
-        );
-        env_parse!("NANOFILE_SYNC_MAX_TREE_DEPTH", self.sync.max_tree_depth);
-        env_parse!("NANOFILE_SYNC_MAX_TREE_VISITS", self.sync.max_tree_visits);
-
-        // Admin init env vars
-        if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_EMAIL") {
-            self.admin_init.email = Some(v);
-        }
-        if let Ok(v) = std::env::var("NANOFILE_ADMIN_INIT_PASSWORD") {
-            tracing::warn!(
-                "NANOFILE_ADMIN_INIT_PASSWORD is set via environment variable. \
-                 Consider using NANOFILE_ADMIN_INIT_PASSWORD_FILE instead, \
-                 which is less likely to leak via process listings or logs."
-            );
-            self.admin_init.password = Some(v);
-        }
-        if let Ok(filepath) = std::env::var("NANOFILE_ADMIN_INIT_PASSWORD_FILE") {
-            match std::fs::read_to_string(&filepath) {
-                Ok(password) => {
-                    self.admin_init.password = Some(password.trim().to_string());
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to read NANOFILE_ADMIN_INIT_PASSWORD_FILE from {}: {}",
-                        filepath,
-                        e
-                    );
-                }
-            }
-        }
-
-        // Comma-separated list
-        if let Ok(v) = std::env::var("NANOFILE_CORS_ALLOWED_ORIGINS") {
-            self.server.cors_allowed_origins = v.split(',').map(|s| s.trim().to_string()).collect();
-        }
-
-        // Comma-separated trusted proxy IP list.
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_TRUSTED_PROXIES") {
-            self.server.trusted_proxies = v.split(',').map(|s| s.trim().to_string()).collect();
-        }
-
-        // Comma-separated allow-list of Host values used in generated URLs.
-        if let Ok(v) = std::env::var("NANOFILE_SERVER_ALLOWED_HOSTS") {
-            self.server.allowed_hosts = v
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-        }
-
-        // Comma-separated API-key lifetime presets (days). Entries that do not
-        // parse are dropped rather than failing startup; an empty result means
-        // "no presets", and the API still accepts any bounded lifetime.
-        if let Ok(v) = std::env::var("NANOFILE_AUTH_API_KEY_TTL_PRESETS_DAYS") {
-            self.auth.api_key_ttl_presets_days = v
-                .split(',')
-                .filter_map(|s| s.trim().parse::<u64>().ok())
-                .collect();
+            self.settings.refresh_interval_secs = parsed;
         }
     }
 }

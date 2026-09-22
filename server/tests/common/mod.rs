@@ -505,6 +505,7 @@ impl TestServer {
             },
             ui: Default::default(),
             sync: Default::default(),
+            settings: Default::default(),
         };
         tweak(&mut config);
         // Ensure block directory exists
@@ -518,7 +519,7 @@ impl TestServer {
         .await;
 
         let state = Arc::new(AppState::new(db, config, temp_file_manager));
-        let block_dir = state.config.storage.block_dir.clone();
+        let block_dir = state.config().storage.block_dir.clone();
 
         // The application the binary serves, middleware and all. It used to be
         // a copy of the router behind a permissive 512 MiB body limit, which

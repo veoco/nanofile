@@ -348,17 +348,23 @@ tray_language = "auto"
 #   NANOFILE_EMAIL_FROM_NAME
 #   NANOFILE_EMAIL_TIMEOUT_SECS
 #   NANOFILE_EMAIL_MAX_ATTEMPTS
+#   NANOFILE_EMAIL_PAUSED
+#   NANOFILE_EMAIL_NOTIFY_NEW_DEVICE
+#   NANOFILE_EMAIL_NOTIFY_API_KEY_CREATED
+#   NANOFILE_EMAIL_NOTIFY_NEW_LOGIN
 #
-# Master switch for outbound mail. It can only be turned on here (or via the
-# environment) — never from the admin Web UI — because sending mail is an
-# operational decision. While it is false the password-reset flow mints no
-# token and no notification is queued.
+# Master switch for outbound mail. This page still works, but from this release
+# on it is one of the settings managed at /sysadmin/settings/email/ (or via the
+# environment variable above, which always wins). While it is false the
+# password-reset flow mints no token and no notification is queued.
 #
-# Everything below is a *bootstrap* value: on first start it seeds the settings
-# saved at /sysadmin/email/, and from then on that page is the source of truth
-# (the startup log warns when the two disagree). Password reset links are only
-# ever delivered to the account owner's inbox; the server never returns a reset
-# link in an HTTP response, since echoing it back would allow account takeover.
+# Every value below is a *bootstrap* value: it supplies the setting until an
+# administrator saves one at /sysadmin/settings/email/, and from then on the
+# saved value is the source of truth unless `[settings] config_override_keys`
+# names the key. The startup log warns when the two disagree. Password reset
+# links are only ever delivered to the account owner's inbox; the server never
+# returns a reset link in an HTTP response, since echoing it back would allow
+# account takeover.
 enabled = false
 # host = "smtp.example.com"
 # port = 587
@@ -371,6 +377,10 @@ enabled = false
 # from_name = "Nanofile"
 # timeout_secs = 10
 # max_attempts = 5
+# paused = false
+# notify_new_device = true
+# notify_api_key_created = true
+# notify_new_login = true
 
 [admin_init]
 # Environment variables:
@@ -460,3 +470,34 @@ max_connections = 1024
 max_connections_per_ip = 64
 # Seconds a connection may stay unauthenticated before the server drops it (0 = disabled).
 subscribe_timeout_secs = 60
+
+[settings]
+# Environment variables:
+#   NANOFILE_SETTINGS_CONFIG_POLICY
+#   NANOFILE_SETTINGS_CONFIG_OVERRIDE_KEYS   (comma-separated)
+#   NANOFILE_SETTINGS_REFRESH_INTERVAL_SECS
+#
+# How the config file and the settings saved at /sysadmin/settings/ layer with
+# each other. This section is deliberately not editable from the admin UI: it
+# decides what a saved setting means, so it has to come from outside the layer
+# the UI writes to.
+#
+# The order is always, highest first:
+#
+#   1. an environment variable (NANOFILE_*, e.g. NANOFILE_SERVER_PORT)
+#   2. this file, for the keys named below
+#   3. the database row saved from /sysadmin/settings/
+#   4. the built-in default
+#
+# "bootstrap" (the default) makes this file a first-start seed: a key with no
+# saved row takes its value from here, and stops mattering for that key once an
+# administrator saves one. The startup log lists the keys where the file and the
+# saved value disagree and the saved value is winning.
+config_policy = "bootstrap"
+# Under "bootstrap", these keys still take the value from this file. Use it to
+# force a deployment-managed value back, e.g. ["server.site_url"].
+# config_override_keys = []
+# Seconds between re-reads of the saved settings, so a change made on another
+# instance (or restored from a backup) is picked up without a restart.
+# 0 disables the periodic read.
+# refresh_interval_secs = 30
