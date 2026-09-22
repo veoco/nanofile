@@ -56,31 +56,13 @@
                 <span class="badge badge-gray">{{ t.tr("admin.email_paused_on") }}</span>
             </div>
             {% endif %}
-            <div class="flex items-center justify-between gap-2">
-                <span class="text-ink-2">{{ t.tr("admin.email_origin") }}</span>
-                <span class="text-ink-3 text-[12px]">
-                    {% if from_config %}{{ t.tr("admin.email_origin_config") }}
-                    {% else %}{{ t.tr("admin.email_origin_stored") }}{% endif %}
-                </span>
-            </div>
-            {% match updated_at_ts %}
-            {% when Some with (ts) %}
-            <div class="flex items-center justify-between gap-2">
-                <span class="text-ink-2">{{ t.tr("admin.email_updated") }}</span>
-                {{ time::ts_class(ts, "text-ink-3 text-[12px]") }}
-            </div>
-            {% when None %}
-            {% endmatch %}
         </div>
 
         {# A plaintext relay is a real choice for a localhost relay and a real
            mistake anywhere else, so it is called out rather than left to the
-           selected option in the form below. #}
+           settings page. #}
         {% if plaintext %}
         <p class="nf-prow-hi text-warn-text mt-3">{{ t.tr("admin.email_plaintext_warning") }}</p>
-        {% endif %}
-        {% if password_broken %}
-        <p class="nf-prow-hi text-err-text mt-3">{{ t.tr("admin.email_password_broken") }}</p>
         {% endif %}
         {% if !config_enabled %}
         <p class="nf-prow-hi mt-3">{{ t.tr("admin.email_disabled_hint") }}</p>
@@ -136,115 +118,37 @@
     </section>
 </div>
 
-{# ── SMTP settings ───────────────────────────────────────────────────── #}
+{# ── Where the settings live ─────────────────────────────────────────── #}
+{# Configuration moved to the settings area: this page used to own a second,
+   editable copy of it, which meant two places to look and two places to get
+   out of step. What is left here is the one fact this page has to state —
+   where the SMTP values come from right now. #}
 <section class="nf-form mt-5">
     <h2>{{ t.tr("admin.email_smtp_title") }}</h2>
-    <p class="desc">{{ t.tr("admin.email_smtp_desc") }}</p>
-    <form action="/sysadmin/email/settings/" method="POST" class="body">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="status" value="{{ status_filter }}">
-        <input type="hidden" name="page" value="{{ page }}">
-
-        <div class="grid gap-4 sm:grid-cols-2">
-            <div>
-                <label class="form-label mb-1" for="host">{{ t.tr("admin.email_host") }}</label>
-                <input type="text" name="host" id="host" value="{{ host }}"
-                       placeholder="smtp.example.com" class="input">
-            </div>
-            <div>
-                <label class="form-label mb-1" for="port">{{ t.tr("admin.email_port") }}</label>
-                <input type="number" name="port" id="port" value="{{ port }}" min="1" max="65535"
-                       class="input">
-            </div>
-            <div>
-                <label class="form-label mb-1" for="tls">{{ t.tr("admin.email_tls") }}</label>
-                <select name="tls" id="tls" class="select">
-                    {% for option in tls_options %}
-                    <option value="{{ option.id }}" {% if tls == option.id %}selected{% endif %}>{{ option.label }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label class="form-label mb-1" for="username">{{ t.tr("admin.email_username") }}</label>
-                <input type="text" name="username" id="username" value="{{ username }}"
-                       autocomplete="off" class="input">
-            </div>
-            <div>
-                <label class="form-label mb-1" for="password">{{ t.tr("admin.email_password") }}</label>
-                <input type="password" name="password" id="password" value=""
-                       autocomplete="new-password"
-                       placeholder="{% if password_set %}{{ t.tr("admin.email_password_keep") }}{% endif %}"
-                       class="input">
-                {% if password_set %}
-                <label class="flex items-center gap-1.5 cursor-pointer mt-2">
-                    <input type="checkbox" name="clear_password" class="accent-ink">
-                    <span class="text-[12.5px] text-ink-2">{{ t.tr("admin.email_password_clear") }}</span>
-                </label>
-                {% endif %}
-            </div>
-            <div>
-                <label class="form-label mb-1" for="from_address">{{ t.tr("admin.email_from_address") }}</label>
-                <input type="text" name="from_address" id="from_address" value="{{ from_address }}"
-                       placeholder="nanofile@example.com" class="input">
-            </div>
-            <div>
-                <label class="form-label mb-1" for="from_name">{{ t.tr("admin.email_from_name") }}</label>
-                <input type="text" name="from_name" id="from_name" value="{{ from_name }}"
-                       placeholder="Nanofile" class="input">
-            </div>
-            <div>
-                <label class="form-label mb-1" for="timeout_secs">{{ t.tr("admin.email_timeout") }}</label>
-                <input type="number" name="timeout_secs" id="timeout_secs" value="{{ timeout_secs }}"
-                       min="1" max="300" class="input">
-            </div>
-            <div>
-                <label class="form-label mb-1" for="max_attempts">{{ t.tr("admin.email_max_attempts") }}</label>
-                <input type="number" name="max_attempts" id="max_attempts" value="{{ max_attempts }}"
-                       min="1" max="100" class="input">
-            </div>
+    <p class="desc">{{ t.tr("admin.email_smtp_moved") }}</p>
+    <div class="body flex flex-col gap-2 text-[13px]">
+        <div class="flex items-center justify-between gap-2">
+            <span class="text-ink-2">{{ t.tr("admin.email_origin") }}</span>
+            {% if settings_origin == "environment" %}
+            <span class="badge badge-green">{{ t.tr("setting.origin_environment") }}</span>
+            {% else if settings_origin == "database" %}
+            <span class="badge badge-brand">{{ t.tr("setting.origin_database") }}</span>
+            {% else if settings_origin == "config" %}
+            <span class="badge badge-gray">{{ t.tr("setting.origin_config") }}</span>
+            {% else %}
+            <span class="badge badge-gray">{{ t.tr("setting.origin_default") }}</span>
+            {% endif %}
         </div>
-
-        <div class="mt-5 pt-4 border-t border-line">
-            <h3 class="text-[13px] font-semibold text-ink mb-1">{{ t.tr("admin.email_notify_title") }}</h3>
-            <p class="desc">{{ t.tr("admin.email_notify_desc") }}</p>
-            <div class="flex flex-col gap-2 mt-2">
-                <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" name="notify_new_device" class="accent-ink mt-0.5"
-                           {% if notify_new_device %}checked{% endif %}>
-                    <span>
-                        <span class="text-[13px] text-ink block">{{ t.tr("admin.email_notify_new_device") }}</span>
-                        <span class="text-[12px] text-ink-3">{{ t.tr("admin.email_notify_new_device_hint") }}</span>
-                    </span>
-                </label>
-                <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" name="notify_new_login" class="accent-ink mt-0.5"
-                           {% if notify_new_login %}checked{% endif %}>
-                    <span>
-                        <span class="text-[13px] text-ink block">{{ t.tr("admin.email_notify_new_login") }}</span>
-                        <span class="text-[12px] text-ink-3">{{ t.tr("admin.email_notify_new_login_hint") }}</span>
-                    </span>
-                </label>
-                <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" name="notify_api_key_created" class="accent-ink mt-0.5"
-                           {% if notify_api_key_created %}checked{% endif %}>
-                    <span>
-                        <span class="text-[13px] text-ink block">{{ t.tr("admin.email_notify_api_key") }}</span>
-                        <span class="text-[12px] text-ink-3">{{ t.tr("admin.email_notify_api_key_hint") }}</span>
-                    </span>
-                </label>
-                <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" name="paused" class="accent-ink mt-0.5"
-                           {% if paused %}checked{% endif %}>
-                    <span>
-                        <span class="text-[13px] text-ink block">{{ t.tr("admin.email_pause") }}</span>
-                        <span class="text-[12px] text-ink-3">{{ t.tr("admin.email_pause_hint") }}</span>
-                    </span>
-                </label>
-            </div>
-        </div>
-
-        <button type="submit" class="btn btn-solid mt-4">{{ t.tr("common.save") }}</button>
-    </form>
+        {% if !settings_origin_detail.is_empty() %}
+        <p class="mono text-[12px] text-ink-3">{{ settings_origin_detail }}</p>
+        {% endif %}
+        {% if restart_pending %}
+        <p class="text-[12px] text-warn-text">{{ t.tr("setting.restart_banner") }}</p>
+        {% endif %}
+        <a href="/sysadmin/settings/email/" class="btn btn-line btn-sm self-start mt-1">
+            {{ t.tr("admin.email_open_settings") }}
+        </a>
+    </div>
 </section>
 
 {# ── Outbox ──────────────────────────────────────────────────────────── #}

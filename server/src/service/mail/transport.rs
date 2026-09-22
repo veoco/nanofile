@@ -117,7 +117,6 @@ fn non_empty(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::mail::settings::SettingsOrigin;
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::{TcpListener, TcpStream};
@@ -212,7 +211,6 @@ mod tests {
 
     fn plaintext_settings(port: u16) -> EmailSettings {
         EmailSettings {
-            origin: SettingsOrigin::Stored,
             enabled: true,
             paused: false,
             host: "127.0.0.1".to_string(),
@@ -221,7 +219,6 @@ mod tests {
             username: String::new(),
             password: None,
             password_set: false,
-            password_broken: false,
             from_address: "nanofile@example.com".to_string(),
             from_name: "Nanofile".to_string(),
             timeout_secs: 5,
@@ -229,8 +226,6 @@ mod tests {
             notify_new_device: true,
             notify_api_key_created: true,
             notify_new_login: true,
-            updated_at: 0,
-            updated_by: None,
         }
     }
 

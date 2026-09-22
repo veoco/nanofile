@@ -111,7 +111,7 @@ pub enum Kind {
 /// A setting whose value is read from the config snapshot on every request needs
 /// no hook ([`Apply::Live`]); one that was copied into an object at startup does,
 /// or it would be [`Apply::Restart`] instead.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Hook {
     /// `AuthRateLimiters`: the per-endpoint attempt budgets.
     RateLimits,
@@ -141,6 +141,17 @@ pub enum Apply {
     /// the database) or unrecoverable (a new `secret_key` makes existing
     /// ciphertext permanently unreadable).
     ReadOnly,
+}
+
+impl Hook {
+    /// Every hook, for callers that want to re-apply all of them.
+    pub const ALL: [Hook; 5] = [
+        Hook::RateLimits,
+        Hook::TaskManager,
+        Hook::NotificationManager,
+        Hook::SyncStatics,
+        Hook::MailDrain,
+    ];
 }
 
 impl Apply {
@@ -330,6 +341,15 @@ impl SettingsPolicy {
         matches!(self.config_policy, ConfigPolicy::Override)
             || self.config_override_keys.contains(def.key)
     }
+
+    /// Whether a config-file entry that disagrees with a stored row is being
+    /// ignored, which is worth telling the operator about.
+    ///
+    /// Under [`ConfigPolicy::Override`] the file wins, so there is nothing to
+    /// report — that is the point of the setting.
+    pub fn should_report_drift(&self) -> bool {
+        matches!(self.config_policy, ConfigPolicy::Bootstrap)
+    }
 }
 
 /// One setting with its effective value and where that value came from.
@@ -426,19 +446,22 @@ pub fn resolve_all(
 /// `live_only` skips [`Apply::Restart`] and [`Apply::ReadOnly`] entries, which is
 /// how the running snapshot keeps the startup value of a restart-only setting
 /// while the database row waits for the next start.
-pub fn apply_resolved(
-    config: &mut Config,
-    resolved: &[Resolved],
-    live_only: bool,
-) -> Result<(), String> {
+///
+/// Returns a description of every value that could not be applied. That is
+/// reported rather than fatal: a row written by a newer build (or edited by
+/// hand) must not stop the process from starting, and the admin page has to stay
+/// reachable to fix it.
+pub fn apply_resolved(config: &mut Config, resolved: &[Resolved], live_only: bool) -> Vec<String> {
+    let mut failures = Vec::new();
     for entry in resolved {
         if live_only && !entry.def.apply.is_live() {
             continue;
         }
-        (entry.def.set)(config, &entry.value)
-            .map_err(|e| format!("{} = {:?}: {e}", entry.def.key, entry.value))?;
+        if let Err(e) = (entry.def.set)(config, &entry.value) {
+            failures.push(format!("{} = {:?}: {e}", entry.def.key, entry.value));
+        }
     }
-    Ok(())
+    failures
 }
 
 // ─── Value parsing / formatting ─────────────────────────────────────────────
@@ -982,7 +1005,7 @@ mod tests {
 
         let mut config = defaults.clone();
         let resolved = resolve_all(&defaults, &defaults, &BTreeSet::new(), &rows, &policy);
-        apply_resolved(&mut config, &resolved, true).unwrap();
+        assert!(apply_resolved(&mut config, &resolved, true).is_empty());
         assert!(!config.server.share_link_enabled, "live key applied");
         assert_eq!(
             config.server.max_json_body_mb, 64,

@@ -93,6 +93,7 @@ migrations!(
     m20260920_000001_drop_groups_and_contacts,
     m20260920_000002_purge_foreign_repo_members,
     m20260921_000001_create_email,
+    m20260922_000001_create_settings,
 );
 
 #[cfg(test)]

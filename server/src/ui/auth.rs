@@ -136,7 +136,7 @@ pub async fn login_page(
 /// password?" link whose every submission silently did nothing. Reporting the
 /// honesty of the flow is now part of deciding to show it.
 async fn password_reset_available(state: &Arc<AppState>) -> bool {
-    state.config().auth.enable_password_reset && state.mail.ready().await
+    state.config().auth.enable_password_reset && state.mail.ready()
 }
 
 /// Tell the owner when a browser signs in for the first time.
@@ -157,7 +157,7 @@ async fn notify_new_browser(
 ) {
     use crate::service::mail::{MailKind, detect};
 
-    if !state.mail.allows(MailKind::NewLogin).await {
+    if !state.mail.allows(MailKind::NewLogin) {
         return;
     }
     let agent = user_agent::from_headers(headers);
@@ -1181,7 +1181,7 @@ pub async fn password_reset(
     // `ready()` is stricter than `email.enabled`: it also requires a configured
     // SMTP host and sender, so an install that enabled the switch but never
     // finished configuring it still mints nothing.
-    if !state.mail.ready().await {
+    if !state.mail.ready() {
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
             t: I18n::from_headers(&headers, &state.config().ui.default_language),

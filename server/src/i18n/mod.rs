@@ -171,6 +171,15 @@ impl I18n {
         (**self.dict).get(key).map(|s| s.as_str()).unwrap_or(key)
     }
 
+    /// Whether a key exists.
+    ///
+    /// Lets a caller choose between rendering the translation and rendering
+    /// nothing — the settings pages use it for each setting's optional help
+    /// text, where the alternative would be printing the raw key.
+    pub fn has(&self, key: &str) -> bool {
+        (**self.dict).contains_key(key)
+    }
+
     /// Translate a key and substitute `{name}` placeholders.
     ///
     /// `A` is any `AsRef<str>` so callers may pass `&str`, `&String` or

@@ -254,7 +254,7 @@ pub fn message_id_domain(site_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::mail::settings::{EmailSettings, SettingsOrigin, TlsMode};
+    use crate::service::mail::settings::{EmailSettings, TlsMode};
 
     fn params() -> MailParams {
         MailParams {
@@ -273,7 +273,6 @@ mod tests {
 
     fn settings() -> EmailSettings {
         EmailSettings {
-            origin: SettingsOrigin::Stored,
             enabled: true,
             paused: false,
             host: "smtp.example.com".to_string(),
@@ -282,7 +281,6 @@ mod tests {
             username: String::new(),
             password: None,
             password_set: false,
-            password_broken: false,
             from_address: "nanofile@example.com".to_string(),
             from_name: "Nanofile".to_string(),
             timeout_secs: 10,
@@ -290,8 +288,6 @@ mod tests {
             notify_new_device: true,
             notify_api_key_created: true,
             notify_new_login: true,
-            updated_at: 0,
-            updated_by: None,
         }
     }
 

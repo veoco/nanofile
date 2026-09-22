@@ -2,9 +2,9 @@
 //!
 //! # Shape of the subsystem
 //!
-//! * [`settings`] — the effective SMTP settings: `[email]` in `config.toml` is
-//!   the hard switch plus first-start bootstrap, the `email_settings` row saved
-//!   from `/sysadmin/email/` is the source of truth afterwards.
+//! * [`settings`] — the effective SMTP settings, read from the layered
+//!   configuration (environment, config file, saved row); see
+//!   [`crate::settings`].
 //! * [`message`] — rendering a kind into subject + text + HTML and assembling
 //!   the raw RFC 5322 message.
 //! * [`queue`] — the outbox table: queueing, claiming, backoff, retention.
@@ -33,21 +33,18 @@ pub mod settings;
 pub mod transport;
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use base::error::AppError;
 #[cfg(test)]
 use infra::config::Config;
 use infra::crypto::token_encryption::TokenCipher;
 use infra::entity::email_message;
-use tokio::sync::RwLock;
 
 use crate::repository::Repositories;
-use crate::repository::email_settings::EmailSettingsUpdate;
 
 pub use i18n::MailStrings;
 pub use message::MailParams;
-pub use settings::{EmailSettings, SettingsOrigin, TlsMode};
+pub use settings::{EmailSettings, TlsMode};
 
 /// Scheduler task name for the outbox drainer.
 ///
@@ -55,14 +52,6 @@ pub use settings::{EmailSettings, SettingsOrigin, TlsMode};
 /// `scheduler_setup`, the admin page's "deliver now" button, and the task list
 /// that button's label is read from.
 pub const TASK_NAME: &str = "email delivery";
-
-/// How long a settings snapshot is reused.
-///
-/// Long enough that a burst of logins does not re-read the row per event, short
-/// enough that a change made elsewhere (a second instance, or a restored
-/// database) is picked up without a restart. Saving from the admin page
-/// refreshes it immediately.
-const SETTINGS_TTL: Duration = Duration::from_secs(30);
 
 /// What a message is for. The persisted form is [`MailKind::id`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,12 +138,14 @@ impl From<MailError> for AppError {
 }
 
 /// The mail subsystem, held on `AppState`.
+///
+/// It keeps the configuration *handle*, not a copy: a setting saved at
+/// `/sysadmin/settings/email/` is read by the very next delivery, and there is
+/// no cache to invalidate because there is no second source of truth.
 pub struct Mailer {
     repos: Arc<Repositories>,
     cipher: Arc<TokenCipher>,
     config: crate::settings::RuntimeConfig,
-    /// Last settings read, with the time it was read.
-    cache: RwLock<Option<(EmailSettings, Instant)>>,
 }
 
 impl Mailer {
@@ -167,7 +158,6 @@ impl Mailer {
             repos,
             cipher,
             config,
-            cache: RwLock::new(None),
         }
     }
 
@@ -192,69 +182,25 @@ impl Mailer {
         self.config.get().ui.default_language.clone()
     }
 
-    /// The effective settings, from cache when it is fresh.
-    pub async fn settings(&self) -> Result<EmailSettings, AppError> {
-        {
-            let cache = self.cache.read().await;
-            if let Some((settings, read_at)) = cache.as_ref()
-                && read_at.elapsed() < SETTINGS_TTL
-            {
-                return Ok(settings.clone());
-            }
-        }
-        self.reload().await
-    }
-
-    /// Re-read the settings and refresh the cache.
+    /// The settings in force for this process right now.
     ///
-    /// The admin page reads through this rather than [`Self::settings`]: an
-    /// administrator who just saved must see what they saved, not a snapshot
-    /// taken up to [`SETTINGS_TTL`] ago.
-    pub async fn reload(&self) -> Result<EmailSettings, AppError> {
-        let settings = settings::load(&self.repos, &self.cipher, &self.config.get()).await?;
-        let mut cache = self.cache.write().await;
-        *cache = Some((settings.clone(), Instant::now()));
-        Ok(settings)
-    }
-
-    /// Save administrator input and immediately pick it up.
-    pub async fn save(
-        &self,
-        mut update: EmailSettingsUpdate,
-        updated_by: Option<i32>,
-    ) -> Result<EmailSettings, AppError> {
-        // The audit column is set here rather than by the form: a handler must
-        // not be able to attribute a change to another account.
-        update.updated_by = updated_by;
-        let now = chrono::Utc::now().timestamp();
-        let saved =
-            settings::save(&self.repos, &self.cipher, &self.config.get(), update, now).await?;
-        let mut cache = self.cache.write().await;
-        *cache = Some((saved.clone(), Instant::now()));
-        Ok(saved)
+    /// One snapshot read: a save at `/sysadmin/settings/email/` replaces the
+    /// snapshot, so the very next delivery uses it and no cache has to be
+    /// invalidated.
+    pub fn settings(&self) -> EmailSettings {
+        EmailSettings::from_config(&self.config.get())
     }
 
     /// Whether a message could be delivered right now.
-    pub async fn ready(&self) -> bool {
-        match self.settings().await {
-            Ok(settings) => settings.ready(),
-            Err(e) => {
-                tracing::warn!("could not read the email settings: {e}");
-                false
-            }
-        }
+    pub fn ready(&self) -> bool {
+        self.settings().ready()
     }
 
     /// Whether this kind should be sent: the subsystem must be ready and the
     /// kind's switch on.
-    pub async fn allows(&self, kind: MailKind) -> bool {
-        match self.settings().await {
-            Ok(settings) => settings.ready() && settings.allows(kind),
-            Err(e) => {
-                tracing::warn!("could not read the email settings: {e}");
-                false
-            }
-        }
+    pub fn allows(&self, kind: MailKind) -> bool {
+        let settings = self.settings();
+        settings.ready() && settings.allows(kind)
     }
 
     /// Send one message from the admin page and report the result.
@@ -264,10 +210,10 @@ impl Mailer {
     /// Notifications go the other way (queued, backgrounded) because a user's
     /// login must not wait on SMTP.
     pub async fn send_test(&self, to: &str, language: Option<&str>) -> Result<(), AppError> {
-        let settings = self.reload().await?;
+        let settings = self.settings();
         if !settings.enabled {
             return Err(AppError::BadRequest(
-                "email is disabled in config.toml ([email] enabled)".to_string(),
+                "outbound mail is switched off ([email] enabled)".to_string(),
             ));
         }
         if settings.paused {
@@ -348,7 +294,7 @@ impl Mailer {
         language: Option<&str>,
         params: MailParams,
     ) -> Result<(), AppError> {
-        let settings = self.settings().await?;
+        let settings = self.settings();
         // Cheapest checks first: while mail is off — the default — a login
         // costs nothing at all, not even an address validation.
         if !settings.ready() || !settings.allows(kind) {
@@ -483,7 +429,7 @@ impl Mailer {
 
     /// Deliver everything that is due and apply retention.
     pub async fn drain_once(&self) -> Result<queue::DrainReport, AppError> {
-        let settings = self.settings().await?;
+        let settings = self.settings();
         if !settings.ready() {
             // Not an error: the drainer runs on a timer and mail may simply be
             // switched off or paused at the moment.
@@ -507,89 +453,48 @@ impl Mailer {
     ///
     /// * password reset is enabled while mail is not — the request form accepts
     ///   an address, answers "if that address is registered…", and never sends
-    ///   anything (the flow used to be described as "email-gated", which hid
-    ///   this);
+    ///   anything;
     /// * mail is enabled but the settings cannot deliver — nothing will ever
     ///   arrive and the queue only fills up.
     ///
-    /// The third message is informational: once a settings row exists, the
-    /// `[email]` values in `config.toml` no longer apply, which is easy to
-    /// forget after editing the file and seeing no change.
-    pub async fn log_startup_diagnostics(&self) {
-        if !self.config.get().email.enabled {
-            if self.config.get().auth.enable_password_reset {
+    /// Which *source* each value came from — and whether the config file is
+    /// being superseded by a saved setting — is reported by the settings service
+    /// (`SettingsService::log_startup_diagnostics`), which is the only place
+    /// that knows.
+    pub fn log_startup_diagnostics(&self) {
+        let config = self.config.get();
+        if !config.email.enabled {
+            if config.auth.enable_password_reset {
                 tracing::warn!(
-                    "[auth] enable_password_reset is on but [email] enabled is off:                      /accounts/password/reset/ renders a generic page, mints no token and                      sends no mail. Set [email] enabled = true (and configure SMTP at                      /sysadmin/email/) or set enable_password_reset = false."
+                    "[auth] enable_password_reset is on but [email] enabled is off: \
+                     /accounts/password/reset/ renders a generic page, mints no token and \
+                     sends no mail. Set [email] enabled = true and configure SMTP at \
+                     /sysadmin/settings/email/, or set enable_password_reset = false."
                 );
             }
-            if !self.config.get().email.host.trim().is_empty()
-                || !self.config.get().email.from_address.trim().is_empty()
+            if !config.email.host.trim().is_empty() || !config.email.from_address.trim().is_empty()
             {
                 tracing::info!(
-                    "[email] has a host/sender configured but enabled = false; outbound                      mail is inert until the switch is on."
+                    "[email] has a host/sender configured but enabled = false; outbound mail \
+                     is inert until the switch is on."
                 );
             }
             return;
         }
 
-        match settings::load(&self.repos, &self.cipher, &self.config.get()).await {
-            Err(e) => tracing::warn!("could not read the email settings: {e}"),
-            Ok(settings) => {
-                let missing = settings.missing();
-                if !missing.is_empty() {
-                    tracing::warn!(
-                        "email is enabled but cannot deliver yet: {} missing. Configure it \
-                         at /sysadmin/email/.",
-                        missing.join(", ")
-                    );
-                }
-                match settings.origin {
-                    SettingsOrigin::Config => tracing::info!(
-                        "email settings were seeded from [email] in config.toml; save them at \
-                         /sysadmin/email/ to change them without editing the file"
-                    ),
-                    SettingsOrigin::Stored => {
-                        let bootstrap = EmailSettings::bootstrap(&self.config.get());
-                        let drifting: Vec<&str> = [
-                            ("host", &bootstrap.host, &settings.host),
-                            (
-                                "port",
-                                &bootstrap.port.to_string(),
-                                &settings.port.to_string(),
-                            ),
-                            (
-                                "tls",
-                                &bootstrap.tls.id().to_string(),
-                                &settings.tls.id().to_string(),
-                            ),
-                            ("username", &bootstrap.username, &settings.username),
-                            (
-                                "from_address",
-                                &bootstrap.from_address,
-                                &settings.from_address,
-                            ),
-                            ("from_name", &bootstrap.from_name, &settings.from_name),
-                        ]
-                        .into_iter()
-                        .filter(|(_, configured, effective)| configured != effective)
-                        .map(|(field, _, _)| field)
-                        .collect();
-                        if !drifting.is_empty() {
-                            tracing::warn!(
-                                "[email] in config.toml differs from the saved email settings \
-                                 ({}); the saved settings win. Change them at /sysadmin/email/.",
-                                drifting.join(", ")
-                            );
-                        }
-                    }
-                }
-            }
+        let missing = self.settings().missing();
+        if !missing.is_empty() {
+            tracing::warn!(
+                "email is enabled but cannot deliver yet: {} missing. Configure it at \
+                 /sysadmin/settings/email/.",
+                missing.join(", ")
+            );
         }
     }
 
     /// Put a failed message back in the queue and try it once.
     pub async fn retry(&self, id: i32) -> Result<bool, AppError> {
-        let settings = self.reload().await?;
+        let settings = self.settings();
         let now = chrono::Utc::now().timestamp();
         if !self.repos.email_message.requeue(id, now).await? {
             return Ok(false);
@@ -673,21 +578,26 @@ impl Mailer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::RuntimeConfig;
     use infra::entity::email_message::Status;
     use migration::MigratorTrait;
     use sea_orm::Database;
 
     async fn mailer_with(config: Config) -> (Arc<Repositories>, Mailer) {
+        let (repos, mailer, _runtime) = mailer_with_handle(config).await;
+        (repos, mailer)
+    }
+
+    /// The mailer shares the configuration handle with its caller, so a test can
+    /// replace the snapshot the way a settings save does.
+    async fn mailer_with_handle(config: Config) -> (Arc<Repositories>, Mailer, RuntimeConfig) {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         migration::Migrator::up(&db, None).await.unwrap();
         let repos = Arc::new(Repositories::new_for_tests(Arc::new(db)));
         let cipher = Arc::new(TokenCipher::from_master_key(b"test-secret"));
-        let mailer = Mailer::new(
-            repos.clone(),
-            cipher,
-            crate::settings::RuntimeConfig::new(config),
-        );
-        (repos, mailer)
+        let runtime = RuntimeConfig::new(config);
+        let mailer = Mailer::new(repos.clone(), cipher, runtime.clone());
+        (repos, mailer, runtime)
     }
 
     fn ready_config() -> Config {
@@ -699,6 +609,7 @@ mod tests {
         config.email.tls = "none".to_string();
         config.email.from_address = "nanofile@example.com".to_string();
         config.email.timeout_secs = 1;
+        config.email.max_attempts = 2;
         config
     }
 
@@ -711,13 +622,12 @@ mod tests {
         assert_eq!(MailKind::from_id("digest"), None);
     }
 
-    /// The default deployment: mail off. Nothing may reach the database — not a
-    /// queue row, not a settings row.
+    /// The default deployment: mail off. Nothing may reach the database.
     #[tokio::test]
     async fn with_email_disabled_nothing_is_queued() {
         let (repos, mailer) = mailer_with(Config::default()).await;
-        assert!(!mailer.ready().await);
-        assert!(!mailer.allows(MailKind::NewLogin).await);
+        assert!(!mailer.ready());
+        assert!(!mailer.allows(MailKind::NewLogin));
 
         mailer
             .notify(
@@ -753,133 +663,35 @@ mod tests {
         config.email.host = "smtp.example.com".to_string();
         config.email.from_address = "nanofile@example.com".to_string();
         let (_repos, mailer) = mailer_with(config).await;
-        assert!(!mailer.ready().await, "the config switch still decides");
+        assert!(!mailer.ready(), "the master switch still decides");
 
-        let (repos, mailer) = mailer_with(ready_config()).await;
-        assert!(mailer.ready().await);
+        let (_repos, mailer) = mailer_with(ready_config()).await;
+        assert!(mailer.ready());
 
-        let mut update = settings_update();
-        update.paused = true;
-        mailer.save(update, Some(1)).await.unwrap();
-        assert!(!mailer.ready().await, "paused stops delivery");
-        assert!(repos.email_settings.get().await.unwrap().is_some());
+        let mut paused = ready_config();
+        paused.email.paused = true;
+        let (_repos, mailer) = mailer_with(paused).await;
+        assert!(!mailer.ready(), "paused stops delivery");
     }
 
-    fn settings_update() -> EmailSettingsUpdate {
-        EmailSettingsUpdate {
-            paused: false,
-            host: "127.0.0.1".to_string(),
-            port: 1,
-            tls: "none".to_string(),
-            username: String::new(),
-            password: None,
-            from_address: "nanofile@example.com".to_string(),
-            from_name: "Nanofile".to_string(),
-            timeout_secs: 1,
-            max_attempts: 2,
-            notify_new_device: true,
-            notify_api_key_created: true,
-            notify_new_login: true,
-            updated_by: Some(1),
-        }
-    }
-
-    /// A saved password is stored encrypted and never read back in the clear
-    /// into the row, and an empty submission keeps the stored one.
+    /// A settings save replaces the configuration snapshot; the very next
+    /// delivery must read it. This is what removed the old 30-second cache.
     #[tokio::test]
-    async fn saving_settings_encrypts_the_password_and_keeps_it_when_blank() {
-        let (repos, mailer) = mailer_with(ready_config()).await;
+    async fn a_settings_change_is_visible_to_the_next_delivery() {
+        let (_repos, mailer, runtime) = mailer_with_handle(ready_config()).await;
+        assert_eq!(mailer.settings().from_name, "");
 
-        let mut update = settings_update();
-        update.username = "nanofile@example.com".to_string();
-        update.password = Some(Some("smtp-secret".to_string()));
-        mailer.save(update, Some(7)).await.unwrap();
+        let mut next = ready_config();
+        next.email.from_name = "Mail Bot".to_string();
+        next.email.host = "smtp.example.com".to_string();
+        next.email.port = 2525;
+        runtime.replace(next);
 
-        let row = repos.email_settings.get().await.unwrap().expect("saved");
-        let stored = row.password_enc.clone().expect("stored");
-        assert!(!stored.contains("smtp-secret"), "the password is encrypted");
-        assert_eq!(
-            mailer.settings().await.unwrap().password.as_deref(),
-            Some("smtp-secret")
-        );
-        assert_eq!(row.updated_by, Some(7));
-
-        // Blank password field: keep what is stored.
-        let mut update = settings_update();
-        update.password = None;
-        mailer.save(update, Some(7)).await.unwrap();
-        assert_eq!(
-            repos
-                .email_settings
-                .get()
-                .await
-                .unwrap()
-                .unwrap()
-                .password_enc,
-            Some(stored.clone())
-        );
-
-        // Explicit clear.
-        let mut update = settings_update();
-        update.password = Some(None);
-        mailer.save(update, Some(7)).await.unwrap();
-        assert!(
-            repos
-                .email_settings
-                .get()
-                .await
-                .unwrap()
-                .unwrap()
-                .password_enc
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn a_saved_row_replaces_the_config_bootstrap() {
-        let (repos, mailer) = mailer_with(ready_config()).await;
-        assert_eq!(
-            mailer.settings().await.unwrap().origin,
-            SettingsOrigin::Config
-        );
-
-        let mut update = settings_update();
-        update.from_name = "Mail Bot".to_string();
-        update.host = "smtp.example.com".to_string();
-        update.port = 2525;
-        mailer.save(update, None).await.unwrap();
-
-        let settings = mailer.settings().await.unwrap();
-        assert_eq!(settings.origin, SettingsOrigin::Stored);
+        let settings = mailer.settings();
         assert_eq!(settings.host, "smtp.example.com");
         assert_eq!(settings.port, 2525);
         assert_eq!(settings.from_name, "Mail Bot");
-        assert!(settings.enabled, "the config switch still decides");
-        assert!(repos.email_settings.get().await.unwrap().is_some());
-    }
-
-    /// A stored password that cannot be decrypted (rotated `secret_key`) must
-    /// not read as "no password": sending without credentials would look like a
-    /// relay problem and could leak the mail as plaintext.
-    #[tokio::test]
-    async fn an_undecryptable_password_is_reported_rather_than_ignored() {
-        let (repos, mailer) = mailer_with(ready_config()).await;
-        let mut update = settings_update();
-        update.username = "nanofile@example.com".to_string();
-        update.password = Some(Some("smtp-secret".to_string()));
-        mailer.save(update, None).await.unwrap();
-
-        // A second mailer over the same database but a different master secret.
-        let cipher = Arc::new(TokenCipher::from_master_key(b"rotated-secret"));
-        let other = Mailer::new(
-            repos.clone(),
-            cipher,
-            crate::settings::RuntimeConfig::new(ready_config()),
-        );
-        let settings = other.settings().await.unwrap();
-        assert!(settings.password_broken);
-        assert!(!settings.ready());
-        assert_eq!(settings.missing(), vec!["password"]);
+        assert!(settings.enabled);
     }
 
     #[tokio::test]
@@ -889,7 +701,7 @@ mod tests {
             .send_test("admin@example.com", Some("en"))
             .await
             .expect_err("disabled mail cannot send a test");
-        assert!(error.to_string().contains("disabled"));
+        assert!(error.to_string().contains("switched off"));
 
         let (repos, mailer) = mailer_with(ready_config()).await;
         let error = mailer
@@ -909,13 +721,10 @@ mod tests {
 
     #[tokio::test]
     async fn notifications_can_be_switched_off_individually() {
-        let (repos, mailer) = mailer_with(ready_config()).await;
-        mailer.save(settings_update(), None).await.unwrap();
-
-        let mut update = settings_update();
-        update.notify_new_login = false;
-        update.notify_new_device = false;
-        mailer.save(update, None).await.unwrap();
+        let mut config = ready_config();
+        config.email.notify_new_login = false;
+        config.email.notify_new_device = false;
+        let (repos, mailer) = mailer_with(config).await;
 
         mailer
             .notify(
@@ -951,12 +760,11 @@ mod tests {
     #[tokio::test]
     async fn an_undeliverable_notification_leaves_an_auditable_row() {
         let (repos, mailer) = mailer_with(ready_config()).await;
-        mailer.save(settings_update(), None).await.unwrap();
 
         // Port 1 has nothing listening, and the settings allow two attempts.
         let row = mailer
             .queue(
-                &mailer.settings().await.unwrap(),
+                &mailer.settings(),
                 MailKind::NewLogin,
                 "user@example.com",
                 Some(1),
@@ -974,7 +782,7 @@ mod tests {
 
         // Two drains with an explicit clock: the first retries with a backoff,
         // the second (after that backoff) is the last attempt allowed.
-        let settings = mailer.settings().await.unwrap();
+        let settings = mailer.settings();
         let cipher = TokenCipher::from_master_key(b"test-secret");
         let start = chrono::Utc::now().timestamp();
         queue::drain(&repos, &cipher, &settings, &mailer.hello_name(), start)

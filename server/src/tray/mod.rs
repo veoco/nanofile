@@ -132,7 +132,7 @@ fn resolve_lang_with(config: &Config, locale: Option<&str>) -> &'static I18n {
 /// Runs the server on a background tokio runtime and blocks the main thread in
 /// the platform tray event loop. Never returns on its own: the server task
 /// exits the process when it is done (clean shutdown, Ctrl+C or error).
-pub fn run(config: Config, config_path: PathBuf) -> ! {
+pub fn run(config: Config, env_keys: infra::config::EnvKeys, config_path: PathBuf) -> ! {
     let _ = TRAY_I18N.set(resolve_lang(&config));
 
     let exe_path = absolute(
@@ -140,6 +140,9 @@ pub fn run(config: Config, config_path: PathBuf) -> ! {
             .expect("failed to locate the running executable")
             .as_path(),
     );
+    // The tray menu is built from the config file (it is opened before the
+    // database is read). `site_url` is one of the settings an administrator can
+    // change at runtime, so a saved value reaches the menu at the next start.
     let ctx = TrayContext {
         exe_path,
         config_path: absolute(&config_path),
@@ -150,7 +153,7 @@ pub fn run(config: Config, config_path: PathBuf) -> ! {
     let (quit_tx, quit_rx) = std::sync::mpsc::channel::<TrayCommand>();
 
     rt.spawn(async move {
-        let result = crate::run_server_flow(config, Some(quit_rx)).await;
+        let result = crate::run_server_flow(config, env_keys, Some(quit_rx)).await;
         match result {
             Ok(()) => std::process::exit(0),
             Err(e) => {

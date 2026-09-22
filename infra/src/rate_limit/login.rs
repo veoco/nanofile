@@ -6,6 +6,7 @@
 /// accounts one address has failed on, so credential spraying is caught even
 /// when a successful login keeps resetting the per-address counter.
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -55,11 +56,14 @@ pub struct LoginRateLimiter {
     /// (`ip -> account -> last failure`). A successful login does NOT clear
     /// this: see [`LoginRateLimiter::clear_login_failure`].
     spray: Mutex<HashMap<String, HashMap<String, i64>>>,
-    max_attempts: u32,
-    lockout_secs: i64,
+    /// Atomic so an administrator can change the budget on a running server.
+    /// What is already counted is deliberately kept: making a save reset the
+    /// counters would turn "raise the limit" into "clear every lockout".
+    max_attempts: AtomicU32,
+    lockout_secs: AtomicI64,
     /// Max distinct accounts one address may fail on before it is blocked
     /// (0 = disabled).
-    max_distinct_usernames: u32,
+    max_distinct_usernames: AtomicU32,
 }
 
 impl LoginRateLimiter {
@@ -67,15 +71,39 @@ impl LoginRateLimiter {
         Self {
             attempts: Mutex::new(HashMap::new()),
             spray: Mutex::new(HashMap::new()),
-            max_attempts,
-            lockout_secs: lockout_secs as i64,
-            max_distinct_usernames,
+            max_attempts: AtomicU32::new(max_attempts),
+            lockout_secs: AtomicI64::new(lockout_secs as i64),
+            max_distinct_usernames: AtomicU32::new(max_distinct_usernames),
         }
+    }
+
+    /// Replace the budgets without touching what is already counted.
+    pub fn set_limits(&self, max_attempts: u32, lockout_secs: u64, max_distinct_usernames: u32) {
+        self.max_attempts.store(max_attempts, Ordering::Relaxed);
+        self.lockout_secs
+            .store(lockout_secs as i64, Ordering::Relaxed);
+        self.max_distinct_usernames
+            .store(max_distinct_usernames, Ordering::Relaxed);
+    }
+
+    /// The configured per-key attempt budget.
+    fn limit(&self) -> u32 {
+        self.max_attempts.load(Ordering::Relaxed)
+    }
+
+    /// The configured lockout window, in seconds.
+    fn window(&self) -> i64 {
+        self.lockout_secs.load(Ordering::Relaxed)
+    }
+
+    /// The configured spray-detector budget.
+    fn distinct_limit(&self) -> u32 {
+        self.max_distinct_usernames.load(Ordering::Relaxed)
     }
 
     /// Whether the failed-attempt lockout is disabled (`0`).
     fn lockout_disabled(&self) -> bool {
-        self.max_attempts == 0
+        self.limit() == 0
     }
 
     fn now() -> i64 {
@@ -123,7 +151,7 @@ impl LoginRateLimiter {
         let timestamps = map.entry(key.to_string()).or_default();
         timestamps.push(now);
         // Trim entries older than the lockout window to bound memory.
-        let cutoff = now - self.lockout_secs;
+        let cutoff = now - self.window();
         timestamps.retain(|&t| t > cutoff);
         Self::shrink_attempts(&mut map);
     }
@@ -136,14 +164,14 @@ impl LoginRateLimiter {
             return false;
         }
         let now = Self::now();
-        let cutoff = now - self.lockout_secs;
+        let cutoff = now - self.window();
         let mut map = self.lock();
         let (stale, limited) = match map.get_mut(key) {
             Some(timestamps) => {
                 timestamps.retain(|&t| t > cutoff);
                 (
                     timestamps.is_empty(),
-                    timestamps.len() as u32 >= self.max_attempts,
+                    timestamps.len() as u32 >= self.limit(),
                 )
             }
             None => (false, false),
@@ -165,7 +193,7 @@ impl LoginRateLimiter {
             return false;
         }
         let now = Self::now();
-        let cutoff = now - self.lockout_secs;
+        let cutoff = now - self.window();
         let mut map = self.lock();
         for key in keys {
             let (stale, limited) = match map.get_mut(*key) {
@@ -173,7 +201,7 @@ impl LoginRateLimiter {
                     timestamps.retain(|&t| t > cutoff);
                     (
                         timestamps.is_empty(),
-                        timestamps.len() as u32 >= self.max_attempts,
+                        timestamps.len() as u32 >= self.limit(),
                     )
                 }
                 None => (false, false),
@@ -193,7 +221,7 @@ impl LoginRateLimiter {
             return;
         }
         let now = Self::now();
-        let cutoff = now - self.lockout_secs;
+        let cutoff = now - self.window();
         let mut map = self.lock();
         for key in keys {
             let timestamps = map.entry((*key).to_string()).or_default();
@@ -240,7 +268,7 @@ impl LoginRateLimiter {
     /// Remember that `username` failed from `ip`, for the spray detector.
     fn record_username_failure(&self, ip: &str, username: &str) {
         let now = Self::now();
-        let cutoff = now - self.lockout_secs;
+        let cutoff = now - self.window();
         let mut map = self.spray.lock().unwrap_or_else(PoisonError::into_inner);
         if !map.contains_key(ip) && map.len() >= MAX_SPRAY_IPS {
             // Evict the address whose most recent failure is oldest. Failure
@@ -262,11 +290,11 @@ impl LoginRateLimiter {
     /// Whether `ip` has failed on at least the configured number of distinct
     /// accounts within the window.
     fn is_spraying(&self, ip: &str) -> bool {
-        if self.max_distinct_usernames == 0 {
+        if self.distinct_limit() == 0 {
             return false;
         }
         let now = Self::now();
-        let cutoff = now - self.lockout_secs;
+        let cutoff = now - self.window();
         let mut map = self.spray.lock().unwrap_or_else(PoisonError::into_inner);
         let (empty, distinct) = match map.get_mut(ip) {
             Some(per_ip) => {
@@ -279,7 +307,41 @@ impl LoginRateLimiter {
             map.remove(ip);
             return false;
         }
-        distinct >= self.max_distinct_usernames
+        distinct >= self.distinct_limit()
+    }
+}
+
+/// The same rule as [`GenericRateLimiter`]: a running budget change must not
+/// clear the lockout state an attacker earned.
+#[cfg(test)]
+mod set_limits_tests {
+    use super::LoginRateLimiter;
+
+    #[test]
+    fn set_limits_keeps_what_is_already_counted() {
+        let limiter = LoginRateLimiter::new(2, 3600, 2);
+        // Each call records one attempt per key.
+        limiter.record_failures(&["ip", "ip:pair"]);
+        limiter.record_failures(&["ip", "ip:pair"]);
+        assert!(limiter.is_locked("ip"));
+
+        limiter.set_limits(4, 3600, 2);
+        assert!(
+            !limiter.is_locked("ip"),
+            "the raised budget applies at once"
+        );
+        // Two attempts were already counted before the change, so two more
+        // reach the new budget of four.
+        limiter.record_failures(&["ip"]);
+        limiter.record_failures(&["ip"]);
+        assert!(limiter.is_locked("ip"));
+
+        // Raising the spray budget takes effect on the same terms.
+        limiter.record_username_failure("addr", "a");
+        limiter.record_username_failure("addr", "b");
+        assert!(limiter.is_spraying("addr"));
+        limiter.set_limits(4, 3600, 9);
+        assert!(!limiter.is_spraying("addr"));
     }
 }
 

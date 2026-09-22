@@ -20,6 +20,7 @@ pub mod shares;
 pub mod sso;
 pub mod starred;
 pub mod sysadmin;
+pub mod system_settings;
 pub mod trash;
 pub mod two_factor;
 pub mod user_agent;
@@ -250,12 +251,29 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/sysadmin/tasks/{name}/trigger/",
             axum::routing::post(admintasks::trigger_task),
         )
-        // Admin — email management (SMTP settings, outbox, notification switches)
-        .route("/sysadmin/email/", get(email::email_page))
+        // Admin — system management: every setting that can be managed at
+        // runtime, one page per area. `{section}` is validated against the
+        // catalog, so an unknown one lands on the first page rather than 404ing.
+        .route("/sysadmin/settings/", get(system_settings::settings_page))
         .route(
-            "/sysadmin/email/settings/",
-            axum::routing::post(email::save_settings),
+            "/sysadmin/settings/{section}/",
+            get(system_settings::settings_page),
         )
+        .route(
+            "/sysadmin/settings/{section}/save/",
+            axum::routing::post(system_settings::save),
+        )
+        .route(
+            "/sysadmin/settings/reset/",
+            axum::routing::post(system_settings::reset),
+        )
+        .route(
+            "/sysadmin/settings/refresh/",
+            axum::routing::post(system_settings::refresh),
+        )
+        // Admin — email management (outbox, delivery state, test message).
+        // The SMTP configuration itself lives under /sysadmin/settings/email/.
+        .route("/sysadmin/email/", get(email::email_page))
         .route(
             "/sysadmin/email/test/",
             axum::routing::post(email::send_test),

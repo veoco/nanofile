@@ -65,6 +65,35 @@ impl AuthRateLimiters {
             search: Arc::new(GenericRateLimiter::new(cfg.search_max_per_minute, 60)),
         })
     }
+
+    /// Push a new configuration into the limiters of a running server.
+    ///
+    /// The windows already counted are kept: a save must not be a way to clear a
+    /// lockout, and raising a budget should not forget who has been trying.
+    pub fn apply(&self, cfg: &AuthConfig) {
+        self.login.set_limits(
+            cfg.max_login_attempts,
+            cfg.lockout_duration_secs,
+            cfg.max_distinct_usernames_per_ip,
+        );
+        self.password_reset
+            .set_limits(cfg.password_reset_max_per_hour, 3600);
+        self.registration
+            .set_limits(cfg.registration_max_per_hour, 3600);
+        self.totp.set_limits(cfg.totp_max_attempts, 300);
+        self.disable_2fa.set_limits(cfg.totp_max_attempts, 300);
+        self.link_password
+            .set_limits(cfg.link_password_max_per_hour, 3600);
+        self.repo_password
+            .set_limits(cfg.repo_password_max_per_hour, 3600);
+        self.share_download
+            .set_limits(cfg.share_download_max_per_minute, 60);
+        self.webdav_auth
+            .set_limits(cfg.webdav_max_failures_per_5min, 300);
+        self.reindex.set_limits(cfg.reindex_max_per_hour, 3600);
+        self.sso_link.set_limits(cfg.sso_link_max_per_hour, 3600);
+        self.search.set_limits(cfg.search_max_per_minute, 60);
+    }
 }
 
 impl AuthRateLimiters {

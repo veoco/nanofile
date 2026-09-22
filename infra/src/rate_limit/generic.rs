@@ -9,6 +9,7 @@
 /// not silently turn 0 into 1: that would make "unlimited" mean "the first
 /// request is already rejected".
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -25,22 +26,42 @@ const MAX_KEYS: usize = 50_000;
 
 pub struct GenericRateLimiter {
     attempts: Mutex<HashMap<String, Vec<i64>>>,
-    max_attempts: u32,
-    window_secs: i64,
+    /// Atomic so an administrator can change the budget on a running server.
+    /// The window already counted is deliberately kept: making a save reset the
+    /// counters would turn "raise the limit" into "clear every lockout".
+    max_attempts: AtomicU32,
+    window_secs: AtomicI64,
 }
 
 impl GenericRateLimiter {
     pub fn new(max_attempts: u32, window_secs: u64) -> Self {
         Self {
             attempts: Mutex::new(HashMap::new()),
-            max_attempts,
-            window_secs: window_secs as i64,
+            max_attempts: AtomicU32::new(max_attempts),
+            window_secs: AtomicI64::new(window_secs as i64),
         }
+    }
+
+    /// Replace the budget and the window without touching what is counted.
+    pub fn set_limits(&self, max_attempts: u32, window_secs: u64) {
+        self.max_attempts.store(max_attempts, Ordering::Relaxed);
+        self.window_secs
+            .store(window_secs as i64, Ordering::Relaxed);
     }
 
     /// Whether this limiter is disabled (`0 = unlimited`).
     fn disabled(&self) -> bool {
-        self.max_attempts == 0
+        self.max_attempts.load(Ordering::Relaxed) == 0
+    }
+
+    /// The configured budget.
+    fn limit(&self) -> u32 {
+        self.max_attempts.load(Ordering::Relaxed)
+    }
+
+    /// The configured window, in seconds.
+    fn window(&self) -> i64 {
+        self.window_secs.load(Ordering::Relaxed)
     }
 
     fn now() -> i64 {
@@ -85,7 +106,7 @@ impl GenericRateLimiter {
         let mut map = self.lock();
         let timestamps = map.entry(key.to_string()).or_default();
         timestamps.push(now);
-        let cutoff = now - self.window_secs;
+        let cutoff = now - self.window();
         timestamps.retain(|&t| t > cutoff);
         Self::shrink(&mut map);
     }
@@ -96,14 +117,14 @@ impl GenericRateLimiter {
             return false;
         }
         let now = Self::now();
-        let cutoff = now - self.window_secs;
+        let cutoff = now - self.window();
         let mut map = self.lock();
         let (stale, limited) = match map.get_mut(key) {
             Some(timestamps) => {
                 timestamps.retain(|&t| t > cutoff);
                 (
                     timestamps.is_empty(),
-                    timestamps.len() as u32 >= self.max_attempts,
+                    timestamps.len() as u32 >= self.limit(),
                 )
             }
             None => (false, false),
@@ -128,6 +149,31 @@ impl GenericRateLimiter {
 #[cfg(test)]
 mod tests {
     use super::{GenericRateLimiter, MAX_KEYS};
+
+    /// Raising the budget must take effect immediately *without* forgetting who
+    /// has been trying: a save that cleared the counters would turn "raise the
+    /// limit" into "clear every lockout".
+    #[test]
+    fn set_limits_keeps_what_is_already_counted() {
+        let limiter = GenericRateLimiter::new(2, 3600);
+        limiter.record_attempt("k");
+        limiter.record_attempt("k");
+        assert!(
+            limiter.is_limited("k"),
+            "the second attempt hits the budget"
+        );
+
+        limiter.set_limits(3, 3600);
+        assert!(
+            !limiter.is_limited("k"),
+            "the raised budget applies at once, over the two attempts already counted"
+        );
+        limiter.record_attempt("k");
+        assert!(limiter.is_limited("k"), "the third attempt now hits it");
+
+        limiter.set_limits(0, 3600);
+        assert!(!limiter.is_limited("k"), "0 still means unlimited");
+    }
 
     #[test]
     fn zero_attempts_means_unlimited() {

@@ -72,10 +72,11 @@ pub struct NotificationManager {
     subscriptions: Arc<RwLock<HashMap<String, HashSet<u64>>>>,
     /// Monotonically increasing client ID counter.
     next_id: Arc<AtomicU64>,
-    /// Global cap on concurrent connections (0 = unlimited).
-    max_connections: u64,
+    /// Global cap on concurrent connections (0 = unlimited). Atomic so an
+    /// administrator can change it on a running server.
+    max_connections: Arc<AtomicU64>,
     /// Cap on concurrent connections per client IP (0 = unlimited).
-    max_connections_per_ip: u64,
+    max_connections_per_ip: Arc<AtomicU64>,
 }
 
 impl NotificationManager {
@@ -101,19 +102,28 @@ impl NotificationManager {
             clients: Arc::new(RwLock::new(HashMap::new())),
             subscriptions: Arc::new(RwLock::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
-            max_connections,
-            max_connections_per_ip,
+            max_connections: Arc::new(AtomicU64::new(max_connections)),
+            max_connections_per_ip: Arc::new(AtomicU64::new(max_connections_per_ip)),
         }
+    }
+
+    /// Replace the connection caps. Clients already connected are not dropped;
+    /// the new cap applies to the next registration.
+    pub fn set_connection_limits(&self, max_connections: u64, max_connections_per_ip: u64) {
+        self.max_connections
+            .store(max_connections, Ordering::Relaxed);
+        self.max_connections_per_ip
+            .store(max_connections_per_ip, Ordering::Relaxed);
     }
 
     /// Global cap on concurrent connections (0 = unlimited).
     pub fn max_connections(&self) -> u64 {
-        self.max_connections
+        self.max_connections.load(Ordering::Relaxed)
     }
 
     /// Cap on concurrent connections per client IP (0 = unlimited).
     pub fn max_connections_per_ip(&self) -> u64 {
-        self.max_connections_per_ip
+        self.max_connections_per_ip.load(Ordering::Relaxed)
     }
 
     /// Number of currently connected clients.
@@ -156,10 +166,10 @@ impl NotificationManager {
                 .values()
                 .filter(|c| c.peer_ip == client.peer_ip)
                 .count();
-            let over_ip =
-                self.max_connections_per_ip > 0 && same_ip as u64 >= self.max_connections_per_ip;
-            let over_global =
-                self.max_connections > 0 && clients.len() as u64 >= self.max_connections;
+            let per_ip_cap = self.max_connections_per_ip.load(Ordering::Relaxed);
+            let global_cap = self.max_connections.load(Ordering::Relaxed);
+            let over_ip = per_ip_cap > 0 && same_ip as u64 >= per_ip_cap;
+            let over_global = global_cap > 0 && clients.len() as u64 >= global_cap;
             if over_global || over_ip {
                 return None;
             }

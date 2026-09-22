@@ -68,6 +68,15 @@ if (userMenu && userButton) {
       emailLink.className = menuItem;
       emailLink.textContent = __t('ui.email_management');
       dropdown.appendChild(emailLink);
+
+      // System management: the settings pages, where every runtime-editable
+      // setting lives (including the email configuration the page above no
+      // longer owns).
+      var settingsLink = document.createElement("a");
+      settingsLink.href = "/sysadmin/settings/";
+      settingsLink.className = menuItem;
+      settingsLink.textContent = __t('ui.system_settings');
+      dropdown.appendChild(settingsLink);
     }
 
     var signOut = document.createElement("a");

@@ -244,14 +244,18 @@ pub fn register_default_tasks(
 
     // Periodic: deliver queued mail and apply retention (every 30 seconds).
     //
-    // Only registered when the config switch is on: with mail disabled there is
-    // nothing that could ever be queued, and a permanently idle row in
-    // /sysadmin/tasks/ invites the reader to wonder whether it is broken.
-    if let Some(mail) = mail.filter(|mail| mail.config_enabled()) {
+    // Only registered while the config switch was on used to mean a restart was
+    // needed to start mailing. It is registered unconditionally now: the switch
+    // is a setting an administrator can flip at runtime, and the task decides
+    // what to do on each run.
+    if let Some(mail) = mail {
         let mail = mail.clone();
         scheduler.spawn_periodic(MAIL_TASK, 30, move || {
             let mail = mail.clone();
             async move {
+                if !mail.config_enabled() {
+                    return TaskOutput::success("outbound mail is switched off", None);
+                }
                 match mail.drain_once().await {
                     Ok(report) if report.attempted() == 0 && report.pruned == 0 => {
                         TaskOutput::success("no queued mail", None)

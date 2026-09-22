@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
-use infra::config::Config;
+use infra::config::{Config, EnvKeys};
 use infra::db::establish_connection;
 use server::AppState;
 
@@ -143,10 +143,14 @@ fn notification_key_is_weak(key: &str) -> bool {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let mut config = match &cli.config {
-        Some(path) => Config::load_from(path)?,
-        None => Config::load()?,
+    // `*_tracked` also reports which settings the environment supplied: the
+    // admin page needs that to say whether a database save would take effect.
+    let loaded = match &cli.config {
+        Some(path) => Config::load_from_tracked(path)?,
+        None => Config::load_tracked()?,
     };
+    let mut config = loaded.config;
+    let env_keys = loaded.env_keys;
 
     // Same resolution order as `Config::load()` — the tray's auto-start
     // entries pass it on and the log target persistence uses it.
@@ -436,11 +440,11 @@ fn main() -> anyhow::Result<()> {
             // the server runs on background tokio workers instead.
             #[cfg(feature = "tray")]
             if tray_mode {
-                tray::run(config, config_path);
+                tray::run(config, env_keys, config_path);
             }
 
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(run_server_flow(config, None))
+            rt.block_on(run_server_flow(config, env_keys, None))
         }
         Command::Adduser {
             email,
@@ -498,17 +502,48 @@ fn main() -> anyhow::Result<()> {
 
 /// DB setup plus server startup — shared by the headless path and the tray
 /// path (`tray::run` spawns this onto its background runtime).
-async fn run_server_flow(config: Config, tray_cmd: Option<TrayCmdReceiver>) -> anyhow::Result<()> {
+async fn run_server_flow(
+    config: Config,
+    env_keys: EnvKeys,
+    tray_cmd: Option<TrayCmdReceiver>,
+) -> anyhow::Result<()> {
     let db = establish_connection(&config.database).await?;
     migration::Migrator::up(&db, None).await?;
-    run_server(db, config, tray_cmd).await
+    run_server(db, config, env_keys, tray_cmd).await
 }
 
 async fn run_server(
     db: DatabaseConnection,
     config: Config,
+    env_keys: EnvKeys,
     tray_cmd: Option<TrayCmdReceiver>,
 ) -> anyhow::Result<()> {
+    // ── The layered configuration ─────────────────────────────────────
+    // Read the saved settings before anything is built from the config: a value
+    // an administrator saved must decide the bind address, the data
+    // directories, the caches and every other startup-time capture, not just
+    // what a request sees afterwards.
+    let settings_repo =
+        server::repository::settings::DbSettingsRepository::new(Arc::new(db.clone()));
+    let layers = server::settings::SettingsLayers::load(&settings_repo, &config, env_keys).await?;
+    let cipher = infra::crypto::token_encryption::TokenCipher::from_master_key(
+        config.server.secret_key.as_bytes(),
+    );
+    let (startup, broken_secrets) = server::settings::service::resolve_startup(&layers, &cipher);
+    for key in &broken_secrets {
+        tracing::warn!(
+            key = %key,
+            "a saved secret cannot be decrypted any more (the server secret_key changed); \
+             re-enter it at /sysadmin/settings/"
+        );
+    }
+    if let Err(e) = startup.validate() {
+        tracing::warn!(
+            "the effective configuration does not validate: {e}; the server will still start"
+        );
+    }
+    let config = startup;
+
     tracing::info!(
         "starting nanofile server on {}:{}",
         config.server.addr,
@@ -589,7 +624,13 @@ async fn run_server(
     )
     .await;
 
-    let state = Arc::new(AppState::new(db, config.clone(), temp_file_manager));
+    let state = Arc::new(AppState::new_with_layers(db, layers, temp_file_manager));
+    // Say what the layering decided: superseded config-file values, changes that
+    // need a restart, rows this build does not know, unreadable secrets.
+    state.settings.log_startup_diagnostics();
+    // Follow the settings table, so a change made on another instance reaches
+    // this one without a restart.
+    state.spawn_settings_refresh();
 
     // Rewrite any legacy plaintext sync tokens as AEAD ciphertext. This is
     // non-disruptive — clients keep presenting the same raw token — and must

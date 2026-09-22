@@ -344,7 +344,7 @@ mod tests {
 
         // The row decrypts with the same secret it was encrypted with; a
         // different secret is what an operator sees after rotating it.
-        let settings = super::super::settings::EmailSettings::bootstrap(&Default::default());
+        let settings = super::super::settings::EmailSettings::from_config(&Default::default());
         let delivered = attempt(
             &repos,
             &TokenCipher::from_master_key(b"another-secret"),
@@ -442,7 +442,7 @@ mod tests {
         let repos = repos().await;
         let cipher = cipher();
         // Nothing listens on this port, so every attempt fails to connect.
-        let mut settings = super::super::settings::EmailSettings::bootstrap(&Default::default());
+        let mut settings = super::super::settings::EmailSettings::from_config(&Default::default());
         settings.enabled = true;
         settings.host = "127.0.0.1".to_string();
         settings.port = 1;

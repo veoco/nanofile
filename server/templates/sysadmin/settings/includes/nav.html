@@ -1,0 +1,16 @@
+<!-- Settings section links.
+     Mirrors `settings/includes/nav.html`: the same `.nf-tabs` bar the rest of
+     the app uses, with `aria-current` for the page you are on. These are links
+     to sibling pages, not tabs over one panel — each area is its own URL so a
+     bookmark and the browser's Back button both mean something. -->
+{% macro nav(sections, t) %}
+<nav class="nf-tabs" aria-label="{{ t.tr("setting.nav_label") }}">
+    {% for section in sections %}
+    <a href="/sysadmin/settings/{% if section.id != "general" %}{{ section.id }}/{% endif %}"
+       class="nf-tab"
+       {% if section.active %}aria-current="page"{% endif %}>
+        {{ t.tr(section.label_key) }}
+    </a>
+    {% endfor %}
+</nav>
+{% endmacro %}

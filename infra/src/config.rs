@@ -1472,6 +1472,113 @@ fn resolve_dir(
 }
 
 impl Config {
+    /// Reject a configuration the server could not run with.
+    ///
+    /// Called before an administrator's save is persisted, so a value that would
+    /// make the next start fail is refused on the page that produced it instead
+    /// of being discovered after a restart. Also called at startup, where a
+    /// failure is reported and the process still starts (an existing deployment
+    /// must not be bricked by a value it already had).
+    ///
+    /// Returns a message meant to be shown to the operator. Checks that need a
+    /// server-only dependency (the email address parser) live in the settings
+    /// service, which adds them on top of this.
+    pub fn validate(&self) -> Result<(), String> {
+        self.server.validate_encrypted_library()?;
+
+        if self.server.version.trim().is_empty() {
+            return Err("server.version must not be empty".to_string());
+        }
+        if self.server.port == 0 {
+            return Err("server.port must be between 1 and 65535".to_string());
+        }
+        if self.server.max_json_body_mb == 0 {
+            return Err(
+                "server.max_json_body_mb must be at least 1; 0 would reject every JSON \
+                 request"
+                    .to_string(),
+            );
+        }
+        if self.server.site_url.trim().is_empty() {
+            return Err("server.site_url must not be empty".to_string());
+        }
+        for origin in &self.server.cors_allowed_origins {
+            if !origin.contains("://") {
+                return Err(format!(
+                    "server.cors_allowed_origins entry {origin:?} is not an origin \
+                     (expected scheme://host[:port])"
+                ));
+            }
+        }
+        let pwd_hash_algo_is_set = self
+            .server
+            .encrypted_library_pwd_hash_algo
+            .as_deref()
+            .is_some_and(|algo| !algo.trim().is_empty());
+        if self.server.encrypted_library_pwd_hash_params.is_some() && !pwd_hash_algo_is_set {
+            return Err("server.encrypted_library_pwd_hash_params is set without \
+                 encrypted_library_pwd_hash_algo; the parameters would be ignored"
+                .to_string());
+        }
+
+        if self.database.url.trim().is_empty() {
+            return Err("database.url must not be empty".to_string());
+        }
+
+        for (field, dir) in [
+            ("storage.block_dir", &self.storage.block_dir),
+            ("storage.temp_dir", &self.storage.temp_dir),
+            ("storage.thumbnail_dir", &self.storage.thumbnail_dir),
+            ("storage.avatar_dir", &self.storage.avatar_dir),
+        ] {
+            if dir.as_os_str().is_empty() {
+                return Err(format!("{field} must not be empty"));
+            }
+        }
+        if self.storage.ffmpeg_path.trim().is_empty() {
+            return Err(
+                "storage.ffmpeg_path must not be empty; set it to a command name or a path"
+                    .to_string(),
+            );
+        }
+
+        if self.auth.password_min_length < 1 {
+            return Err("auth.password_min_length must be at least 1".to_string());
+        }
+        if self.auth.password_hash_iterations < 1 {
+            return Err("auth.password_hash_iterations must be at least 1".to_string());
+        }
+
+        if self.email.port == 0 {
+            return Err("email.port must be between 1 and 65535".to_string());
+        }
+        if self.email.timeout_secs < 1 {
+            return Err("email.timeout_secs must be at least 1 second".to_string());
+        }
+        if self.email.max_attempts < 1 {
+            return Err("email.max_attempts must be at least 1".to_string());
+        }
+        if !self.email.username.trim().is_empty() && self.email.host.trim().is_empty() {
+            return Err(
+                "email.username is set without email.host; there is nothing to authenticate to"
+                    .to_string(),
+            );
+        }
+
+        if self.logging.level.trim().is_empty() {
+            return Err("logging.level must not be empty".to_string());
+        }
+        if self.logging.max_file_size_mb < 1 {
+            return Err("logging.max_file_size_mb must be at least 1".to_string());
+        }
+
+        if self.sync.verify_fs_objects.trim().is_empty() {
+            return Err("sync.verify_fs_objects must be strict, log or off".to_string());
+        }
+
+        Ok(())
+    }
+
     /// Repair externally visible URL fields at load time.
     ///
     /// Accepts the two shapes operators actually write — a full
@@ -2030,6 +2137,45 @@ request_timeout_secs = 600
             c.download_url_base(Some("192.168.1.100:8082")),
             "http://127.0.0.1:8082"
         );
+    }
+
+    /// A configuration the server could not run with must be refused by the
+    /// admin page that produced it, not discovered after a restart.
+    #[test]
+    fn validate_accepts_defaults_and_rejects_unrunnable_values() {
+        assert_eq!(Config::default().validate(), Ok(()));
+
+        type Mutate = fn(&mut Config);
+        let cases: [(&str, Mutate); 8] = [
+            ("server.version", |c| c.server.version = "  ".to_string()),
+            ("server.port", |c| c.server.port = 0),
+            ("server.max_json_body_mb", |c| c.server.max_json_body_mb = 0),
+            ("server.cors_allowed_origins", |c| {
+                c.server.cors_allowed_origins = vec!["not-an-origin".to_string()]
+            }),
+            ("storage.block_dir", |c| {
+                c.storage.block_dir = PathBuf::new()
+            }),
+            ("auth.password_min_length", |c| {
+                c.auth.password_min_length = 0
+            }),
+            ("email.timeout_secs", |c| c.email.timeout_secs = 0),
+            ("logging.level", |c| c.logging.level = String::new()),
+        ];
+        for (expected_field, mutate) in cases {
+            let mut config = Config::default();
+            mutate(&mut config);
+            let error = config.validate().expect_err("must be rejected");
+            assert!(
+                error.contains(expected_field),
+                "error for {expected_field} was {error:?}"
+            );
+        }
+
+        // The encrypted-library wire contract keeps its own validator.
+        let mut config = Config::default();
+        config.server.encrypted_library_version = 3;
+        assert!(config.validate().is_err());
     }
 
     #[test]

@@ -45,7 +45,7 @@ use crate::notification::manager::NotificationManager;
 use crate::scheduler::Scheduler;
 use crate::service::auth::access_token::AccessTokenManager;
 use crate::service::auth::rate_limit::AuthRateLimiters;
-use crate::settings::RuntimeConfig;
+use crate::settings::{RuntimeConfig, SettingsLayers, SettingsService};
 use infra::config::Config;
 use infra::crypto::password_manager::PasswordManager;
 use infra::storage::DynBlockStorage;
@@ -116,6 +116,10 @@ pub struct AppState {
     /// Outbound mail: settings, queue and transport. Always present; whether it
     /// can actually send is decided by config and the saved settings.
     pub mail: Arc<crate::service::mail::Mailer>,
+    /// The layered settings: the saved rows, the effective value of every
+    /// catalog key and where each came from, and the single point every admin
+    /// save goes through.
+    pub settings: Arc<SettingsService>,
 }
 
 /// Progress of a background reindex task (`POST /api2/reindex/`).
@@ -149,7 +153,60 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
+    /// Build from a configuration that is already fully resolved.
+    ///
+    /// Used by the test harness and by any caller that has no settings table to
+    /// read: the config file is then the only layer.
     pub fn new(db: DatabaseConnection, config: Config, temp_file_manager: TempFileManager) -> Self {
+        let layers = SettingsLayers::plain(&config);
+        Self::build(db, layers, temp_file_manager)
+    }
+
+    /// Build with the real layers: the config file plus the saved settings.
+    ///
+    /// The saved rows are read here, so the value of every setting is decided in
+    /// exactly one place — the same place the admin page reads.
+    pub fn new_with_layers(
+        db: DatabaseConnection,
+        layers: SettingsLayers,
+        temp_file_manager: TempFileManager,
+    ) -> Self {
+        Self::build(db, layers, temp_file_manager)
+    }
+
+    fn build(
+        db: DatabaseConnection,
+        layers: SettingsLayers,
+        temp_file_manager: TempFileManager,
+    ) -> Self {
+        let db = Arc::new(db);
+        // The ciphers are derived from `secret_key`, which is a read-only
+        // setting: it can only come from the environment or the config file, so
+        // the base layer already holds the value the process runs with.
+        let secret = layers.base.server.secret_key.clone();
+        let token_cipher = Arc::new(
+            infra::crypto::token_encryption::TokenCipher::from_master_key(secret.as_bytes()),
+        );
+        let totp_cipher = Arc::new(infra::crypto::totp_encryption::TotpCipher::from_master_key(
+            secret.as_bytes(),
+        ));
+        let repos = Arc::new(crate::repository::Repositories::new(
+            db.clone(),
+            token_cipher.clone(),
+            totp_cipher,
+        ));
+
+        // Every layer is applied inside the service: the environment and the
+        // config file as `base`, the saved rows on top. `config` below is the
+        // result, and it is what every startup-time capture reads.
+        let settings = Arc::new(SettingsService::new(
+            repos.settings.clone(),
+            token_cipher.clone(),
+            layers,
+        ));
+        let config = settings.startup().clone();
+        let runtime = settings.runtime().clone();
+
         let block_dir = Arc::new(PathBuf::from(&config.storage.block_dir));
         let mut block_store: infra::storage::DynBlockStorage =
             infra::storage::new_block_store(&block_dir);
@@ -200,24 +257,8 @@ impl AppState {
         let password_manager = Arc::new(PasswordManager::new());
 
         // Sync tokens stay recoverable (clients re-present them), so they are
-        // encrypted at rest with a key domain-separated from the server secret.
-        let token_cipher = Arc::new(
-            infra::crypto::token_encryption::TokenCipher::from_master_key(
-                config.server.secret_key.as_bytes(),
-            ),
-        );
-
-        let db = Arc::new(db);
-        // TOTP seeds are password-equivalent, so they are encrypted at rest
-        // under a key domain-separated from the server secret.
-        let totp_cipher = Arc::new(infra::crypto::totp_encryption::TotpCipher::from_master_key(
-            config.server.secret_key.as_bytes(),
-        ));
-        let repos = Arc::new(crate::repository::Repositories::new(
-            db.clone(),
-            token_cipher.clone(),
-            totp_cipher,
-        ));
+        // encrypted at rest with a key domain-separated from the server secret;
+        // the cipher itself was built above, before the settings were read.
 
         // Apply sync-protocol hardening knobs (process-wide).
         crate::fs::core::traversal::configure(
@@ -250,39 +291,36 @@ impl AppState {
             None
         };
 
-        // Outbound mail: settings (config bootstrap + the rows saved at
-        // `/sysadmin/settings/email/`), the outbox and the SMTP transport.
-        // The mailer keeps the *handle*, not a snapshot, so a saved SMTP setting
-        // is used by the very next delivery.
-        let config = RuntimeConfig::new(config);
+        // Outbound mail: settings (the layered email values), the outbox and the
+        // SMTP transport. The mailer keeps the *handle*, not a snapshot, so a
+        // saved SMTP setting is used by the very next delivery.
         let mail = Arc::new(crate::service::mail::Mailer::new(
             repos.clone(),
             token_cipher.clone(),
-            config.clone(),
+            runtime.clone(),
         ));
         // The startup diagnostics have to read the settings row, so they run as
         // a task instead of blocking `new` (which is not async).
         {
             let mail = mail.clone();
-            tokio::spawn(async move { mail.log_startup_diagnostics().await });
+            tokio::spawn(async move { mail.log_startup_diagnostics() });
         }
 
         // Register all background tasks (event listener, token expiry, cache
         // cleanup, share/upload link cleanup, gc, index commit, mail delivery).
         // The interval and switch values are read once here; changing them needs
         // a restart, which the settings catalog states for each of them.
-        let startup = config.get();
         crate::scheduler_setup::register_default_tasks(
             &scheduler,
             &repos,
             &db,
             notification_manager.as_ref(),
             &password_manager,
-            &startup.gc,
+            &config.gc,
             &block_store,
             indexer.as_ref(),
             &temp_file_manager,
-            startup.storage.temp_upload_ttl_hours,
+            config.storage.temp_upload_ttl_hours,
             enc_mode,
             block_dir.as_ref(),
             Some(&mail),
@@ -298,12 +336,13 @@ impl AppState {
 
         // Built from the startup snapshot: the cap is captured by the manager,
         // so a change to it is pushed through the settings hook.
-        let task_manager = Arc::new(TaskManager::new(startup.tasks.max_active_tasks));
+        let task_manager = Arc::new(TaskManager::new(config.tasks.max_active_tasks));
 
         Self {
             repos,
             db,
-            config,
+            config: runtime,
+            settings,
             block_store,
             block_dir,
             token_manager: Arc::new(AccessTokenManager::new()),
@@ -325,6 +364,87 @@ impl AppState {
     }
 
     // ── Service factory methods ─────────────────────────────────────────
+
+    /// Push a saved setting into the long-lived object that captured it at
+    /// startup.
+    ///
+    /// Only the settings the catalog marks [`infra::settings::Apply::LiveWithHook`]
+    /// need this: everything else is read from the snapshot on each request, or
+    /// is explicitly restart-only.
+    pub fn apply_settings_hooks(&self, hooks: &std::collections::BTreeSet<infra::settings::Hook>) {
+        use infra::settings::Hook;
+        let config = self.config();
+        for hook in hooks {
+            match hook {
+                Hook::RateLimits => self.auth_limiters.apply(&config.auth),
+                Hook::TaskManager => self
+                    .task_manager
+                    .set_max_active_tasks(config.tasks.max_active_tasks),
+                Hook::NotificationManager => {
+                    if let Some(manager) = &self.notification_manager {
+                        manager.set_connection_limits(
+                            config.notification.max_connections,
+                            config.notification.max_connections_per_ip,
+                        );
+                    }
+                }
+                Hook::SyncStatics => {
+                    crate::fs::core::traversal::configure(
+                        config.sync.max_tree_depth,
+                        config.sync.max_tree_visits,
+                    );
+                    crate::service::sync::configure_fs_object_verification(
+                        &config.sync.verify_fs_objects,
+                    );
+                }
+                // The outbox drainer is registered unconditionally and checks
+                // the live switch itself, so flipping it needs no push.
+                Hook::MailDrain => {}
+            }
+        }
+    }
+
+    /// Keep the running configuration in step with the settings table.
+    ///
+    /// A change made on another instance (or restored from a backup) reaches
+    /// this process without a restart. The environment and the config file are
+    /// deliberately *not* re-read: they are process-level inputs, and a running
+    /// process quietly getting a different value for one of them would be a
+    /// surprise rather than an update.
+    pub fn spawn_settings_refresh(self: &Arc<Self>) {
+        let interval = self.settings.refresh_interval_secs();
+        if interval == 0 {
+            return;
+        }
+        let state = self.clone();
+        let shutdown = self.shutdown_token.child_token();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval));
+            // A slow read must not make the following ticks fire in a burst.
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The first tick completes immediately; skip it so a start-up read
+            // is not duplicated right after the service was built from the table.
+            ticker.tick().await;
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = ticker.tick() => {
+                        match state.settings.reload().await {
+                            Ok(outcome) if !outcome.is_empty() => {
+                                tracing::info!(
+                                    keys = ?outcome.changed.iter().map(String::as_str).collect::<Vec<_>>(),
+                                    "settings changed in the database; applying them now"
+                                );
+                                state.apply_settings_hooks(&outcome.hooks);
+                            }
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!("could not re-read the settings: {e}"),
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     /// The configuration snapshot in force right now.
     ///

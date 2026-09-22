@@ -15,7 +15,6 @@ pub mod client_login_token;
 pub mod commit;
 pub mod deleted_repo;
 pub mod email_message;
-pub mod email_settings;
 pub mod file_lock_timestamp;
 pub mod file_tag;
 pub mod file_trash;
@@ -29,6 +28,7 @@ pub mod password_reset_token;
 pub mod repo;
 pub mod repo_tag;
 pub mod s2fa_token;
+pub mod settings;
 pub mod share_link;
 pub mod sso_login_token;
 pub mod starred;
@@ -53,7 +53,6 @@ use crate::repository::client_login_token::*;
 use crate::repository::commit::*;
 use crate::repository::deleted_repo::*;
 use crate::repository::email_message::*;
-use crate::repository::email_settings::*;
 use crate::repository::file_lock_timestamp::*;
 use crate::repository::file_tag::*;
 use crate::repository::file_trash::*;
@@ -67,6 +66,7 @@ use crate::repository::password_reset_token::*;
 use crate::repository::repo::*;
 use crate::repository::repo_tag::*;
 use crate::repository::s2fa_token::*;
+use crate::repository::settings::*;
 use crate::repository::share_link::*;
 use crate::repository::sso_login_token::*;
 use crate::repository::starred::*;
@@ -107,7 +107,7 @@ pub struct Repositories {
     pub file_tag: Arc<dyn FileTagRepository>,
     pub file_trash: Arc<dyn FileTrashRepository>,
     pub deleted_repo: Arc<dyn DeletedRepoRepository>,
-    pub email_settings: Arc<dyn EmailSettingsRepository>,
+    pub settings: Arc<dyn SettingsRepository>,
     pub email_message: Arc<dyn EmailMessageRepository>,
     pub password_reset_token: Arc<dyn PasswordResetTokenRepository>,
     pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
@@ -175,7 +175,7 @@ impl Repositories {
             file_tag: Arc::new(DbFileTagRepository::new(db.clone())),
             file_trash: Arc::new(DbFileTrashRepository::new(db.clone())),
             deleted_repo: Arc::new(DbDeletedRepoRepository::new(db.clone())),
-            email_settings: Arc::new(DbEmailSettingsRepository::new(db.clone())),
+            settings: Arc::new(DbSettingsRepository::new(db.clone())),
             email_message: Arc::new(DbEmailMessageRepository::new(db.clone())),
             password_reset_token: Arc::new(DbPasswordResetTokenRepository::new(db.clone())),
             user_2fa_backup_code: Arc::new(DbUser2faBackupCodeRepository::new(db.clone())),

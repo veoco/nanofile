@@ -36,6 +36,10 @@ pub struct TestServer {
     pub repos: Arc<Repositories>,
     /// Block storage directory — used by tests to inspect orphan blocks.
     pub block_dir: std::path::PathBuf,
+    /// The application state the running server uses, for tests that exercise a
+    /// service directly (the settings service, for instance) rather than
+    /// through a route.
+    pub state: Arc<AppState>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     /// Directories created under `/tmp` for this server (block storage root and
     /// the full-text index dir). Removed on `Drop` so repeated test runs don't
@@ -565,6 +569,7 @@ impl TestServer {
             db: state.db.clone(),
             repos: state.repos.clone(),
             block_dir,
+            state,
             shutdown_tx: Some(shutdown_tx),
             temp_dirs: vec![block_root, index_dir],
         }

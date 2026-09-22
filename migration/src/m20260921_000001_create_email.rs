@@ -239,6 +239,19 @@ mod tests {
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
     use sea_orm_migration::MigratorTrait;
 
+    /// The number of migrations that run before this one.
+    ///
+    /// Looked up by name rather than assumed to be "the last one": a later
+    /// migration that removes `email_settings` (which this migration's table
+    /// has since been folded into) would otherwise silently become the subject
+    /// of these tests.
+    fn steps_before_this_migration() -> u32 {
+        crate::migration_names()
+            .iter()
+            .position(|name| *name == "m20260921_000001_create_email")
+            .expect("this migration is registered") as u32
+    }
+
     /// A database migrated up to — but not including — this migration, so the
     /// two tables really are created by the code under test.
     async fn before_this_migration() -> (tempfile::TempDir, DatabaseConnection) {
@@ -247,13 +260,16 @@ mod tests {
         let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
             .await
             .expect("connect sqlite");
-        let steps = crate::migration_names()
-            .iter()
-            .position(|name| *name == "m20260921_000001_create_email")
-            .expect("this migration is registered") as u32;
-        crate::Migrator::up(&db, Some(steps))
+        crate::Migrator::up(&db, Some(steps_before_this_migration()))
             .await
             .expect("run prior migrations");
+        (dir, db)
+    }
+
+    /// Stop right after this migration, before any later one touches the tables.
+    async fn db_holding_this_migrations_tables() -> (tempfile::TempDir, DatabaseConnection) {
+        let (dir, db) = before_this_migration().await;
+        crate::Migrator::up(&db, Some(1)).await.expect("run migration");
         (dir, db)
     }
 
@@ -283,7 +299,7 @@ mod tests {
             "the table must not exist before this migration"
         );
 
-        crate::Migrator::up(&db, None).await.expect("run migration");
+        crate::Migrator::up(&db, Some(1)).await.expect("run migration");
 
         // A row inserted with nothing but the delivery defaults must be
         // *deliverable-shaped*: every notification on, not paused, sensible
@@ -323,8 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn queues_a_message_and_clears_its_body_in_place() {
-        let (_dir, db) = before_this_migration().await;
-        crate::Migrator::up(&db, None).await.expect("run migration");
+        let (_dir, db) = db_holding_this_migrations_tables().await;
 
         db.execute_unprepared(
             "INSERT INTO email_messages (kind, to_address, subject, body_enc, status, created_at)
@@ -370,11 +385,10 @@ mod tests {
 
     #[tokio::test]
     async fn down_drops_both_tables() {
-        let (_dir, db) = before_this_migration().await;
-        crate::Migrator::up(&db, None).await.expect("run migration");
+        // Stop right after this migration, then roll exactly it back: running
+        // the whole chain and stepping back once would undo a *later* migration.
+        let (_dir, db) = db_holding_this_migrations_tables().await;
 
-        // This migration is the newest one, so rolling back a single step runs
-        // exactly the `down` under test.
         crate::Migrator::down(&db, Some(1))
             .await
             .expect("run this migration's down");

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{PoisonError, RwLock};
 
 use base::error::AppError;
@@ -40,7 +41,7 @@ pub struct CopyMoveTask {
 /// slot. Guarding that is out of scope.
 pub struct TaskManager {
     tasks: RwLock<HashMap<String, CopyMoveTask>>,
-    max_active_tasks: u64,
+    max_active_tasks: AtomicU64,
 }
 
 const CLEANUP_TTL_SECS: i64 = 3600;
@@ -62,8 +63,17 @@ impl TaskManager {
     pub fn new(max_active_tasks: u64) -> Self {
         Self {
             tasks: RwLock::new(HashMap::new()),
-            max_active_tasks,
+            max_active_tasks: AtomicU64::new(max_active_tasks),
         }
+    }
+
+    /// Replace the concurrent-task cap on a running server.
+    ///
+    /// Tasks already running are not interrupted; the new cap applies to the
+    /// next `create_task`.
+    pub fn set_max_active_tasks(&self, max_active_tasks: u64) {
+        self.max_active_tasks
+            .store(max_active_tasks, Ordering::Relaxed);
     }
 
     /// Create a new task in Pending state, returning its task_id.
@@ -100,7 +110,8 @@ impl TaskManager {
             .values()
             .filter(|t| matches!(t.state, TaskState::Pending | TaskState::Processing))
             .count();
-        if self.max_active_tasks > 0 && active as u64 >= self.max_active_tasks {
+        let cap = self.max_active_tasks.load(Ordering::Relaxed);
+        if cap > 0 && active as u64 >= cap {
             return Err(AppError::TooManyRequests);
         }
 
