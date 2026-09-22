@@ -91,6 +91,17 @@ test("a restart-only setting is marked as such", async ({ page }) => {
   ).toHaveValue(before);
 });
 
+test("an environment-owned row names its variable once", async ({ page }) => {
+  // This suite exports NANOFILE_SERVER_PORT, so the bind port is owned by the
+  // environment: the row has to say which variable, exactly once, next to the
+  // badge that already says where the value came from.
+  await page.goto("/sysadmin/settings/");
+  const row = page.locator('[data-setting="server.port"]');
+  await expect(row.locator("span.badge", { hasText: "Environment" })).toBeVisible();
+  const text = await row.innerText();
+  expect(text.match(/NANOFILE_SERVER_PORT/g)).toHaveLength(1);
+});
+
 test("a read-only value is shown but has no control", async ({ page }) => {
   await page.goto("/sysadmin/settings/advanced/");
   const row = page.locator('[data-setting="database.url"]');

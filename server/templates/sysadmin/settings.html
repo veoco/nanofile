@@ -123,11 +123,6 @@
                         {% if let Some(ts) = row.origin_at %}
                         <span class="text-[11px] text-ink-3">{{ time::ts(ts) }}</span>
                         {% endif %}
-                        {% if row.origin == "environment" %}
-                        {% if let Some(var) = row.env_var %}
-                        <span class="mono text-[11px] text-ink-3">{{ var }}</span>
-                        {% endif %}
-                        {% endif %}
                     </div>
 
                     {% if let Some(config_value) = row.config_value %}

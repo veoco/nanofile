@@ -53,11 +53,11 @@ pub struct SettingRow {
     /// `database`, `default`.
     pub origin: &'static str,
     /// The badge's detail line (variable name, file key, or "saved …").
+    /// For an environment-owned row this is the variable itself, and it is the
+    /// only place the name is rendered.
     pub origin_detail: String,
     /// Unix seconds of the last save, for a database-sourced value.
     pub origin_at: Option<i64>,
-    /// The environment variable that fixes this value, when there is one.
-    pub env_var: Option<&'static str>,
     /// The value in the config file, when a saved value is superseding it —
     /// otherwise an operator editing the file sees no effect and no reason why.
     pub config_value: Option<String>,
@@ -349,7 +349,6 @@ fn build_row(
         origin: origin_id,
         origin_detail,
         origin_at,
-        env_var: def.env,
         config_value,
         restart: def.apply == Apply::Restart,
         pending_restart: pending.contains(def.key),
