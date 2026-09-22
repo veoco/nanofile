@@ -62,29 +62,29 @@ pub struct ServerInfoResponse {
 pub async fn server_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let mut features = vec!["seafile-basic".to_string(), "seafile-pro".to_string()];
     // The desktop client's search tab and mobile search key off "file-search".
-    if state.config.server.file_search_enabled {
+    if state.config().server.file_search_enabled {
         features.push("file-search".to_string());
     }
     // Advertise the local-browser SSO flow only when the server-side feature
     // is enabled (mirrors seahub's CLIENT_SSO_VIA_LOCAL_BROWSER setting).
-    if state.config.server.sso_enabled {
+    if state.config().server.sso_enabled {
         features.push("client-sso-via-local-browser".to_string());
     }
     // Advertise that external share/upload links are disabled, so clients hide
     // sharing entry points. The feature name is a best-effort convention; keep
     // it in sync with the server config toggle `server.share_link_enabled`.
-    if !state.config.server.share_link_enabled {
+    if !state.config().server.share_link_enabled {
         features.push("share-link-disabled".to_string());
     }
 
     let response = ServerInfoResponse {
-        version: state.config.server.version.clone(),
+        version: state.config().server.version.clone(),
         // Taken verbatim by the clients as the `enc_version` of a library they
         // create themselves, so this is the configured version (2 by default,
         // like seahub's `ENCRYPTED_LIBRARY_VERSION`) — never a hard-coded one.
-        encrypted_library_version: state.config.server.encrypted_library_version,
-        desktop_custom_brand: state.config.server.desktop_custom_brand.clone(),
-        desktop_custom_logo: state.config.server.desktop_custom_logo.clone(),
+        encrypted_library_version: state.config().server.encrypted_library_version,
+        desktop_custom_brand: state.config().server.desktop_custom_brand.clone(),
+        desktop_custom_logo: state.config().server.desktop_custom_logo.clone(),
         // Advertised only when configured, and then honoured end to end: a client
         // that sees the algorithm generates a `pwd_hash` instead of a `magic`
         // (seafile's `seafile_generate_magic_and_random_key`), nanofile stores and
@@ -93,18 +93,18 @@ pub async fn server_info(State(state): State<Arc<AppState>>) -> impl IntoRespons
         // seahub emits `encrypted_library_pwd_hash_params` whenever the algorithm
         // is set, even as `""`; do the same so a client never sees the pair split.
         encrypted_library_pwd_hash_algo: state
-            .config
+            .config()
             .server
             .encrypted_library_pwd_hash_algo
             .clone(),
         encrypted_library_pwd_hash_params: state
-            .config
+            .config()
             .server
             .encrypted_library_pwd_hash_algo
             .as_ref()
             .map(|_| {
                 state
-                    .config
+                    .config()
                     .server
                     .encrypted_library_pwd_hash_params
                     .clone()

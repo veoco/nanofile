@@ -46,7 +46,7 @@ pub async fn propfind(
     // `infinity`, so bound what one request may materialise. Over the cap the
     // client is told to retry with a shallower depth instead of being served a
     // truncated (and thus wrong) listing.
-    let limit = state.config.server.max_propfind_entries;
+    let limit = state.config().server.max_propfind_entries;
     let exceeds_limit = |count: usize| limit > 0 && count > limit;
 
     let mut responses = Vec::new();

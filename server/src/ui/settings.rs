@@ -376,7 +376,7 @@ pub async fn change_password(
     if !verify_password_async(
         form.old_password.clone(),
         user_record.password_hash.clone(),
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     )
     .await
     {
@@ -395,15 +395,15 @@ pub async fn change_password(
     // unlike registration and password reset.
     if let Err(msg) = crate::service::auth::password::validate_password(
         &form.new_password,
-        state.config.auth.password_min_length,
-        state.config.auth.require_strong_password,
+        state.config().auth.password_min_length,
+        state.config().auth.require_strong_password,
     ) {
         return render_security_error(&state, &user, msg).await;
     }
 
     let new_hash = hash_password_async(
         form.new_password.clone(),
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     )
     .await;
     state

@@ -18,7 +18,7 @@ pub async fn accessible_repos(
         .sync_service()
         .accessible_repos(
             _auth.user_id,
-            state.config.auth.sync_token_ttl_days,
+            state.config().auth.sync_token_ttl_days,
             &_auth.repo_scope(),
             peer.as_ref(),
         )

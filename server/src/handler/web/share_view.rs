@@ -93,8 +93,11 @@ fn check_share_download_rate(
     addr: &SocketAddr,
     headers: &HeaderMap,
 ) -> Result<(), AppError> {
-    let client_ip =
-        crate::middleware::effective_client_ip(addr, headers, &state.config.server.trusted_proxies);
+    let client_ip = crate::middleware::effective_client_ip(
+        addr,
+        headers,
+        &state.config().server.trusted_proxies,
+    );
     let key = format!("share_download:{client_ip}");
     if state.auth_limiters.share_download.is_limited(&key) {
         return Err(AppError::TooManyRequests);
@@ -203,7 +206,7 @@ pub async fn shared_file_view(
     let pw_ok = crate::service::sharing::share::check_share_link_password(
         &link,
         provided_pwd,
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     )
     .await?;
 
@@ -217,7 +220,7 @@ pub async fn shared_file_view(
         }
         // A wrong password supplied via the header gets the form back with the
         // error; a plain GET just gets the form.
-        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
+        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
@@ -288,7 +291,7 @@ pub async fn shared_file_view(
     let download_url = format!("/f/{}/?dl=1", link.token);
 
     let tpl = ShareViewTemplate {
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
         urls: crate::static_assets::template_urls(),
         file_name: file_name.clone(),
         file_ext,
@@ -331,7 +334,7 @@ pub async fn shared_file_view_post(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
     let rl_key = format!("link_password:{client_ip}");
     if state.auth_limiters.link_password.is_limited(&rl_key) {
@@ -342,7 +345,7 @@ pub async fn shared_file_view_post(
     let valid = crate::service::auth::password::verify_password_async(
         password.clone(),
         link.password.clone().unwrap_or_default(),
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     )
     .await;
 
@@ -351,7 +354,7 @@ pub async fn shared_file_view_post(
         // brute force against one link can't slip under the IP-based limit.
         record_link_password_failure(&state, &token)?;
         // Show password form again with error
-        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
+        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
@@ -371,7 +374,7 @@ pub async fn shared_file_view_post(
         &crate::service::auth::csrf::share_link_cookie_name(&token),
         &token,
         &state.csrf_secret,
-        state.config.server.secure_cookies(),
+        state.config().server.secure_cookies(),
     );
     let redirect = format!("/f/{}/", token);
     Ok((
@@ -445,7 +448,7 @@ pub async fn shared_dir_view(
     let pw_ok = crate::service::sharing::share::check_share_link_password(
         &link,
         provided_pwd,
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     )
     .await?;
 
@@ -456,7 +459,7 @@ pub async fn shared_dir_view(
         if provided_pwd.is_some() {
             record_link_password_failure(&state, &token)?;
         }
-        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
+        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
@@ -511,8 +514,8 @@ pub async fn shared_dir_view(
             &link.path,
             &dir_name,
             ZipLimits {
-                max_entries: state.config.storage.max_zip_entries,
-                max_bytes: state.config.storage.max_zip_bytes,
+                max_entries: state.config().storage.max_zip_entries,
+                max_bytes: state.config().storage.max_zip_bytes,
             },
         )
         .await?;
@@ -620,7 +623,7 @@ pub async fn shared_dir_view(
         Vec::new()
     };
 
-    let t = I18n::from_headers(&headers, &state.config.ui.default_language);
+    let t = I18n::from_headers(&headers, &state.config().ui.default_language);
 
     // `current_path` is repo-absolute, so the trail is taken relative to the
     // share's own root — the share URL is the "root" crumb.
@@ -719,7 +722,7 @@ pub async fn shared_dir_file_view(
     let pw_ok = crate::service::sharing::share::check_share_link_password(
         &link,
         provided_pwd,
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     )
     .await?;
     let unlocked = share_link_unlocked(&state, &token, &headers, pw_ok);
@@ -791,7 +794,7 @@ pub async fn shared_dir_view_post(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
     let rl_key = format!("link_password:{client_ip}");
     if state.auth_limiters.link_password.is_limited(&rl_key) {
@@ -802,7 +805,7 @@ pub async fn shared_dir_view_post(
     let valid = crate::service::auth::password::verify_password_async(
         password.clone(),
         link.password.clone().unwrap_or_default(),
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     )
     .await;
 
@@ -812,7 +815,7 @@ pub async fn shared_dir_view_post(
         // bounds guessing against one link. The GET/file paths already record
         // it; the POST path used to be the hole.
         record_link_password_failure(&state, &token)?;
-        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
+        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
@@ -832,7 +835,7 @@ pub async fn shared_dir_view_post(
         &crate::service::auth::csrf::share_link_cookie_name(&token),
         &token,
         &state.csrf_secret,
-        state.config.server.secure_cookies(),
+        state.config().server.secure_cookies(),
     );
     let redirect = format!("/d/{}/", token);
     Ok((

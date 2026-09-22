@@ -158,7 +158,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
                         crate::middleware::effective_client_ip(
                             &ci.0,
                             &parts.headers,
-                            &state.config.server.trusted_proxies,
+                            &state.config().server.trusted_proxies,
                         )
                     });
                 let _ = repos

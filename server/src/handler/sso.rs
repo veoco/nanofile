@@ -34,7 +34,7 @@ pub async fn client_sso_link(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
     if state.auth_limiters.sso_link.is_limited(&client_ip) {
         return Err(AppError::TooManyRequests);
@@ -66,7 +66,7 @@ pub async fn client_sso_link(
     // which is unreachable for remote clients but never attacker-controlled.
     let link = format!(
         "{}/client-sso/{token}/",
-        state.config.server.site_url.trim_end_matches('/')
+        state.config().server.site_url.trim_end_matches('/')
     );
 
     Ok(Json(serde_json::json!({ "link": link })))

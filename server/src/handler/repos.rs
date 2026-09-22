@@ -188,9 +188,9 @@ pub async fn create_repo(
             repo_req.pwd_hash_params.clone(),
         ),
         repo_req.passwd.as_deref(),
-        &service::EncryptedLibraryPolicy::from_config(&state.config.server),
+        &service::EncryptedLibraryPolicy::from_config(&state.config().server),
         peer.as_ref(),
-        state.config.auth.sync_token_ttl_days,
+        state.config().auth.sync_token_ttl_days,
     )
     .await?;
 
@@ -526,7 +526,7 @@ pub async fn download_info(
         &repo_id,
         auth.user_id,
         peer.as_ref(),
-        state.config.auth.sync_token_ttl_days,
+        state.config().auth.sync_token_ttl_days,
     )
     .await?;
     Ok(Json(info))
@@ -551,7 +551,7 @@ pub async fn get_upload_link(
     let url = service::RepoService::get_upload_link(
         &state.repos,
         &state.token_manager,
-        &state.config.server.site_url,
+        &state.config().server.site_url,
         &repo_id,
         auth.user_id,
         &auth.email,
@@ -576,7 +576,7 @@ pub async fn get_update_link(
     let url = service::RepoService::get_update_link(
         &state.repos,
         &state.token_manager,
-        &state.config.server.site_url,
+        &state.config().server.site_url,
         &repo_id,
         auth.user_id,
         &auth.email,
@@ -623,7 +623,7 @@ pub async fn repo_tokens(
         &repo_ids,
         auth.user_id,
         peer.as_ref(),
-        state.config.auth.sync_token_ttl_days,
+        state.config().auth.sync_token_ttl_days,
     )
     .await?;
 
@@ -711,9 +711,9 @@ pub async fn create_default_repo(
                 None,
                 service::PwdHash::default(),
                 None,
-                &service::EncryptedLibraryPolicy::from_config(&state.config.server),
+                &service::EncryptedLibraryPolicy::from_config(&state.config().server),
                 peer.as_ref(),
-                state.config.auth.sync_token_ttl_days,
+                state.config().auth.sync_token_ttl_days,
             )
             .await?;
             repo_info.id

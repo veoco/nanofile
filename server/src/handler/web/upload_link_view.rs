@@ -48,7 +48,7 @@ fn upload_link_cookie(state: &AppState, token: &str) -> String {
         &upload_link_cookie_name(token),
         token,
         &state.csrf_secret,
-        state.config.server.secure_cookies(),
+        state.config().server.secure_cookies(),
     )
 }
 
@@ -160,7 +160,7 @@ pub async fn upload_link_view(
     let pw_ok = check_password(
         &link,
         provided_pwd,
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     )
     .await;
     // The password form POST sets `visited_ufs_{token}`; accept that cookie as
@@ -182,7 +182,7 @@ pub async fn upload_link_view(
         if provided_pwd.is_some() {
             super::share_view::record_link_password_failure(&state, &token)?;
         }
-        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
+        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
@@ -205,14 +205,14 @@ pub async fn upload_link_view(
         .unwrap_or_else(|| link.path.clone());
 
     let tpl = UploadLinkViewTemplate {
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
         urls: crate::static_assets::template_urls(),
         token: link.token.clone(),
         repo_id: link.repo_id.clone(),
         path: link.path.clone(),
         dir_name,
         has_password: link.password.is_some(),
-        max_upload_size_mb: state.config.server.max_upload_size_mb as i64,
+        max_upload_size_mb: state.config().server.max_upload_size_mb as i64,
         description: link.description.clone(),
     };
 
@@ -258,7 +258,7 @@ pub async fn upload_link_view_post(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
     let rl_key = format!("link_password:{client_ip}");
     if state.auth_limiters.link_password.is_limited(&rl_key) {
@@ -269,7 +269,7 @@ pub async fn upload_link_view_post(
     let valid = crate::service::auth::password::verify_password_async(
         password.clone(),
         link.password.clone().unwrap_or_default(),
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     )
     .await;
 
@@ -277,7 +277,7 @@ pub async fn upload_link_view_post(
         // Same per-token cap as the share-link POST path: the IP limiter alone
         // does not bound a distributed brute force against one link token.
         crate::handler::web::share_view::record_link_password_failure(&state, &token)?;
-        let t = I18n::from_headers(&headers, &state.config.ui.default_language);
+        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),

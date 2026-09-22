@@ -138,7 +138,7 @@ pub async fn login(
     };
 
     // ── CSRF: validate Origin/Referer for browser-based requests ──────
-    let origin = state.config.server.site_url_origin();
+    let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return login_error("Invalid request origin.");
     }
@@ -147,7 +147,7 @@ pub async fn login(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
 
     // Extract S2FA/OTP/trust-device headers

@@ -185,7 +185,7 @@ pub async fn put_block(
         auth.user_id,
         &repo_id,
         data.len() as i64,
-        state.config.storage.max_storage_bytes,
+        state.config().storage.max_storage_bytes,
     )
     .await?;
 

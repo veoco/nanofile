@@ -63,7 +63,7 @@ async fn check_quota(
         &state.repos,
         repo_record.owner_id,
         delta,
-        state.config.storage.max_storage_bytes,
+        state.config().storage.max_storage_bytes,
     )
     .await?;
 

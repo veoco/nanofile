@@ -40,8 +40,8 @@ pub async fn get_account_info(
     let info = svc
         .get_account_info(
             auth.user_id,
-            state.config.storage.max_storage_bytes,
-            &state.config.server.site_url_origin(),
+            state.config().storage.max_storage_bytes,
+            &state.config().server.site_url_origin(),
         )
         .await?;
     Ok(Json(info))
@@ -61,8 +61,8 @@ pub async fn update_account_info(
         .update_account_info(
             auth.user_id,
             body.name,
-            state.config.storage.max_storage_bytes,
-            &state.config.server.site_url_origin(),
+            state.config().storage.max_storage_bytes,
+            &state.config().server.site_url_origin(),
         )
         .await?;
     Ok(Json(info))
@@ -91,12 +91,12 @@ pub async fn register_user(
     // admin-only path used to accept a one-character password.
     crate::service::auth::password::validate_password(
         &form.password,
-        state.config.auth.password_min_length,
-        state.config.auth.require_strong_password,
+        state.config().auth.password_min_length,
+        state.config().auth.require_strong_password,
     )
     .map_err(AppError::BadRequest)?;
 
-    let iterations = state.config.auth.password_hash_iterations;
+    let iterations = state.config().auth.password_hash_iterations;
     let password_hash = crate::service::auth::password::hash_password(&form.password, iterations);
 
     let svc = AccountService::new(state.repos.clone());

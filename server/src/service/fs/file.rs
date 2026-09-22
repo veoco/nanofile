@@ -379,7 +379,7 @@ pub struct FileService {
     block_store: infra::storage::DynBlockStorage,
     indexer: Option<crate::indexer::TextIndexer>,
     token_manager: Arc<crate::AccessTokenManager>,
-    config: Arc<infra::config::Config>,
+    config: crate::settings::RuntimeConfig,
     notification_manager: Option<crate::notification::manager::NotificationManager>,
 }
 
@@ -390,7 +390,7 @@ impl FileService {
         block_store: infra::storage::DynBlockStorage,
         indexer: Option<crate::indexer::TextIndexer>,
         token_manager: Arc<crate::AccessTokenManager>,
-        config: Arc<infra::config::Config>,
+        config: crate::settings::RuntimeConfig,
         notification_manager: Option<crate::notification::manager::NotificationManager>,
     ) -> Self {
         Self {
@@ -483,7 +483,7 @@ impl FileService {
 
     /// URL base for download / block links (see `ServerConfig::download_url_base`).
     fn build_url_base(&self, host_header: Option<&str>) -> String {
-        self.config.server.download_url_base(host_header)
+        self.config.get().server.download_url_base(host_header)
     }
 
     /// Build a download API URL.
@@ -568,7 +568,7 @@ impl FileService {
                 &self.repos,
                 uid,
                 total_size,
-                self.config.storage.max_storage_bytes,
+                self.config.get().storage.max_storage_bytes,
             )
             .await
         {
@@ -981,7 +981,7 @@ impl FileService {
             .is_some();
 
         // Absolute avatar URL (seahub returns a full URL via api_avatar_url).
-        let origin = self.config.server.site_url_origin();
+        let origin = self.config.get().server.site_url_origin();
         let last_modifier_avatar = format!(
             "{}{}",
             origin,

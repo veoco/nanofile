@@ -33,7 +33,8 @@ pub async fn list_share_links(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<share::ShareLinkInfo>>, AppError> {
     let mut infos =
-        share::list_share_links(&state.repos, &state.config.server.site_url, auth.user_id).await?;
+        share::list_share_links(&state.repos, &state.config().server.site_url, auth.user_id)
+            .await?;
     // A share token is a capability URL: never hand one out for a library
     // outside the key's scope.
     let scope = auth.repo_scope();
@@ -49,7 +50,7 @@ pub async fn create_share_link(
     crate::middleware::ensure_share_links_enabled(&state)?;
     let info = share::create_share_link(
         &state.repos,
-        &state.config,
+        &state.config(),
         &req.repo_id,
         &req.path,
         req.password.as_deref(),

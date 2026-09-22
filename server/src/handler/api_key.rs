@@ -121,7 +121,7 @@ pub async fn create_api_key(
     let expires = expiry_of(body.never, body.expires_in_days, body.expires_at)?;
     let created = ApiKeyService::create(
         &state.repos,
-        &state.config.auth,
+        &state.config().auth,
         auth.user_id,
         NewApiKey {
             name: body.name,
@@ -176,7 +176,7 @@ pub async fn update_api_key(
         };
     let view = ApiKeyService::update(
         &state.repos,
-        &state.config.auth,
+        &state.config().auth,
         auth.user_id,
         key_id,
         ApiKeyUpdate {
@@ -236,7 +236,7 @@ pub async fn api_key_catalog(
                 "capabilities": preset.capabilities,
             }))
             .collect::<Vec<_>>(),
-        "ttl_presets_days": state.config.auth.api_key_ttl_presets_days,
-        "max_ttl_days": state.config.auth.api_key_max_ttl_days,
+        "ttl_presets_days": state.config().auth.api_key_ttl_presets_days,
+        "max_ttl_days": state.config().auth.api_key_max_ttl_days,
     })))
 }

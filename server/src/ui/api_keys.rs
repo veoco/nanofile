@@ -273,7 +273,7 @@ async fn render(
             })
             .collect(),
         ttl_options: state
-            .config
+            .config()
             .auth
             .api_key_ttl_presets_days
             .iter()
@@ -282,7 +282,7 @@ async fn render(
                 label: t.trf("apikey.expiry_days", &[("days", days.to_string())]),
             })
             .collect(),
-        max_ttl_days: state.config.auth.api_key_max_ttl_days,
+        max_ttl_days: state.config().auth.api_key_max_ttl_days,
         repo_options,
         keys: cards,
         new_key,
@@ -442,7 +442,7 @@ pub async fn create(
         expires,
     };
 
-    match ApiKeyService::create(&state.repos, &state.config.auth, user.user_id, input).await {
+    match ApiKeyService::create(&state.repos, &state.config().auth, user.user_id, input).await {
         Ok(created) => {
             // Tell the owner a key now exists — the secret itself is only ever
             // shown here, so this is also the record that it was created.
@@ -493,7 +493,7 @@ pub async fn update(
 
     match ApiKeyService::update(
         &state.repos,
-        &state.config.auth,
+        &state.config().auth,
         user.user_id,
         key_id,
         input,

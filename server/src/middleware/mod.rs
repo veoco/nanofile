@@ -42,8 +42,8 @@ pub async fn security_headers(
     let mut response = next.run(req).await;
     apply_security_headers(
         response.headers_mut(),
-        state.config.server.secure_cookies(),
-        state.config.server.hsts_include_subdomains,
+        state.config().server.secure_cookies(),
+        state.config().server.hsts_include_subdomains,
     );
     response
 }
@@ -141,7 +141,7 @@ pub fn require_csrf_for_cookie_session(
 /// the `server.share_link_enabled` setting. Call this at the top of handlers
 /// that create or serve anonymous share/upload links.
 pub fn ensure_share_links_enabled(state: &std::sync::Arc<AppState>) -> Result<(), AppError> {
-    if state.config.server.share_link_enabled {
+    if state.config().server.share_link_enabled {
         Ok(())
     } else {
         Err(AppError::Forbidden)

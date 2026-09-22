@@ -38,7 +38,7 @@ pub async fn get_activities(
         .clamp(1, crate::service::activity::MAX_ACTIVITY_PER_PAGE);
     let result = ActivityService::get_activities(
         &state.repos,
-        &state.config.server.site_url_origin(),
+        &state.config().server.site_url_origin(),
         auth.user_id,
         page,
         per_page,

@@ -52,7 +52,7 @@ pub async fn get_avatar(
 
     // Desktop client uses the returned `url` directly as the fetch target, so
     // it must be an absolute URL (matching seahub's api_avatar_url behaviour).
-    let origin = state.config.server.site_url_origin();
+    let origin = state.config().server.site_url_origin();
     let url = format!("{}{}", origin, primary_avatar_url(&email, size));
 
     let svc = state.avatar_service();

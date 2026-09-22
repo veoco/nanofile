@@ -98,6 +98,6 @@ async fn ensure_not_encrypted(state: &AppState, repo_id: &str) -> Result<(), App
 }
 
 fn build_blks_op_url(state: &AppState, op: &str, token: &str) -> String {
-    let base = state.config.server.site_url_origin();
+    let base = state.config().server.site_url_origin();
     format!("{}/{}/{}", base.trim_end_matches('/'), op, token)
 }

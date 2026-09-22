@@ -94,7 +94,7 @@ async fn create_user(
 ) -> Result<Json<UserAdminView>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let iterations = state.config.auth.password_hash_iterations;
+    let iterations = state.config().auth.password_hash_iterations;
     let password_hash =
         crate::service::auth::password::hash_password(&payload.password, iterations);
 

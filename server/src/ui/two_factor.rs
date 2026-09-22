@@ -304,7 +304,7 @@ pub async fn disable_2fa(
     if !verify_password_async(
         form.password.clone(),
         user_record.password_hash.clone(),
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     )
     .await
     {

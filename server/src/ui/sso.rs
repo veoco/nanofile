@@ -73,7 +73,7 @@ pub async fn client_sso(
     headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Response {
-    if !state.config.server.sso_enabled {
+    if !state.config().server.sso_enabled {
         return sso_error(&state, &headers, "auth.sso_disabled").await;
     }
 
@@ -114,7 +114,7 @@ pub async fn client_sso_complete_page(
     let csrf_token = csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     let tpl = ClientLoginConfirmTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
         csrf_token,
         action: format!("/client-sso/{token}/complete/"),
         requester: svc.sso_link_requester(&token).await,
@@ -141,7 +141,7 @@ pub async fn client_sso_complete(
 
     render(ClientLoginCompleteTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
     })
 }
 
@@ -157,7 +157,7 @@ fn render<T: Template>(tpl: T) -> Response {
 async fn sso_error(state: &AppState, headers: &HeaderMap, message_key: &'static str) -> Response {
     let tpl = ClientSsoErrorTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(headers, &state.config.ui.default_language),
+        t: I18n::from_headers(headers, &state.config().ui.default_language),
         message_key,
     };
     match tpl.render() {

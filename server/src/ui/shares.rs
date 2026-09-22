@@ -209,7 +209,7 @@ pub async fn create_share(
 
     crate::service::sharing::share::create_share_link_impl(
         &state.repos,
-        &state.config,
+        &state.config(),
         &form.repo_id,
         &form.path,
         None,

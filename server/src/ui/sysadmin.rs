@@ -101,7 +101,7 @@ async fn render_page(
                 Some(q) => crate::ui::files::format_size(q),
                 None => {
                     let g = crate::ui::files::format_size(
-                        state.config.storage.max_storage_bytes as i64,
+                        state.config().storage.max_storage_bytes as i64,
                     );
                     I18n::get(user.language.as_deref()).trf("admin.global_quota", &[("size", &g)])
                 }
@@ -174,7 +174,7 @@ pub async fn create_user(
     let is_admin = form.is_admin.is_some();
     let is_active = form.is_active.is_some();
 
-    let iterations = state.config.auth.password_hash_iterations;
+    let iterations = state.config().auth.password_hash_iterations;
     let password_hash = crate::service::auth::password::hash_password(&form.password, iterations);
 
     if let Err(e) = svc

@@ -33,7 +33,8 @@ pub async fn list_upload_links(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<link::UploadLinkInfo>>, AppError> {
     let mut infos =
-        link::list_upload_links(&state.repos, &state.config.server.site_url, auth.user_id).await?;
+        link::list_upload_links(&state.repos, &state.config().server.site_url, auth.user_id)
+            .await?;
     // An upload-link token is a capability URL: never hand one out for a
     // library outside the key's scope.
     let scope = auth.repo_scope();
@@ -49,7 +50,7 @@ pub async fn create_upload_link(
     crate::middleware::ensure_share_links_enabled(&state)?;
     let info = link::create_upload_link(
         &state.repos,
-        &state.config,
+        &state.config(),
         &req.repo_id,
         &req.path,
         req.password.as_deref(),

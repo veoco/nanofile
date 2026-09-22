@@ -24,6 +24,7 @@ pub mod scheduler;
 pub mod scheduler_setup;
 pub mod serve;
 pub mod service;
+pub mod settings;
 pub mod static_assets;
 pub mod thumbnail_util;
 pub mod ui;
@@ -44,6 +45,7 @@ use crate::notification::manager::NotificationManager;
 use crate::scheduler::Scheduler;
 use crate::service::auth::access_token::AccessTokenManager;
 use crate::service::auth::rate_limit::AuthRateLimiters;
+use crate::settings::RuntimeConfig;
 use infra::config::Config;
 use infra::crypto::password_manager::PasswordManager;
 use infra::storage::DynBlockStorage;
@@ -67,7 +69,10 @@ fn decode_master_key(key: &str) -> Vec<u8> {
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<DatabaseConnection>,
-    pub config: Arc<Config>,
+    /// The current configuration. Read it through [`AppState::config`], which
+    /// returns the snapshot in force for this request; a saved setting replaces
+    /// the snapshot, so no reader has to be told about the change.
+    pub config: RuntimeConfig,
     /// Block storage backend — default is filesystem-based.
     pub block_store: DynBlockStorage,
     /// Path to the block storage directory (convenience for FileOps).
@@ -245,9 +250,11 @@ impl AppState {
             None
         };
 
-        // Outbound mail: settings (config bootstrap + the row saved at
-        // `/sysadmin/email/`), the outbox and the SMTP transport.
-        let config = Arc::new(config);
+        // Outbound mail: settings (config bootstrap + the rows saved at
+        // `/sysadmin/settings/email/`), the outbox and the SMTP transport.
+        // The mailer keeps the *handle*, not a snapshot, so a saved SMTP setting
+        // is used by the very next delivery.
+        let config = RuntimeConfig::new(config);
         let mail = Arc::new(crate::service::mail::Mailer::new(
             repos.clone(),
             token_cipher.clone(),
@@ -262,17 +269,20 @@ impl AppState {
 
         // Register all background tasks (event listener, token expiry, cache
         // cleanup, share/upload link cleanup, gc, index commit, mail delivery).
+        // The interval and switch values are read once here; changing them needs
+        // a restart, which the settings catalog states for each of them.
+        let startup = config.get();
         crate::scheduler_setup::register_default_tasks(
             &scheduler,
             &repos,
             &db,
             notification_manager.as_ref(),
             &password_manager,
-            &config.gc,
+            &startup.gc,
             &block_store,
             indexer.as_ref(),
             &temp_file_manager,
-            config.storage.temp_upload_ttl_hours,
+            startup.storage.temp_upload_ttl_hours,
             enc_mode,
             block_dir.as_ref(),
             Some(&mail),
@@ -286,8 +296,9 @@ impl AppState {
             });
         }
 
-        // Built before `config` is moved into the Arc below.
-        let task_manager = Arc::new(TaskManager::new(config.tasks.max_active_tasks));
+        // Built from the startup snapshot: the cap is captured by the manager,
+        // so a change to it is pushed through the settings hook.
+        let task_manager = Arc::new(TaskManager::new(startup.tasks.max_active_tasks));
 
         Self {
             repos,
@@ -314,6 +325,15 @@ impl AppState {
     }
 
     // ── Service factory methods ─────────────────────────────────────────
+
+    /// The configuration snapshot in force right now.
+    ///
+    /// One call per request (or per service call) is enough: the returned `Arc`
+    /// keeps that view consistent for as long as the caller holds it, so a
+    /// setting saved mid-request cannot make one handler see two values.
+    pub fn config(&self) -> Arc<Config> {
+        self.config.get()
+    }
 
     pub fn file_service(&self) -> crate::service::fs::file::FileService {
         crate::service::fs::file::FileService::new(
@@ -366,9 +386,9 @@ impl AppState {
         crate::service::fs::thumbnail::ThumbnailService::new(
             self.repos.clone(),
             self.block_store.clone(),
-            Arc::new(self.config.storage.thumbnail_dir.clone()),
-            Arc::new(self.config.storage.temp_dir.clone()),
-            Arc::new(self.config.storage.ffmpeg_path.clone()),
+            Arc::new(self.config().storage.thumbnail_dir.clone()),
+            Arc::new(self.config().storage.temp_dir.clone()),
+            Arc::new(self.config().storage.ffmpeg_path.clone()),
         )
     }
 
@@ -379,15 +399,15 @@ impl AppState {
     pub fn avatar_service(&self) -> crate::service::user::AvatarService {
         crate::service::user::AvatarService::new(
             self.repos.clone(),
-            Arc::new(self.config.storage.avatar_dir.clone()),
+            Arc::new(self.config().storage.avatar_dir.clone()),
         )
     }
 
     pub fn login_service(&self) -> crate::service::auth::login::LoginService {
         crate::service::auth::login::LoginService::new(
             self.repos.clone(),
-            self.config.auth.password_hash_iterations,
-            self.config.auth.api_token_ttl_days,
+            self.config().auth.password_hash_iterations,
+            self.config().auth.api_token_ttl_days,
             self.auth_limiters.login.clone(),
         )
     }
@@ -395,7 +415,7 @@ impl AppState {
     pub fn sso_service(&self) -> crate::service::auth::sso::SsoService {
         crate::service::auth::sso::SsoService::new(
             self.repos.clone(),
-            self.config.auth.api_token_ttl_days,
+            self.config().auth.api_token_ttl_days,
         )
     }
 

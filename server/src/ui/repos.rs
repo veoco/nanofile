@@ -102,7 +102,7 @@ pub async fn list_repos(
         left_panel_repos,
         current_repo_id: None,
         webdav_base_url: state
-            .config
+            .config()
             .server
             .site_url
             .trim_end_matches('/')

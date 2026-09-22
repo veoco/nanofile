@@ -59,7 +59,7 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
         // Global switch — WebDAV disabled entirely.
-        if !state.config.server.webdav_enabled {
+        if !state.config().server.webdav_enabled {
             return Err(WebDavAuthError::Forbidden);
         }
 
@@ -99,7 +99,7 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
             Some(addr) => crate::middleware::effective_client_ip(
                 &addr,
                 &parts.headers,
-                &state.config.server.trusted_proxies,
+                &state.config().server.trusted_proxies,
             ),
             // Without connect info every such request shares one bucket: that
             // throttles more aggressively, never less.

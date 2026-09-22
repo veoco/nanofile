@@ -347,7 +347,7 @@ pub struct DirService {
     block_store: infra::storage::DynBlockStorage,
     /// Server config: the global storage cap is needed to charge a sub-repo copy
     /// against the caller's quota.
-    config: Arc<infra::config::Config>,
+    config: crate::settings::RuntimeConfig,
 }
 
 impl DirService {
@@ -356,7 +356,7 @@ impl DirService {
         db: Arc<DatabaseConnection>,
         indexer: Option<crate::indexer::TextIndexer>,
         block_store: infra::storage::DynBlockStorage,
-        config: Arc<infra::config::Config>,
+        config: crate::settings::RuntimeConfig,
     ) -> Self {
         Self {
             repos,
@@ -617,7 +617,7 @@ impl DirService {
             &new_repo_id,
             &source_dir_fs_id,
             user_id,
-            self.config.storage.max_storage_bytes,
+            self.config.get().storage.max_storage_bytes,
         )
         .await
         {

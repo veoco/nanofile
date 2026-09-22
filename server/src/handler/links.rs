@@ -157,7 +157,7 @@ pub async fn list_share_links_v21(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListShareLinksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let base_url = &state.config.server.site_url;
+    let base_url = &state.config().server.site_url;
     let scope = auth.repo_scope();
     let infos = if let (Some(repo_id), Some(path)) = (&query.repo_id, &query.path) {
         // Filtering by a repo requires membership of that repo, and — for a
@@ -212,7 +212,7 @@ pub async fn create_share_link_v21(
     let expire_days = resolve_expire_days(&req)?;
     let info = share::create_share_link_v21(
         &state.repos,
-        &state.config,
+        &state.config(),
         &req.repo_id,
         &req.path,
         req.password.as_deref(),
@@ -257,7 +257,7 @@ pub async fn get_share_link_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let info = share::get_share_link_v21(
         &state.repos,
-        &state.config.server.site_url,
+        &state.config().server.site_url,
         &token,
         auth.user_id,
     )
@@ -303,7 +303,7 @@ pub async fn create_multi_share_link_v21(
     let expire_days = resolve_expire_days(&req)?;
     let info = share::create_share_link_v21(
         &state.repos,
-        &state.config,
+        &state.config(),
         &req.repo_id,
         &req.path,
         req.password.as_deref(),
@@ -361,7 +361,7 @@ pub async fn update_share_link_v21(
     Json(req): Json<UpdateLinkRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let info = share::update_share_link_v21(
-        &state.config,
+        &state.config(),
         &state.repos,
         &token,
         auth.user_id,
@@ -435,7 +435,7 @@ pub async fn create_upload_link_v21(
 
     let info = link::create_upload_link_v21(
         &state.repos,
-        &state.config,
+        &state.config(),
         &req.repo_id,
         &req.path,
         req.password,
@@ -485,7 +485,7 @@ pub async fn get_upload_link_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let info = link::get_upload_link_v21(
         &state.repos,
-        &state.config.server.site_url,
+        &state.config().server.site_url,
         &token,
         auth.user_id,
     )
@@ -502,7 +502,7 @@ pub async fn update_upload_link_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let updated = link::update_upload_link_v21(
         &state.repos,
-        &state.config,
+        &state.config(),
         &token,
         auth.user_id,
         req.expire_days,
@@ -657,7 +657,7 @@ pub async fn list_repo_upload_links_v21(
     let repo_id = path.repo_id;
     let items = link::list_upload_links_for_repo_v21(
         &state.repos,
-        &state.config.server.site_url,
+        &state.config().server.site_url,
         &repo_id,
         path.user.user_id,
     )

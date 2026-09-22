@@ -38,7 +38,7 @@ pub async fn ws_upgrade(
     let peer_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
 
     // Enforce connection caps before the upgrade is committed. `on_upgrade` is
@@ -67,10 +67,10 @@ async fn handle_ws_socket(socket: WebSocket, peer_ip: String, state: Arc<AppStat
         None => return,
     };
 
-    let private_key = state.config.notification.private_key.clone();
-    let ping_interval = state.config.notification.ping_interval;
-    let client_timeout = state.config.notification.client_timeout;
-    let subscribe_timeout_secs = state.config.notification.subscribe_timeout_secs;
+    let private_key = state.config().notification.private_key.clone();
+    let ping_interval = state.config().notification.ping_interval;
+    let client_timeout = state.config().notification.client_timeout;
+    let subscribe_timeout_secs = state.config().notification.subscribe_timeout_secs;
     let keepalive_enabled = ping_interval > 0 && client_timeout > 0;
     let subscribe_timeout = std::time::Duration::from_secs(subscribe_timeout_secs);
 
@@ -329,11 +329,11 @@ pub async fn post_event(
     };
 
     // Validate the event submission JWT.
-    let private_key = &state.config.notification.private_key;
+    let private_key = &state.config().notification.private_key;
     if !validate_event_jwt(
         token,
         private_key,
-        state.config.notification.accept_legacy_event_tokens,
+        state.config().notification.accept_legacy_event_tokens,
     ) {
         return Err(AppError::Unauthorized);
     }

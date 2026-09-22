@@ -20,7 +20,7 @@ use infra::serialization::S_IFDIR;
 pub struct MetadataService {
     db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
-    config: Arc<infra::config::Config>,
+    config: crate::settings::RuntimeConfig,
 }
 
 /// Resolved filesystem information for a single path.
@@ -34,7 +34,7 @@ impl MetadataService {
     pub fn new(
         db: Arc<DatabaseConnection>,
         repos: Arc<Repositories>,
-        config: Arc<infra::config::Config>,
+        config: crate::settings::RuntimeConfig,
     ) -> Self {
         Self { db, repos, config }
     }
@@ -609,7 +609,7 @@ impl MetadataService {
         let members = self.repos.member.find_by_repo_id(repo_id).await?;
         let user_ids: Vec<i32> = members.into_iter().map(|m| m.user_id).collect();
         let users = self.repos.user.find_by_ids(&user_ids).await?;
-        let origin = self.config.server.site_url_origin();
+        let origin = self.config.get().server.site_url_origin();
         Ok(users
             .into_iter()
             .map(|u| {

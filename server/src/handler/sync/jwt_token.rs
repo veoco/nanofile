@@ -34,7 +34,7 @@ pub async fn get_jwt_token(
         return Err(AppError::NotFound("notification not configured".into()));
     }
 
-    let private_key = &state.config.notification.private_key;
+    let private_key = &state.config().notification.private_key;
     if private_key.is_empty() {
         return Err(AppError::Internal(
             "notification private key not configured".into(),

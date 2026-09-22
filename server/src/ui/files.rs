@@ -1028,7 +1028,7 @@ async fn file_browser_inner(
             active_page: "repos",
             left_panel_repos: ctx.left_panel_repos,
             current_repo_id,
-            max_upload_size_mb: state.config.server.max_upload_size_mb,
+            max_upload_size_mb: state.config().server.max_upload_size_mb,
             sort_field: sort_field.to_string(),
             sort_order: sort_order.to_string(),
             gallery_groups,

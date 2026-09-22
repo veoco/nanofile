@@ -100,7 +100,7 @@ pub async fn client_token_login(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
     let cross_site_navigation = headers
         .get("sec-fetch-site")
@@ -109,9 +109,9 @@ pub async fn client_token_login(
     let trusted = !cross_site_navigation && issuer_matches(&token_str, &client_ip);
 
     if !trusted {
-        let allowed_origin = state.config.server.site_url_origin();
+        let allowed_origin = state.config().server.site_url_origin();
         let html = ClientLoginConfirmTemplate {
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t: I18n::from_headers(&headers, &state.config().ui.default_language),
             urls: crate::static_assets::template_urls(),
             token: token_str.clone(),
             next: params
@@ -142,7 +142,7 @@ pub async fn client_token_login_confirm(
     headers: axum::http::HeaderMap,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let origin = state.config.server.site_url_origin();
+    let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Ok(Redirect::to("/libraries/").into_response());
     }
@@ -170,7 +170,7 @@ async fn complete_login(
     // device fields, so it is the only thing that identifies the session.
     user_agent: Option<String>,
 ) -> Result<axum::response::Response, AppError> {
-    let allowed_origin = state.config.server.site_url_origin();
+    let allowed_origin = state.config().server.site_url_origin();
     // Look up the token
     let record = state
         .repos
@@ -220,7 +220,7 @@ async fn complete_login(
 
     // Generate a new session token
     let api_token = generate_api_token();
-    let ttl_days = state.config.auth.api_token_ttl_days;
+    let ttl_days = state.config().auth.api_token_ttl_days;
     let expires_at = now + (ttl_days as i64 * 86400);
 
     state
@@ -245,7 +245,7 @@ async fn complete_login(
         .await
         .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
 
-    let secure = if state.config.server.secure_cookies() {
+    let secure = if state.config().server.secure_cookies() {
         "; Secure"
     } else {
         ""
@@ -262,7 +262,7 @@ async fn complete_login(
     let csrf_cookie = crate::service::auth::csrf::csrf_cookie_header(
         &state.csrf_secret,
         &api_token,
-        state.config.server.secure_cookies(),
+        state.config().server.secure_cookies(),
         Some(ttl_days * 86400),
     );
 

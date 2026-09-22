@@ -106,7 +106,7 @@ async fn precheck_quota(
         &state.repos,
         uid,
         len,
-        state.config.storage.max_storage_bytes,
+        state.config().storage.max_storage_bytes,
     )
     .await
 }
@@ -233,7 +233,7 @@ async fn try_handle_chunked(
 
     // Cap a single chunk so one request can't buffer arbitrarily many bytes
     // (a client could otherwise send the whole file as one Content-Range).
-    let max_chunk_bytes = state.config.server.max_chunk_size_mb * 1024 * 1024;
+    let max_chunk_bytes = state.config().server.max_chunk_size_mb * 1024 * 1024;
     if max_chunk_bytes > 0 && expected_len as u64 > max_chunk_bytes {
         return Err(AppError::BadRequest(format!(
             "chunk size {expected_len} exceeds per-chunk limit {max_chunk_bytes}"
@@ -241,7 +241,7 @@ async fn try_handle_chunked(
     }
 
     // Check total file size against server limit
-    let max_bytes = state.config.server.max_upload_size_mb * 1024 * 1024;
+    let max_bytes = state.config().server.max_upload_size_mb * 1024 * 1024;
     if max_bytes > 0 && file_size > max_bytes {
         return Err(AppError::BadRequest(format!(
             "file size {file_size} exceeds upload limit {max_bytes}"
@@ -279,7 +279,7 @@ async fn try_handle_chunked(
             uid,
             repo_id,
             file_size as i64,
-            state.config.storage.max_storage_bytes,
+            state.config().storage.max_storage_bytes,
         )
         .await?;
     }
@@ -569,7 +569,7 @@ pub async fn upload_aj(
                     read_chunked_field(
                         &mut field,
                         content_range,
-                        state.config.server.max_chunk_size_mb * 1024 * 1024,
+                        state.config().server.max_chunk_size_mb * 1024 * 1024,
                     )
                     .await?,
                 );
@@ -857,12 +857,12 @@ async fn ingest_staged_file(
 
 /// Staging directory for uploads whose authorization happens after parsing.
 fn upload_staging_dir(state: &AppState) -> std::path::PathBuf {
-    state.config.storage.temp_dir.join("staging")
+    state.config().storage.temp_dir.join("staging")
 }
 
 /// Maximum upload size in bytes (`0` = unlimited).
 fn max_upload_bytes(state: &AppState) -> u64 {
-    state.config.server.max_upload_size_mb * 1024 * 1024
+    state.config().server.max_upload_size_mb * 1024 * 1024
 }
 
 /// POST /update-api/ — Update existing file (web UI, no token).
@@ -1031,7 +1031,7 @@ pub async fn update_aj(
                     read_chunked_field(
                         &mut field,
                         content_range,
-                        state.config.server.max_chunk_size_mb * 1024 * 1024,
+                        state.config().server.max_chunk_size_mb * 1024 * 1024,
                     )
                     .await?,
                 );
@@ -1223,7 +1223,7 @@ pub async fn upload_aj_token(
                     read_chunked_field(
                         &mut field,
                         content_range,
-                        state.config.server.max_chunk_size_mb * 1024 * 1024,
+                        state.config().server.max_chunk_size_mb * 1024 * 1024,
                     )
                     .await?,
                 );
@@ -1420,7 +1420,7 @@ pub async fn upload_api(
                     read_chunked_field(
                         &mut field,
                         content_range.as_deref(),
-                        state.config.server.max_chunk_size_mb * 1024 * 1024,
+                        state.config().server.max_chunk_size_mb * 1024 * 1024,
                     )
                     .await?,
                 );
@@ -1886,7 +1886,7 @@ pub async fn upload_blks_api(
                     info.user_id,
                     &info.repo_id,
                     data.len() as i64,
-                    state.config.storage.max_storage_bytes,
+                    state.config().storage.max_storage_bytes,
                 )
                 .await?;
                 let (_, was_new) = state
@@ -1987,7 +1987,7 @@ pub async fn upload_blks_api(
             &state.repos,
             info.user_id,
             real_size,
-            state.config.storage.max_storage_bytes,
+            state.config().storage.max_storage_bytes,
         )
         .await
         {

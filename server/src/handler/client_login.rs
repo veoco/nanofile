@@ -28,7 +28,7 @@ pub async fn client_login(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
     crate::ui::client_login::remember_issuer(&token, &client_ip);
 

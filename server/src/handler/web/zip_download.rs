@@ -160,8 +160,8 @@ pub async fn zip_task_handler(
         &payload.parent_dir,
         &payload.dirents,
         ZipLimits {
-            max_entries: state.config.storage.max_zip_entries,
-            max_bytes: state.config.storage.max_zip_bytes,
+            max_entries: state.config().storage.max_zip_entries,
+            max_bytes: state.config().storage.max_zip_bytes,
         },
     )
     .await?;

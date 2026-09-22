@@ -97,7 +97,7 @@ pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
 
     Router::new()
         .route("/health", get(health_check))
-        .merge(crate::routes::api_routes().layer(cors_layer(&state.config.server)))
+        .merge(crate::routes::api_routes().layer(cors_layer(&state.config().server)))
         .merge(crate::handler::sync::sync_routes().layer(DefaultBodyLimit::max(upload_body_limit)))
         .merge(
             crate::handler::web::web_api_routes().layer(DefaultBodyLimit::max(upload_body_limit)),
@@ -131,7 +131,7 @@ pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
 /// asking "does this request reach this handler" should not have to run on top
 /// of a tracer and a 10-minute timeout to find out.
 pub fn build_app(state: Arc<AppState>) -> Router {
-    let config = &state.config.server;
+    let config = &state.config().server;
 
     let app = app_routes(&state)
         // The default for every route; the upload-capable groups raised their

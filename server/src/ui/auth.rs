@@ -113,14 +113,14 @@ pub async fn login_page(
     headers: HeaderMap,
     Query(query): Query<LoginNextQuery>,
 ) -> Result<Html<String>, AppError> {
-    let t = I18n::from_headers(&headers, &state.config.ui.default_language);
+    let t = I18n::from_headers(&headers, &state.config().ui.default_language);
     let tpl = LoginTemplate {
         urls: crate::static_assets::template_urls(),
         t,
         error: login_error(&query, t),
-        remember_days: state.config.auth.api_token_ttl_days,
+        remember_days: state.config().auth.api_token_ttl_days,
         enable_password_reset: password_reset_available(&state).await,
-        enable_invitations: state.config.auth.enable_invitations,
+        enable_invitations: state.config().auth.enable_invitations,
         next: query.next.unwrap_or_default(),
     };
     let html = tpl
@@ -136,7 +136,7 @@ pub async fn login_page(
 /// password?" link whose every submission silently did nothing. Reporting the
 /// honesty of the flow is now part of deciding to show it.
 async fn password_reset_available(state: &Arc<AppState>) -> bool {
-    state.config.auth.enable_password_reset && state.mail.ready().await
+    state.config().auth.enable_password_reset && state.mail.ready().await
 }
 
 /// Tell the owner when a browser signs in for the first time.
@@ -230,11 +230,11 @@ async fn render_login_page(
 ) -> Result<Html<String>, AppError> {
     let tpl = LoginTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(headers, &state.config.ui.default_language),
+        t: I18n::from_headers(headers, &state.config().ui.default_language),
         error,
-        remember_days: state.config.auth.api_token_ttl_days,
+        remember_days: state.config().auth.api_token_ttl_days,
         enable_password_reset: password_reset_available(state).await,
-        enable_invitations: state.config.auth.enable_invitations,
+        enable_invitations: state.config().auth.enable_invitations,
         next: next.to_string(),
     };
     let html = tpl
@@ -248,7 +248,7 @@ async fn render_login_page(
 /// Both the GET page and the POST use it, so the flag cannot be bypassed by
 /// navigating straight to `/accounts/register/`.
 fn ensure_invitations_enabled(state: &Arc<AppState>) -> Result<(), AppError> {
-    if state.config.auth.enable_invitations {
+    if state.config().auth.enable_invitations {
         Ok(())
     } else {
         Err(AppError::NotFound("registration is disabled".into()))
@@ -265,20 +265,20 @@ pub async fn login(
 ) -> Result<impl IntoResponse, AppError> {
     // The hidden `next` form field carries the original `?next=` query value.
     // Fall back to the query itself for clients that post without the field.
-    let tenant_origin = state.config.server.site_url_origin();
+    let tenant_origin = state.config().server.site_url_origin();
     let next = resolve_next(
         form.next.as_deref().or(query.next.as_deref()),
         &tenant_origin,
     );
 
     // CSRF: validate Origin/Referer.
-    let origin = state.config.server.site_url_origin();
+    let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return render_login_page(
             &state,
             &headers,
             Some(
-                I18n::from_headers(&headers, &state.config.ui.default_language)
+                I18n::from_headers(&headers, &state.config().ui.default_language)
                     .tr("auth.invalid_origin")
                     .to_string(),
             ),
@@ -293,7 +293,7 @@ pub async fn login(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
 
     // Throttle keys for this attempt: the client address, the (address,
@@ -308,7 +308,7 @@ pub async fn login(
             &state,
             &headers,
             Some(
-                I18n::from_headers(&headers, &state.config.ui.default_language)
+                I18n::from_headers(&headers, &state.config().ui.default_language)
                     .tr("auth.too_many_attempts")
                     .to_string(),
             ),
@@ -332,15 +332,15 @@ pub async fn login(
             verify_password_async(
                 form.password.clone(),
                 u.password_hash.clone(),
-                state.config.auth.password_hash_iterations,
+                state.config().auth.password_hash_iterations,
             )
             .await
         }
         None => {
             let _ = verify_password_async(
                 form.password.clone(),
-                dummy_password_hash(state.config.auth.password_hash_iterations),
-                state.config.auth.password_hash_iterations,
+                dummy_password_hash(state.config().auth.password_hash_iterations),
+                state.config().auth.password_hash_iterations,
             )
             .await;
             false
@@ -355,7 +355,7 @@ pub async fn login(
             &state,
             &headers,
             Some(
-                I18n::from_headers(&headers, &state.config.ui.default_language)
+                I18n::from_headers(&headers, &state.config().ui.default_language)
                     .tr("auth.incorrect_credentials")
                     .to_string(),
             ),
@@ -374,11 +374,11 @@ pub async fn login(
     // correct password.
     if needs_rehash(
         &user_record.password_hash,
-        state.config.auth.password_hash_iterations,
+        state.config().auth.password_hash_iterations,
     ) {
         let upgraded = hash_password_async(
             form.password.clone(),
-            state.config.auth.password_hash_iterations,
+            state.config().auth.password_hash_iterations,
         )
         .await;
         if let Err(e) = state
@@ -406,7 +406,7 @@ pub async fn login(
             "seahub-session-pending",
             &pending_token,
             Some(300),
-            state.config.server.secure_cookies(),
+            state.config().server.secure_cookies(),
         );
 
         // Thread the `next` URL through the 2FA step so the user still lands
@@ -436,7 +436,7 @@ pub async fn login(
     let is_remembered =
         form.remember_me.as_deref() == Some("1") || form.remember_me.as_deref() == Some("on");
 
-    let ttl_days = state.config.auth.api_token_ttl_days;
+    let ttl_days = state.config().auth.api_token_ttl_days;
     let token_expires_at = if is_remembered {
         Some(now + (ttl_days as i64 * 86400))
     } else {
@@ -469,7 +469,7 @@ pub async fn login(
         .touch_last_login(user_record.id, now)
         .await?;
 
-    let secure_cookies = state.config.server.secure_cookies();
+    let secure_cookies = state.config().server.secure_cookies();
     let cookie = session_cookie(
         "seahub-session",
         &session_token,
@@ -525,7 +525,7 @@ pub async fn two_factor_auth_page(
 ) -> Result<Html<String>, AppError> {
     let tpl = TwoFactorLoginTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
         error: None,
         next: query.next.unwrap_or_default(),
     };
@@ -588,17 +588,17 @@ pub async fn two_factor_auth(
     Form(form): Form<TwoFactorAuthForm>,
 ) -> Result<impl IntoResponse, AppError> {
     // The hidden `next` field carries the value from the pending 2FA redirect.
-    let tenant_origin = state.config.server.site_url_origin();
+    let tenant_origin = state.config().server.site_url_origin();
     let next = resolve_next(
         form.next.as_deref().or(query.next.as_deref()),
         &tenant_origin,
     );
 
     // CSRF: validate Origin/Referer.
-    let origin = state.config.server.site_url_origin();
+    let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Err(AppError::BadRequest(
-            I18n::from_headers(&headers, &state.config.ui.default_language)
+            I18n::from_headers(&headers, &state.config().ui.default_language)
                 .tr("auth.invalid_origin")
                 .to_string(),
         ));
@@ -608,13 +608,13 @@ pub async fn two_factor_auth(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
 
     // Every failure from here on means the pending 2FA session cannot be used,
     // and the TOTP form needs a live one. The reason therefore goes back to the
     // sign-in form instead of a generic error page that would blame the request.
-    let secure_cookies = state.config.server.secure_cookies();
+    let secure_cookies = state.config().server.secure_cookies();
 
     // Read the pending token from cookie
     let pending_token = headers
@@ -720,9 +720,9 @@ pub async fn two_factor_auth(
         state.auth_limiters.totp.record_attempt(&totp_key);
         let tpl = TwoFactorLoginTemplate {
             urls: crate::static_assets::template_urls(),
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t: I18n::from_headers(&headers, &state.config().ui.default_language),
             error: Some(
-                I18n::from_headers(&headers, &state.config.ui.default_language)
+                I18n::from_headers(&headers, &state.config().ui.default_language)
                     .tr("auth.invalid_code")
                     .to_string(),
             ),
@@ -745,7 +745,7 @@ pub async fn two_factor_auth(
 
     let session_token = generate_api_token();
     let now = chrono::Utc::now().timestamp();
-    let ttl_days = state.config.auth.api_token_ttl_days;
+    let ttl_days = state.config().auth.api_token_ttl_days;
     let expires_at = now + (ttl_days as i64 * 86400);
 
     state
@@ -769,7 +769,7 @@ pub async fn two_factor_auth(
 
     state.repos.user.touch_last_login(user_id, now).await?;
 
-    let secure_cookies = state.config.server.secure_cookies();
+    let secure_cookies = state.config().server.secure_cookies();
     let session_cookie_str = session_cookie(
         "seahub-session",
         &session_token,
@@ -849,7 +849,7 @@ pub async fn logout(
         let _ = state.repos.api_token.delete_by_token(token).await;
     }
 
-    let secure_cookies = state.config.server.secure_cookies();
+    let secure_cookies = state.config().server.secure_cookies();
     let clear_cookie = session_cookie("seahub-session", "", Some(0), secure_cookies);
     // Clear the CSRF token cookie too.
     let mut clear_csrf = String::from("sfcsrftoken=; Path=/; SameSite=Lax; Max-Age=0");
@@ -911,7 +911,7 @@ pub async fn register_page(
 
     let tpl = RegisterTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
         error: None,
     };
     let html = tpl
@@ -931,7 +931,7 @@ fn register_error(
 ) -> Result<Response, AppError> {
     let tpl = RegisterTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(headers, &state.config.ui.default_language),
+        t: I18n::from_headers(headers, &state.config().ui.default_language),
         error: Some(message.as_ref().to_string()),
     };
     let html = tpl
@@ -948,12 +948,12 @@ pub async fn register(
     Form(form): Form<RegisterForm>,
 ) -> Result<impl IntoResponse, AppError> {
     // CSRF: validate Origin/Referer.
-    let origin = state.config.server.site_url_origin();
+    let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return register_error(
             &state,
             &headers,
-            I18n::from_headers(&headers, &state.config.ui.default_language)
+            I18n::from_headers(&headers, &state.config().ui.default_language)
                 .tr("auth.invalid_origin"),
         );
     }
@@ -965,14 +965,14 @@ pub async fn register(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
     let rl_key = format!("register:{}", client_ip);
     if state.auth_limiters.registration.is_limited(&rl_key) {
         return register_error(
             &state,
             &headers,
-            I18n::from_headers(&headers, &state.config.ui.default_language)
+            I18n::from_headers(&headers, &state.config().ui.default_language)
                 .tr("auth.registration_too_many"),
         );
     }
@@ -983,12 +983,12 @@ pub async fn register(
         return register_error(
             &state,
             &headers,
-            I18n::from_headers(&headers, &state.config.ui.default_language)
+            I18n::from_headers(&headers, &state.config().ui.default_language)
                 .tr("auth.passwords_mismatch"),
         );
     }
 
-    let cfg = &state.config.auth;
+    let cfg = &state.config().auth;
 
     // Use RegistrationService for the core logic.
     let reg_service = RegistrationService::new(state.repos.clone());
@@ -1042,7 +1042,7 @@ pub async fn register(
         .touch_last_login(result.user.id, now)
         .await?;
 
-    let secure_cookies = state.config.server.secure_cookies();
+    let secure_cookies = state.config().server.secure_cookies();
     let cookie = session_cookie(
         "seahub-session",
         &session_token,
@@ -1136,7 +1136,7 @@ pub async fn password_reset_page(
     }
     let tpl = PasswordResetFormTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
         error: None,
     };
     let html = tpl
@@ -1157,16 +1157,16 @@ pub async fn password_reset(
     Form(form): Form<PasswordResetForm>,
 ) -> Result<Html<String>, AppError> {
     // CSRF: validate Origin/Referer.
-    let origin = state.config.server.site_url_origin();
+    let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Ok(Html(String::new()));
     }
 
     // The feature switch and an email backend are both required.
-    if !state.config.auth.enable_password_reset {
+    if !state.config().auth.enable_password_reset {
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t: I18n::from_headers(&headers, &state.config().ui.default_language),
         };
         let html = tpl
             .render()
@@ -1184,7 +1184,7 @@ pub async fn password_reset(
     if !state.mail.ready().await {
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t: I18n::from_headers(&headers, &state.config().ui.default_language),
         };
         let html = tpl
             .render()
@@ -1196,14 +1196,14 @@ pub async fn password_reset(
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
-        &state.config.server.trusted_proxies,
+        &state.config().server.trusted_proxies,
     );
     let rl_key = format!("password_reset:{}", client_ip);
     if state.auth_limiters.password_reset.is_limited(&rl_key) {
         // Show the done page silently to prevent enumeration.
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t: I18n::from_headers(&headers, &state.config().ui.default_language),
         };
         let html = tpl
             .render()
@@ -1222,7 +1222,7 @@ pub async fn password_reset(
     // on /sysadmin/email/.
     let reset_service = PasswordResetService::new(state.repos.clone());
     let result = reset_service
-        .create_reset_token(&form.email, &state.config.server.site_url)
+        .create_reset_token(&form.email, &state.config().server.site_url)
         .await?;
     if let (Some(user_id), Some(reset_url)) = (result.user_id, result.reset_url) {
         state
@@ -1239,7 +1239,7 @@ pub async fn password_reset(
 
     let tpl = PasswordResetDoneTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
     };
     let html = tpl
         .render()
@@ -1254,7 +1254,7 @@ pub async fn password_reset_done(
 ) -> Result<Html<String>, AppError> {
     let tpl = PasswordResetDoneTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
     };
     let html = tpl
         .render()
@@ -1270,7 +1270,7 @@ pub async fn password_reset_confirm_page(
 ) -> Result<Html<String>, AppError> {
     // `auth.enable_password_reset = false` must close the whole flow, not just
     // hide the link: the confirm pages used to work regardless of the flag.
-    if !state.config.auth.enable_password_reset {
+    if !state.config().auth.enable_password_reset {
         return Err(AppError::NotFound("password reset is disabled".into()));
     }
 
@@ -1279,7 +1279,7 @@ pub async fn password_reset_confirm_page(
 
     let tpl = PasswordResetConfirmTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
         error: None,
         valid,
     };
@@ -1296,25 +1296,25 @@ pub async fn password_reset_confirm(
     Path(token): Path<String>,
     Form(form): Form<PasswordResetConfirmForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    if !state.config.auth.enable_password_reset {
+    if !state.config().auth.enable_password_reset {
         return Err(AppError::NotFound("password reset is disabled".into()));
     }
 
     // CSRF: validate Origin/Referer.
-    let origin = state.config.server.site_url_origin();
+    let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Ok(StatusCode::FORBIDDEN.into_response());
     }
 
-    let cfg = &state.config.auth;
+    let cfg = &state.config().auth;
 
     // Validate passwords match before delegating to service.
     if form.password1 != form.password2 {
         let tpl = PasswordResetConfirmTemplate {
             urls: crate::static_assets::template_urls(),
-            t: I18n::from_headers(&headers, &state.config.ui.default_language),
+            t: I18n::from_headers(&headers, &state.config().ui.default_language),
             error: Some(
-                I18n::from_headers(&headers, &state.config.ui.default_language)
+                I18n::from_headers(&headers, &state.config().ui.default_language)
                     .tr("auth.passwords_mismatch")
                     .to_string(),
             ),
@@ -1344,7 +1344,7 @@ pub async fn password_reset_confirm(
         Err(AppError::BadRequest(msg)) => {
             let tpl = PasswordResetConfirmTemplate {
                 urls: crate::static_assets::template_urls(),
-                t: I18n::from_headers(&headers, &state.config.ui.default_language),
+                t: I18n::from_headers(&headers, &state.config().ui.default_language),
                 error: Some(msg),
                 valid: true,
             };
@@ -1370,7 +1370,7 @@ pub async fn password_reset_complete(
 ) -> Result<Html<String>, AppError> {
     let tpl = PasswordResetCompleteTemplate {
         urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config.ui.default_language),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
     };
     let html = tpl
         .render()

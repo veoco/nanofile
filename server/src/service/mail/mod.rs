@@ -36,6 +36,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base::error::AppError;
+#[cfg(test)]
 use infra::config::Config;
 use infra::crypto::token_encryption::TokenCipher;
 use infra::entity::email_message;
@@ -151,13 +152,17 @@ impl From<MailError> for AppError {
 pub struct Mailer {
     repos: Arc<Repositories>,
     cipher: Arc<TokenCipher>,
-    config: Arc<Config>,
+    config: crate::settings::RuntimeConfig,
     /// Last settings read, with the time it was read.
     cache: RwLock<Option<(EmailSettings, Instant)>>,
 }
 
 impl Mailer {
-    pub fn new(repos: Arc<Repositories>, cipher: Arc<TokenCipher>, config: Arc<Config>) -> Self {
+    pub fn new(
+        repos: Arc<Repositories>,
+        cipher: Arc<TokenCipher>,
+        config: crate::settings::RuntimeConfig,
+    ) -> Self {
         Self {
             repos,
             cipher,
@@ -169,22 +174,22 @@ impl Mailer {
     /// Whether `[email] enabled` is set. Says nothing about whether the SMTP
     /// settings are complete — that is [`Self::ready`].
     pub fn config_enabled(&self) -> bool {
-        self.config.email.enabled
+        self.config.get().email.enabled
     }
 
     /// This server's public URL, for links and prose in a body.
-    pub fn site_url(&self) -> &str {
-        &self.config.server.site_url
+    pub fn site_url(&self) -> String {
+        self.config.get().server.site_url.clone()
     }
 
     /// The domain used for `EHLO` and the generated `Message-ID`.
     pub fn hello_name(&self) -> String {
-        message::message_id_domain(self.site_url())
+        message::message_id_domain(&self.site_url())
     }
 
     /// The default UI language, used when a recipient has no preference.
-    pub fn default_language(&self) -> &str {
-        &self.config.ui.default_language
+    pub fn default_language(&self) -> String {
+        self.config.get().ui.default_language.clone()
     }
 
     /// The effective settings, from cache when it is fresh.
@@ -206,7 +211,7 @@ impl Mailer {
     /// administrator who just saved must see what they saved, not a snapshot
     /// taken up to [`SETTINGS_TTL`] ago.
     pub async fn reload(&self) -> Result<EmailSettings, AppError> {
-        let settings = settings::load(&self.repos, &self.cipher, &self.config).await?;
+        let settings = settings::load(&self.repos, &self.cipher, &self.config.get()).await?;
         let mut cache = self.cache.write().await;
         *cache = Some((settings.clone(), Instant::now()));
         Ok(settings)
@@ -222,7 +227,8 @@ impl Mailer {
         // not be able to attribute a change to another account.
         update.updated_by = updated_by;
         let now = chrono::Utc::now().timestamp();
-        let saved = settings::save(&self.repos, &self.cipher, &self.config, update, now).await?;
+        let saved =
+            settings::save(&self.repos, &self.cipher, &self.config.get(), update, now).await?;
         let mut cache = self.cache.write().await;
         *cache = Some((saved.clone(), Instant::now()));
         Ok(saved)
@@ -510,14 +516,14 @@ impl Mailer {
     /// `[email]` values in `config.toml` no longer apply, which is easy to
     /// forget after editing the file and seeing no change.
     pub async fn log_startup_diagnostics(&self) {
-        if !self.config.email.enabled {
-            if self.config.auth.enable_password_reset {
+        if !self.config.get().email.enabled {
+            if self.config.get().auth.enable_password_reset {
                 tracing::warn!(
                     "[auth] enable_password_reset is on but [email] enabled is off:                      /accounts/password/reset/ renders a generic page, mints no token and                      sends no mail. Set [email] enabled = true (and configure SMTP at                      /sysadmin/email/) or set enable_password_reset = false."
                 );
             }
-            if !self.config.email.host.trim().is_empty()
-                || !self.config.email.from_address.trim().is_empty()
+            if !self.config.get().email.host.trim().is_empty()
+                || !self.config.get().email.from_address.trim().is_empty()
             {
                 tracing::info!(
                     "[email] has a host/sender configured but enabled = false; outbound                      mail is inert until the switch is on."
@@ -526,7 +532,7 @@ impl Mailer {
             return;
         }
 
-        match settings::load(&self.repos, &self.cipher, &self.config).await {
+        match settings::load(&self.repos, &self.cipher, &self.config.get()).await {
             Err(e) => tracing::warn!("could not read the email settings: {e}"),
             Ok(settings) => {
                 let missing = settings.missing();
@@ -543,7 +549,7 @@ impl Mailer {
                          /sysadmin/email/ to change them without editing the file"
                     ),
                     SettingsOrigin::Stored => {
-                        let bootstrap = EmailSettings::bootstrap(&self.config);
+                        let bootstrap = EmailSettings::bootstrap(&self.config.get());
                         let drifting: Vec<&str> = [
                             ("host", &bootstrap.host, &settings.host),
                             (
@@ -614,7 +620,7 @@ impl Mailer {
         params: &MailParams,
         now: i64,
     ) -> Result<email_message::Model, AppError> {
-        let strings = MailStrings::get(language, self.default_language());
+        let strings = MailStrings::get(language, &self.default_language());
         let mut params = params.clone();
         if params.site_url.is_none() {
             params.site_url = Some(self.site_url().to_string());
@@ -628,7 +634,7 @@ impl Mailer {
             settings,
             to,
             &content,
-            &message::message_id_domain(self.site_url()),
+            &message::message_id_domain(&self.site_url()),
         )
         .map_err(AppError::from)?;
 
@@ -676,7 +682,11 @@ mod tests {
         migration::Migrator::up(&db, None).await.unwrap();
         let repos = Arc::new(Repositories::new_for_tests(Arc::new(db)));
         let cipher = Arc::new(TokenCipher::from_master_key(b"test-secret"));
-        let mailer = Mailer::new(repos.clone(), cipher, Arc::new(config));
+        let mailer = Mailer::new(
+            repos.clone(),
+            cipher,
+            crate::settings::RuntimeConfig::new(config),
+        );
         (repos, mailer)
     }
 
@@ -861,7 +871,11 @@ mod tests {
 
         // A second mailer over the same database but a different master secret.
         let cipher = Arc::new(TokenCipher::from_master_key(b"rotated-secret"));
-        let other = Mailer::new(repos.clone(), cipher, Arc::new(ready_config()));
+        let other = Mailer::new(
+            repos.clone(),
+            cipher,
+            crate::settings::RuntimeConfig::new(ready_config()),
+        );
         let settings = other.settings().await.unwrap();
         assert!(settings.password_broken);
         assert!(!settings.ready());

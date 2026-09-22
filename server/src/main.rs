@@ -602,8 +602,8 @@ async fn run_server(
 
     // ── Auto-create admin user from config/env on first startup ──────
     if let (Some(admin_email), Some(admin_password)) = (
-        &state.config.admin_init.email,
-        &state.config.admin_init.password,
+        &state.config().admin_init.email,
+        &state.config().admin_init.password,
     ) {
         let count = infra::entity::user::Entity::find()
             .count(state.db.as_ref())
@@ -612,7 +612,7 @@ async fn run_server(
             tracing::info!("No users found; creating initial admin user");
             let password_hash = server::service::auth::password::hash_password(
                 admin_password,
-                state.config.auth.password_hash_iterations,
+                state.config().auth.password_hash_iterations,
             );
             let now = chrono::Utc::now().timestamp();
             let model = infra::entity::user::ActiveModel {

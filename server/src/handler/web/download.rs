@@ -109,7 +109,7 @@ pub(crate) async fn upload_block_key(
     // its one-hour TTL) before the switch was flipped must stop accepting
     // writes. `ensure_share_links_enabled` only guarded the pages and the
     // creation endpoints.
-    if anonymous_link && !state.config.server.share_link_enabled {
+    if anonymous_link && !state.config().server.share_link_enabled {
         return Err(AppError::Forbidden);
     }
 

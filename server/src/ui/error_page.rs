@@ -176,7 +176,7 @@ async fn render(
     user: Option<&WebUser>,
 ) -> Response {
     let status = page.status;
-    let t = I18n::from_headers(headers, &state.config.ui.default_language);
+    let t = I18n::from_headers(headers, &state.config().ui.default_language);
     let urls = crate::static_assets::template_urls();
 
     if let Some(user) = user
@@ -226,7 +226,7 @@ pub fn link_page(failure: LinkFailure, state: &AppState, headers: &HeaderMap) ->
     let status = page.status;
     html(
         AnonymousErrorTemplate {
-            t: I18n::from_headers(headers, &state.config.ui.default_language),
+            t: I18n::from_headers(headers, &state.config().ui.default_language),
             urls: crate::static_assets::template_urls(),
             status: status.as_u16(),
             glyph: page.glyph,
