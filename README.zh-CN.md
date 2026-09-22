@@ -53,7 +53,13 @@ Nanofile 实现了 Seafile 同步协议和 REST API，因此官方 Seafile 桌�
   `/settings/credentials/`；原有的个人资料表单路径仍保留为别名。
 - **WebDAV**（`/dav/...`）：使用上述密钥中的 `webdav.*` 能力认证，由 `webdav_enabled` 控制。
 - **Web UI**：带预览和缩略图的文件浏览器、星标文件、动态流、回收站、设置（个人资料、会话与
-  凭据、2FA、邀请、API 密钥），以及**系统管理后台**（用户、分享、后台任务、邮件）。支持中英文界面。
+  凭据、2FA、邀请、API 密钥），以及**系统管理后台**（用户、分享、后台任务、邮件、系统管理）。支持中英文界面。
+- **系统管理**（`/sysadmin/settings/`）：所有可在运行时管理的设置，按分区一页，逐项显示当前生效值
+  及其来源。层级从高到低为：环境变量、配置文件（仅 `[settings] config_override_keys` 列出的键）、
+  在此保存的值、内置默认值。除此之外配置文件是**首次启动的播种值**：某个键一旦在此保存过，此后
+  以保存值为准；启动日志会列出两者不一致的键名。大多数设置保存后立即生效；无法立即生效的会明确
+  标注并在下次启动时应用；少数填错会导致无法启动的项（主密钥、数据库连接串、状态目录、初始管理员
+  凭据）只读展示。密钥类字段永不回显——页面只说明是否已设置。
 - **分享**：分享链接（可选密码 / 过期时间 / 浏览计数）、匿名上传链接。全局 `share_link_enabled`
   开关可完全禁用匿名分享 / 上传链接（已有链接将不可访问，并广播 `share-link-disabled` 特性让
   客户端隐藏分享功能）。资料库始终属于单个账号：没有面向用户或群组的共享面。
@@ -170,6 +176,18 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
 `NANOFILE_DATABASE_URL`、`NANOFILE_SERVER_PORT`）。环境变量在运行时始终生效，且永远不会被
 写回文件。
 
+**管理员可在 `/sysadmin/settings/` 运行时修改的设置**引入第三个来源，优先级顺序固定：
+
+1. 环境变量（`NANOFILE_*`）——最高；页面会把这类值显示为只读，避免"保存成功却不生效"；
+2. 配置文件——仅对 `[settings] config_override_keys` 列出的键（或 `config_policy = "override"` 时的全部键）；
+3. 在该页面保存的值；
+4. 内置默认值。
+
+默认策略 `config_policy = "bootstrap"` 下，配置文件是**首次启动的播种值**：某键保存过之后即以保存
+值为准，此后改文件对该键无效。启动日志会列出文件与保存值不一致的键名，页面上每一行都能"清除已保存
+值"让文件重新生效，因此以文件为准的部署不会被静默覆盖。大多数设置立即生效；不能立即生效的（监听
+地址、日志目标、索引目录）会标注出来并在下次启动时生效。
+
 **相对状态路径相对于运行中的二进制所在目录解析**，绝不使用工作目录。数据库、`[storage]`
 各目录和 `[index] index_dir` 会在启动时拼接到该目录上：桌面实例的工作目录说明不了安装在
 哪里——Windows 的 `Run` 注册表值甚至无法携带起始目录，否则登录启动的实例会去
@@ -187,13 +205,14 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
 | `[storage]` | 块存储、临时、缩略图和头像目录，全局存储配额上限（`max_storage_bytes`，`0` = 不限）、视频缩略图的 ffmpeg 路径、可续传上传临时限制（`max_temp_uploads`、`max_temp_upload_bytes`、`temp_upload_ttl_hours`）、zip 归档上限（`max_zip_entries`、`max_zip_bytes`，`0` = 不限），以及透明静态块加密（`block_encryption_mode` / `encryption_key`）。 |
 | `[auth]` | 密码哈希成本、token TTL、API 密钥有效期预设（`api_key_ttl_presets_days`）及其上限（`api_key_max_ttl_days`，`0` = 不限；非 0 时不允许创建永不过期的密钥）、登录锁定、邀请注册、密码策略，以及每 IP 限流（密码重置、注册、TOTP 验证、分享 / 上传链接密码、匿名分享下载）。 |
 | `[ui]` | 默认 UI 语言（`en` / `zh`）、托盘菜单语言（`tray_language`：`auto` 跟随系统区域设置，`en`/`zh` 强制指定）。 |
-| `[email]` | 出站邮件总开关，以及首次启动用的 SMTP 默认值（`host`、`port`、`tls`、`username`、`password`、`from_address`、`from_name`、`timeout_secs`、`max_attempts`）。总开关只能在这里或环境变量中打开，不能在管理页面打开。SMTP 默认值用于首次启动时播种 `/sysadmin/email/` 保存的设置，此后以该页面为准（启动日志会在两者不一致时告警）。详见**邮件通知**。 |
+| `[email]` | 出站邮件的播种值（`enabled`、`host`、`port`、`tls`、`username`、`password`、`from_address`、`from_name`、`timeout_secs`、`max_attempts`，以及 `paused` 和三个 `notify_*` 开关）。在 `/sysadmin/settings/email/` 修改；某键保存过之后以保存值为准。详见**邮件通知**。 |
 | `[admin_init]` | 可选的首次启动管理员自动创建。密码优先使用 `NANOFILE_ADMIN_INIT_PASSWORD_FILE`。 |
 | `[logging]` | 日志级别、可选轮转日志文件（`file_enabled`、`file`、`max_file_size_mb`、`max_backups`）。 |
 | `[gc]` | 启用 / 调度垃圾回收。 |
 | `[index]` | 全文搜索开关（`enabled`）和索引目录。 |
 | `[notification]` | WebSocket 通知设置和 JWT 私钥，以及连接上限（`max_connections`、`max_connections_per_ip`）和未认证连接的订阅超时（`subscribe_timeout_secs`）。 |
 | `[tasks]` | 最大并发后台复制 / 移动任务数（`max_active_tasks`，`0` = 不限；超出请求返回 HTTP 429）。 |
+| `[settings]` | 配置文件与已保存设置的叠加方式：`config_policy`（`bootstrap` = 文件播种、保存值优先；`override` = 文件始终优先）、`config_override_keys`（`bootstrap` 下的逐键例外）和 `refresh_interval_secs`（运行中的实例重读设置表的间隔，用于感知其他实例的改动）。该段不能在管理界面修改——它决定界面保存的含义。 |
 
 `secret_key` 是唯一主密钥：通知密钥和 CSRF 签名密钥都由它派生。生产环境请用
 `openssl rand -hex 32` 生成唯一值，并通过 `NANOFILE_SERVER_SECRET_KEY` 设置（空值会在启动时
@@ -205,18 +224,22 @@ Nanofile 可以通过 SMTP 发送四类邮件：**密码重置链接**、**新�
 **新建 API 密钥**。所有邮件先写入数据库队列，因此发件箱可以跨重启保留，每次投递尝试都能在
 `/sysadmin/email/`（系统管理 → 邮件管理）看到。
 
-**如何开启。** `[email] enabled`（或 `NANOFILE_EMAIL_ENABLED`）是总开关，只能写在配置文件或环境
-变量里，不能在管理页面打开——这样即使管理员会话被攻破，也无法开始向用户发信。关闭时：密码重置流程
-不会生成任何 token，"忘记密码"链接隐藏，`/accounts/password/reset/` 返回 404，也不会排队任何通知；
-当 `enable_password_reset` 为真而邮件关闭时，启动日志会明确指出这一组合（它会静默吞掉所有重置请求）。
+**如何开启。** `enabled` 是总开关，它是 `/sysadmin/settings/email/` 上的一项设置，管理员可以直接开关；
+按上面的分层规则，`NANOFILE_EMAIL_ENABLED` 仍然最高，可用于把某个部署钉死在这个值上。关闭时：密码
+重置流程不会生成任何 token，"忘记密码"链接隐藏，`/accounts/password/reset/` 返回 404，也不会排队
+任何通知；当 `enable_password_reset` 为真而邮件关闭时，启动日志会明确指出这一组合（它会静默吞掉所有
+重置请求）。每次改动都会记录保存人与时间，并写入日志。
 
-`[email]` 下的 SMTP 值（`host`、`port`、`tls`、`username`、`password`、`from_address`、`from_name`、
-`timeout_secs`、`max_attempts`）是**首次播种**值：首次启动时写入设置行，之后以 `/sysadmin/email/` 为准，
-因此写错主机后无需改文件或重启即可修正。文件与已保存设置不一致时，启动日志会告警。密码建议用
-`NANOFILE_EMAIL_PASSWORD_FILE` 而不是 `NANOFILE_EMAIL_PASSWORD`，以免出现在进程列表里。`tls` 可取
-`starttls`（587 端口）、`tls`（隐式 TLS，通常是 465）或 `none`；证书始终校验，且没有"接受任意证书"
-的开关——暂不支持私有 CA，请使用公共可信证书，或用本机中继并设 `tls = "none"`（管理页面会明确标注
-这是明文）。
+`[email]` 下的值（`host`、`port`、`tls`、`username`、`password`、`from_address`、`from_name`、
+`timeout_secs`、`max_attempts`，以及 `paused` 和三个 `notify_*` 开关）是**播种**值：在某个键被保存
+之前由它提供，之后以保存值为准——因此写错主机后无需改文件或重启即可修正，两者不一致时启动日志会
+告警。密码建议用 `NANOFILE_EMAIL_PASSWORD_FILE` 而不是 `NANOFILE_EMAIL_PASSWORD`，以免出现在进程
+列表里；保存的密码在数据库里加密存放，且永不回显到页面。`tls` 可取 `starttls`（587 端口）、`tls`
+（隐式 TLS，通常是 465）或 `none`；证书始终校验，且没有"接受任意证书"的开关——暂不支持私有 CA，请
+使用公共可信证书，或用本机中继并设 `tls = "none"`（设置页面会明确标注这是明文）。
+
+`/sysadmin/email/` 只保留原邮件页的发件箱、投递状态、测试邮件和"立即投递"：配置本身与其他设置放在
+一起，只有一份，不会出现两处不一致。
 
 **投递内容。** 密码重置链接是账号所有者唯一的 token 副本：服务器从不在 HTTP 响应中返回它，数据库只
 存它的 SHA-256 哈希。排队等待期间，渲染好的报文使用与同步 token 相同的域分离 AEAD 密钥加密，投递

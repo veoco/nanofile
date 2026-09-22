@@ -67,7 +67,16 @@ clients and tools like `seaf-cli` can point at it directly. It also ships its ow
   `webdav_enabled`.
 - **Web UI**: file browser with previews and thumbnails, starred files, activity feed, trash,
   settings (profile, sessions & credentials, 2FA, invitations, API keys), and a **sysadmin panel**
-  (users, shares, background tasks, email). Localized in English and Chinese.
+  (users, shares, background tasks, email, system management). Localized in English and Chinese.
+- **System management** (`/sysadmin/settings/`): every setting that can be managed at runtime, on
+  one page per area, with the effective value of each one and where it came from. The layers are, in
+  order: an environment variable, the config file (only for the keys `[settings]
+  config_override_keys` names), the value saved here, and the built-in default. The config file is
+  otherwise a first-start *seed*: a saved value wins from then on, and the startup log names the keys
+  where the two disagree. Most settings take effect immediately; the ones that cannot say so and are
+  applied at the next start, and the handful that could brick an install from the wrong value (the
+  master secret, the database URL, the state directories, the initial-admin credentials) are shown
+  read-only. Secrets are never rendered back — the page says whether one is set, not what it is.
 - **Sharing**: share links (optional password / expiry / view counting) and anonymous upload links.
   A global `share_link_enabled` switch can disable anonymous share/upload links entirely (existing
   links become inaccessible and the `share-link-disabled` feature is advertised so clients hide
@@ -202,7 +211,24 @@ missing, the server falls back to built-in defaults, so it can start with zero c
 whatever you need via `NANOFILE_*` environment variables. Every key can also be overridden with
 a `NANOFILE_*` environment variable — the shipped `config.toml.example` lists the exact variable name
 in a comment above each key (e.g. `NANOFILE_DATABASE_URL`, `NANOFILE_SERVER_PORT`). Environment
-variables always win at runtime and are never written into the file.
+variables always win and are never written into the file.
+
+**Settings an administrator can change live at `/sysadmin/settings/`** add a third source, and the
+order between them is fixed:
+
+1. an environment variable (`NANOFILE_*`) — highest, and the page shows such a value read-only so a
+   save cannot silently do nothing;
+2. the config file — but only for the keys `[settings] config_override_keys` names (or every key,
+   with `config_policy = "override"`);
+3. the value saved on that page;
+4. the built-in default.
+
+Under the default `config_policy = "bootstrap"` the file is a *first-start seed*: a value saved on
+the page wins for that key from then on, and editing the file afterwards has no effect on it. The
+startup log lists the keys where the file and the saved value disagree, and every row on the page
+offers to clear the saved value so the file applies again — so a file-managed deployment is never
+silently overridden. Most settings take effect immediately; a change that cannot (the listener, the
+log target, an index directory) is marked and applied at the next start.
 
 **Relative state paths resolve against the directory of the running binary**, never the working
 directory. The database, the `[storage]` directories and `[index] index_dir` are joined onto that
@@ -228,13 +254,14 @@ migration is applied in memory only.
 | `[storage]` | Block store, temp, thumbnail and avatar directories, global storage quota cap (`max_storage_bytes`, `0` = unlimited), ffmpeg path for video thumbnails, resumable-upload temp limits (`max_temp_uploads`, `max_temp_upload_bytes`, `temp_upload_ttl_hours`), zip-archive caps (`max_zip_entries`, `max_zip_bytes`, `0` = unlimited), and transparent at-rest block encryption (`block_encryption_mode` / `encryption_key`). |
 | `[auth]` | Password hashing cost, token TTLs, API-key lifetime presets (`api_key_ttl_presets_days`) and their upper bound (`api_key_max_ttl_days`, `0` = unbounded; when set, non-expiring keys are refused), login lockout, invitation registration, password policy, and per-IP rate limits (password reset, registration, TOTP verification, share/upload-link passwords, anonymous share downloads). |
 | `[ui]` | Default UI language (`en` / `zh`), tray menu language (`tray_language`: `auto` follows the OS locale, `en`/`zh` force one). |
-| `[email]` | Master switch for outbound mail, plus first-start SMTP defaults (`host`, `port`, `tls`, `username`, `password`, `from_address`, `from_name`, `timeout_secs`, `max_attempts`). The switch can only be turned on here (or in the environment) — never from the admin UI. The SMTP values seed the settings saved at `/sysadmin/email/` on first start; after that the page is the source of truth (the startup log says when the two disagree). See **Email notifications**. |
+| `[email]` | Seed values for outbound mail (`enabled`, `host`, `port`, `tls`, `username`, `password`, `from_address`, `from_name`, `timeout_secs`, `max_attempts`, `paused`, `notify_new_device`, `notify_api_key_created`, `notify_new_login`). Edited at `/sysadmin/settings/email/`, which supersedes the file for any value saved there. See **Email notifications**. |
 | `[admin_init]` | Optional first-start admin auto-creation. Prefer `NANOFILE_ADMIN_INIT_PASSWORD_FILE` for the password. |
 | `[logging]` | Log level, optional rotating log file (`file_enabled`, `file`, `max_file_size_mb`, `max_backups`). |
 | `[gc]` | Enable / schedule garbage collection. |
 | `[index]` | Full-text search switch (`enabled`) and index directory. |
 | `[notification]` | WebSocket notification settings and JWT private key, plus connection caps (`max_connections`, `max_connections_per_ip`) and the unauthenticated-connection subscribe timeout (`subscribe_timeout_secs`). |
 | `[tasks]` | Max concurrent background copy/move tasks (`max_active_tasks`, `0` = unlimited; excess requests get HTTP 429). |
+| `[settings]` | How the config file and the saved settings layer: `config_policy` (`bootstrap` = the file seeds, a saved value wins; `override` = the file always wins), `config_override_keys` (per-key exceptions under `bootstrap`) and `refresh_interval_secs` (how often a running instance re-reads the table, for a change made elsewhere). Not editable from the admin UI — it decides what a save there means. |
 
 `secret_key` is the single master key: the notification key and CSRF signing key are derived from it.
 Generate a unique one for production with `openssl rand -hex 32` and set it via
@@ -248,22 +275,28 @@ sign-in, a **new browser** sign-in, and a **newly created API key**. Anything it
 the database first, so the outbox survives a restart and every attempt is visible at
 `/sysadmin/email/` (Sysadmin → Email Management).
 
-**Turning it on.** `[email] enabled` (or `NANOFILE_EMAIL_ENABLED`) is the master switch, and it can
-only be set in the config file or the environment — never from the admin UI, so a compromised admin
-session cannot start mailing your users. With it off, the password-reset flow mints no token at all,
-the "Forgot password?" link is hidden, `/accounts/password/reset/` answers 404, and no notification
-is queued; the startup log says so when `enable_password_reset` is on and mail is off, which is the
-combination that silently swallows reset requests.
+**Turning it on.** `enabled` is the master switch. It is one of the settings at
+`/sysadmin/settings/email/`, so an administrator can flip it — under the layers above, a
+`NANOFILE_EMAIL_ENABLED` variable still wins, which is how a deployment pins it. With it off, the
+password-reset flow mints no token at all, the "Forgot password?" link is hidden,
+`/accounts/password/reset/` answers 404, and no notification is queued; the startup log says so when
+`enable_password_reset` is on and mail is off, which is the combination that silently swallows reset
+requests. Every change is attributed to the administrator who made it and logged.
 
 The SMTP values under `[email]` (`host`, `port`, `tls`, `username`, `password`, `from_address`,
-`from_name`, `timeout_secs`, `max_attempts`) are *bootstrap* values: they fill the settings row on
-first start, and from then on `/sysadmin/email/` is the source of truth, so a wrong host can be fixed
-without editing the file or restarting. The startup log warns when the file and the saved settings
-disagree. Prefer `NANOFILE_EMAIL_PASSWORD_FILE` over `NANOFILE_EMAIL_PASSWORD` so the secret does not
-appear in a process listing. `tls` is `starttls` (port 587), `tls` (implicit TLS, usually 465) or
+`from_name`, `timeout_secs`, `max_attempts`, plus `paused` and the three `notify_*` switches) are
+*seed* values: they supply a key until something is saved for it, and from then on the saved value
+wins — so a wrong host is fixed on the page, without editing the file or restarting, and the startup
+log warns when the two disagree. Prefer `NANOFILE_EMAIL_PASSWORD_FILE` over `NANOFILE_EMAIL_PASSWORD`
+so the secret does not appear in a process listing; the saved value is encrypted at rest and is never
+rendered back into the page. `tls` is `starttls` (port 587), `tls` (implicit TLS, usually 465) or
 `none`; certificates are always validated, and there is no "accept any certificate" switch — a relay
 with a private CA is not supported yet, so use a publicly trusted certificate or a localhost relay
-with `tls = "none"` (which the admin page labels as plaintext, because it is).
+with `tls = "none"` (which the settings page labels as plaintext, because it is).
+
+`/sysadmin/email/` is what is left of the old email page: the delivery state, the outbox, the test
+message and the "deliver now" button. The configuration itself lives with every other setting, so
+there is only one copy of it to look at.
 
 **What is delivered.** The reset link is the account owner's only copy of the token — the server
 never returns it in an HTTP response, and the database stores just its SHA-256 hash. The rendered

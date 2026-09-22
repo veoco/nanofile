@@ -74,19 +74,6 @@ export async function startServer(
     NANOFILE_ADMIN_INIT_PASSWORD: ADMIN_PASSWORD,
     NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS: "1000",
     NANOFILE_SERVER_SECRET_KEY: SERVER_SECRET_KEY,
-    // Mail is on for the whole suite, pointed at the stub in
-    // `helpers/mailbox.ts`: the password-reset flow and the notifications can
-    // only be tested against a real SMTP conversation. These seed the settings
-    // on first start (no settings row exists yet), so a spec that saves the form
-    // must save equivalent values.
-    NANOFILE_EMAIL_ENABLED: "true",
-    NANOFILE_EMAIL_HOST: "127.0.0.1",
-    NANOFILE_EMAIL_PORT: String(SMTP_PORT),
-    NANOFILE_EMAIL_TLS: "none",
-    NANOFILE_EMAIL_FROM_ADDRESS: "nanofile@test.local",
-    NANOFILE_EMAIL_FROM_NAME: "Nanofile E2E",
-    NANOFILE_EMAIL_TIMEOUT_SECS: "5",
-    NANOFILE_EMAIL_MAX_ATTEMPTS: "3",
     NANOFILE_LOG_LEVEL: process.env.E2E_LOG_LEVEL || "info",
     ...opts.env,
   };
@@ -94,24 +81,33 @@ export async function startServer(
   // Pass the config path explicitly via --config so the server does not depend
   // on the working directory. binaryPath is {repoRoot}/target/debug/nanofile.
   //
-  // The live `config.toml` is gitignored (it holds the master secret), so a
-  // fresh checkout only has `config.toml.example`. Prefer the former when it
-  // exists — a developer may have tuned it — and fall back to the template.
+  // The config file is generated per run rather than copied from the checkout:
+  // a developer's own `config.toml` may point at a real SMTP server, and since
+  // the environment is only used here for process-level values, mail settings
+  // left in a copied file would be the ones actually used.
   const repoRoot = path.resolve(path.dirname(binaryPath), "..", "..");
-  const localConfig = path.join(repoRoot, "config.toml");
-  const exampleConfig = path.join(repoRoot, "config.toml.example");
-  const configPath = fs.existsSync(localConfig)
-    ? localConfig
-    : (() => {
-        if (!fs.existsSync(exampleConfig)) {
-          throw new Error(
-            `neither config.toml nor config.toml.example found in ${repoRoot}`,
-          );
-        }
-        const generated = path.join(tmpRoot, "config.toml");
-        fs.copyFileSync(exampleConfig, generated);
-        return generated;
-      })();
+  const configPath = path.join(tmpRoot, "config.toml");
+  // Mail is on for the whole suite, pointed at the stub in `helpers/mailbox.ts`:
+  // the password-reset flow and the notifications can only be tested against a
+  // real SMTP conversation. These are *bootstrap* values — the settings page
+  // supersedes any of them as soon as a spec saves one, which is what the email
+  // spec exercises — so they are deliberately not environment variables, which
+  // would win over a saved value.
+  fs.writeFileSync(
+    configPath,
+    [
+      "[email]",
+      "enabled = true",
+      'host = "127.0.0.1"',
+      `port = ${SMTP_PORT}`,
+      'tls = "none"',
+      'from_address = "nanofile@test.local"',
+      'from_name = "Nanofile E2E"',
+      "timeout_secs = 5",
+      "max_attempts = 3",
+      "",
+    ].join("\n"),
+  );
   const child = spawn(binaryPath, ["--config", configPath], {
     cwd: repoRoot,
     env,
