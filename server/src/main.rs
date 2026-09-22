@@ -232,29 +232,6 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // ── Absolute-URL host trust ────────────────────────────────────────
-    // While `site_url` is unconfigured the request Host is echoed into
-    // download/block URLs so LAN clients get a reachable address. That value is
-    // client-supplied, so an attacker who can make a client use their hostname
-    // (DNS rebinding, wildcard vhost) receives the client's capability token.
-    if config.server.site_url_is_default() && config.server.allowed_hosts.is_empty() {
-        if config.server.trust_request_host {
-            tracing::warn!(
-                "site_url is still the built-in default and server.allowed_hosts is empty: \
-                 download/block URLs will echo a syntactically valid request Host header, \
-                 which is attacker-influenced behind a wildcard vhost or a proxy that \
-                 forwards arbitrary Host values. Set server.site_url to the address \
-                 clients use, restrict server.allowed_hosts, or disable the echo with \
-                 server.trust_request_host = false."
-            );
-        } else {
-            tracing::info!(
-                "site_url is still the built-in default; download/block URLs will use it \
-                 verbatim (server.trust_request_host = false)."
-            );
-        }
-    }
-
     // ── Server secret key ──────────────────────────────────────────────
     // Release builds require an explicit, high-entropy secret: the storage
     // encryption master key, CSRF/notification JWT keys and the sync-token
@@ -348,22 +325,6 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // ── Token lifetimes ────────────────────────────────────────────────
-    // `0` is not "use the default" for these two: on the API login path it means
-    // the token never expires, so it silently turns into a permanent bearer
-    // credential. The web-UI path reads `0` the opposite way, which makes this
-    // easy to misread — say so out loud rather than letting it pass silently.
-    if config.auth.api_token_ttl_days == 0 {
-        tracing::warn!(
-            "auth.api_token_ttl_days = 0: account tokens issued by POST /api2/auth-token/ \
-             will NEVER expire (they are only revoked by a password change/reset or by \
-             deactivating the account). Set a positive value unless that is intended."
-        );
-    }
-    if config.auth.sync_token_ttl_days == 0 {
-        tracing::warn!("auth.sync_token_ttl_days = 0: repository sync tokens will NEVER expire.");
-    }
-
     // ── Encrypted-library wire contract ────────────────────────────────
     // `encrypted_library_version` and `encrypted_library_pwd_hash_algo` are
     // echoed to every client and are taken verbatim as the `enc_version` /
@@ -371,19 +332,6 @@ fn main() -> anyhow::Result<()> {
     // silently breaks encrypted-library creation everywhere.
     if let Err(message) = config.server.validate_encrypted_library() {
         anyhow::bail!("{message}");
-    }
-
-    // Orphan blocks are no longer a quota bypass — every block write is charged
-    // as an uncommitted write (`service::fs::quota::reserve_block_bytes`) — but
-    // with GC off nothing ever reclaims blocks that no commit references (an
-    // upload abandoned before its final chunk, a sync whose branch update
-    // failed). Say so rather than letting the disk watermark grow silently.
-    if !config.gc.enabled {
-        tracing::warn!(
-            "gc.enabled = false: blocks and FS objects that no commit references are \
-             never reclaimed. Per-user quota still bounds how much one user may write, \
-             but total disk usage only grows. Enable [gc] to reclaim them."
-        );
     }
 
     // ── Derive notification private key from secret_key if not set ─────
@@ -543,6 +491,62 @@ async fn run_server(
         );
     }
     let config = startup;
+
+    // ── Advisories about the *effective* configuration ─────────────────
+    // These read the layered config, not the file: a value saved at
+    // `/sysadmin/settings/` (or supplied by the environment) is what the server
+    // will actually run with, and an advisory about the other one is noise.
+
+    // While `site_url` is unconfigured the request Host is echoed into
+    // download/block URLs so LAN clients get a reachable address. That value is
+    // client-supplied, so an attacker who can make a client use their hostname
+    // (DNS rebinding, wildcard vhost) receives the client's capability token.
+    if config.server.site_url_is_default() && config.server.allowed_hosts.is_empty() {
+        if config.server.trust_request_host {
+            tracing::warn!(
+                "site_url is still the built-in default and server.allowed_hosts is empty: \
+                 download/block URLs will echo a syntactically valid request Host header, \
+                 which is attacker-influenced behind a wildcard vhost or a proxy that \
+                 forwards arbitrary Host values. Set server.site_url to the address \
+                 clients use (at /sysadmin/settings/ or in the file), restrict \
+                 server.allowed_hosts, or disable the echo with \
+                 server.trust_request_host = false."
+            );
+        } else {
+            tracing::info!(
+                "site_url is still the built-in default; download/block URLs will use it \
+                 verbatim (server.trust_request_host = false)."
+            );
+        }
+    }
+
+    // `0` is not "use the default" for these two: on the API login path it means
+    // the token never expires, so it silently turns into a permanent bearer
+    // credential. The web-UI path reads `0` the opposite way, which makes this
+    // easy to misread — say so out loud rather than letting it pass silently.
+    if config.auth.api_token_ttl_days == 0 {
+        tracing::warn!(
+            "auth.api_token_ttl_days = 0: account tokens issued by POST /api2/auth-token/ \
+             will NEVER expire (they are only revoked by a password change/reset or by \
+             deactivating the account). Set a positive value unless that is intended."
+        );
+    }
+    if config.auth.sync_token_ttl_days == 0 {
+        tracing::warn!("auth.sync_token_ttl_days = 0: repository sync tokens will NEVER expire.");
+    }
+
+    // Orphan blocks are no longer a quota bypass — every block write is charged
+    // as an uncommitted write (`service::fs::quota::reserve_block_bytes`) — but
+    // with GC off nothing ever reclaims blocks that no commit references (an
+    // upload abandoned before its final chunk, a sync whose branch update
+    // failed). Say so rather than letting the disk watermark grow silently.
+    if !config.gc.enabled {
+        tracing::warn!(
+            "gc.enabled = false: blocks and FS objects that no commit references are \
+             never reclaimed. Per-user quota still bounds how much one user may write, \
+             but total disk usage only grows. Enable [gc] to reclaim them."
+        );
+    }
 
     tracing::info!(
         "starting nanofile server on {}:{}",
