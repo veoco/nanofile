@@ -352,13 +352,16 @@ pub async fn drain_now(
     require_admin_csrf(&state, &user, &form).await?;
     // Queued rather than run here: the old scheduler ran the whole drain inside
     // this request.
-    state.tasks.submit(
-        crate::tasks::spec::JobKey::MailDelivery,
-        None,
-        serde_json::Value::Null,
-        "mail delivery",
-        None,
-    )?;
+    state
+        .tasks
+        .submit(
+            crate::tasks::spec::JobKey::MailDelivery,
+            None,
+            serde_json::Value::Null,
+            "mail delivery",
+            None,
+        )
+        .await?;
     Ok((
         StatusCode::FOUND,
         [("Location", "/sysadmin/email/?action=drained")],

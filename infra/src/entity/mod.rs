@@ -12,6 +12,7 @@ pub mod file_tag;
 pub mod file_trash;
 pub mod fs_object;
 pub mod invitation_code;
+pub mod job_run;
 pub mod locked_file;
 pub mod metadata_config;
 pub mod metadata_record;

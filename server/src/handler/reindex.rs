@@ -109,14 +109,17 @@ pub async fn reindex(
     // Per-repo dedup: only one reindex at a time per repo. The task system
     // enforces this from the job's declared dedup key, so there is no second
     // map to keep in step.
-    let task_id = state.tasks.submit_with_details(
-        JobKey::Reindex,
-        Some(auth.user_id),
-        serde_json::json!({ "repo_id": req.repo_id }),
-        format!("Reindex \"{}\"", req.repo_id),
-        None,
-        vec![("repo_id", serde_json::json!(req.repo_id.clone()))],
-    )?;
+    let task_id = state
+        .tasks
+        .submit_with_details(
+            JobKey::Reindex,
+            Some(auth.user_id),
+            serde_json::json!({ "repo_id": req.repo_id }),
+            format!("Reindex \"{}\"", req.repo_id),
+            None,
+            vec![("repo_id", serde_json::json!(req.repo_id.clone()))],
+        )
+        .await?;
 
     // Dedup passed — consume a rate-limit slot.
     state.auth_limiters.reindex.record_attempt(&rl_key);

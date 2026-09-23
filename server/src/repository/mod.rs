@@ -20,6 +20,7 @@ pub mod file_tag;
 pub mod file_trash;
 pub mod fs_object;
 pub mod invitation_code;
+pub mod job_run;
 pub mod locked_file;
 pub mod member;
 pub mod metadata_config;
@@ -58,6 +59,7 @@ use crate::repository::file_tag::*;
 use crate::repository::file_trash::*;
 use crate::repository::fs_object::*;
 use crate::repository::invitation_code::*;
+use crate::repository::job_run::*;
 use crate::repository::locked_file::*;
 use crate::repository::member::*;
 use crate::repository::metadata_config::*;
@@ -109,6 +111,7 @@ pub struct Repositories {
     pub deleted_repo: Arc<dyn DeletedRepoRepository>,
     pub settings: Arc<dyn SettingsRepository>,
     pub email_message: Arc<dyn EmailMessageRepository>,
+    pub job_run: Arc<dyn JobRunRepository>,
     pub password_reset_token: Arc<dyn PasswordResetTokenRepository>,
     pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
     pub file_lock_timestamp: Arc<dyn FileLockTimestampRepository>,
@@ -177,6 +180,7 @@ impl Repositories {
             deleted_repo: Arc::new(DbDeletedRepoRepository::new(db.clone())),
             settings: Arc::new(DbSettingsRepository::new(db.clone())),
             email_message: Arc::new(DbEmailMessageRepository::new(db.clone())),
+            job_run: Arc::new(DbJobRunRepository::new(db.clone())),
             password_reset_token: Arc::new(DbPasswordResetTokenRepository::new(db.clone())),
             user_2fa_backup_code: Arc::new(DbUser2faBackupCodeRepository::new(db.clone())),
             file_lock_timestamp: Arc::new(DbFileLockTimestampRepository::new(db.clone())),

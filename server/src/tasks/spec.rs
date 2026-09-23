@@ -55,6 +55,11 @@ impl JobKey {
         Self::TempUploadCleanup,
     ];
 
+    /// Look a key up by its stored slug, for recovery from the run table.
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|key| key.as_str() == slug)
+    }
+
     /// Stable slug used in URLs, logs and stored history.
     pub const fn as_str(self) -> &'static str {
         match self {

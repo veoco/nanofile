@@ -119,6 +119,9 @@ struct Inner {
     /// Reads the database pool's occupancy. Installed per generation, because
     /// the pool belongs to the generation.
     db_probe: RwLock<Option<DbProbe>>,
+    /// Durable history, when the database is available. `None` in a test that
+    /// builds a task system without one.
+    journal: RwLock<Option<Arc<dyn crate::repository::job_run::JobRunRepository>>>,
     /// Whether jobs may be deferred and throttled by load.
     load_aware: AtomicBool,
     /// Seconds between load samples.
@@ -164,6 +167,7 @@ impl TaskSystem {
                 load,
                 gate,
                 db_probe: RwLock::new(None),
+                journal: RwLock::new(None),
                 load_aware: AtomicBool::new(false),
                 sample_interval_secs: AtomicU64::new(5),
             }),
@@ -292,7 +296,7 @@ impl TaskSystem {
     ///
     /// The state machine belongs to the executor from here on: the caller
     /// cannot mark the run done, and cannot forget to.
-    pub fn submit(
+    pub async fn submit(
         &self,
         key: JobKey,
         owner: Option<i32>,
@@ -301,12 +305,13 @@ impl TaskSystem {
         expected_total: Option<u64>,
     ) -> Result<RunId, AppError> {
         self.submit_with_details(key, owner, params, summary, expected_total, Vec::new())
+            .await
     }
 
     /// Submit with small job-specific facts for the wire projection that must
     /// outlive the params.
     #[allow(clippy::too_many_arguments)]
-    pub fn submit_with_details(
+    pub async fn submit_with_details(
         &self,
         key: JobKey,
         owner: Option<i32>,
@@ -369,6 +374,24 @@ impl TaskSystem {
             run.set_detail(name, value);
         }
         let id = run.id.clone();
+        if let Some(journal) = self.journal()
+            && job.spec.durability == Durability::Durable
+        {
+            let now = chrono::Utc::now().timestamp();
+            journal
+                .enqueue(
+                    crate::repository::job_run::NewJobRun {
+                        id: id.as_str().to_string(),
+                        kind: key.as_str().to_string(),
+                        owner,
+                        summary: run.summary.clone(),
+                        params: Some(params.to_string()),
+                        created_at: now,
+                    },
+                    crate::tasks::queue::QueuePolicy::DEFAULT.lease_until(now),
+                )
+                .await?;
+        }
         self.inner.store.insert(run.clone())?;
 
         let cancel = CancellationToken::new();
@@ -422,10 +445,48 @@ impl TaskSystem {
         // Counted as *background* load: admission deliberately ignores this, so
         // a running pass cannot defer itself.
         let _background = self.inner.load.background_guard();
+        let journal = self.journal();
+        if let Some(journal) = &journal
+            && job.spec.durability == Durability::Durable
+        {
+            let now = chrono::Utc::now().timestamp();
+            let lease = crate::tasks::queue::QueuePolicy::DEFAULT.lease_until(now);
+            if let Err(e) = journal.mark_running(run.id.as_str(), now, lease).await {
+                tracing::warn!(run = %run.id, "could not mark the run as running: {e}");
+            }
+        }
         let gate = self.yield_gate(job.as_ref());
         let report =
             executor::execute(&job, &run, params, &self.inner.store, cancel.clone(), gate).await;
         self.record_stats(job.key(), &report, started.elapsed());
+        if let Some(journal) = &journal
+            && job.spec.durability >= Durability::Audit
+        {
+            let error = match &report.state {
+                JobState::Failed(message) => Some(message.as_str()),
+                JobState::TimedOut => Some("timed out"),
+                JobState::Cancelled => Some("cancelled"),
+                JobState::Interrupted => Some("interrupted by a restart"),
+                _ => None,
+            };
+            let processed = report
+                .outcome
+                .as_ref()
+                .and_then(|o| o.processed)
+                .map(|p| p as i64);
+            if let Err(e) = journal
+                .finish(
+                    run.id.as_str(),
+                    report.state.as_str(),
+                    error,
+                    processed,
+                    chrono::Utc::now().timestamp(),
+                )
+                .await
+            {
+                tracing::warn!(run = %run.id, "could not record the finished run: {e}");
+            }
+        }
         tracing::debug!(
             job = job.name(),
             run = %run.id,
@@ -481,6 +542,145 @@ impl TaskSystem {
             .chunkable
             .is_some()
             .then(|| self.inner.gate.clone())
+    }
+
+    /// Install the durable run journal.
+    pub fn set_journal(&self, journal: Arc<dyn crate::repository::job_run::JobRunRepository>) {
+        *self
+            .inner
+            .journal
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(journal);
+    }
+
+    fn journal(&self) -> Option<Arc<dyn crate::repository::job_run::JobRunRepository>> {
+        self.inner
+            .journal
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Re-submit durable runs whose process died before they finished.
+    ///
+    /// Called once at start-up. Only a job that declared `Durable` is replayed:
+    /// the catalog refuses that declaration for anything not marked idempotent,
+    /// so a destructive run is never repeated here. The interrupted attempt is
+    /// recorded rather than quietly dropped.
+    pub async fn recover(&self) {
+        let Some(journal) = self.journal() else {
+            return;
+        };
+        let now = chrono::Utc::now().timestamp();
+        let lease = crate::tasks::queue::QueuePolicy::DEFAULT;
+        let rows = match journal.recoverable(now, 50).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("could not read the run journal for recovery: {e}");
+                return;
+            }
+        };
+        if rows.is_empty() {
+            return;
+        }
+
+        for row in rows {
+            let Some(key) = JobKey::from_slug(&row.kind) else {
+                let _ = journal
+                    .finish(
+                        &row.id,
+                        "interrupted",
+                        Some("no job is registered under this name any more"),
+                        None,
+                        now,
+                    )
+                    .await;
+                continue;
+            };
+            let replayable = self
+                .job(key)
+                .is_some_and(|job| job.spec.durability == Durability::Durable);
+            if !replayable {
+                let _ = journal
+                    .finish(
+                        &row.id,
+                        "interrupted",
+                        Some("this job is not safe to replay"),
+                        None,
+                        now,
+                    )
+                    .await;
+                continue;
+            }
+            // Take the row over before re-submitting, so two servers starting
+            // together cannot both replay it.
+            match journal
+                .claim_for_recovery(&row.id, row.attempt, now, lease.lease_until(now))
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    tracing::warn!(run = %row.id, "could not claim a run for recovery: {e}");
+                    continue;
+                }
+            }
+
+            let params: Params = row
+                .params
+                .as_deref()
+                .and_then(|p| serde_json::from_str(p).ok())
+                .unwrap_or(Params::Null);
+            let summary = if row.summary.is_empty() {
+                format!("{} (recovered)", key.as_str())
+            } else {
+                format!("{} (recovered)", row.summary)
+            };
+            match self.submit(key, row.owner, params, summary, None).await {
+                Ok(_) => {
+                    // The old attempt is closed as interrupted, so it is not
+                    // read as pending work by the next start.
+                    let _ = journal
+                        .finish(
+                            &row.id,
+                            "interrupted",
+                            Some("recovered after a restart"),
+                            row.processed,
+                            now,
+                        )
+                        .await;
+                    tracing::info!(job = %row.kind, run = %row.id, "recovered a durable run");
+                }
+                Err(e) => {
+                    let _ = journal
+                        .finish(
+                            &row.id,
+                            "failed",
+                            Some(&format!("could not be recovered: {e}")),
+                            None,
+                            now,
+                        )
+                        .await;
+                }
+            }
+        }
+    }
+
+    /// Drop journal rows past retention. Called by the sweeper.
+    pub async fn prune_journal(&self) -> usize {
+        let Some(journal) = self.journal() else {
+            return 0;
+        };
+        let policy = crate::tasks::queue::QueuePolicy::DEFAULT;
+        let now = chrono::Utc::now().timestamp();
+        let (sent, _failed) = policy.retention_cutoffs(now);
+        match journal.prune(sent, policy.max_finished_rows).await {
+            Ok(pruned) => pruned as usize,
+            Err(e) => {
+                tracing::warn!("could not prune the run journal: {e}");
+                0
+            }
+        }
     }
 
     /// The load counters.
@@ -791,7 +991,7 @@ impl TaskSystem {
                             break;
                         }
                         _ = ticker.tick() => {
-                            system.tick(&job, overlap);
+                            system.tick(&job, overlap).await;
                         }
                     }
                 }
@@ -834,6 +1034,7 @@ impl TaskSystem {
                         if dropped > 0 {
                             tracing::debug!(dropped, "swept expired job runs");
                         }
+                        system.prune_journal().await;
                     }
                 }
             }
@@ -841,7 +1042,7 @@ impl TaskSystem {
     }
 
     /// Fire one periodic tick. Returns whether a run was submitted.
-    fn tick(&self, job: &Arc<RegisteredJob>, overlap: OverlapPolicy) -> bool {
+    async fn tick(&self, job: &Arc<RegisteredJob>, overlap: OverlapPolicy) -> bool {
         if overlap == OverlapPolicy::Skip && self.inner.store.count_active(job.key(), None) > 0 {
             tracing::debug!(
                 job = job.name(),
@@ -849,7 +1050,10 @@ impl TaskSystem {
             );
             return false;
         }
-        match self.submit(job.key(), None, Params::Null, job.name(), None) {
+        match self
+            .submit(job.key(), None, Params::Null, job.name(), None)
+            .await
+        {
             Ok(_) => true,
             Err(e) => {
                 tracing::warn!(job = job.name(), error = %e, "could not submit a scheduled run");
@@ -975,6 +1179,28 @@ mod tests {
         system
     }
 
+    /// A task system with a real (in-memory) database behind its journal.
+    async fn journal_system() -> (Arc<TaskSystem>, Arc<crate::repository::Repositories>) {
+        use migration::MigratorTrait;
+        let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+        migration::Migrator::up(&db, None).await.unwrap();
+        let repos = Arc::new(crate::repository::Repositories::new_for_tests(Arc::new(db)));
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system.set_journal(repos.job_run.clone());
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::Reindex),
+                Arc::new(|ctx, _params| {
+                    Box::pin(async move {
+                        ctx.report(1, Some(1));
+                        Ok(Outcome::success("indexed", Some(1)))
+                    })
+                }),
+            ))
+            .unwrap();
+        (system, repos)
+    }
+
     fn copy_params(names: &[&str]) -> Params {
         serde_json::json!({ "names": names, "repo_id": "r1" })
     }
@@ -990,6 +1216,7 @@ mod tests {
                 "Copy 2",
                 Some(2),
             )
+            .await
             .unwrap();
 
         // The run exists immediately, before the body has been polled.
@@ -1015,7 +1242,9 @@ mod tests {
     async fn an_unregistered_job_cannot_be_submitted() {
         let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
         assert!(matches!(
-            system.submit(JobKey::Copy, Some(1), Params::Null, "x", None),
+            system
+                .submit(JobKey::Copy, Some(1), Params::Null, "x", None)
+                .await,
             Err(AppError::Internal(_))
         ));
     }
@@ -1041,9 +1270,12 @@ mod tests {
         let params = serde_json::json!({"repo_id": "r1"});
         system
             .submit(JobKey::Reindex, Some(1), params.clone(), "reindex", None)
+            .await
             .unwrap();
         assert!(matches!(
-            system.submit(JobKey::Reindex, Some(1), params, "reindex", None),
+            system
+                .submit(JobKey::Reindex, Some(1), params, "reindex", None)
+                .await,
             Err(AppError::Conflict(_))
         ));
     }
@@ -1075,13 +1307,17 @@ mod tests {
 
         system
             .submit(JobKey::Copy, Some(1), copy_params(&["a"]), "a", None)
+            .await
             .unwrap();
         system
             .submit(JobKey::Copy, Some(1), copy_params(&["b"]), "b", None)
+            .await
             .unwrap();
         assert!(
             matches!(
-                system.submit(JobKey::Copy, Some(1), copy_params(&["c"]), "c", None),
+                system
+                    .submit(JobKey::Copy, Some(1), copy_params(&["c"]), "c", None)
+                    .await,
                 Err(AppError::TooManyRequests)
             ),
             "one user must not be able to take unlimited slots"
@@ -1090,6 +1326,7 @@ mod tests {
         assert!(
             system
                 .submit(JobKey::Copy, Some(2), copy_params(&["d"]), "d", None)
+                .await
                 .is_ok()
         );
     }
@@ -1135,6 +1372,7 @@ mod tests {
             .unwrap();
         let id = system
             .submit(JobKey::Move, Some(1), copy_params(&["a"]), "move", None)
+            .await
             .unwrap();
         assert!(matches!(
             system.cancel(&id, Viewer::user(1)),
@@ -1166,6 +1404,7 @@ mod tests {
                 "reindex",
                 None,
             )
+            .await
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         system.cancel(&id, Viewer::user(1)).unwrap();
@@ -1186,6 +1425,7 @@ mod tests {
         let system = test_system();
         let id = system
             .submit(JobKey::Copy, Some(1), copy_params(&["a"]), "a", None)
+            .await
             .unwrap();
         assert!(matches!(
             system.cancel(&id, Viewer::user(2)),
@@ -1213,6 +1453,7 @@ mod tests {
             .unwrap();
         let id = system
             .submit(JobKey::Move, Some(1), copy_params(&["a"]), "move", None)
+            .await
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
@@ -1247,6 +1488,7 @@ mod tests {
                 "reindex",
                 None,
             )
+            .await
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
@@ -1287,7 +1529,9 @@ mod tests {
             ))
             .unwrap();
         assert!(matches!(
-            system.submit(JobKey::Copy, Some(1), copy_params(&["a"]), "a", None),
+            system
+                .submit(JobKey::Copy, Some(1), copy_params(&["a"]), "a", None)
+                .await,
             Err(AppError::TooManyRequests)
         ));
     }
@@ -1318,9 +1562,12 @@ mod tests {
             .unwrap();
         system
             .submit(JobKey::Copy, Some(1), copy_params(&["a"]), "a", None)
+            .await
             .unwrap();
         assert!(matches!(
-            system.submit(JobKey::Copy, Some(2), copy_params(&["b"]), "b", None),
+            system
+                .submit(JobKey::Copy, Some(2), copy_params(&["b"]), "b", None)
+                .await,
             Err(AppError::TooManyRequests)
         ));
     }
@@ -1361,6 +1608,7 @@ mod tests {
         let busy = system.load().request_guard();
         let id = system
             .submit(JobKey::Reindex, None, copy_params(&["a"]), "busy", None)
+            .await
             .unwrap();
 
         // It is parked, not finished, and recorded as such.
@@ -1421,6 +1669,7 @@ mod tests {
 
         let id = system
             .submit(JobKey::Reindex, None, copy_params(&["a"]), "unaware", None)
+            .await
             .unwrap();
         for _ in 0..400 {
             let state = system.store().get(&id).unwrap().state;
@@ -1451,6 +1700,183 @@ mod tests {
             Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
         );
         assert!(system.yield_gate(&gc).is_some());
+    }
+
+    /// A finished audited run leaves a row, so a crash is visible rather than
+    /// silent.
+    #[tokio::test]
+    async fn an_audited_run_is_recorded_in_the_journal() {
+        let (system, repos) = journal_system().await;
+        let id = system
+            .submit(
+                JobKey::Reindex,
+                Some(1),
+                copy_params(&["a"]),
+                "reindex",
+                None,
+            )
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            if system.store().get(&id).unwrap().state.is_terminal() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        // The journal write happens after the terminal transition.
+        let mut rows = Vec::new();
+        for _ in 0..200 {
+            rows = repos.job_run.recent(10).await.unwrap();
+            if !rows.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(rows.len(), 1, "one finished run is recorded");
+        let row = &rows[0];
+        assert_eq!(row.kind, "reindex");
+        assert_eq!(row.phase, "succeeded");
+        assert_eq!(row.owner, Some(1));
+        assert!(row.finished_at.is_some());
+        assert!(row.lease_until.is_none(), "a finished run holds no lease");
+        assert!(row.params.is_none(), "the input is dropped once it is over");
+    }
+
+    /// A destructive job is never recorded as replayable, so a crash can never
+    /// repeat it.
+    #[tokio::test]
+    async fn a_memory_only_run_is_never_journalled() {
+        let (system, repos) = journal_system().await;
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::Move),
+                Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+            ))
+            .unwrap();
+        let id = system
+            .submit(JobKey::Move, Some(1), copy_params(&["a"]), "move", None)
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            if system.store().get(&id).unwrap().state.is_terminal() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            repos.job_run.recent(10).await.unwrap().is_empty(),
+            "copy and move are not recorded at all"
+        );
+        assert!(
+            repos
+                .job_run
+                .recoverable(i64::MAX, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "and never recovered"
+        );
+    }
+
+    /// A durable run whose process died is replayed; its interrupted attempt is
+    /// recorded rather than dropped.
+    #[tokio::test]
+    async fn a_durable_run_is_recovered_after_a_crash() {
+        let (system, repos) = journal_system().await;
+        // A run left behind by a process that never finished it, with its lease
+        // long expired.
+        repos
+            .job_run
+            .enqueue(
+                crate::repository::job_run::NewJobRun {
+                    id: "crashed-run".to_string(),
+                    kind: "reindex".to_string(),
+                    owner: Some(7),
+                    summary: "Reindex \"r1\"".to_string(),
+                    params: Some(serde_json::json!({"repo_id": "r1"}).to_string()),
+                    created_at: 0,
+                },
+                -1,
+            )
+            .await
+            .unwrap();
+
+        system.recover().await;
+
+        // The new attempt ran and was recorded.
+        let mut recovered: Vec<crate::repository::job_run::NewJobRun> = Vec::new();
+        for _ in 0..200 {
+            recovered = repos
+                .job_run
+                .recent(10)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|row| row.id != "crashed-run")
+                .map(|row| crate::repository::job_run::NewJobRun {
+                    id: row.id,
+                    kind: row.kind,
+                    owner: row.owner,
+                    summary: row.summary,
+                    params: row.params,
+                    created_at: row.created_at,
+                })
+                .collect();
+            if !recovered.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(recovered.len(), 1, "the run was replayed once");
+        assert_eq!(recovered[0].owner, Some(7), "ownership survives recovery");
+        assert!(
+            recovered[0].params.is_none(),
+            "the finished replay drops its input"
+        );
+
+        // The abandoned attempt is closed, so it is not replayed again.
+        assert!(
+            repos
+                .job_run
+                .recoverable(i64::MAX, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "the interrupted attempt is not pending work any more"
+        );
+    }
+
+    /// A row whose job is gone, or that is not safe to replay, is closed rather
+    /// than left to be retried forever.
+    #[tokio::test]
+    async fn recovery_closes_a_row_it_cannot_replay() {
+        let (system, repos) = journal_system().await;
+        for (id, kind) in [("gone", "no-such-job"), ("unsafe", "move")] {
+            repos
+                .job_run
+                .enqueue(
+                    crate::repository::job_run::NewJobRun {
+                        id: id.to_string(),
+                        kind: kind.to_string(),
+                        owner: None,
+                        summary: String::new(),
+                        params: None,
+                        created_at: 0,
+                    },
+                    -1,
+                )
+                .await
+                .unwrap();
+        }
+
+        system.recover().await;
+
+        let rows = repos.job_run.recent(10).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            assert_eq!(row.phase, "interrupted", "{} was closed", row.id);
+            assert!(row.finished_at.is_some());
+        }
     }
 
     #[test]

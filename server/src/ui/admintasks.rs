@@ -26,6 +26,7 @@ pub struct AdmintasksTemplate {
     pub active_page: &'static str,
     pub tasks: Vec<TaskRow>,
     pub load: LoadRow,
+    pub runs: Vec<RunRow>,
     pub error: Option<String>,
     pub success: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
@@ -67,6 +68,16 @@ impl LoadRow {
             load_aware: state.tasks.load_aware(),
         }
     }
+}
+
+/// One recorded run, from the durable journal.
+pub struct RunRow {
+    pub kind: String,
+    pub state: String,
+    pub owner: String,
+    pub finished_at_ts: Option<i64>,
+    pub processed: Option<i64>,
+    pub error: String,
 }
 
 /// One row of the listing: a job, or a long-lived service.
@@ -215,6 +226,28 @@ async fn render_page(
     // looking at this page wants to know they exist.
     tasks.extend(state.tasks.services().iter().map(|name| service_row(name)));
 
+    // Durable history, so a run that crashed is visible and not only the most
+    // recent in-memory state.
+    let runs = state
+        .repos
+        .job_run
+        .recent(20)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| RunRow {
+            kind: row.kind,
+            state: row.phase,
+            owner: row
+                .owner
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "—".to_string()),
+            finished_at_ts: row.finished_at,
+            processed: row.processed,
+            error: row.error.unwrap_or_default(),
+        })
+        .collect();
+
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
     let tpl = AdmintasksTemplate {
@@ -226,6 +259,7 @@ async fn render_page(
         active_page: "admintasks",
         tasks,
         load: LoadRow::from_state(state),
+        runs,
         error,
         success,
         left_panel_repos: ctx.left_panel_repos,
@@ -281,17 +315,21 @@ pub async fn trigger_task(
         return render_page(&state, &user, Some(msg), None).await;
     }
 
-    if let Err(e) = state.tasks.submit(
-        key,
-        None,
-        serde_json::Value::Null,
-        state
-            .tasks
-            .job(key)
-            .map(|job| job.spec.name)
-            .unwrap_or(&name),
-        None,
-    ) {
+    if let Err(e) = state
+        .tasks
+        .submit(
+            key,
+            None,
+            serde_json::Value::Null,
+            state
+                .tasks
+                .job(key)
+                .map(|job| job.spec.name)
+                .unwrap_or(&name),
+            None,
+        )
+        .await
+    {
         let msg = I18n::get(user.language.as_deref()).trf(
             "admin.task_trigger_failed",
             &[("name", &name), ("reason", &e.to_string())],

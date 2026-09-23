@@ -61,6 +61,10 @@ pub fn install_default_jobs(
         }));
     }
 
+    // Durable history lives in the database, so a crash is visible rather than
+    // silent, and a job declared replayable can be resumed.
+    tasks.set_journal(repos.job_run.clone());
+
     let mut jobs: Vec<RegisteredJob> = Vec::new();
 
     // ── Jobs a request submits ───────────────────────────────────────────
@@ -457,6 +461,14 @@ pub fn install_default_jobs(
     // Install first: it replaces the generation's job set *and* clears the
     // service listing, so anything registered before it would be forgotten.
     tasks.install(jobs, shutdown)?;
+
+    // Then resume whatever the previous process left unfinished. Spawned
+    // rather than awaited because this runs from a synchronous constructor, and
+    // recovery does not have to finish before the server starts serving.
+    {
+        let tasks = tasks.clone();
+        tokio::spawn(async move { tasks.recover().await });
+    }
 
     // The event listener is a service, not a job: it has no owner, no progress
     // and no terminal state, so it gets a lifecycle rather than a run record.

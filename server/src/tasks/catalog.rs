@@ -44,9 +44,10 @@ pub fn policy(key: JobKey) -> JobSpec {
             // map, and its 409.
             dedup: Dedup::ByParams("repo_id"),
             visibility: Visibility::OwnerOrAdmin,
-            // A full rebuild converges on the same index, so recording it and
-            // replaying it after a crash is safe.
-            durability: Durability::Audit,
+            // Idempotent — a full rebuild converges on the same index — so this
+            // is the one job safe to replay after a crash. Everything else is
+            // either destructive or not worth resuming.
+            durability: Durability::Durable,
             resumable: true,
             cancellable: true,
             chunkable: Some(ChunkPolicy {
@@ -196,10 +197,9 @@ fn housekeeping(key: JobKey, name: &'static str, trigger: Trigger) -> JobSpec {
         dedup: Dedup::None,
         retention: Retention::default(),
         visibility: Visibility::OwnerOrAdmin,
-        // Promoted to `Audit` once the run table exists; recording a cleanup
-        // pass is useful history and needs no idempotency, but replaying it
-        // buys nothing.
-        durability: Durability::Memory,
+        // Audited: recording a cleanup pass is useful history and needs no
+        // idempotency, but replaying it buys nothing, so it is not `Durable`.
+        durability: Durability::Audit,
         resumable: true,
         cancellable: false,
         chunkable: None,

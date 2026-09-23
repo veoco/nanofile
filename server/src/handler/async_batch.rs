@@ -50,19 +50,22 @@ pub async fn async_batch_copy_item(
 
     let description = describe("Copy", &body.src_dirents);
     let total = body.src_dirents.len() as u64;
-    let task_id = state.tasks.submit(
-        JobKey::Copy,
-        Some(auth.user_id),
-        serde_json::json!({
-            "repo_id": body.src_repo_id,
-            "src_dir": src_dir,
-            "dst_dir": dst_dir,
-            "file_names": body.src_dirents,
-            "email": auth.email,
-        }),
-        description,
-        Some(total),
-    )?;
+    let task_id = state
+        .tasks
+        .submit(
+            JobKey::Copy,
+            Some(auth.user_id),
+            serde_json::json!({
+                "repo_id": body.src_repo_id,
+                "src_dir": src_dir,
+                "dst_dir": dst_dir,
+                "file_names": body.src_dirents,
+                "email": auth.email,
+            }),
+            description,
+            Some(total),
+        )
+        .await?;
 
     Ok(Json(serde_json::json!({"task_id": task_id.as_str()})))
 }
@@ -93,19 +96,22 @@ pub async fn async_batch_move_item(
 
     let description = describe("Move", &body.src_dirents);
     let total = body.src_dirents.len() as u64;
-    let task_id = state.tasks.submit(
-        JobKey::Move,
-        Some(auth.user_id),
-        serde_json::json!({
-            "repo_id": body.src_repo_id,
-            "src_dir": src_dir,
-            "dst_dir": dst_dir,
-            "file_names": body.src_dirents,
-            "email": auth.email,
-        }),
-        description,
-        Some(total),
-    )?;
+    let task_id = state
+        .tasks
+        .submit(
+            JobKey::Move,
+            Some(auth.user_id),
+            serde_json::json!({
+                "repo_id": body.src_repo_id,
+                "src_dir": src_dir,
+                "dst_dir": dst_dir,
+                "file_names": body.src_dirents,
+                "email": auth.email,
+            }),
+            description,
+            Some(total),
+        )
+        .await?;
 
     Ok(Json(serde_json::json!({"task_id": task_id.as_str()})))
 }
@@ -160,19 +166,22 @@ pub async fn copy_move_task(
     );
     let total = body.src_dirents.len().max(1) as u64;
 
-    let task_id = state.tasks.submit(
-        key,
-        Some(auth.user_id),
-        serde_json::json!({
-            "repo_id": body.src_repo_id,
-            "src_dir": src_dir,
-            "dst_dir": dst_dir,
-            "file_names": body.src_dirents,
-            "email": auth.email,
-        }),
-        description,
-        Some(total),
-    )?;
+    let task_id = state
+        .tasks
+        .submit(
+            key,
+            Some(auth.user_id),
+            serde_json::json!({
+                "repo_id": body.src_repo_id,
+                "src_dir": src_dir,
+                "dst_dir": dst_dir,
+                "file_names": body.src_dirents,
+                "email": auth.email,
+            }),
+            description,
+            Some(total),
+        )
+        .await?;
 
     Ok(Json(serde_json::json!({"task_id": task_id.as_str()})))
 }

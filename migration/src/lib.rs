@@ -95,6 +95,7 @@ migrations!(
     m20260921_000001_create_email,
     m20260922_000001_create_settings,
     m20260923_000001_add_lease_to_email_messages,
+    m20260924_000001_create_job_runs,
 );
 
 #[cfg(test)]
