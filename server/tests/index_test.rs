@@ -265,7 +265,8 @@ async fn test_move_updates_index() {
 
     // Create a subdirectory
     let resp = f.client.create_dir(token, &f.repo_id, "/subdir").await;
-    assert_eq!(resp.status(), 200);
+    // seahub answers 201 Created for mkdir.
+    assert_eq!(resp.status(), 201);
 
     // Upload
     let resp = f
@@ -402,7 +403,7 @@ async fn test_dir_rename_and_move_update_index() {
             .create_dir(token, &f.repo_id, "/docs")
             .await
             .status(),
-        200
+        201
     );
     assert_eq!(
         f.client
@@ -439,7 +440,7 @@ async fn test_dir_rename_and_move_update_index() {
             .create_dir(token, &f.repo_id, "/dst")
             .await
             .status(),
-        200
+        201
     );
     let resp = f
         .client
@@ -514,7 +515,7 @@ async fn test_dir_delete_cleans_index_subtree() {
             .create_dir(token, &f.repo_id, "/gone")
             .await
             .status(),
-        200
+        201
     );
     assert_eq!(
         f.client

@@ -212,7 +212,10 @@ async fn put_handler(
             &auth.email,
             Some(auth.user_id),
             false,
-            None,
+            // WebDAV PUT overwrites an existing resource, but a new one must
+            // still be logged/committed as a create — passing `true`
+            // unconditionally made every new PUT an "edit".
+            existed,
             new_block_ids,
         )
         .await

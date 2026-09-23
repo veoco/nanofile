@@ -14,6 +14,9 @@ use base::error::AppError;
 #[derive(Deserialize)]
 pub struct PermissionQuery {
     op: Option<String>,
+    /// 40-hex client id; upstream rejects any other length. (`client_ver` is
+    /// also sent but upstream's version gate is not enforced here.)
+    client_id: Option<String>,
 }
 
 pub fn permission_routes() -> Router<Arc<AppState>> {
@@ -45,6 +48,19 @@ pub async fn permission_check(
         return Err(AppError::RepoDeleted);
     }
 
+    // Upstream validates the op and the optional client id before doing any
+    // permission work (`fileserver/sync_api.go:197-216`).
+    match query.op.as_deref() {
+        Some("upload") | Some("download") => {}
+        _ => return Err(AppError::BadRequest("op is invalid".into())),
+    }
+    if let Some(client_id) = query.client_id.as_deref()
+        && !client_id.is_empty()
+        && client_id.len() != 40
+    {
+        return Err(AppError::BadRequest("client_id is invalid".into()));
+    }
+
     // Check permission based on operation type.
     // seaf-daemon sends op=upload or op=download.
     match query.op.as_deref() {
@@ -70,7 +86,7 @@ pub async fn permission_check(
             }
         }
         _ => {
-            // Default to read permission check (covers download + unknown ops).
+            // op == "download" (validated above).
             crate::domain::permission::check_repo_read_permission(
                 state.repos.member.as_ref(),
                 &repo_id,

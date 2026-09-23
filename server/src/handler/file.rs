@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::dir::{is_true as reload_requested, parent_dir_of, reload_dir_response};
 use crate::handler::exif::get_exif;
 use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
 use crate::middleware::auth::AuthUser;
@@ -26,6 +27,13 @@ pub(crate) use file_svc::rename_entry;
 pub struct FileQuery {
     pub p: Option<String>,
     pub reuse: Option<i32>,
+    /// `download` (default), `view` or `downloadblks`. Upstream reads
+    /// `op = request.GET.get('op', 'download')` and branches on it
+    /// (`seahub/api2/views.py:3142-3150`).
+    pub op: Option<String>,
+    /// `reloaddir=true` asks the create/rename/move handlers for the affected
+    /// directory's listing instead of a bare `"success"`.
+    pub reloaddir: Option<String>,
 }
 
 pub fn file_routes() -> Router<Arc<AppState>> {
@@ -81,7 +89,69 @@ pub async fn download_file(
         HeaderValue::from_str(&file_fs_id).unwrap_or_else(|_| HeaderValue::from_static(EMPTY_SHA1)),
     );
 
-    Ok((resp_headers, Json(url)).into_response())
+    match query.op.as_deref().unwrap_or("download") {
+        "download" | "view" => Ok((resp_headers, Json(url)).into_response()),
+        "downloadblks" => {
+            // The iOS client asks for this before a client-side-decrypted
+            // download and reads `file_id`/`blklist`; the shape (and the
+            // `oid` header) matches `seahub/api2/views.py:2524-2549`.
+            let block_ids: Vec<String> = if file_fs_id == EMPTY_SHA1 {
+                // A zero-byte file has no blocks, so no library key is needed.
+                Vec::new()
+            } else {
+                let obj = state
+                    .repos
+                    .fs_object
+                    .find_by_repo_and_fs_id(repo_id, &file_fs_id)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::OperationFailed("Failed to get file block list".into())
+                    })?;
+                let value: serde_json::Value = serde_json::from_str(&obj.data).map_err(|e| {
+                    AppError::OperationFailed(format!("Failed to get file block list: {e}"))
+                })?;
+                value
+                    .get("block_ids")
+                    .and_then(|v| v.as_array())
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(|v| v.as_str())
+                            .filter(|s| s.len() == 40)
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+
+            // Upstream only reports the library's encryption info when there is
+            // a block list to decrypt.
+            let (encrypted, enc_version) = if block_ids.is_empty() {
+                (false, 0)
+            } else {
+                let repo = state
+                    .repos
+                    .repo
+                    .find_by_id(repo_id)
+                    .await?
+                    .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+                (repo.encrypted != 0, repo.enc_version as i32)
+            };
+
+            Ok((
+                resp_headers,
+                Json(serde_json::json!({
+                    "file_id": file_fs_id,
+                    "blklist": block_ids,
+                    "encrypted": encrypted,
+                    "enc_version": enc_version,
+                })),
+            )
+                .into_response())
+        }
+        _ => Err(AppError::OperationFailed(
+            "Operation is neither download, view nor downloadblks.".into(),
+        )),
+    }
 }
 
 pub async fn file_post_handler(
@@ -89,7 +159,7 @@ pub async fn file_post_handler(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FileQuery>,
     req: Request<Body>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Response, AppError> {
     let repo_id = &access.repo_id;
 
     let (parts, body) = req.into_parts();
@@ -185,7 +255,10 @@ pub async fn file_post_handler(
                 &state.block_store,
             )
             .await?;
-            return Ok(Json(serde_json::Value::String("success".to_string())));
+            if reload_requested(query.reloaddir.as_deref()) {
+                return reload_dir_response(&state, repo_id, &parent_dir_of(&path)).await;
+            }
+            return Ok(Json(serde_json::Value::String("success".to_string())).into_response());
         }
 
         if !has_file {
@@ -210,11 +283,14 @@ pub async fn file_post_handler(
             &access.user.email,
             Some(access.user.user_id),
             false,
-            Some(replace),
+            replace,
             file_new_block_ids,
         )
         .await?;
-        Ok(ok_json())
+        if reload_requested(query.reloaddir.as_deref()) {
+            return reload_dir_response(&state, repo_id, &parent_dir).await;
+        }
+        Ok(ok_json().into_response())
     } else {
         let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
@@ -229,7 +305,10 @@ pub async fn file_post_handler(
                 let _ = svc
                     .create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
                     .await?;
-                Ok(ok_json())
+                if reload_requested(query.reloaddir.as_deref()) {
+                    return reload_dir_response(&state, repo_id, &parent_dir_of(&path)).await;
+                }
+                Ok(ok_json().into_response())
             }
             Some("rename") => {
                 let newname = form
@@ -243,7 +322,10 @@ pub async fn file_post_handler(
                     access.user.user_id,
                 )
                 .await?;
-                Ok(ok_json())
+                if reload_requested(query.reloaddir.as_deref()) {
+                    return reload_dir_response(&state, repo_id, &parent_dir_of(&path)).await;
+                }
+                Ok(ok_json().into_response())
             }
             Some("move") => {
                 let _dst_repo = form
@@ -258,7 +340,11 @@ pub async fn file_post_handler(
                     access.user.user_id,
                 )
                 .await?;
-                Ok(ok_json())
+                // seahub reloads the *destination* directory after a move.
+                if reload_requested(query.reloaddir.as_deref()) {
+                    return reload_dir_response(&state, repo_id, dst_dir).await;
+                }
+                Ok(ok_json().into_response())
             }
             _ => Err(AppError::BadRequest("unknown operation".into())),
         }

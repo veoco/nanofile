@@ -74,6 +74,11 @@ pub struct FsIdListQuery {
     pub dir_only: Option<String>,
 }
 
+/// True for a 40-character hex object id (commit / fs object).
+fn is_object_id(s: &str) -> bool {
+    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 pub fn fs_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/{repo_id}/fs-id-list/", axum::routing::get(fs_id_list))
@@ -101,6 +106,23 @@ pub async fn fs_id_list(
     let server_head = query
         .server_head
         .ok_or_else(|| AppError::BadRequest("missing server-head parameter".into()))?;
+
+    // Upstream validates both heads as 40-hex object ids and answers 400
+    // (`sync_api.go:118-132`); passing garbage straight through produced a
+    // confusing 404/500 instead.
+    if !is_object_id(&server_head) {
+        return Err(AppError::BadRequest(
+            "Invalid server-head parameter.".into(),
+        ));
+    }
+    if let Some(head) = query.client_head.as_deref()
+        && !head.is_empty()
+        && !is_object_id(head)
+    {
+        return Err(AppError::BadRequest(
+            "Invalid client-head parameter.".into(),
+        ));
+    }
 
     let dir_only = !query.dir_only.as_deref().unwrap_or("").is_empty();
     if server_head == EMPTY_SHA1 {
@@ -163,6 +185,29 @@ pub async fn pack_fs_handler(
         .sync_service()
         .fetch_fs_objects(&repo_id, &fs_ids)
         .await?;
+
+    // A requested id the server cannot serve must fail the request instead of
+    // producing a short 200. seaf-daemon treats "requested but not returned" as
+    // "retry immediately" — it re-queues every missing id and loops with no
+    // sleep and no retry cap — so a silent subset turns a server-side gap into a
+    // client-side infinite loop. Upstream `packFSCB` returns 500 when an object
+    // cannot be read (and only ever returns a short pack when it hits its size
+    // cut-off, where the omitted ids still exist and the retry terminates).
+    //
+    // `EMPTY_SHA1` is the empty-directory / zero-byte-file sentinel: it has no
+    // stored object, clients materialise it locally, and `check-fs` reports it
+    // as always present. It is answered with no entry, as before; `fs-id-list`
+    // never advertises it (see `diff_fs_ids`).
+    let stored: std::collections::HashSet<&str> =
+        objects.iter().map(|obj| obj.fs_id.as_str()).collect();
+    if let Some(missing) = fs_ids
+        .iter()
+        .find(|id| id.as_str() != EMPTY_SHA1 && !stored.contains(id.as_str()))
+    {
+        return Err(AppError::Internal(format!(
+            "fs object {missing} is missing from library {repo_id}"
+        )));
+    }
 
     // zlib compression is CPU-bound; offload to the blocking pool so the
     // async runtime can serve other requests (locked-files, commit/HEAD)
@@ -253,7 +298,9 @@ pub async fn recv_fs(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let entries = pack_fs::decode_pack_fs_entries(&data).map_err(AppError::internal)?;
+    // A malformed pack (bad id, truncated entry, trailing bytes) is a client
+    // error upstream answers with 400 (`sync_api.go:465-509`), not a 500.
+    let entries = pack_fs::decode_pack_fs_entries(&data).map_err(AppError::BadRequest)?;
     state
         .sync_service()
         .insert_fs_objects(&repo_id, entries)

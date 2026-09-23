@@ -240,7 +240,8 @@ async fn test_recv_fs_invalid_obj_id() {
     packed.push(0x00);
 
     let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
-    assert_eq!(resp.status(), 500);
+    // A malformed object id is a client error (upstream answers 400).
+    assert_eq!(resp.status(), 400);
 }
 
 /// A directory object must be rejected when it does not declare `type: 3`.
@@ -304,7 +305,9 @@ async fn test_recv_fs_truncated_body() {
 
     let packed = vec![0u8; 20];
     let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
-    assert_eq!(resp.status(), 200);
+    // A body that does not end on an entry boundary is malformed: upstream
+    // rejects it with 400 instead of silently storing a prefix.
+    assert_eq!(resp.status(), 400);
 }
 
 #[tokio::test]

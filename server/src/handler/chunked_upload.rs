@@ -48,7 +48,7 @@ pub async fn upload_blks_link(
         parent_dir,
     );
 
-    let url = build_blks_op_url(&state, "upload-blks-api", &token);
+    let url = build_blks_op_url(&state, "upload-blks-api", &token, &headers);
 
     Ok(Json(url))
 }
@@ -74,7 +74,7 @@ pub async fn update_blks_link(
         parent_dir,
     );
 
-    let url = build_blks_op_url(&state, "update-blks-api", &token);
+    let url = build_blks_op_url(&state, "update-blks-api", &token, &headers);
 
     Ok(Json(url))
 }
@@ -97,7 +97,11 @@ async fn ensure_not_encrypted(state: &AppState, repo_id: &str) -> Result<(), App
     Ok(())
 }
 
-fn build_blks_op_url(state: &AppState, op: &str, token: &str) -> String {
-    let base = state.config().server.site_url_origin();
+/// Build a block-upload URL on the Host-aware external base, so a LAN client
+/// that reached the server by address is not told to upload to loopback (the
+/// same rule download links use).
+fn build_blks_op_url(state: &AppState, op: &str, token: &str, headers: &HeaderMap) -> String {
+    let host = headers.get("host").and_then(|v| v.to_str().ok());
+    let base = state.config().server.download_url_base(host);
     format!("{}/{}/{}", base.trim_end_matches('/'), op, token)
 }

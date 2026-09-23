@@ -1,4 +1,4 @@
-use axum::http::{HeaderMap, HeaderName, HeaderValue};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::{
     Json, Router,
     body::Body,
@@ -23,6 +23,50 @@ pub struct DirQuery {
     pub p: Option<String>,
     pub t: Option<String>,
     pub recursive: Option<String>,
+    /// `reloaddir=true` asks for the affected directory's listing in the
+    /// response body instead of a bare `"success"` (seahub's `reloaddir()`).
+    pub reloaddir: Option<String>,
+}
+
+/// Whether a query parameter spells `true` (seahub lowercases and compares).
+pub(crate) fn is_true(value: Option<&str>) -> bool {
+    value.is_some_and(|v| v.eq_ignore_ascii_case("true"))
+}
+
+/// Parent directory of an absolute repo path (`/a/b` → `/a`, `/a` → `/`).
+pub(crate) fn parent_dir_of(path: &str) -> String {
+    match path.rfind('/') {
+        Some(0) | None => "/".to_string(),
+        Some(i) => path[..i].to_string(),
+    }
+}
+
+/// Build the `reloaddir=true` response: the directory's dirents as a **bare**
+/// JSON array plus the `oid`/`dir_perm` headers seahub's `reloaddir()`
+/// produces (`seahub/api2/views.py:2560-2576`).
+///
+/// The official iOS client's `SeafDir.handleData:` accepts only a bare array or
+/// a `{"dirent_list": […]}` wrapper, so the previous `{"dir_listing": …}`
+/// wrapper left its file list stale — and a rename then reported failure even
+/// though the server had renamed the entry.
+pub(crate) async fn reload_dir_response(
+    state: &AppState,
+    repo_id: &str,
+    path: &str,
+) -> Result<Response, AppError> {
+    let (dir_id, entries) = state.dir_service().list_dir(repo_id, path).await?;
+    let mut headers = HeaderMap::new();
+    if !dir_id.is_empty() {
+        headers.insert(
+            HeaderName::from_static("oid"),
+            HeaderValue::from_str(&dir_id).unwrap_or_else(|_| HeaderValue::from_static(EMPTY_SHA1)),
+        );
+    }
+    headers.insert(
+        HeaderName::from_static("dir_perm"),
+        HeaderValue::from_static("rw"),
+    );
+    Ok((headers, Json(entries)).into_response())
 }
 
 pub fn dir_routes() -> Router<Arc<AppState>> {
@@ -109,7 +153,7 @@ pub async fn dir_post_handler(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DirQuery>,
     req: Request<Body>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Response, AppError> {
     let repo_id = &access.repo_id;
 
     let (_parts, body) = req.into_parts();
@@ -159,12 +203,32 @@ pub async fn dir_post_handler(
                 access.user.user_id,
             )
             .await?;
-            Ok(Json(serde_json::Value::String("success".to_string())))
+            Ok(Json(serde_json::Value::String("success".to_string())).into_response())
         }
         _ => {
             svc.create_dir(repo_id, &path, &access.user.email, access.user.user_id)
                 .await?;
-            Ok(Json(serde_json::Value::String("success".to_string())))
+            // iOS sends `reloaddir=true` and reads the parent listing out of the
+            // body; without it the new folder would not appear until a manual
+            // refresh.
+            if is_true(query.reloaddir.as_deref()) {
+                let parent = parent_dir_of(&path);
+                return reload_dir_response(&state, repo_id, &parent).await;
+            }
+            // Otherwise seahub answers 201 with a `Location` for the new folder.
+            let mut headers = HeaderMap::new();
+            if let Ok(value) = HeaderValue::from_str(&format!(
+                "/api2/repos/{repo_id}/dir/?p={}",
+                percent_encoding::utf8_percent_encode(&path, percent_encoding::NON_ALPHANUMERIC)
+            )) {
+                headers.insert(axum::http::header::LOCATION, value);
+            }
+            Ok((
+                StatusCode::CREATED,
+                headers,
+                Json(serde_json::Value::String("success".to_string())),
+            )
+                .into_response())
         }
     }
 }
@@ -173,7 +237,7 @@ pub async fn delete_dir(
     access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
     Query(query): Query<DirQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Response, AppError> {
     let repo_id = &access.repo_id;
 
     let path = safe_normalize_path(
@@ -186,7 +250,12 @@ pub async fn delete_dir(
     let svc = state.dir_service();
     svc.delete_dir(repo_id, &path, &access.user.email, access.user.user_id)
         .await?;
-    Ok(ok_json())
+
+    // seahub's `DirView.delete` ends in `reloaddir_if_necessary`.
+    if is_true(query.reloaddir.as_deref()) {
+        return reload_dir_response(&state, repo_id, &parent_dir_of(&path)).await;
+    }
+    Ok(ok_json().into_response())
 }
 
 #[derive(Deserialize)]

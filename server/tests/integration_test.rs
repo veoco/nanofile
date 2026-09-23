@@ -1660,7 +1660,7 @@ async fn test_regression_rename_dir_creates_new_commit() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/my_folder")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
 
     // Record root fs_id before rename from head commit
     let root_before = get_root_fs_id(&f).await;
@@ -1731,7 +1731,7 @@ async fn test_regression_delete_dir_creates_new_commit() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/my_folder")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
     let resp = f
         .client
         .upload_file(
@@ -1812,7 +1812,7 @@ async fn test_create_dir_shows_in_list_dir() {
 
     // Create a directory via API JSON
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, "/test").await;
-    assert_eq!(resp.status(), 200, "create_dir /test failed");
+    assert_eq!(resp.status(), 201, "create_dir /test failed");
 
     // List root — must contain BOTH the file AND the directory
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
@@ -1842,7 +1842,7 @@ async fn test_create_dir_in_empty_repo_shows_in_list_dir() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/my_folder")
         .await;
-    assert_eq!(resp.status(), 200, "create_dir failed");
+    assert_eq!(resp.status(), 201, "create_dir failed");
 
     // List root — must contain the directory
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
@@ -1873,7 +1873,7 @@ async fn test_create_dir_chinese_name_shows_in_list_dir() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/未命名文件夹")
         .await;
-    assert_eq!(resp.status(), 200, "create_dir with Chinese name failed");
+    assert_eq!(resp.status(), 201, "create_dir with Chinese name failed");
 
     // List root — must contain the Chinese-named directory
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
@@ -1917,7 +1917,7 @@ async fn test_create_dir_after_rebuild_shows_in_list() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/new_folder")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
 
     // List root — must contain both the file and the new directory
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
@@ -1948,7 +1948,7 @@ async fn test_empty_directory_uses_emtpysha1() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/api_empty")
         .await;
-    assert_eq!(resp.status(), 200, "API: create dir should succeed");
+    assert_eq!(resp.status(), 201, "API: create dir should succeed");
 
     // List root — verify the dir entry exists
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
@@ -2011,14 +2011,14 @@ async fn test_empty_directory_uses_emtpysha1() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/alpha")
         .await;
-    assert_eq!(resp.status(), 200, "API: create parent dir");
+    assert_eq!(resp.status(), 201, "API: create parent dir");
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/alpha/beta")
         .await;
     assert_eq!(
         resp.status(),
-        200,
+        201,
         "API: nested dir creation should succeed"
     );
 

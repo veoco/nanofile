@@ -155,12 +155,13 @@ async fn restore_directory_adds_its_subtree_back() {
     let f = TestFixture::new().await;
     upload(&f, "/", "keep.txt", b"01234").await;
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, "/d").await;
-    assert_eq!(resp.status(), 200);
+    // seahub answers 201 Created for mkdir.
+    assert_eq!(resp.status(), 201);
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/d/sub")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
     upload(&f, "/d", "x.txt", b"0123456789").await;
     upload(&f, "/d/sub", "y.txt", &[b'y'; 20]).await;
     assert_eq!(repo_size(&f).await, 35);
@@ -187,7 +188,7 @@ async fn restore_nested_file_adds_its_size_back() {
     let f = TestFixture::new().await;
     upload(&f, "/", "keep.txt", b"01234").await;
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, "/d").await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
     upload(&f, "/d", "x.txt", b"0123456789").await;
     assert_eq!(repo_size(&f).await, 15);
 

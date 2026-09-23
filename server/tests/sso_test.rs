@@ -642,7 +642,7 @@ async fn test_search_directories() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/mydir")
         .await;
-    assert_eq!(resp.status(), 200, "create dir should succeed");
+    assert_eq!(resp.status(), 201, "create dir should succeed");
 
     // Upload a file into it
     let resp = f

@@ -20,9 +20,10 @@ async fn upload_test_file(f: &TestFixture, name: &str, data: &[u8], parent_dir: 
 /// Helper: create a subdirectory.
 async fn create_subdir(f: &TestFixture, path: &str) {
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, path).await;
+    // seahub answers 201 Created for mkdir.
     assert_eq!(
         resp.status(),
-        200,
+        201,
         "mkdir {} failed: {:?}",
         path,
         resp.text().await
@@ -150,10 +151,18 @@ async fn test_batch_delete_reloaddir() {
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    // Should have dir_listing field with remaining entries
+    // seahub's `reloaddir_if_necessary` returns the parent directory's dirents
+    // as a bare array (the iOS client rejects any other wrapper).
+    let arr = body
+        .as_array()
+        .unwrap_or_else(|| panic!("reloaddir=true must return a bare array, got {body:?}"));
     assert!(
-        body.get("dir_listing").is_some(),
-        "reloaddir=true should return dir_listing"
+        !arr.iter().any(|e| e["name"] == "del1.txt"),
+        "deleted entry still listed: {body:?}"
+    );
+    assert!(
+        !arr.iter().any(|e| e["name"] == "del2.txt"),
+        "deleted entry still listed: {body:?}"
     );
 }
 

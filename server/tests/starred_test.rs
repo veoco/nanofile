@@ -22,9 +22,10 @@ async fn upload_file(f: &TestFixture, name: &str) {
 /// Create a subdirectory.
 async fn create_subdir(f: &TestFixture, path: &str) {
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, path).await;
+    // seahub answers 201 Created for mkdir.
     assert_eq!(
         resp.status(),
-        200,
+        201,
         "mkdir {} failed: {:?}",
         path,
         resp.text().await

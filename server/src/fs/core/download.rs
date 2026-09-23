@@ -421,6 +421,18 @@ pub struct FileDownloadParams {
 /// `200 OK`. Both cases advertise `Accept-Ranges: bytes` and set
 /// `Content-Length`, so download managers can display progress and resume an
 /// interrupted transfer with a follow-up `Range` request.
+/// Strong validator for a file body, derived from its content-addressed block
+/// list: identical content always yields the same ETag and any edit changes it.
+pub fn blocks_etag(block_ids: &[String]) -> String {
+    use sha1::Digest;
+    let mut hasher = sha1::Sha1::new();
+    for id in block_ids {
+        hasher.update(id.as_bytes());
+        hasher.update(b"|");
+    }
+    format!("\"{}\"", hex::encode(hasher.finalize()))
+}
+
 pub fn file_download_response(p: FileDownloadParams) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -448,24 +460,42 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
         );
     }
 
-    if let Some((start, end)) = p.range_header.and_then(|r| parse_range(&r, p.total_size)) {
-        headers.insert(
-            header::CONTENT_RANGE,
-            HeaderValue::from_str(&format!("bytes {start}-{end}/{}", p.total_size))
-                .expect("Content-Range header value must be valid ASCII"),
-        );
-        headers.insert(
-            header::CONTENT_LENGTH,
-            HeaderValue::from_str(&(end - start + 1).to_string())
-                .expect("Content-Length header value must be valid ASCII"),
-        );
-        let stream = range_stream(p.repo_id, p.block_ids, p.block_store, p.enc_key, start, end);
-        return (
-            StatusCode::PARTIAL_CONTENT,
-            headers,
-            Body::from_stream(stream),
-        )
-            .into_response();
+    if let Some(range_header) = p.range_header.as_deref() {
+        match parse_range(range_header, p.total_size) {
+            Some((start, end)) => {
+                headers.insert(
+                    header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes {start}-{end}/{}", p.total_size))
+                        .expect("Content-Range header value must be valid ASCII"),
+                );
+                headers.insert(
+                    header::CONTENT_LENGTH,
+                    HeaderValue::from_str(&(end - start + 1).to_string())
+                        .expect("Content-Length header value must be valid ASCII"),
+                );
+                let stream =
+                    range_stream(p.repo_id, p.block_ids, p.block_store, p.enc_key, start, end);
+                return (
+                    StatusCode::PARTIAL_CONTENT,
+                    headers,
+                    Body::from_stream(stream),
+                )
+                    .into_response();
+            }
+            // A `Range` that does not describe a satisfiable single range is
+            // 416 for a non-empty file, exactly as upstream's `doFileRange`
+            // does — it never silently serves the whole file instead. A
+            // zero-length file has no range to satisfy and stays 200.
+            None if p.total_size > 0 => {
+                headers.insert(
+                    header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes */{}", p.total_size))
+                        .expect("Content-Range header value must be valid ASCII"),
+                );
+                return (StatusCode::RANGE_NOT_SATISFIABLE, headers).into_response();
+            }
+            None => {}
+        }
     }
 
     headers.insert(

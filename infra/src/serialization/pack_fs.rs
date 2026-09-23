@@ -78,5 +78,16 @@ pub fn decode_pack_fs_entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Str
         entries.push((fs_id, entry_data));
     }
 
+    // The body must end exactly on an entry boundary. A trailing fragment
+    // smaller than an object header used to be dropped silently while the
+    // request still reported success, so a truncated upload was half-stored and
+    // only failed later (upstream returns 400: `sync_api.go:503-509`).
+    if offset != data.len() {
+        return Err(format!(
+            "trailing {} byte(s) after the last fs object",
+            data.len() - offset
+        ));
+    }
+
     Ok(entries)
 }

@@ -1061,10 +1061,14 @@ impl RepoService {
     }
 
     /// Get an upload link URL for the given repo.
+    ///
+    /// `base_url` is the caller-resolved external URL base (Host-aware when
+    /// `site_url` is still the built-in default; see
+    /// [`ServerConfig::download_url_base`]).
     pub async fn get_upload_link(
         repos: &Repositories,
         token_manager: &AccessTokenManager,
-        site_url: &str,
+        base_url: &str,
         repo_id: &str,
         user_id: i32,
         email: &str,
@@ -1091,7 +1095,7 @@ impl RepoService {
 
         let is_web = from == Some("web");
         let op = if is_web { "upload-aj" } else { "upload-api" };
-        let mut url = build_op_url(site_url, op, &token);
+        let mut url = build_op_url(base_url, op, &token);
 
         if !is_web && replace == Some("1") {
             url.push_str("?replace=1");
@@ -1101,10 +1105,13 @@ impl RepoService {
     }
 
     /// Get an update link URL for the given repo.
+    ///
+    /// `base_url` is the caller-resolved external URL base (Host-aware when
+    /// `site_url` is still the built-in default).
     pub async fn get_update_link(
         repos: &Repositories,
         token_manager: &AccessTokenManager,
-        site_url: &str,
+        base_url: &str,
         repo_id: &str,
         user_id: i32,
         email: &str,
@@ -1133,7 +1140,7 @@ impl RepoService {
         } else {
             "update-api"
         };
-        let url = build_op_url(site_url, op, &token);
+        let url = build_op_url(base_url, op, &token);
 
         Ok(url)
     }

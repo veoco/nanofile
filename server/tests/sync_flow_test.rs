@@ -648,7 +648,8 @@ async fn test_empty_directory_sync() {
 
     // Step 1: Create an empty directory via the API
     let resp = client.create_dir(&api_token, &repo_id, "/emptydir").await;
-    assert_eq!(resp.status(), 200, "create empty dir should succeed");
+    // seahub answers 201 Created for mkdir.
+    assert_eq!(resp.status(), 201, "create empty dir should succeed");
 
     // Step 2: Verify the empty directory appears in the parent dir listing
     let resp = client.list_dir(&api_token, &repo_id, "/").await;

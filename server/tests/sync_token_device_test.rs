@@ -189,7 +189,10 @@ async fn syncing_never_reassigns_a_token_to_another_device() {
         .client
         .get_sync(
             &format!(
-                "/seafhttp/repo/{}/permission-check/?op=download&client_id=dev-b&client_name=Other",
+                // `client_id` must be a 40-hex device id (upstream rejects any
+                // other length); the point of the test is that this *other*
+                // device still cannot take the token's attribution over.
+                "/seafhttp/repo/{}/permission-check/?op=download&client_id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&client_name=Other",
                 f.repo_id
             ),
             &token,

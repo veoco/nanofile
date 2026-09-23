@@ -1201,7 +1201,8 @@ async fn test_search_dir_and_file() {
         .client
         .create_dir(&fixture.api_token, &fixture.repo_id, "/myfolder")
         .await;
-    assert_eq!(resp.status(), 200, "create dir should succeed");
+    // seahub answers 201 Created for mkdir.
+    assert_eq!(resp.status(), 201, "create dir should succeed");
 
     // Upload a file into it
     let resp = fixture

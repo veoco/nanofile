@@ -109,7 +109,14 @@ pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .merge(crate::routes::api_routes().layer(cors_layer(&state.config().server)))
         .merge(crate::handler::sync::sync_routes().layer(DefaultBodyLimit::max(upload_body_limit)))
         .merge(
-            crate::handler::web::web_api_routes().layer(DefaultBodyLimit::max(upload_body_limit)),
+            crate::handler::web::web_api_routes()
+                .layer(DefaultBodyLimit::max(upload_body_limit))
+                // The upload/download/zip endpoints are fetched directly by the
+                // browser (and by clients on a different origin), so they need
+                // the same CORS handling as the API group — upstream's
+                // fileserver answers OPTIONS and sets
+                // `Access-Control-Allow-Origin` on every response.
+                .layer(cors_layer(&state.config().server)),
         )
         .merge(
             crate::handler::web::web_page_routes()

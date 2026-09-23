@@ -234,15 +234,27 @@ pub async fn get_block_map(
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
 
-    let block_sizes: Vec<i64> = stream::iter(block_id_strs)
-        .map(move |bid| {
-            let store = block_store.clone();
-            let repo_id = repo_id.clone();
-            async move { store.block_size(&repo_id, &bid).await.unwrap_or(0) }
-        })
-        .buffered(16)
-        .collect()
-        .await;
+    let block_sizes: Vec<i64> = {
+        let sizes = stream::iter(block_id_strs)
+            .map(move |bid| {
+                let store = block_store.clone();
+                let repo_id = repo_id.clone();
+                async move { store.block_size(&repo_id, &bid).await }
+            })
+            .buffered(16)
+            .collect::<Vec<_>>()
+            .await;
+        // A missing block is an error, not a zero-length block: upstream
+        // answers 500 (`sync_api.go:303-307`), and a 0 length makes a seadrive
+        // client compute wrong block offsets.
+        let mut out = Vec::with_capacity(sizes.len());
+        for size in sizes {
+            out.push(
+                size.map_err(|e| AppError::Internal(format!("block size lookup failed: {e}")))?,
+            );
+        }
+        out
+    };
 
     Ok(Json(block_sizes))
 }

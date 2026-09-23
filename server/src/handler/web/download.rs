@@ -135,8 +135,14 @@ pub(crate) async fn upload_block_key(
 
 #[derive(Deserialize)]
 pub struct RepoFileQuery {
-    /// `?dl=1` forces `Content-Disposition: attachment` (download).
+    /// `?dl=1` forces `Content-Disposition: attachment` (download). Kept for
+    /// nanofile's own web UI, which predates `op`.
     pub dl: Option<String>,
+    /// `view` (inline) or `download` (attachment), matching seahub's
+    /// `FILE_SERVER_ROOT/repos/{id}/files/{path}?op=…` contract. The web
+    /// download button builds `?op=download`; a missing `op` keeps the old
+    /// inline-by-default behaviour.
+    pub op: Option<String>,
 }
 
 /// GET /repos/{repo_id}/files/{*path} — the unified web file-content endpoint.
@@ -210,12 +216,32 @@ pub async fn repo_file_download(
         return Ok(StatusCode::NOT_MODIFIED.into_response());
     }
 
-    let content_disposition = if query.dl.as_deref() == Some("1") {
-        Some(crate::fs::core::download::content_disposition(
+    // seahub's `accessV2CB` distinguishes `op=view` (inline) from
+    // `op=download` (attachment); the official web frontend's download button
+    // sends `?op=download`, and ignoring it made the browser open files inline.
+    // `?dl=1` is nanofile's older alias for the same thing, and an absent `op`
+    // keeps the previous "let the browser decide" behaviour.
+    let content_disposition = match query.op.as_deref() {
+        None | Some("") => {
+            if query.dl.as_deref() == Some("1") {
+                Some(crate::fs::core::download::content_disposition(
+                    &file_name, true,
+                ))
+            } else {
+                None
+            }
+        }
+        Some("download") => Some(crate::fs::core::download::content_disposition(
             &file_name, true,
-        ))
-    } else {
-        None
+        )),
+        Some("view") => Some(crate::fs::core::download::content_disposition(
+            &file_name, false,
+        )),
+        Some(other) => {
+            return Err(AppError::BadRequest(format!(
+                "Operation is neither view nor download: {other}"
+            )));
+        }
     };
 
     Ok(crate::fs::core::download::file_download_response(
@@ -274,6 +300,9 @@ pub async fn download_api(
 
     let disposition = crate::fs::core::download::content_disposition(&filename, true);
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    // Canonical `/files/{token}/{name}` sets a validator from the object id, so
+    // repeat previews/downloads can revalidate instead of re-streaming.
+    let etag = crate::fs::core::download::blocks_etag(&block_ids);
     Ok(crate::fs::core::download::file_download_response(
         crate::fs::core::download::FileDownloadParams {
             repo_id: repo_id.clone(),
@@ -284,7 +313,7 @@ pub async fn download_api(
             content_type: "application/octet-stream",
             content_disposition: Some(disposition),
             range_header: range_header.map(|s| s.to_string()),
-            etag: None,
+            etag: Some(etag),
         },
     ))
 }

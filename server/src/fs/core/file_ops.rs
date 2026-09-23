@@ -199,7 +199,7 @@ impl FileOps {
         total_size: i64,
         modifier: &str,
         replace: bool,
-    ) -> Result<String, AppError> {
+    ) -> Result<(String, String), AppError> {
         let now = chrono::Utc::now().timestamp();
 
         let file_fs_data = FsFileData {
@@ -261,13 +261,27 @@ impl FileOps {
             }
         }
 
+        // Name this upload is actually stored under. `replace=0` (the official
+        // default: Android/iOS "keep both", the desktop uploader, and a plain
+        // WebDAV-less POST) must *keep* the existing entry and store the new
+        // file under a unique name, exactly like seafile's `genUniqueName()`
+        // (`server/fileserver/fileop.go:2407-2434`). Overwriting in place is
+        // reserved for `replace=1` / the update endpoints.
+        let effective_name = if identical_replace {
+            name.to_string()
+        } else if !replace && dirents.iter().any(|d| d.name == name) {
+            infra::common::util::generate_unique_filename(&dirents, name)
+        } else {
+            name.to_string()
+        };
+
         if !identical_replace {
             dirents.push(DirEntryData {
                 id: file_fs_id.clone(),
                 mode: infra::serialization::S_IFREG,
                 modifier: modifier.to_string(),
                 mtime: now,
-                name: name.to_string(),
+                name: effective_name.clone(),
                 size: total_size,
             });
         }
@@ -308,7 +322,7 @@ impl FileOps {
                 .find_by_repo_and_commit_id(repo_id, head_id)
                 .await?;
             if head_commit.is_some_and(|c| c.root_id == root_fs_id) {
-                return Ok(file_fs_id);
+                return Ok((file_fs_id, effective_name));
             }
         }
 
@@ -318,7 +332,7 @@ impl FileOps {
             root_id: root_fs_id.clone(),
             creator_name: modifier.to_string(),
             creator: EMPTY_SHA1.to_string(),
-            description: format!("Added {}", name),
+            description: format!("Added {}", effective_name),
             ctime: now,
             parent_id: parent_commit_id.clone(),
             second_parent_id: None,
@@ -367,7 +381,7 @@ impl FileOps {
         // its next poll cycle, causing a noticeable sync delay.
         events::publish_repo_update(repo_id, commit_id);
 
-        Ok(file_fs_id)
+        Ok((file_fs_id, effective_name))
     }
 
     /// Walk up the directory tree from immediate_parent_path to root,

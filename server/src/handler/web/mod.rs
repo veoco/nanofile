@@ -37,12 +37,6 @@ pub fn web_page_routes() -> Router<Arc<AppState>> {
             "/d/{token}/files/{*path}",
             get(share_view::shared_dir_file_view),
         )
-        // Opened by a link in the file list and by the media preview element;
-        // an error body of HTML is as invisible to `<video>` as JSON was.
-        .route(
-            "/repos/{repo_id}/files/{*path}",
-            get(download::repo_file_download),
-        )
         .route(
             "/u/{token}",
             get(upload_link_view::upload_link_view).post(upload_link_view::upload_link_view_post),
@@ -62,6 +56,14 @@ pub fn web_api_routes() -> Router<Arc<AppState>> {
         .route("/upload-aj/{token}", post(upload::upload_aj_token))
         .route("/upload-api/{token}", post(upload::upload_api))
         .route("/download-api/{token}", get(download::download_api))
+        // Raw file content: opened by a link in the file list and by the media
+        // preview element. It belongs to the wire group, not the page group —
+        // the page group's error middleware rewrites 4xx bodies to HTML, which
+        // dropped the `Content-Range` on a 416 and made `<video>` see a page.
+        .route(
+            "/repos/{repo_id}/files/{*path}",
+            get(download::repo_file_download),
+        )
         .route(
             "/blks/{token}/{file_id}/{block_id}",
             get(download::block_download),

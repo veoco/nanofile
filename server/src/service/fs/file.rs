@@ -544,9 +544,9 @@ impl FileService {
         modifier: &str,
         user_id: Option<i32>,
         ensure_dir: bool,
-        replace: Option<bool>,
+        replace: bool,
         new_block_ids: Vec<String>,
-    ) -> Result<String, AppError> {
+    ) -> Result<(String, String), AppError> {
         base::sanitize::validate_filename(filename)
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
@@ -555,9 +555,8 @@ impl FileService {
 
         // Detect the existing entry to decide old-size / replace / op_type.
         let size_result = crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await;
-        let file_exists = size_result.is_ok();
         let old_size = size_result.ok().unwrap_or(0);
-        let replace_eff = replace.unwrap_or(file_exists);
+        let replace_eff = replace;
         let old_size_eff = if replace_eff { old_size } else { 0 };
 
         // Check storage quota against the (now known) file size. On failure,
@@ -582,7 +581,7 @@ impl FileService {
                 .await?;
         }
 
-        let fs_id = FileOps::create_file_from_blocks(
+        let (fs_id, effective_name) = FileOps::create_file_from_blocks(
             self.db(),
             &self.repos,
             repo_id,
@@ -595,6 +594,12 @@ impl FileService {
         )
         .await
         .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
+
+        // Without `replace` the commit lands under a unique name (`name (1).ext`),
+        // so the activity entry and the search index must use the effective path,
+        // not the requested one.
+        let effective_fp = base::sanitize::safe_join_path(target_dir, &effective_name)
+            .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
         // Adjust repo size (delta = new_size - old_size).
         crate::fs::core::adjust_repo_size(&self.repos, repo_id, total_size - old_size_eff).await?;
@@ -619,7 +624,7 @@ impl FileService {
                 repo_id,
                 op_type,
                 "file",
-                &fp,
+                &effective_fp,
                 uid,
                 None,
                 Some(total_size),
@@ -638,7 +643,7 @@ impl FileService {
         if let Some(indexer) = &self.indexer {
             let idx = indexer.clone();
             let repo_id = repo_id.to_string();
-            let full_path = fp;
+            let full_path = effective_fp;
             let block_store = self.block_store.clone();
             tokio::spawn(async move {
                 if let Err(e) = idx.reindex_file(&repo_id, &full_path, &block_store).await {
@@ -647,7 +652,7 @@ impl FileService {
             });
         }
 
-        Ok(fs_id)
+        Ok((fs_id, effective_name))
     }
 
     /// Recursively create any missing directory components below `path`.

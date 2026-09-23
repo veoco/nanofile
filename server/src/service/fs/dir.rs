@@ -652,6 +652,10 @@ impl DirService {
         }
 
         Ok(serde_json::json!({
+            // The desktop client reads `sub_repo_id` to open the new library
+            // (`seahub/api2/views.py:4199`, `desktop/src/api/requests.cpp:388`);
+            // without it the create-library-from-folder flow opened an empty id.
+            "sub_repo_id": new_repo_id,
             "id": new_repo_id,
             "name": dir_name,
             "desc": "",

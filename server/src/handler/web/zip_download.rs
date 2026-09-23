@@ -11,7 +11,6 @@
 //! data-descriptor write (CRC-32 → compressed size → uncompressed size).
 
 use axum::{
-    Json,
     body::Body,
     extract::{Path, State},
     http::{HeaderValue, StatusCode, header},
@@ -109,6 +108,54 @@ fn determine_zip_name(parent_dir: &str, dirents: &[String]) -> String {
 
 // ── Handlers ───────────────────────────────────────────────────────────
 
+/// Parse the `zip-task` payload from either a JSON body or `multipart/form-data`.
+///
+/// The official web frontend posts `FormData` with `parent_dir` and a repeated
+/// `dirents` field (`seafile-api.js`, `seahub/api2/endpoints/zip_task.py`), so a
+/// JSON-only extractor made the browser's multi-select download fail with 415.
+async fn parse_zip_task_request(
+    headers: &axum::http::HeaderMap,
+    body: axum::body::Body,
+) -> Result<ZipTaskRequest, AppError> {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if content_type.starts_with("multipart/form-data") {
+        let boundary = multer::parse_boundary(content_type)
+            .map_err(|e| AppError::BadRequest(format!("invalid multipart boundary: {e}")))?;
+        let mut mp = multer::Multipart::new(body.into_data_stream(), boundary);
+        let mut parent_dir = "/".to_string();
+        let mut dirents: Vec<String> = Vec::new();
+        while let Some(field) = mp
+            .next_field()
+            .await
+            .map_err(|e| AppError::BadRequest(format!("multipart error: {e}")))?
+        {
+            let name = field.name().unwrap_or("").to_string();
+            let text = field
+                .text()
+                .await
+                .map_err(|e| AppError::BadRequest(format!("multipart field error: {e}")))?;
+            match name.as_str() {
+                "parent_dir" => parent_dir = text,
+                "dirents" => dirents.push(text),
+                _ => {}
+            }
+        }
+        return Ok(ZipTaskRequest {
+            parent_dir,
+            dirents,
+        });
+    }
+
+    let bytes = axum::body::to_bytes(body, crate::handler::MAX_SMALL_BODY_BYTES)
+        .await
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| AppError::BadRequest(format!("invalid JSON body: {e}")))
+}
+
 /// `POST /api/v2.1/repos/{repo_id}/zip-task/`
 ///
 /// Accepts form data:
@@ -121,8 +168,10 @@ pub async fn zip_task_handler(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
-    Json(mut payload): Json<ZipTaskRequest>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Body,
 ) -> Result<JsonResponse<ZipTaskResponse>, AppError> {
+    let mut payload = parse_zip_task_request(&headers, body).await?;
     // Verify read permission
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),

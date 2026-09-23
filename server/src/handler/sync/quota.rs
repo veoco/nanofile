@@ -40,16 +40,14 @@ async fn check_quota(
     )
     .await?;
 
-    let delta = match query.delta {
-        Some(ref d) => d
-            .parse::<i64>()
-            .map_err(|_| AppError::BadRequest("invalid delta parameter".into()))?,
-        None => 0,
-    };
-
-    if delta <= 0 {
-        return Ok(StatusCode::OK);
-    }
+    // A missing delta is a client error, not an implicit zero
+    // (`fileserver/sync_api.go:702-712`).
+    let delta = query
+        .delta
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("Invalid delta parameter.".into()))?
+        .parse::<i64>()
+        .map_err(|_| AppError::BadRequest("Invalid delta parameter.".into()))?;
 
     // Look up the repo owner to check their quota.
     let repo_record = state
@@ -59,7 +57,7 @@ async fn check_quota(
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-    crate::service::fs::quota::check_upload_quota(
+    crate::service::fs::quota::check_sync_quota(
         &state.repos,
         repo_record.owner_id,
         delta,

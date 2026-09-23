@@ -49,6 +49,18 @@ pub enum AppError {
     #[error("blocks missing")]
     BlockMissing,
 
+    /// 442 — uploaded entry exceeds the server's size limit (seafile wire
+    /// protocol; the desktop client maps it to a "file too large" error and
+    /// aborts the batch). Distinct from 413, which it does not recognise.
+    #[error("file too large")]
+    TooLarge,
+
+    /// 441 — the entry a write targets must exist (seafile's
+    /// `SEAF_HTTP_RES_NOT_EXISTS`; returned by the update endpoints when the
+    /// target file is gone).
+    #[error("entry does not exist")]
+    NotExists,
+
     /// 403 — file is locked by another user (seafile wire protocol)
     /// The daemon parses the body with regex "File (.+) is locked"
     /// and emits SYNC_ERROR_ID_FILE_LOCKED.
@@ -169,6 +181,14 @@ mod into_response_impl {
                 AppError::BlockMissing => (
                     StatusCode::from_u16(446).unwrap(),
                     json!({ "error_msg": "Blocks missing for uploaded files." }),
+                ),
+                AppError::TooLarge => (
+                    StatusCode::from_u16(442).unwrap(),
+                    json!({ "error_msg": "File too large." }),
+                ),
+                AppError::NotExists => (
+                    StatusCode::from_u16(441).unwrap(),
+                    json!({ "error_msg": "File does not exist." }),
                 ),
                 // Unreachable: `Locked` returns early above with the plain-text
                 // body the daemon's error regex requires. Kept for

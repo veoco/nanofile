@@ -212,6 +212,14 @@ async fn test_idx_progress() {
 async fn test_update_aj() {
     let f = TestFixture::new().await;
 
+    // The update endpoints require the target to exist (seahub answers 441
+    // otherwise), so seed it first.
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "update.txt", b"original")
+        .await;
+    assert!(up.status().is_success(), "seed upload failed");
+
     let file_part = reqwest::multipart::Part::bytes(b"updated".to_vec())
         .file_name("update.txt".to_string())
         .mime_str("text/plain")
@@ -351,7 +359,7 @@ async fn test_upload_api_to_chinese_dir() {
             &[("operation", "mkdir")],
         )
         .await;
-    assert_eq!(dir_resp.status(), 200, "create chinese dir failed");
+    assert_eq!(dir_resp.status(), 201, "create chinese dir failed");
 
     // Get upload link for that directory
     let resp = f
@@ -405,12 +413,12 @@ async fn test_upload_api_with_relative_path() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/My Photos")
         .await;
-    assert_eq!(resp.status(), 200, "create My Photos failed");
+    assert_eq!(resp.status(), 201, "create My Photos failed");
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/My Photos/Camera")
         .await;
-    assert_eq!(resp.status(), 200, "create Camera failed");
+    assert_eq!(resp.status(), 201, "create Camera failed");
 
     // Get upload link for ROOT (as the Android client does).
     let resp = f
@@ -488,12 +496,12 @@ async fn test_upload_blks_commit_with_relative_path() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/My Photos")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/My Photos/Camera")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
 
     // Get upload-blks link (defaults to parent_dir=/).
     let link_resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
@@ -728,7 +736,7 @@ async fn test_sync_batch_copy_item_same_repo() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/subdir")
         .await;
-    assert_eq!(mkdir.status(), 200, "create dir failed");
+    assert_eq!(mkdir.status(), 201, "create dir failed");
 
     // Copy source.txt to /subdir/
     let body = serde_json::json!({

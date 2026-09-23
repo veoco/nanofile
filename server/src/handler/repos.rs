@@ -542,16 +542,22 @@ pub struct LinkQuery {
 pub async fn get_upload_link(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     Path(repo_id): Path<String>,
     Query(query): Query<LinkQuery>,
 ) -> Result<Json<String>, AppError> {
     let parent_dir = query.p.as_deref().unwrap_or("/");
 
+    // Use the same Host-aware base as download links: with `site_url` left at
+    // its built-in loopback default, a LAN client that reached the server by
+    // address must be told to upload to *that* address, not to 127.0.0.1.
+    let host_header = headers.get("host").and_then(|v| v.to_str().ok());
+    let base_url = state.config().server.download_url_base(host_header);
+
     let url = service::RepoService::get_upload_link(
         &state.repos,
         &state.token_manager,
-        &state.config().server.site_url,
+        &base_url,
         &repo_id,
         auth.user_id,
         &auth.email,
@@ -567,16 +573,19 @@ pub async fn get_upload_link(
 pub async fn get_update_link(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     Path(repo_id): Path<String>,
     Query(query): Query<LinkQuery>,
 ) -> Result<Json<String>, AppError> {
     let parent_dir = query.p.as_deref().unwrap_or("/");
 
+    let host_header = headers.get("host").and_then(|v| v.to_str().ok());
+    let base_url = state.config().server.download_url_base(host_header);
+
     let url = service::RepoService::get_update_link(
         &state.repos,
         &state.token_manager,
-        &state.config().server.site_url,
+        &base_url,
         &repo_id,
         auth.user_id,
         &auth.email,

@@ -163,10 +163,13 @@ pub async fn batch_delete_handler(
     )
     .await?;
 
-    // Handle reloaddir=true
-    if query.reloaddir.as_deref() == Some("true") {
+    // Handle reloaddir=true: seahub's `reloaddir_if_necessary` answers with the
+    // parent directory's dirents as a **bare** array. The iOS client's
+    // `SeafDir.handleData:` rejects any other wrapper, so `{"dir_listing": …}`
+    // left its list stale.
+    if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
         let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &parent_dir).await?;
-        return Ok(Json(json!({"dir_listing": entries})).into_response());
+        return Ok(Json(json!(entries)).into_response());
     }
 
     Ok(StatusCode::OK.into_response())
@@ -225,13 +228,11 @@ pub async fn batch_copy_handler(
         })
         .collect();
 
-    if query.reloaddir.as_deref() == Some("true") {
-        let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &dst_dir).await?;
-        return Ok(Json(json!({
-            "results": json_results,
-            "dir_listing": entries,
-        }))
-        .into_response());
+    // seahub reloads the **source** directory (`parent_dir = ?p`) after a copy,
+    // as a bare dirent array.
+    if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
+        let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &src_parent_dir).await?;
+        return Ok(Json(json!(entries)).into_response());
     }
 
     Ok(Json(json!(json_results)).into_response())
@@ -289,13 +290,11 @@ pub async fn batch_move_handler(
         })
         .collect();
 
-    if query.reloaddir.as_deref() == Some("true") {
-        let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &dst_dir).await?;
-        return Ok(Json(json!({
-            "results": json_results,
-            "dir_listing": entries,
-        }))
-        .into_response());
+    // seahub reloads the **source** directory (`parent_dir = ?p`) after a move,
+    // as a bare dirent array.
+    if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
+        let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &src_parent_dir).await?;
+        return Ok(Json(json!(entries)).into_response());
     }
 
     Ok(Json(json!(json_results)).into_response())

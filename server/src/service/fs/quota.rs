@@ -55,6 +55,30 @@ pub async fn check_upload_quota(
     Ok(())
 }
 
+/// Sync-protocol quota probe (`GET /seafhttp/repo/{id}/quota-check/?delta=`).
+///
+/// Upstream's `checkQuota` evaluates `usage + delta >= quota` for *any* delta,
+/// including zero, so a client that has already filled its quota is told
+/// "out of quota" rather than getting a 200 from the non-positive short-circuit
+/// in [`check_upload_quota`] (`fileserver/quota.go:56-59`).
+pub async fn check_sync_quota(
+    repos: &Repositories,
+    user_id: i32,
+    delta: i64,
+    global_max: u64,
+) -> Result<(), AppError> {
+    let Some(quota) = effective_quota(repos, user_id, global_max).await? else {
+        return Ok(());
+    };
+
+    let usage = user_usage(repos, user_id).await?;
+    if usage + delta.max(0) >= quota {
+        return Err(AppError::QuotaExceeded);
+    }
+
+    Ok(())
+}
+
 /// Drop a user's cached usage so the next check reads the committed total.
 ///
 /// Without this, a commit leaves the 500 ms snapshot in place and several

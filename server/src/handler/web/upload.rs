@@ -2,6 +2,7 @@ use axum::{
     Json,
     extract::{Multipart, Path, State},
     http::HeaderMap,
+    response::IntoResponse,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -68,6 +69,109 @@ fn compute_scoped_target_dir(
 }
 
 // ─── Content-Range / chunked upload helpers ───────────────────────────────
+
+/// Parse seafile's `replace` argument.
+///
+/// Upstream reads `r.FormValue("replace")`, so both the URL query (the
+/// `upload-link` endpoint appends `?replace=1`) and a multipart/form field
+/// count. Absent, `0` or `false` means *keep both*: the existing entry survives
+/// and the new file is stored under a unique name (`name (1).ext`). `1`/`true`
+/// overwrites in place. Anything else is rejected, matching
+/// `server/fileserver/fileop.go:1220-1231`.
+fn parse_replace_arg(query: Option<&str>, form: Option<&str>) -> Result<bool, AppError> {
+    let raw = form.or(query).map(str::trim).filter(|v| !v.is_empty());
+    match raw {
+        None | Some("0") | Some("false") => Ok(false),
+        Some("1") | Some("true") => Ok(true),
+        Some(other) => Err(AppError::BadRequest(format!(
+            "Invalid argument replace: {other}"
+        ))),
+    }
+}
+
+/// Collect a URL's query parameters into a map (missing/unparsable → empty).
+fn query_params(uri: &axum::http::Uri) -> HashMap<String, String> {
+    uri.query()
+        .and_then(|q| serde_urlencoded::from_str(q).ok())
+        .unwrap_or_default()
+}
+
+/// True when the request carries `ret-json` in its query string or its form
+/// body. Upstream tests for the key's mere presence (`r.Form["ret-json"]`), so
+/// the Android client's `ret-json=1`, the iOS client's `ret-json=true` and a
+/// bare `ret-json` all switch the success body to JSON.
+fn wants_ret_json(query: &HashMap<String, String>, fields: &HashMap<String, String>) -> bool {
+    query.contains_key("ret-json") || fields.contains_key("ret-json")
+}
+
+/// Reject an update whose target does not exist with 441.
+///
+/// Upstream's update endpoints answer `SEAF_HTTP_RES_NOT_EXISTS` (441) instead
+/// of silently creating the file (`server/fileserver/fileop.go:3339-3343`), so
+/// an update against a deleted path must not resurrect it as a plain create.
+async fn require_target_exists(
+    state: &AppState,
+    repo_id: &str,
+    target_dir: &str,
+    name: &str,
+) -> Result<(), AppError> {
+    let path = base::sanitize::safe_join_path(target_dir, name)
+        .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
+    if crate::fs::core::get_entry_total_size(&state.repos, repo_id, &path)
+        .await
+        .is_err()
+    {
+        return Err(AppError::NotExists);
+    }
+    Ok(())
+}
+
+/// Frame a committed upload's success body.
+///
+/// `-aj` endpoints always answer with the JSON array (`isAjax=true`). The
+/// `-api` endpoints answer with tab-separated plain-text file ids unless
+/// `ret-json` was requested — the official Android and desktop clients store
+/// that body verbatim as the file id, so a JSON array there corrupts their
+/// state. Matches `server/fileserver/fileop.go:1859-1884`.
+fn upload_commit_response(
+    ret_json: bool,
+    id: &str,
+    name: &str,
+    size: i64,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if ret_json {
+        return Json(json!([{ "id": id, "name": name, "size": size }])).into_response();
+    }
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        id.to_string(),
+    )
+        .into_response()
+}
+
+/// Outcome of a resumable (`Content-Range`) chunk request.
+enum ChunkResult {
+    /// Not the final chunk: upstream always answers `{"success": true}`.
+    Intermediate,
+    /// The final chunk was assembled and committed.
+    Committed { id: String, name: String, size: i64 },
+}
+
+/// Render a chunk outcome for the `-aj` endpoints, which always answer JSON
+/// (`isAjax=true` upstream).
+fn chunk_result_json(result: ChunkResult) -> Json<serde_json::Value> {
+    match result {
+        ChunkResult::Intermediate => Json(json!({ "success": true })),
+        ChunkResult::Committed { id, name, size } => {
+            Json(json!([{ "id": id, "name": name, "size": size }]))
+        }
+    }
+}
 
 /// Parse a `Content-Range` header of the form `bytes start-end/file_size`.
 ///
@@ -200,9 +304,10 @@ fn map_temp_error(e: std::io::Error) -> AppError {
 /// Returns:
 /// - `Ok(None)` — not a chunked upload (no Content-Range, caller should
 ///   handle as a regular non-chunked upload).
-/// - `Ok(Some(json))` — the chunk was handled. If it was an intermediate
-///   chunk the response is `{"success": true}`; if it was the final chunk
-///   the response is the standard file metadata JSON array.
+/// - `Ok(Some(ChunkResult::Intermediate))` — an intermediate chunk was stored;
+///   the caller answers `{"success": true}`.
+/// - `Ok(Some(ChunkResult::Committed { .. }))` — the final chunk was assembled
+///   and committed; the caller frames the body for its endpoint.
 /// - `Err(...)` — an error occurred.
 async fn try_handle_chunked(
     temp_mgr: &crate::handler::web::temp_file::TempFileManager,
@@ -215,7 +320,8 @@ async fn try_handle_chunked(
     modifier: &str,
     user_id: Option<i32>,
     enc_key: Option<(&[u8], &[u8])>,
-) -> Result<Option<Json<serde_json::Value>>, AppError> {
+    replace: bool,
+) -> Result<Option<ChunkResult>, AppError> {
     let Some(range_header) = content_range else {
         return Ok(None); // not a chunked upload
     };
@@ -240,12 +346,11 @@ async fn try_handle_chunked(
         )));
     }
 
-    // Check total file size against server limit
+    // Check total file size against server limit. 442 is seafile's
+    // `SEAF_HTTP_RES_TOO_LARGE`, which the clients recognise; 400/413 are not.
     let max_bytes = state.config().server.max_upload_size_mb * 1024 * 1024;
     if max_bytes > 0 && file_size > max_bytes {
-        return Err(AppError::BadRequest(format!(
-            "file size {file_size} exceeds upload limit {max_bytes}"
-        )));
+        return Err(AppError::TooLarge);
     }
 
     // Pre-check storage quota once (on the first chunk) against the declared
@@ -310,7 +415,7 @@ async fn try_handle_chunked(
 
     // Intermediate chunk — tell the client to keep sending
     if end != file_size - 1 {
-        return Ok(Some(ok_json()));
+        return Ok(Some(ChunkResult::Intermediate));
     }
 
     // ── Final chunk: commit ──
@@ -320,7 +425,7 @@ async fn try_handle_chunked(
         .take_streamed_blocks(&state.block_store, repo_id, &file_path, file_size)
         .await
     {
-        let fs_id = state
+        let (fs_id, effective_name) = state
             .file_service()
             .upload_file_committed_stream(
                 repo_id,
@@ -331,14 +436,16 @@ async fn try_handle_chunked(
                 modifier,
                 user_id,
                 true,
-                None,
+                replace,
                 new_block_ids,
             )
             .await?;
         temp_mgr.finish(repo_id, &file_path).await;
-        return Ok(Some(Json(json!([
-            { "id": fs_id, "name": file_name, "size": total_size }
-        ]))));
+        return Ok(Some(ChunkResult::Committed {
+            id: fs_id,
+            name: effective_name,
+            size: total_size,
+        }));
     }
 
     // Fallback path: stream the temp file through the CDC chunker so the whole
@@ -380,7 +487,7 @@ async fn try_handle_chunked(
         )));
     }
 
-    let fs_id = state
+    let (fs_id, effective_name) = state
         .file_service()
         .upload_file_committed_stream(
             repo_id,
@@ -391,7 +498,7 @@ async fn try_handle_chunked(
             modifier,
             user_id,
             true,
-            None,
+            replace,
             new_block_ids,
         )
         .await?;
@@ -399,9 +506,11 @@ async fn try_handle_chunked(
     // Clean up the temp file regardless of success/failure
     temp_mgr.finish(repo_id, &file_path).await;
 
-    Ok(Some(Json(json!([
-        { "id": fs_id, "name": file_name, "size": total_size }
-    ]))))
+    Ok(Some(ChunkResult::Committed {
+        id: fs_id,
+        name: effective_name,
+        size: total_size,
+    }))
 }
 
 // ─── Multipart parser (for desktop-client compatibility) ──────────────────────
@@ -523,6 +632,7 @@ struct MultipartResult {
 pub async fn upload_aj(
     user: WebUser,
     State(state): State<Arc<AppState>>,
+    uri: axum::http::Uri,
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -598,6 +708,11 @@ pub async fn upload_aj(
         .map(|s| s.as_str())
         .unwrap_or("");
     let target_dir = compute_target_dir(parent_dir, relative_path)?;
+    let query = query_params(&uri);
+    let replace = parse_replace_arg(
+        query.get("replace").map(String::as_str),
+        fields.get("replace").map(String::as_str),
+    )?;
 
     // CSRF: this endpoint authenticates via the session cookie, so a
     // cross-site form POST must be rejected.
@@ -625,7 +740,7 @@ pub async fn upload_aj(
     if is_chunked {
         let file_data = chunked_file_data.unwrap_or_default();
         if !file_data.is_empty()
-            && let Some(resp) = try_handle_chunked(
+            && let Some(result) = try_handle_chunked(
                 &state.temp_file_manager,
                 &state,
                 repo_id,
@@ -636,10 +751,11 @@ pub async fn upload_aj(
                 &user.email,
                 Some(user.user_id),
                 enc_key_ref,
+                replace,
             )
             .await?
         {
-            return Ok(resp);
+            return Ok(chunk_result_json(result));
         }
         return Ok(Json(json!([{"name": filename, "uploaded": true}])));
     }
@@ -656,26 +772,28 @@ pub async fn upload_aj(
         )
         .await;
         let (block_ids, total_size, new_block_ids) = ingested?;
-        if !block_ids.is_empty() {
-            let fs_id = state
-                .file_service()
-                .upload_file_committed_stream(
-                    repo_id,
-                    &target_dir,
-                    &filename,
-                    block_ids,
-                    total_size,
-                    &user.email,
-                    Some(user.user_id),
-                    true,
-                    None,
-                    new_block_ids,
-                )
-                .await?;
-            return Ok(Json(
-                json!([{"id": fs_id, "name": filename, "size": total_size}]),
-            ));
-        }
+        // Zero-byte files are committed too: seafile gives them the
+        // `EMPTY_SHA1` sentinel id but still creates the dirent, so skipping
+        // the commit here made an empty upload silently do nothing
+        // (`server/fileserver/fileop.go:3699-3702`).
+        let (fs_id, effective_name) = state
+            .file_service()
+            .upload_file_committed_stream(
+                repo_id,
+                &target_dir,
+                &filename,
+                block_ids,
+                total_size,
+                &user.email,
+                Some(user.user_id),
+                true,
+                replace,
+                new_block_ids,
+            )
+            .await?;
+        return Ok(Json(
+            json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
+        ));
     }
 
     Ok(Json(json!([{"name": filename, "uploaded": true}])))
@@ -790,7 +908,8 @@ async fn stage_file_field(
     {
         size += chunk.len() as i64;
         if max_bytes > 0 && size as u64 > max_bytes {
-            return Err(AppError::ContentTooLarge);
+            // 442, the code the clients map to "file too large" and abort on.
+            return Err(AppError::TooLarge);
         }
         file.write_all(&chunk)
             .await
@@ -952,6 +1071,7 @@ pub async fn update_api(
             .rsplit_once('/')
             .map(|(_, n)| n)
             .unwrap_or(&file_path);
+        require_target_exists(&state, &repo_id, parent, name).await?;
 
         if let Some(path) = staged.path() {
             let ingested = ingest_staged_file(
@@ -962,26 +1082,25 @@ pub async fn update_api(
             )
             .await;
             let (block_ids, total_size, new_block_ids) = ingested?;
-            if !block_ids.is_empty() {
-                let fs_id = state
-                    .file_service()
-                    .upload_file_committed_stream(
-                        &repo_id,
-                        parent,
-                        name,
-                        block_ids,
-                        total_size,
-                        &user.email,
-                        Some(user.user_id),
-                        true,
-                        None,
-                        new_block_ids,
-                    )
-                    .await?;
-                return Ok(Json(
-                    json!([{"id": fs_id, "name": name, "size": total_size}]),
-                ));
-            }
+            // Update semantics: overwrite in place, and commit zero-byte files too.
+            let (fs_id, effective_name) = state
+                .file_service()
+                .upload_file_committed_stream(
+                    &repo_id,
+                    parent,
+                    name,
+                    block_ids,
+                    total_size,
+                    &user.email,
+                    Some(user.user_id),
+                    true,
+                    true,
+                    new_block_ids,
+                )
+                .await?;
+            return Ok(Json(
+                json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
+            ));
         }
     }
 
@@ -1085,11 +1204,12 @@ pub async fn update_aj(
         .rsplit_once('/')
         .map(|(_, n)| n)
         .unwrap_or(target_file);
+    require_target_exists(&state, repo_id, parent, name).await?;
 
     if is_chunked {
         let file_data = chunked_file_data.unwrap_or_default();
         if !file_data.is_empty()
-            && let Some(resp) = try_handle_chunked(
+            && let Some(result) = try_handle_chunked(
                 &state.temp_file_manager,
                 &state,
                 repo_id,
@@ -1100,10 +1220,12 @@ pub async fn update_aj(
                 &user.email,
                 Some(user.user_id),
                 enc_key_ref,
+                // The update endpoints always replace the target in place.
+                true,
             )
             .await?
         {
-            return Ok(resp);
+            return Ok(chunk_result_json(result));
         }
         return Ok(ok_json());
     }
@@ -1118,26 +1240,25 @@ pub async fn update_aj(
         )
         .await;
         let (block_ids, total_size, new_block_ids) = ingested?;
-        if !block_ids.is_empty() {
-            let fs_id = state
-                .file_service()
-                .upload_file_committed_stream(
-                    repo_id,
-                    parent,
-                    name,
-                    block_ids,
-                    total_size,
-                    &user.email,
-                    Some(user.user_id),
-                    true,
-                    None,
-                    new_block_ids,
-                )
-                .await?;
-            return Ok(Json(
-                json!([{"id": fs_id, "name": name, "size": total_size}]),
-            ));
-        }
+        // Update semantics: overwrite in place, and commit zero-byte files too.
+        let (fs_id, effective_name) = state
+            .file_service()
+            .upload_file_committed_stream(
+                repo_id,
+                parent,
+                name,
+                block_ids,
+                total_size,
+                &user.email,
+                Some(user.user_id),
+                true,
+                true,
+                new_block_ids,
+            )
+            .await?;
+        return Ok(Json(
+            json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
+        ));
     }
 
     Ok(ok_json())
@@ -1157,6 +1278,7 @@ pub async fn update_aj(
 pub async fn upload_aj_token(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
+    uri: axum::http::Uri,
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1259,11 +1381,16 @@ pub async fn upload_aj_token(
         .map(|s| s.as_str())
         .unwrap_or("");
     let target_dir = compute_scoped_target_dir(&info, parent_dir, relative_path)?;
+    let query = query_params(&uri);
+    let replace = parse_replace_arg(
+        query.get("replace").map(String::as_str),
+        fields.get("replace").map(String::as_str),
+    )?;
 
     if is_chunked {
         let file_data = chunked_file_data.unwrap_or_default();
         if !file_data.is_empty()
-            && let Some(resp) = try_handle_chunked(
+            && let Some(result) = try_handle_chunked(
                 &state.temp_file_manager,
                 &state,
                 &info.repo_id,
@@ -1276,43 +1403,40 @@ pub async fn upload_aj_token(
                 // owner's storage quota, matching the non-chunked path below.
                 Some(info.user_id),
                 enc_key_ref,
+                replace,
             )
             .await?
         {
-            return Ok(resp);
+            return Ok(chunk_result_json(result));
         }
         return Ok(Json(json!([{"name": filename, "uploaded": true}])));
     }
 
-    if !block_ids.is_empty() {
-        let uid = Some(info.user_id);
-        let fs_id = state
-            .file_service()
-            .upload_file_committed_stream(
-                &info.repo_id,
-                &target_dir,
-                &filename,
-                block_ids,
-                total_size,
-                &info.username,
-                uid,
-                true,
-                None,
-                new_block_ids,
-            )
-            .await?;
+    let uid = Some(info.user_id);
+    let (fs_id, effective_name) = state
+        .file_service()
+        .upload_file_committed_stream(
+            &info.repo_id,
+            &target_dir,
+            &filename,
+            block_ids,
+            total_size,
+            &info.username,
+            uid,
+            true,
+            replace,
+            new_block_ids,
+        )
+        .await?;
 
-        // Increment upload count if this was triggered by an upload link
-        if let Some(link_id) = info.upload_link_id {
-            upload_link_service::increment_upload_view_cnt(state.repos.clone(), link_id);
-        }
-
-        return Ok(Json(
-            json!([{"id": fs_id, "name": filename, "size": total_size}]),
-        ));
+    // Increment upload count if this was triggered by an upload link
+    if let Some(link_id) = info.upload_link_id {
+        upload_link_service::increment_upload_view_cnt(state.repos.clone(), link_id);
     }
 
-    Ok(Json(json!([{"name": filename, "uploaded": true}])))
+    Ok(Json(
+        json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
+    ))
 }
 
 /// POST /upload-api/{token} — Token-authenticated file upload (desktop client).
@@ -1329,7 +1453,7 @@ pub async fn upload_api(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
     req: axum::http::Request<axum::body::Body>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     // Extract Content-Type header before consuming the request body.
     let ct = req
         .headers()
@@ -1397,6 +1521,8 @@ pub async fn upload_api(
         .nth(1)
         .map(|s| s.trim().trim_matches('"').to_string())
         .ok_or_else(|| AppError::BadRequest("missing boundary".into()))?;
+    // The query has to be captured before the request body is consumed.
+    let query = query_params(req.uri());
     let mut multipart = multer::Multipart::new(req.into_body().into_data_stream(), boundary);
 
     let mut fields: HashMap<String, String> = HashMap::new();
@@ -1453,11 +1579,19 @@ pub async fn upload_api(
         .unwrap_or_else(|| info.parent_dir.clone());
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
     let target_dir = compute_scoped_target_dir(&info, &parent_dir, &relative_path)?;
+    let replace = parse_replace_arg(
+        query.get("replace").map(String::as_str),
+        fields.get("replace").map(String::as_str),
+    )?;
+    // Only `/upload-api` honours `ret-json`; the `-aj` endpoints always answer
+    // JSON. Official Android/desktop clients read the plain-text body as the
+    // file id, so the default must stay plain text.
+    let ret_json = wants_ret_json(&query, &fields);
 
     if is_chunked {
         let file_data = chunked_file_data.unwrap_or_default();
         if !file_data.is_empty()
-            && let Some(resp) = try_handle_chunked(
+            && let Some(result) = try_handle_chunked(
                 &state.temp_file_manager,
                 &state,
                 &info.repo_id,
@@ -1468,37 +1602,42 @@ pub async fn upload_api(
                 &info.username,
                 Some(info.user_id),
                 enc_key_ref,
+                replace,
             )
             .await?
         {
-            return Ok(resp);
+            return Ok(match result {
+                ChunkResult::Intermediate => Json(json!({ "success": true })).into_response(),
+                ChunkResult::Committed { id, name, size } => {
+                    upload_commit_response(ret_json, &id, &name, size)
+                }
+            });
         }
-        return Ok(Json(json!([{"name": filename, "uploaded": true}])));
+        return Ok(Json(json!([{"name": filename, "uploaded": true}])).into_response());
     }
 
-    if !block_ids.is_empty() {
-        let uid = Some(info.user_id);
-        let fs_id = state
-            .file_service()
-            .upload_file_committed_stream(
-                &info.repo_id,
-                &target_dir,
-                &filename,
-                block_ids,
-                total_size,
-                &info.username,
-                uid,
-                true,
-                None,
-                new_block_ids,
-            )
-            .await?;
-        return Ok(Json(
-            json!([{"id": fs_id, "name": filename, "size": total_size}]),
-        ));
-    }
-
-    Ok(Json(json!([{"name": filename, "uploaded": true}])))
+    let uid = Some(info.user_id);
+    let (fs_id, effective_name) = state
+        .file_service()
+        .upload_file_committed_stream(
+            &info.repo_id,
+            &target_dir,
+            &filename,
+            block_ids,
+            total_size,
+            &info.username,
+            uid,
+            true,
+            replace,
+            new_block_ids,
+        )
+        .await?;
+    Ok(upload_commit_response(
+        ret_json,
+        &fs_id,
+        &effective_name,
+        total_size,
+    ))
 }
 
 // ─── Token-authenticated update endpoints ─────────────────────────────────────
@@ -1514,7 +1653,7 @@ pub async fn update_api_handler(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
     req: axum::http::Request<axum::body::Body>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let ct = req
         .headers()
         .get("content-type")
@@ -1566,6 +1705,8 @@ pub async fn update_api_handler(
         .nth(1)
         .map(|s| s.trim().trim_matches('"').to_string())
         .ok_or_else(|| AppError::BadRequest("missing boundary".into()))?;
+    // The query has to be captured before the request body is consumed.
+    let query = query_params(req.uri());
     let mut multipart = multer::Multipart::new(req.into_body().into_data_stream(), boundary);
 
     let mut fields: HashMap<String, String> = HashMap::new();
@@ -1605,74 +1746,84 @@ pub async fn update_api_handler(
 
     let target_file = fields.get("target_file").cloned().unwrap_or_default();
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
+    // `/update-api` honours `ret-json`; without it the body is a plain id.
+    let ret_json = wants_ret_json(&query, &fields);
 
-    if !block_ids.is_empty() {
-        let uid = Some(info.user_id);
-        if !target_file.is_empty() {
-            // Derive target from target_file + optional relative_path
-            let (raw_parent, raw_name) =
-                target_file.rsplit_once('/').unwrap_or(("/", &target_file));
-            let parent = if raw_parent.is_empty() {
-                "/"
-            } else {
-                raw_parent
-            };
-            // Scoped helper, for consistency with every other token path. An
-            // update token never carries `upload_link_id` today, so this does
-            // not change behaviour; it keeps the link-directory clamp from
-            // silently disappearing if an update-link is ever minted from an
-            // upload link.
-            let target_dir = compute_scoped_target_dir(&info, parent, &relative_path)?;
-            let name = raw_name.to_string();
+    // No `block_ids.is_empty()` guard: a zero-byte update still has to commit
+    // (its fs id is the `EMPTY_SHA1` sentinel).
+    let uid = Some(info.user_id);
+    if !target_file.is_empty() {
+        // Derive target from target_file + optional relative_path
+        let (raw_parent, raw_name) = target_file.rsplit_once('/').unwrap_or(("/", &target_file));
+        let parent = if raw_parent.is_empty() {
+            "/"
+        } else {
+            raw_parent
+        };
+        // Scoped helper, for consistency with every other token path. An
+        // update token never carries `upload_link_id` today, so this does
+        // not change behaviour; it keeps the link-directory clamp from
+        // silently disappearing if an update-link is ever minted from an
+        // upload link.
+        let target_dir = compute_scoped_target_dir(&info, parent, &relative_path)?;
+        let name = raw_name.to_string();
+        require_target_exists(&state, &info.repo_id, &target_dir, &name).await?;
 
-            let fs_id = state
-                .file_service()
-                .upload_file_committed_stream(
-                    &info.repo_id,
-                    &target_dir,
-                    &name,
-                    block_ids,
-                    total_size,
-                    &info.username,
-                    uid,
-                    false,
-                    None,
-                    new_block_ids,
-                )
-                .await?;
+        let (fs_id, effective_name) = state
+            .file_service()
+            .upload_file_committed_stream(
+                &info.repo_id,
+                &target_dir,
+                &name,
+                block_ids,
+                total_size,
+                &info.username,
+                uid,
+                false,
+                // The update endpoint always overwrites in place.
+                true,
+                new_block_ids,
+            )
+            .await?;
 
-            return Ok(Json(
-                json!([{"id": fs_id, "name": name, "size": total_size}]),
-            ));
-        }
-
-        // Fallback: parent_dir + relative_path + filename
-        let parent_dir = fields.get("parent_dir").cloned().unwrap_or(info.parent_dir);
-        let target_dir = compute_target_dir(&parent_dir, &relative_path)?;
-
-        if !filename.is_empty() {
-            let fs_id = state
-                .file_service()
-                .upload_file_committed_stream(
-                    &info.repo_id,
-                    &target_dir,
-                    &filename,
-                    block_ids,
-                    total_size,
-                    &info.username,
-                    uid,
-                    true,
-                    None,
-                    new_block_ids,
-                )
-                .await?;
-            return Ok(Json(
-                json!([{"id": fs_id, "name": filename, "size": total_size}]),
-            ));
-        }
+        return Ok(upload_commit_response(
+            ret_json,
+            &fs_id,
+            &effective_name,
+            total_size,
+        ));
     }
 
-    Ok(ok_json())
+    // Fallback: parent_dir + relative_path + filename
+    let parent_dir = fields.get("parent_dir").cloned().unwrap_or(info.parent_dir);
+    let target_dir = compute_target_dir(&parent_dir, &relative_path)?;
+
+    if !filename.is_empty() {
+        require_target_exists(&state, &info.repo_id, &target_dir, &filename).await?;
+        let (fs_id, effective_name) = state
+            .file_service()
+            .upload_file_committed_stream(
+                &info.repo_id,
+                &target_dir,
+                &filename,
+                block_ids,
+                total_size,
+                &info.username,
+                uid,
+                true,
+                true,
+                new_block_ids,
+            )
+            .await?;
+        return Ok(upload_commit_response(
+            ret_json,
+            &fs_id,
+            &effective_name,
+            total_size,
+        ));
+    }
+
+    Ok(ok_json().into_response())
 }
 
 /// POST /update-aj/{token} — Token-based AJAX file update (Seahub web frontend).
@@ -1752,10 +1903,7 @@ pub async fn update_aj_token(
         }
     }
 
-    if block_ids.is_empty() {
-        return Ok(ok_json());
-    }
-
+    // Update semantics: overwrite in place, and commit zero-byte files too.
     let uid = Some(info.user_id);
     let target_file = fields.get("target_file").cloned().unwrap_or_default();
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
@@ -1769,8 +1917,9 @@ pub async fn update_aj_token(
         };
         let name = target_file[slash_pos + 1..].to_string();
         let target_dir = compute_target_dir(raw_parent, &relative_path)?;
+        require_target_exists(&state, &info.repo_id, &target_dir, &name).await?;
 
-        let fs_id = state
+        let (fs_id, effective_name) = state
             .file_service()
             .upload_file_committed_stream(
                 &info.repo_id,
@@ -1781,13 +1930,13 @@ pub async fn update_aj_token(
                 &info.username,
                 uid,
                 false,
-                None,
+                true,
                 new_block_ids,
             )
             .await?;
 
         return Ok(Json(
-            json!([{"id": fs_id, "name": name, "size": total_size}]),
+            json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
         ));
     }
 
@@ -1816,8 +1965,9 @@ pub async fn update_aj_token(
 pub async fn upload_blks_api(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
+    uri: axum::http::Uri,
     mut multipart: Multipart,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let info = state
         .token_manager
         .validate(&token)
@@ -1855,6 +2005,7 @@ pub async fn upload_blks_api(
     }
 
     let uid = Some(info.user_id);
+    let query = query_params(&uri);
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut new_block_ids: Vec<String> = Vec::new();
 
@@ -2052,6 +2203,10 @@ pub async fn upload_blks_api(
         // Add file entry to parent directory
         let entry_name = file_name.clone();
         let modifier_name = info.username.clone();
+        // The stored name may differ from the requested one: without `replace`,
+        // a collision is resolved with `name (1).ext` and the caller reports that
+        // name back.
+        let mut effective_name = entry_name.clone();
         crate::fs::core::file_ops::FileOps::update_dir_tree_and_commit(
             state.db.as_ref(),
             &state.repos,
@@ -2069,6 +2224,7 @@ pub async fn upload_blks_api(
                 if dirents.iter().any(|d| d.name == entry_name) {
                     let unique_name =
                         infra::common::util::generate_unique_filename(dirents, &entry_name);
+                    effective_name = unique_name.clone();
                     dirents.push(base::common::DirEntryData {
                         id: file_fs_id.clone(),
                         mode: infra::serialization::S_IFREG,
@@ -2107,10 +2263,15 @@ pub async fn upload_blks_api(
             )
             .await?;
 
-        return Ok(Json(json!({"id": file_fs_id})));
+        return Ok(upload_commit_response(
+            wants_ret_json(&query, &fields),
+            &file_fs_id,
+            &effective_name,
+            file_size,
+        ));
     }
 
-    Ok(ok_json())
+    Ok(ok_json().into_response())
 }
 
 #[cfg(test)]

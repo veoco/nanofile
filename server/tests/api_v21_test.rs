@@ -73,7 +73,8 @@ async fn test_v21_dir_delete_directory() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/dir_to_delete")
         .await;
-    assert_eq!(resp.status(), 200);
+    // seahub answers 201 Created for mkdir.
+    assert_eq!(resp.status(), 201);
 
     // Delete via the v2.1 DELETE endpoint.
     let resp = f
@@ -137,7 +138,7 @@ async fn test_v21_dir_list_with_thumbnails() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/subdir")
         .await;
-    assert_eq!(resp.status(), 200, "create subdir failed");
+    assert_eq!(resp.status(), 201, "create subdir failed");
 
     let resp = f
         .client
@@ -166,7 +167,7 @@ async fn test_v21_dir_list_after_create_dir() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/my_folder")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
 
     // List via v2.1 — must show the directory
     let resp = f
@@ -203,7 +204,7 @@ async fn test_v21_dir_list_chinese_name() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/未命名文件夹")
         .await;
-    assert_eq!(resp.status(), 200, "create dir with Chinese name failed");
+    assert_eq!(resp.status(), 201, "create dir with Chinese name failed");
 
     // List via v2.1 — must show both the file and the Chinese-named directory
     let resp = f
@@ -357,7 +358,7 @@ async fn test_v21_file_create() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/subdir")
         .await;
-    assert_eq!(mkdir.status(), 200);
+    assert_eq!(mkdir.status(), 201);
 
     let resp2 = f
         .client
@@ -445,7 +446,7 @@ async fn test_v21_dir_detail_returns_metadata() {
         .client
         .create_dir(&f.api_token, &f.repo_id, "/mydir")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
 
     // Get directory detail
     let resp = f
@@ -519,7 +520,7 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         .await;
     assert_eq!(
         resp.status(),
-        200,
+        201,
         "multipart mkdir failed: {:?}",
         resp.text().await
     );
@@ -703,7 +704,7 @@ async fn test_v21_mkdir_response_format() {
         .client
         .create_dir_multipart(&f.api_token, &f.repo_id, "/resp_format_test")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(
@@ -717,7 +718,7 @@ async fn test_v21_mkdir_response_format() {
         .client
         .create_dir_multipart(&f.api_token, &f.repo_id, "/resp_format_test/child")
         .await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 201);
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(

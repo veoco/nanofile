@@ -422,6 +422,15 @@ impl SyncService {
                         // Client lacks this directory → the whole server
                         // subtree must be sent.
                         for entry in &server_dir.dirents {
+                            // An empty directory is the `EMPTY_SHA1` sentinel and
+                            // has no stored fs object: the client materialises it
+                            // from the dirent. Advertising it here would make the
+                            // client request a `pack-fs` entry the server cannot
+                            // serve, and seaf-daemon then re-requests it forever
+                            // (upstream excludes `emptySHA1` from this list too).
+                            if entry.id == EMPTY_SHA1 {
+                                continue;
+                            }
                             let path = join_sync_path(&frame.prefix, &entry.name);
                             let is_dir = entry.mode & S_IFDIR != 0;
                             if !dir_only || is_dir {
@@ -443,6 +452,12 @@ impl SyncService {
                             .map(|d| (d.name.as_str(), d))
                             .collect();
                         for entry in &server_dir.dirents {
+                            // See the `None` branch above: `EMPTY_SHA1` is a
+                            // sentinel with no object, so it must never be
+                            // advertised as something to download.
+                            if entry.id == EMPTY_SHA1 {
+                                continue;
+                            }
                             let path = join_sync_path(&frame.prefix, &entry.name);
                             let is_dir = entry.mode & S_IFDIR != 0;
                             // Identical id → identical subtree, skip it entirely.
