@@ -228,6 +228,12 @@ max_zip_entries = 10000
 # Max total uncompressed bytes in a single zip archive (0 = unlimited; the
 # example sets a finite 8 GiB so one "download as zip" cannot exhaust memory).
 max_zip_bytes = 8589934592
+# Byte budget for all unconsumed zip-download tokens held in memory (0 =
+# unlimited). A token keeps the whole entry list, including every file's block
+# ids, so this — not the number of tokens — decides how much memory a flood of
+# zip requests can pin. Oldest tokens are evicted first; an archive whose
+# listing alone exceeds the budget is refused with 429.
+max_zip_task_bytes = 33554432
 # Server-side transparent at-rest encryption for file blocks:
 #   "off"  - blocks are stored exactly as received (legacy plaintext).
 #   "on"   - every new write is encrypted, every read is decrypted; requires encryption_key.
@@ -426,6 +432,7 @@ max_backups = 3
 # Environment variables:
 #   NANOFILE_GC_ENABLED
 #   NANOFILE_GC_INTERVAL_HOURS
+#   NANOFILE_GC_MIN_BLOCK_AGE_SECS
 # Reclaims blocks and FS objects that no commit references (an upload abandoned
 # before its final chunk, a sync whose branch update failed) and prunes history
 # past the per-repo limits. Per-user quota is enforced independently of this
@@ -433,6 +440,12 @@ max_backups = 3
 # disk usage never shrinks. The server logs a warning at startup in that case.
 enabled = false
 interval_hours = 24
+# Blocks younger than this are never deleted. An upload writes its blocks before
+# the commit that references them, so without a grace window a pass that started
+# just before that commit would delete live data. Raise it for clients that stay
+# offline for a long time between uploading blocks and committing them; 0
+# disables the window.
+min_block_age_secs = 3600
 
 [tasks]
 # Environment variables:

@@ -220,6 +220,25 @@ impl BlockStorageBackend for EncryptingBlockStore {
         }
     }
 
+    /// The age of the stored file is unaffected by the at-rest layer, so this
+    /// delegates: the header and tag are written in the same `create` that
+    /// produced the file.
+    async fn block_modified_secs(
+        &self,
+        repo_id: &str,
+        block_id: &str,
+    ) -> Result<Option<i64>, io::Error> {
+        self.inner.block_modified_secs(repo_id, block_id).await
+    }
+
+    async fn stream_blocks_in_repo(
+        &self,
+        repo_id: &str,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> Result<(), io::Error> {
+        self.inner.stream_blocks_in_repo(repo_id, tx).await
+    }
+
     async fn convert_legacy_block(&self, repo_id: &str, block_id: &str) -> Result<bool, io::Error> {
         // Read the raw on-disk bytes (not through `read_decrypted`, which in
         // `Lazy` mode would fall back to plaintext and hide the distinction).

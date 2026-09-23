@@ -107,6 +107,22 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     /// Get the size of a block on disk in bytes.
     async fn block_size(&self, repo_id: &str, block_id: &str) -> Result<i64, std::io::Error>;
 
+    /// Modification time of a block file as Unix epoch seconds, or `None` when
+    /// the block is absent or the backend cannot report it.
+    ///
+    /// An upload writes its blocks *before* the commit that references them, so
+    /// a GC pass whose reference snapshot predates that commit would otherwise
+    /// see a live-block-about-to-be-referenced as an orphan. GC uses this to
+    /// keep a grace window; a `None` return means "no age information", which
+    /// GC treats as eligible (the pre-existing behaviour).
+    async fn block_modified_secs(
+        &self,
+        _repo_id: &str,
+        _block_id: &str,
+    ) -> Result<Option<i64>, std::io::Error> {
+        Ok(None)
+    }
+
     /// List all block IDs stored for one repository.
     async fn list_blocks(&self, repo_id: &str) -> Result<Vec<String>, std::io::Error>;
 
@@ -121,6 +137,27 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
         let ids = self.list_blocks(repo_id).await?;
         for id in &ids {
             f(id);
+        }
+        Ok(())
+    }
+
+    /// Enumerate one repository's block IDs through a bounded channel so a
+    /// caller that must *await* per id can process them while the walk is still
+    /// running.
+    ///
+    /// [`Self::for_each_block_in_repo`] takes a synchronous callback, which
+    /// forces an async caller to buffer the whole list first — for a large
+    /// library that buffer is the dominant memory cost. Ids are sent in
+    /// enumeration order; the walk stops early once the receiver is dropped.
+    async fn stream_blocks_in_repo(
+        &self,
+        repo_id: &str,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> Result<(), std::io::Error> {
+        for id in self.list_blocks(repo_id).await? {
+            if tx.send(id).await.is_err() {
+                break;
+            }
         }
         Ok(())
     }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::fs::core::block_encryption_convert::BlockEncryptionConverter;
-use crate::fs::core::gc::GcManager;
+use crate::fs::core::gc::{GcManager, GcPolicy};
 use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
@@ -151,13 +151,17 @@ pub fn register_default_tasks(
     if gc_config.enabled {
         let repos = repos.clone();
         let block_store = block_store.clone();
+        let gc_policy = GcPolicy::new(gc_config.min_block_age_secs);
         scheduler.spawn_periodic("gc", gc_config.interval_hours * 3600, move || {
             let repos = repos.clone();
             let block_store = block_store.clone();
             async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    tokio::runtime::Handle::current()
-                        .block_on(GcManager::garbage_collect(&repos, &block_store))
+                    tokio::runtime::Handle::current().block_on(GcManager::garbage_collect(
+                        &repos,
+                        &block_store,
+                        gc_policy,
+                    ))
                 })
                 .await;
                 match result {

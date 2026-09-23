@@ -984,6 +984,14 @@ pub struct StorageConfig {
     /// Env: NANOFILE_STORAGE_MAX_ZIP_BYTES
     #[serde(default)]
     pub max_zip_bytes: u64,
+    /// Byte budget for all unconsumed zip-download tokens held in memory
+    /// (0 = unlimited). A token carries the full entry list including every
+    /// file's block ids, so this — not the token count — is what decides how
+    /// much memory a flood of zip requests can pin. Oldest tokens are evicted
+    /// first; a single archive whose listing exceeds the budget is rejected.
+    /// Env: NANOFILE_STORAGE_MAX_ZIP_TASK_BYTES
+    #[serde(default = "default_max_zip_task_bytes")]
+    pub max_zip_task_bytes: u64,
     /// Thumbnail cache directory for file thumbnails.
     /// Defaults to `data/thumbnails` for backward compatibility.
     /// Env: NANOFILE_STORAGE_THUMBNAIL_DIR
@@ -1033,6 +1041,12 @@ fn default_temp_upload_ttl_hours() -> u64 {
 fn default_max_zip_entries() -> u64 {
     10000
 }
+
+/// 32 MiB: roughly a 10k-file listing with a handful of blocks each, times a
+/// few concurrently-held tokens.
+fn default_max_zip_task_bytes() -> u64 {
+    32 * 1024 * 1024
+}
 fn default_thumbnail_dir() -> PathBuf {
     PathBuf::from("data/thumbnails")
 }
@@ -1072,6 +1086,7 @@ impl Default for StorageConfig {
             temp_upload_ttl_hours: default_temp_upload_ttl_hours(),
             max_zip_entries: default_max_zip_entries(),
             max_zip_bytes: 0,
+            max_zip_task_bytes: default_max_zip_task_bytes(),
             thumbnail_dir: default_thumbnail_dir(),
             avatar_dir: default_avatar_dir(),
             block_encryption_mode: default_block_encryption_mode(),
@@ -1326,6 +1341,13 @@ pub struct GcConfig {
     pub enabled: bool,
     #[serde(default = "default_gc_interval_hours")]
     pub interval_hours: u64,
+    /// Blocks written less than this many seconds ago are never deleted, even
+    /// when the reference snapshot cannot see the commit that will reference
+    /// them: an upload writes its blocks before committing them, so a pass that
+    /// started just before that commit would otherwise delete live data.
+    /// Env: NANOFILE_GC_MIN_BLOCK_AGE_SECS
+    #[serde(default = "default_gc_min_block_age_secs")]
+    pub min_block_age_secs: u64,
 }
 
 impl Default for GcConfig {
@@ -1333,12 +1355,17 @@ impl Default for GcConfig {
         Self {
             enabled: false,
             interval_hours: default_gc_interval_hours(),
+            min_block_age_secs: default_gc_min_block_age_secs(),
         }
     }
 }
 
 fn default_gc_interval_hours() -> u64 {
     24
+}
+
+fn default_gc_min_block_age_secs() -> u64 {
+    3600
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

@@ -7,6 +7,39 @@ use infra::storage::DynBlockStorage;
 
 const SECS_PER_DAY: i64 = 86_400;
 
+/// Tunables for one garbage-collection pass.
+#[derive(Debug, Clone, Copy)]
+pub struct GcPolicy {
+    /// Blocks written less than this many seconds ago are never deleted, even
+    /// when the reference snapshot does not mention them. `0` disables the
+    /// window.
+    pub min_block_age_secs: u64,
+    /// Re-read each repository's head immediately before deleting its blocks
+    /// and skip that repository when the head moved after the snapshot was
+    /// taken.
+    pub verify_head: bool,
+}
+
+impl GcPolicy {
+    /// The production policy: age grace window on, head re-checked.
+    pub fn new(min_block_age_secs: u64) -> Self {
+        Self {
+            min_block_age_secs,
+            verify_head: true,
+        }
+    }
+
+    /// No grace window and no head re-check: the pre-grace behaviour, which is
+    /// what a test that asserts reachability wants (its blocks were just
+    /// written, so the grace window would spare them).
+    pub fn immediate() -> Self {
+        Self {
+            min_block_age_secs: 0,
+            verify_head: false,
+        }
+    }
+}
+
 pub struct GcManager;
 
 impl GcManager {
@@ -20,9 +53,15 @@ impl GcManager {
     /// `history_ttl_days` retained history plus the current head). That makes
     /// this pass both simpler and more precise than the previous global live
     /// set: collecting repository A can never affect repository B's blocks.
+    ///
+    /// Reachability alone is not enough to authorize a delete: an upload writes
+    /// its blocks *before* the commit that references them, so a block can be
+    /// genuinely live while being absent from the snapshot this pass works from.
+    /// [`GcPolicy`] carries the two guards that cover that window.
     pub async fn garbage_collect(
         repos: &Repositories,
         block_store: &DynBlockStorage,
+        policy: GcPolicy,
     ) -> Result<u64, AppError> {
         let now = chrono::Utc::now().timestamp();
         let all_repos = repos.repo.find_all().await?;
@@ -86,15 +125,66 @@ impl GcManager {
                 )
                 .await?;
             let orphan_blocks = orphan_blocks.lock().unwrap().clone();
-            for id in &orphan_blocks {
-                block_store.remove_block(&repo_model.id, id).await?;
+
+            // The snapshot above was taken before the enumeration. A commit that
+            // landed since then can reference a block this pass classified as an
+            // orphan, so re-read the head and leave the repository alone when it
+            // moved. Placed as late as possible to keep the window narrow.
+            if policy.verify_head && Self::repo_head_moved(repos, repo_model).await? {
+                tracing::warn!(
+                    repo_id = %repo_model.id,
+                    orphans = orphan_blocks.len(),
+                    "skipping block deletion: the repository head moved during this GC pass"
+                );
+                continue;
             }
-            removed += orphan_blocks.len() as u64;
+
+            let mut deleted = 0u64;
+            let mut skipped_fresh = 0u64;
+            for id in &orphan_blocks {
+                // The second guard: a block written at or after the snapshot may
+                // belong to an upload whose commit is not visible yet. Deleting
+                // it would corrupt that upload, so leave it for a later pass.
+                if policy.min_block_age_secs > 0
+                    && block_store
+                        .block_modified_secs(&repo_model.id, id)
+                        .await?
+                        .is_some_and(|m| now.saturating_sub(m) < policy.min_block_age_secs as i64)
+                {
+                    skipped_fresh += 1;
+                    continue;
+                }
+                block_store.remove_block(&repo_model.id, id).await?;
+                deleted += 1;
+            }
+            if skipped_fresh > 0 {
+                tracing::debug!(
+                    repo_id = %repo_model.id,
+                    skipped_fresh,
+                    min_block_age_secs = policy.min_block_age_secs,
+                    "kept blocks younger than the GC grace window"
+                );
+            }
+            removed += deleted;
         }
 
         removed += Self::sweep_orphan_repo_dirs(repos, block_store).await?;
 
         Ok(removed)
+    }
+
+    /// Whether the repository's head differs from the snapshot this pass read.
+    ///
+    /// A repository that disappeared entirely counts as moved: its blocks are no
+    /// longer this pass's to judge (the orphan-directory sweep handles them).
+    async fn repo_head_moved(
+        repos: &Repositories,
+        snapshot: &repo::Model,
+    ) -> Result<bool, AppError> {
+        Ok(match repos.repo.find_by_id(&snapshot.id).await? {
+            Some(current) => current.head_commit_id != snapshot.head_commit_id,
+            None => true,
+        })
     }
 
     /// Remove block directories whose repository no longer exists.
@@ -481,7 +571,7 @@ mod tests {
         )
         .await;
 
-        let removed = GcManager::garbage_collect(&repos, &store)
+        let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
             .await
             .expect("gc succeeds");
         // Only the two fs objects reachable solely from c3 are orphaned.
@@ -511,7 +601,7 @@ mod tests {
         )
         .await;
 
-        let removed = GcManager::garbage_collect(&repos, &store)
+        let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
             .await
             .expect("gc succeeds");
         assert_eq!(removed, 0);
@@ -558,7 +648,7 @@ mod tests {
         )
         .await;
 
-        let removed = GcManager::garbage_collect(&repos, &store)
+        let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
             .await
             .expect("gc succeeds");
         // a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5 is orphaned (only reachable from the pruned commit).
@@ -595,7 +685,7 @@ mod tests {
         )
         .await;
 
-        let removed = GcManager::garbage_collect(&repos, &store)
+        let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
             .await
             .expect("gc succeeds");
         assert_eq!(removed, 1, "only the orphan block should be removed");
@@ -657,7 +747,7 @@ mod tests {
         )
         .await;
 
-        let removed = GcManager::garbage_collect(&repos, &store)
+        let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
             .await
             .expect("gc succeeds");
         // 2 orphaned fs rows (a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1, b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1) + 1 orphan block.
@@ -700,12 +790,146 @@ mod tests {
         )
         .await;
 
-        let removed = GcManager::garbage_collect(&repos, &store)
+        let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
             .await
             .expect("gc succeeds");
         // Both fs objects and both commits are orphaned and pruned.
         assert_eq!(removed, 2);
         assert_eq!(count_rows(&db, "commits").await, 0);
         assert_eq!(count_rows(&db, "fs_objects").await, 0);
+    }
+
+    /// Backdate a block file's mtime so the grace window can be exercised
+    /// without waiting an hour. Blocks are content-addressed and the on-disk
+    /// path is private to the store, so the file is found by name.
+    fn backdate_block(dir: &std::path::Path, block_id: &str, age_secs: u64) {
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(current) = stack.pop() {
+            for entry in std::fs::read_dir(&current).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if entry.file_name() == block_id {
+                    let when =
+                        std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+                    std::fs::File::options()
+                        .write(true)
+                        .open(&path)
+                        .unwrap()
+                        .set_modified(when)
+                        .unwrap();
+                    return;
+                }
+            }
+        }
+        panic!("block {block_id} not found under {}", dir.display());
+    }
+
+    /// The grace window spares a block written around the time the reference
+    /// snapshot was taken — it may belong to an upload whose commit is not
+    /// visible yet — while an orphan older than the window is still deleted.
+    #[tokio::test]
+    async fn test_gc_grace_window_spares_fresh_blocks_only() {
+        let db = setup_gc_test_db(0, 0).await; // unlimited → nothing pruned
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (dir, store) = temp_block_store();
+
+        let kept_id = store.write_block(REPO, b"kept content").await.unwrap();
+        let fresh_id = store.write_block(REPO, b"fresh orphan").await.unwrap();
+        let stale_id = store.write_block(REPO, b"stale orphan").await.unwrap();
+        // One orphan is aged past the window; the other keeps its just-written
+        // mtime, which is what a block from an in-flight upload looks like.
+        backdate_block(dir.path(), &stale_id, 2 * 3600);
+
+        insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 3000).await;
+        insert_fs_object(
+            &db,
+            "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            3,
+            r#"{"dirents":[{"id":"b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}],"type":3,"version":1}"#,
+        )
+        .await;
+        let kept_json = format!(r#"{{"block_ids":["{kept_id}"],"size":10,"type":1,"version":1}}"#);
+        insert_fs_object(
+            &db,
+            "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+            1,
+            &kept_json,
+        )
+        .await;
+
+        let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::new(3600))
+            .await
+            .expect("gc succeeds");
+        assert_eq!(removed, 1, "only the orphan past the window is removable");
+        assert!(
+            store.has_block(REPO, &kept_id).await,
+            "referenced block must survive"
+        );
+        assert!(
+            store.has_block(REPO, &fresh_id).await,
+            "a block written around the snapshot must survive the grace window"
+        );
+        assert!(
+            !store.has_block(REPO, &stale_id).await,
+            "an orphan older than the window must still be deleted"
+        );
+
+        // Disabling the window makes the spared orphan deletable, which is the
+        // pre-grace behaviour the reachability tests rely on.
+        let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
+            .await
+            .expect("gc succeeds");
+        assert_eq!(removed, 1);
+        assert!(
+            !store.has_block(REPO, &fresh_id).await,
+            "with no window the fresh orphan is collected"
+        );
+    }
+
+    /// The head re-check compares the live row against the snapshot the pass
+    /// started from, and treats a vanished repository as moved.
+    #[tokio::test]
+    async fn test_repo_head_moved_detects_changes_since_the_snapshot() {
+        let db = setup_gc_test_db(0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+
+        let snapshot = repos
+            .repo
+            .find_all()
+            .await
+            .unwrap()
+            .pop()
+            .expect("seeded repo");
+        assert!(
+            !GcManager::repo_head_moved(&repos, &snapshot).await.unwrap(),
+            "an unchanged head must not look moved"
+        );
+
+        // A commit landing after the snapshot moves the head.
+        db.execute_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "UPDATE repos SET head_commit_id = 'cccccccccccccccccccccccccccccccccccccccc'"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+        assert!(
+            GcManager::repo_head_moved(&repos, &snapshot).await.unwrap(),
+            "a head that moved since the snapshot must be detected"
+        );
+
+        // A repository deleted mid-pass is no longer this pass's to judge.
+        db.execute_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "DELETE FROM repos".to_string(),
+        ))
+        .await
+        .unwrap();
+        assert!(
+            GcManager::repo_head_moved(&repos, &snapshot).await.unwrap(),
+            "a deleted repository counts as moved"
+        );
     }
 }

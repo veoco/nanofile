@@ -102,6 +102,8 @@ impl Default for TempLimits {
 pub struct ZipLimits {
     pub max_entries: u64,
     pub max_bytes: u64,
+    /// Byte budget for unconsumed zip-download tokens held in memory.
+    pub max_task_bytes: u64,
 }
 
 impl Default for ZipLimits {
@@ -109,6 +111,7 @@ impl Default for ZipLimits {
         Self {
             max_entries: 10000,
             max_bytes: 0,
+            max_task_bytes: 32 * 1024 * 1024,
         }
     }
 }
@@ -442,6 +445,7 @@ impl TestServer {
                 temp_upload_ttl_hours: temp_limits.unwrap_or_default().ttl_hours,
                 max_zip_entries: zip_limits.unwrap_or_default().max_entries,
                 max_zip_bytes: zip_limits.unwrap_or_default().max_bytes,
+                max_zip_task_bytes: zip_limits.unwrap_or_default().max_task_bytes,
                 thumbnail_dir: block_root.join("thumbnails"),
                 avatar_dir: block_root.join("avatars"),
                 block_encryption_mode: "off".to_string(),
@@ -479,7 +483,7 @@ impl TestServer {
             },
             gc: infra::config::GcConfig {
                 enabled: false,
-                interval_hours: 24,
+                ..Default::default()
             },
             notification: infra::config::NotificationConfig {
                 enabled: enable_notification,

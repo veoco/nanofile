@@ -5,6 +5,7 @@ mod common;
 use common::TestFixture;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use server::fs::core::GcManager;
+use server::fs::core::gc::GcPolicy;
 
 /// A throwaway filesystem-backed block store for GC calls. These pruned-history
 /// tests never write blocks, so an empty store suffices.
@@ -195,7 +196,7 @@ async fn test_gc_prunes_by_history_limit() {
 
     set_history(db, &f.repo_id, 2, 0).await;
 
-    let removed = GcManager::garbage_collect(&f.server.repos, &block_store)
+    let removed = GcManager::garbage_collect(&f.server.repos, &block_store, GcPolicy::immediate())
         .await
         .unwrap();
     assert_eq!(
@@ -274,7 +275,7 @@ async fn test_gc_prunes_by_ttl() {
 
     set_history(db, &f.repo_id, 0, 5).await;
 
-    let removed = GcManager::garbage_collect(&f.server.repos, &block_store)
+    let removed = GcManager::garbage_collect(&f.server.repos, &block_store, GcPolicy::immediate())
         .await
         .unwrap();
     assert_eq!(
@@ -342,7 +343,7 @@ async fn test_gc_noop_when_unlimited() {
     // history_limit = 0, history_ttl_days = 0 → unlimited.
     set_history(db, &f.repo_id, 0, 0).await;
 
-    let removed = GcManager::garbage_collect(&f.server.repos, &block_store)
+    let removed = GcManager::garbage_collect(&f.server.repos, &block_store, GcPolicy::immediate())
         .await
         .unwrap();
     assert_eq!(removed, 0);
@@ -463,7 +464,7 @@ async fn test_gc_collects_nested_fs_ids() {
 
     set_history(db, &f.repo_id, 1, 0).await;
 
-    let removed = GcManager::garbage_collect(&f.server.repos, &block_store)
+    let removed = GcManager::garbage_collect(&f.server.repos, &block_store, GcPolicy::immediate())
         .await
         .unwrap();
     assert_eq!(removed, 2, "old root and old file should be removed");

@@ -833,6 +833,18 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
+        "storage.max_zip_task_bytes",
+        Storage,
+        "NANOFILE_STORAGE_MAX_ZIP_TASK_BYTES",
+        Kind::U64,
+        Apply::Live,
+        |c| c.storage.max_zip_task_bytes.to_string(),
+        |c, v| {
+            c.storage.max_zip_task_bytes = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
         "storage.block_encryption_mode",
         Storage,
         "NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE",
@@ -902,6 +914,18 @@ pub static CATALOG: &[SettingDef] = &[
         |c| c.gc.interval_hours.to_string(),
         |c, v| {
             c.gc.interval_hours = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "gc.min_block_age_secs",
+        Storage,
+        "NANOFILE_GC_MIN_BLOCK_AGE_SECS",
+        Kind::U64,
+        Apply::Restart,
+        |c| c.gc.min_block_age_secs.to_string(),
+        |c, v| {
+            c.gc.min_block_age_secs = parse_u64(v)?;
             Ok(())
         }
     ),

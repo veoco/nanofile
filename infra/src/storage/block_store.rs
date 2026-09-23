@@ -523,6 +523,28 @@ impl BlockStorageBackend for BlockStorage {
         Ok(size)
     }
 
+    async fn block_modified_secs(
+        &self,
+        repo_id: &str,
+        block_id: &str,
+    ) -> Result<Option<i64>, io::Error> {
+        if !Self::is_valid_block_id(block_id) {
+            return Ok(None);
+        }
+        let path = self.block_path(repo_id, block_id);
+        match tokio::fs::metadata(&path).await {
+            Ok(meta) => Ok(meta.modified().ok().and_then(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_secs() as i64)
+            })),
+            // A block that vanished between the enumeration and this stat is
+            // simply gone: report "no age" rather than failing the whole pass.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     async fn list_blocks(&self, repo_id: &str) -> Result<Vec<String>, io::Error> {
         let mut blocks = Vec::new();
         let repo_dir = self.repo_dir(repo_id);
@@ -586,6 +608,47 @@ impl BlockStorageBackend for BlockStorage {
                                 f(name);
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Stream every block id of one repository to a channel as the directory
+    /// walk finds them, so a caller that awaits on each id never holds the
+    /// whole list. Stops early when the receiver goes away.
+    async fn stream_blocks_in_repo(
+        &self,
+        repo_id: &str,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> Result<(), io::Error> {
+        let repo_dir = self.repo_dir(repo_id);
+        let mut entries = match tokio::fs::read_dir(&repo_dir).await {
+            Ok(e) => e,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+
+        while let Some(entry) = entries.next_entry().await? {
+            if entry.file_type().await?.is_dir() {
+                let prefix = entry.file_name();
+                if prefix.to_string_lossy().len() != 2 {
+                    continue;
+                }
+                let mut sub_entries = tokio::fs::read_dir(entry.path()).await?;
+                while let Some(sub_entry) = sub_entries.next_entry().await? {
+                    if !sub_entry.file_type().await?.is_file() {
+                        continue;
+                    }
+                    let name = sub_entry.file_name();
+                    let Some(name) = name.to_str() else { continue };
+                    if name.len() != 40 || !name.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        continue;
+                    }
+                    if tx.send(name.to_string()).await.is_err() {
+                        return Ok(());
                     }
                 }
             }

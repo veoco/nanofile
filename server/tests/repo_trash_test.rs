@@ -13,6 +13,7 @@ use common::{TestFixture, create_test_user};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use serde_json::Value;
 use server::fs::core::GcManager;
+use server::fs::core::gc::GcPolicy;
 
 /// `GET /api/v2.1/deleted-repos/` — a bare JSON array, as seahub returns.
 async fn deleted_repos(f: &TestFixture) -> Vec<Value> {
@@ -274,7 +275,7 @@ async fn trashed_library_blocks_survive_gc_and_come_back() {
     assert!(resp.status().is_success());
 
     // GC must not reclaim the blocks of a restorable library...
-    let removed = GcManager::garbage_collect(&f.server.repos, &store)
+    let removed = GcManager::garbage_collect(&f.server.repos, &store, GcPolicy::immediate())
         .await
         .unwrap();
     assert_eq!(removed, 0, "a trashed library's blocks must be kept");
@@ -299,7 +300,7 @@ async fn trashed_library_blocks_survive_gc_and_come_back() {
     assert_eq!(resp.bytes().await.unwrap().to_vec(), content);
 
     // A restored library is live content again.
-    let removed = GcManager::garbage_collect(&f.server.repos, &store)
+    let removed = GcManager::garbage_collect(&f.server.repos, &store, GcPolicy::immediate())
         .await
         .unwrap();
     assert_eq!(removed, 0, "a restored library's blocks are reachable");
