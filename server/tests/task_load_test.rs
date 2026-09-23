@@ -222,10 +222,21 @@ async fn interactive_requests_stay_responsive_while_a_heavy_job_runs() {
         "the parked job must not have advanced during the load"
     );
 
-    // Stopped rather than waited out: the burn is deliberately long. That the
-    // pass also resumes and runs to completion on a quiet server is covered by
-    // the reindex test, which parks a real job; this test exists for the
-    // request latency above, and cancelling here keeps it short.
+    // Release the server, and the job picks up where it left off: parking held
+    // it back rather than ending it.
+    drop(stalled);
+    assert!(
+        wait_for(Duration::from_secs(10), || async {
+            tasks
+                .store()
+                .get(&run_id)
+                .is_some_and(|run| run.progress.done > 0)
+        })
+        .await,
+        "the job must resume once the server is quiet"
+    );
+
+    // Stopped rather than waited out: the burn is deliberately long.
     tasks.cancel(&run_id, Viewer::user(f.user_id)).unwrap();
     assert!(
         wait_for(Duration::from_secs(10), || async {

@@ -146,6 +146,25 @@ impl ProgressSink {
 /// Sentinel for "this sink has not written yet".
 const NEVER: u64 = u64::MAX;
 
+/// The clock behind a job's declared chunk budget.
+///
+/// How long a chunk takes is something only the job can see, so the promise in
+/// [`ChunkPolicy::max_chunk_ms`] is kept where the job checks in: a checkpoint
+/// that lands more than the budget after the previous one gives the runtime
+/// back. That is what stops a job whose chunk is synchronous CPU from owning
+/// its worker until the loop ends — `checkpoint` is otherwise a no-op while the
+/// server is calm.
+///
+/// Shared by every clone of the context, because the job body and the progress
+/// clone can both reach it.
+struct ChunkBudget {
+    max_chunk_ms: u64,
+    /// When the context was built, so a chunk can be measured in millis.
+    base: std::time::Instant,
+    /// Millis since `base` at the last yield.
+    last_ms: AtomicU64,
+}
+
 /// The handle a job body uses to talk to the task system.
 #[derive(Clone)]
 pub struct JobContext {
@@ -156,6 +175,9 @@ pub struct JobContext {
     progress: ProgressSink,
     budget: BudgetSignal,
     chunk: Option<ChunkPolicy>,
+    /// The declared chunk budget, and the clock that enforces it. `None` for a
+    /// job that declared no unit — it is not asked to hand anything back.
+    chunk_budget: Option<Arc<ChunkBudget>>,
     /// The load gate, for a job that declared it can be interrupted. `None`
     /// means the job never parks, which is the contract the catalog enforces.
     gate: Option<YieldGate>,
@@ -173,6 +195,18 @@ impl JobContext {
         chunk: Option<ChunkPolicy>,
         gate: Option<YieldGate>,
     ) -> Self {
+        // A job that declared no unit, or declared one of zero, is not bounded
+        // and never hands the runtime back — `0` reads as "unlimited" here as
+        // it does for the other caps in the catalog.
+        let chunk_budget = chunk
+            .filter(|policy| policy.max_chunk_ms > 0)
+            .map(|policy| {
+                Arc::new(ChunkBudget {
+                    max_chunk_ms: policy.max_chunk_ms,
+                    base: std::time::Instant::now(),
+                    last_ms: AtomicU64::new(0),
+                })
+            });
         Self {
             id,
             key,
@@ -181,6 +215,7 @@ impl JobContext {
             progress,
             budget,
             chunk,
+            chunk_budget,
             gate,
         }
     }
@@ -253,11 +288,19 @@ impl JobContext {
     /// While parked the run is recorded as [`JobState::Yielded`], which is
     /// deliberately distinct from `Running`: the run is alive, and a recovery
     /// pass must not mistake it for one that died.
+    ///
+    /// It is also where a job's declared [`ChunkPolicy::max_chunk_ms`] is
+    /// honoured: a chunk that has run its course gives the runtime back,
+    /// whether or not the server is busy.
     pub async fn checkpoint(&self) -> Result<(), JobFailure> {
         self.progress.tick.bump();
         if self.cancel.is_cancelled() {
             return Err(JobFailure::Cancelled);
         }
+
+        // Before the gate, so the hand-back happens on a calm server too —
+        // which is the case the gate cannot cover.
+        self.yield_after_chunk().await;
 
         let Some(gate) = &self.gate else {
             return Ok(());
@@ -282,6 +325,40 @@ impl JobContext {
             return Err(JobFailure::Cancelled);
         }
         Ok(())
+    }
+
+    /// Give the runtime back once the declared chunk has run its course.
+    ///
+    /// A yield, not a park: the job is not waiting for anything, it is letting
+    /// the other tasks on its worker be polled. Cheap enough to be checked at
+    /// every checkpoint — a job whose chunks are short yields rarely, because
+    /// the budget is what decides, not the checkpoint.
+    async fn yield_after_chunk(&self) {
+        let Some(budget) = &self.chunk_budget else {
+            return;
+        };
+        let now = budget.base.elapsed().as_millis() as u64;
+        let mut last = budget.last_ms.load(Ordering::Relaxed);
+        loop {
+            if now.saturating_sub(last) < budget.max_chunk_ms {
+                return;
+            }
+            // Whoever wins the window owns the yield: a job that works through
+            // its chunks concurrently needs the runtime back once, not once per
+            // task that happens to check in.
+            match budget.last_ms.compare_exchange_weak(
+                last,
+                now,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    tokio::task::yield_now().await;
+                    return;
+                }
+                Err(actual) => last = actual,
+            }
+        }
     }
 
     /// Run blocking work on the blocking pool, but only after a checkpoint.
@@ -336,6 +413,78 @@ mod tests {
             id,
             tick,
         )
+    }
+
+    /// A context with no gate, so only its chunk budget can yield.
+    fn context(chunk: Option<ChunkPolicy>) -> JobContext {
+        let (sink, _store, id, _tick) = sink(Duration::ZERO);
+        JobContext::new(
+            id,
+            JobKey::Copy,
+            Some(1),
+            CancellationToken::new(),
+            sink,
+            BudgetSignal::full(),
+            chunk,
+            None,
+        )
+    }
+
+    /// A body whose only await points are its checkpoints, plus a witness task
+    /// that can only run if one of them gives the runtime back.
+    ///
+    /// `#[tokio::test]` is a current-thread runtime, so a job that never yields
+    /// owns the thread for the whole loop and the witness never runs.
+    async fn chunked_loop(chunk: Option<ChunkPolicy>, chunk_ms: u64) -> u64 {
+        let ctx = context(chunk);
+        let ran = Arc::new(AtomicU64::new(0));
+        tokio::spawn({
+            let ran = ran.clone();
+            async move {
+                ran.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        for _ in 0..4 {
+            ctx.checkpoint().await.unwrap();
+            std::thread::sleep(Duration::from_millis(chunk_ms));
+        }
+        ran.load(Ordering::SeqCst)
+    }
+
+    /// A chunk that has run its course hands the runtime back.
+    #[tokio::test]
+    async fn a_declared_chunk_hands_the_runtime_back() {
+        let ran = chunked_loop(
+            Some(ChunkPolicy {
+                max_chunk_ms: 5,
+                unit: "unit",
+            }),
+            6,
+        )
+        .await;
+        assert!(ran > 0, "a chunk past its budget must yield");
+    }
+
+    /// A chunk still inside its budget does not: the budget decides, not the
+    /// checkpoint.
+    #[tokio::test]
+    async fn a_chunk_inside_its_budget_does_not_yield() {
+        let ran = chunked_loop(
+            Some(ChunkPolicy {
+                max_chunk_ms: 3_600_000,
+                unit: "unit",
+            }),
+            1,
+        )
+        .await;
+        assert_eq!(ran, 0, "a chunk inside its budget must not yield");
+    }
+
+    /// A job that declared no unit is not asked to hand anything back.
+    #[tokio::test]
+    async fn a_job_without_a_declared_chunk_does_not_yield() {
+        let ran = chunked_loop(None, 6).await;
+        assert_eq!(ran, 0, "an unbounded job must not yield");
     }
 
     #[test]

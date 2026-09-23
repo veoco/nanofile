@@ -157,6 +157,11 @@ pub enum Resource {
 pub struct ChunkPolicy {
     /// Upper bound on how long one indivisible unit may run. This *is* the
     /// reaction time: the executor can only notice load at a checkpoint.
+    ///
+    /// Enforced at the checkpoint itself, which hands the runtime back once
+    /// this much time has passed since the previous one — so the bound holds
+    /// even while the server is quiet, when a checkpoint has nothing else to
+    /// do. `0` means the job did not bound its unit.
     pub max_chunk_ms: u64,
     /// Name of one unit, for logs and the admin page.
     pub unit: &'static str,
