@@ -172,12 +172,30 @@ pub fn install_default_jobs(
                 })?;
                 let svc = crate::service::admin::AdminService::new(repos);
                 let progress = ctx.clone();
+                // The pass checks in before every file, so it parks while the
+                // server is busy and resumes when it is not. Those checkpoints
+                // are also where a cancellation lands.
                 let (indexed, skipped) = svc
-                    .reindex(&indexer, &repo_id, &block_store, move |done, total| {
-                        progress.report(done, Some(total));
-                    })
+                    .reindex(
+                        &indexer,
+                        &repo_id,
+                        &block_store,
+                        Some(&ctx),
+                        move |done, total| {
+                            progress.report(done, Some(total));
+                        },
+                    )
                     .await
-                    .map_err(JobFailure::App)?;
+                    .map_err(|e| {
+                        // A pass that stopped at a checkpoint comes back as an
+                        // opaque failure; the context knows whether it was a
+                        // cancellation, which is a different terminal state.
+                        if ctx.is_cancelled() {
+                            JobFailure::Cancelled
+                        } else {
+                            JobFailure::App(e)
+                        }
+                    })?;
                 // Kept past the params drop so the progress endpoint can still
                 // report which repository this was and what it did.
                 ctx.set_detail("indexed", serde_json::json!(indexed));

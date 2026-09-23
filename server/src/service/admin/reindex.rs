@@ -4,9 +4,20 @@ use futures::StreamExt;
 
 use crate::indexer::{TextIndexer, collect_file_paths_under};
 use crate::repository::Repositories;
+use crate::tasks::JobFailure;
+use crate::tasks::context::JobContext;
 use base::error::AppError;
 use infra::common::EMPTY_SHA1;
 use infra::storage::DynBlockStorage;
+
+/// How many files a pass reindexes at once, before the running budget trims it.
+const REINDEX_CONCURRENCY: usize = 8;
+
+/// Returned when a pass stopped at a checkpoint rather than finishing.
+///
+/// The job body maps it back onto a cancellation, which is a terminal state
+/// distinct from a failure — the same arrangement GC uses.
+pub const ABORTED: &str = "reindex stopped at a checkpoint";
 
 /// Service for index/reindex administration operations.
 pub struct AdminService {
@@ -101,11 +112,18 @@ impl AdminService {
     /// Files are reindexed with bounded concurrency (whole-file reads +
     /// Tantivy writes are heavy); `on_progress` is called after each file with
     /// `(done_count, total)` so a background task can report progress.
+    ///
+    /// `ctx` is the running job's context. Every file checks in before it is
+    /// read, so on a busy server the pass stops at a file boundary and resumes
+    /// when the server is quiet — the in-flight files park and the stream stops
+    /// pulling new ones, so the concurrency drains to zero rather than merely
+    /// slowing down. `None` is the uninterruptible call used outside a job.
     pub async fn reindex(
         &self,
         indexer: &TextIndexer,
         repo_id: &str,
         block_store: &DynBlockStorage,
+        ctx: Option<&JobContext>,
         mut on_progress: impl FnMut(u64, u64) + Send + 'static,
     ) -> Result<(u64, u64), AppError> {
         let repo_model = self
@@ -133,29 +151,41 @@ impl AdminService {
         let file_paths = collect_file_paths_under(&self.repos, repo_id, &head.root_id, "").await?;
         let total = file_paths.len() as u64;
 
-        let results: Vec<Result<bool, AppError>> = futures::stream::iter(file_paths)
+        // The budget trims the width when the pass starts on an already busy
+        // server. It is not what holds a *running* pass back — the checkpoint
+        // is, because a parked file stops the stream pulling the next one.
+        let width = (REINDEX_CONCURRENCY as f32 * ctx.map_or(1.0, JobContext::budget)) as usize;
+
+        let mut stream = futures::stream::iter(file_paths)
             .map(|fullpath| {
                 let indexer = indexer.clone();
                 let block_store = block_store.clone();
                 let rid = repo_id.to_string();
                 async move {
-                    Ok(indexer
-                        .reindex_file(&rid, &fullpath, &block_store)
-                        .await
-                        .unwrap_or(false))
+                    // Checked in before the read, not after: the point is not to
+                    // start work the server cannot afford right now.
+                    checkpoint(ctx).await?;
+                    Ok::<bool, AppError>(
+                        indexer
+                            .reindex_file(&rid, &fullpath, &block_store)
+                            .await
+                            // A file that cannot be read is not a reason to
+                            // abandon a rebuild; it counts as skipped, as it
+                            // always has.
+                            .unwrap_or(false),
+                    )
                 }
             })
-            .buffer_unordered(8)
-            .collect::<Vec<_>>()
-            .await;
+            .buffer_unordered(width.max(1));
 
         let mut indexed = 0u64;
         let mut skipped = 0u64;
         let mut done = 0u64;
-        for r in results {
-            match r {
-                Ok(true) => indexed += 1,
-                _ => skipped += 1,
+        while let Some(result) = stream.next().await {
+            if result? {
+                indexed += 1;
+            } else {
+                skipped += 1;
             }
             done += 1;
             on_progress(done, total);
@@ -163,4 +193,17 @@ impl AdminService {
 
         Ok((indexed, skipped))
     }
+}
+
+/// Ask the run to stop, if there is a run to ask.
+async fn checkpoint(ctx: Option<&JobContext>) -> Result<(), AppError> {
+    let Some(ctx) = ctx else {
+        return Ok(());
+    };
+    ctx.checkpoint().await.map_err(|failure| match failure {
+        // Mapped back onto a cancellation by the job body, which is the only
+        // place that knows which of the two terminal states applies.
+        JobFailure::Cancelled | JobFailure::TimedOut => AppError::OperationFailed(ABORTED.into()),
+        JobFailure::App(e) => e,
+    })
 }

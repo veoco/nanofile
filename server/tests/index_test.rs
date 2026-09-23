@@ -713,6 +713,180 @@ async fn test_reindex_endpoint() {
     assert!(progress["indexed"].as_u64().unwrap() >= 1);
 }
 
+/// A reindex checks in before every file, so a busy server parks the pass
+/// instead of letting it run to completion.
+///
+/// The catalog declares `chunkable` for this job. Without a checkpoint in the
+/// body that declaration is a lie: the run is handed a gate and never uses it.
+#[tokio::test]
+async fn a_reindex_pass_parks_while_the_server_is_busy() {
+    use server::tasks::admission::LoadThresholds;
+    use server::tasks::run::{JobState, RunId};
+
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    // Several files, so the pass has more than one boundary to stop at.
+    for i in 0..8 {
+        let resp = f
+            .client
+            .upload_file(
+                token,
+                &f.repo_id,
+                "/",
+                &format!("parkable-{i}.txt"),
+                format!("parkable content number {i}").as_bytes(),
+            )
+            .await;
+        assert_eq!(resp.status(), 200, "upload {i} should succeed");
+    }
+
+    // Load awareness on, with a threshold a single in-flight request exceeds.
+    let tasks = &f.server.state.tasks;
+    tasks.configure_load(true, 1);
+    tasks.set_load_thresholds(LoadThresholds {
+        max_inflight_requests: 0,
+        max_db_utilization: 1.0,
+        max_worker_busy_pct: 100,
+    });
+
+    // Hold the server busy for the whole pass.
+    let busy = tasks.load().request_guard();
+
+    let resp = f
+        .client
+        .post_json(
+            "/api2/reindex/",
+            Some(token),
+            &serde_json::json!({"repo_id": f.repo_id}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let task_id = resp.json::<serde_json::Value>().await.unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let run_id = RunId::from_client(task_id);
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(10), || async {
+            tasks.store().get(&run_id).map(|run| run.state) == Some(JobState::Yielded)
+        })
+        .await,
+        "a busy server must park the reindex pass"
+    );
+
+    // It stays parked: nothing advances while the load is still on.
+    for _ in 0..5 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(
+            tasks.store().get(&run_id).map(|run| run.state),
+            Some(JobState::Yielded)
+        );
+    }
+
+    // The server goes quiet, and the pass finishes on its own.
+    drop(busy);
+    assert!(
+        wait_for(std::time::Duration::from_secs(30), || async {
+            tasks
+                .store()
+                .get(&run_id)
+                .is_some_and(|run| run.state.is_terminal())
+        })
+        .await,
+        "the pass must finish once the server is quiet"
+    );
+
+    let run = tasks.store().get(&run_id).unwrap();
+    assert_eq!(run.state, JobState::Succeeded);
+    // Parking held the pass back without making it skip work.
+    assert_eq!(
+        Some(run.progress.done),
+        run.progress.total,
+        "every file should still have been visited"
+    );
+    assert_eq!(run.progress.done, 8);
+}
+
+/// A pass stopped at a checkpoint ends as a cancellation, not as a failure.
+///
+/// The abandoned pass surfaces as an opaque error; the job body is what turns
+/// it back into the terminal state the caller actually asked for.
+#[tokio::test]
+async fn a_parked_reindex_cancels_rather_than_fails() {
+    use server::tasks::admission::LoadThresholds;
+    use server::tasks::run::{JobState, RunId, Viewer};
+
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    for i in 0..4 {
+        let resp = f
+            .client
+            .upload_file(
+                token,
+                &f.repo_id,
+                "/",
+                &format!("cancel-{i}.txt"),
+                format!("cancel content {i}").as_bytes(),
+            )
+            .await;
+        assert_eq!(resp.status(), 200, "upload {i} should succeed");
+    }
+
+    let tasks = &f.server.state.tasks;
+    tasks.configure_load(true, 1);
+    tasks.set_load_thresholds(LoadThresholds {
+        max_inflight_requests: 0,
+        max_db_utilization: 1.0,
+        max_worker_busy_pct: 100,
+    });
+
+    // The server stays busy for the whole test, so the pass can only end
+    // because it was cancelled.
+    let _busy = tasks.load().request_guard();
+
+    let resp = f
+        .client
+        .post_json(
+            "/api2/reindex/",
+            Some(token),
+            &serde_json::json!({"repo_id": f.repo_id}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let task_id = resp.json::<serde_json::Value>().await.unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let run_id = RunId::from_client(task_id);
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(10), || async {
+            tasks.store().get(&run_id).map(|run| run.state) == Some(JobState::Yielded)
+        })
+        .await,
+        "a busy server must park the reindex pass"
+    );
+
+    tasks.cancel(&run_id, Viewer::user(f.user_id)).unwrap();
+    assert!(
+        wait_for(std::time::Duration::from_secs(10), || async {
+            tasks
+                .store()
+                .get(&run_id)
+                .is_some_and(|run| run.state.is_terminal())
+        })
+        .await,
+        "a cancelled pass must reach a terminal state"
+    );
+    assert_eq!(
+        tasks.store().get(&run_id).unwrap().state,
+        JobState::Cancelled
+    );
+}
+
 /// Upload a binary image, then use index_file_text to associate extracted text.
 #[tokio::test]
 async fn test_index_file_text_for_binary() {
