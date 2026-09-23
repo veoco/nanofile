@@ -4,7 +4,7 @@
 //! be created on the main thread — so in tray mode the platform event loop
 //! owns the main thread while the tokio runtime runs on background worker
 //! threads (see `main.rs`). Menu actions are handled on the event-loop thread;
-//! "Quit" is forwarded to the async server task over a std mpsc channel, and
+//! "Quit" is forwarded to the async server task over a channel, and
 //! the server performs its normal graceful shutdown before ending the process
 //! (which also removes the tray icon).
 
@@ -33,11 +33,11 @@ mod backend;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::mpsc::Sender;
 
 use anyhow::Context;
 use infra::config::Config;
 use server::i18n::I18n;
+use tokio::sync::mpsc::UnboundedSender;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
@@ -150,7 +150,7 @@ pub fn run(config: Config, env_keys: infra::config::EnvKeys, config_path: PathBu
     };
 
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-    let (quit_tx, quit_rx) = std::sync::mpsc::channel::<TrayCommand>();
+    let (quit_tx, quit_rx) = tokio::sync::mpsc::unbounded_channel::<TrayCommand>();
 
     rt.spawn(async move {
         let result = crate::run_server_flow(config, env_keys, Some(quit_rx)).await;
@@ -179,7 +179,10 @@ pub(super) fn park_forever() -> ! {
 /// Builds the tray icon and menu. Fails when the desktop integration is
 /// broken (e.g. `DISPLAY` points at a dead X server); callers fall back to
 /// running headless instead of taking the server down.
-fn create_tray(ctx: &TrayContext, quit_tx: Sender<TrayCommand>) -> anyhow::Result<TrayIcon> {
+fn create_tray(
+    ctx: &TrayContext,
+    quit_tx: UnboundedSender<TrayCommand>,
+) -> anyhow::Result<TrayIcon> {
     let autostart =
         autostart::PlatformAutostart::new(ctx.exe_path.clone(), ctx.config_path.clone());
 
@@ -242,7 +245,7 @@ struct MenuState {
     ctx: TrayContext,
     autostart: autostart::PlatformAutostart,
     autostart_item: CheckMenuItem,
-    quit_tx: Sender<TrayCommand>,
+    quit_tx: UnboundedSender<TrayCommand>,
 }
 
 thread_local! {
@@ -261,7 +264,7 @@ enum MenuAction {
     OpenWeb(String),
     ToggleAutostart(autostart::PlatformAutostart, CheckMenuItem),
     OpenConfig(PathBuf),
-    Quit(Sender<TrayCommand>),
+    Quit(UnboundedSender<TrayCommand>),
 }
 
 fn on_menu_event(event: MenuEvent) {

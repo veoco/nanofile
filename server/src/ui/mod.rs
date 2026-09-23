@@ -271,6 +271,13 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/sysadmin/settings/refresh/",
             axum::routing::post(system_settings::refresh),
         )
+        // Admin — restart the server in place. Separate from `save`: this
+        // applies *already saved* restart-only settings, and must never save
+        // whatever the form happened to carry.
+        .route(
+            "/sysadmin/settings/restart/",
+            axum::routing::post(system_settings::restart),
+        )
         // Admin — email management (outbox, delivery state, test message).
         // The SMTP configuration itself lives under /sysadmin/settings/email/.
         .route("/sysadmin/email/", get(email::email_page))

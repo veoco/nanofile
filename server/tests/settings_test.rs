@@ -705,3 +705,198 @@ async fn a_secret_that_cannot_be_decrypted_falls_back_instead_of_being_used() {
         "the undecryptable value must not become the password"
     );
 }
+
+/// The restart button lives on the settings page and nowhere else, so the page
+/// has to be reachable and rendered before it can be clicked.
+#[tokio::test]
+async fn the_settings_page_offers_a_restart_button() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (status, html) = page(&server, &admin, "/sysadmin/settings/").await;
+    assert_eq!(status, 200);
+    assert!(
+        html.contains(r#"formaction="/sysadmin/settings/restart/""#),
+        "the footer must carry the restart button"
+    );
+    assert!(
+        html.contains("data-restart-button"),
+        "the button needs the hook the confirmation script binds to"
+    );
+}
+
+#[tokio::test]
+async fn restarting_from_the_page_returns_a_waiting_page_and_signals_the_runner() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/general/").await;
+    let csrf = csrf_of(&html);
+
+    let resp = admin
+        .post(format!("{}/sysadmin/settings/restart/", server.base_url))
+        .form(&[("csrf_token", csrf.as_str()), ("section", "general")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // The page is a place to wait: the watch hook, the URL to come back to, and
+    // no settings form that the browser could submit into a server that is down.
+    assert!(body.contains("data-restart-watch"), "{body}");
+    assert!(
+        body.contains(r#"data-return="/sysadmin/settings/?action=restarted""#),
+        "{body}"
+    );
+    assert!(
+        !body.contains(r#"action="/sysadmin/settings/general/save/""#),
+        "the restarting page must not render the form"
+    );
+    // The content is everything before the embedded i18n data block.
+    let content = body
+        .split(r#"id="__i18n""#)
+        .next()
+        .expect("the page has a content block");
+    assert!(
+        !content.contains("setting.restarting_"),
+        "a raw locale key reached the page"
+    );
+
+    // The signal is raised shortly after the response (so the response is on the
+    // wire first); the test server does not consume it, which is what makes it
+    // observable here.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !server.state.restart.is_requested() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the restart request never reached the run loop"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
+#[tokio::test]
+async fn restarting_needs_an_admin_and_a_csrf_token() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    // No CSRF token at all.
+    let resp = admin
+        .post(format!("{}/sysadmin/settings/restart/", server.base_url))
+        .form(&[("section", "general")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    assert!(!server.state.restart.is_requested());
+
+    // A regular account with a valid token for its own session.
+    common::create_test_user(&server.db, "pleb@example.com", "password123").await;
+    let user = ui_login(&server, "pleb@example.com", "password123").await;
+    let (_, html) = page(&server, &user, "/settings/").await;
+    let csrf = csrf_of(&html);
+    let resp = user
+        .post(format!("{}/sysadmin/settings/restart/", server.base_url))
+        .form(&[("csrf_token", csrf.as_str()), ("section", "general")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
+    assert!(
+        !server.state.restart.is_requested(),
+        "a non-admin must never be able to restart the server"
+    );
+}
+
+#[tokio::test]
+async fn restarting_does_not_save_the_submitted_form() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/security/").await;
+    let csrf = csrf_of(&html);
+
+    let before = server.state.config().server.share_link_enabled;
+    let resp = admin
+        .post(format!("{}/sysadmin/settings/restart/", server.base_url))
+        .form(&[
+            ("csrf_token", csrf.as_str()),
+            ("section", "security"),
+            ("server.share_link_enabled", "false"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        server.state.config().server.share_link_enabled,
+        before,
+        "restarting is not a save"
+    );
+    assert!(
+        stored(&server, "server.share_link_enabled").is_none(),
+        "no row may be written by the restart request"
+    );
+}
+
+/// The settings page has to distinguish what the restart button applies from
+/// what only a full process restart does — the whole reason the button can be
+/// offered honestly.
+#[tokio::test]
+async fn the_page_separates_in_place_from_process_restarts() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    // `server.tray` and `ui.tray_language` are read before the server loop
+    // exists; a stored value for one of them is pending, but *not* pending in
+    // the in-place sense.
+    server
+        .state
+        .settings
+        .save(Section::General, &form(&[("ui.tray_language", "zh")]), None)
+        .await
+        .expect("save");
+
+    assert!(
+        server
+            .state
+            .settings
+            .pending_process_restart()
+            .contains("ui.tray_language")
+    );
+    assert!(
+        !server
+            .state
+            .settings
+            .pending_restart()
+            .contains("ui.tray_language"),
+        "the in-app restart cannot apply a process-bootstrap value"
+    );
+
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/general/").await;
+    let row = html
+        .split(r#"data-setting="ui.tray_language""#)
+        .nth(1)
+        .expect("the row must render");
+    assert!(
+        row.contains("Needs a full process restart"),
+        "the row must say the button cannot apply it"
+    );
+    // The banner names the key, and it is translated rather than a raw locale id.
+    // `strip_i18n_dictionary` returns the *tail* (the embedded dictionary and the
+    // bundle script), so the content is everything before the data block.
+    let body = html
+        .split(r#"id="__i18n""#)
+        .next()
+        .expect("the page has a content block");
+    assert!(
+        body.contains("applied only after a full process restart"),
+        "the page must explain which values the button cannot reach"
+    );
+    assert!(body.contains("ui.tray_language"));
+}

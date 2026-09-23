@@ -134,8 +134,20 @@ pub enum Apply {
     /// Effective for the next request, after a hook pushes it into the object
     /// that captured it at startup.
     LiveWithHook(Hook),
-    /// Saved now, applied at the next start.
+    /// Saved now, applied at the next restart of the server.
+    ///
+    /// The server restarts itself in place (the "Restart server" button on the
+    /// settings page): everything the server rebuilds for a new generation —
+    /// the layered settings, the database, the caches, the background tasks —
+    /// is recreated, while the process, the tray icon and the listening socket
+    /// survive.
     Restart,
+    /// Saved now, applied only when the *operating-system process* is
+    /// restarted (stopped and started again). These are the values read before
+    /// the server loop exists: the log subscriber and the desktop tray. An
+    /// in-place restart deliberately cannot apply them, and the page says so
+    /// rather than pretending a restart happened.
+    ProcessRestart,
     /// Never stored: the value can only come from the environment or the config
     /// file. Editing it would be either meaningless (the database cannot govern
     /// the database) or unrecoverable (a new `secret_key` makes existing
@@ -161,6 +173,20 @@ impl Apply {
 
     pub const fn is_stored(self) -> bool {
         !matches!(self, Apply::ReadOnly)
+    }
+
+    /// Whether the in-app "Restart server" button applies a saved value.
+    ///
+    /// [`Apply::ProcessRestart`] is not covered on purpose: it is the set the
+    /// button cannot reach, and the settings page marks it separately.
+    pub const fn is_in_place_restart(self) -> bool {
+        matches!(self, Apply::Restart)
+    }
+
+    /// Whether a saved change waits for *some* restart — the in-place button or
+    /// a full process restart.
+    pub const fn is_restart_only(self) -> bool {
+        matches!(self, Apply::Restart | Apply::ProcessRestart)
     }
 }
 
@@ -799,6 +825,48 @@ mod tests {
             "most settings must take effect without a restart: {live}/{}",
             CATALOG.len()
         );
+    }
+
+    /// The in-app restart cannot reach these: the log subscriber and the tray
+    /// are decided before the server loop exists, so the page has to say so
+    /// instead of promising the button applied them.
+    #[test]
+    fn process_restart_entries_are_the_ones_read_before_the_loop() {
+        for key in [
+            "logging.level",
+            "logging.max_file_size_mb",
+            "logging.max_backups",
+            "server.tray",
+            "ui.tray_language",
+        ] {
+            let def = find(key).expect(key);
+            assert_eq!(def.apply, Apply::ProcessRestart, "{key}");
+            assert!(
+                !def.apply.is_live(),
+                "{key} must keep its startup value until the process restarts"
+            );
+            assert!(
+                def.apply.is_stored(),
+                "{key} is still editable, just not applied by the in-app restart"
+            );
+        }
+    }
+
+    /// The two restart kinds are disjoint, and both are outside the live
+    /// snapshot: a value that never reaches the running process cannot be live.
+    #[test]
+    fn the_restart_kinds_are_disjoint() {
+        for def in CATALOG {
+            assert!(
+                !(def.apply.is_in_place_restart() && def.apply == Apply::ProcessRestart),
+                "{}",
+                def.key
+            );
+            if def.apply.is_restart_only() {
+                assert!(!def.apply.is_live(), "{}", def.key);
+                assert!(def.apply.is_stored(), "{}", def.key);
+            }
+        }
     }
 
     #[test]

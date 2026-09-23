@@ -19,6 +19,21 @@
 {% block title %}{{ t.tr(section_title_key) }} | Nanofile{% endblock %}
 
 {% block content %}
+{% if restarting %}
+{# The server is going down and coming back. No form here: the page is a place
+   to wait, and `pages/sysadmin-settings.js` polls `/health` (same origin, which
+   `connect-src 'self'` allows) and comes back to `restart_return`. #}
+<div data-restart-watch data-return="{{ restart_return }}" data-generation="{{ restart_generation }}"
+     data-pending="{{ t.tr("setting.restarting_body") }}"
+     data-timeout="{{ t.tr("setting.restarting_timeout") }}">
+    <h1 class="page-title">{{ t.tr("setting.restarting_title") }}</h1>
+    <p class="page-subtitle">{{ t.tr("setting.restarting_body") }}</p>
+    <div class="nf-banner is-warn mt-5">
+        <p class="js-restart-status">{{ t.tr("setting.restarting_body") }}</p>
+        <a class="btn btn-line btn-sm mt-2" href="{{ restart_return }}">{{ t.tr("setting.restarting_manual") }}</a>
+    </div>
+</div>
+{% else %}
 <div>
     <h1 class="page-title">{{ t.tr(section_title_key) }}</h1>
     <p class="page-subtitle">{{ t.tr(section_subtitle_key) }}</p>
@@ -32,9 +47,19 @@
     <div class="mt-5">{% include "includes/alert_success.html" %}</div>
     {% endif %}
 
-    {# The two things an operator cannot see from a form: a saved value is
-       winning over a config-file entry that disagrees, and a saved value needs a
-       restart before it does anything. #}
+    {# A restart that could not move to the saved address keeps serving on the
+       address that works; say so, or the row above quietly lies. #}
+    {% if let Some(restart_error) = restart_error %}
+    <div class="nf-banner is-warn mt-5">
+        <p>{{ t.tr("setting.restart_failed_banner") }}</p>
+        <p class="mono text-[12px]">{{ restart_error }}</p>
+    </div>
+    {% endif %}
+
+    {# The three things an operator cannot see from a form: a saved value is
+       winning over a config-file entry that disagrees, a saved value needs a
+       restart before it does anything, and a saved value needs a restart the
+       in-app button cannot perform. #}
     {% if !drift_keys.is_empty() %}
     <div class="nf-banner is-warn mt-5">
         <p>
@@ -48,6 +73,14 @@
         <p>
             {{ t.tr("setting.restart_banner") }}
             <span class="mono">{{ pending_restart.join(", ") }}</span>
+        </p>
+    </div>
+    {% endif %}
+    {% if !pending_process_restart.is_empty() %}
+    <div class="nf-banner is-warn mt-5">
+        <p>
+            {{ t.tr("setting.process_restart_banner") }}
+            <span class="mono">{{ pending_process_restart.join(", ") }}</span>
         </p>
     </div>
     {% endif %}
@@ -109,6 +142,9 @@
 
                         {% if row.restart %}
                         <span class="badge badge-gray">{{ t.tr("setting.apply_restart") }}</span>
+                        {% endif %}
+                        {% if row.process_restart %}
+                        <span class="badge badge-gray">{{ t.tr("setting.apply_process_restart") }}</span>
                         {% endif %}
                         {% if row.pending_restart %}
                         <span class="badge badge-red">{{ t.tr("setting.pending_restart") }}</span>
@@ -207,7 +243,16 @@
                     formaction="/sysadmin/settings/refresh/">
                 {{ t.tr("setting.refresh") }}
             </button>
+            {# Applies the restart-only settings that are already saved. Deliberately
+               not a save: the form's values are ignored, and `pages/sysadmin-settings.js`
+               asks for confirmation first. #}
+            <button type="submit" class="btn btn-line"
+                    formaction="/sysadmin/settings/restart/"
+                    data-restart-button data-confirm="{{ t.tr("setting.restart_confirm") }}">
+                {{ t.tr("setting.restart_button") }}
+            </button>
         </div>
     </form>
 </div>
+{% endif %}
 {% endblock %}

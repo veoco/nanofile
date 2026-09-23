@@ -65,6 +65,9 @@ pub struct SettingRow {
     pub restart: bool,
     /// A saved value that is waiting for the next start.
     pub pending_restart: bool,
+    /// The value is read before the server loop exists (the log subscriber, the
+    /// desktop tray), so only a full process restart applies it.
+    pub process_restart: bool,
     /// Only the environment or the config file can set this.
     pub locked: bool,
     /// Read-only settings are shown for their origin, not for editing.
@@ -116,9 +119,22 @@ pub struct SystemSettingsTemplate {
     /// Keys whose saved value supersedes a config-file entry that disagrees.
     pub drift_keys: Vec<String>,
     pub pending_restart: Vec<String>,
+    /// Keys only a full process restart applies, shown apart from the ones the
+    /// restart button below does cover.
+    pub pending_process_restart: Vec<String>,
     pub policy: PolicyView,
     pub error: Option<String>,
     pub success: Option<String>,
+    /// The page is the "restarting" notice rather than the settings form: the
+    /// browser polls `/health` and comes back to `restart_return`.
+    pub restarting: bool,
+    pub restart_return: String,
+    /// The generation this page was rendered by. The browser only reloads once
+    /// `/health` reports a *different* one, so it cannot mistake the server
+    /// that is still shutting down for the one that came back.
+    pub restart_generation: u64,
+    /// Why the last in-place restart kept the previous listener, if it did.
+    pub restart_error: Option<String>,
 }
 
 /// Query parameters of a settings page.
@@ -135,6 +151,7 @@ fn success_message(t: &I18n, action: Option<&str>, restarted: bool) -> Option<St
         Some("saved") => "setting.saved",
         Some("reset") => "setting.reset_done",
         Some("refreshed") => "setting.refreshed",
+        Some("restarted") => "setting.restarted",
         _ => return None,
     };
     Some(t.tr(key).to_string())
@@ -175,10 +192,26 @@ pub async fn settings_page(
         query.action.as_deref(),
         !state.settings.pending_restart().is_empty(),
     );
-    match render(&state, &user, section, None, success, None).await {
+    let flags = RenderFlags {
+        success,
+        ..RenderFlags::default()
+    };
+    match render(&state, &user, section, flags, None).await {
         Ok(response) => response,
         Err(e) => e.into_response(),
     }
+}
+
+/// What one rendered settings page shows besides its rows.
+#[derive(Default)]
+struct RenderFlags {
+    /// A rejected action, shown above the form.
+    error: Option<String>,
+    /// A completed action, shown above the form.
+    success: Option<String>,
+    /// The page is the "restart in progress" notice: no form, and the browser
+    /// watches `/health` until the server is back.
+    restarting: bool,
 }
 
 /// Build and render one section, carrying at most one banner.
@@ -186,8 +219,7 @@ async fn render(
     state: &Arc<AppState>,
     user: &WebUser,
     section: Section,
-    error: Option<String>,
-    success: Option<String>,
+    flags: RenderFlags,
     submitted: Option<&HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let t = I18n::get(user.language.as_deref());
@@ -230,6 +262,7 @@ async fn render(
         rows,
         drift_keys,
         pending_restart: pending.iter().cloned().collect(),
+        pending_process_restart: service.pending_process_restart().iter().cloned().collect(),
         policy: PolicyView {
             config_policy: match policy.config_policy {
                 infra::settings::ConfigPolicy::Bootstrap => "bootstrap",
@@ -238,14 +271,26 @@ async fn render(
             override_keys: policy.config_override_keys.iter().cloned().collect(),
             refresh_interval_secs: policy.refresh_interval_secs,
         },
-        error,
-        success,
+        error: flags.error,
+        success: flags.success,
+        restarting: flags.restarting,
+        restart_return: settings_url(section, "restarted"),
+        restart_generation: crate::restart::generation(),
+        restart_error: crate::restart::failure(),
     };
 
     let html = tpl
         .render()
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Html(html).into_response())
+}
+
+/// The URL of one section's page, with an optional action banner.
+fn settings_url(section: Section, action: &str) -> String {
+    match section {
+        Section::General => format!("/sysadmin/settings/?action={action}"),
+        other => format!("/sysadmin/settings/{}/?action={action}", other.id()),
+    }
 }
 
 /// Render one catalog entry into its row view.
@@ -350,8 +395,9 @@ fn build_row(
         origin_detail,
         origin_at,
         config_value,
-        restart: def.apply == Apply::Restart,
+        restart: def.apply.is_in_place_restart(),
         pending_restart: pending.contains(def.key),
+        process_restart: def.apply == Apply::ProcessRestart,
         locked,
         read_only,
         secret_set: matches!(
@@ -472,7 +518,11 @@ pub async fn save(
         // that produced it.
         Err(e) => {
             let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &e);
-            render(&state, &user, section, Some(msg), None, Some(&form)).await
+            let flags = RenderFlags {
+                error: Some(msg),
+                ..RenderFlags::default()
+            };
+            render(&state, &user, section, flags, Some(&form)).await
         }
     }
 }
@@ -518,9 +568,51 @@ pub async fn reset(
         }
         Err(e) => {
             let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &e);
-            render(&state, &user, section, Some(msg), None, None).await
+            let flags = RenderFlags {
+                error: Some(msg),
+                ..RenderFlags::default()
+            };
+            render(&state, &user, section, flags, None).await
         }
     }
+}
+
+/// POST /sysadmin/settings/restart/ — restart the server in place.
+///
+/// The signal is raised *after* this handler has returned and the response is
+/// on its way out: the run loop tears the server down through the normal
+/// graceful shutdown, so an in-flight response is always delivered. The
+/// submitted values are deliberately ignored — restarting is not a save, and a
+/// silent save would be the wrong side effect for a button labelled "restart".
+pub async fn restart(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    Form(pairs): Form<Vec<(String, String)>>,
+) -> Result<Response, AppError> {
+    let form = fold_form(&pairs);
+    require_admin_csrf(&state, &user, &form)?;
+    let section = form
+        .get("section")
+        .and_then(|id| section_of(id))
+        .unwrap_or(Section::General);
+
+    tracing::warn!(
+        admin = user.user_id,
+        section = section.id(),
+        "restart requested from the settings page"
+    );
+
+    let signal = state.restart.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        signal.request();
+    });
+
+    let flags = RenderFlags {
+        restarting: true,
+        ..RenderFlags::default()
+    };
+    render(&state, &user, section, flags, None).await
 }
 
 /// POST /sysadmin/settings/refresh/ — re-read the settings table now.

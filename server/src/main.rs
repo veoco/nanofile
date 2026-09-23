@@ -92,7 +92,11 @@ enum TrayCommand {
     Quit,
 }
 
-type TrayCmdReceiver = std::sync::mpsc::Receiver<TrayCommand>;
+/// Why a tokio channel rather than the std one: the run loop restarts in place
+/// and has to keep *waiting* on the same receiver after a restart, which is
+/// only possible with a `recv(&mut self)` API. Senders are off-runtime
+/// threads, and an unbounded send never blocks them.
+type TrayCmdReceiver = tokio::sync::mpsc::UnboundedReceiver<TrayCommand>;
 
 /// Whether a configured secret has adequate length/entropy.
 ///
@@ -464,22 +468,53 @@ fn main() -> anyhow::Result<()> {
 
 /// DB setup plus server startup — shared by the headless path and the tray
 /// path (`tray::run` spawns this onto its background runtime).
+///
+/// Runs the server until the process is asked to stop. An administrator
+/// restarting the server from `/sysadmin/settings/` does *not* return: the
+/// server is torn down through the normal graceful shutdown and built again
+/// from the settings table, keeping the listening socket across the gap (see
+/// `server::restart`). Everything a fresh process would re-read — the saved
+/// settings, the database, the indexer, the caches, the scheduler — is rebuilt
+/// by the next iteration.
 async fn run_server_flow(
     config: Config,
     env_keys: EnvKeys,
-    tray_cmd: Option<TrayCmdReceiver>,
+    mut tray_cmd: Option<TrayCmdReceiver>,
 ) -> anyhow::Result<()> {
-    let db = establish_connection(&config.database).await?;
-    migration::Migrator::up(&db, None).await?;
-    run_server(db, config, env_keys, tray_cmd).await
+    let mut listener: Option<server::restart::BoundListener> = None;
+    let mut first = true;
+    loop {
+        // Every generation gets a new number, which `/health` reports and the
+        // browser's "restarting" page waits to change.
+        let generation = server::restart::next_generation();
+        tracing::info!(generation, "starting a server generation");
+        let db = establish_connection(&config.database).await?;
+        migration::Migrator::up(&db, None).await?;
+        let reason = run_server(
+            db,
+            config.clone(),
+            env_keys.clone(),
+            tray_cmd.as_mut(),
+            &mut listener,
+            first,
+        )
+        .await?;
+        if !reason.should_restart() {
+            return Ok(());
+        }
+        tracing::info!("Restarting the server in place");
+        first = false;
+    }
 }
 
 async fn run_server(
     db: DatabaseConnection,
     config: Config,
     env_keys: EnvKeys,
-    tray_cmd: Option<TrayCmdReceiver>,
-) -> anyhow::Result<()> {
+    mut tray_cmd: Option<&mut TrayCmdReceiver>,
+    listener: &mut Option<server::restart::BoundListener>,
+    first: bool,
+) -> anyhow::Result<server::restart::StopReason> {
     // ── The layered configuration ─────────────────────────────────────
     // Read the saved settings before anything is built from the config: a value
     // an administrator saved must decide the bind address, the data
@@ -700,10 +735,35 @@ async fn run_server(
 
     let app = server::app::build_app(state.clone());
 
+    // ── Bind, or carry the listening socket over ─────────────────────
+    // A restart keeps the original socket and hands this generation a
+    // duplicate, so the port is never rebound (Windows refuses a bind while a
+    // drained connection sits in TIME_WAIT). Only a *changed* address rebinds,
+    // and that path retries: whatever held it may be on its way out.
     let addr = format!("{}:{}", config.server.addr, config.server.port);
-    tracing::info!("listening on {}", addr);
+    match server::restart::BoundListener::acquire(listener, &addr, !first).await {
+        Ok(()) => server::restart::clear_failure(),
+        Err(e) => {
+            let Some(current) = listener.as_ref() else {
+                return Err(anyhow::anyhow!("failed to bind {addr}: {e}"));
+            };
+            // The restart cannot move to the saved address. Serving nothing
+            // would be worse than serving the old one, so keep the socket that
+            // works and record why — `/sysadmin/settings/` shows it, because
+            // the RESTART response has long been sent by the time this fails.
+            server::restart::note_failure(format!(
+                "the restart could not bind {addr} ({e}); still listening on {}",
+                current.addr()
+            ));
+        }
+    }
 
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let bound = listener
+        .as_ref()
+        .expect("a listener is bound once `acquire` has succeeded");
+    let bound_addr = bound.addr().to_string();
+    let conn_listener = bound.to_tokio()?;
+    tracing::info!("listening on {}", bound_addr);
 
     // ── Start server with graceful shutdown via oneshot ─────────────
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -716,10 +776,11 @@ async fn run_server(
         secs => Some(std::time::Duration::from_secs(secs)),
     };
     let server_handle = tokio::spawn(async move {
-        server::serve::serve_with_timeouts(listener, app, shutdown_rx, header_read_timeout).await
+        server::serve::serve_with_timeouts(conn_listener, app, shutdown_rx, header_read_timeout)
+            .await
     });
 
-    // ── Wait for Ctrl+C, SIGTERM or a tray quit request ─────────────
+    // ── Wait for Ctrl+C, SIGTERM, a tray quit or an admin restart ───
     let ctrl_c = tokio::signal::ctrl_c();
     let terminate = async {
         #[cfg(unix)]
@@ -732,23 +793,39 @@ async fn run_server(
         #[cfg(not(unix))]
         std::future::pending::<()>().await;
     };
-    // Bridge the tray menu's std channel into async: a blocking thread parks
-    // on `recv()` until the tray sends a command (or the channel closes,
-    // which cannot happen while the tray loop is alive).
+    // The tray and the service control handler both send on a tokio channel
+    // that is *reused* across restarts (`recv()` borrows rather than consumes),
+    // so a restart cannot silently disconnect the menu's Quit item.
     let tray_quit = async {
-        if let Some(rx) = tray_cmd
-            && let Ok(Ok(TrayCommand::Quit)) = tokio::task::spawn_blocking(move || rx.recv()).await
-        {
-            return;
+        if let Some(rx) = tray_cmd.as_mut() {
+            while let Some(cmd) = rx.recv().await {
+                if matches!(cmd, TrayCommand::Quit) {
+                    return;
+                }
+            }
         }
         std::future::pending::<()>().await;
     };
+    let admin_restart = state.restart.wait();
 
-    tokio::select! {
-        _ = ctrl_c => tracing::info!("Received SIGINT (Ctrl+C)"),
-        _ = terminate => tracing::info!("Received SIGTERM"),
-        _ = tray_quit => tracing::info!("Quit requested from tray"),
-    }
+    let reason = tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("Received SIGINT (Ctrl+C)");
+            server::restart::StopReason::Shutdown
+        }
+        _ = terminate => {
+            tracing::info!("Received SIGTERM");
+            server::restart::StopReason::Shutdown
+        }
+        _ = tray_quit => {
+            tracing::info!("Quit requested from the tray");
+            server::restart::StopReason::Shutdown
+        }
+        _ = admin_restart => {
+            tracing::info!("Restart requested from the admin UI");
+            server::restart::StopReason::Restart
+        }
+    };
 
     tracing::info!("Shutdown signal received, starting graceful shutdown...");
 
@@ -782,7 +859,7 @@ async fn run_server(
 
     tracing::info!("Server shutdown complete");
 
-    Ok(())
+    Ok(reason)
 }
 
 /// Read a password from the first line of `reader`.

@@ -2,14 +2,14 @@
 //! event loop must run there, so the process' main thread is handed to
 //! NSApplication (as an accessory app: no Dock icon, no menu bar).
 
-use std::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 
 use super::TrayContext;
 
-pub(super) fn run(ctx: &TrayContext, quit_tx: Sender<crate::TrayCommand>) -> ! {
+pub(super) fn run(ctx: &TrayContext, quit_tx: UnboundedSender<crate::TrayCommand>) -> ! {
     let _tray = match super::create_tray(ctx, quit_tx) {
         Ok(tray) => tray,
         Err(e) => {

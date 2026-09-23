@@ -2,11 +2,11 @@
 //! GTK must be initialized on the same thread that creates the tray and runs
 //! its main loop — this is the process' main thread.
 
-use std::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 use super::TrayContext;
 
-pub(super) fn run(ctx: &TrayContext, quit_tx: Sender<crate::TrayCommand>) -> ! {
+pub(super) fn run(ctx: &TrayContext, quit_tx: UnboundedSender<crate::TrayCommand>) -> ! {
     // A stale DISPLAY (e.g. from an old SSH session) makes GTK init fail —
     // degrade to headless instead of taking the server down.
     if let Err(e) = gtk::init() {

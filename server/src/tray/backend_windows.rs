@@ -11,7 +11,7 @@
 //! dispatch has returned.
 
 use std::sync::OnceLock;
-use std::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -44,7 +44,7 @@ pub(super) fn request_autostart_toggle() {
     }
 }
 
-pub(super) fn run(ctx: &TrayContext, quit_tx: Sender<crate::TrayCommand>) -> ! {
+pub(super) fn run(ctx: &TrayContext, quit_tx: UnboundedSender<crate::TrayCommand>) -> ! {
     LOOP_THREAD_ID
         .set(unsafe { GetCurrentThreadId() })
         .expect("tray loop thread id set once");

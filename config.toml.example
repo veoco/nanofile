@@ -135,6 +135,9 @@ hsts_include_subdomains = false
 # plain builds have no tray code at all). Set to false (or NANOFILE_SERVER_TRAY=false)
 # to run headless even in a desktop session — e.g. for an auto-started instance
 # that should stay invisible.
+#
+# This value is read before the tray comes up, so changing it needs a full
+# process restart (the in-app restart button cannot apply it).
 tray = true
 #   NANOFILE_SERVER_SECRET_KEY               (generate with: openssl rand -hex 32)
 # IMPORTANT: Generate a unique secret key for production:
@@ -333,6 +336,7 @@ search_max_per_minute = 60
 default_language = "en"
 # Language of the system tray menu (desktop builds): "auto" follows the OS
 # locale (falling back to default_language), "en"/"zh" force a language.
+# Read when the tray is created, so a change needs a full process restart.
 tray_language = "auto"
 
 [email]

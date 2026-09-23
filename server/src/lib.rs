@@ -19,6 +19,7 @@ pub mod indexer;
 pub mod middleware;
 pub mod notification;
 pub mod repository;
+pub mod restart;
 pub mod routes;
 pub mod scheduler;
 pub mod scheduler_setup;
@@ -120,6 +121,9 @@ pub struct AppState {
     /// catalog key and where each came from, and the single point every admin
     /// save goes through.
     pub settings: Arc<SettingsService>,
+    /// Set by an administrator asking for a restart at `/sysadmin/settings/`;
+    /// the run loop in `main.rs` waits on it and rebuilds the server in place.
+    pub restart: Arc<crate::restart::RestartSignal>,
 }
 
 /// Progress of a background reindex task (`POST /api2/reindex/`).
@@ -360,6 +364,7 @@ impl AppState {
             reindex_running: Arc::new(std::sync::Mutex::new(HashMap::new())),
             left_panel_cache: Arc::new(crate::ui::left_panel_cache::LeftPanelRepoCache::default()),
             mail,
+            restart: Arc::new(crate::restart::RestartSignal::new()),
         }
     }
 

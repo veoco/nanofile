@@ -80,8 +80,11 @@ test("a restart-only setting is marked as such", async ({ page }) => {
     .locator('form[action="/sysadmin/settings/general/save/"]')
     .getByRole("button", { name: "Save", exact: true })
     .click();
-  // Two banners say it: the save confirmation and the page-wide reminder.
-  await expect(page.getByText(/next restart/).first()).toBeVisible();
+  // Three things say it: the save confirmation, the page-wide reminder, and the
+  // button that applies it.
+  await expect(page.getByText(/need a restart/).first()).toBeVisible();
+  await expect(page.getByText(/Restart server button/).first()).toBeVisible();
+  await expect(page.locator("[data-restart-button]")).toBeVisible();
 
   // Put it back: the rest of the suite must see the value it booted with.
   await row.locator('button[formaction="/sysadmin/settings/reset/"]').click();

@@ -12,6 +12,7 @@ import "../core/modal.js";
 import "../core/search.js";
 import "../pages/repos.js";
 import "../pages/sysadmin.js";
+import "../pages/sysadmin-settings.js";
 import "../pages/starred.js";
 import "../pages/trash.js";
 import "../pages/shares.js";

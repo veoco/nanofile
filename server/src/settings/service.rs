@@ -307,12 +307,30 @@ impl SettingsService {
     ///
     /// Compares each restart-only setting's effective (stored) value with the
     /// value the running process actually started with, which is what the page
-    /// has to call out.
+    /// has to call out. These are exactly the keys the in-place "Restart
+    /// server" button applies; [`Self::pending_process_restart`] holds the ones
+    /// it cannot.
     pub fn pending_restart(&self) -> BTreeSet<String> {
         let live = self.runtime.get();
         self.resolved()
             .into_iter()
-            .filter(|entry| entry.def.apply == Apply::Restart)
+            .filter(|entry| entry.def.apply.is_in_place_restart())
+            .filter(|entry| entry.value != (entry.def.get)(&live))
+            .map(|entry| entry.def.key.to_string())
+            .collect()
+    }
+
+    /// Keys whose saved value needs the *operating-system process* restarted.
+    ///
+    /// Read before the server loop exists (the log subscriber, the desktop
+    /// tray), so the in-app restart cannot reach them. Reporting them
+    /// separately stops the page from promising that the button fixed a value
+    /// it did not touch.
+    pub fn pending_process_restart(&self) -> BTreeSet<String> {
+        let live = self.runtime.get();
+        self.resolved()
+            .into_iter()
+            .filter(|entry| entry.def.apply == Apply::ProcessRestart)
             .filter(|entry| entry.value != (entry.def.get)(&live))
             .map(|entry| entry.def.key.to_string())
             .collect()
@@ -440,7 +458,7 @@ impl SettingsService {
         outcome.restart_pending = outcome
             .changed
             .iter()
-            .filter(|key| settings::find(key).is_some_and(|def| def.apply == Apply::Restart))
+            .filter(|key| settings::find(key).is_some_and(|def| def.apply.is_restart_only()))
             .cloned()
             .collect();
         Ok(outcome)
@@ -521,6 +539,18 @@ impl SettingsService {
             tracing::info!(
                 keys = ?pending.iter().map(String::as_str).collect::<Vec<_>>(),
                 "saved settings will take effect at the next restart"
+            );
+        }
+
+        // The values read before the server loop exists cannot be reached by
+        // that restart at all, so they get their own line rather than being
+        // folded into the one above.
+        let process_pending = self.pending_process_restart();
+        if !process_pending.is_empty() {
+            tracing::warn!(
+                keys = ?process_pending.iter().map(String::as_str).collect::<Vec<_>>(),
+                "saved settings only take effect after the process is restarted \
+                 (the log subscriber and the desktop tray are set up before the server loop)"
             );
         }
 

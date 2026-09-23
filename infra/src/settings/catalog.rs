@@ -215,7 +215,7 @@ pub static CATALOG: &[SettingDef] = &[
         General,
         "NANOFILE_SERVER_TRAY",
         Kind::Bool,
-        Apply::Restart,
+        Apply::ProcessRestart,
         |c| fmt_bool(c.server.tray),
         |c, v| {
             c.server.tray = parse_bool(v)?;
@@ -239,7 +239,7 @@ pub static CATALOG: &[SettingDef] = &[
         General,
         "NANOFILE_UI_TRAY_LANGUAGE",
         Kind::Enum(&["auto", "en", "zh"]),
-        Apply::Restart,
+        Apply::ProcessRestart,
         |c| c.ui.tray_language.clone(),
         |c, v| {
             c.ui.tray_language = parse_enum(v, &["auto", "en", "zh"])?;
@@ -1214,7 +1214,7 @@ pub static CATALOG: &[SettingDef] = &[
         Advanced,
         "NANOFILE_LOG_LEVEL",
         Kind::Text,
-        Apply::Restart,
+        Apply::ProcessRestart,
         |c| c.logging.level.clone(),
         |c, v| {
             c.logging.level = v.trim().to_string();
@@ -1255,7 +1255,7 @@ pub static CATALOG: &[SettingDef] = &[
         Advanced,
         "NANOFILE_LOG_MAX_FILE_SIZE_MB",
         Kind::U64,
-        Apply::Restart,
+        Apply::ProcessRestart,
         |c| c.logging.max_file_size_mb.to_string(),
         |c, v| {
             c.logging.max_file_size_mb = parse_u64(v)?;
@@ -1267,7 +1267,7 @@ pub static CATALOG: &[SettingDef] = &[
         Advanced,
         "NANOFILE_LOG_MAX_BACKUPS",
         Kind::U32,
-        Apply::Restart,
+        Apply::ProcessRestart,
         |c| c.logging.max_backups.to_string(),
         |c, v| {
             c.logging.max_backups = parse_u32(v)?;

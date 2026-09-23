@@ -75,8 +75,17 @@ pub fn redact_request_path(path: &str) -> String {
 
 /// `/health` — readiness, used by the container healthcheck and by anything
 /// that needs to wait for the listener without touching the API.
-pub async fn health_check() -> axum::http::StatusCode {
-    axum::http::StatusCode::OK
+///
+/// The body stays empty; the generation header is what the "restarting" page
+/// watches, because the listening socket survives an in-place restart and a
+/// plain 200 cannot tell the server that is going away from the one that
+/// replaced it. A proxy that strips the header degrades that page to waiting for
+/// any 200.
+pub async fn health_check() -> impl axum::response::IntoResponse {
+    [(
+        axum::http::HeaderName::from_static(crate::restart::GENERATION_HEADER),
+        crate::restart::generation().to_string(),
+    )]
 }
 
 /// The route tree and every middleware that decides what a request reaches.
