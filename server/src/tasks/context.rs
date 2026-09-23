@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use super::run::{JobFailure, RunId};
+use super::admission::YieldGate;
+use super::run::{JobFailure, JobState, RunId};
 use super::spec::{ChunkPolicy, JobKey};
 use super::store::RunStore;
 
@@ -155,6 +156,9 @@ pub struct JobContext {
     progress: ProgressSink,
     budget: BudgetSignal,
     chunk: Option<ChunkPolicy>,
+    /// The load gate, for a job that declared it can be interrupted. `None`
+    /// means the job never parks, which is the contract the catalog enforces.
+    gate: Option<YieldGate>,
 }
 
 impl JobContext {
@@ -167,6 +171,7 @@ impl JobContext {
         progress: ProgressSink,
         budget: BudgetSignal,
         chunk: Option<ChunkPolicy>,
+        gate: Option<YieldGate>,
     ) -> Self {
         Self {
             id,
@@ -176,6 +181,7 @@ impl JobContext {
             progress,
             budget,
             chunk,
+            gate,
         }
     }
 
@@ -193,8 +199,15 @@ impl JobContext {
     }
 
     /// How much of its normal work the job should attempt now.
+    ///
+    /// Full speed unless load awareness is on and the server is busy, in which
+    /// case it scales down. A job that reads this can slow itself; one that
+    /// ignores it still parks at its checkpoints.
     pub fn budget(&self) -> f32 {
-        self.budget.get()
+        match &self.gate {
+            Some(gate) => gate.budget(),
+            None => self.budget.get(),
+        }
     }
 
     /// How long one indivisible unit of this job may run, if it declares one.
@@ -236,9 +249,36 @@ impl JobContext {
     /// Load-aware yielding is layered onto this same call: the checkpoint is
     /// deliberately the place a job waits, so parking needs no second API and a
     /// job cannot yield "by accident" between units.
+    ///
+    /// While parked the run is recorded as [`JobState::Yielded`], which is
+    /// deliberately distinct from `Running`: the run is alive, and a recovery
+    /// pass must not mistake it for one that died.
     pub async fn checkpoint(&self) -> Result<(), JobFailure> {
         self.progress.tick.bump();
         if self.cancel.is_cancelled() {
+            return Err(JobFailure::Cancelled);
+        }
+
+        let Some(gate) = &self.gate else {
+            return Ok(());
+        };
+        if !gate.is_enabled() || gate.is_calm() {
+            return Ok(());
+        }
+
+        let id = self.id.clone();
+        self.progress.store.update(&id, |run| {
+            if run.state == JobState::Running {
+                run.state = JobState::Yielded;
+            }
+        });
+        let calm = gate.wait_until_calm(&self.cancel).await;
+        self.progress.store.update(&id, |run| {
+            if run.state == JobState::Yielded {
+                run.state = JobState::Running;
+            }
+        });
+        if !calm || self.cancel.is_cancelled() {
             return Err(JobFailure::Cancelled);
         }
         Ok(())
@@ -376,6 +416,7 @@ mod tests {
             sink,
             BudgetSignal::full(),
             None,
+            None,
         );
         assert!(ctx.checkpoint().await.is_ok());
         assert!(!ctx.is_cancelled());
@@ -398,6 +439,7 @@ mod tests {
             sink,
             BudgetSignal::full(),
             None,
+            None,
         );
         assert_eq!(ctx.run_blocking(|| 7).await.unwrap(), 7);
 
@@ -419,6 +461,7 @@ mod tests {
             cancel.clone(),
             sink,
             BudgetSignal::full(),
+            None,
             None,
         );
         cancel.cancel();

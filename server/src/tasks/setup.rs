@@ -289,29 +289,35 @@ pub fn install_default_jobs(
                     let repos = repos.clone();
                     let block_store = block_store.clone();
                     async move {
-                        // The pass runs on the blocking pool: the reference
-                        // collection and the deletions are DB and filesystem
-                        // work, and `run_blocking` checks the checkpoint first
-                        // so a busy server stops starting new passes.
-                        ctx.run_blocking(move || {
-                            tokio::runtime::Handle::current().block_on(GcManager::garbage_collect(
-                                &repos,
-                                &block_store,
-                                policy,
-                            ))
-                        })
-                        .await?
-                        .map(|count| {
-                            if count > 0 {
-                                Outcome::success(
-                                    format!("GC removed {count} unreferenced objects/blocks"),
-                                    Some(count),
-                                )
+                        // The pass checks in at every repository boundary and
+                        // between batches of deletions, so it parks while the
+                        // server is busy and resumes when it is not. Those
+                        // checkpoints are also where a cancellation lands.
+                        let removed = GcManager::garbage_collect_with(
+                            &repos,
+                            &block_store,
+                            policy,
+                            Some(&ctx),
+                        )
+                        .await
+                        .map_err(|e| {
+                            // An aborted pass comes back as an opaque failure;
+                            // the context knows whether it was a cancellation,
+                            // which is a different terminal state.
+                            if ctx.is_cancelled() {
+                                JobFailure::Cancelled
                             } else {
-                                Outcome::success("GC completed: nothing to remove", None)
+                                JobFailure::App(e)
                             }
+                        })?;
+                        Ok(if removed > 0 {
+                            Outcome::success(
+                                format!("GC removed {removed} unreferenced objects/blocks"),
+                                Some(removed),
+                            )
+                        } else {
+                            Outcome::success("GC completed: nothing to remove", None)
                         })
-                        .map_err(JobFailure::App)
                     }
                 }
             },

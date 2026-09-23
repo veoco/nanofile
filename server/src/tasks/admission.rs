@@ -25,7 +25,7 @@
 //! the moment it starts, so counting itself would make it defer forever.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 /// What the server looked like at one moment.
@@ -218,6 +218,156 @@ impl LoadGauge {
         let at = self.snapshot().sampled_at;
         at > 0 && now.saturating_sub(at) <= max_age.as_secs() as i64
     }
+}
+
+/// The gate a running job checks at its checkpoints.
+///
+/// Shares the gauge and the switch, so a job's idea of "busy" is the same as
+/// the administrator's panel.
+/// Shared by every job, so the interior mutability is in an `Arc`.
+#[derive(Clone)]
+pub struct YieldGate {
+    inner: Arc<GateInner>,
+}
+
+struct GateInner {
+    gauge: LoadGauge,
+    /// Settable without `&mut`, because one gate is shared by every job.
+    thresholds: std::sync::RwLock<LoadThresholds>,
+    enabled: AtomicBool,
+    /// How often a parked job re-checks, in milliseconds. Short enough to
+    /// resume promptly, long enough not to spin.
+    poll_ms: AtomicU64,
+}
+
+impl std::fmt::Debug for YieldGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("YieldGate")
+            .field("enabled", &self.is_enabled())
+            .field("snapshot", &self.inner.gauge.snapshot())
+            .finish()
+    }
+}
+
+impl YieldGate {
+    pub fn new(gauge: LoadGauge, thresholds: LoadThresholds) -> Self {
+        Self {
+            inner: Arc::new(GateInner {
+                gauge,
+                thresholds: std::sync::RwLock::new(thresholds),
+                enabled: AtomicBool::new(false),
+                poll_ms: AtomicU64::new(200),
+            }),
+        }
+    }
+
+    /// Whether load-aware scheduling is switched on.
+    pub fn is_enabled(&self) -> bool {
+        self.inner.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        self.inner.enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn set_thresholds(&self, thresholds: LoadThresholds) {
+        *self
+            .inner
+            .thresholds
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = thresholds;
+    }
+
+    /// The thresholds in force, for the administrator's view.
+    pub fn thresholds(&self) -> LoadThresholds {
+        *self
+            .inner
+            .thresholds
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Take a shorter poll interval, for tests.
+    pub fn set_poll(&self, poll: Duration) {
+        self.inner
+            .poll_ms
+            .store(poll.as_millis().max(1) as u64, Ordering::Relaxed);
+    }
+
+    /// Whether the server is calm enough for a parked job to continue.
+    ///
+    /// This — not the budget — is what a checkpoint tests: the budget is a
+    /// scaling hint and can round to full speed while the server is still over
+    /// a threshold of zero.
+    pub fn is_calm(&self) -> bool {
+        self.thresholds().is_calm(&self.inner.gauge.snapshot())
+    }
+
+    /// How much of its normal work a job should attempt now.
+    ///
+    /// Full speed when the server is calm or the feature is off; below that it
+    /// scales with how far over the thresholds the worst signal is, down to a
+    /// tenth — enough to keep making progress without competing.
+    pub fn budget(&self) -> f32 {
+        if !self.is_enabled() {
+            return 1.0;
+        }
+        let thresholds = self.thresholds();
+        let snapshot = self.inner.gauge.snapshot();
+        if thresholds.is_calm(&snapshot) {
+            return 1.0;
+        }
+        let ratios = [
+            ratio(snapshot.inflight_requests, thresholds.max_inflight_requests),
+            if thresholds.max_db_utilization > 0.0 {
+                snapshot.db_utilization() / thresholds.max_db_utilization
+            } else {
+                0.0
+            },
+            if thresholds.max_worker_busy_pct > 0 {
+                snapshot.worker_busy_pct as f32 / thresholds.max_worker_busy_pct as f32
+            } else {
+                0.0
+            },
+        ];
+        let worst = ratios.into_iter().fold(0.0f32, f32::max);
+        if worst <= 1.0 {
+            1.0
+        } else {
+            (1.0 / worst).clamp(0.1, 1.0)
+        }
+    }
+
+    /// Wait until the server is calm again, or until the run is cancelled.
+    ///
+    /// Returns `false` when the wait ended because of cancellation, so the
+    /// caller can turn it into a terminal state rather than silently carrying
+    /// on.
+    pub async fn wait_until_calm(&self, cancel: &tokio_util::sync::CancellationToken) -> bool {
+        loop {
+            if !self.is_enabled() || self.is_calm() {
+                return true;
+            }
+            let poll = Duration::from_millis(self.inner.poll_ms.load(Ordering::Relaxed).max(1));
+            tokio::select! {
+                _ = cancel.cancelled() => return false,
+                _ = tokio::time::sleep(poll) => {}
+            }
+        }
+    }
+}
+
+fn ratio(value: u64, threshold: u64) -> f32 {
+    if value == 0 {
+        return 0.0;
+    }
+    // A zero threshold means "any load at all is over it", so the ratio is
+    // large rather than zero — otherwise the worst-case fold would read the
+    // strictest signal as the most relaxed one.
+    if threshold == 0 {
+        return 1_000_000.0;
+    }
+    value as f32 / threshold as f32
 }
 
 /// Tracks how long the server has been quiet, so a job starts in a lull rather
@@ -449,6 +599,110 @@ mod tests {
         gauge.mark_sampled(1_000);
         assert!(gauge.is_fresh(Duration::from_secs(15), 1_010));
         assert!(!gauge.is_fresh(Duration::from_secs(15), 1_100));
+    }
+
+    fn gate_with(gauge: LoadGauge, thresholds: LoadThresholds, enabled: bool) -> YieldGate {
+        let gate = YieldGate::new(gauge, thresholds);
+        gate.set_enabled(enabled);
+        gate.set_poll(Duration::from_millis(1));
+        gate
+    }
+
+    fn gate(gauge: LoadGauge) -> YieldGate {
+        gate_with(gauge, LoadThresholds::default(), false)
+    }
+
+    #[test]
+    fn a_disabled_gate_never_yields_and_offers_full_budget() {
+        let gauge = LoadGauge::new();
+        let _busy: Vec<_> = (0..100).map(|_| gauge.request_guard()).collect();
+        let gate = gate(gauge.clone());
+        assert!(!gate.is_enabled());
+        assert_eq!(gate.budget(), 1.0, "a switched-off gate is never busy");
+    }
+
+    #[test]
+    fn budget_scales_with_how_far_over_the_server_is() {
+        let gauge = LoadGauge::new();
+        let gate = gate_with(
+            gauge.clone(),
+            LoadThresholds {
+                max_inflight_requests: 4,
+                max_db_utilization: 0.5,
+                max_worker_busy_pct: 70,
+            },
+            true,
+        );
+
+        assert_eq!(gate.budget(), 1.0, "an idle server allows full speed");
+
+        // Exactly at the threshold is still calm.
+        let _at = (0..4).map(|_| gauge.request_guard()).collect::<Vec<_>>();
+        assert_eq!(gate.budget(), 1.0);
+
+        // Twice the threshold halves the budget.
+        let _over = (0..4).map(|_| gauge.request_guard()).collect::<Vec<_>>();
+        assert!((gate.budget() - 0.5).abs() < 0.01, "got {}", gate.budget());
+
+        // A very busy server still makes some progress.
+        let _flood: Vec<_> = (0..96).map(|_| gauge.request_guard()).collect();
+        assert!(gate.budget() >= 0.1);
+        assert!(gate.budget() < 0.2);
+    }
+
+    #[tokio::test]
+    async fn a_parked_job_resumes_when_the_server_goes_quiet() {
+        let gauge = LoadGauge::new();
+        let gate = gate_with(gauge.clone(), LoadThresholds::default(), true);
+        let busy = (0..20).map(|_| gauge.request_guard()).collect::<Vec<_>>();
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        // While busy, the wait does not return.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), gate.wait_until_calm(&cancel))
+                .await
+                .is_err(),
+            "a busy server must keep the job parked"
+        );
+
+        drop(busy);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), gate.wait_until_calm(&cancel))
+                .await
+                .expect("the job must resume once the server is quiet"),
+            "resuming is not a cancellation"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_parked_job_returns_immediately_when_cancelled() {
+        let gauge = LoadGauge::new();
+        let gate = gate_with(gauge.clone(), LoadThresholds::default(), true);
+        let _busy = (0..20).map(|_| gauge.request_guard()).collect::<Vec<_>>();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        assert!(
+            !gate.wait_until_calm(&cancel).await,
+            "the wait reports cancellation rather than calm"
+        );
+    }
+
+    /// The self-blocking trap, at the level that matters: a job's own activity
+    /// must not keep it parked.
+    #[tokio::test]
+    async fn a_jobs_own_activity_does_not_park_it() {
+        let gauge = LoadGauge::new();
+        let gate = gate_with(gauge.clone(), LoadThresholds::default(), true);
+        let _background = (0..50)
+            .map(|_| gauge.background_guard())
+            .collect::<Vec<_>>();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), gate.wait_until_calm(&cancel))
+                .await
+                .expect("its own load must not park a job"),
+        );
+        assert_eq!(gate.budget(), 1.0);
     }
 
     #[test]

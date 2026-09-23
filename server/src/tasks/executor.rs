@@ -40,6 +40,7 @@ pub async fn execute(
     params: Params,
     store: &RunStore,
     cancel: CancellationToken,
+    gate: Option<super::admission::YieldGate>,
 ) -> RunReport {
     let spec = &job.spec;
     let tick = LivenessTick::default();
@@ -57,6 +58,7 @@ pub async fn execute(
         sink,
         BudgetSignal::full(),
         spec.chunkable,
+        gate,
     );
 
     let mut attempt = 1u32;
@@ -325,6 +327,7 @@ mod tests {
             serde_json::json!({}),
             &store,
             CancellationToken::new(),
+            None,
         )
         .await;
         assert_eq!(report.state, JobState::Succeeded);
@@ -358,6 +361,7 @@ mod tests {
             serde_json::json!({}),
             &store,
             CancellationToken::new(),
+            None,
         )
         .await;
         match report.state {
@@ -388,6 +392,7 @@ mod tests {
             serde_json::json!({}),
             &store,
             CancellationToken::new(),
+            None,
         )
         .await;
         match &report.state {
@@ -422,6 +427,7 @@ mod tests {
             serde_json::json!({}),
             &store,
             CancellationToken::new(),
+            None,
         )
         .await;
         assert_eq!(report.state, JobState::Cancelled);
@@ -443,6 +449,7 @@ mod tests {
             serde_json::json!({}),
             &store,
             CancellationToken::new(),
+            None,
         )
         .await;
         assert_eq!(report.state, JobState::TimedOut);
@@ -478,6 +485,7 @@ mod tests {
             serde_json::json!({}),
             &store,
             CancellationToken::new(),
+            None,
         )
         .await;
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
@@ -519,6 +527,7 @@ mod tests {
             serde_json::json!({}),
             &store,
             CancellationToken::new(),
+            None,
         )
         .await;
         assert_eq!(report.state, JobState::Succeeded);
@@ -552,6 +561,7 @@ mod tests {
             serde_json::json!({}),
             &store,
             CancellationToken::new(),
+            None,
         )
         .await;
         assert_eq!(report.state, JobState::TimedOut);
@@ -590,6 +600,7 @@ mod tests {
             serde_json::json!({}),
             &store,
             CancellationToken::new(),
+            None,
         )
         .await;
         assert_eq!(report.state, JobState::Succeeded);
@@ -625,6 +636,7 @@ mod tests {
             serde_json::json!({}),
             &store,
             CancellationToken::new(),
+            None,
         )
         .await;
         assert_eq!(report.state, JobState::TimedOut);

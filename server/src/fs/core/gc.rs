@@ -1,11 +1,16 @@
 use crate::fs::core::tree::read_fs_file_data_batch;
 use crate::repository::Repositories;
+use crate::tasks::run::JobFailure;
 use base::common::{FsDirData, S_IFDIR, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::entity::{commit, repo};
 use infra::storage::DynBlockStorage;
 
 const SECS_PER_DAY: i64 = 86_400;
+
+/// Returned when a pass stopped at a checkpoint because the run was asked to
+/// stop. The job body maps it back onto a cancellation rather than a failure.
+pub const ABORTED: &str = "gc stopped at a checkpoint";
 
 /// Tunables for one garbage-collection pass.
 #[derive(Debug, Clone, Copy)]
@@ -40,6 +45,25 @@ impl GcPolicy {
     }
 }
 
+/// How many block deletions may run between checkpoints.
+///
+/// Bounded by count rather than time so the interval is trivially predictable;
+/// a deletion is an unlink, so the batch is short.
+const CHECKPOINT_EVERY_BLOCKS: usize = 256;
+
+/// Ask the run to stop, if there is a run to ask.
+async fn checkpoint(ctx: Option<&crate::tasks::context::JobContext>) -> Result<(), AppError> {
+    let Some(ctx) = ctx else {
+        return Ok(());
+    };
+    ctx.checkpoint().await.map_err(|failure| match failure {
+        // Mapped back onto a cancellation by the job body, which is the only
+        // place that knows which of the two terminal states applies.
+        JobFailure::Cancelled | JobFailure::TimedOut => AppError::OperationFailed(ABORTED.into()),
+        JobFailure::App(e) => e,
+    })
+}
+
 pub struct GcManager;
 
 impl GcManager {
@@ -63,11 +87,30 @@ impl GcManager {
         block_store: &DynBlockStorage,
         policy: GcPolicy,
     ) -> Result<u64, AppError> {
+        Self::garbage_collect_with(repos, block_store, policy, None).await
+    }
+
+    /// The same pass, but interruptible.
+    ///
+    /// `ctx` is the running job's context: a pass is a walk over repositories,
+    /// so it checks in at every repository boundary and after each batch of
+    /// block deletions. That is what lets a GC pass step aside for load —
+    /// nothing outside the job can suspend it.
+    pub async fn garbage_collect_with(
+        repos: &Repositories,
+        block_store: &DynBlockStorage,
+        policy: GcPolicy,
+        ctx: Option<&crate::tasks::context::JobContext>,
+    ) -> Result<u64, AppError> {
         let now = chrono::Utc::now().timestamp();
         let all_repos = repos.repo.find_all().await?;
         let mut removed = 0u64;
 
         for repo_model in &all_repos {
+            // A repository boundary is the natural place to wait: the whole
+            // previous repository is done, so stopping here leaves the pass in
+            // a state a later run can simply continue from.
+            checkpoint(ctx).await?;
             // GC needs every commit (history_limit + TTL + reachable-set
             // collection), so it passes `None` to fetch all rows.
             let commits = repos
@@ -141,7 +184,13 @@ impl GcManager {
 
             let mut deleted = 0u64;
             let mut skipped_fresh = 0u64;
-            for id in &orphan_blocks {
+            for (index, id) in orphan_blocks.iter().enumerate() {
+                // Deleting can be a long tail on a repository with many
+                // orphans, so check in periodically rather than only between
+                // repositories.
+                if index % CHECKPOINT_EVERY_BLOCKS == 0 {
+                    checkpoint(ctx).await?;
+                }
                 // The second guard: a block written at or after the snapshot may
                 // belong to an upload whose commit is not visible yet. Deleting
                 // it would corrupt that upload, so leave it for a later pass.
@@ -886,6 +935,38 @@ mod tests {
             !store.has_block(REPO, &fresh_id).await,
             "with no window the fresh orphan is collected"
         );
+    }
+
+    /// A pass with a context stops as soon as the run is asked to stop, rather
+    /// than running to completion and then reporting the cancellation.
+    #[tokio::test]
+    async fn an_interruptible_pass_stops_at_a_checkpoint() {
+        let db = setup_gc_test_db(0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        store.write_block(REPO, b"orphan content").await.unwrap();
+        insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 3000).await;
+        insert_fs_object(
+            &db,
+            "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
+
+        let ctx = crate::tasks::test_support::cancelled_context();
+        let result =
+            GcManager::garbage_collect_with(&repos, &store, GcPolicy::immediate(), Some(&ctx))
+                .await;
+        match result {
+            Err(AppError::OperationFailed(message)) => {
+                assert_eq!(
+                    message, ABORTED,
+                    "the pass reports the checkpoint it stopped at"
+                )
+            }
+            other => panic!("expected the pass to abort, got {other:?}"),
+        }
     }
 
     /// The head re-check compares the live row against the snapshot the pass

@@ -114,6 +114,8 @@ struct Inner {
     /// How busy the server is, for the administrator's view and — once load
     /// awareness is switched on — for admission.
     load: LoadGauge,
+    /// The gate jobs park at. Shares the gauge with `load`.
+    gate: admission::YieldGate,
     /// Reads the database pool's occupancy. Installed per generation, because
     /// the pool belongs to the generation.
     db_probe: RwLock<Option<DbProbe>>,
@@ -144,6 +146,10 @@ impl TaskSystem {
     /// Process-lifetime: built once, outside the server generation loop, so run
     /// history and schedule state survive an in-place restart.
     pub fn new(limits: TaskLimits, shutdown: CancellationToken) -> Arc<Self> {
+        // One gauge, shared by the administrator's panel and by the gate jobs
+        // park at: a job must see exactly the numbers the operator sees.
+        let load = LoadGauge::new();
+        let gate = admission::YieldGate::new(load.clone(), admission::LoadThresholds::default());
         Arc::new(Self {
             inner: Arc::new(Inner {
                 registry: RwLock::new(JobRegistry::new()),
@@ -155,7 +161,8 @@ impl TaskSystem {
                 shutdown: RwLock::new(shutdown),
                 services: RwLock::new(Vec::new()),
                 stats: RwLock::new(HashMap::new()),
-                load: LoadGauge::new(),
+                load,
+                gate,
                 db_probe: RwLock::new(None),
                 load_aware: AtomicBool::new(false),
                 sample_interval_secs: AtomicU64::new(5),
@@ -415,7 +422,9 @@ impl TaskSystem {
         // Counted as *background* load: admission deliberately ignores this, so
         // a running pass cannot defer itself.
         let _background = self.inner.load.background_guard();
-        let report = executor::execute(&job, &run, params, &self.inner.store, cancel.clone()).await;
+        let gate = self.yield_gate(job.as_ref());
+        let report =
+            executor::execute(&job, &run, params, &self.inner.store, cancel.clone(), gate).await;
         self.record_stats(job.key(), &report, started.elapsed());
         tracing::debug!(
             job = job.name(),
@@ -466,6 +475,14 @@ impl TaskSystem {
         }
     }
 
+    /// The gate a job parks at, for jobs that declared a checkpoint.
+    fn yield_gate(&self, job: &RegisteredJob) -> Option<admission::YieldGate> {
+        job.spec
+            .chunkable
+            .is_some()
+            .then(|| self.inner.gate.clone())
+    }
+
     /// The load counters.
     pub fn load(&self) -> &LoadGauge {
         &self.inner.load
@@ -474,6 +491,12 @@ impl TaskSystem {
     /// How busy the server is right now.
     pub fn load_snapshot(&self) -> LoadSnapshot {
         self.inner.load.snapshot()
+    }
+
+    /// Override the thresholds admission uses. Used by tests; the catalog
+    /// carries the production values implicitly.
+    pub fn set_load_thresholds(&self, thresholds: admission::LoadThresholds) {
+        self.inner.gate.set_thresholds(thresholds);
     }
 
     /// Install this generation's database-pool probe.
@@ -492,6 +515,7 @@ impl TaskSystem {
 
     /// Apply the load-aware settings of a saved configuration.
     pub fn configure_load(&self, aware: bool, sample_interval_secs: u64) {
+        self.inner.gate.set_enabled(aware);
         self.inner.load_aware.store(aware, Ordering::Relaxed);
         self.inner
             .sample_interval_secs
@@ -594,6 +618,7 @@ impl TaskSystem {
             sink,
             context::BudgetSignal::full(),
             job.spec.chunkable,
+            self.yield_gate(job.as_ref()),
         );
 
         f(ctx).await.map_err(|failure| match failure {
@@ -875,6 +900,46 @@ impl TaskSystem {
     /// that need to explain a refusal.
     pub fn state_of(&self, id: &RunId) -> Option<JobState> {
         self.inner.store.get(id).map(|run| run.state)
+    }
+}
+
+/// Helpers for tests elsewhere in the crate that need a job context.
+#[cfg(test)]
+pub mod test_support {
+    use super::*;
+
+    /// A context whose run has already been asked to stop, for asserting that
+    /// a long pass really does check in.
+    pub fn cancelled_context() -> context::JobContext {
+        let store = RunStore::new(RunLimits::default());
+        let run = JobRun::queued(
+            JobKey::GarbageCollection,
+            Visibility::OwnerOrAdmin,
+            None,
+            Params::Null,
+            "test",
+            None,
+            0,
+        );
+        let id = run.id.clone();
+        store.insert(run).expect("the run is never oversized");
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let tick = context::LivenessTick::default();
+        let sink = context::ProgressSink::new(store, id, std::time::Duration::ZERO, tick);
+        context::JobContext::new(
+            RunId::new(),
+            JobKey::GarbageCollection,
+            None,
+            cancel,
+            sink,
+            context::BudgetSignal::full(),
+            Some(ChunkPolicy {
+                max_chunk_ms: 100,
+                unit: "repository",
+            }),
+            None,
+        )
     }
 }
 
@@ -1258,6 +1323,134 @@ mod tests {
             system.submit(JobKey::Copy, Some(2), copy_params(&["b"]), "b", None),
             Err(AppError::TooManyRequests)
         ));
+    }
+
+    /// The heart of load awareness: a running job parks while the server is
+    /// busy and resumes when it is not, recording that it parked.
+    #[tokio::test]
+    async fn a_running_job_yields_while_the_server_is_busy() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system
+            .register(RegisteredJob::new(
+                JobSpec {
+                    chunkable: Some(ChunkPolicy {
+                        max_chunk_ms: 100,
+                        unit: "unit",
+                    }),
+                    ..catalog::policy(JobKey::Reindex)
+                },
+                Arc::new(|ctx, _params| {
+                    Box::pin(async move {
+                        for i in 0..5 {
+                            ctx.checkpoint().await?;
+                            ctx.report(i + 1, Some(5));
+                        }
+                        Ok(Outcome::success("done", Some(5)))
+                    })
+                }),
+            ))
+            .unwrap();
+        // Enabled with thresholds that a single in-flight request exceeds.
+        system.configure_load(true, 1);
+        system.set_load_thresholds(crate::tasks::admission::LoadThresholds {
+            max_inflight_requests: 0,
+            max_db_utilization: 1.0,
+            max_worker_busy_pct: 100,
+        });
+
+        let busy = system.load().request_guard();
+        let id = system
+            .submit(JobKey::Reindex, None, copy_params(&["a"]), "busy", None)
+            .unwrap();
+
+        // It is parked, not finished, and recorded as such.
+        let mut parked = false;
+        for _ in 0..200 {
+            match system.store().get(&id).unwrap().state {
+                JobState::Yielded => {
+                    parked = true;
+                    break;
+                }
+                state if state.is_terminal() => panic!("the job finished while busy: {state:?}"),
+                _ => tokio::time::sleep(std::time::Duration::from_millis(5)).await,
+            }
+        }
+        assert!(parked, "a busy server must park the job");
+
+        // The server goes quiet and the job finishes on its own.
+        drop(busy);
+        for _ in 0..400 {
+            let state = system.store().get(&id).unwrap().state;
+            if state.is_terminal() {
+                assert_eq!(state, JobState::Succeeded);
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("the job did not resume");
+    }
+
+    /// With load awareness off, the same job never parks.
+    #[tokio::test]
+    async fn a_job_does_not_park_when_load_awareness_is_off() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system
+            .register(RegisteredJob::new(
+                JobSpec {
+                    chunkable: Some(ChunkPolicy {
+                        max_chunk_ms: 100,
+                        unit: "unit",
+                    }),
+                    ..catalog::policy(JobKey::Reindex)
+                },
+                Arc::new(|ctx, _params| {
+                    Box::pin(async move {
+                        for i in 0..5 {
+                            ctx.checkpoint().await?;
+                            ctx.report(i + 1, Some(5));
+                        }
+                        Ok(Outcome::success("done", Some(5)))
+                    })
+                }),
+            ))
+            .unwrap();
+        system.configure_load(false, 1);
+        let _busy = (0..50)
+            .map(|_| system.load().request_guard())
+            .collect::<Vec<_>>();
+
+        let id = system
+            .submit(JobKey::Reindex, None, copy_params(&["a"]), "unaware", None)
+            .unwrap();
+        for _ in 0..400 {
+            let state = system.store().get(&id).unwrap().state;
+            if state.is_terminal() {
+                assert_eq!(state, JobState::Succeeded);
+                return;
+            }
+            assert_ne!(state, JobState::Yielded, "the switch is off");
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("the job did not finish");
+    }
+
+    /// A job that cannot be interrupted is never handed a gate, so a quiet
+    /// policy on it could not do anything — which is why the catalog refuses
+    /// that combination outright.
+    #[test]
+    fn a_job_without_a_checkpoint_gets_no_gate() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        let copy = RegisteredJob::new(
+            catalog::policy(JobKey::Copy),
+            Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+        );
+        assert!(system.yield_gate(&copy).is_none());
+
+        let gc = RegisteredJob::new(
+            catalog::policy(JobKey::GarbageCollection),
+            Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+        );
+        assert!(system.yield_gate(&gc).is_some());
     }
 
     #[test]
