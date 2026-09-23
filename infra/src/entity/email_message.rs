@@ -36,6 +36,13 @@ pub struct Model {
     pub attempts: i32,
     #[sea_orm(not_null, default_value = 0)]
     pub next_attempt_at: i64,
+    /// Unix time until which the current claim holder owns this row.
+    ///
+    /// `None` means unclaimed. A claim requires this to be absent or in the
+    /// past, which is what makes it exclusive; an expired lease is cleared by
+    /// the drain's reaper so a row whose holder died becomes claimable again.
+    #[sea_orm(nullable)]
+    pub lease_until: Option<i64>,
     #[sea_orm(nullable)]
     pub last_error: Option<String>,
     #[sea_orm(not_null, default_value = 0)]

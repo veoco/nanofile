@@ -24,28 +24,21 @@ use super::transport::MailTransport;
 /// when a long outage has piled messages up.
 pub const DRAIN_BATCH: u64 = 25;
 
-/// First retry delay; doubles per attempt up to [`MAX_BACKOFF_SECS`].
-const BASE_BACKOFF_SECS: i64 = 30;
-const MAX_BACKOFF_SECS: i64 = 60 * 60;
-
-/// Retention of the audit rows, applied by the drain task.
-const SENT_RETENTION_SECS: i64 = 30 * 24 * 60 * 60;
-const FAILED_RETENTION_SECS: i64 = 90 * 24 * 60 * 60;
-const MAX_FINISHED_ROWS: u64 = 1000;
+/// The queue's schedule: backoff, claim lease and retention. Shared with any
+/// other persistent queue rather than restated here.
+pub const POLICY: crate::tasks::queue::QueuePolicy = crate::tasks::queue::QueuePolicy::DEFAULT;
 
 /// Delay before the next attempt after `attempts` failed tries.
 ///
 /// 30s, 1m, 2m, 4m … capped at an hour: long enough that a down relay is not
 /// hammered, short enough that a transient failure is invisible to the user.
 pub fn backoff_secs(attempts: i32) -> i64 {
-    let attempts = attempts.clamp(1, 32) as u32;
-    let factor = 1i64 << (attempts - 1).min(20);
-    (BASE_BACKOFF_SECS * factor).min(MAX_BACKOFF_SECS)
+    POLICY.backoff_secs(attempts)
 }
 
 /// When the next attempt is due after `attempts` failed tries.
 pub fn next_attempt_at(now: i64, attempts: i32) -> i64 {
-    now.saturating_add(backoff_secs(attempts))
+    POLICY.next_attempt_at(now, attempts)
 }
 
 /// Encode a rendered message for storage.
@@ -124,9 +117,16 @@ pub async fn attempt(
     row: &email_message::Model,
     now: i64,
 ) -> Result<bool, AppError> {
-    // Claiming is what makes a crash mid-send safe, and what stops a second
-    // drain (or a manual retry) from sending the same body twice.
-    if !repos.email_message.claim(row.id, row.attempts, now).await? {
+    // Claiming is what makes a crash mid-send safe, and the lease is what stops
+    // a second drain (or a manual retry) from sending the same body twice: the
+    // attempt counter alone is not exclusive, because a drain that reads the row
+    // after the first claim commits sees the incremented value and its own swap
+    // succeeds.
+    if !repos
+        .email_message
+        .claim(row.id, row.attempts, now, POLICY.lease_until(now))
+        .await?
+    {
         return Ok(false);
     }
     let attempt_no = row.attempts + 1;
@@ -186,6 +186,9 @@ pub async fn drain(
     now: i64,
 ) -> Result<DrainReport, AppError> {
     let mut report = DrainReport::default();
+    // A lease whose holder died must not strand its row: clear it before the
+    // due query so this drain can pick the message up.
+    reap_leases(repos, now).await?;
     for row in repos.email_message.due_pending(now, DRAIN_BATCH).await? {
         let attempts_before = row.attempts;
         if attempt(repos, cipher, settings, hello_name, &row, now).await? {
@@ -209,14 +212,23 @@ pub async fn drain(
     Ok(report)
 }
 
+/// Clear leases whose holder disappeared, so their rows become claimable.
+///
+/// A row is left pending with its attempt counted when the process dies
+/// mid-send; clearing the lease is all that is needed for the next drain to
+/// pick it up. Called before each drain rather than on its own timer.
+pub async fn reap_leases(repos: &Repositories, now: i64) -> Result<u64, AppError> {
+    repos.email_message.reap_expired_leases(now).await
+}
+
 /// Apply the retention policy, returning how many rows were removed.
 pub async fn prune(repos: &Repositories, now: i64) -> Result<u64, AppError> {
     repos
         .email_message
         .prune(
-            now - SENT_RETENTION_SECS,
-            now - FAILED_RETENTION_SECS,
-            MAX_FINISHED_ROWS,
+            POLICY.retention_cutoffs(now).0,
+            POLICY.retention_cutoffs(now).1,
+            POLICY.max_finished_rows,
         )
         .await
 }
@@ -244,11 +256,11 @@ mod tests {
         assert_eq!(backoff_secs(1), 30);
         assert_eq!(backoff_secs(2), 60);
         assert_eq!(backoff_secs(3), 120);
-        assert_eq!(backoff_secs(20), MAX_BACKOFF_SECS);
+        assert_eq!(backoff_secs(20), POLICY.max_backoff_secs as i64);
         // A nonsensical attempt number must not shift by a negative amount.
         assert_eq!(backoff_secs(0), 30);
         assert_eq!(backoff_secs(-5), 30);
-        assert_eq!(backoff_secs(i32::MAX), MAX_BACKOFF_SECS);
+        assert_eq!(backoff_secs(i32::MAX), POLICY.max_backoff_secs as i64);
         assert!(backoff_secs(8) > backoff_secs(7));
     }
 
@@ -312,9 +324,19 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(repos.email_message.claim(row.id, 0, 0).await.unwrap());
         assert!(
-            !repos.email_message.claim(row.id, 0, 0).await.unwrap(),
+            repos
+                .email_message
+                .claim(row.id, 0, 0, POLICY.lease_until(0))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !repos
+                .email_message
+                .claim(row.id, 0, 0, POLICY.lease_until(0))
+                .await
+                .unwrap(),
             "a claimed row cannot be claimed again by a caller holding the old count"
         );
         let after = repos
@@ -324,6 +346,149 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(after.attempts, 1);
+    }
+
+    /// The bug the lease exists for: the attempt counter alone is not
+    /// exclusive. A drain that re-reads the row after the first claim commits
+    /// sees the incremented counter, so its own compare-and-swap succeeds and
+    /// both send. The lease closes that window.
+    #[tokio::test]
+    async fn a_second_claim_with_the_fresh_attempt_count_is_still_refused() {
+        let repos = repos().await;
+        let row = enqueue(
+            &repos,
+            &cipher(),
+            "new_login",
+            "a@example.com",
+            None,
+            "s",
+            b"raw",
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            repos
+                .email_message
+                .claim(row.id, 0, 0, POLICY.lease_until(0))
+                .await
+                .unwrap()
+        );
+        // Exactly the case the old conditional update allowed through: a second
+        // worker that read `attempts = 1` after the first claim landed.
+        let reread = repos
+            .email_message
+            .find_by_id(row.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reread.attempts, 1);
+        assert!(
+            !repos
+                .email_message
+                .claim(row.id, reread.attempts, 0, POLICY.lease_until(0))
+                .await
+                .unwrap(),
+            "the first claim's lease must keep a second drain out"
+        );
+    }
+
+    /// A lease whose holder died must not strand the row.
+    #[tokio::test]
+    async fn an_expired_lease_is_reaped_and_the_row_becomes_claimable() {
+        let repos = repos().await;
+        let row = enqueue(
+            &repos,
+            &cipher(),
+            "new_login",
+            "a@example.com",
+            None,
+            "s",
+            b"raw",
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            repos
+                .email_message
+                .claim(row.id, 0, 0, POLICY.lease_until(0))
+                .await
+                .unwrap()
+        );
+        assert_eq!(reap_leases(&repos, 0).await.unwrap(), 0, "still leased");
+
+        let after_expiry = POLICY.lease_secs + 1;
+        assert_eq!(reap_leases(&repos, after_expiry).await.unwrap(), 1);
+        let reread = repos
+            .email_message
+            .find_by_id(row.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            repos
+                .email_message
+                .claim(
+                    row.id,
+                    reread.attempts,
+                    after_expiry,
+                    POLICY.lease_until(after_expiry)
+                )
+                .await
+                .unwrap(),
+            "once the lease is reaped the row is claimable again"
+        );
+    }
+
+    /// A lease still held keeps its row out of a competing drain even after the
+    /// counter moved, and the same drain can extend it.
+    #[tokio::test]
+    async fn a_lease_can_be_renewed() {
+        let repos = repos().await;
+        let row = enqueue(
+            &repos,
+            &cipher(),
+            "new_login",
+            "a@example.com",
+            None,
+            "s",
+            b"raw",
+            0,
+        )
+        .await
+        .unwrap();
+        assert!(
+            repos
+                .email_message
+                .claim(row.id, 0, 0, POLICY.lease_until(0))
+                .await
+                .unwrap()
+        );
+
+        let renewed = POLICY.lease_until(1_000);
+        repos
+            .email_message
+            .renew_lease(row.id, renewed)
+            .await
+            .unwrap();
+        assert_eq!(
+            repos
+                .email_message
+                .find_by_id(row.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .lease_until,
+            Some(renewed)
+        );
+        assert_eq!(
+            reap_leases(&repos, 1_000).await.unwrap(),
+            0,
+            "the renewed lease still holds"
+        );
     }
 
     #[tokio::test]
@@ -381,8 +546,8 @@ mod tests {
         // An old delivered row and an old failed row, each past its own
         // retention window (30 days for delivered mail, 90 for failures).
         for (age, kind) in [
-            (SENT_RETENTION_SECS + 10_000, "old_sent"),
-            (FAILED_RETENTION_SECS + 10_000, "old_failed"),
+            (POLICY.sent_retention_secs + 10_000, "old_sent"),
+            (POLICY.failed_retention_secs + 10_000, "old_failed"),
         ] {
             let row = enqueue(
                 &repos,

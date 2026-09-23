@@ -46,18 +46,39 @@ pub trait EmailMessageRepository: Send + Sync {
         limit: u64,
     ) -> Result<Vec<email_message::Model>, AppError>;
 
-    /// Take ownership of an attempt by incrementing `attempts`.
+    /// Take ownership of an attempt by incrementing `attempts` and holding a
+    /// lease until `lease_until`.
     ///
     /// `expected_attempts` is the value the caller read, and the update only
-    /// applies while it still holds — a compare-and-swap. That is what makes
-    /// the claim exclusive: without it, two drains (or a drain and a manual
-    /// retry) that both read `attempts = 0` would both match and both send.
+    /// applies while it still holds — a compare-as-swap. That alone is not
+    /// enough to make the claim exclusive: because `due_pending` re-reads
+    /// `attempts`, a second drain that queries *after* the first claim commits
+    /// sees the incremented value and its own swap succeeds, so both send.
+    /// Requiring the lease to be absent or expired closes that window.
     ///
-    /// `false` means the row moved on (claimed elsewhere, no longer pending, or
-    /// its backoff has not elapsed), so the caller must not try to send. The
-    /// counter is bumped by the claim rather than after the send so a process
-    /// that dies mid-delivery still counts the attempt.
-    async fn claim(&self, id: i32, expected_attempts: i32, now: i64) -> Result<bool, AppError>;
+    /// `false` means the row moved on (claimed and leased elsewhere, no longer
+    /// pending, or its backoff has not elapsed), so the caller must not send.
+    /// The counter is bumped by the claim rather than after the send so a
+    /// process that dies mid-delivery still counts the attempt.
+    async fn claim(
+        &self,
+        id: i32,
+        expected_attempts: i32,
+        now: i64,
+        lease_until: i64,
+    ) -> Result<bool, AppError>;
+
+    /// Extend a held lease, so a slow delivery is not reaped and re-sent while
+    /// it is still in flight.
+    async fn renew_lease(&self, id: i32, lease_until: i64) -> Result<(), AppError>;
+
+    /// Clear leases that expired without the attempt completing, returning how
+    /// many rows became claimable again.
+    ///
+    /// A lease expires when the process holding it died mid-send. The row was
+    /// left pending with its attempt counted, so clearing the lease is all that
+    /// is needed for the next drain to pick it up.
+    async fn reap_expired_leases(&self, now: i64) -> Result<u64, AppError>;
     /// Delivered: clear the ciphertext — a delivered body must not survive in
     /// the database — and record the delivery time.
     async fn mark_sent(&self, id: i32, sent_at: i64) -> Result<(), AppError>;
@@ -114,6 +135,8 @@ impl EmailMessageRepository for DbEmailMessageRepository {
             // Due immediately: the caller attempts delivery right after
             // queueing, and a restart has to find it retryable too.
             next_attempt_at: Set(message.created_at),
+            // Unclaimed until a drain takes it.
+            lease_until: Set(None),
             last_error: Set(None),
             created_at: Set(message.created_at),
             sent_at: Set(None),
@@ -191,19 +214,61 @@ impl EmailMessageRepository for DbEmailMessageRepository {
             .await?)
     }
 
-    async fn claim(&self, id: i32, expected_attempts: i32, now: i64) -> Result<bool, AppError> {
+    async fn claim(
+        &self,
+        id: i32,
+        expected_attempts: i32,
+        now: i64,
+        lease_until: i64,
+    ) -> Result<bool, AppError> {
         let result = email_message::Entity::update_many()
             .filter(email_message::Column::Id.eq(id))
             .filter(email_message::Column::Status.eq(Status::Pending.id()))
             .filter(email_message::Column::Attempts.eq(expected_attempts))
             .filter(email_message::Column::NextAttemptAt.lte(now))
+            // Free, or a lease that has already run out.
+            .filter(
+                email_message::Column::LeaseUntil
+                    .is_null()
+                    .or(email_message::Column::LeaseUntil.lte(now)),
+            )
             .col_expr(
                 email_message::Column::Attempts,
                 sea_orm::sea_query::Expr::col(email_message::Column::Attempts).add(1),
             )
+            .col_expr(
+                email_message::Column::LeaseUntil,
+                sea_orm::sea_query::Expr::value(lease_until),
+            )
             .exec(self.db.as_ref())
             .await?;
         Ok(result.rows_affected == 1)
+    }
+
+    async fn renew_lease(&self, id: i32, lease_until: i64) -> Result<(), AppError> {
+        email_message::Entity::update_many()
+            .filter(email_message::Column::Id.eq(id))
+            .set(email_message::ActiveModel {
+                lease_until: Set(Some(lease_until)),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn reap_expired_leases(&self, now: i64) -> Result<u64, AppError> {
+        let result = email_message::Entity::update_many()
+            .filter(email_message::Column::Status.eq(Status::Pending.id()))
+            .filter(email_message::Column::LeaseUntil.is_not_null())
+            .filter(email_message::Column::LeaseUntil.lte(now))
+            .col_expr(
+                email_message::Column::LeaseUntil,
+                sea_orm::sea_query::Expr::value(Option::<i64>::None),
+            )
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
     }
 
     async fn mark_sent(&self, id: i32, sent_at: i64) -> Result<(), AppError> {
@@ -213,6 +278,10 @@ impl EmailMessageRepository for DbEmailMessageRepository {
                 status: Set(Status::Sent.id().to_string()),
                 sent_at: Set(Some(sent_at)),
                 last_error: Set(None),
+                // The attempt is over, so the lease that covered it must go:
+                // leaving it set would keep a *different* concern — the retry
+                // deadline — from being honoured.
+                lease_until: Set(None),
                 // The rendered body — which for a password reset contains the
                 // one-time link — must not outlive delivery.
                 body_enc: Set(None),
@@ -242,6 +311,10 @@ impl EmailMessageRepository for DbEmailMessageRepository {
                 status: Set(status.id().to_string()),
                 next_attempt_at: Set(next),
                 last_error: Set(Some(error.to_string())),
+                // Released on every outcome: the lease covers the in-flight
+                // window only, and holding it past that would delay the retry
+                // the backoff just scheduled.
+                lease_until: Set(None),
                 ..Default::default()
             })
             .exec(self.db.as_ref())

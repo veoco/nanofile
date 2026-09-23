@@ -18,6 +18,7 @@ pub mod catalog;
 pub mod compat;
 pub mod context;
 pub mod executor;
+pub mod queue;
 pub mod registry;
 pub mod run;
 pub mod setup;
