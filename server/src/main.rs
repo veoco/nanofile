@@ -29,6 +29,12 @@ mod logging;
 #[cfg(feature = "tray")]
 mod tray;
 
+/// Windows service control: `nanofile service …`, the Service Control Manager
+/// loop, and the registration the tray menu drives. Compiled on every platform
+/// (its command-line and comparison helpers have tests that run anywhere), but
+/// only *reachable* on Windows — the subcommand below is gated on the target.
+mod winservice;
+
 /// Nanofile — a Seafile-compatible sync server
 #[derive(Parser)]
 #[command(name = "nanofile", version, about)]
@@ -82,11 +88,19 @@ enum Command {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    /// Windows service control. `run` is what the registered service's binary
+    /// path calls; `install`/`uninstall` need administrator rights.
+    #[cfg(target_os = "windows")]
+    Service {
+        #[command(subcommand)]
+        action: winservice::ServiceAction,
+    },
 }
 
-/// Commands sent from the optional system tray menu to the server task.
-/// Defined unconditionally so `run_server` keeps a stable signature; the
-/// variant is only ever constructed by the tray module.
+/// Commands sent from the optional system tray menu (and, on Windows, from the
+/// service control handler) to the server task. Defined unconditionally so
+/// `run_server` keeps a stable signature; the variants are only ever
+/// constructed by those two front-ends.
 #[allow(dead_code)]
 enum TrayCommand {
     Quit,
@@ -147,6 +161,23 @@ fn notification_key_is_weak(key: &str) -> bool {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // ── Decide the run mode first: the log target depends on it ────────
+    let command = cli.command.unwrap_or(Command::Server);
+    // A service is the server without a desktop: it has no console a person can
+    // read, no session to show a dialog in, and it must never try to put an icon
+    // where there is no desktop. Everything else about it is the ordinary
+    // headless server.
+    #[cfg(target_os = "windows")]
+    let service_run = matches!(
+        command,
+        Command::Service {
+            action: winservice::ServiceAction::Run
+        }
+    );
+    #[cfg(not(target_os = "windows"))]
+    let service_run = false;
+    let serving = matches!(command, Command::Server) || service_run;
+
     // `*_tracked` also reports which settings the environment supplied: the
     // admin page needs that to say whether a database save would take effect.
     //
@@ -158,12 +189,12 @@ fn main() -> anyhow::Result<()> {
     // broken reference.
     //
     // Failing here is before the subscriber exists, so the reason has to be
-    // delivered by hand: a log file, and a dialog when there is a desktop to
-    // show one on.
+    // delivered by hand: a log file, and a dialog only when there is a desktop
+    // to show one on (never for a service).
     let loaded = match Config::load_for_start(cli.config.as_deref()) {
         Ok(loaded) => loaded,
         Err(e) => {
-            logging::report_startup_failure(&e, true);
+            logging::report_startup_failure(&e, !service_run);
             return Err(e);
         }
     };
@@ -183,8 +214,16 @@ fn main() -> anyhow::Result<()> {
     // (no console shows them), so install the hook before anything else.
     logging::install_panic_hook();
 
-    // ── Decide the run mode first: the log target depends on it ────────
-    let command = cli.command.unwrap_or(Command::Server);
+    // Every `service …` action runs without a console in a GUI-subsystem build
+    // (the tray is started by a double-click, and the elevated install helper by
+    // the tray), and the elevated helper's user-visible failure channel is a
+    // message box. Routing its tracing to the log file is what makes "the reason
+    // is in the log" true — and it leaves a record of install/uninstall.
+    #[cfg(target_os = "windows")]
+    let service_command = matches!(command, Command::Service { .. });
+    #[cfg(not(target_os = "windows"))]
+    let service_command = false;
+
     #[cfg(feature = "tray")]
     let (tray_mode, headless_reason) = match command {
         Command::Server => match tray::run_mode(&config) {
@@ -197,19 +236,24 @@ fn main() -> anyhow::Result<()> {
     let (tray_mode, headless_reason): (bool, Option<&'static str>) = (false, None);
 
     // CLI subcommands may be interactive; GUI-subsystem builds have no
-    // console, so reattach to the launching terminal before any output.
-    if !matches!(command, Command::Server) {
+    // console, so reattach to the launching terminal before any output. A
+    // running server (desktop or service) has nothing to reattach to, and the
+    // install/uninstall helper launched by the tray has no parent console for
+    // `AttachConsole` to find — it fails harmlessly there.
+    if !serving {
         console::attach_parent_console();
     }
 
     logging::init(
         &config,
-        if matches!(command, Command::Server) {
+        if serving || service_command {
             logging::Kind::Server
         } else {
             logging::Kind::Cli
         },
-        tray_mode,
+        // A service (and its installer) has no console at all; a tray build's
+        // stdout is invisible by construction. Both want the log file.
+        tray_mode || service_run || service_command,
         &config_path,
     );
     if let Some(reason) = headless_reason {
@@ -262,7 +306,7 @@ fn main() -> anyhow::Result<()> {
     let allow_ephemeral = std::env::var("NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let needs_secret = matches!(command, Command::Server);
+    let needs_secret = matches!(command, Command::Server) || service_run;
 
     if !secret_is_strong(&config.server.secret_key) {
         if is_dev || allow_ephemeral || !needs_secret {
@@ -463,11 +507,17 @@ fn main() -> anyhow::Result<()> {
                 anyhow::Ok(())
             })
         }
+        // Windows service control. `run` never returns on its own: the SCM owns
+        // this process from `StartServiceCtrlDispatcherW` onwards, and the
+        // server itself runs inside `ServiceMain`.
+        #[cfg(target_os = "windows")]
+        Command::Service { action } => winservice::run_cli(action, &config, &config_path, env_keys),
     }
 }
 
-/// DB setup plus server startup — shared by the headless path and the tray
-/// path (`tray::run` spawns this onto its background runtime).
+/// DB setup plus server startup — shared by the headless path, the tray path
+/// (`tray::run` spawns this onto its background runtime) and the Windows
+/// service path.
 ///
 /// Runs the server until the process is asked to stop. An administrator
 /// restarting the server from `/sysadmin/settings/` does *not* return: the

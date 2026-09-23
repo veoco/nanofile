@@ -26,6 +26,23 @@ impl Autostart for AutostartManager {
         plist_path().is_file()
     }
 
+    /// `ProgramArguments` holds absolute paths, so a moved installation leaves
+    /// the agent starting something that is not there.
+    fn is_stale(&self) -> bool {
+        let Ok(text) = std::fs::read_to_string(plist_path()) else {
+            return false;
+        };
+        let values = super::plist_strings(&text);
+        // [Label, exe, "--config", config]
+        let Some((_label, args)) = values.split_first() else {
+            return false;
+        };
+        let Some((exe, config)) = super::paths_from_args(args) else {
+            return false;
+        };
+        super::stale_between(&exe, &config, &self.exe)
+    }
+
     fn enable(&self) -> anyhow::Result<()> {
         let path = plist_path();
         std::fs::create_dir_all(path.parent().expect("plist path has a parent"))?;

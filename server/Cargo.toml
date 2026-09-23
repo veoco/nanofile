@@ -20,7 +20,6 @@ tray = [
     "dep:open",
     "dep:notify-rust",
     "dep:winreg",
-    "dep:windows-sys",
     "dep:objc2",
     "dep:objc2-app-kit",
     "dep:gtk",
@@ -138,11 +137,23 @@ sys-locale = { version = "0.3", optional = true }
 notify-rust = { version = "4", optional = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = { version = "0.55", optional = true }
-windows-sys = { version = "0.59", optional = true, features = [
+# Not optional: `nanofile service …` (the Service Control Manager front-end the
+# tray menu drives) exists in every Windows build, not only the tray one.
+windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    # ShellExecuteExW with the "runas" verb: the elevated install/uninstall.
+    "Win32_UI_Shell",
     "Win32_Security",
+    # CoInitializeEx for the shell call above.
+    "Win32_System_Com",
     "Win32_System_Threading",
+    # The Service Control Manager: install, uninstall, status and the service
+    # control loop (`StartServiceCtrlDispatcherW`, `SetServiceStatus`, …).
+    "Win32_System_Services",
+    # `HKLM\SYSTEM\CurrentControlSet\Services\<name>\ImagePath`, which says
+    # whether the registered service belongs to *this* installation.
+    "Win32_System_Registry",
     # GUI-subsystem builds: reattach the parent console for CLI subcommands.
     "Win32_System_Console",
     "Win32_Storage_FileSystem",

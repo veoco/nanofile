@@ -4,14 +4,26 @@
 //! be created on the main thread — so in tray mode the platform event loop
 //! owns the main thread while the tokio runtime runs on background worker
 //! threads (see `main.rs`). Menu actions are handled on the event-loop thread;
-//! "Quit" is forwarded to the async server task over a channel, and
-//! the server performs its normal graceful shutdown before ending the process
-//! (which also removes the tray icon).
+//! "Quit" is forwarded to the async server task over a channel, and the server
+//! performs its normal graceful shutdown before ending the process (which also
+//! removes the tray icon).
+//!
+//! Two states this module can be in, decided before the menu is built:
+//!
+//! * **Server** — nothing is listening on the configured address, so this
+//!   process starts the server and forwards Quit to it.
+//! * **Client** — something already answers on that address, typically the
+//!   Windows service. Starting a second server would only fail to bind, so the
+//!   menu comes up without one; Quit then exits this process alone. That is what
+//!   keeps the service switchable from the tray while the service is running.
 
 pub(crate) mod autostart;
 mod icon;
 pub(crate) mod icon_gen;
 mod notify;
+/// The Windows-only "start as a service" menu item.
+#[cfg(target_os = "windows")]
+mod service_windows;
 /// macOS gets a template image and lets the system invert it, so the theme
 /// probe only exists where the raster has to carry the colour itself.
 #[cfg(not(target_os = "macos"))]
@@ -31,8 +43,10 @@ mod backend;
 mod backend;
 
 use std::cell::RefCell;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::Context;
 use infra::config::Config;
@@ -46,6 +60,9 @@ use autostart::Autostart as _;
 
 const ID_OPEN_WEB: &str = "nanofile.open-web";
 const ID_AUTOSTART: &str = "nanofile.autostart";
+/// The Windows-only "start as a service" item.
+#[cfg(target_os = "windows")]
+const ID_SERVICE: &str = "nanofile.service";
 const ID_OPEN_CONFIG: &str = "nanofile.open-config";
 const ID_QUIT: &str = "nanofile.quit";
 
@@ -149,22 +166,78 @@ pub fn run(config: Config, env_keys: infra::config::EnvKeys, config_path: PathBu
         web_url: format!("{}/", config.server.site_url.trim_end_matches('/')),
     };
 
+    // Is something already serving this address? Almost always another nanofile
+    // (the Windows service, or an instance the user forgot about). Trying to
+    // bind anyway would end the process with nothing but a log line, and there
+    // would be no tray left to switch the service off from — so the tray comes
+    // up in client mode instead.
+    let client_mode = already_serving(&config);
+
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     let (quit_tx, quit_rx) = tokio::sync::mpsc::unbounded_channel::<TrayCommand>();
 
-    rt.spawn(async move {
-        let result = crate::run_server_flow(config, env_keys, Some(quit_rx)).await;
-        match result {
-            Ok(()) => std::process::exit(0),
-            Err(e) => {
-                tracing::error!("Server failed: {e:#}");
-                std::process::exit(1);
+    if client_mode {
+        tracing::info!(
+            web_url = %ctx.web_url,
+            "something already serves this address; the tray starts without a server"
+        );
+    } else {
+        rt.spawn(async move {
+            let result = crate::run_server_flow(config, env_keys, Some(quit_rx)).await;
+            match result {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    tracing::error!("Server failed: {e:#}");
+                    std::process::exit(1);
+                }
             }
-        }
-    });
+        });
+    }
 
     tracing::info!("Starting system tray icon");
-    backend::run(&ctx, quit_tx);
+    backend::run(&ctx, quit_tx, client_mode);
+}
+
+/// Whether something already accepts connections on the configured address.
+///
+/// Best effort, and deliberately bounded: this only decides whether the tray
+/// should offer itself as a client, so a slow or unusual setup must not delay
+/// the menu for long.
+fn already_serving(config: &Config) -> bool {
+    let addr = probe_addr(&config.server.addr, config.server.port);
+    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+}
+
+/// The address to probe for "is a server already there".
+///
+/// A wildcard bind address (`0.0.0.0`, `::`) is not connectable, so it is mapped
+/// to the loopback of its own family — which is where a second local instance
+/// would be reachable anyway. A host name is not resolvable here without
+/// blocking, so it falls back to the same loopback.
+fn probe_addr(addr: &str, port: u16) -> SocketAddr {
+    let host = addr.trim().trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<IpAddr>() {
+        Ok(ip) if ip.is_unspecified() => match ip {
+            IpAddr::V4(_) => SocketAddr::from(([127, 0, 0, 1], port)),
+            IpAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port),
+        },
+        Ok(ip) => SocketAddr::new(ip, port),
+        Err(_) => SocketAddr::from(([127, 0, 0, 1], port)),
+    }
+}
+
+/// Whether *this* installation's Windows service is registered.
+///
+/// False everywhere else: on other platforms the login entry is the only
+/// automatic start there is.
+#[cfg(target_os = "windows")]
+fn service_registered(config_path: &Path) -> bool {
+    service_windows::probe(config_path).is_ours()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn service_registered(_config_path: &Path) -> bool {
+    false
 }
 
 /// Blocks the main thread forever. Used when tray initialization fails after
@@ -182,30 +255,70 @@ pub(super) fn park_forever() -> ! {
 fn create_tray(
     ctx: &TrayContext,
     quit_tx: UnboundedSender<TrayCommand>,
+    client_mode: bool,
 ) -> anyhow::Result<TrayIcon> {
     let autostart =
         autostart::PlatformAutostart::new(ctx.exe_path.clone(), ctx.config_path.clone());
+
+    // A login entry records absolute paths, so a folder that was moved, renamed
+    // or deleted leaves it launching something that is not there — and a login
+    // entry that fails does so silently. Point it at the copy the user is
+    // actually running; a healthy entry, or one we cannot read, is left alone.
+    if autostart.is_stale() {
+        tracing::warn!(
+            exe = %ctx.exe_path.display(),
+            "the start-at-login entry points at a path that no longer exists; repointing it at \
+             this installation"
+        );
+        if let Err(e) = autostart.enable() {
+            tracing::warn!("repointing the start-at-login entry failed: {e:#}");
+        }
+    }
+
+    // On Windows, "start at login" and "start as a service" are two ways to do
+    // the same thing, and registering the service removes the login entry.
+    // Showing them as alternatives is what keeps the menu honest: while this
+    // installation's service is registered the login item is disabled (removing
+    // the service enables it again), instead of two checkmarks that contradict
+    // each other and a click that does the opposite of what it looks like.
+    let service_ours = service_registered(&ctx.config_path);
 
     let t = lang();
     let item_open_web = MenuItem::with_id(ID_OPEN_WEB, t.tr("tray.open_web"), true, None);
     let item_autostart = CheckMenuItem::with_id(
         ID_AUTOSTART,
         t.tr("tray.launch_at_login"),
-        true,
+        !service_ours,
         autostart.is_enabled(),
+        None,
+    );
+    // Checked when the registered service is *this* installation's; a service
+    // registered for another copy is shown unchecked (the confirmation names the
+    // registered command line before replacing it).
+    #[cfg(target_os = "windows")]
+    let item_service = CheckMenuItem::with_id(
+        ID_SERVICE,
+        t.tr("tray.service_autostart"),
+        true,
+        service_ours,
         None,
     );
     let item_open_config = MenuItem::with_id(ID_OPEN_CONFIG, t.tr("tray.open_config"), true, None);
     let item_quit = MenuItem::with_id(ID_QUIT, t.tr("tray.quit"), true, None);
 
+    // Three groups: the two "open something" actions, the automatic-start pair
+    // (long labels, and the two that are alternatives to each other), and Quit.
     let menu = Menu::new();
     menu.append(&item_open_web)
+        .context("failed to build tray menu")?;
+    menu.append(&item_open_config)
         .context("failed to build tray menu")?;
     menu.append(&PredefinedMenuItem::separator())
         .context("failed to build tray menu")?;
     menu.append(&item_autostart)
         .context("failed to build tray menu")?;
-    menu.append(&item_open_config)
+    #[cfg(target_os = "windows")]
+    menu.append(&item_service)
         .context("failed to build tray menu")?;
     menu.append(&PredefinedMenuItem::separator())
         .context("failed to build tray menu")?;
@@ -221,6 +334,9 @@ fn create_tray(
             },
             autostart,
             autostart_item: item_autostart,
+            #[cfg(target_os = "windows")]
+            service_item: item_service,
+            client_mode,
             quit_tx,
         });
     });
@@ -230,7 +346,13 @@ fn create_tray(
         .with_id("nanofile")
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
-        .with_tooltip(lang().tr("tray.tooltip"))
+        .with_tooltip(if client_mode {
+            // Saying "Nanofile is running" here would be a lie about *this*
+            // process: it brought up no server.
+            lang().tr("tray.client_mode_tooltip")
+        } else {
+            lang().tr("tray.tooltip")
+        })
         // macOS menu-bar icons are template images: the system inverts the
         // glyph for the light/dark menu bar and for the highlighted state, so
         // the glyph is rendered bare and ON TOP of that inversion. Elsewhere
@@ -245,6 +367,12 @@ struct MenuState {
     ctx: TrayContext,
     autostart: autostart::PlatformAutostart,
     autostart_item: CheckMenuItem,
+    /// The Windows "start as a service" item.
+    #[cfg(target_os = "windows")]
+    service_item: CheckMenuItem,
+    /// Something else already serves this address, so this process runs no
+    /// server and Quit only ends the tray.
+    client_mode: bool,
     quit_tx: UnboundedSender<TrayCommand>,
 }
 
@@ -263,8 +391,10 @@ thread_local! {
 enum MenuAction {
     OpenWeb(String),
     ToggleAutostart(autostart::PlatformAutostart, CheckMenuItem),
+    #[cfg(target_os = "windows")]
+    ToggleService,
     OpenConfig(PathBuf),
-    Quit(UnboundedSender<TrayCommand>),
+    Quit(UnboundedSender<TrayCommand>, bool),
 }
 
 fn on_menu_event(event: MenuEvent) {
@@ -283,8 +413,10 @@ fn on_menu_event(event: MenuEvent) {
                 state.autostart.clone(),
                 state.autostart_item.clone(),
             )),
+            #[cfg(target_os = "windows")]
+            ID_SERVICE => Some(MenuAction::ToggleService),
             ID_OPEN_CONFIG => Some(MenuAction::OpenConfig(state.ctx.config_path.clone())),
-            ID_QUIT => Some(MenuAction::Quit(state.quit_tx.clone())),
+            ID_QUIT => Some(MenuAction::Quit(state.quit_tx.clone(), state.client_mode)),
             _ => None,
         }
     });
@@ -299,12 +431,39 @@ fn on_menu_event(event: MenuEvent) {
         Some(MenuAction::ToggleAutostart(autostart, item)) => {
             toggle_autostart(autostart, item);
         }
+        // The service toggle is deferred like the autostart one: it may show a
+        // confirmation and then an elevation prompt, both of which pump
+        // messages on this thread.
+        #[cfg(target_os = "windows")]
+        Some(MenuAction::ToggleService) => service_windows::request_toggle(),
         Some(MenuAction::OpenConfig(config_path)) => open_config_file(&config_path),
-        Some(MenuAction::Quit(quit_tx)) => {
-            tracing::info!("Quit requested from tray");
-            let _ = quit_tx.send(TrayCommand::Quit);
+        Some(MenuAction::Quit(quit_tx, client_mode)) => {
+            if client_mode {
+                // Something else serves the address. Quit means the same thing
+                // it means in the ordinary tray — stop the server — which in
+                // this state is this installation's Windows service, if that is
+                // what is listening. `quit_client` decides, and says so when it
+                // cannot.
+                quit_client();
+            } else {
+                tracing::info!("Quit requested from tray");
+                let _ = quit_tx.send(TrayCommand::Quit);
+            }
         }
         None => {}
+    }
+}
+
+/// Quit from a tray that brought up no server of its own.
+fn quit_client() {
+    #[cfg(target_os = "windows")]
+    service_windows::quit_in_client_mode();
+    #[cfg(not(target_os = "windows"))]
+    {
+        // No service concept: whatever holds the address is a process the user
+        // started, and ending it is not this menu's business.
+        tracing::info!("Quit requested from a client-mode tray");
+        std::process::exit(0);
     }
 }
 
@@ -336,6 +495,12 @@ pub(super) fn perform_autostart_toggle() {
     }) else {
         return;
     };
+    // The login entry and the service are alternatives: while this
+    // installation's service is registered the item is disabled, and this
+    // catches the case where the registration changed outside the tray.
+    if service_windows::refuse_login_entry_change() {
+        return;
+    }
     perform_autostart_toggle_with(autostart, item);
 }
 

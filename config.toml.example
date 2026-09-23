@@ -136,8 +136,14 @@ hsts_include_subdomains = false
 # to run headless even in a desktop session — e.g. for an auto-started instance
 # that should stay invisible.
 #
-# This value is read before the tray comes up, so changing it needs a full
-# process restart (the in-app restart button cannot apply it).
+# On Windows the tray menu can also register Nanofile as a service
+# (`nanofile service install`, administrator rights required): a service starts
+# at boot with no login, which is what the per-user "start automatically after
+# login" entry cannot do. This value is read before the tray comes up, so
+# changing it needs a full process restart (the in-app restart button cannot
+# apply it). Note that both registrations record absolute paths: a config file
+# named with --config/NANOFILE_CONFIG that has been moved away is a refused
+# start, not a quiet fall back to built-in defaults.
 tray = true
 #   NANOFILE_SERVER_SECRET_KEY               (generate with: openssl rand -hex 32)
 # IMPORTANT: Generate a unique secret key for production:

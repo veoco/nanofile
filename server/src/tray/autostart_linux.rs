@@ -25,6 +25,22 @@ impl Autostart for AutostartManager {
         desktop_path().is_file()
     }
 
+    /// `Exec=` holds absolute paths, so a moved installation leaves the entry
+    /// starting something that is not there.
+    fn is_stale(&self) -> bool {
+        let Ok(text) = std::fs::read_to_string(desktop_path()) else {
+            return false;
+        };
+        let Some(exec) = super::desktop_exec(&text) else {
+            return false;
+        };
+        let args = super::split_quoted_args(&exec);
+        let Some((exe, config)) = super::paths_from_args(&args) else {
+            return false;
+        };
+        super::stale_between(&exe, &config, &self.exe)
+    }
+
     fn enable(&self) -> anyhow::Result<()> {
         let path = desktop_path();
         std::fs::create_dir_all(path.parent().expect("desktop path has a parent"))?;

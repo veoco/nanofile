@@ -24,12 +24,33 @@ impl AutostartManager {
     }
 }
 
-impl Autostart for AutostartManager {
-    fn is_enabled(&self) -> bool {
+impl AutostartManager {
+    /// The command line currently registered under our value name, if any.
+    fn recorded(&self) -> Option<String> {
         RegKey::predef(HKEY_CURRENT_USER)
             .open_subkey(RUN_KEY)
-            .and_then(|key| key.get_value::<String, _>(VALUE_NAME))
-            .is_ok()
+            .ok()?
+            .get_value::<String, _>(VALUE_NAME)
+            .ok()
+    }
+}
+
+impl Autostart for AutostartManager {
+    fn is_enabled(&self) -> bool {
+        self.recorded().is_some()
+    }
+
+    /// The value records absolute paths, so a moved or renamed installation
+    /// leaves it launching a file that is not there — silently, at every login.
+    fn is_stale(&self) -> bool {
+        let Some(recorded) = self.recorded() else {
+            return false;
+        };
+        let args = super::split_quoted_args(&recorded);
+        let Some((exe, config)) = super::paths_from_args(&args) else {
+            return false;
+        };
+        super::stale_between(&exe, &config, &self.exe)
     }
 
     fn enable(&self) -> anyhow::Result<()> {

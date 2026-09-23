@@ -9,15 +9,19 @@ use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 
 use super::TrayContext;
 
-pub(super) fn run(ctx: &TrayContext, quit_tx: UnboundedSender<crate::TrayCommand>) -> ! {
-    let _tray = match super::create_tray(ctx, quit_tx) {
+pub(super) fn run(
+    ctx: &TrayContext,
+    quit_tx: UnboundedSender<crate::TrayCommand>,
+    client_mode: bool,
+) -> ! {
+    let _tray = match super::create_tray(ctx, quit_tx, client_mode) {
         Ok(tray) => tray,
         Err(e) => {
             tracing::error!("Tray unavailable, running headless: {e:#}");
             super::park_forever()
         }
     };
-    super::notify::started();
+    super::notify::started(client_mode);
 
     let mtm = MainThreadMarker::new().expect("tray event loop must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);

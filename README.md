@@ -130,6 +130,29 @@ nanofile [--config <path>] migrate-blocks [--dry-run]
                                      (normally done automatically at startup; --dry-run previews only)
 ```
 
+Windows service control (administrator rights required; equivalent to the tray's
+"Start as a Windows Service" item, except for `run`):
+
+```
+nanofile [--config <path>] service install    register an auto-start service (starts at boot, no login)
+nanofile [--config <path>] service uninstall  stop and remove it
+nanofile [--config <path>] service status     report the registration (exit code 0 when installed)
+nanofile [--config <path>] service run        what the SCM calls; running it by hand exits with an error
+```
+
+## Desktop tray and Windows service
+
+Binaries built with `--features tray` carry a system tray menu: **Start automatically after login** (a per-user entry, so it starts once somebody logs in), **Start automatically at boot (administrator rights required)** on Windows — see below — plus open the web UI, open the config file and quit.
+
+On Windows there is also **Start as a Windows Service**: registered with the Service Control Manager, it starts at boot with **no login at all**, which is what an unattended machine needs.
+
+- Enabling it asks for administrator rights; dismissing the prompt changes nothing.
+- The two automatic-start options are alternatives: registering the service removes the "Start automatically after login" entry (that is the one thing install changes about your startup entries, and the confirmation says so), and the tray disables that item while the service is registered. Removing the service enables the item again but does **not** re-create the entry: after that, Nanofile starts automatically only if you ask for it.
+- Both registrations record absolute paths, so they outlive a move. A login entry whose recorded executable or config file is gone is repointed at the running copy the next time the tray starts (a healthy entry, or one this build cannot read, is left alone). A service registration that points at a folder which no longer exists is named as such in the confirmation before it is repointed. And naming a config file that does not exist (`--config`, or `NANOFILE_CONFIG`) is now a refused start rather than a silent fall back to built-in defaults — which would have quietly served a different database on a different port.
+- It takes effect at the **next system start**; the tray copy running now keeps serving. Handing the port over immediately is not reliable on Windows, where a just-closed connection stays in `TIME_WAIT` for minutes and the new process would fail to bind.
+- The service runs as `LocalSystem`, so the state directories have to be writable by that account. While it runs, starting the tray by hand gives you a "client mode" tray: it brings up no second server, and **Quit stops the service** — the same thing Quit means in an ordinary tray, where it stops the server. It restarts at the next boot, and the tray can also install/remove the service from that menu.
+- A service has no desktop, so there is no tray icon; logs go to `nanofile.log` next to the executable.
+
 ## Data directory
 
 State lives under the binary's directory in `data/` by default, since relative paths resolve against that directory. A section can name absolute paths instead.

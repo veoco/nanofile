@@ -115,18 +115,20 @@ fn startup_message_box(title: &str, text: &str) {
 
 /// Initialize the global tracing subscriber.
 ///
-/// `tray_mode` says the server is presenting the desktop tray UI; `config_path`
-/// is the config file this instance loaded, used to persist the resolved
-/// default log file path (never created if the file doesn't exist yet).
-pub fn init(config: &Config, kind: Kind, tray_mode: bool, config_path: &Path) {
+/// `no_console` says this process has no console a person can read (a desktop
+/// tray build, or a service started by the Service Control Manager), so the file
+/// is the only useful default; `config_path` is the config file this instance
+/// loaded, used to persist the resolved default log file path (never created if
+/// the file doesn't exist yet).
+pub fn init(config: &Config, kind: Kind, no_console: bool, config_path: &Path) {
     let want_file = match config.logging.file_enabled {
         Some(enabled) => enabled,
         None => match kind {
             Kind::Cli => false,
-            // A Windows tray build is a GUI-subsystem binary: its stdout is
-            // invisible even when the tray is disabled via config, so file
-            // logging is the only useful default there too.
-            Kind::Server => tray_mode || cfg!(all(target_os = "windows", feature = "tray")),
+            // Windows GUI-subsystem builds have an invisible stdout whether or
+            // not the tray is showing, so file logging is the only useful
+            // default there too — and a service has no console at all.
+            Kind::Server => no_console || cfg!(all(target_os = "windows", feature = "tray")),
         },
     };
     if !want_file {
