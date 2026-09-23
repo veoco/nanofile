@@ -27,6 +27,7 @@ pub mod serve;
 pub mod service;
 pub mod settings;
 pub mod static_assets;
+pub mod tasks;
 pub mod thumbnail_util;
 pub mod ui;
 pub mod webdav;

@@ -176,6 +176,11 @@ image = { version = "0.25", features = ["tiff"] }
 tempfile = "3"
 tokio-tungstenite = "0.29"
 zip = "2"
+# `test-util` gives the task-system tests a paused clock (`start_paused`), so a
+# timeout policy is exercised deterministically instead of by sleeping. It is a
+# dev-dependency on purpose: `full` does not include it, and the production
+# build must not pay for it.
+tokio = { version = "1", features = ["test-util"] }
 
 [[bin]]
 name = "nanofile"

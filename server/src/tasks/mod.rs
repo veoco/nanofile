@@ -1,0 +1,900 @@
+//! The task system: one registry of jobs, one bounded store of runs, one
+//! executor that owns every state transition.
+//!
+//! Two ways in, and the difference is the point:
+//!
+//! * [`TaskSystem::submit`] schedules work somebody will ask about later by id.
+//!   It produces a [`JobRun`] that can be polled, and — for a job declared
+//!   `cancellable` — stopped.
+//! * [`TaskSystem::run_inline`] runs request-scoped work under the same
+//!   concurrency limits and timeouts but keeps no record, because no second
+//!   caller will ever look it up.
+//!
+//! What is *not* here is as deliberate: a long-lived event listener has no
+//! owner, no progress and no terminal state, so it is a service rather than a
+//! job and does not belong in the run table.
+
+pub mod catalog;
+pub mod context;
+pub mod executor;
+pub mod registry;
+pub mod run;
+pub mod spec;
+pub mod store;
+
+use std::collections::HashMap;
+use std::sync::{Arc, PoisonError, RwLock};
+
+use base::error::AppError;
+use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
+
+use self::context::JobContext;
+use self::registry::{JobRegistry, RegisteredJob, RegistryError};
+use self::run::{JobRun, JobState, Params, RunId, Viewer};
+use self::spec::{Dedup, JobKey, Priority};
+use self::store::{RunFilter, RunLimits, RunStore};
+
+pub use self::run::{JobFailure, Outcome, Progress};
+pub use self::spec::{ChunkPolicy, Durability, Resource, TimeoutPolicy, Trigger, Visibility};
+
+/// Process-wide admission limits.
+#[derive(Clone, Copy, Debug)]
+pub struct TaskLimits {
+    /// How many runs one user may have active at once, across every job. `0`
+    /// means unlimited.
+    ///
+    /// The old cap was a single server-wide number, so one account could take
+    /// every slot and the next user got a 429.
+    pub max_active_per_user: usize,
+    pub runs: RunLimits,
+}
+
+impl Default for TaskLimits {
+    fn default() -> Self {
+        Self {
+            max_active_per_user: 8,
+            runs: RunLimits::default(),
+        }
+    }
+}
+
+struct Inner {
+    /// Populated during startup, read-only afterwards.
+    registry: RwLock<JobRegistry>,
+    /// One permit pool per job, created with the job's declared concurrency.
+    permits: RwLock<HashMap<JobKey, Arc<Semaphore>>>,
+    store: RunStore,
+    /// Live runs' cancellation handles, so a caller can stop one.
+    cancels: RwLock<HashMap<RunId, CancellationToken>>,
+    limits: RwLock<TaskLimits>,
+    /// Cancelled when the server generation ends.
+    shutdown: CancellationToken,
+}
+
+/// The task system.
+#[derive(Clone)]
+pub struct TaskSystem {
+    inner: Arc<Inner>,
+}
+
+impl std::fmt::Debug for TaskSystem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskSystem")
+            .field("jobs", &self.registry().len())
+            .field("runs", &self.inner.store.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl TaskSystem {
+    /// A new, empty task system.
+    ///
+    /// Process-lifetime: built once, outside the server generation loop, so run
+    /// history and schedule state survive an in-place restart.
+    pub fn new(limits: TaskLimits, shutdown: CancellationToken) -> Arc<Self> {
+        Arc::new(Self {
+            inner: Arc::new(Inner {
+                registry: RwLock::new(JobRegistry::new()),
+                permits: RwLock::new(HashMap::new()),
+                store: RunStore::new(limits.runs),
+                cancels: RwLock::new(HashMap::new()),
+                limits: RwLock::new(limits),
+                shutdown,
+            }),
+        })
+    }
+
+    fn registry(&self) -> std::sync::RwLockReadGuard<'_, JobRegistry> {
+        self.inner
+            .registry
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Register a job. Called during startup; a duplicate or a mis-declared
+    /// policy is refused rather than silently accepted.
+    pub fn register(&self, job: RegisteredJob) -> Result<(), RegistryError> {
+        let key = job.key();
+        let concurrency = job.spec.max_concurrent;
+        {
+            let mut registry = self
+                .inner
+                .registry
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            registry.register(job)?;
+        }
+        self.inner
+            .permits
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, Arc::new(Semaphore::new(concurrency)));
+        Ok(())
+    }
+
+    /// Every registered job, in registration order.
+    pub fn jobs(&self) -> Vec<Arc<RegisteredJob>> {
+        self.registry().jobs().into_iter().cloned().collect()
+    }
+
+    pub fn job(&self, key: JobKey) -> Option<Arc<RegisteredJob>> {
+        self.registry().get(key).cloned()
+    }
+
+    pub fn store(&self) -> &RunStore {
+        &self.inner.store
+    }
+
+    pub fn limits(&self) -> TaskLimits {
+        *self
+            .inner
+            .limits
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Replace the admission limits of a running server.
+    pub fn set_limits(&self, limits: TaskLimits) {
+        self.inner.store.set_limits(limits.runs);
+        *self
+            .inner
+            .limits
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = limits;
+    }
+
+    /// Submit a job for background execution and return the id it can be polled
+    /// with.
+    ///
+    /// The state machine belongs to the executor from here on: the caller
+    /// cannot mark the run done, and cannot forget to.
+    pub fn submit(
+        &self,
+        key: JobKey,
+        owner: Option<i32>,
+        params: Params,
+        summary: impl Into<String>,
+        expected_total: Option<u64>,
+    ) -> Result<RunId, AppError> {
+        let job = self
+            .job(key)
+            .ok_or_else(|| AppError::Internal(format!("job {key:?} is not registered")))?;
+        let now = chrono::Utc::now().timestamp();
+
+        // Admission. Checked before the run exists so a refusal leaves no
+        // trace to sweep.
+        let limits = self.limits();
+        if job.spec.queue_depth > 0
+            && self.inner.store.count_active(key, owner) >= job.spec.queue_depth
+        {
+            return Err(AppError::TooManyRequests);
+        }
+        if limits.max_active_per_user > 0
+            && owner.is_some()
+            && self.inner.store.count_active_all(owner) >= limits.max_active_per_user
+        {
+            return Err(AppError::TooManyRequests);
+        }
+
+        // Deduplication stands in for the per-repo reindex lock that used to be
+        // a second map next to the progress map.
+        if let Dedup::ByParams(field) = job.spec.dedup
+            && let Some(value) = params.get(field)
+            && self
+                .inner
+                .store
+                .find_active_by_param(key, field, value)
+                .is_some()
+        {
+            return Err(AppError::Conflict(format!(
+                "{} is already in progress",
+                job.spec.name
+            )));
+        }
+
+        let run = JobRun::queued(
+            key,
+            job.spec.visibility,
+            owner,
+            params.clone(),
+            summary,
+            expected_total,
+            now,
+        );
+        let id = run.id.clone();
+        self.inner.store.insert(run.clone())?;
+
+        let cancel = CancellationToken::new();
+        self.inner
+            .cancels
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.clone(), cancel.clone());
+
+        let system = self.clone();
+        let spawned_id = id.clone();
+        tokio::spawn(async move {
+            system.drive(job, run, params, cancel).await;
+            system
+                .inner
+                .cancels
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&spawned_id);
+        });
+
+        Ok(id)
+    }
+
+    /// Acquire this job's permit and run its body.
+    async fn drive(
+        &self,
+        job: Arc<RegisteredJob>,
+        run: JobRun,
+        params: Params,
+        cancel: CancellationToken,
+    ) {
+        let permits = self
+            .inner
+            .permits
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&job.key())
+            .cloned();
+        let _permit = match permits {
+            Some(semaphore) => match semaphore.acquire_owned().await {
+                Ok(permit) => Some(permit),
+                // The semaphore is only closed if the system is being torn
+                // down, in which case the run is interrupted by `drain`.
+                Err(_) => return,
+            },
+            None => None,
+        };
+
+        let report = executor::execute(&job, &run, params, &self.inner.store, cancel.clone()).await;
+        tracing::debug!(
+            job = job.name(),
+            run = %run.id,
+            state = report.state.as_str(),
+            attempts = report.attempts,
+            "job finished"
+        );
+    }
+
+    /// Run request-scoped work under a job's concurrency limit, keeping no
+    /// record.
+    ///
+    /// The work is bounded and observable like any other, but there is no run
+    /// to poll because no second caller will look it up.
+    pub async fn run_inline<F, Fut, T>(&self, key: JobKey, f: F) -> Result<T, AppError>
+    where
+        F: FnOnce(JobContext) -> Fut,
+        Fut: std::future::Future<Output = Result<T, JobFailure>>,
+    {
+        let job = self
+            .job(key)
+            .ok_or_else(|| AppError::Internal(format!("job {key:?} is not registered")))?;
+        let semaphore = self
+            .inner
+            .permits
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&key)
+            .cloned();
+        let _permit = match semaphore {
+            Some(semaphore) => Some(
+                semaphore
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| AppError::Internal("task system is shutting down".into()))?,
+            ),
+            None => None,
+        };
+
+        // No record is kept, so the context is a throwaway with a fresh
+        // cancellation token that follows the caller.
+        let id = RunId::new();
+        let tick = context::LivenessTick::default();
+        let sink = context::ProgressSink::new(
+            self.inner.store.clone(),
+            id.clone(),
+            std::time::Duration::ZERO,
+            tick,
+        );
+        let ctx = JobContext::new(
+            id,
+            key,
+            None,
+            self.inner.shutdown.child_token(),
+            sink,
+            context::BudgetSignal::full(),
+            job.spec.chunkable,
+        );
+
+        f(ctx).await.map_err(|failure| match failure {
+            JobFailure::App(e) => e,
+            JobFailure::Cancelled => AppError::Internal("operation cancelled".into()),
+            JobFailure::TimedOut => AppError::Internal("operation timed out".into()),
+        })
+    }
+
+    /// Ask a run to stop.
+    ///
+    /// Only a job declared `cancellable` honours this; for anything else the
+    /// request is refused rather than silently ignored, because cancelling a
+    /// move between its two commits would lose data.
+    pub fn cancel(&self, id: &RunId, viewer: Viewer) -> Result<(), AppError> {
+        let run = self
+            .inner
+            .store
+            .get_for(id, viewer)
+            .ok_or_else(|| AppError::NotFound("task not found or expired".into()))?;
+        if run.state.is_terminal() {
+            return Err(AppError::Conflict("task has already finished".into()));
+        }
+        let cancellable = self
+            .job(run.key)
+            .is_some_and(|job| job.spec.cancellable || job.spec.resumable);
+        if !cancellable {
+            return Err(AppError::Conflict(format!(
+                "{} cannot be cancelled",
+                run.key.as_str()
+            )));
+        }
+        if let Some(token) = self
+            .inner
+            .cancels
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .cloned()
+        {
+            token.cancel();
+        }
+        Ok(())
+    }
+
+    /// Drop expired terminal runs. Called by one periodic sweeper.
+    pub fn sweep(&self) -> usize {
+        self.inner.store.sweep(chrono::Utc::now().timestamp())
+    }
+
+    /// Runs matching `filter`, newest first.
+    pub fn runs(&self, filter: &RunFilter) -> Vec<JobRun> {
+        self.inner.store.list(filter)
+    }
+
+    /// Stop everything this generation started, and record anything that could
+    /// not be stopped.
+    ///
+    /// A run that is safely interruptible is cancelled outright; one that is
+    /// not (a move between its two commits) is given `grace` to finish. Either
+    /// way the run ends in a recorded terminal state rather than vanishing,
+    /// which is what stops a client that is polling a task id from getting a
+    /// 404 after an administrator restarts the server.
+    pub async fn drain(&self, grace: std::time::Duration) {
+        let active = self.inner.store.list(&RunFilter {
+            include_active: true,
+            include_terminal: false,
+            ..Default::default()
+        });
+        if active.is_empty() {
+            return;
+        }
+
+        // Collect the tokens to fire first: the guard must not be held across
+        // the wait below.
+        let to_cancel: Vec<CancellationToken> = {
+            let cancels = self
+                .inner
+                .cancels
+                .read()
+                .unwrap_or_else(PoisonError::into_inner);
+            active
+                .iter()
+                .filter(|run| {
+                    self.job(run.key)
+                        .is_some_and(|job| job.spec.resumable || job.spec.cancellable)
+                })
+                .filter_map(|run| cancels.get(&run.id).cloned())
+                .collect()
+        };
+        let cancelled = to_cancel.len();
+        for token in to_cancel {
+            token.cancel();
+        }
+
+        // Wait for the active set to empty, whether the runs were cancelled or
+        // must finish on their own: a cancelled run still needs a moment to
+        // reach its checkpoint and record the terminal state, and interrupting
+        // it in that window would report the wrong outcome.
+        if !grace.is_zero() {
+            let deadline = tokio::time::Instant::now() + grace;
+            while tokio::time::Instant::now() < deadline {
+                if self
+                    .inner
+                    .store
+                    .list(&RunFilter {
+                        include_active: true,
+                        include_terminal: false,
+                        ..Default::default()
+                    })
+                    .is_empty()
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
+        tracing::debug!(
+            active = active.len(),
+            cancelled,
+            "drained this generation's task system"
+        );
+
+        let interrupted = self
+            .inner
+            .store
+            .interrupt_active(chrono::Utc::now().timestamp());
+        if interrupted > 0 {
+            tracing::warn!(
+                interrupted,
+                "recorded runs interrupted by the end of this server generation"
+            );
+        }
+    }
+
+    /// Whether the process is shutting down.
+    pub fn is_shutting_down(&self) -> bool {
+        self.inner.shutdown.is_cancelled()
+    }
+
+    /// The priority of a registered job, for the admin listing.
+    pub fn priority_of(&self, key: JobKey) -> Option<Priority> {
+        self.job(key).map(|job| job.spec.priority)
+    }
+
+    /// The terminal state a run would show if it were stopped now, for callers
+    /// that need to explain a refusal.
+    pub fn state_of(&self, id: &RunId) -> Option<JobState> {
+        self.inner.store.get(id).map(|run| run.state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use self::spec::{
+        ChunkPolicy, Dedup, Durability, JobSpec, QuietPolicy, RetryPolicy, SpikePolicy,
+        TimeoutPolicy, Trigger,
+    };
+    use super::*;
+
+    fn test_system() -> Arc<TaskSystem> {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::Copy),
+                Arc::new(|ctx, params| {
+                    Box::pin(async move {
+                        let names = params
+                            .get("names")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.len() as u64)
+                            .unwrap_or(0);
+                        for i in 0..names {
+                            ctx.checkpoint().await?;
+                            ctx.report(i + 1, Some(names));
+                        }
+                        Ok(Outcome::success("copied", Some(names)))
+                    })
+                }),
+            ))
+            .unwrap();
+        system
+    }
+
+    fn copy_params(names: &[&str]) -> Params {
+        serde_json::json!({ "names": names, "repo_id": "r1" })
+    }
+
+    #[tokio::test]
+    async fn submit_returns_an_id_that_can_be_polled() {
+        let system = test_system();
+        let id = system
+            .submit(
+                JobKey::Copy,
+                Some(1),
+                copy_params(&["a", "b"]),
+                "Copy 2",
+                Some(2),
+            )
+            .unwrap();
+
+        // The run exists immediately, before the body has been polled.
+        let run = system.store().get(&id).expect("run is recorded");
+        assert_eq!(run.owner, Some(1));
+        assert_eq!(run.expected_total, Some(2));
+        assert_eq!(run.summary, "Copy 2");
+
+        // And reaches a terminal state on its own.
+        for _ in 0..100 {
+            let run = system.store().get(&id).unwrap();
+            if run.state.is_terminal() {
+                assert_eq!(run.state, JobState::Succeeded);
+                assert_eq!(run.progress.message, "copied");
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("run did not finish");
+    }
+
+    #[tokio::test]
+    async fn an_unregistered_job_cannot_be_submitted() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        assert!(matches!(
+            system.submit(JobKey::Copy, Some(1), Params::Null, "x", None),
+            Err(AppError::Internal(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_submission_is_refused_when_the_job_dedups() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system
+            .register(RegisteredJob::new(
+                JobSpec {
+                    dedup: Dedup::ByParams("repo_id"),
+                    ..catalog::policy(JobKey::Reindex)
+                },
+                Arc::new(|_ctx, _params| {
+                    Box::pin(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        Ok(Outcome::ok())
+                    })
+                }),
+            ))
+            .unwrap();
+
+        let params = serde_json::json!({"repo_id": "r1"});
+        system
+            .submit(JobKey::Reindex, Some(1), params.clone(), "reindex", None)
+            .unwrap();
+        assert!(matches!(
+            system.submit(JobKey::Reindex, Some(1), params, "reindex", None),
+            Err(AppError::Conflict(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_per_user_active_cap_is_enforced() {
+        let system = TaskSystem::new(
+            TaskLimits {
+                max_active_per_user: 2,
+                ..TaskLimits::default()
+            },
+            CancellationToken::new(),
+        );
+        system
+            .register(RegisteredJob::new(
+                JobSpec {
+                    max_concurrent: 10,
+                    timeout: TimeoutPolicy::default(),
+                    ..catalog::policy(JobKey::Copy)
+                },
+                Arc::new(|_ctx, _params| {
+                    Box::pin(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        Ok(Outcome::ok())
+                    })
+                }),
+            ))
+            .unwrap();
+
+        system
+            .submit(JobKey::Copy, Some(1), copy_params(&["a"]), "a", None)
+            .unwrap();
+        system
+            .submit(JobKey::Copy, Some(1), copy_params(&["b"]), "b", None)
+            .unwrap();
+        assert!(
+            matches!(
+                system.submit(JobKey::Copy, Some(1), copy_params(&["c"]), "c", None),
+                Err(AppError::TooManyRequests)
+            ),
+            "one user must not be able to take unlimited slots"
+        );
+        // A different user is unaffected: the cap is per user, not global.
+        assert!(
+            system
+                .submit(JobKey::Copy, Some(2), copy_params(&["d"]), "d", None)
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn run_inline_keeps_no_record_but_honours_the_limit() {
+        let system = test_system();
+        let before = system.store().len();
+        let value = system
+            .run_inline(JobKey::Copy, |_ctx| async move { Ok(41 + 1) })
+            .await
+            .unwrap();
+        assert_eq!(value, 42);
+        assert_eq!(system.store().len(), before, "no run was recorded");
+    }
+
+    #[tokio::test]
+    async fn run_inline_maps_failures_onto_app_errors() {
+        let system = test_system();
+        assert!(matches!(
+            system
+                .run_inline(JobKey::Copy, |_ctx| async move {
+                    Err::<(), _>(JobFailure::TimedOut)
+                })
+                .await,
+            Err(AppError::Internal(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancel_is_refused_for_a_job_that_cannot_be_interrupted() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::Move),
+                Arc::new(|_ctx, _params| {
+                    Box::pin(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        Ok(Outcome::ok())
+                    })
+                }),
+            ))
+            .unwrap();
+        let id = system
+            .submit(JobKey::Move, Some(1), copy_params(&["a"]), "move", None)
+            .unwrap();
+        assert!(matches!(
+            system.cancel(&id, Viewer::user(1)),
+            Err(AppError::Conflict(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancel_stops_a_cancellable_job_and_reports_it_as_cancelled() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::Reindex),
+                Arc::new(|ctx, _params| {
+                    Box::pin(async move {
+                        loop {
+                            ctx.checkpoint().await?;
+                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        }
+                    })
+                }),
+            ))
+            .unwrap();
+        let id = system
+            .submit(
+                JobKey::Reindex,
+                Some(1),
+                copy_params(&["a"]),
+                "reindex",
+                None,
+            )
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        system.cancel(&id, Viewer::user(1)).unwrap();
+
+        for _ in 0..100 {
+            let run = system.store().get(&id).unwrap();
+            if run.state.is_terminal() {
+                assert_eq!(run.state, JobState::Cancelled);
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("run did not stop");
+    }
+
+    #[tokio::test]
+    async fn cancel_hides_a_run_owned_by_somebody_else() {
+        let system = test_system();
+        let id = system
+            .submit(JobKey::Copy, Some(1), copy_params(&["a"]), "a", None)
+            .unwrap();
+        assert!(matches!(
+            system.cancel(&id, Viewer::user(2)),
+            Err(AppError::NotFound(_))
+        ));
+    }
+
+    /// The bug this replaces: a task submitted before an in-place restart used
+    /// to be unknown to the next generation, so the client polling it got a 404.
+    #[tokio::test]
+    async fn drain_records_an_interrupted_run_instead_of_losing_it() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::Move),
+                Arc::new(|ctx, _params| {
+                    Box::pin(async move {
+                        // Ignores cancellation: exactly the case a generation
+                        // boundary has to record rather than forget.
+                        ctx.sleep(std::time::Duration::from_secs(3600)).await.ok();
+                        Ok(Outcome::ok())
+                    })
+                }),
+            ))
+            .unwrap();
+        let id = system
+            .submit(JobKey::Move, Some(1), copy_params(&["a"]), "move", None)
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        system.drain(std::time::Duration::from_millis(50)).await;
+
+        let run = system.store().get(&id).expect("the run must still exist");
+        assert_eq!(run.state, JobState::Interrupted);
+        assert!(run.finished_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn drain_cancels_what_can_be_interrupted() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::Reindex),
+                Arc::new(|ctx, _params| {
+                    Box::pin(async move {
+                        loop {
+                            ctx.checkpoint().await?;
+                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        }
+                    })
+                }),
+            ))
+            .unwrap();
+        let id = system
+            .submit(
+                JobKey::Reindex,
+                Some(1),
+                copy_params(&["a"]),
+                "reindex",
+                None,
+            )
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        system.drain(std::time::Duration::from_millis(200)).await;
+
+        let run = system.store().get(&id).unwrap();
+        assert_eq!(
+            run.state,
+            JobState::Cancelled,
+            "an interruptible run is stopped cleanly, not marked interrupted"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_is_a_no_op_with_nothing_running() {
+        let system = test_system();
+        system.drain(std::time::Duration::from_millis(10)).await;
+        assert!(system.store().get(&RunId::from_client("x")).is_none());
+    }
+
+    #[tokio::test]
+    async fn submitting_a_job_whose_params_exceed_the_budget_is_refused() {
+        let system = TaskSystem::new(
+            TaskLimits {
+                runs: RunLimits {
+                    max_retained: 0,
+                    max_retained_bytes: 1,
+                    terminal_ttl_secs: 3600,
+                },
+                ..TaskLimits::default()
+            },
+            CancellationToken::new(),
+        );
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::Copy),
+                Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+            ))
+            .unwrap();
+        assert!(matches!(
+            system.submit(JobKey::Copy, Some(1), copy_params(&["a"]), "a", None),
+            Err(AppError::TooManyRequests)
+        ));
+    }
+
+    #[test]
+    fn registering_a_duplicate_is_refused() {
+        let system = test_system();
+        let again = RegisteredJob::new(
+            catalog::policy(JobKey::Copy),
+            Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+        );
+        assert!(matches!(
+            system.register(again),
+            Err(RegistryError::Duplicate(JobKey::Copy))
+        ));
+    }
+
+    #[test]
+    fn jobs_are_listed_in_registration_order() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::Reindex),
+                Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+            ))
+            .unwrap();
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::Copy),
+                Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+            ))
+            .unwrap();
+        let keys: Vec<JobKey> = system.jobs().iter().map(|j| j.key()).collect();
+        assert_eq!(keys, vec![JobKey::Reindex, JobKey::Copy]);
+        assert_eq!(
+            system.priority_of(JobKey::Copy),
+            Some(Priority::Interactive)
+        );
+    }
+
+    /// A `ChunkPolicy` on the registered job reaches the context, which is what
+    /// makes the deferral contract real rather than declarative.
+    #[test]
+    fn the_chunk_policy_reaches_the_context() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system
+            .register(RegisteredJob::new(
+                JobSpec {
+                    chunkable: Some(ChunkPolicy {
+                        max_chunk_ms: 250,
+                        unit: "repo",
+                    }),
+                    priority: Priority::Background,
+                    quiet: Some(QuietPolicy {
+                        min_idle_for_secs: 1,
+                        max_deferral_hours: 1,
+                        on_spike: SpikePolicy::Yield,
+                    }),
+                    idempotent: true,
+                    retry: RetryPolicy::Never,
+                    durability: Durability::Memory,
+                    trigger: Trigger::Manual,
+                    ..catalog::policy(JobKey::GarbageCollection)
+                },
+                Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+            ))
+            .unwrap();
+        let spec = system.job(JobKey::GarbageCollection).unwrap();
+        assert_eq!(spec.spec.chunkable.unwrap().max_chunk_ms, 250);
+    }
+}
