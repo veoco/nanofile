@@ -1703,6 +1703,41 @@ impl Config {
         Self::load_from_tracked(&path)
     }
 
+    /// Load the configuration a *server start* should use.
+    ///
+    /// Like [`Self::load_tracked`], but a configuration file the operator named
+    /// explicitly — `--config`, or `NANOFILE_CONFIG` (including one set in a
+    /// `.env` file) — **must exist**.
+    ///
+    /// The difference matters because these paths outlive a single process: a
+    /// login auto-start entry and a Windows service registration both record the
+    /// config path they were created with, so a folder that was moved or renamed
+    /// leaves them pointing at a file that is gone. Falling back to built-in
+    /// defaults there would silently start a server on the default port with the
+    /// default database next to the binary — a *different* instance — instead of
+    /// saying that the named file is missing. The zero-config convenience stays
+    /// for the unnamed default (`config.toml`), where "no file" is a legitimate
+    /// setup rather than a broken reference.
+    pub fn load_for_start(explicit_path: Option<&Path>) -> anyhow::Result<LoadedConfig> {
+        load_dotenv();
+        let (path, named_by) = match explicit_path {
+            Some(path) => (path.to_path_buf(), "--config"),
+            None => match std::env::var(CONFIG_PATH_ENV) {
+                Ok(path) => (PathBuf::from(path), CONFIG_PATH_ENV),
+                Err(_) => (PathBuf::from(DEFAULT_CONFIG_PATH), ""),
+            },
+        };
+        if !named_by.is_empty() && !path.is_file() {
+            anyhow::bail!(
+                "configuration file {} does not exist (named by {named_by}); starting with \
+                 built-in defaults would use a different database and listener, so fix the path \
+                 or drop the explicit setting",
+                path.display()
+            );
+        }
+        Self::load_from_tracked(&path)
+    }
+
     /// Load a config file. Missing fields are filled with built-in defaults and
     /// written back in place (comments preserved), so an upgrade leaves a
     /// visible trace of newly added options. A write failure (e.g. a read-only
@@ -1715,7 +1750,6 @@ impl Config {
     pub fn load_from(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         Self::load_from_tracked(path).map(|loaded| loaded.config)
     }
-
     /// [`Self::load_from`] plus the set of catalog keys the environment
     /// supplied. See [`Self::load_tracked`].
     pub fn load_from_tracked(path: impl AsRef<Path>) -> anyhow::Result<LoadedConfig> {
@@ -2631,6 +2665,29 @@ request_timeout_secs = 600
         let base = state_path_base();
         assert!(base.is_absolute(), "{base:?}");
         assert!(base.is_dir(), "{base:?}");
+    }
+
+    /// The reference a login auto-start entry or a service registration records
+    /// has to be an error when it is gone: built-in defaults here would start a
+    /// second instance against a different database and port.
+    #[test]
+    fn a_config_named_explicitly_must_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("moved-away.toml");
+        let error = match Config::load_for_start(Some(&missing)) {
+            Ok(_) => panic!("a named config that is gone must not fall back to defaults"),
+            Err(e) => e.to_string(),
+        };
+        assert!(error.contains("does not exist"), "{error}");
+        assert!(error.contains("moved-away.toml"), "{error}");
+        assert!(error.contains("--config"), "{error}");
+
+        // An existing one still loads, and still fills missing fields.
+        let present = dir.path().join("config.toml");
+        std::fs::write(&present, "[server]\nport = 1234\n").unwrap();
+        let loaded = Config::load_for_start(Some(&present)).unwrap();
+        assert_eq!(loaded.config.server.port, 1234);
+        assert!(!loaded.config.server.site_url.is_empty(), "defaults filled");
     }
 
     #[test]

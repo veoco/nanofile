@@ -45,6 +45,74 @@ pub fn install_panic_hook() {
     }));
 }
 
+/// Report a failure raised *before* the subscriber exists.
+///
+/// The cases that matter are the ones with nowhere to print: a Windows tray
+/// build is a GUI-subsystem binary, and a service has neither a console nor a
+/// session to show a message in. The reason is appended to the log file the
+/// process would have used (`nanofile.log` next to the binary, then the working
+/// directory — the configured path cannot be known, because reading the
+/// configuration is what failed) and, when `show_dialog` and there is a desktop,
+/// shown in a message box.
+///
+/// Best effort throughout: this runs on the way out of a process that is about
+/// to exit.
+pub fn report_startup_failure(error: &anyhow::Error, show_dialog: bool) {
+    let message = format!("{error:#}");
+    eprintln!("[nanofile] {message}");
+    append_to_default_log(&message);
+
+    #[cfg(target_os = "windows")]
+    if show_dialog {
+        startup_message_box("Nanofile", &message);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = show_dialog;
+}
+
+/// Append one line to the first writable default log location.
+fn append_to_default_log(message: &str) {
+    let mut candidates = Vec::new();
+    if let Some(dir) = exe_dir() {
+        candidates.push(dir.join(DEFAULT_LOG_FILE_NAME));
+    }
+    candidates.push(PathBuf::from(DEFAULT_LOG_FILE_NAME));
+    for candidate in candidates {
+        let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&candidate)
+        else {
+            continue;
+        };
+        let stamp = chrono::Utc::now().to_rfc3339();
+        let _ = writeln!(file, "{stamp} ERROR nanofile: startup failed: {message}");
+        return;
+    }
+}
+
+/// The one place a GUI-subsystem build can explain itself without a log file.
+#[cfg(target_os = "windows")]
+fn startup_message_box(title: &str, text: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    };
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+    let title = wide(title);
+    let text = wide(text);
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        )
+    };
+}
+
 /// Initialize the global tracing subscriber.
 ///
 /// `tray_mode` says the server is presenting the desktop tray UI; `config_path`

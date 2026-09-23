@@ -145,15 +145,29 @@ fn main() -> anyhow::Result<()> {
 
     // `*_tracked` also reports which settings the environment supplied: the
     // admin page needs that to say whether a database save would take effect.
-    let loaded = match &cli.config {
-        Some(path) => Config::load_from_tracked(path)?,
-        None => Config::load_tracked()?,
+    //
+    // A config file named on the command line or by `NANOFILE_CONFIG` has to
+    // exist. These paths are what a login auto-start entry and a Windows service
+    // registration record, so a moved folder leaves them pointing at nothing —
+    // and falling back to built-in defaults would quietly start a *second*
+    // instance against the default database and port instead of reporting the
+    // broken reference.
+    //
+    // Failing here is before the subscriber exists, so the reason has to be
+    // delivered by hand: a log file, and a dialog when there is a desktop to
+    // show one on.
+    let loaded = match Config::load_for_start(cli.config.as_deref()) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            logging::report_startup_failure(&e, true);
+            return Err(e);
+        }
     };
     let mut config = loaded.config;
     let env_keys = loaded.env_keys;
 
-    // Same resolution order as `Config::load()` — the tray's auto-start
-    // entries pass it on and the log target persistence uses it.
+    // The path this start was told to use — the tray's auto-start entries pass
+    // it on, and the log target persistence uses it.
     let config_path: PathBuf = match &cli.config {
         Some(path) => path.clone(),
         None => std::env::var(infra::config::CONFIG_PATH_ENV)
