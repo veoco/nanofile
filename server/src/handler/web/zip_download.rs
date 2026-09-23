@@ -46,23 +46,131 @@ struct ZipTaskInfo {
 
 // ── In-memory token store ──────────────────────────────────────────────
 
-static ZIP_TASKS: OnceLock<Mutex<HashMap<String, ZipTaskInfo>>> = OnceLock::new();
+/// Unconsumed zip-download tokens, bounded by **both** a count and a byte
+/// budget.
+///
+/// The byte budget is the one that decides memory use: a token carries the full
+/// entry list, and `ZipFileEntry::block_ids` is a per-file vector of 40-char
+/// ids, so `max_zip_entries` entries times concurrently-held tokens reaches
+/// gigabytes on a directory of large files. A count cap alone would not stop
+/// that.
+#[derive(Default)]
+struct ZipTaskRegistry {
+    tasks: HashMap<String, ZipTaskInfo>,
+    /// Sum of [`ZipTaskInfo::entry_bytes`] over `tasks`, kept in step with
+    /// every insert and removal so the budget check is O(1).
+    bytes: usize,
+}
 
-/// TTL for an unconsumed zip task, and a hard cap on the in-memory map so a
-/// flood of zip-task requests can't grow it without bound.
+impl ZipTaskInfo {
+    /// Rough heap footprint of one registry entry, used only for the byte
+    /// budget. Deliberately an over-estimate: it counts the struct, the map key
+    /// and every owned string (including each block id).
+    fn entry_bytes(token: &str, info: &Self) -> usize {
+        let files: usize = info
+            .files
+            .iter()
+            .map(|f| {
+                std::mem::size_of::<ZipFileEntry>()
+                    + f.path_in_zip.len()
+                    + f.block_ids
+                        .iter()
+                        .map(|b| b.len() + std::mem::size_of::<String>())
+                        .sum::<usize>()
+            })
+            .sum();
+        std::mem::size_of::<Self>()
+            + token.len()
+            + std::mem::size_of::<String>()
+            + info.repo_id.len()
+            + info.zip_name.len()
+            + files
+    }
+}
+
+impl ZipTaskRegistry {
+    /// Drop tokens older than [`ZIP_TASK_TTL_SECS`], returning their bytes to
+    /// the budget.
+    fn sweep(&mut self, now: i64) {
+        let mut freed = 0usize;
+        self.tasks.retain(|token, task| {
+            let keep = now - task.created_at < ZIP_TASK_TTL_SECS;
+            if !keep {
+                freed += ZipTaskInfo::entry_bytes(token, task);
+            }
+            keep
+        });
+        self.bytes = self.bytes.saturating_sub(freed);
+    }
+
+    /// Insert a token, evicting oldest-first until both budgets hold.
+    ///
+    /// Returns `false` when the entry alone exceeds `max_bytes`, which is a
+    /// request that can never be satisfied rather than one to wait for.
+    fn insert(
+        &mut self,
+        token: String,
+        info: ZipTaskInfo,
+        max_count: usize,
+        max_bytes: usize,
+    ) -> bool {
+        let bytes = ZipTaskInfo::entry_bytes(&token, &info);
+        if max_bytes > 0 && bytes > max_bytes {
+            return false;
+        }
+        loop {
+            let over_count = max_count > 0 && self.tasks.len() >= max_count;
+            let over_bytes = max_bytes > 0 && self.bytes + bytes > max_bytes;
+            if !over_count && !over_bytes {
+                break;
+            }
+            let Some(oldest) = self
+                .tasks
+                .iter()
+                .min_by_key(|(_, task)| task.created_at)
+                .map(|(token, _)| token.clone())
+            else {
+                break;
+            };
+            if let Some(removed) = self.tasks.remove(&oldest) {
+                self.bytes = self
+                    .bytes
+                    .saturating_sub(ZipTaskInfo::entry_bytes(&oldest, &removed));
+            }
+        }
+        self.bytes += bytes;
+        self.tasks.insert(token, info);
+        true
+    }
+
+    /// Consume a token, returning its bytes to the budget.
+    fn take(&mut self, token: &str) -> Option<ZipTaskInfo> {
+        let removed = self.tasks.remove(token)?;
+        self.bytes = self
+            .bytes
+            .saturating_sub(ZipTaskInfo::entry_bytes(token, &removed));
+        Some(removed)
+    }
+}
+
+static ZIP_TASKS: OnceLock<Mutex<ZipTaskRegistry>> = OnceLock::new();
+
+/// TTL for an unconsumed zip task, and a hard cap on how many may be held at
+/// once. The byte budget in [`ZipTaskRegistry`] is the binding limit in
+/// practice.
 const ZIP_TASK_TTL_SECS: i64 = 3600;
 const MAX_ZIP_TASKS: usize = 1000;
 
-fn zip_tasks() -> &'static Mutex<HashMap<String, ZipTaskInfo>> {
-    ZIP_TASKS.get_or_init(|| Mutex::new(HashMap::new()))
+fn zip_tasks() -> &'static Mutex<ZipTaskRegistry> {
+    ZIP_TASKS.get_or_init(|| Mutex::new(ZipTaskRegistry::default()))
 }
 
 /// Remove zip tasks older than `ZIP_TASK_TTL_SECS`. Called on new task
 /// creation and periodically by the scheduler so abandoned tasks don't
 /// accumulate.
 pub fn cleanup_expired(now: i64) {
-    if let Ok(mut tasks) = zip_tasks().lock() {
-        tasks.retain(|_, t| now - t.created_at < ZIP_TASK_TTL_SECS);
+    if let Ok(mut registry) = zip_tasks().lock() {
+        registry.sweep(now);
     }
 }
 
@@ -223,16 +331,14 @@ pub async fn zip_task_handler(
     let token = generate_token();
     let now = now_secs();
 
-    // Purge abandoned tasks and enforce the in-memory cap.
+    // Purge abandoned tasks and enforce the count/byte budgets.
     cleanup_expired(now);
     {
-        let mut tasks = zip_tasks()
+        let max_bytes = state.config().storage.max_zip_task_bytes as usize;
+        let mut registry = zip_tasks()
             .lock()
             .map_err(|_| AppError::Internal("zip task registry poisoned".into()))?;
-        if tasks.len() >= MAX_ZIP_TASKS {
-            return Err(AppError::TooManyRequests);
-        }
-        tasks.insert(
+        let stored = registry.insert(
             token.clone(),
             ZipTaskInfo {
                 repo_id: repo_id.clone(),
@@ -241,7 +347,12 @@ pub async fn zip_task_handler(
                 zip_name,
                 created_at: now,
             },
+            MAX_ZIP_TASKS,
+            max_bytes,
         );
+        if !stored {
+            return Err(AppError::TooManyRequests);
+        }
     }
 
     Ok(JsonResponse(ZipTaskResponse { zip_token: token }))
@@ -259,11 +370,11 @@ pub async fn zip_download_handler(
 ) -> Result<Response, AppError> {
     // Look up the task
     let task = {
-        let mut tasks = zip_tasks()
+        let mut registry = zip_tasks()
             .lock()
             .map_err(|_| AppError::Internal("zip task registry poisoned".into()))?;
-        tasks
-            .remove(&token)
+        registry
+            .take(&token)
             .ok_or_else(|| AppError::NotFound("Zip task not found or expired".into()))?
     };
 
@@ -353,5 +464,129 @@ pub struct JsonResponse<T: serde::Serialize>(pub T);
 impl<T: serde::Serialize> IntoResponse for JsonResponse<T> {
     fn into_response(self) -> Response {
         axum::Json(self.0).into_response()
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    fn entry(path: &str, blocks: usize) -> ZipFileEntry {
+        ZipFileEntry {
+            path_in_zip: path.to_string(),
+            block_ids: (0..blocks).map(|i| format!("{i:040x}")).collect(),
+            size: 1,
+        }
+    }
+
+    fn info(files: Vec<ZipFileEntry>, created_at: i64) -> ZipTaskInfo {
+        ZipTaskInfo {
+            repo_id: "repo".to_string(),
+            user_id: 1,
+            files,
+            zip_name: "z".to_string(),
+            created_at,
+        }
+    }
+
+    fn bytes_of(token: &str, files: Vec<ZipFileEntry>) -> usize {
+        ZipTaskInfo::entry_bytes(token, &info(files, 0))
+    }
+
+    /// The byte budget — not the token count — is what bounds memory: once it
+    /// is reached, the oldest tokens are evicted to make room.
+    #[test]
+    fn byte_budget_evicts_the_oldest_tokens() {
+        let mut registry = ZipTaskRegistry::default();
+        let files = || vec![entry("a.txt", 40)];
+        let one = bytes_of("t0", files());
+
+        assert!(registry.insert("t0".into(), info(files(), 100), 0, one * 2));
+        assert!(registry.insert("t1".into(), info(files(), 200), 0, one * 2));
+        assert!(registry.insert("t2".into(), info(files(), 300), 0, one * 2));
+
+        assert_eq!(registry.tasks.len(), 2, "the budget holds two tokens");
+        assert!(!registry.tasks.contains_key("t0"), "the oldest is evicted");
+        assert!(registry.tasks.contains_key("t1"));
+        assert!(registry.tasks.contains_key("t2"));
+        assert!(registry.bytes <= one * 2, "the tally stays within budget");
+    }
+
+    /// An archive whose listing alone exceeds the whole budget can never be
+    /// served from memory, so it is refused rather than evicting everything
+    /// else to make room for something that still would not fit.
+    #[test]
+    fn an_oversized_token_is_refused_without_evicting() {
+        let mut registry = ZipTaskRegistry::default();
+        let one = bytes_of("small", vec![entry("a.txt", 4)]);
+        assert!(registry.insert("small".into(), info(vec![entry("a.txt", 4)], 1), 0, one * 2));
+
+        let big = vec![entry("big.bin", 4000)];
+        assert!(
+            !registry.insert("big".into(), info(big, 2), 0, one * 2),
+            "an entry larger than the whole budget must be refused"
+        );
+        assert!(
+            registry.tasks.contains_key("small"),
+            "refusing must not evict the tokens already stored"
+        );
+    }
+
+    /// The count cap evicts rather than failing, and consuming a token returns
+    /// its bytes to the budget.
+    #[test]
+    fn count_cap_evicts_and_take_frees_bytes() {
+        let mut registry = ZipTaskRegistry::default();
+        assert!(registry.insert("t0".into(), info(vec![entry("a.txt", 4)], 1), 1, 0));
+        assert_eq!(registry.tasks.len(), 1);
+        let with_one = registry.bytes;
+
+        assert!(registry.insert("t1".into(), info(vec![entry("a.txt", 4)], 2), 1, 0));
+        assert_eq!(registry.tasks.len(), 1);
+        assert!(
+            !registry.tasks.contains_key("t0"),
+            "the count cap evicts the oldest"
+        );
+        assert_eq!(registry.bytes, with_one, "the tally follows the eviction");
+
+        assert!(registry.take("t1").is_some());
+        assert_eq!(registry.bytes, 0, "consuming returns the bytes");
+        assert!(registry.take("t1").is_none());
+    }
+
+    /// Expiry returns the bytes too, so the budget cannot be pinned by
+    /// abandoned tokens.
+    #[test]
+    fn sweep_drops_expired_tokens_and_their_bytes() {
+        let mut registry = ZipTaskRegistry::default();
+        let base = 1_000;
+        let fresh_at = base + ZIP_TASK_TTL_SECS;
+        // The token itself is part of an entry's footprint, so the two sizes
+        // differ; compute each from the token it is actually stored under.
+        let old_bytes = ZipTaskInfo::entry_bytes("old", &info(vec![entry("a.txt", 4)], base));
+        let fresh_bytes =
+            ZipTaskInfo::entry_bytes("fresh", &info(vec![entry("a.txt", 4)], fresh_at));
+
+        registry.insert("old".into(), info(vec![entry("a.txt", 4)], base), 0, 0);
+        registry.insert(
+            "fresh".into(),
+            info(vec![entry("a.txt", 4)], fresh_at),
+            0,
+            0,
+        );
+        assert_eq!(registry.bytes, old_bytes + fresh_bytes);
+
+        registry.sweep(fresh_at + 1);
+
+        assert_eq!(registry.tasks.len(), 1);
+        assert!(
+            !registry.tasks.contains_key("old"),
+            "expired token is dropped"
+        );
+        assert!(registry.tasks.contains_key("fresh"));
+        assert_eq!(
+            registry.bytes, fresh_bytes,
+            "the expired token's bytes are freed"
+        );
     }
 }

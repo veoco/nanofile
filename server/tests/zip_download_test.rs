@@ -292,6 +292,7 @@ async fn test_zip_task_rejects_when_entry_limit_reached() {
     let f = TestFixture::new_with_zip_limits(ZipLimits {
         max_entries: 2,
         max_bytes: 0,
+        ..Default::default()
     })
     .await;
     upload(&f, "/", "z1.txt", b"a").await;
@@ -321,6 +322,7 @@ async fn test_zip_task_rejects_when_byte_limit_reached() {
     let f = TestFixture::new_with_zip_limits(ZipLimits {
         max_entries: 0,
         max_bytes: 5,
+        ..Default::default()
     })
     .await;
     upload(&f, "/", "b1.txt", b"12345").await;
@@ -334,5 +336,30 @@ async fn test_zip_task_rejects_when_byte_limit_reached() {
         resp.status(),
         429,
         "zip-task should be rejected over the byte cap"
+    );
+}
+
+/// The in-memory token budget is enforced: an archive whose listing cannot fit
+/// the configured byte budget is refused rather than cached, so a flood of
+/// zip-task requests cannot pin an unbounded amount of memory.
+#[tokio::test]
+async fn test_zip_task_rejects_when_token_budget_is_too_small() {
+    let f = TestFixture::new_with_zip_limits(ZipLimits {
+        max_entries: 0,
+        max_bytes: 0,
+        // Below the footprint of even a one-file listing.
+        max_task_bytes: 1,
+    })
+    .await;
+    upload(&f, "/", "small.txt", b"a").await;
+
+    let resp = f
+        .client
+        .zip_task(&f.api_token, &f.repo_id, "/", &["small.txt"])
+        .await;
+    assert_eq!(
+        resp.status(),
+        429,
+        "a listing larger than the whole token budget must be refused"
     );
 }

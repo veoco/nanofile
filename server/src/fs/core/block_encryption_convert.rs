@@ -19,7 +19,6 @@
 //! is probed only once.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base::error::AppError;
@@ -42,46 +41,53 @@ impl BlockEncryptionConverter {
     /// Convert every legacy plaintext block to ciphertext, in bounded batches
     /// with a short sleep between batches to keep load smooth. Returns the
     /// number of blocks converted.
+    ///
+    /// Block ids are streamed from the store through a bounded channel and
+    /// converted as they arrive, so the walk never holds a library's whole id
+    /// list — let alone every library's — in memory. The channel also bounds
+    /// how far the walk can run ahead of the conversion.
     pub async fn convert_legacy_blocks(
         block_store: &DynBlockStorage,
         batch_limit: usize,
         batch_sleep: Duration,
     ) -> Result<u64, AppError> {
-        // 1. Collect every `(repo_id, block_id)` pair. The callbacks are
-        //    synchronous `'static` `FnMut`s and cannot await, so they only
-        //    collect ids into an Arc-shared buffer; conversion happens below.
-        let pairs = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
-        for (repo_id, _dir) in block_store.repo_dirs().await? {
-            let pairs_ref = pairs.clone();
-            let owner = repo_id.clone();
-            block_store
-                .for_each_block_in_repo(
-                    &repo_id,
-                    Box::new(move |id| {
-                        pairs_ref
-                            .lock()
-                            .unwrap()
-                            .push((owner.clone(), id.to_string()))
-                    }),
-                )
-                .await?;
-        }
-        let pairs = pairs.lock().unwrap().clone();
+        let batch_limit = batch_limit.max(1);
+        let repo_ids: Vec<String> = block_store
+            .repo_dirs()
+            .await?
+            .into_iter()
+            .map(|(repo_id, _dir)| repo_id)
+            .collect();
 
-        // 2. Probe and convert in batches, sleeping between batches so a large
-        //    store never hogs CPU/IO in one burst.
         let mut converted = 0u64;
-        for chunk in pairs.chunks(batch_limit) {
-            for (repo_id, id) in chunk {
-                match block_store.convert_legacy_block(repo_id, id).await {
+        for repo_id in repo_ids {
+            // The walk is a separate task because the callback-style
+            // enumeration cannot await the per-block conversion; the bounded
+            // channel is what keeps the two in step.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(batch_limit * 2);
+            let store = block_store.clone();
+            let walk_repo = repo_id.clone();
+            let walker =
+                tokio::spawn(async move { store.stream_blocks_in_repo(&walk_repo, tx).await });
+
+            let mut since_sleep = 0usize;
+            while let Some(id) = rx.recv().await {
+                match block_store.convert_legacy_block(&repo_id, &id).await {
                     Ok(true) => converted += 1, // plaintext → ciphertext
                     Ok(false) => {}             // already ciphertext
                     Err(e) => return Err(AppError::internal(e.to_string())),
                 }
+                since_sleep += 1;
+                if since_sleep == batch_limit {
+                    since_sleep = 0;
+                    tokio::time::sleep(batch_sleep).await;
+                }
             }
-            if chunk.len() == batch_limit {
-                tokio::time::sleep(batch_sleep).await;
-            }
+
+            walker
+                .await
+                .map_err(|e| AppError::internal(format!("block walk task failed: {e}")))?
+                .map_err(|e| AppError::internal(e.to_string()))?;
         }
         Ok(converted)
     }
@@ -94,6 +100,7 @@ mod tests {
     use infra::storage::BlockStorageBackend;
     use infra::storage::block_store::BlockStorage;
     use infra::storage::encrypting_block_store::{BlockEncryptionMode, EncryptingBlockStore};
+    use std::sync::Arc;
 
     const MASTER: [u8; 32] = [0x42; 32];
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
