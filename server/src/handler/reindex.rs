@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::ReindexProgress;
 use crate::middleware::auth::AuthUser;
+use crate::tasks::compat::reindex_progress as project_reindex_progress;
+use crate::tasks::run::{RunId, Viewer};
+use crate::tasks::spec::JobKey;
 use base::error::AppError;
 
 #[derive(Deserialize)]
@@ -76,7 +78,7 @@ pub async fn index_file_text(
 ///
 /// Rebuild the full-text search index for all files in a repository.
 ///
-/// Runs as a background task so large repositories don't block the HTTP
+/// Runs as a background job so large repositories don't block the HTTP
 /// response. The task id can be polled via `GET /api2/reindex-progress/`.
 ///
 /// Only the repo owner or a server admin may trigger a reindex. A per-repo
@@ -92,10 +94,11 @@ pub async fn reindex(
     // Only owner or admin may trigger a full reindex.
     svc.check_repo_admin(&req.repo_id, auth.user_id).await?;
 
-    let indexer = state
-        .indexer
-        .clone()
-        .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
+    if state.indexer.is_none() {
+        return Err(AppError::BadRequest(
+            "full-text indexing is not enabled".into(),
+        ));
+    }
 
     // Rate-limit per user to prevent abuse.
     let rl_key = format!("reindex:{}", auth.user_id);
@@ -103,99 +106,24 @@ pub async fn reindex(
         return Err(AppError::TooManyRequests);
     }
 
-    // Per-repo dedup: only one reindex at a time per repo.
-    {
-        let mut running = state
-            .reindex_running
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if running.contains_key(&req.repo_id) {
-            return Err(AppError::Conflict(
-                "reindex already in progress for this repo".into(),
-            ));
-        }
-        running.insert(req.repo_id.clone(), ());
-    }
+    // Per-repo dedup: only one reindex at a time per repo. The task system
+    // enforces this from the job's declared dedup key, so there is no second
+    // map to keep in step.
+    let task_id = state.tasks.submit_with_details(
+        JobKey::Reindex,
+        Some(auth.user_id),
+        serde_json::json!({ "repo_id": req.repo_id }),
+        format!("Reindex \"{}\"", req.repo_id),
+        None,
+        vec![("repo_id", serde_json::json!(req.repo_id.clone()))],
+    )?;
 
     // Dedup passed — consume a rate-limit slot.
     state.auth_limiters.reindex.record_attempt(&rl_key);
 
-    let task_id = uuid::Uuid::new_v4().to_string();
-    {
-        let mut map = state
-            .reindex_tasks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        map.insert(
-            task_id.clone(),
-            ReindexProgress {
-                state: "running".to_string(),
-                repo_id: req.repo_id.clone(),
-                done_count: 0,
-                total: 0,
-                indexed: 0,
-                skipped: 0,
-                error: None,
-                finished_at: None,
-                creator_id: auth.user_id,
-            },
-        );
-    }
-
-    let state_clone = state.clone();
-    let tid = task_id.clone();
-    let rid = req.repo_id.clone();
-    let block_store = state.block_store.clone();
-
-    tokio::spawn(async move {
-        let progress_handle = state_clone.reindex_tasks.clone();
-        let tid_inner = tid.clone();
-        let on_progress = move |done: u64, total: u64| {
-            if let Ok(mut map) = progress_handle.lock()
-                && let Some(p) = map.get_mut(&tid_inner)
-            {
-                p.done_count = done;
-                p.total = total;
-            }
-        };
-
-        let result = state_clone
-            .admin_service()
-            .reindex(&indexer, &rid, &block_store, on_progress)
-            .await;
-
-        let now = chrono::Utc::now().timestamp();
-        let mut map = state_clone
-            .reindex_tasks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(p) = map.get_mut(&tid) {
-            match result {
-                Ok((indexed, skipped)) => {
-                    p.state = "completed".to_string();
-                    p.indexed = indexed;
-                    p.skipped = skipped;
-                }
-                Err(e) => {
-                    p.state = "failed".to_string();
-                    p.error = Some(e.to_string());
-                }
-            }
-            p.finished_at = Some(now);
-        }
-        drop(map);
-
-        // Release the per-repo dedup lock.
-        let mut running = state_clone
-            .reindex_running
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        running.remove(&rid);
-    });
-
     Ok(Json(ReindexResponse {
         status: "ok".to_string(),
-        task_id,
+        task_id: task_id.as_str().to_string(),
     }))
 }
 
@@ -203,42 +131,28 @@ pub async fn reindex(
 ///
 /// Poll the progress of a background reindex task. Only the task creator
 /// or a server admin may query progress. Completed tasks are purged after
-/// one hour to bound memory usage.
+/// one hour, by the run store's sweeper rather than by this read path.
 pub async fn reindex_progress(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Query(q): Query<ReindexProgressQuery>,
-) -> Result<Json<ReindexProgress>, AppError> {
-    let now = chrono::Utc::now().timestamp();
-
-    // Lock, do TTL cleanup, fetch the progress entry, then drop the guard
-    // before any async DB query so the future stays Send.
-    let progress = {
-        let mut map = state
-            .reindex_tasks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
-        // TTL cleanup: drop completed/failed tasks older than 1 hour.
-        map.retain(|_, p| !matches!(p.finished_at, Some(ts) if now - ts > 3600));
-
-        map.get(&q.task_id)
-            .cloned()
-            .ok_or_else(|| AppError::NotFound("reindex task not found".into()))?
-    };
-
-    // Only the creator or an admin may view progress.
-    if progress.creator_id != auth.user_id {
-        let user = state
+) -> Result<Json<serde_json::Value>, AppError> {
+    // The viewer check is part of the lookup, so a run that exists but belongs
+    // to somebody else is reported exactly like one that does not.
+    let viewer = Viewer::User {
+        id: auth.user_id,
+        is_admin: state
             .repos
             .user
             .find_by_id(auth.user_id)
             .await?
-            .ok_or(AppError::Forbidden)?;
-        if !user.is_admin {
-            return Err(AppError::Forbidden);
-        }
-    }
+            .is_some_and(|user| user.is_admin),
+    };
+    let run = state
+        .tasks
+        .store()
+        .get_for(&RunId::from_client(q.task_id), viewer)
+        .ok_or_else(|| AppError::NotFound("reindex task not found".into()))?;
 
-    Ok(Json(progress))
+    Ok(Json(project_reindex_progress(&run)))
 }

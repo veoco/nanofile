@@ -15,10 +15,12 @@
 //! job and does not belong in the run table.
 
 pub mod catalog;
+pub mod compat;
 pub mod context;
 pub mod executor;
 pub mod registry;
 pub mod run;
+pub mod setup;
 pub mod spec;
 pub mod store;
 
@@ -32,19 +34,41 @@ use tokio_util::sync::CancellationToken;
 use self::context::JobContext;
 use self::registry::{JobRegistry, RegisteredJob, RegistryError};
 use self::run::{JobRun, JobState, Params, RunId, Viewer};
-use self::spec::{Dedup, JobKey, Priority};
+use self::spec::{Dedup, JobKey, OverlapPolicy, Priority};
 use self::store::{RunFilter, RunLimits, RunStore};
 
 pub use self::run::{JobFailure, Outcome, Progress};
 pub use self::spec::{ChunkPolicy, Durability, Resource, TimeoutPolicy, Trigger, Visibility};
 
+/// Lifetime counters for one job, for the administrator's view.
+///
+/// Process-lifetime, like the task system itself, so the numbers survive an
+/// in-place restart. They are aggregates, not a substitute for the run table:
+/// the run table keeps what happened recently, these keep the totals.
+#[derive(Clone, Debug, Default)]
+pub struct JobStats {
+    pub run_count: u64,
+    pub success_count: u64,
+    pub error_count: u64,
+    pub last_run_at: Option<i64>,
+    pub last_duration_ms: u64,
+    pub last_success_message: String,
+    pub last_error_message: String,
+    pub total_processed: u64,
+    /// Terminal state of the most recent run, for the listing.
+    pub last_state: Option<JobState>,
+}
+
 /// Process-wide admission limits.
 #[derive(Clone, Copy, Debug)]
 pub struct TaskLimits {
+    /// How many runs may be active server-wide, across every job. `0` means
+    /// unlimited. The backstop behind the per-user cap.
+    pub max_active_total: usize,
     /// How many runs one user may have active at once, across every job. `0`
     /// means unlimited.
     ///
-    /// The old cap was a single server-wide number, so one account could take
+    /// The old cap was only the server-wide number, so one account could take
     /// every slot and the next user got a 429.
     pub max_active_per_user: usize,
     pub runs: RunLimits,
@@ -53,6 +77,7 @@ pub struct TaskLimits {
 impl Default for TaskLimits {
     fn default() -> Self {
         Self {
+            max_active_total: 100,
             max_active_per_user: 8,
             runs: RunLimits::default(),
         }
@@ -68,8 +93,14 @@ struct Inner {
     /// Live runs' cancellation handles, so a caller can stop one.
     cancels: RwLock<HashMap<RunId, CancellationToken>>,
     limits: RwLock<TaskLimits>,
-    /// Cancelled when the server generation ends.
-    shutdown: CancellationToken,
+    /// The current server generation's cancellation token. Replaced by
+    /// [`TaskSystem::install`], because the task system outlives a generation
+    /// while the token does not.
+    shutdown: RwLock<CancellationToken>,
+    /// Long-lived services of the current generation, for the admin listing.
+    services: RwLock<Vec<&'static str>>,
+    /// Lifetime counters per job.
+    stats: RwLock<HashMap<JobKey, JobStats>>,
 }
 
 /// The task system.
@@ -100,7 +131,9 @@ impl TaskSystem {
                 store: RunStore::new(limits.runs),
                 cancels: RwLock::new(HashMap::new()),
                 limits: RwLock::new(limits),
-                shutdown,
+                shutdown: RwLock::new(shutdown),
+                services: RwLock::new(Vec::new()),
+                stats: RwLock::new(HashMap::new()),
             }),
         })
     }
@@ -112,8 +145,66 @@ impl TaskSystem {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Register a job. Called during startup; a duplicate or a mis-declared
-    /// policy is refused rather than silently accepted.
+    /// Bind this generation's job set and cancellation token.
+    ///
+    /// The task system is process-lifetime so that run history and schedule
+    /// state survive an in-place restart; the *bodies* are not, because they
+    /// capture the generation's database pool, block store and indexer. So each
+    /// generation replaces the whole set here rather than adding to it. The
+    /// policies are identical every time (they come from
+    /// [`catalog`](self::catalog)); only the bodies differ.
+    ///
+    /// Validation happens against the fresh set, so a mis-declared job fails
+    /// before anything is swapped in.
+    pub fn install(
+        &self,
+        jobs: Vec<RegisteredJob>,
+        shutdown: CancellationToken,
+    ) -> Result<(), RegistryError> {
+        let mut fresh = JobRegistry::new();
+        for job in jobs {
+            fresh.register(job)?;
+        }
+        let mut permits = HashMap::new();
+        for job in fresh.jobs() {
+            permits.insert(job.key(), Arc::new(Semaphore::new(job.spec.max_concurrent)));
+        }
+        *self
+            .inner
+            .registry
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = fresh;
+        *self
+            .inner
+            .permits
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = permits;
+        *self
+            .inner
+            .shutdown
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = shutdown;
+        // Services are spawned per generation, so the listing is rebuilt with
+        // it rather than accumulating stale names.
+        self.inner
+            .services
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        Ok(())
+    }
+
+    /// The current generation's cancellation token.
+    pub fn shutdown_token(&self) -> CancellationToken {
+        self.inner
+            .shutdown
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Register a single job. Used by tests and by anything that adds a job
+    /// outside the standard set.
     pub fn register(&self, job: RegisteredJob) -> Result<(), RegistryError> {
         let key = job.key();
         let concurrency = job.spec.max_concurrent;
@@ -177,6 +268,21 @@ impl TaskSystem {
         summary: impl Into<String>,
         expected_total: Option<u64>,
     ) -> Result<RunId, AppError> {
+        self.submit_with_details(key, owner, params, summary, expected_total, Vec::new())
+    }
+
+    /// Submit with small job-specific facts for the wire projection that must
+    /// outlive the params.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_with_details(
+        &self,
+        key: JobKey,
+        owner: Option<i32>,
+        params: Params,
+        summary: impl Into<String>,
+        expected_total: Option<u64>,
+        details: Vec<(&str, serde_json::Value)>,
+    ) -> Result<RunId, AppError> {
         let job = self
             .job(key)
             .ok_or_else(|| AppError::Internal(format!("job {key:?} is not registered")))?;
@@ -187,6 +293,11 @@ impl TaskSystem {
         let limits = self.limits();
         if job.spec.queue_depth > 0
             && self.inner.store.count_active(key, owner) >= job.spec.queue_depth
+        {
+            return Err(AppError::TooManyRequests);
+        }
+        if limits.max_active_total > 0
+            && self.inner.store.count_active_all(None) >= limits.max_active_total
         {
             return Err(AppError::TooManyRequests);
         }
@@ -213,7 +324,7 @@ impl TaskSystem {
             )));
         }
 
-        let run = JobRun::queued(
+        let mut run = JobRun::queued(
             key,
             job.spec.visibility,
             owner,
@@ -222,6 +333,9 @@ impl TaskSystem {
             expected_total,
             now,
         );
+        for (name, value) in details {
+            run.set_detail(name, value);
+        }
         let id = run.id.clone();
         self.inner.store.insert(run.clone())?;
 
@@ -272,7 +386,9 @@ impl TaskSystem {
             None => None,
         };
 
+        let started = std::time::Instant::now();
         let report = executor::execute(&job, &run, params, &self.inner.store, cancel.clone()).await;
+        self.record_stats(job.key(), &report, started.elapsed());
         tracing::debug!(
             job = job.name(),
             run = %run.id,
@@ -280,6 +396,57 @@ impl TaskSystem {
             attempts = report.attempts,
             "job finished"
         );
+    }
+
+    /// Fold one finished run into the job's lifetime counters.
+    ///
+    /// Aggregates rather than the run table: the table keeps what happened
+    /// recently, these keep the totals an administrator compares over time.
+    fn record_stats(
+        &self,
+        key: JobKey,
+        report: &executor::RunReport,
+        elapsed: std::time::Duration,
+    ) {
+        let mut stats = self
+            .inner
+            .stats
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let entry = stats.entry(key).or_default();
+        entry.run_count += 1;
+        entry.last_run_at = Some(chrono::Utc::now().timestamp());
+        entry.last_duration_ms = elapsed.as_millis() as u64;
+        entry.last_state = Some(report.state.clone());
+        if report.state == JobState::Succeeded {
+            entry.success_count += 1;
+            if let Some(outcome) = &report.outcome {
+                entry.last_success_message = outcome.message.clone();
+                if let Some(processed) = outcome.processed {
+                    entry.total_processed += processed;
+                }
+            }
+        } else {
+            entry.error_count += 1;
+            entry.last_error_message = match &report.state {
+                JobState::Failed(message) => message.clone(),
+                JobState::TimedOut => "timed out".to_string(),
+                JobState::Cancelled => "cancelled".to_string(),
+                JobState::Interrupted => "interrupted by a restart".to_string(),
+                _ => String::new(),
+            };
+        }
+    }
+
+    /// Lifetime counters for one job.
+    pub fn stats(&self, key: JobKey) -> JobStats {
+        self.inner
+            .stats
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&key)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Run request-scoped work under a job's concurrency limit, keeping no
@@ -326,7 +493,7 @@ impl TaskSystem {
             id,
             key,
             None,
-            self.inner.shutdown.child_token(),
+            self.shutdown_token().child_token(),
             sink,
             context::BudgetSignal::full(),
             job.spec.chunkable,
@@ -467,7 +634,119 @@ impl TaskSystem {
 
     /// Whether the process is shutting down.
     pub fn is_shutting_down(&self) -> bool {
-        self.inner.shutdown.is_cancelled()
+        self.shutdown_token().is_cancelled()
+    }
+
+    /// Start the interval loops for every periodic job and the single run
+    /// sweeper.
+    ///
+    /// Called once per server generation, after registration. Nothing else
+    /// decides when a periodic job runs.
+    pub fn start_schedules(&self) {
+        for job in self.jobs() {
+            let Trigger::Periodic {
+                interval_secs,
+                overlap,
+            } = job.spec.trigger
+            else {
+                continue;
+            };
+            let system = self.clone();
+            let shutdown = self.shutdown_token().child_token();
+            tokio::spawn(async move {
+                let mut ticker =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(1)));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                // The first tick completes immediately; consume it so a start-up
+                // does not fire every job at once, and so the first run waits a
+                // full interval, as the scheduler it replaces did.
+                ticker.tick().await;
+                tracing::info!(job = job.name(), interval_secs, "scheduled job started");
+                loop {
+                    tokio::select! {
+                        _ = shutdown.cancelled() => {
+                            tracing::info!(job = job.name(), "scheduled job stopped");
+                            break;
+                        }
+                        _ = ticker.tick() => {
+                            system.tick(&job, overlap);
+                        }
+                    }
+                }
+            });
+        }
+
+        // One sweeper for the whole run table, rather than each read path
+        // tidying up after itself while holding a lock.
+        let system = self.clone();
+        let shutdown = self.shutdown_token().child_token();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticker.tick().await;
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = ticker.tick() => {
+                        let dropped = system.sweep();
+                        if dropped > 0 {
+                            tracing::debug!(dropped, "swept expired job runs");
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Fire one periodic tick. Returns whether a run was submitted.
+    fn tick(&self, job: &Arc<RegisteredJob>, overlap: OverlapPolicy) -> bool {
+        if overlap == OverlapPolicy::Skip && self.inner.store.count_active(job.key(), None) > 0 {
+            tracing::debug!(
+                job = job.name(),
+                "skipping a tick: the previous run is still active"
+            );
+            return false;
+        }
+        match self.submit(job.key(), None, Params::Null, job.name(), None) {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(job = job.name(), error = %e, "could not submit a scheduled run");
+                false
+            }
+        }
+    }
+
+    /// Run a long-lived background service: a loop with no owner, no progress
+    /// and no terminal state.
+    ///
+    /// Deliberately not a job. An event listener has nothing to poll and nothing
+    /// to retry, so a run record would only add noise to the table; what it
+    /// needs is a lifecycle and a cancellation token.
+    pub fn spawn_service<F, Fut>(&self, name: &'static str, task: F)
+    where
+        F: FnOnce(CancellationToken) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        self.inner
+            .services
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(name);
+        let token = self.shutdown_token().child_token();
+        tokio::spawn(async move {
+            tracing::info!(service = name, "service started");
+            task(token).await;
+            tracing::info!(service = name, "service stopped");
+        });
+    }
+
+    /// Long-lived services of the current generation.
+    pub fn services(&self) -> Vec<&'static str> {
+        self.inner
+            .services
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The priority of a registered job, for the admin listing.
@@ -827,6 +1106,39 @@ mod tests {
             .unwrap();
         assert!(matches!(
             system.submit(JobKey::Copy, Some(1), copy_params(&["a"]), "a", None),
+            Err(AppError::TooManyRequests)
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_global_active_cap_is_enforced() {
+        let system = TaskSystem::new(
+            TaskLimits {
+                max_active_total: 1,
+                max_active_per_user: 0,
+                ..TaskLimits::default()
+            },
+            CancellationToken::new(),
+        );
+        system
+            .register(RegisteredJob::new(
+                JobSpec {
+                    max_concurrent: 10,
+                    ..catalog::policy(JobKey::Copy)
+                },
+                Arc::new(|_ctx, _params| {
+                    Box::pin(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        Ok(Outcome::ok())
+                    })
+                }),
+            ))
+            .unwrap();
+        system
+            .submit(JobKey::Copy, Some(1), copy_params(&["a"]), "a", None)
+            .unwrap();
+        assert!(matches!(
+            system.submit(JobKey::Copy, Some(2), copy_params(&["b"]), "b", None),
             Err(AppError::TooManyRequests)
         ));
     }

@@ -934,10 +934,34 @@ pub static CATALOG: &[SettingDef] = &[
         Storage,
         "NANOFILE_TASKS_MAX_ACTIVE",
         Kind::U64,
-        Apply::LiveWithHook(Hook::TaskManager),
+        Apply::LiveWithHook(Hook::TaskSystem),
         |c| c.tasks.max_active_tasks.to_string(),
         |c, v| {
             c.tasks.max_active_tasks = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "tasks.max_active_per_user",
+        Storage,
+        "NANOFILE_TASKS_MAX_ACTIVE_PER_USER",
+        Kind::U64,
+        Apply::LiveWithHook(Hook::TaskSystem),
+        |c| c.tasks.max_active_per_user.to_string(),
+        |c, v| {
+            c.tasks.max_active_per_user = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "tasks.max_retained_bytes",
+        Storage,
+        "NANOFILE_TASKS_MAX_RETAINED_BYTES",
+        Kind::U64,
+        Apply::LiveWithHook(Hook::TaskSystem),
+        |c| c.tasks.max_retained_bytes.to_string(),
+        |c, v| {
+            c.tasks.max_retained_bytes = parse_u64(v)?;
             Ok(())
         }
     ),

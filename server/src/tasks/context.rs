@@ -221,6 +221,15 @@ impl JobContext {
         self.progress.report(done, total, Some(message.into()));
     }
 
+    /// Record a small fact the client-compatibility projection needs after the
+    /// run's params have been released — a reindex run's indexed and skipped
+    /// counts, for instance.
+    pub fn set_detail(&self, key: &str, value: serde_json::Value) {
+        self.progress
+            .store
+            .update(&self.id, |run| run.set_detail(key, value));
+    }
+
     /// The one interruption point a job must call.
     ///
     /// Returns [`JobFailure::Cancelled`] once the run has been asked to stop.

@@ -367,16 +367,37 @@ pub struct TaskConfig {
     /// Env: NANOFILE_TASKS_MAX_ACTIVE
     #[serde(default = "default_task_max_active")]
     pub max_active_tasks: u64,
+    /// Max runs one user may have active at once, across every job (0 =
+    /// unlimited). The server-wide cap is shared, so without a per-user limit a
+    /// single account can take every slot and the next user gets a 429.
+    /// Env: NANOFILE_TASKS_MAX_ACTIVE_PER_USER
+    #[serde(default = "default_task_max_active_per_user")]
+    pub max_active_per_user: u64,
+    /// Byte budget for retained job runs (0 = unlimited). A run carries the
+    /// request that submitted it, so a count cap alone does not bound memory.
+    /// Env: NANOFILE_TASKS_MAX_RETAINED_BYTES
+    #[serde(default = "default_task_max_retained_bytes")]
+    pub max_retained_bytes: u64,
 }
 
 fn default_task_max_active() -> u64 {
     100
 }
 
+fn default_task_max_active_per_user() -> u64 {
+    8
+}
+
+fn default_task_max_retained_bytes() -> u64 {
+    8 * 1024 * 1024
+}
+
 impl Default for TaskConfig {
     fn default() -> Self {
         Self {
             max_active_tasks: default_task_max_active(),
+            max_active_per_user: default_task_max_active_per_user(),
+            max_retained_bytes: default_task_max_retained_bytes(),
         }
     }
 }

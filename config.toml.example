@@ -450,10 +450,19 @@ min_block_age_secs = 3600
 [tasks]
 # Environment variables:
 #   NANOFILE_TASKS_MAX_ACTIVE
+#   NANOFILE_TASKS_MAX_ACTIVE_PER_USER
+#   NANOFILE_TASKS_MAX_RETAINED_BYTES
 # Max async copy/move tasks in Pending or Processing state (0 = unlimited).
 # New tasks beyond the cap are rejected with HTTP 429, preventing authenticated
 # users from exhausting the server with unbounded background copy tasks.
 max_active_tasks = 100
+# Max runs one user may have active at once, across every job (0 = unlimited).
+# The cap above is server-wide, so without this one account can take every slot
+# and every other user gets a 429.
+max_active_per_user = 8
+# Byte budget for retained job runs (0 = unlimited). A run keeps the request
+# that submitted it, so a count cap alone would not bound memory.
+max_retained_bytes = 8388608
 
 [index]
 # Environment variables:

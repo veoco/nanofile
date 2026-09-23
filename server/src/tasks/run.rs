@@ -203,7 +203,17 @@ pub struct JobRun {
     pub expected_total: Option<u64>,
     /// Human summary, also kept past the params drop.
     pub summary: String,
+    /// Small job-specific facts a client-compatibility projection still needs
+    /// after the params are gone (a reindex run's repository, its indexed and
+    /// skipped counts).
+    ///
+    /// Bounded by [`MAX_DETAIL_KEYS`]: this is a handful of scalars, not a
+    /// second place to keep a payload.
+    pub details: serde_json::Map<String, serde_json::Value>,
 }
+
+/// Upper bound on [`JobRun::details`] entries.
+pub const MAX_DETAIL_KEYS: usize = 16;
 
 /// A job's input, opaque to the task system.
 pub type Params = serde_json::Value;
@@ -233,6 +243,15 @@ impl JobRun {
             params: Some(params),
             expected_total,
             summary: summary.into(),
+            details: serde_json::Map::new(),
+        }
+    }
+
+    /// Record a small terminal fact for the wire projection. Silently ignored
+    /// past [`MAX_DETAIL_KEYS`], so a job cannot turn this into a payload store.
+    pub fn set_detail(&mut self, key: &str, value: serde_json::Value) {
+        if self.details.contains_key(key) || self.details.len() < MAX_DETAIL_KEYS {
+            self.details.insert(key.to_string(), value);
         }
     }
 
@@ -273,6 +292,11 @@ impl JobRun {
                 _ => 0,
             }
             + self.params.as_ref().map_or(0, |p| p.to_string().len())
+            + self
+                .details
+                .iter()
+                .map(|(k, v)| k.len() + v.to_string().len())
+                .sum::<usize>()
     }
 
     /// Release the submit-time input once the run can no longer need it.

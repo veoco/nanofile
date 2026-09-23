@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
-use crate::service::mail::{self, MailKind};
+use crate::service::mail::MailKind;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -350,7 +350,15 @@ pub async fn drain_now(
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     require_admin_csrf(&state, &user, &form).await?;
-    state.scheduler.trigger_now(mail::TASK_NAME).await;
+    // Queued rather than run here: the old scheduler ran the whole drain inside
+    // this request.
+    state.tasks.submit(
+        crate::tasks::spec::JobKey::MailDelivery,
+        None,
+        serde_json::Value::Null,
+        "mail delivery",
+        None,
+    )?;
     Ok((
         StatusCode::FOUND,
         [("Location", "/sysadmin/email/?action=drained")],

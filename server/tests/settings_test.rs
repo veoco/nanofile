@@ -408,7 +408,7 @@ async fn a_setting_captured_at_startup_reports_the_hook_that_applies_it() {
             Section::Storage,
             "tasks.max_active_tasks",
             "5",
-            infra::settings::Hook::TaskManager,
+            infra::settings::Hook::TaskSystem,
         ),
         (
             Section::Email,
@@ -453,17 +453,16 @@ async fn a_setting_captured_at_startup_reports_the_hook_that_applies_it() {
 #[tokio::test]
 async fn the_outbox_drainer_stays_registered_while_mail_is_off() {
     let server = TestServer::start().await;
-    // `TestServer::start` leaves `[email] enabled` false. The task still has to
+    // `TestServer::start` leaves `[email] enabled` false. The job still has to
     // exist, or turning mail on from the page would need the restart this
     // release removes.
     assert!(!server.state.config().email.enabled);
     assert!(
         server
             .state
-            .scheduler
-            .handles()
-            .iter()
-            .any(|handle| handle.name == server::service::mail::TASK_NAME),
+            .tasks
+            .job(server::tasks::spec::JobKey::MailDelivery)
+            .is_some(),
         "the mail drainer must be registered regardless of the switch"
     );
 }

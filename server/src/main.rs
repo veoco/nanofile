@@ -532,6 +532,13 @@ async fn run_server_flow(
     mut tray_cmd: Option<TrayCmdReceiver>,
 ) -> anyhow::Result<()> {
     let mut listener: Option<server::restart::BoundListener> = None;
+    // Built once, outside the generation loop, for the same reason the listener
+    // is: an in-place restart rebuilds `AppState`, and a run submitted before it
+    // must still be pollable after it.
+    let tasks = server::tasks::TaskSystem::new(
+        server::tasks::TaskLimits::default(),
+        tokio_util::sync::CancellationToken::new(),
+    );
     let mut first = true;
     loop {
         // Every generation gets a new number, which `/health` reports and the
@@ -547,6 +554,7 @@ async fn run_server_flow(
             tray_cmd.as_mut(),
             &mut listener,
             first,
+            &tasks,
         )
         .await?;
         if !reason.should_restart() {
@@ -557,6 +565,7 @@ async fn run_server_flow(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_server(
     db: DatabaseConnection,
     config: Config,
@@ -564,6 +573,7 @@ async fn run_server(
     mut tray_cmd: Option<&mut TrayCmdReceiver>,
     listener: &mut Option<server::restart::BoundListener>,
     first: bool,
+    tasks: &Arc<server::tasks::TaskSystem>,
 ) -> anyhow::Result<server::restart::StopReason> {
     // ── The layered configuration ─────────────────────────────────────
     // Read the saved settings before anything is built from the config: a value
@@ -727,7 +737,12 @@ async fn run_server(
     )
     .await;
 
-    let state = Arc::new(AppState::new_with_layers(db, layers, temp_file_manager));
+    let state = Arc::new(AppState::new_with_layers_and_tasks(
+        db,
+        layers,
+        temp_file_manager,
+        tasks.clone(),
+    ));
     // Say what the layering decided: superseded config-file values, changes that
     // need a restart, rows this build does not know, unreadable secrets.
     state.settings.log_startup_diagnostics();
@@ -891,6 +906,12 @@ async fn run_server(
     // ── Graceful shutdown sequence ──────────────────────────────────
     tracing::info!("Stopping background tasks...");
     state.shutdown_token.cancel();
+
+    // Record anything this generation started that has not finished. Without
+    // this a client polling a task id submitted just before the restart would
+    // get a 404 from the next generation, because the run would never report
+    // again. Bounded so a wedged job cannot hold the restart open.
+    state.tasks.drain(std::time::Duration::from_secs(5)).await;
 
     // Close WebSocket connections cleanly.
     if let Some(ref mgr) = state.notification_manager {

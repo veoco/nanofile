@@ -115,8 +115,9 @@ pub enum Kind {
 pub enum Hook {
     /// `AuthRateLimiters`: the per-endpoint attempt budgets.
     RateLimits,
-    /// `TaskManager`: the concurrent copy/move cap.
-    TaskManager,
+    /// The task system: the server-wide and per-user run caps and the run
+    /// table's byte budget.
+    TaskSystem,
     /// `NotificationManager`: the WebSocket connection caps.
     NotificationManager,
     /// The process-wide sync-protocol statics (`traversal`, FS-object check).
@@ -159,7 +160,7 @@ impl Hook {
     /// Every hook, for callers that want to re-apply all of them.
     pub const ALL: [Hook; 5] = [
         Hook::RateLimits,
-        Hook::TaskManager,
+        Hook::TaskSystem,
         Hook::NotificationManager,
         Hook::SyncStatics,
         Hook::MailDrain,
@@ -736,6 +737,8 @@ mod tests {
             "notification.subscribe_timeout_secs",
             "notification.accept_legacy_event_tokens",
             "tasks.max_active_tasks",
+            "tasks.max_active_per_user",
+            "tasks.max_retained_bytes",
             "admin_init.email",
             "admin_init.password",
             "email.enabled",

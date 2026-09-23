@@ -34,20 +34,21 @@
         <span class="nf-prow-ic">{{ icons::icon_clock("w-[15px] h-[15px]") }}</span>
         <div class="nf-prow-main">
             <div class="nf-prow-name">
-                <span class="base">{{ task.name }}</span>
-                {% if task.kind_label == "Periodic" %}
-                <span class="badge badge-brand shrink-0">{{ t.tr("admin.task_periodic") }}</span>
-                {% else %}
-                <span class="badge badge-gray shrink-0">{{ t.tr("admin.task_continuous") }}</span>
+                <span class="base">{{ task.display_name }}</span>
+                <span class="badge badge-brand shrink-0">{{ task.kind_label }}</span>
+                {% if !task.priority_label.is_empty() %}
+                <span class="badge badge-gray shrink-0" title="{{ t.tr("admin.task_priority") }}">{{ task.priority_label }}</span>
                 {% endif %}
             </div>
             <div class="nf-prow-sub">
-                {# A continuous task has no interval, and the server renders its
-                   display value as an em dash — drop the whole segment. #}
-                {% if task.kind_label == "Periodic" %}
+                {# Only a periodic job has an interval; the server renders an em
+                   dash for the rest, so drop the whole segment. #}
+                {% if task.interval_secs_display != "—" %}
                 <span class="t" title="{{ t.tr("admin.task_interval") }}">{{ task.interval_secs_display }}</span>
                 <span class="sep">&middot;</span>
                 {% endif %}
+                <span class="t" title="{{ t.tr("admin.task_concurrency") }}">{{ task.concurrency }}</span>
+                <span class="sep">&middot;</span>
                 <span class="t" title="{{ t.tr("admin.task_last_run") }}" data-last-run>
                     {% match task.last_run_at_ts %}
                     {% when Some with (ts) %}{{ time::ts(ts) }}
@@ -71,7 +72,7 @@
             </span>
         </div>
         <div class="nf-prow-act">
-            {% if task.can_trigger %}
+            {% if task.triggerable %}
             <form action="/sysadmin/tasks/{{ task.name }}/trigger/" method="POST" class="trigger-form"
                   data-confirm="admin.task_run_confirm" data-confirm-variant="solid"
                   data-confirm-args='{"name":"{{ task.name }}"}'>

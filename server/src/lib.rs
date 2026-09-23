@@ -21,8 +21,6 @@ pub mod notification;
 pub mod repository;
 pub mod restart;
 pub mod routes;
-pub mod scheduler;
-pub mod scheduler_setup;
 pub mod serve;
 pub mod service;
 pub mod settings;
@@ -40,14 +38,13 @@ use sea_orm::DatabaseConnection;
 use sha2::Digest;
 use tokio_util::sync::CancellationToken;
 
-use crate::fs::task_manager::TaskManager;
 use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
-use crate::scheduler::Scheduler;
 use crate::service::auth::access_token::AccessTokenManager;
 use crate::service::auth::rate_limit::AuthRateLimiters;
 use crate::settings::{RuntimeConfig, SettingsLayers, SettingsService};
+use crate::tasks::TaskSystem;
 use infra::config::Config;
 use infra::crypto::password_manager::PasswordManager;
 use infra::storage::DynBlockStorage;
@@ -81,8 +78,6 @@ pub struct AppState {
     pub block_dir: Arc<PathBuf>,
     /// Web access token manager for `/upload-api/` and `/update-api/`.
     pub token_manager: Arc<AccessTokenManager>,
-    /// In-memory task manager for async copy/move operations.
-    pub task_manager: Arc<TaskManager>,
     /// WebSocket notification manager for real-time repo change notifications.
     /// `None` if the notification feature is disabled.
     pub notification_manager: Option<NotificationManager>,
@@ -104,8 +99,12 @@ pub struct AppState {
     pub shutdown_token: CancellationToken,
     /// Password manager for encrypted repo key caching.
     pub password_manager: Arc<PasswordManager>,
-    /// Unified scheduler for all periodic and continuous background tasks.
-    pub scheduler: Arc<Scheduler>,
+    /// The job system: every periodic, manual and submitted background job,
+    /// plus its run history.
+    ///
+    /// Process-lifetime, so a run submitted before an in-place restart is still
+    /// there after it.
+    pub tasks: Arc<TaskSystem>,
     /// In-memory progress of background full-text reindex tasks, keyed by
     /// task_id. Stored on AppState because `admin_service()` builds a new
     /// `AdminService` per request.
@@ -164,7 +163,7 @@ impl AppState {
     /// read: the config file is then the only layer.
     pub fn new(db: DatabaseConnection, config: Config, temp_file_manager: TempFileManager) -> Self {
         let layers = SettingsLayers::plain(&config);
-        Self::build(db, layers, temp_file_manager)
+        Self::build(db, layers, temp_file_manager, None)
     }
 
     /// Build with the real layers: the config file plus the saved settings.
@@ -176,13 +175,28 @@ impl AppState {
         layers: SettingsLayers,
         temp_file_manager: TempFileManager,
     ) -> Self {
-        Self::build(db, layers, temp_file_manager)
+        Self::build(db, layers, temp_file_manager, None)
+    }
+
+    /// Build with a task system that outlives this generation.
+    ///
+    /// The binary passes the process-lifetime instance here, so run history and
+    /// schedule state survive an in-place restart; tests and any caller without
+    /// a process loop get a private one.
+    pub fn new_with_layers_and_tasks(
+        db: DatabaseConnection,
+        layers: SettingsLayers,
+        temp_file_manager: TempFileManager,
+        tasks: Arc<TaskSystem>,
+    ) -> Self {
+        Self::build(db, layers, temp_file_manager, Some(tasks))
     }
 
     fn build(
         db: DatabaseConnection,
         layers: SettingsLayers,
         temp_file_manager: TempFileManager,
+        tasks: Option<Arc<TaskSystem>>,
     ) -> Self {
         let db = Arc::new(db);
         // The ciphers are derived from `secret_key`, which is a read-only
@@ -237,9 +251,23 @@ impl AppState {
             );
         }
         let shutdown_token = CancellationToken::new();
-        let scheduler = Arc::new(Scheduler::new(shutdown_token.child_token()));
+        // Adopted from the process-lifetime task system when the caller has one,
+        // so an in-place restart keeps the run table; otherwise a private one.
+        let tasks = tasks.unwrap_or_else(|| {
+            TaskSystem::new(
+                crate::tasks::TaskLimits {
+                    max_active_total: config.tasks.max_active_tasks as usize,
+                    max_active_per_user: config.tasks.max_active_per_user as usize,
+                    runs: crate::tasks::store::RunLimits {
+                        max_retained_bytes: config.tasks.max_retained_bytes as usize,
+                        ..Default::default()
+                    },
+                },
+                shutdown_token.child_token(),
+            )
+        });
 
-        // ── State setup (order independent of scheduler) ────────────────
+        // ── State setup ─────────────────────────────────────────────────
 
         let notification_manager =
             if config.notification.enabled && !config.notification.private_key.is_empty() {
@@ -311,12 +339,12 @@ impl AppState {
             tokio::spawn(async move { mail.log_startup_diagnostics() });
         }
 
-        // Register all background tasks (event listener, token expiry, cache
-        // cleanup, share/upload link cleanup, gc, index commit, mail delivery).
-        // The interval and switch values are read once here; changing them needs
-        // a restart, which the settings catalog states for each of them.
-        crate::scheduler_setup::register_default_tasks(
-            &scheduler,
+        // Bind this generation's job bodies and start their intervals. The
+        // policies come from the catalog; the bodies capture the resources
+        // built above.
+        if let Err(e) = crate::tasks::setup::install_default_jobs(
+            &tasks,
+            shutdown_token.child_token(),
             &repos,
             &db,
             notification_manager.as_ref(),
@@ -329,19 +357,49 @@ impl AppState {
             enc_mode,
             block_dir.as_ref(),
             Some(&mail),
-        );
-
-        // In Lazy mode, run the one-shot legacy-block conversion once at startup.
-        if enc_mode == infra::storage::encrypting_block_store::BlockEncryptionMode::Lazy {
-            let scheduler = scheduler.clone();
-            tokio::spawn(async move {
-                scheduler.trigger_now("block encryption convert").await;
-            });
+        ) {
+            // A mis-declared job is a programming error, caught by the catalog
+            // tests before release; starting with half a job set would be worse
+            // than refusing.
+            panic!("the job catalog is invalid: {e}");
         }
+        // Bind this generation's job bodies and start their intervals. The
+        // policies come from the catalog; the bodies capture the resources built
+        // above. A mis-declared job is a programming error the catalog tests
+        // catch before release, and starting with half a job set would be worse
+        // than refusing.
+        crate::tasks::setup::install_default_jobs(
+            &tasks,
+            shutdown_token.child_token(),
+            &repos,
+            &db,
+            notification_manager.as_ref(),
+            &password_manager,
+            &config.gc,
+            &block_store,
+            indexer.as_ref(),
+            &temp_file_manager,
+            config.storage.temp_upload_ttl_hours,
+            enc_mode,
+            block_dir.as_ref(),
+            Some(&mail),
+        )
+        .unwrap_or_else(|e| panic!("the job catalog is invalid: {e}"));
+        tasks.start_schedules();
 
-        // Built from the startup snapshot: the cap is captured by the manager,
-        // so a change to it is pushed through the settings hook.
-        let task_manager = Arc::new(TaskManager::new(config.tasks.max_active_tasks));
+        // In Lazy mode, run the one-shot legacy-block conversion once at
+        // startup, as a job rather than by blocking construction.
+        if enc_mode == infra::storage::encrypting_block_store::BlockEncryptionMode::Lazy
+            && let Err(e) = tasks.submit(
+                crate::tasks::spec::JobKey::BlockEncryptionConvert,
+                None,
+                serde_json::Value::Null,
+                "block encryption convert",
+                None,
+            )
+        {
+            tracing::warn!("could not start the legacy block conversion: {e}");
+        }
 
         Self {
             repos,
@@ -351,7 +409,6 @@ impl AppState {
             block_store,
             block_dir,
             token_manager: Arc::new(AccessTokenManager::new()),
-            task_manager,
             notification_manager,
             indexer,
             auth_limiters,
@@ -360,7 +417,7 @@ impl AppState {
             temp_file_manager,
             shutdown_token,
             password_manager,
-            scheduler,
+            tasks,
             reindex_tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             reindex_running: Arc::new(std::sync::Mutex::new(HashMap::new())),
             left_panel_cache: Arc::new(crate::ui::left_panel_cache::LeftPanelRepoCache::default()),
@@ -383,9 +440,14 @@ impl AppState {
         for hook in hooks {
             match hook {
                 Hook::RateLimits => self.auth_limiters.apply(&config.auth),
-                Hook::TaskManager => self
-                    .task_manager
-                    .set_max_active_tasks(config.tasks.max_active_tasks),
+                Hook::TaskSystem => self.tasks.set_limits(crate::tasks::TaskLimits {
+                    max_active_total: config.tasks.max_active_tasks as usize,
+                    max_active_per_user: config.tasks.max_active_per_user as usize,
+                    runs: crate::tasks::store::RunLimits {
+                        max_retained_bytes: config.tasks.max_retained_bytes as usize,
+                        ..Default::default()
+                    },
+                }),
                 Hook::NotificationManager => {
                     if let Some(manager) = &self.notification_manager {
                         manager.set_connection_limits(

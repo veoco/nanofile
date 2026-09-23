@@ -505,6 +505,9 @@ impl TestServer {
             },
             tasks: infra::config::TaskConfig {
                 max_active_tasks: task_limits.unwrap_or_default().max_active_tasks,
+                // Tests submit few runs; the byte budget only has to be large
+                // enough not to interfere.
+                ..Default::default()
             },
             admin_init: Default::default(),
             email: infra::config::EmailConfig {
