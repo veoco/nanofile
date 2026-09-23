@@ -63,6 +63,18 @@ pub struct JobStats {
     pub last_state: Option<JobState>,
 }
 
+/// How long a deferrable job has been waiting, and since when the server has
+/// been calm enough to start it.
+#[derive(Default)]
+struct QuietState {
+    tracker: admission::QuietTracker,
+    /// Set while the job is being deferred, for the starvation valve.
+    deferred_since: Option<i64>,
+}
+
+/// A load sample older than this is not a reason to start a job.
+const MAX_SAMPLE_AGE: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Reports a database pool's occupancy as `(in use, maximum)`.
 pub type DbProbe = Arc<dyn Fn() -> (u64, u64) + Send + Sync>;
 
@@ -119,6 +131,9 @@ struct Inner {
     /// Reads the database pool's occupancy. Installed per generation, because
     /// the pool belongs to the generation.
     db_probe: RwLock<Option<DbProbe>>,
+    /// Per-job quiet tracking: how long each deferrable job has been waiting,
+    /// and since when it has been calm enough to start.
+    quiet: RwLock<HashMap<JobKey, QuietState>>,
     /// Durable history, when the database is available. `None` in a test that
     /// builds a task system without one.
     journal: RwLock<Option<Arc<dyn crate::repository::job_run::JobRunRepository>>>,
@@ -167,6 +182,7 @@ impl TaskSystem {
                 load,
                 gate,
                 db_probe: RwLock::new(None),
+                quiet: RwLock::new(HashMap::new()),
                 journal: RwLock::new(None),
                 load_aware: AtomicBool::new(false),
                 sample_interval_secs: AtomicU64::new(5),
@@ -693,6 +709,18 @@ impl TaskSystem {
         self.inner.load.snapshot()
     }
 
+    /// Whether a job is currently being deferred, and since when. For the
+    /// administrator's view: a job that is waiting must say so, or the page
+    /// looks like the job is broken.
+    pub fn deferred_since(&self, key: JobKey) -> Option<i64> {
+        self.inner
+            .quiet
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&key)
+            .and_then(|state| state.deferred_since)
+    }
+
     /// Override the thresholds admission uses. Used by tests; the catalog
     /// carries the production values implicitly.
     pub fn set_load_thresholds(&self, thresholds: admission::LoadThresholds) {
@@ -1041,8 +1069,76 @@ impl TaskSystem {
         });
     }
 
+    /// Whether a job may start now, for a job that declared it can wait.
+    ///
+    /// Returns [`Admission::Allow`] for anything without a quiet policy, so this
+    /// is safe to call for every job.
+    ///
+    /// The starvation valve is `max_deferral_hours`: without it, a server that
+    /// is always busy would never collect its garbage. `force_safe` decides
+    /// what happens at that point — a job whose forced execution is safe runs,
+    /// and one whose is not (GC, which would race a concurrent upload) only
+    /// says so.
+    fn admit(&self, job: &RegisteredJob, now: i64) -> admission::Admission {
+        let Some(policy) = job.spec.quiet else {
+            return admission::Admission::Allow;
+        };
+        if !self.load_aware() {
+            return admission::Admission::Allow;
+        }
+        // A sampler that stopped must not read as a quiet server.
+        if !self.load().is_fresh(MAX_SAMPLE_AGE, now) {
+            return admission::Admission::Defer;
+        }
+
+        let snapshot = self.load_snapshot();
+        let thresholds = self.inner.gate.thresholds();
+        let mut quiet = self
+            .inner
+            .quiet
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let state = quiet.entry(job.key()).or_default();
+
+        match state
+            .tracker
+            .admits(&snapshot, &thresholds, policy.min_idle_for_secs, now)
+        {
+            admission::Admission::Allow => {
+                state.deferred_since = None;
+                admission::Admission::Allow
+            }
+            admission::Admission::Defer => {
+                let since = *state.deferred_since.get_or_insert(now);
+                let waited_hours = (now.saturating_sub(since) / 3600) as u64;
+                if policy.max_deferral_hours > 0 && waited_hours >= policy.max_deferral_hours {
+                    if job.spec.force_safe {
+                        tracing::warn!(
+                            job = job.name(),
+                            waited_hours,
+                            "deferred past its cap; running it anyway"
+                        );
+                        state.deferred_since = None;
+                        return admission::Admission::Allow;
+                    }
+                    tracing::warn!(
+                        job = job.name(),
+                        waited_hours,
+                        "deferred past its cap, but running it now would be unsafe"
+                    );
+                }
+                admission::Admission::Defer
+            }
+        }
+    }
+
     /// Fire one periodic tick. Returns whether a run was submitted.
     async fn tick(&self, job: &Arc<RegisteredJob>, overlap: OverlapPolicy) -> bool {
+        let now = chrono::Utc::now().timestamp();
+        if self.admit(job, now) == admission::Admission::Defer {
+            tracing::debug!(job = job.name(), "deferred: waiting for a quiet server");
+            return false;
+        }
         if overlap == OverlapPolicy::Skip && self.inner.store.count_active(job.key(), None) > 0 {
             tracing::debug!(
                 job = job.name(),
@@ -1681,6 +1777,109 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         panic!("the job did not finish");
+    }
+
+    /// A deferrable job waits for a quiet server before it starts, and the
+    /// starvation valve eventually lets it through.
+    #[tokio::test]
+    async fn a_deferrable_job_waits_for_a_quiet_server() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        let gc = RegisteredJob::new(
+            catalog::policy(JobKey::GarbageCollection),
+            Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+        );
+        // Load awareness is off, so nothing waits however busy the server is.
+        let now = 1_000_000;
+        let _busy = (0..50)
+            .map(|_| system.load().request_guard())
+            .collect::<Vec<_>>();
+        assert_eq!(system.admit(&gc, now), admission::Admission::Allow);
+
+        system.configure_load(true, 1);
+        // GC waits 60s of calm by its own policy, and the sampler has never
+        // run, so the sample is stale and nothing starts.
+        assert_eq!(system.admit(&gc, now), admission::Admission::Defer);
+        drop(_busy);
+        system.load().mark_sampled(now);
+        // Calm, but the dwell has only just begun.
+        assert_eq!(system.admit(&gc, now), admission::Admission::Defer);
+        assert_eq!(
+            system.admit(&gc, now + 30),
+            admission::Admission::Defer,
+            "the dwell has not elapsed"
+        );
+        // The sampler would have refreshed by now; a stale sample is never a
+        // reason to start.
+        system.load().mark_sampled(now + 60);
+        assert_eq!(
+            system.admit(&gc, now + 60),
+            admission::Admission::Allow,
+            "after the dwell the job may start"
+        );
+    }
+
+    /// A stopped sampler must not read as a quiet server.
+    #[tokio::test]
+    async fn a_stale_sample_defers_a_job() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        let gc = RegisteredJob::new(
+            catalog::policy(JobKey::GarbageCollection),
+            Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+        );
+        system.configure_load(true, 1);
+        let now = 1_000_000;
+        system.load().mark_sampled(now);
+        // Let the calm window elapse without the sampler running.
+        let late = now + 3600;
+        assert_eq!(
+            system.admit(&gc, late),
+            admission::Admission::Defer,
+            "an hour-old sample says nothing about load now"
+        );
+    }
+
+    /// The starvation valve: a permanently busy server must not defer GC for
+    /// ever, and GC must not be forced when forcing it is unsafe.
+    #[tokio::test]
+    async fn the_starvation_valve_respects_force_safe() {
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        let gc = RegisteredJob::new(
+            catalog::policy(JobKey::GarbageCollection),
+            Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+        );
+        system.configure_load(true, 1);
+        system.set_load_thresholds(admission::LoadThresholds {
+            max_inflight_requests: 0,
+            max_db_utilization: 0.0,
+            max_worker_busy_pct: 0,
+        });
+
+        let busy = system.load().request_guard();
+        let now = 1_000_000;
+        system.load().mark_sampled(now);
+        assert_eq!(system.admit(&gc, now), admission::Admission::Defer);
+
+        // Past the cap, but GC's forced execution is not safe, so it still
+        // waits — and says so rather than running.
+        let past_cap = now + 25 * 3600;
+        system.load().mark_sampled(past_cap);
+        assert!(!gc.spec.force_safe);
+        assert_eq!(system.admit(&gc, past_cap), admission::Admission::Defer);
+        assert_eq!(
+            system.deferred_since(JobKey::GarbageCollection),
+            Some(now),
+            "the wait is visible to the administrator"
+        );
+
+        // A job whose forced execution is safe does go through.
+        let mut spec = catalog::policy(JobKey::GarbageCollection);
+        spec.force_safe = true;
+        let safe = RegisteredJob::new(
+            spec,
+            Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+        );
+        assert_eq!(system.admit(&safe, past_cap), admission::Admission::Allow);
+        drop(busy);
     }
 
     /// A job that cannot be interrupted is never handed a gate, so a quiet
