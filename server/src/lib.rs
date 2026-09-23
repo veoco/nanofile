@@ -448,6 +448,12 @@ impl AppState {
                         ..Default::default()
                     },
                 }),
+                Hook::TaskLoad => {
+                    self.tasks.configure_load(
+                        config.tasks.load_aware,
+                        config.tasks.load_sample_interval_secs,
+                    );
+                }
                 Hook::NotificationManager => {
                     if let Some(manager) = &self.notification_manager {
                         manager.set_connection_limits(

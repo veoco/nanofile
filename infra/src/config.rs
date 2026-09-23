@@ -378,6 +378,17 @@ pub struct TaskConfig {
     /// Env: NANOFILE_TASKS_MAX_RETAINED_BYTES
     #[serde(default = "default_task_max_retained_bytes")]
     pub max_retained_bytes: u64,
+    /// Let heavy background jobs wait for a quiet server, and slow down while
+    /// it is busy. Off by default: the measurements it acts on need a week of
+    /// real traffic before the thresholds mean anything, and the admin page
+    /// shows them meanwhile.
+    /// Env: NANOFILE_TASKS_LOAD_AWARE
+    #[serde(default)]
+    pub load_aware: bool,
+    /// Seconds between load samples (minimum 1).
+    /// Env: NANOFILE_TASKS_LOAD_SAMPLE_INTERVAL_SECS
+    #[serde(default = "default_task_load_sample_interval_secs")]
+    pub load_sample_interval_secs: u64,
 }
 
 fn default_task_max_active() -> u64 {
@@ -392,12 +403,18 @@ fn default_task_max_retained_bytes() -> u64 {
     8 * 1024 * 1024
 }
 
+fn default_task_load_sample_interval_secs() -> u64 {
+    5
+}
+
 impl Default for TaskConfig {
     fn default() -> Self {
         Self {
             max_active_tasks: default_task_max_active(),
             max_active_per_user: default_task_max_active_per_user(),
             max_retained_bytes: default_task_max_retained_bytes(),
+            load_aware: false,
+            load_sample_interval_secs: default_task_load_sample_interval_secs(),
         }
     }
 }

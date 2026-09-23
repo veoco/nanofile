@@ -118,6 +118,8 @@ pub enum Hook {
     /// The task system: the server-wide and per-user run caps and the run
     /// table's byte budget.
     TaskSystem,
+    /// Whether background jobs react to load, and how often it is sampled.
+    TaskLoad,
     /// `NotificationManager`: the WebSocket connection caps.
     NotificationManager,
     /// The process-wide sync-protocol statics (`traversal`, FS-object check).
@@ -158,9 +160,10 @@ pub enum Apply {
 
 impl Hook {
     /// Every hook, for callers that want to re-apply all of them.
-    pub const ALL: [Hook; 5] = [
+    pub const ALL: [Hook; 6] = [
         Hook::RateLimits,
         Hook::TaskSystem,
+        Hook::TaskLoad,
         Hook::NotificationManager,
         Hook::SyncStatics,
         Hook::MailDrain,
@@ -739,6 +742,8 @@ mod tests {
             "tasks.max_active_tasks",
             "tasks.max_active_per_user",
             "tasks.max_retained_bytes",
+            "tasks.load_aware",
+            "tasks.load_sample_interval_secs",
             "admin_init.email",
             "admin_init.password",
             "email.enabled",

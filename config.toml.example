@@ -452,6 +452,8 @@ min_block_age_secs = 3600
 #   NANOFILE_TASKS_MAX_ACTIVE
 #   NANOFILE_TASKS_MAX_ACTIVE_PER_USER
 #   NANOFILE_TASKS_MAX_RETAINED_BYTES
+#   NANOFILE_TASKS_LOAD_AWARE
+#   NANOFILE_TASKS_LOAD_SAMPLE_INTERVAL_SECS
 # Max async copy/move tasks in Pending or Processing state (0 = unlimited).
 # New tasks beyond the cap are rejected with HTTP 429, preventing authenticated
 # users from exhausting the server with unbounded background copy tasks.
@@ -463,6 +465,13 @@ max_active_per_user = 8
 # Byte budget for retained job runs (0 = unlimited). A run keeps the request
 # that submitted it, so a count cap alone would not bound memory.
 max_retained_bytes = 8388608
+# Let heavy background jobs (garbage collection, block conversion) wait for a
+# quiet server and slow down while it is busy. Off by default: the thresholds it
+# acts on need real traffic to calibrate, and the task page shows the
+# measurements in the meantime. Only jobs that declare a checkpoint can defer.
+load_aware = false
+# Seconds between load samples (minimum 1).
+load_sample_interval_secs = 5
 
 [index]
 # Environment variables:

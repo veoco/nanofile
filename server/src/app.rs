@@ -133,6 +133,14 @@ pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .merge(crate::notification::notification_routes())
         .merge(crate::webdav::webdav_routes().layer(DefaultBodyLimit::max(upload_body_limit)))
         .merge(crate::handler::avatar::image_routes())
+        // Count work in flight, for the load gauge. Applied here rather than in
+        // `build_app` so the static-asset route below stays outside it: a page
+        // load fetching a dozen assets is not a busy server, and counting it
+        // would defer background work for no reason.
+        .layer(from_fn_with_state(
+            state.clone(),
+            crate::middleware::load_guard,
+        ))
         .route("/static/{*path}", get(crate::static_assets::serve_static))
         // No route matched. A browser gets the error page; a client keeps the
         // body-less 404 it has always received.

@@ -954,6 +954,30 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
+        "tasks.load_aware",
+        Storage,
+        "NANOFILE_TASKS_LOAD_AWARE",
+        Kind::Bool,
+        Apply::LiveWithHook(Hook::TaskLoad),
+        |c| fmt_bool(c.tasks.load_aware),
+        |c, v| {
+            c.tasks.load_aware = parse_bool(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "tasks.load_sample_interval_secs",
+        Storage,
+        "NANOFILE_TASKS_LOAD_SAMPLE_INTERVAL_SECS",
+        Kind::U64,
+        Apply::Restart,
+        |c| c.tasks.load_sample_interval_secs.to_string(),
+        |c, v| {
+            c.tasks.load_sample_interval_secs = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
         "tasks.max_retained_bytes",
         Storage,
         "NANOFILE_TASKS_MAX_RETAINED_BYTES",

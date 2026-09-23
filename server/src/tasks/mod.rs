@@ -14,6 +14,7 @@
 //! owner, no progress and no terminal state, so it is a service rather than a
 //! job and does not belong in the run table.
 
+pub mod admission;
 pub mod catalog;
 pub mod compat;
 pub mod context;
@@ -26,12 +27,14 @@ pub mod spec;
 pub mod store;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use base::error::AppError;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use self::admission::{LoadGauge, LoadSnapshot};
 use self::context::JobContext;
 use self::registry::{JobRegistry, RegisteredJob, RegistryError};
 use self::run::{JobRun, JobState, Params, RunId, Viewer};
@@ -59,6 +62,9 @@ pub struct JobStats {
     /// Terminal state of the most recent run, for the listing.
     pub last_state: Option<JobState>,
 }
+
+/// Reports a database pool's occupancy as `(in use, maximum)`.
+pub type DbProbe = Arc<dyn Fn() -> (u64, u64) + Send + Sync>;
 
 /// Process-wide admission limits.
 #[derive(Clone, Copy, Debug)]
@@ -94,6 +100,9 @@ struct Inner {
     /// Live runs' cancellation handles, so a caller can stop one.
     cancels: RwLock<HashMap<RunId, CancellationToken>>,
     limits: RwLock<TaskLimits>,
+    /// When this process's task system was built, for the worker-occupancy
+    /// calculation.
+    started_at: std::time::Instant,
     /// The current server generation's cancellation token. Replaced by
     /// [`TaskSystem::install`], because the task system outlives a generation
     /// while the token does not.
@@ -102,6 +111,16 @@ struct Inner {
     services: RwLock<Vec<&'static str>>,
     /// Lifetime counters per job.
     stats: RwLock<HashMap<JobKey, JobStats>>,
+    /// How busy the server is, for the administrator's view and — once load
+    /// awareness is switched on — for admission.
+    load: LoadGauge,
+    /// Reads the database pool's occupancy. Installed per generation, because
+    /// the pool belongs to the generation.
+    db_probe: RwLock<Option<DbProbe>>,
+    /// Whether jobs may be deferred and throttled by load.
+    load_aware: AtomicBool,
+    /// Seconds between load samples.
+    sample_interval_secs: AtomicU64,
 }
 
 /// The task system.
@@ -132,9 +151,14 @@ impl TaskSystem {
                 store: RunStore::new(limits.runs),
                 cancels: RwLock::new(HashMap::new()),
                 limits: RwLock::new(limits),
+                started_at: std::time::Instant::now(),
                 shutdown: RwLock::new(shutdown),
                 services: RwLock::new(Vec::new()),
                 stats: RwLock::new(HashMap::new()),
+                load: LoadGauge::new(),
+                db_probe: RwLock::new(None),
+                load_aware: AtomicBool::new(false),
+                sample_interval_secs: AtomicU64::new(5),
             }),
         })
     }
@@ -388,6 +412,9 @@ impl TaskSystem {
         };
 
         let started = std::time::Instant::now();
+        // Counted as *background* load: admission deliberately ignores this, so
+        // a running pass cannot defer itself.
+        let _background = self.inner.load.background_guard();
         let report = executor::execute(&job, &run, params, &self.inner.store, cancel.clone()).await;
         self.record_stats(job.key(), &report, started.elapsed());
         tracing::debug!(
@@ -437,6 +464,75 @@ impl TaskSystem {
                 _ => String::new(),
             };
         }
+    }
+
+    /// The load counters.
+    pub fn load(&self) -> &LoadGauge {
+        &self.inner.load
+    }
+
+    /// How busy the server is right now.
+    pub fn load_snapshot(&self) -> LoadSnapshot {
+        self.inner.load.snapshot()
+    }
+
+    /// Install this generation's database-pool probe.
+    pub fn set_db_probe(&self, probe: DbProbe) {
+        *self
+            .inner
+            .db_probe
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(probe);
+    }
+
+    /// Whether deferred and throttled jobs are enabled.
+    pub fn load_aware(&self) -> bool {
+        self.inner.load_aware.load(Ordering::Relaxed)
+    }
+
+    /// Apply the load-aware settings of a saved configuration.
+    pub fn configure_load(&self, aware: bool, sample_interval_secs: u64) {
+        self.inner.load_aware.store(aware, Ordering::Relaxed);
+        self.inner
+            .sample_interval_secs
+            .store(sample_interval_secs.max(1), Ordering::Relaxed);
+    }
+
+    /// Take one sample of everything the gauge cannot see for itself.
+    fn sample_load(&self) {
+        if let Some(probe) = self
+            .inner
+            .db_probe
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        {
+            let (in_use, max) = probe();
+            self.inner.load.set_db(in_use, max);
+        }
+        // Stable tokio metrics: everything else about the blocking pool needs
+        // `tokio_unstable`, which is not worth enabling for one number.
+        let handle = tokio::runtime::Handle::current();
+        let metrics = handle.metrics();
+        let workers = metrics.num_workers().max(1);
+        let busy_nanos: u64 = (0..workers)
+            .map(|i| metrics.worker_total_busy_duration(i).as_nanos() as u64)
+            .sum();
+        // Busy time since process start divided by wall-clock capacity: a rough
+        // but trend-correct occupancy.
+        let elapsed_nanos = self.inner.started_at.elapsed().as_nanos().max(1) as u64;
+        let busy_pct = (busy_nanos.saturating_mul(100)
+            / (elapsed_nanos.saturating_mul(workers as u64).max(1)))
+        .min(100) as u32;
+        // Only the injection queue is exposed on a stable tokio; the
+        // per-worker local queues need `tokio_unstable`, which is not worth
+        // enabling for one number.
+        self.inner.load.set_runtime(
+            busy_pct,
+            metrics.global_queue_depth() as u64,
+            metrics.num_alive_tasks() as u64,
+        );
+        self.inner.load.mark_sampled(chrono::Utc::now().timestamp());
     }
 
     /// Lifetime counters for one job.
@@ -676,6 +772,26 @@ impl TaskSystem {
                 }
             });
         }
+
+        // One load sampler for the process, so admission reads a cached struct
+        // rather than sampling per decision.
+        let system = self.clone();
+        let shutdown = self.shutdown_token().child_token();
+        let interval = self
+            .inner
+            .sample_interval_secs
+            .load(Ordering::Relaxed)
+            .max(1);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = ticker.tick() => system.sample_load(),
+                }
+            }
+        });
 
         // One sweeper for the whole run table, rather than each read path
         // tidying up after itself while holding a lock.

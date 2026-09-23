@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use crate::AppState;
 use base::error::AppError;
 
+use axum::extract::State;
 use axum::http::{HeaderValue, header};
 
 /// Add baseline security headers to every response.
@@ -34,6 +35,21 @@ use axum::http::{HeaderValue, header};
 ///
 /// `Strict-Transport-Security` is only sent when `site_url` is HTTPS: a
 /// plain-HTTP LAN deployment must not be pinned to HTTPS by its own server.
+/// Count a request as in flight for as long as it is being served.
+///
+/// The counter is what the load gauge reports as *foreground* load, so it is
+/// the signal that decides whether a background job may run. The guard is RAII
+/// and drops on every path, including a panic, so a failed request cannot make
+/// the server look permanently busy.
+pub async fn load_guard(
+    State(state): State<std::sync::Arc<AppState>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let _guard = state.tasks.load().request_guard();
+    next.run(request).await
+}
+
 pub async fn security_headers(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::AppState>>,
     req: axum::extract::Request,

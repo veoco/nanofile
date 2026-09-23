@@ -48,6 +48,19 @@ pub fn install_default_jobs(
     block_dir: &Path,
     mail: Option<&Arc<Mailer>>,
 ) -> Result<(), crate::tasks::registry::RegistryError> {
+    // The gauge cannot see the database pool for itself, and the pool belongs
+    // to this generation, so the probe is installed with the generation's jobs.
+    {
+        let db = db.clone();
+        tasks.set_db_probe(Arc::new(move || {
+            let pool = db.get_sqlite_connection_pool();
+            let total = pool.size() as u64;
+            let idle = pool.num_idle() as u64;
+            let max = pool.options().get_max_connections() as u64;
+            (total.saturating_sub(idle), max)
+        }));
+    }
+
     let mut jobs: Vec<RegisteredJob> = Vec::new();
 
     // ── Jobs a request submits ───────────────────────────────────────────

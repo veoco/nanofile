@@ -88,4 +88,22 @@
     {% endfor %}
 </div>
 {% endif %}
+
+{# The load panel sits below the list on purpose: the list is what the page is
+   for, and the measurements are context for why a job may be waiting. #}
+<div class="mt-8">
+    <h2 class="text-sm font-semibold text-ink-2">{{ t.tr("admin.load_title") }}</h2>
+    <p class="text-xs text-ink-3 mt-1">
+        {% if load.load_aware %}{{ t.tr("admin.load_aware_on") }}{% else %}{{ t.tr("admin.load_aware_off") }}{% endif %}
+        {% if !load.fresh %}&middot; {{ t.tr("admin.load_stale") }}{% endif %}
+    </p>
+    <div class="flex flex-wrap items-center gap-x-6 gap-y-2 mt-3 text-sm">
+        <span title="{{ t.tr("admin.load_requests") }}">{{ t.tr("admin.load_requests") }}: <span class="text-ink">{{ load.inflight_requests }}</span></span>
+        <span title="{{ t.tr("admin.load_background") }}">{{ t.tr("admin.load_background") }}: <span class="text-ink">{{ load.background_active }}</span></span>
+        <span title="{{ t.tr("admin.load_db") }}">{{ t.tr("admin.load_db") }}: <span class="text-ink">{{ load.db_in_use }}/{{ load.db_max }}</span></span>
+        <span title="{{ t.tr("admin.load_workers") }}">{{ t.tr("admin.load_workers") }}: <span class="text-ink">{{ load.worker_busy_pct }}%</span></span>
+        <span title="{{ t.tr("admin.load_queue") }}">{{ t.tr("admin.load_queue") }}: <span class="text-ink">{{ load.queue_depth }}</span></span>
+        <span title="{{ t.tr("admin.load_tasks") }}">{{ t.tr("admin.load_tasks") }}: <span class="text-ink">{{ load.alive_tasks }}</span></span>
+    </div>
+</div>
 {% endblock %}

@@ -25,10 +25,48 @@ pub struct AdmintasksTemplate {
     pub csrf_token: Option<String>,
     pub active_page: &'static str,
     pub tasks: Vec<TaskRow>,
+    pub load: LoadRow,
     pub error: Option<String>,
     pub success: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
+}
+
+/// The measurements load-aware deferral acts on, shown so an administrator can
+/// see why a job is waiting — and calibrate the thresholds before trusting them.
+pub struct LoadRow {
+    pub inflight_requests: u64,
+    pub background_active: u64,
+    pub db_in_use: u64,
+    pub db_max: u64,
+    pub worker_busy_pct: u32,
+    pub queue_depth: u64,
+    pub alive_tasks: u64,
+    /// Whether the sample is recent enough to act on. A stopped sampler must
+    /// never read as a quiet server.
+    pub fresh: bool,
+    pub load_aware: bool,
+}
+
+impl LoadRow {
+    fn from_state(state: &Arc<AppState>) -> Self {
+        let snapshot = state.tasks.load_snapshot();
+        let now = chrono::Utc::now().timestamp();
+        Self {
+            inflight_requests: snapshot.inflight_requests,
+            background_active: snapshot.background_active,
+            db_in_use: snapshot.db_in_use,
+            db_max: snapshot.db_max,
+            worker_busy_pct: snapshot.worker_busy_pct,
+            queue_depth: snapshot.queue_depth,
+            alive_tasks: snapshot.alive_tasks,
+            fresh: state
+                .tasks
+                .load()
+                .is_fresh(std::time::Duration::from_secs(30), now),
+            load_aware: state.tasks.load_aware(),
+        }
+    }
 }
 
 /// One row of the listing: a job, or a long-lived service.
@@ -187,6 +225,7 @@ async fn render_page(
         csrf_token: Some(ctx.csrf_token),
         active_page: "admintasks",
         tasks,
+        load: LoadRow::from_state(state),
         error,
         success,
         left_panel_repos: ctx.left_panel_repos,

@@ -411,6 +411,12 @@ async fn a_setting_captured_at_startup_reports_the_hook_that_applies_it() {
             infra::settings::Hook::TaskSystem,
         ),
         (
+            Section::Storage,
+            "tasks.load_aware",
+            "true",
+            infra::settings::Hook::TaskLoad,
+        ),
+        (
             Section::Email,
             "notification.max_connections",
             "10",
