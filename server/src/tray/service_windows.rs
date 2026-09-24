@@ -319,18 +319,20 @@ pub(super) fn finish(enable: bool, exit_code: u32) {
 }
 
 /// Put both menu items back in step with the real machine state.
+///
+/// Through the same plan the menu was built from: the install flow removes the
+/// login entry and the uninstall flow leaves it removed, so the two items have
+/// to be re-derived rather than assumed.
 fn sync(
     config_path: &Path,
     service_item: &CheckMenuItem,
     autostart_item: &CheckMenuItem,
     autostart: &PlatformLogin,
 ) {
-    let ours = probe(config_path).is_ours();
-    service_item.set_checked(ours);
-    // The login entry is only the way to start automatically while no service
-    // of ours is registered; the checkmark still reports the registry as it is.
-    autostart_item.set_enabled(!ours);
-    autostart_item.set_checked(autostart.is_enabled());
+    let plan = crate::startup::policy::plan(super::startup_state(config_path, autostart));
+    service_item.set_checked(plan.service_checked);
+    autostart_item.set_enabled(plan.login_enabled);
+    autostart_item.set_checked(plan.login_checked);
 }
 
 enum LaunchError {

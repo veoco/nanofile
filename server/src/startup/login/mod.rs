@@ -29,6 +29,20 @@ mod platform;
 
 pub(crate) use platform::LoginManager as PlatformLogin;
 
+/// What the login entry looks like right now.
+///
+/// Read once (one registry/plist/desktop-file read) and handed to the policy
+/// that decides what the tray should show and do.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LoginState {
+    /// A registration exists under our name.
+    pub present: bool,
+    /// It launches *this* installation (same executable).
+    pub ours: bool,
+    /// The location it names no longer exists.
+    pub stale: bool,
+}
+
 /// Launch-at-login management for the current platform.
 pub(crate) trait LoginEntry {
     /// Absolute path of the running executable.
@@ -46,17 +60,41 @@ pub(crate) trait LoginEntry {
     fn enable(&self) -> anyhow::Result<()>;
     fn disable(&self) -> anyhow::Result<()>;
 
-    /// Whether the recorded entry points at a location that no longer exists.
+    /// Everything about the entry, from a single read.
     ///
-    /// An entry records absolute paths, so moving or renaming the installation
-    /// leaves it launching something that is not there — which fails silently at
-    /// login. Reporting that here lets the tray repoint the entry at the copy the
-    /// user is actually running. "Unknown, leave it alone" is the answer for a
-    /// backend that cannot read its entry.
-    fn is_stale(&self) -> bool {
-        let Some((exe, config)) = self.recorded() else {
-            return false;
-        };
-        entry::stale_between(&exe, &config, self.exe())
+    /// An entry that exists but cannot be read back as an `(executable, config)`
+    /// pair counts as present, is nobody's ("not ours"), and is never reported
+    /// as stale — the two answers that could otherwise rewrite or remove
+    /// something a person wrote by hand.
+    fn state(&self) -> LoginState {
+        let recorded = self.recorded();
+        LoginState {
+            present: recorded.is_some() || self.is_enabled(),
+            ours: recorded
+                .as_ref()
+                .is_some_and(|(exe, _)| entry::same_path(exe, self.exe())),
+            stale: recorded
+                .as_ref()
+                .is_some_and(|(exe, config)| entry::stale_between(exe, config, self.exe())),
+        }
+    }
+
+    /// Whether the entry launches this installation.
+    fn is_ours(&self) -> bool {
+        self.state().ours
+    }
+
+    /// Remove the entry **only** when it is ours, reporting whether it was.
+    ///
+    /// Used for the automatic consequences of installing the service: an
+    /// elevated helper may be running as a different account, and its `HKCU` is
+    /// then somebody else's hive — deleting a login entry there that names a
+    /// different copy would be destroying a registration we never wrote.
+    fn retire_ours(&self) -> anyhow::Result<bool> {
+        if !self.is_ours() {
+            return Ok(false);
+        }
+        self.disable()?;
+        Ok(true)
     }
 }

@@ -56,6 +56,7 @@ use tray_icon::{TrayIcon, TrayIconBuilder};
 
 use crate::TrayCommand;
 use crate::startup::login::{LoginEntry as _, PlatformLogin};
+use crate::startup::policy;
 
 const ID_OPEN_WEB: &str = "nanofile.open-web";
 const ID_AUTOSTART: &str = "nanofile.autostart";
@@ -239,6 +240,18 @@ fn service_registered(_config_path: &Path) -> bool {
     false
 }
 
+/// Probe both automatic-start mechanisms once, for [`policy::plan`].
+///
+/// Every decision about them — the menu's initial state, the startup repair and
+/// each toggle's re-synchronisation — goes through this and the plan, so the
+/// "alternatives" rule cannot be applied differently in two places.
+fn startup_state(config_path: &Path, login: &PlatformLogin) -> policy::StartupState {
+    policy::StartupState {
+        login: login.state(),
+        service_ours: service_registered(config_path),
+    }
+}
+
 /// Blocks the main thread forever. Used when tray initialization fails after
 /// the server is already running in the background: the process keeps serving
 /// headless, just without a tray icon.
@@ -258,11 +271,19 @@ fn create_tray(
 ) -> anyhow::Result<TrayIcon> {
     let autostart = PlatformLogin::new(ctx.exe_path.clone(), ctx.config_path.clone());
 
-    // A login entry records absolute paths, so a folder that was moved, renamed
-    // or deleted leaves it launching something that is not there — and a login
-    // entry that fails does so silently. Point it at the copy the user is
-    // actually running; a healthy entry, or one we cannot read, is left alone.
-    if autostart.is_stale() {
+    // Both mechanisms are probed *before* anything is written, and the one
+    // policy decides what happens: on Windows they are alternatives, so a stale
+    // login entry must not be repointed while the service has replaced it (that
+    // would re-create the second automatic start the service removed), and an
+    // entry of ours that survived an install is removed for the same reason.
+    let state = startup_state(&ctx.config_path, &autostart);
+    let plan = policy::plan(state);
+
+    if plan.repair_login {
+        // A login entry records absolute paths, so a folder that was moved,
+        // renamed or deleted leaves it launching something that is not there —
+        // and a login entry that fails does so silently. Point it at the copy
+        // the user is actually running.
         tracing::warn!(
             exe = %ctx.exe_path.display(),
             "the start-at-login entry points at a path that no longer exists; repointing it at \
@@ -273,23 +294,25 @@ fn create_tray(
         } else if let Err(e) = autostart.enable() {
             tracing::warn!("repointing the start-at-login entry failed: {e:#}");
         }
+    } else if plan.retire_login {
+        tracing::info!("removing the start-at-login entry: the Windows service has replaced it");
+        match autostart.retire_ours() {
+            Ok(_) => {}
+            Err(e) => tracing::warn!("could not remove the start-at-login entry: {e:#}"),
+        }
     }
 
-    // On Windows, "start at login" and "start as a service" are two ways to do
-    // the same thing, and registering the service removes the login entry.
-    // Showing them as alternatives is what keeps the menu honest: while this
+    // Showing the pair as alternatives is what keeps the menu honest: while this
     // installation's service is registered the login item is disabled (removing
     // the service enables it again), instead of two checkmarks that contradict
     // each other and a click that does the opposite of what it looks like.
-    let service_ours = service_registered(&ctx.config_path);
-
     let t = lang();
     let item_open_web = MenuItem::with_id(ID_OPEN_WEB, t.tr("tray.open_web"), true, None);
     let item_autostart = CheckMenuItem::with_id(
         ID_AUTOSTART,
         t.tr("tray.launch_at_login"),
-        !service_ours,
-        autostart.is_enabled(),
+        plan.login_enabled,
+        plan.login_checked,
         None,
     );
     // Checked when the registered service is *this* installation's; a service
@@ -300,7 +323,7 @@ fn create_tray(
         ID_SERVICE,
         t.tr("tray.service_autostart"),
         true,
-        service_ours,
+        plan.service_checked,
         None,
     );
     let item_open_config = MenuItem::with_id(ID_OPEN_CONFIG, t.tr("tray.open_config"), true, None);

@@ -94,7 +94,7 @@ pub(crate) fn stale_between(recorded_exe: &str, recorded_config: &str, current_e
 
 /// Path identity the way the platform sees it: Windows ignores case and treats
 /// both separators alike.
-fn same_path(a: &str, b: &Path) -> bool {
+pub(crate) fn same_path(a: &str, b: &Path) -> bool {
     normalize_path(a) == normalize_path(&b.to_string_lossy())
 }
 

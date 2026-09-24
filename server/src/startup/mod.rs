@@ -20,6 +20,10 @@ pub(crate) mod cmdline;
 #[cfg(feature = "tray")]
 pub(crate) mod login;
 
+/// The rule that keeps the login entry and the Windows service alternatives.
+#[cfg(feature = "tray")]
+pub(crate) mod policy;
+
 /// The Windows service registration and control loop. The platform-independent
 /// part (the command line, the `ImagePath` comparison, the probe types) is
 /// compiled everywhere so its tests run on every platform.
