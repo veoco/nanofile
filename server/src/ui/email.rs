@@ -431,7 +431,10 @@ pub async fn clear_finished(
 
 #[cfg(test)]
 mod tests {
+    use infra::config::Config;
+
     use super::*;
+    use crate::service::mail::settings::EmailSettings;
 
     #[test]
     fn unknown_actions_render_no_banner() {
@@ -444,13 +447,30 @@ mod tests {
         assert!(success_message(t, None).is_none());
     }
 
+    /// Every field name `missing()` reports is translated one by one, so each
+    /// needs a key of its own. The names are read back from a configuration
+    /// broken in all three ways rather than listed here: the key is built with
+    /// `format!`, so a field without a translation renders as a raw locale id
+    /// on the page and no whole-string search would notice.
     #[test]
     fn missing_fields_are_translated_one_by_one() {
+        let mut config = Config::default();
+        config.email.host = String::new();
+        config.email.port = 0;
+        config.email.from_address = "not-an-address".to_string();
+        let fields = EmailSettings::from_config(&config).missing();
+        assert_eq!(fields, ["host", "port", "from_address"]);
+
         let t = I18n::get(Some("en"));
-        let labels = missing_labels(t, &["host", "from_address"]);
-        assert_eq!(labels.len(), 2);
-        assert_ne!(labels[0], "admin.email_field_host");
-        assert_ne!(labels[1], "admin.email_field_from_address");
+        let labels = missing_labels(t, &fields);
+        assert_eq!(labels.len(), fields.len());
+        for (field, label) in fields.iter().zip(&labels) {
+            assert_ne!(
+                label,
+                &format!("admin.email_field_{field}"),
+                "{field} has no translated label"
+            );
+        }
     }
 
     #[test]

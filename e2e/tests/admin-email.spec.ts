@@ -38,6 +38,10 @@ test("the page reports delivery as ready and points at the settings", async ({
   await expect(page.getByText("Message log")).toBeVisible();
   // TLS is off in the e2e configuration, which the page has to say out loud.
   await expect(page.getByText("TLS is off")).toBeVisible();
+  // A key with no translation renders as the key itself, so a raw `admin.*`
+  // string in the body means a locale entry was deleted while still in use.
+  // The dictionary is rendered after `</main>`, so this only sees the page.
+  await expect(page.locator("main")).not.toContainText("admin.");
 });
 
 test("a test message is delivered to the given address", async ({ page }) => {
