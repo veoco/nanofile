@@ -102,43 +102,44 @@
                 {% for row in group.rows %}
                 {# `data-setting` is the hook a test (or a future script) uses to find
                    one row without depending on the markup around it. #}
+                {# `data-setting` is the key, and the label's tooltip repeats it:
+                   an operator who needs to name the setting in a bug report can
+                   find it, and a page of rows does not print it 110 times. #}
                 <div data-setting="{{ row.key }}"
-                     class="grid grid-cols-1 gap-3 border-t border-line py-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6">
+                     class="grid grid-cols-1 gap-3 border-t border-line py-3.5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6">
                     <div class="min-w-0">
-                        <label class="text-[13px] font-medium text-ink"
+                        <label class="text-[13px] font-medium text-ink" title="{{ row.key }}"
                                {% if !row.locked && !row.read_only %}for="field-{{ row.key }}"{% endif %}>
                             {{ t.tr(row.label_key) }}
                         </label>
-                        <p class="mono text-[11px] text-ink-3">{{ row.key }}</p>
                         <p class="desc">{{ row.help }}</p>
 
                         <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            {# The badge names the kind of source; which file key or
+                               which save sits behind it is in the tooltip. #}
                             {% if row.origin == "environment" %}
-                            <span class="badge badge-green">{{ t.tr("setting.origin_environment") }}</span>
+                            <span class="badge badge-green"
+                                  {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_environment") }}</span>
                             {% else if row.origin == "database" %}
-                            <span class="badge badge-brand">{{ t.tr("setting.origin_database") }}</span>
+                            <span class="badge badge-brand"
+                                  {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_database") }}</span>
                             {% else if row.origin == "config" %}
-                            <span class="badge badge-gray">{{ t.tr("setting.origin_config") }}</span>
+                            <span class="badge badge-gray"
+                                  {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_config") }}</span>
                             {% else %}
-                            <span class="badge badge-gray">{{ t.tr("setting.origin_default") }}</span>
+                            <span class="badge badge-gray"
+                                  {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_default") }}</span>
                             {% endif %}
 
-                            {% if row.restart %}
-                            <span class="badge badge-gray">{{ t.tr("setting.apply_restart") }}</span>
-                            {% endif %}
-                            {% if row.process_restart %}
-                            <span class="badge badge-gray">{{ t.tr("setting.apply_process_restart") }}</span>
-                            {% endif %}
-                            {% if row.pending_restart %}
-                            <span class="badge badge-red">{{ t.tr("setting.pending_restart") }}</span>
-                            {% endif %}
-                            {% if row.read_only %}
-                            <span class="badge badge-gray">{{ t.tr("setting.apply_read_only") }}</span>
+                            {# The one origin an operator has to act on, named in full. #}
+                            {% if let Some(var) = row.env_var %}
+                            <span class="mono text-[11px] text-ink-3">{{ var }}</span>
                             {% endif %}
 
-                            {% if !row.origin_detail.is_empty() %}
-                            <span class="mono text-[11px] text-ink-3">{{ row.origin_detail }}</span>
+                            {% if let Some(state) = row.state_badge %}
+                            <span class="badge {{ state.class }}">{{ state.label }}</span>
                             {% endif %}
+
                             {% if let Some(ts) = row.origin_at %}
                             <span class="text-[11px] text-ink-3">{{ time::ts(ts) }}</span>
                             {% endif %}

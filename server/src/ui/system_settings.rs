@@ -58,22 +58,23 @@ pub struct SettingRow {
     /// Where the effective value came from: `environment`, `config`,
     /// `database`, `default`.
     pub origin: &'static str,
-    /// The badge's detail line (variable name, file key, or "saved …").
-    /// For an environment-owned row this is the variable itself, and it is the
-    /// only place the name is rendered.
-    pub origin_detail: String,
+    /// The origin badge's tooltip: the `config.toml` key that supplied the
+    /// value, or who saved it. The badge says the kind, and this says which one
+    /// — on hover, because a page of keys is a page nobody reads.
+    pub origin_title: String,
+    /// The `NANOFILE_*` variable the value came from, when the environment owns
+    /// it. This is the one piece of provenance a row prints as text: it is also
+    /// the only one an operator has to go and change.
+    pub env_var: Option<String>,
     /// Unix seconds of the last save, for a database-sourced value.
     pub origin_at: Option<i64>,
     /// The value in the config file, when a saved value is superseding it —
     /// otherwise an operator editing the file sees no effect and no reason why.
     pub config_value: Option<String>,
-    /// The server starts with this value locked in; a change needs a restart.
-    pub restart: bool,
-    /// A saved value that is waiting for the next start.
-    pub pending_restart: bool,
-    /// The value is read before the server loop exists (the log subscriber, the
-    /// desktop tray), so only a full process restart applies it.
-    pub process_restart: bool,
+    /// The one state the row is in, by precedence: waiting for a restart
+    /// outranks needing one, which outranks being read-only. A row that said
+    /// all of them at once said none of them.
+    pub state_badge: Option<StateBadge>,
     /// Only the environment or the config file can set this.
     pub locked: bool,
     /// Read-only settings are shown for their origin, not for editing.
@@ -82,6 +83,14 @@ pub struct SettingRow {
     pub secret_set: bool,
     /// A stored secret cannot be decrypted any more.
     pub secret_broken: bool,
+}
+
+/// The badge for the one state a row is in.
+pub struct StateBadge {
+    /// `badge-red` for something the operator still has to do, `badge-gray`
+    /// otherwise.
+    pub class: &'static str,
+    pub label: String,
 }
 
 /// One group of rows on a page, ready for the template.
@@ -399,9 +408,13 @@ fn build_row(
     };
 
     let secret_state = service.secret_state(def.key);
-    let (origin_id, origin_detail, origin_at) = match origin {
-        Some(Origin::Environment { var }) => ("environment", var.to_string(), None),
-        Some(Origin::ConfigFile { key }) => ("config", format!("config.toml: {key}"), None),
+    // The environment's variable is the only provenance a row prints: it is the
+    // one an operator has to go and change. The rest is a tooltip on the badge.
+    let (origin_id, origin_title, env_var, origin_at) = match origin {
+        Some(Origin::Environment { var }) => {
+            ("environment", String::new(), Some(var.to_string()), None)
+        }
+        Some(Origin::ConfigFile { key }) => ("config", format!("config.toml: {key}"), None, None),
         Some(Origin::Database {
             updated_at,
             updated_by,
@@ -411,14 +424,41 @@ fn build_row(
                 Some(id) => t.trf("setting.saved_by", &[("id", id.to_string())]),
                 None => String::new(),
             },
+            None,
             (updated_at > 0).then_some(updated_at),
         ),
-        Some(Origin::Default) => ("default", String::new(), None),
-        None => ("default", String::new(), None),
+        Some(Origin::Default) | None => ("default", String::new(), None, None),
     };
 
     let read_only = !def.is_stored();
     let locked = read_only || matches!(origin, Some(Origin::Environment { .. }));
+
+    // One state, by precedence. A value waiting for the next start is the most
+    // urgent thing about its row; that a change would need a start at all comes
+    // next; that the row cannot be edited here comes last.
+    let state_badge = if pending.contains(def.key) {
+        Some(StateBadge {
+            class: "badge-red",
+            label: t.tr("setting.pending_restart").to_string(),
+        })
+    } else if def.apply == Apply::ProcessRestart {
+        Some(StateBadge {
+            class: "badge-gray",
+            label: t.tr("setting.apply_process_restart").to_string(),
+        })
+    } else if def.apply.is_in_place_restart() {
+        Some(StateBadge {
+            class: "badge-gray",
+            label: t.tr("setting.apply_restart").to_string(),
+        })
+    } else if read_only {
+        Some(StateBadge {
+            class: "badge-gray",
+            label: t.tr("setting.apply_read_only").to_string(),
+        })
+    } else {
+        None
+    };
 
     SettingRow {
         key: def.key.to_string(),
@@ -443,12 +483,11 @@ fn build_row(
         value,
         options,
         origin: origin_id,
-        origin_detail,
+        origin_title,
+        env_var,
         origin_at,
         config_value,
-        restart: def.apply.is_in_place_restart(),
-        pending_restart: pending.contains(def.key),
-        process_restart: def.apply == Apply::ProcessRestart,
+        state_badge,
         locked,
         read_only,
         secret_set: matches!(
@@ -820,12 +859,11 @@ mod tests {
             options: Vec::new(),
             field: String::new(),
             origin: "default",
-            origin_detail: String::new(),
+            origin_title: String::new(),
+            env_var: None,
             origin_at: None,
             config_value: None,
-            restart: false,
-            pending_restart: false,
-            process_restart: false,
+            state_badge: None,
             locked: false,
             read_only: false,
             secret_set: false,

@@ -602,6 +602,114 @@ fn row_of<'a>(html: &'a str, key: &str) -> &'a str {
     &rest[..end]
 }
 
+/// The text a reader sees in a fragment: the markup removed, so a key that only
+/// lives in a `title` or a `data-` attribute does not count as printed.
+fn text_of(fragment: &str) -> String {
+    let mut out = String::new();
+    let mut tags = 0usize;
+    for ch in fragment.chars() {
+        match ch {
+            '<' => tags += 1,
+            '>' => tags = tags.saturating_sub(1),
+            _ if tags == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A row shows one state, not all of them. A setting that needs a restart and is
+/// also read-only used to say both, which is how a badge strip stops meaning
+/// anything.
+#[tokio::test]
+async fn a_row_shows_at_most_one_state_badge() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/server/").await;
+
+    // The port is restart-only, so the badge says so; the chunk size is live and
+    // carries nothing but its origin.
+    let restart = row_of(&html, "server.port");
+    assert!(restart.contains("Needs a restart"), "{restart}");
+    assert_eq!(
+        restart.matches(r#"class="badge"#).count(),
+        2,
+        "an origin badge and exactly one state badge: {restart}"
+    );
+    let live = row_of(&html, "server.max_chunk_size_mb");
+    assert_eq!(
+        live.matches(r#"class="badge"#).count(),
+        1,
+        "origin only: {live}"
+    );
+
+    // A saved value waiting for the next start is the more urgent state, and its
+    // row says that instead of repeating that a change would need a start.
+    server
+        .state
+        .settings
+        .save(
+            Section::Server,
+            &form(&[("server.max_json_body_mb", "7")]),
+            None,
+        )
+        .await
+        .expect("save");
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/server/").await;
+    let pending = row_of(&html, "server.max_json_body_mb");
+    assert!(pending.contains("Waiting for a restart"), "{pending}");
+    assert!(
+        !pending.contains(">Needs a restart<"),
+        "the weaker state must not also render: {pending}"
+    );
+
+    // A read-only row says that, and nothing else.
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/advanced/").await;
+    let read_only = row_of(&html, "database.url");
+    assert!(read_only.contains("Read-only"), "{read_only}");
+    assert_eq!(
+        read_only.matches(r#"class="badge"#).count(),
+        2,
+        "{read_only}"
+    );
+}
+
+/// The internal key is not page furniture: it stays in `data-setting` and in the
+/// label's tooltip, where a bug report can find it, and out of the text.
+#[tokio::test]
+async fn a_row_keeps_its_key_out_of_the_text() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/server/").await;
+    for key in [
+        "server.addr",
+        "server.max_upload_size_mb",
+        "ui.tray_language",
+    ] {
+        let row = row_of(&html, key);
+        assert!(
+            row.contains(&format!(r#"title="{key}""#)),
+            "{key} must stay discoverable: {row}"
+        );
+        assert!(
+            !text_of(row).contains(key),
+            "{key} must not be printed as text: {}",
+            text_of(row)
+        );
+    }
+
+    // The config file's key is in the origin badge's tooltip, not in the row's
+    // text; the environment's variable is the one thing that is printed, because
+    // it is the one an operator has to change.
+    let row = row_of(&html, "server.addr");
+    assert!(row.contains(r#"title="config.toml: server.addr""#), "{row}");
+    assert!(!text_of(row).contains("config.toml"), "{}", text_of(row));
+}
+
 /// A numeric value carries its unit beside the field, not inside its label:
 /// "Max upload size" plus `MB` reads as one statement, and the label alone
 /// still works in a sentence.

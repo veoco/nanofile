@@ -157,6 +157,37 @@ test("a stored secret is never rendered back", async ({ page }) => {
   await expect(page.getByText("Settings saved.")).toBeVisible();
 });
 
+test("a row keeps its internal key out of the text", async ({ page }) => {
+  await page.goto("/sysadmin/settings/server/");
+  const row = page.locator('[data-setting="server.max_upload_size_mb"]');
+  // The key is a hook and a tooltip, not page furniture.
+  const text = await row.innerText();
+  expect(text).not.toContain("server.max_upload_size_mb");
+  await expect(row.locator("label")).toHaveAttribute(
+    "title",
+    "server.max_upload_size_mb",
+  );
+  // One origin badge and at most one state badge.
+  expect(await row.locator("span.badge").count()).toBeLessThanOrEqual(2);
+});
+
+test("a numeric row shows its unit beside the field", async ({ page }) => {
+  await page.goto("/sysadmin/settings/server/");
+  const row = page.locator('[data-setting="server.max_upload_size_mb"]');
+  await expect(row.locator('input[type="number"]')).toBeVisible();
+  // The unit is rendered by the form, so the label does not repeat it.
+  await expect(row.locator("label")).toHaveText("Max upload size");
+  await expect(row).toContainText("MB");
+});
+
+test("an enum names its choices instead of the wire value", async ({ page }) => {
+  await page.goto("/sysadmin/settings/server/");
+  const select = page.locator('select[name="ui.tray_language"]');
+  await expect(select).toContainText("Follow the operating system");
+  // What is submitted stays the value the server stores.
+  await expect(select.locator('option[value="auto"]')).toHaveCount(1);
+});
+
 test("a regular account cannot reach the pages", async ({ page, browser }) => {
   const { createUserViaAdmin } = await import("../helpers/users");
   const email = await createUserViaAdmin(page, "settings-visitor", "settings-password-123");
