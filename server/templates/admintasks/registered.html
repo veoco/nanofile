@@ -93,7 +93,7 @@
                 <div class="nf-prow-act">
                     {% if row.triggerable %}
                     <form action="/sysadmin/tasks/{{ row.slug }}/trigger/" method="POST" class="trigger-form"
-                          data-confirm="admin.task_run_confirm" data-confirm-variant="solid"
+                          data-confirm="{{ t.tr("admin.task_run_confirm") }}" data-confirm-variant="solid"
                           data-confirm-args='{{ row.confirm_args }}'>
                         <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
                         <button type="submit" class="btn btn-line btn-sm" title="{{ t.tr("admin.task_run_now") }}">
