@@ -591,15 +591,53 @@ async fn every_settings_page_renders_for_an_admin_only() {
     );
 }
 
-/// The markup of one row, from its `data-setting` hook to the next row.
+/// The markup of one row, from its opening tag to the next row's.
 fn row_of<'a>(html: &'a str, key: &str) -> &'a str {
     let marker = format!(r#"data-setting="{key}""#);
-    let rest = html
-        .split(&marker)
-        .nth(1)
+    let at = html
+        .find(&marker)
         .unwrap_or_else(|| panic!("{key} did not render"));
-    let end = rest.find(r#"data-setting=""#).unwrap_or(rest.len());
+    // The element that owns the attribute, so the opening tag is part of the
+    // slice and `text_of` can tell markup from text.
+    let start = html[..at].rfind('<').expect("a row is an element");
+    let rest = &html[start..];
+    // The row's own opening tag carries the marker too, so the next row begins
+    // only after it closes.
+    let open_end = rest.find('>').expect("the opening tag closes") + 1;
+    let end = rest[open_end..]
+        .find(r#"data-setting=""#)
+        .map(|i| open_end + i)
+        .unwrap_or(rest.len());
     &rest[..end]
+}
+
+/// The filter matches a row against its key, its name and its description, so
+/// the row has to carry all three.
+#[tokio::test]
+async fn a_row_carries_the_text_the_filter_matches_on() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/server/").await;
+    assert!(
+        html.contains("data-settings-filter"),
+        "the page must have a filter box"
+    );
+    assert!(
+        html.contains("data-settings-empty"),
+        "and a note for a query that matches nothing"
+    );
+
+    let row = row_of(&html, "server.max_upload_size_mb");
+    let search = row
+        .split(r#"data-setting-search=""#)
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the row carries its search text");
+    assert!(search.contains("server.max_upload_size_mb"), "{search}");
+    assert!(search.contains("Max upload size"), "{search}");
+    assert!(search.contains("transport cap"), "{search}");
 }
 
 /// The text a reader sees in a fragment: the markup removed, so a key that only

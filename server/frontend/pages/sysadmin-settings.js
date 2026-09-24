@@ -1,4 +1,4 @@
-// sysadmin-settings — the two client-side behaviours of the settings page.
+// sysadmin-settings — the client-side behaviours of the settings page.
 //
 //   1. Restarting is not idempotent for the people using the server (active
 //      transfers are cut, clients reconnect), so the button asks first.
@@ -7,9 +7,12 @@
 //      it is back before reloading. `/health` is the readiness probe the
 //      container healthcheck already uses, and it is same-origin, which is what
 //      `connect-src 'self'` allows.
+//   3. A page holds up to seventeen settings and the whole catalog is over a
+//      hundred, so the filter box narrows the page to the rows whose key, name
+//      or description contains what was typed.
 //
-// The waiting logic is exported separately from the DOM wiring so it can be
-// tested on bare Node (see `sysadmin-settings.test.js`).
+// The waiting and matching logic is exported separately from the DOM wiring so
+// it can be tested on bare Node (see `sysadmin-settings.test.js`).
 import { __t } from "../core/i18n.js";
 import { ConfirmDialog } from "../core/confirm.js";
 
@@ -168,7 +171,67 @@ export function initRestartConfirm(doc) {
   });
 }
 
+/**
+ * Whether one row's searchable text matches a query.
+ *
+ * A plain case-insensitive substring test, against the text the server put in
+ * `data-setting-search` (the key, the name and the description joined). The
+ * point is to find a setting whose name is half remembered, so a half-typed
+ * word has to match: ranking, word boundaries and fuzzy distance would all make
+ * a partial query find nothing.
+ */
+export function matchesSetting(searchText, query) {
+  const needle = String(query == null ? "" : query)
+    .trim()
+    .toLowerCase();
+  if (!needle) return true;
+  return String(searchText == null ? "" : searchText)
+    .toLowerCase()
+    .includes(needle);
+}
+
+/**
+ * Wire the filter box, if this page has one.
+ *
+ * A row and its group heading are hidden together: a heading with nothing under
+ * it is worse than no heading. Hiding a row does not remove it from the form —
+ * `display: none` controls still submit — so a filtered page saves the values it
+ * was rendered with, exactly as an unfiltered one does. Returns whether a box
+ * was found, which gives a test a way to tell a settings page from another.
+ */
+export function initSettingsFilter(deps) {
+  const options = deps || {};
+  const doc = options.doc || document;
+  const root = options.root || doc;
+  const input = root.querySelector("[data-settings-filter]");
+  if (!input) return false;
+
+  const empty = root.querySelector("[data-settings-empty]");
+  const groups = Array.from(root.querySelectorAll("[data-setting-group]"));
+
+  function apply() {
+    const query = input.value;
+    let shown = 0;
+    groups.forEach(function (group) {
+      let inGroup = 0;
+      group.querySelectorAll("[data-setting]").forEach(function (row) {
+        const hit = matchesSetting(row.dataset.settingSearch, query);
+        row.hidden = !hit;
+        if (hit) inGroup += 1;
+      });
+      group.hidden = inGroup === 0;
+      shown += inGroup;
+    });
+    if (empty) empty.hidden = shown > 0;
+  }
+
+  input.addEventListener("input", apply);
+  apply();
+  return true;
+}
+
 if (typeof document !== "undefined") {
   startRestartWatch();
   initRestartConfirm();
+  initSettingsFilter();
 }

@@ -188,6 +188,26 @@ test("an enum names its choices instead of the wire value", async ({ page }) => 
   await expect(select.locator('option[value="auto"]')).toHaveCount(1);
 });
 
+test("the filter narrows the page to the rows that match", async ({ page }) => {
+  await page.goto("/sysadmin/settings/server/");
+  const filter = page.locator("[data-settings-filter]");
+  await expect(page.locator('[data-setting="server.addr"]')).toBeVisible();
+
+  await filter.fill("tray");
+  await expect(page.locator('[data-setting="ui.tray_language"]')).toBeVisible();
+  await expect(page.locator('[data-setting="server.addr"]')).toBeHidden();
+  // A heading with nothing left under it goes with its rows.
+  await expect(page.locator('[data-setting-group="server_addresses"]')).toBeHidden();
+  await expect(page.locator('[data-setting-group="server_desktop"]')).toBeVisible();
+
+  await filter.fill("no setting says this");
+  await expect(page.locator("[data-settings-empty]")).toBeVisible();
+
+  await filter.fill("");
+  await expect(page.locator('[data-setting="server.addr"]')).toBeVisible();
+  await expect(page.locator("[data-settings-empty]")).toBeHidden();
+});
+
 test("a regular account cannot reach the pages", async ({ page, browser }) => {
   const { createUserViaAdmin } = await import("../helpers/users");
   const email = await createUserViaAdmin(page, "settings-visitor", "settings-password-123");

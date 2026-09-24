@@ -85,6 +85,16 @@
     </div>
     {% endif %}
 
+    {# The catalog is over a hundred settings across ten pages, so the page can
+       be filtered. Without scripting the box is inert and the page is what it
+       always was. #}
+    <div class="mt-5 flex flex-wrap items-center gap-3">
+        <input type="search" class="input max-w-sm" data-settings-filter
+               placeholder="{{ t.tr("setting.filter_placeholder") }}"
+               aria-label="{{ t.tr("setting.filter_placeholder") }}">
+        <p class="text-[12px] text-ink-3" data-settings-empty hidden>{{ t.tr("setting.filter_empty") }}</p>
+    </div>
+
     <form action="/sysadmin/settings/{{ section }}/save/" method="POST" class="nf-form mt-5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="section" value="{{ section }}">
@@ -105,7 +115,7 @@
                 {# `data-setting` is the key, and the label's tooltip repeats it:
                    an operator who needs to name the setting in a bug report can
                    find it, and a page of rows does not print it 110 times. #}
-                <div data-setting="{{ row.key }}"
+                <div data-setting="{{ row.key }}" data-setting-search="{{ row.search_text }}"
                      class="grid grid-cols-1 gap-3 border-t border-line py-3.5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6">
                     <div class="min-w-0">
                         <label class="text-[13px] font-medium text-ink" title="{{ row.key }}"

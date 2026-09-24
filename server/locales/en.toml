@@ -1145,6 +1145,9 @@ setting.unit_bytes = "bytes"
 
 setting.list_placeholder = "one, two, three"
 setting.list_hint = "Separate several entries with commas."
+
+setting.filter_placeholder = "Filter these settings"
+setting.filter_empty = "No setting on this page matches that."
 setting.origin_default = "Default"
 setting.origin_config = "Config file"
 setting.origin_database = "Database"

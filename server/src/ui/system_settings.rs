@@ -36,6 +36,10 @@ pub struct SettingRow {
     pub key: String,
     /// The locale key, so the template renders the label.
     pub label_key: String,
+    /// Everything the filter matches this row against: the key, the label and
+    /// the help sentence, so a half-remembered name, a config key and a word
+    /// from the description all find it.
+    pub search_text: String,
     /// The one sentence that says what this setting does. Every catalog entry
     /// has one in both languages; `every_catalog_string_is_translated` is what
     /// keeps it that way, because a row with only a label is a row an operator
@@ -460,10 +464,16 @@ fn build_row(
         None
     };
 
+    // `tr` borrows the key it is given, so the strings are owned before they
+    // outlive the temporaries.
+    let label = t.tr(&def.label_key()).to_string();
+    let help = t.tr(&def.help_key()).to_string();
+    let search_text = format!("{} {label} {help}", def.key);
     SettingRow {
         key: def.key.to_string(),
+        search_text,
         label_key: def.label_key(),
-        help: t.tr(&def.help_key()).to_string(),
+        help,
         unit: def.unit_key().map(|key| t.tr(&key).to_string()),
         control: match def.kind {
             Kind::Bool => "bool",
@@ -850,6 +860,7 @@ mod tests {
     fn row(key: &'static str) -> SettingRow {
         SettingRow {
             key: key.to_string(),
+            search_text: String::new(),
             label_key: String::new(),
             help: String::new(),
             unit: None,

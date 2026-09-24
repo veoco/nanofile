@@ -1143,6 +1143,9 @@ setting.unit_bytes = "字节"
 
 setting.list_placeholder = "一个, 两个, 三个"
 setting.list_hint = "多个条目用逗号分隔。"
+
+setting.filter_placeholder = "筛选本页设置"
+setting.filter_empty = "本页没有匹配的设置。"
 setting.origin_default = "默认值"
 setting.origin_config = "配置文件"
 setting.origin_database = "数据库"

@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { probeHealth, isBack, waitForServer, startRestartWatch } from "./sysadmin-settings.js";
+import {
+  probeHealth,
+  isBack,
+  waitForServer,
+  startRestartWatch,
+  matchesSetting,
+  initSettingsFilter,
+} from "./sysadmin-settings.js";
 
 /** Let the promise chain inside `startRestartWatch` settle. */
 function flush() {
@@ -143,4 +150,107 @@ test("startRestartWatch explains a timeout and does not navigate", async () => {
 
 test("startRestartWatch is inert on a page without the marker", () => {
   assert.equal(startRestartWatch({ doc: { querySelector: () => null } }), false);
+});
+
+// ─── Filter ───────────────────────────────────────────────────────────────
+
+test("matchesSetting keeps every row when nothing is typed", () => {
+  assert.equal(matchesSetting("server.port Bind port", ""), true);
+  assert.equal(matchesSetting("server.port Bind port", "   "), true);
+  assert.equal(matchesSetting("", ""), true);
+});
+
+test("matchesSetting is case-insensitive and matches anywhere", () => {
+  const row = "server.max_upload_size_mb Max upload size The transport cap";
+  assert.equal(matchesSetting(row, "UPLOAD"), true);
+  assert.equal(matchesSetting(row, "max_upload"), true);
+  assert.equal(matchesSetting(row, "transport"), true);
+  assert.equal(matchesSetting(row, "download"), false);
+});
+
+test("matchesSetting tolerates a missing row text", () => {
+  assert.equal(matchesSetting(undefined, "x"), false);
+  assert.equal(matchesSetting(null, "x"), false);
+});
+
+/**
+ * A minimal settings page: the filter box, two groups, and rows whose
+ * `dataset.settingSearch` is what the server rendered into the attribute.
+ */
+function fakeSettingsPage() {
+  function makeRow(search) {
+    return { dataset: { settingSearch: search }, hidden: false };
+  }
+  const rows = {
+    addr: makeRow("server.addr Bind address Changing the listener needs a restart."),
+    port: makeRow("server.port Bind port Changing the listener needs a restart."),
+    host: makeRow("email.host SMTP host Host name of the SMTP server."),
+  };
+  function makeGroup(held) {
+    return {
+      hidden: false,
+      querySelectorAll: (sel) => (sel === "[data-setting]" ? held : []),
+    };
+  }
+  const groups = [makeGroup([rows.addr, rows.port]), makeGroup([rows.host])];
+  const input = {
+    value: "",
+    listeners: {},
+    addEventListener: function (event, fn) {
+      this.listeners[event] = fn;
+    },
+  };
+  const empty = { hidden: true };
+  return {
+    input,
+    empty,
+    groups,
+    rows,
+    doc: {
+      querySelector: (sel) => {
+        if (sel === "[data-settings-filter]") return input;
+        if (sel === "[data-settings-empty]") return empty;
+        return null;
+      },
+      querySelectorAll: (sel) => (sel === "[data-setting-group]" ? groups : []),
+    },
+    type: function (value) {
+      this.input.value = value;
+      this.input.listeners.input();
+    },
+  };
+}
+
+test("initSettingsFilter hides rows and a heading left with none", () => {
+  const page = fakeSettingsPage();
+  assert.equal(initSettingsFilter({ doc: page.doc }), true);
+
+  // Nothing typed: every row and heading is visible, and the note is hidden.
+  assert.equal(page.empty.hidden, true);
+  assert.equal(page.groups[0].hidden, false);
+
+  page.type("email");
+  assert.equal(page.rows.addr.hidden, true);
+  assert.equal(page.rows.host.hidden, false);
+  assert.equal(page.groups[0].hidden, true, "a heading with no rows goes with them");
+  assert.equal(page.groups[1].hidden, false);
+  assert.equal(page.empty.hidden, true);
+
+  // A query that matches nothing says so rather than showing a blank page.
+  page.type("nothing matches this");
+  assert.equal(page.groups[1].hidden, true);
+  assert.equal(page.empty.hidden, false);
+
+  // Clearing the box brings the page back.
+  page.type("");
+  assert.equal(page.groups[0].hidden, false);
+  assert.equal(page.groups[1].hidden, false);
+  assert.equal(page.empty.hidden, true);
+});
+
+test("initSettingsFilter is inert on a page without a box", () => {
+  assert.equal(
+    initSettingsFilter({ doc: { querySelector: () => null, querySelectorAll: () => [] } }),
+    false,
+  );
 });
