@@ -98,8 +98,45 @@ test("a job's scheduling policy is one disclosure away", async ({ page }) => {
 // rows.
 test("the run list is not the registry", async ({ page }) => {
   await page.goto("/sysadmin/tasks/");
-  await expect(page.locator("main .nf-sec h2").first()).toHaveText("Recent runs");
+  await expect(page.locator("main .nf-sec h2").first()).toHaveText("Running now");
   await expect(page.locator("main [data-task]")).toHaveCount(0);
+});
+
+// The journal is the durable record, so a run that finished shows up on the run
+// list named and labelled rather than as the slug and wire phase the database
+// holds.
+test("a finished run is named and labelled on the run list", async ({ page }) => {
+  await page.goto(REGISTRY);
+  await taskRow(page, "share-link-cleanup")
+    .locator('form.trigger-form button[type="submit"]')
+    .click();
+  await page.locator(".js-confirm-ok").click();
+  await page.waitForURL(/\/sysadmin\/tasks\/registered\/\?action=triggered$/);
+
+  // The run is queued rather than executed in the request, so the row is only
+  // there once the job has finished and the journal has been written.
+  await expect
+    .poll(async () => {
+      await page.goto("/sysadmin/tasks/");
+      return page
+        .locator('main .nf-xrow[data-run]')
+        .filter({ hasText: "Share link cleanup" })
+        .count();
+    })
+    .not.toBe(0);
+
+  const run = page
+    .locator('main .nf-xrow[data-run]')
+    .filter({ hasText: "Share link cleanup" })
+    .first();
+  await expect(run.locator(".badge")).toHaveText("Succeeded");
+  await expect(run).not.toContainText("share-link-cleanup");
+  await expect(run.locator('[data-fact="owner"]')).toContainText("The server");
+
+  // The id and the job's own report are one disclosure away.
+  await expect(run.locator("details.nf-xrow-more .nf-kv").first()).toBeHidden();
+  await run.locator("details.nf-xrow-more summary").click();
+  await expect(run.locator("details.nf-xrow-more")).toContainText("Run id");
 });
 
 // The subtitle has no bottom margin of its own, so the run panel must keep its

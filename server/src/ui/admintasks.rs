@@ -11,18 +11,21 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
+use infra::entity::job_run;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
 use crate::tasks::JobStats;
 use crate::tasks::registry::RegisteredJob;
-use crate::tasks::run::JobState;
+use crate::tasks::run::{JobRun, JobState};
 use crate::tasks::spec::{
     Durability, JobKey, JobSpec, OverlapPolicy, Priority, Resource, RetryPolicy, ServiceKey,
     Trigger,
 };
+use crate::tasks::store::RunFilter;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -37,6 +40,7 @@ pub struct RunsTemplate {
     pub is_admin: bool,
     pub csrf_token: Option<String>,
     pub active_page: &'static str,
+    pub active: Vec<ActiveRunRow>,
     pub runs: Vec<RunRow>,
     pub load: LoadRow,
     pub error: Option<String>,
@@ -99,13 +103,32 @@ impl LoadRow {
     }
 }
 
+/// One run still in flight, from the in-memory run table.
+///
+/// The journal only holds what has finished, so a run that is happening now is
+/// nowhere else: without this the page could not answer "what is the server
+/// doing", which is the question the load panel next to it raises.
+pub struct ActiveRunRow {
+    /// The full id, which is what the log line for this run carries.
+    pub id: String,
+    /// The job's name, in the reader's language.
+    pub name: String,
+    pub state: StateBadge,
+    pub facts: Vec<FactRow>,
+    /// What the run is doing now, in the job's own words.
+    pub message: String,
+}
+
 /// One recorded run, from the durable journal.
 pub struct RunRow {
-    pub kind: String,
-    pub state: String,
-    pub owner: String,
-    pub finished_at_ts: Option<i64>,
-    pub processed: Option<i64>,
+    /// The full id, which is what the log line for this run carries.
+    pub id: String,
+    /// The job's name, or its slug when the job no longer exists.
+    pub name: String,
+    pub state: StateBadge,
+    pub facts: Vec<FactRow>,
+    /// The job's own summary of what it did.
+    pub summary: String,
     pub error: String,
 }
 
@@ -684,28 +707,189 @@ pub async fn registered_page(
     }
 }
 
+/// The name of the job a run belongs to.
+///
+/// A run outlives the job that wrote it: the journal is kept across upgrades
+/// and a job can be removed, so an unknown slug is shown as it is rather than
+/// left blank or dropped.
+fn run_name(slug: &str, t: &I18n) -> String {
+    match JobKey::from_slug(slug) {
+        Some(key) => t.tr(&job_name_key(key)).to_string(),
+        None => slug.to_string(),
+    }
+}
+
+/// How far a run has got, as the run itself reports it.
+///
+/// `total` is optional because not every job can say: a reference copy is one
+/// tree update and one commit, so a percentage for it would be invented.
+fn progress_value(run: &JobRun) -> String {
+    match run.progress.total {
+        Some(total) => format!("{} / {}", run.progress.done, total),
+        None => run.progress.done.to_string(),
+    }
+}
+
+/// A duration a reader can compare at a glance.
+fn duration_display(secs: i64) -> String {
+    if secs >= 60 {
+        format!("{}m", secs / 60)
+    } else if secs >= 1 {
+        format!("{secs}s")
+    } else {
+        // Escaped by the template, not here.
+        "<1s".to_string()
+    }
+}
+
+/// The account behind each owner id, so the page names a submitter instead of
+/// printing a number.
+async fn owner_emails(state: &Arc<AppState>, ids: &[i32]) -> HashMap<i32, String> {
+    if ids.is_empty() {
+        return HashMap::new();
+    }
+    match state.repos.user.find_by_ids(ids).await {
+        Ok(users) => users
+            .into_iter()
+            .map(|user| (user.id, user.email))
+            .collect(),
+        // A page that cannot name the submitter still has the run to show.
+        Err(_) => HashMap::new(),
+    }
+}
+
+/// Who to name as the submitter of a run.
+fn owner_label(t: &I18n, owners: &HashMap<i32, String>, owner: Option<i32>) -> String {
+    match owner {
+        // A scheduled pass is the server's own work, not somebody's request.
+        None => t.tr("admin.owner_system").to_string(),
+        Some(id) => owners
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| t.tr("admin.owner_unknown").to_string()),
+    }
+}
+
+/// A labelled pair with an already-rendered value.
+fn plain_fact(key: &'static str, label: &str, value: String) -> FactRow {
+    FactRow {
+        key,
+        label: label.to_string(),
+        value,
+        ts: None,
+    }
+}
+
+/// A labelled pair whose value is a raw stamp the browser renders.
+fn time_fact(key: &'static str, label: &str, ts: i64) -> FactRow {
+    FactRow {
+        key,
+        label: label.to_string(),
+        value: String::new(),
+        ts: Some(ts),
+    }
+}
+
+/// One row for a run that is still going.
+fn active_run_row(run: &JobRun, owners: &HashMap<i32, String>, t: &I18n) -> ActiveRunRow {
+    let mut facts = vec![
+        plain_fact("progress", t.tr("admin.fact_progress"), progress_value(run)),
+        plain_fact(
+            "owner",
+            t.tr("admin.runs_owner"),
+            owner_label(t, owners, run.owner),
+        ),
+    ];
+    // A run that has not started yet is still queued, and saying when it was
+    // submitted is the only time it has.
+    facts.push(match run.started_at {
+        Some(ts) => time_fact("started", t.tr("admin.fact_started"), ts),
+        None => time_fact("submitted", t.tr("admin.fact_submitted"), run.created_at),
+    });
+    ActiveRunRow {
+        id: run.id.as_str().to_string(),
+        name: run_name(run.key.as_str(), t),
+        state: state_badge(t, run.state.as_str()),
+        facts,
+        message: run.progress.message.clone(),
+    }
+}
+
+/// One row for a run the journal kept.
+fn journal_row(row: &job_run::Model, owners: &HashMap<i32, String>, t: &I18n) -> RunRow {
+    let mut facts = vec![plain_fact(
+        "owner",
+        t.tr("admin.runs_owner"),
+        owner_label(t, owners, row.owner),
+    )];
+    if let Some(processed) = row.processed {
+        facts.push(plain_fact(
+            "processed",
+            t.tr("admin.runs_processed"),
+            processed.to_string(),
+        ));
+    }
+    // Only a recovered run has more than one attempt, so the plain case is not
+    // worth a column.
+    if row.attempt > 1 {
+        facts.push(plain_fact(
+            "attempt",
+            t.tr("admin.fact_attempt"),
+            row.attempt.to_string(),
+        ));
+    }
+    if let Some(finished) = row.finished_at {
+        if let Some(started) = row.started_at {
+            facts.push(plain_fact(
+                "duration",
+                t.tr("admin.task_duration"),
+                duration_display(finished.saturating_sub(started)),
+            ));
+        }
+        facts.push(time_fact("finished", t.tr("admin.fact_finished"), finished));
+    }
+    RunRow {
+        id: row.id.clone(),
+        name: run_name(&row.kind, t),
+        state: state_badge(t, &row.phase),
+        facts,
+        summary: row.summary.clone(),
+        error: row.error.clone().unwrap_or_default(),
+    }
+}
+
 /// Build and render the run list.
 async fn render_runs(state: &Arc<AppState>, user: &WebUser) -> Result<Response, AppError> {
-    // Durable history, so a run that crashed is visible and not only the most
-    // recent in-memory state.
-    let runs = state
-        .repos
-        .job_run
-        .recent(20)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|row| RunRow {
-            kind: row.kind,
-            state: row.phase,
-            owner: row
-                .owner
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "—".to_string()),
-            finished_at_ts: row.finished_at,
-            processed: row.processed,
-            error: row.error.unwrap_or_default(),
-        })
+    let t = I18n::get(user.language.as_deref());
+
+    // What is happening now, from the in-memory table. Every active run is
+    // shown: they are bounded by each job's own concurrency, not by a page
+    // size, and a truncated list of running work would be a lie.
+    let active_runs = state.tasks.store().list(&RunFilter {
+        include_active: true,
+        ..RunFilter::default()
+    });
+
+    // What happened, from the durable journal. It survives a restart, which the
+    // in-memory table does not, and it holds every job whose subsystem asked to
+    // be remembered.
+    let journal = state.repos.job_run.recent(20).await.unwrap_or_default();
+
+    // One lookup for both lists, so a page of runs does not become a query per
+    // row.
+    let mut owner_ids: Vec<i32> = active_runs.iter().filter_map(|run| run.owner).collect();
+    owner_ids.extend(journal.iter().filter_map(|row| row.owner));
+    owner_ids.sort_unstable();
+    owner_ids.dedup();
+    let owners = owner_emails(state, &owner_ids).await;
+
+    let active = active_runs
+        .iter()
+        .map(|run| active_run_row(run, &owners, t))
+        .collect();
+    let runs = journal
+        .iter()
+        .map(|row| journal_row(row, &owners, t))
         .collect();
 
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
@@ -717,6 +901,7 @@ async fn render_runs(state: &Arc<AppState>, user: &WebUser) -> Result<Response, 
         is_admin: ctx.is_admin,
         csrf_token: Some(ctx.csrf_token),
         active_page: "admintasks",
+        active,
         runs,
         load: LoadRow::from_state(state),
         error: None,
@@ -854,7 +1039,9 @@ pub async fn trigger_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tasks::run::Params;
     use crate::tasks::spec::OverlapPolicy;
+    use crate::tasks::spec::Visibility;
 
     /// The languages the server can render, as `I18n::get` resolves them.
     fn languages() -> [&'static I18n; 2] {
@@ -1129,6 +1316,56 @@ mod tests {
             // disappearing: the journal can outlive the phase that wrote it.
             assert_eq!(state_badge(t, "future_phase").label, "future_phase");
         }
+    }
+
+    /// A run that outlives its job still has a name to show: the journal is
+    /// kept across upgrades, so a slug can name a job this build does not have.
+    #[test]
+    fn a_run_names_its_job_or_falls_back_to_its_slug() {
+        let t = I18n::get(None);
+        assert_eq!(run_name("gc", t), "Garbage collection");
+        assert_eq!(run_name("retired-job", t), "retired-job");
+    }
+
+    /// A submitted run has no account when the server scheduled it, and an
+    /// account can be deleted while its runs stay in the journal; neither is a
+    /// number the page should print.
+    #[test]
+    fn a_run_names_its_submitter_or_says_why_it_cannot() {
+        let t = I18n::get(None);
+        let owners = HashMap::from([(7, "someone@example.com".to_string())]);
+        assert_eq!(owner_label(t, &owners, Some(7)), "someone@example.com");
+        assert_eq!(owner_label(t, &owners, Some(9)), "Deleted account");
+        assert_eq!(owner_label(t, &owners, None), "The server");
+    }
+
+    /// A one-second run and a one-minute run are not both "0m".
+    #[test]
+    fn a_duration_reads_at_the_scale_it_happened_on() {
+        assert_eq!(duration_display(0), "<1s");
+        assert_eq!(duration_display(1), "1s");
+        assert_eq!(duration_display(59), "59s");
+        assert_eq!(duration_display(60), "1m");
+        assert_eq!(duration_display(3600), "60m");
+    }
+
+    /// A run the job has not started counting for reports what it has done and
+    /// nothing invented about a total.
+    #[test]
+    fn progress_reports_only_the_total_the_run_knows() {
+        let mut run = JobRun::queued(
+            JobKey::Reindex,
+            Visibility::OwnerOrAdmin,
+            None,
+            Params::Null,
+            "reindex",
+            None,
+            0,
+        );
+        assert_eq!(progress_value(&run), "0");
+        run.progress.done = 128;
+        run.progress.total = Some(512);
+        assert_eq!(progress_value(&run), "128 / 512");
     }
 
     /// A job's policies are written in the reader's language, never left as
