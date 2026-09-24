@@ -78,6 +78,16 @@ pub struct SettingRow {
     pub secret_broken: bool,
 }
 
+/// One group of rows on a page, ready for the template.
+///
+/// A page is rendered as its groups rather than as one flat list, so a heading
+/// and the rows under it can be hidden together when the page is filtered.
+pub struct SettingGroup {
+    pub id: &'static str,
+    pub title_key: &'static str,
+    pub rows: Vec<SettingRow>,
+}
+
 /// One `<option>` of an enum control.
 pub struct SelectOption {
     pub value: String,
@@ -115,7 +125,7 @@ pub struct SystemSettingsTemplate {
     pub section_title_key: &'static str,
     pub section_subtitle_key: &'static str,
     pub sections: Vec<SectionLink>,
-    pub rows: Vec<SettingRow>,
+    pub groups: Vec<SettingGroup>,
     /// Keys whose saved value supersedes a config-file entry that disagrees.
     pub drift_keys: Vec<String>,
     pub pending_restart: Vec<String>,
@@ -219,15 +229,16 @@ async fn render(
     let policy = service.policy();
     let pending = service.pending_restart();
 
-    let mut rows = Vec::new();
+    let mut by_key: HashMap<&'static str, SettingRow> = HashMap::new();
     let mut drift_keys = Vec::new();
     for def in infra::settings::section(section) {
         let row = build_row(t, service, def, &pending, submitted);
         if row.config_value.is_some() {
             drift_keys.push(def.key.to_string());
         }
-        rows.push(row);
+        by_key.insert(def.key, row);
     }
+    let groups = build_groups(section, by_key);
 
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
     let tpl = SystemSettingsTemplate {
@@ -251,7 +262,7 @@ async fn render(
                 active: *id == section,
             })
             .collect(),
-        rows,
+        groups,
         drift_keys,
         pending_restart: pending.iter().cloned().collect(),
         pending_process_restart: service.pending_process_restart().iter().cloned().collect(),
@@ -283,6 +294,50 @@ fn settings_url(section: Section, action: &str) -> String {
         Section::Server => format!("/sysadmin/settings/?action={action}"),
         other => format!("/sysadmin/settings/{}/?action={action}", other.id()),
     }
+}
+
+/// Assemble a page's rows into its groups, in render order.
+///
+/// A catalog key that `GROUPS` does not name would silently vanish from the
+/// page, so anything left over is collected into a trailing "Other" group rather
+/// than dropped; `the_groups_partition_the_catalog` is what stops that from
+/// being the normal case.
+fn build_groups(
+    section: Section,
+    mut rows: HashMap<&'static str, SettingRow>,
+) -> Vec<SettingGroup> {
+    let mut groups: Vec<SettingGroup> = Vec::new();
+    for group in infra::settings::groups(section) {
+        let held: Vec<SettingRow> = group
+            .keys
+            .iter()
+            .filter_map(|key| rows.remove(key))
+            .collect();
+        if !held.is_empty() {
+            groups.push(SettingGroup {
+                id: group.id,
+                title_key: group.title_key,
+                rows: held,
+            });
+        }
+    }
+    // Catalog order, not map order, so the leftovers read like a page. Anything
+    // else the map held (it should hold only this page's keys) follows by key,
+    // so the order stays deterministic whatever it is.
+    let mut leftovers: Vec<SettingRow> = infra::settings::section(section)
+        .filter_map(|def| rows.remove(def.key))
+        .collect();
+    let mut rest: Vec<&'static str> = rows.keys().copied().collect();
+    rest.sort_unstable();
+    leftovers.extend(rest.into_iter().filter_map(|key| rows.remove(key)));
+    if !leftovers.is_empty() {
+        groups.push(SettingGroup {
+            id: "other",
+            title_key: "setting.group_other",
+            rows: leftovers,
+        });
+    }
+    groups
 }
 
 /// Render one catalog entry into its row view.
@@ -746,5 +801,72 @@ mod tests {
             assert_eq!(section_of(section.id()), Some(section));
         }
         assert_eq!(section_of("nope"), None);
+    }
+
+    /// A row with nothing in it: the grouping code only looks at `key`.
+    fn row(key: &'static str) -> SettingRow {
+        SettingRow {
+            key: key.to_string(),
+            label_key: String::new(),
+            help: None,
+            control: "text",
+            value: String::new(),
+            checked: false,
+            options: Vec::new(),
+            field: String::new(),
+            origin: "default",
+            origin_detail: String::new(),
+            origin_at: None,
+            config_value: None,
+            restart: false,
+            pending_restart: false,
+            process_restart: false,
+            locked: false,
+            read_only: false,
+            secret_set: false,
+            secret_broken: false,
+        }
+    }
+
+    #[test]
+    fn a_page_is_rendered_as_its_groups_in_order() {
+        let mut rows = HashMap::new();
+        for def in infra::settings::section(Section::RateLimits) {
+            rows.insert(def.key, row(def.key));
+        }
+        let groups = build_groups(Section::RateLimits, rows);
+        let ids: Vec<&str> = groups.iter().map(|group| group.id).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "rate_limits_sign_in",
+                "rate_limits_account_flows",
+                "rate_limits_protected",
+                "rate_limits_content",
+            ]
+        );
+        let listed: Vec<&str> = groups
+            .iter()
+            .flat_map(|group| group.rows.iter().map(|row| row.key.as_str()))
+            .collect();
+        let declared: Vec<&str> = infra::settings::section(Section::RateLimits)
+            .map(|def| def.key)
+            .collect();
+        assert_eq!(listed, declared);
+    }
+
+    /// A key with no group still has to reach the page: silently dropping a
+    /// setting is worse than showing it under a heading that says "Other".
+    #[test]
+    fn a_key_with_no_group_is_not_dropped() {
+        let mut rows = HashMap::new();
+        rows.insert("server.addr", row("server.addr"));
+        rows.insert("email.host", row("email.host"));
+        let groups = build_groups(Section::Server, rows);
+        let last = groups.last().expect("a fallback group");
+        assert_eq!(last.id, "other");
+        assert_eq!(last.title_key, "setting.group_other");
+        let keys: Vec<&str> = last.rows.iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(keys, vec!["email.host"]);
     }
 }

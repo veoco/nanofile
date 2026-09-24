@@ -85,6 +85,165 @@
     </div>
     {% endif %}
 
+    <form action="/sysadmin/settings/{{ section }}/save/" method="POST" class="nf-form mt-5">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="{{ section }}">
+
+        <div class="body">
+            {% for group in groups %}
+            {# One `<section>` per group, so a filter can hide a heading together
+               with the rows it belongs to instead of leaving it behind. #}
+            <section data-setting-group="{{ group.id }}">
+                <div class="nf-sec">
+                    <h2>{{ t.tr(group.title_key) }}</h2>
+                    <span class="n num">{{ group.rows.len() }}</span>
+                    <span class="rule" aria-hidden="true"></span>
+                </div>
+                {% for row in group.rows %}
+                {# `data-setting` is the hook a test (or a future script) uses to find
+                   one row without depending on the markup around it. #}
+                <div data-setting="{{ row.key }}"
+                     class="grid grid-cols-1 gap-3 border-t border-line py-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6">
+                    <div class="min-w-0">
+                        <label class="text-[13px] font-medium text-ink"
+                               {% if !row.locked && !row.read_only %}for="field-{{ row.key }}"{% endif %}>
+                            {{ t.tr(row.label_key) }}
+                        </label>
+                        <p class="mono text-[11px] text-ink-3">{{ row.key }}</p>
+                        {% if let Some(help) = row.help %}
+                        <p class="desc">{{ help }}</p>
+                        {% endif %}
+
+                        <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            {% if row.origin == "environment" %}
+                            <span class="badge badge-green">{{ t.tr("setting.origin_environment") }}</span>
+                            {% else if row.origin == "database" %}
+                            <span class="badge badge-brand">{{ t.tr("setting.origin_database") }}</span>
+                            {% else if row.origin == "config" %}
+                            <span class="badge badge-gray">{{ t.tr("setting.origin_config") }}</span>
+                            {% else %}
+                            <span class="badge badge-gray">{{ t.tr("setting.origin_default") }}</span>
+                            {% endif %}
+
+                            {% if row.restart %}
+                            <span class="badge badge-gray">{{ t.tr("setting.apply_restart") }}</span>
+                            {% endif %}
+                            {% if row.process_restart %}
+                            <span class="badge badge-gray">{{ t.tr("setting.apply_process_restart") }}</span>
+                            {% endif %}
+                            {% if row.pending_restart %}
+                            <span class="badge badge-red">{{ t.tr("setting.pending_restart") }}</span>
+                            {% endif %}
+                            {% if row.read_only %}
+                            <span class="badge badge-gray">{{ t.tr("setting.apply_read_only") }}</span>
+                            {% endif %}
+
+                            {% if !row.origin_detail.is_empty() %}
+                            <span class="mono text-[11px] text-ink-3">{{ row.origin_detail }}</span>
+                            {% endif %}
+                            {% if let Some(ts) = row.origin_at %}
+                            <span class="text-[11px] text-ink-3">{{ time::ts(ts) }}</span>
+                            {% endif %}
+                        </div>
+
+                        {% if let Some(config_value) = row.config_value %}
+                        <p class="text-[12px] text-warn-text mt-1.5">
+                            {{ t.tr("setting.config_superseded") }}
+                            <span class="mono">{{ config_value }}</span>
+                        </p>
+                        {% endif %}
+                    </div>
+
+                    <div class="flex min-w-0 flex-col items-start gap-2">
+                        {% if row.read_only %}
+                        <p class="mono text-[12px] text-ink-2 break-all" data-setting-value>
+                            {% if row.control == "secret" %}
+                                {% if row.secret_set %}{{ t.tr("setting.secret_set") }}
+                                {% else if row.secret_broken %}{{ t.tr("setting.secret_broken") }}
+                                {% else %}{{ t.tr("setting.secret_unset") }}{% endif %}
+                            {% else if row.value.is_empty() %}
+                                {# An unset optional value: say so rather than showing nothing. #}
+                                {{ t.tr("setting.value_unset") }}
+                            {% else %}
+                                {{ row.value }}
+                            {% endif %}
+                        </p>
+                        {% else if row.locked %}
+                        <p class="mono text-[12px] text-ink-2 break-all" data-setting-value>{{ row.value }}</p>
+                        <p class="text-[11px] text-ink-3">{{ t.tr("setting.env_locked") }}</p>
+                        {% else if row.control == "bool" %}
+                        <div class="flex items-center gap-2">
+                            {# A hidden "false" first, then the checkbox: the browser
+                               submits both when it is on, and last-wins folding is
+                               what makes an unchecked box mean false rather than
+                               "leave it alone". #}
+                            <input type="hidden" name="{{ row.key }}" value="false">
+                            <input type="checkbox" name="{{ row.key }}" value="true" id="field-{{ row.key }}"
+                                   {% if row.checked %}checked{% endif %}>
+                        </div>
+                        {% else if row.control == "enum" %}
+                        <select class="input w-full" name="{{ row.key }}" id="field-{{ row.key }}">
+                            {% for option in row.options %}
+                            <option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>
+                                {{ option.label }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        {% else if row.control == "secret" %}
+                        <input class="input w-full" type="password" name="{{ row.field }}"
+                               id="field-{{ row.key }}" autocomplete="new-password"
+                               placeholder="{% if row.secret_set %}{{ t.tr("setting.secret_keep") }}{% else %}{{ t.tr("setting.secret_unset") }}{% endif %}">
+                        <label class="flex items-center gap-2 text-[12px] text-ink-2">
+                            <input type="checkbox" name="clear:{{ row.key }}" value="on">
+                            {{ t.tr("setting.secret_clear") }}
+                        </label>
+                        {% if row.secret_broken %}
+                        <p class="text-[12px] text-err-text">{{ t.tr("setting.secret_broken") }}</p>
+                        {% endif %}
+                        {% else %}
+                        <input class="input w-full {% if row.control == "number" %}mono{% endif %}"
+                               type="{% if row.control == "number" %}number{% else %}text{% endif %}"
+                               name="{{ row.key }}" id="field-{{ row.key }}" value="{{ row.value }}"
+                               {% if row.control == "list" %}placeholder="a,b,c"{% endif %}>
+                        {% endif %}
+
+                        {% if row.origin == "database" %}
+                        {# Clear the saved value so the config file (or the built-in
+                           default) supplies it again. `formaction` keeps this inside
+                           the one form; a nested form would be invalid HTML. #}
+                        <button type="submit" class="btn btn-line btn-sm"
+                                formaction="/sysadmin/settings/reset/"
+                                name="key" value="{{ row.key }}">
+                            {{ t.tr("setting.reset") }}
+                        </button>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </section>
+            {% endfor %}
+        </div>
+
+        <div class="body mt-2 flex flex-wrap gap-2 border-t border-line pt-4">
+            <button type="submit" class="btn btn-solid">{{ t.tr("common.save") }}</button>
+            <button type="submit" class="btn btn-line"
+                    formaction="/sysadmin/settings/refresh/">
+                {{ t.tr("setting.refresh") }}
+            </button>
+            {# Applies the restart-only settings that are already saved. Deliberately
+               not a save: the form's values are ignored, and `pages/sysadmin-settings.js`
+               asks for confirmation first. #}
+            <button type="submit" class="btn btn-line"
+                    formaction="/sysadmin/settings/restart/"
+                    data-restart-button data-confirm="{{ t.tr("setting.restart_confirm") }}">
+                {{ t.tr("setting.restart_button") }}
+            </button>
+        </div>
+    </form>
+
+    {# The layering policy is not a setting: it decides whether a saved value or
+       the config file wins. It has no controls, so it sits below the rows rather
+       than inside the form. #}
     {% if section == "advanced" %}
     <section class="nf-form mt-5">
         <h2>{{ t.tr("setting.policy_title") }}</h2>
@@ -108,151 +267,6 @@
         </div>
     </section>
     {% endif %}
-
-    <form action="/sysadmin/settings/{{ section }}/save/" method="POST" class="nf-form mt-5">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="section" value="{{ section }}">
-
-        <div class="body">
-            {% for row in rows %}
-            {# `data-setting` is the hook a test (or a future script) uses to find
-               one row without depending on the markup around it. #}
-            <div data-setting="{{ row.key }}"
-                 class="grid grid-cols-1 gap-3 border-t border-line py-4 first:border-t-0 first:pt-0 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6">
-                <div class="min-w-0">
-                    <label class="text-[13px] font-medium text-ink"
-                           {% if !row.locked && !row.read_only %}for="field-{{ row.key }}"{% endif %}>
-                        {{ t.tr(row.label_key) }}
-                    </label>
-                    <p class="mono text-[11px] text-ink-3">{{ row.key }}</p>
-                    {% if let Some(help) = row.help %}
-                    <p class="desc">{{ help }}</p>
-                    {% endif %}
-
-                    <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        {% if row.origin == "environment" %}
-                        <span class="badge badge-green">{{ t.tr("setting.origin_environment") }}</span>
-                        {% else if row.origin == "database" %}
-                        <span class="badge badge-brand">{{ t.tr("setting.origin_database") }}</span>
-                        {% else if row.origin == "config" %}
-                        <span class="badge badge-gray">{{ t.tr("setting.origin_config") }}</span>
-                        {% else %}
-                        <span class="badge badge-gray">{{ t.tr("setting.origin_default") }}</span>
-                        {% endif %}
-
-                        {% if row.restart %}
-                        <span class="badge badge-gray">{{ t.tr("setting.apply_restart") }}</span>
-                        {% endif %}
-                        {% if row.process_restart %}
-                        <span class="badge badge-gray">{{ t.tr("setting.apply_process_restart") }}</span>
-                        {% endif %}
-                        {% if row.pending_restart %}
-                        <span class="badge badge-red">{{ t.tr("setting.pending_restart") }}</span>
-                        {% endif %}
-                        {% if row.read_only %}
-                        <span class="badge badge-gray">{{ t.tr("setting.apply_read_only") }}</span>
-                        {% endif %}
-
-                        {% if !row.origin_detail.is_empty() %}
-                        <span class="mono text-[11px] text-ink-3">{{ row.origin_detail }}</span>
-                        {% endif %}
-                        {% if let Some(ts) = row.origin_at %}
-                        <span class="text-[11px] text-ink-3">{{ time::ts(ts) }}</span>
-                        {% endif %}
-                    </div>
-
-                    {% if let Some(config_value) = row.config_value %}
-                    <p class="text-[12px] text-warn-text mt-1.5">
-                        {{ t.tr("setting.config_superseded") }}
-                        <span class="mono">{{ config_value }}</span>
-                    </p>
-                    {% endif %}
-                </div>
-
-                <div class="flex min-w-0 flex-col items-start gap-2">
-                    {% if row.read_only %}
-                    <p class="mono text-[12px] text-ink-2 break-all" data-setting-value>
-                        {% if row.control == "secret" %}
-                            {% if row.secret_set %}{{ t.tr("setting.secret_set") }}
-                            {% else if row.secret_broken %}{{ t.tr("setting.secret_broken") }}
-                            {% else %}{{ t.tr("setting.secret_unset") }}{% endif %}
-                        {% else if row.value.is_empty() %}
-                            {# An unset optional value: say so rather than showing nothing. #}
-                            {{ t.tr("setting.value_unset") }}
-                        {% else %}
-                            {{ row.value }}
-                        {% endif %}
-                    </p>
-                    {% else if row.locked %}
-                    <p class="mono text-[12px] text-ink-2 break-all" data-setting-value>{{ row.value }}</p>
-                    <p class="text-[11px] text-ink-3">{{ t.tr("setting.env_locked") }}</p>
-                    {% else if row.control == "bool" %}
-                    <div class="flex items-center gap-2">
-                        {# A hidden "false" first, then the checkbox: the browser
-                           submits both when it is on, and last-wins folding is
-                           what makes an unchecked box mean false rather than
-                           "leave it alone". #}
-                        <input type="hidden" name="{{ row.key }}" value="false">
-                        <input type="checkbox" name="{{ row.key }}" value="true" id="field-{{ row.key }}"
-                               {% if row.checked %}checked{% endif %}>
-                    </div>
-                    {% else if row.control == "enum" %}
-                    <select class="input w-full" name="{{ row.key }}" id="field-{{ row.key }}">
-                        {% for option in row.options %}
-                        <option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>
-                            {{ option.label }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                    {% else if row.control == "secret" %}
-                    <input class="input w-full" type="password" name="{{ row.field }}"
-                           id="field-{{ row.key }}" autocomplete="new-password"
-                           placeholder="{% if row.secret_set %}{{ t.tr("setting.secret_keep") }}{% else %}{{ t.tr("setting.secret_unset") }}{% endif %}">
-                    <label class="flex items-center gap-2 text-[12px] text-ink-2">
-                        <input type="checkbox" name="clear:{{ row.key }}" value="on">
-                        {{ t.tr("setting.secret_clear") }}
-                    </label>
-                    {% if row.secret_broken %}
-                    <p class="text-[12px] text-err-text">{{ t.tr("setting.secret_broken") }}</p>
-                    {% endif %}
-                    {% else %}
-                    <input class="input w-full {% if row.control == "number" %}mono{% endif %}"
-                           type="{% if row.control == "number" %}number{% else %}text{% endif %}"
-                           name="{{ row.key }}" id="field-{{ row.key }}" value="{{ row.value }}"
-                           {% if row.control == "list" %}placeholder="a,b,c"{% endif %}>
-                    {% endif %}
-
-                    {% if row.origin == "database" %}
-                    {# Clear the saved value so the config file (or the built-in
-                       default) supplies it again. `formaction` keeps this inside
-                       the one form; a nested form would be invalid HTML. #}
-                    <button type="submit" class="btn btn-line btn-sm"
-                            formaction="/sysadmin/settings/reset/"
-                            name="key" value="{{ row.key }}">
-                        {{ t.tr("setting.reset") }}
-                    </button>
-                    {% endif %}
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-
-        <div class="body mt-2 flex flex-wrap gap-2 border-t border-line pt-4">
-            <button type="submit" class="btn btn-solid">{{ t.tr("common.save") }}</button>
-            <button type="submit" class="btn btn-line"
-                    formaction="/sysadmin/settings/refresh/">
-                {{ t.tr("setting.refresh") }}
-            </button>
-            {# Applies the restart-only settings that are already saved. Deliberately
-               not a save: the form's values are ignored, and `pages/sysadmin-settings.js`
-               asks for confirmation first. #}
-            <button type="submit" class="btn btn-line"
-                    formaction="/sysadmin/settings/restart/"
-                    data-restart-button data-confirm="{{ t.tr("setting.restart_confirm") }}">
-                {{ t.tr("setting.restart_button") }}
-            </button>
-        </div>
-    </form>
 </div>
 {% endif %}
 {% endblock %}

@@ -983,6 +983,11 @@ html:not([data-view]) .seg .js-view-list {
   .nf-cards > .nf-form { @apply rounded-box border border-line bg-panel; }
   .nf-cards > .is-wide { @apply xl:col-span-2; }
 
+  /* A settings page groups its rows under `.nf-sec` headings too, but there the
+     form already pads them, so the heading drops the horizontal padding a
+     `.nf-list` section needs. */
+  .nf-form .nf-sec { padding-left: 0; padding-right: 0; }
+
   /* A control stops growing with its card: past this a text field is a long
      empty box. `:where()` keeps the specificity at one class so a deliberate
      `max-w-*` on the element (the language select) still wins. */

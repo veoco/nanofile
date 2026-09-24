@@ -295,6 +295,41 @@ mod tests {
         assert!(out.contains("\\u003c/script"));
     }
 
+    /// Every string a settings page renders from the catalog must exist in both
+    /// languages: a page-wide label that fell back to its key would put a raw
+    /// locale id like "setting.server_port_help" in front of an operator.
+    #[test]
+    fn every_catalog_string_is_translated() {
+        let mut missing: Vec<String> = Vec::new();
+        for def in infra::settings::CATALOG {
+            // Step 3 adds `def.help_key()` here once every entry has a sentence.
+            for key in [def.label_key()] {
+                for (lang, table) in [("en", &*EN), ("zh", &*ZH)] {
+                    if !table.contains_key(&key) {
+                        missing.push(format!("{lang}: {key}"));
+                    }
+                }
+            }
+        }
+        for section in infra::settings::Section::ALL {
+            for key in [section.title_key(), section.subtitle_key()] {
+                for (lang, table) in [("en", &*EN), ("zh", &*ZH)] {
+                    if !table.contains_key(key) {
+                        missing.push(format!("{lang}: {key}"));
+                    }
+                }
+            }
+        }
+        for group in infra::settings::GROUPS {
+            for (lang, table) in [("en", &*EN), ("zh", &*ZH)] {
+                if !table.contains_key(group.title_key) {
+                    missing.push(format!("{lang}: {}", group.title_key));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "untranslated: {missing:?}");
+    }
+
     /// Every tray string must exist in both languages, otherwise the menu
     /// would show raw keys like "tray.quit" on one language.
     #[test]

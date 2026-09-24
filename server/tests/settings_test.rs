@@ -512,16 +512,11 @@ async fn page(server: &TestServer, client: &reqwest::Client, path: &str) -> (u16
 
 /// Everything after the embedded `window.__T` dictionary.
 ///
-/// The dictionary ships every key with its translation, so a raw key there is
-/// normal; a raw key in the rendered body is not.
-fn strip_i18n_dictionary(html: &str) -> &str {
-    let Some(start) = html.find("id=\"__i18n\"") else {
-        return html;
-    };
-    match html[start..].find("</script>") {
-        Some(end) => &html[start + end..],
-        None => html,
-    }
+/// Everything the page renders, without the translation dictionary and the
+/// bundle script that follow it. The dictionary ships every key with its
+/// translation, so a raw key there is normal; a raw key in the body is not.
+fn page_content(html: &str) -> &str {
+    html.split("id=\"__i18n\"").next().unwrap_or(html)
 }
 
 /// The CSRF token embedded in a settings page's form.
@@ -546,7 +541,7 @@ async fn every_settings_page_renders_for_an_admin_only() {
         let (status, html) = page(&server, &admin, &path).await;
         assert_eq!(status, 200, "{path}");
         assert!(html.contains("class=\"page-title\""), "{path} has no title");
-        let body = strip_i18n_dictionary(&html);
+        let body = page_content(&html);
         for raw in ["setting.section_", "setting.group_", "setting.origin_"] {
             assert!(
                 !body.contains(raw),
@@ -556,6 +551,18 @@ async fn every_settings_page_renders_for_an_admin_only() {
         assert!(
             html.matches("class=\"badge").count() >= 2,
             "{path} rendered no setting rows"
+        );
+        // The page is rendered as its groups, one `<section>` each, and the
+        // layering policy is not one of them.
+        assert_eq!(
+            html.matches(r#"data-setting-group=""#).count(),
+            infra::settings::groups(section).count(),
+            "{path} did not render one section per group"
+        );
+        assert_eq!(
+            body.contains("config_policy"),
+            section == infra::settings::Section::Advanced,
+            "{path} rendered the layering policy on the wrong page"
         );
     }
     {
@@ -891,8 +898,8 @@ async fn the_page_separates_in_place_from_process_restarts() {
         "the row must say the button cannot apply it"
     );
     // The banner names the key, and it is translated rather than a raw locale id.
-    // `strip_i18n_dictionary` returns the *tail* (the embedded dictionary and the
-    // bundle script), so the content is everything before the data block.
+    // `page_content` is everything before the embedded dictionary, which is
+    // where the rendered body ends.
     let body = html
         .split(r#"id="__i18n""#)
         .next()
