@@ -187,9 +187,12 @@ function fakeSettingsPage() {
     host: makeRow("email.host SMTP host Host name of the SMTP server."),
   };
   function makeGroup(held) {
+    const count = { textContent: String(held.length) };
     return {
       hidden: false,
+      count,
       querySelectorAll: (sel) => (sel === "[data-setting]" ? held : []),
+      querySelector: (sel) => (sel === "[data-setting-group-count]" ? count : null),
     };
   }
   const groups = [makeGroup([rows.addr, rows.port]), makeGroup([rows.host])];
@@ -235,6 +238,8 @@ test("initSettingsFilter hides rows and a heading left with none", () => {
   assert.equal(page.groups[0].hidden, true, "a heading with no rows goes with them");
   assert.equal(page.groups[1].hidden, false);
   assert.equal(page.empty.hidden, true);
+  // A heading counts what is left under it, not what it started with.
+  assert.equal(page.groups[1].count.textContent, "1");
 
   // A query that matches nothing says so rather than showing a blank page.
   page.type("nothing matches this");
@@ -245,6 +250,7 @@ test("initSettingsFilter hides rows and a heading left with none", () => {
   page.type("");
   assert.equal(page.groups[0].hidden, false);
   assert.equal(page.groups[1].hidden, false);
+  assert.equal(page.groups[0].count.textContent, "2");
   assert.equal(page.empty.hidden, true);
 });
 

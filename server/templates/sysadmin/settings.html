@@ -112,15 +112,17 @@
             <section data-setting-group="{{ group.id }}">
                 <div class="nf-sec">
                     <h2>{{ t.tr(group.title_key) }}</h2>
-                    <span class="n num">{{ group.rows.len() }}</span>
+                    {# The count is what the group holds now, so the filter updates
+                       it as it hides rows rather than leaving a stale number. #}
+                    <span class="n num" data-setting-group-count>{{ group.rows.len() }}</span>
                     <span class="rule" aria-hidden="true"></span>
                 </div>
                 {% for row in group.rows %}
                 {# `data-setting` is the hook a test (or a future script) uses to find
-                   one row without depending on the markup around it. #}
-                {# `data-setting` is the key, and the label's tooltip repeats it:
-                   an operator who needs to name the setting in a bug report can
-                   find it, and a page of rows does not print it 110 times. #}
+                   one row without depending on the markup around it; it is also
+                   the key the label repeats as a tooltip, so an operator naming
+                   the setting in a bug report can find it without the page
+                   printing it once per row. #}
                 <div data-setting="{{ row.key }}" data-setting-search="{{ row.search_text }}"
                      class="grid grid-cols-1 gap-3 border-t border-line py-3.5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6">
                     <div class="min-w-0">

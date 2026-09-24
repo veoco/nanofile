@@ -199,6 +199,10 @@ test("the filter narrows the page to the rows that match", async ({ page }) => {
   // A heading with nothing left under it goes with its rows.
   await expect(page.locator('[data-setting-group="server_addresses"]')).toBeHidden();
   await expect(page.locator('[data-setting-group="server_desktop"]')).toBeVisible();
+  // A heading counts what is left under it, not what it started with.
+  await expect(
+    page.locator('[data-setting-group="server_desktop"] [data-setting-group-count]'),
+  ).toHaveText("2");
 
   await filter.fill("no setting says this");
   await expect(page.locator("[data-settings-empty]")).toBeVisible();

@@ -194,10 +194,12 @@ export function matchesSetting(searchText, query) {
  * Wire the filter box, if this page has one.
  *
  * A row and its group heading are hidden together: a heading with nothing under
- * it is worse than no heading. Hiding a row does not remove it from the form —
- * `display: none` controls still submit — so a filtered page saves the values it
- * was rendered with, exactly as an unfiltered one does. Returns whether a box
- * was found, which gives a test a way to tell a settings page from another.
+ * it is worse than no heading, and the count on a heading follows what is left,
+ * because a heading that says 4 over two rows is a small lie. Hiding a row does
+ * not remove it from the form — `display: none` controls still submit — so a
+ * filtered page saves the values it was rendered with, exactly as an unfiltered
+ * one does. Returns whether a box was found, which gives a test a way to tell a
+ * settings page from another.
  */
 export function initSettingsFilter(deps) {
   const options = deps || {};
@@ -220,6 +222,8 @@ export function initSettingsFilter(deps) {
         if (hit) inGroup += 1;
       });
       group.hidden = inGroup === 0;
+      const count = group.querySelector("[data-setting-group-count]");
+      if (count) count.textContent = String(inGroup);
       shown += inGroup;
     });
     if (empty) empty.hidden = shown > 0;
