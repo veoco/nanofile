@@ -581,7 +581,7 @@ fn prepare_account(
         return Ok(());
     };
     let sid = super::acl::resolve_sid(&target)?;
-    let mut granted = Vec::new();
+    let mut granted: Vec<PathBuf> = Vec::new();
     for (path, inheritable) in input.grant_targets() {
         if !path.exists() {
             // The preflight creates every directory; a path that is still
@@ -589,11 +589,30 @@ fn prepare_account(
             tracing::debug!(path = %path.display(), "nothing to grant access to");
             continue;
         }
-        super::acl::grant(&sid, &path, inheritable)?;
+        if let Err(e) = super::acl::grant(&sid, &path, inheritable) {
+            // A half-granted account is a change to somebody else's access
+            // control that this failed install should not leave behind.
+            tracing::error!(
+                path = %path.display(),
+                "granting access failed; taking back the {count} grant(s) already made",
+                count = granted.len()
+            );
+            revoke_paths(&sid, &granted);
+            return Err(e);
+        }
         granted.push(path);
     }
     tracing::info!(account = %target, sid = %sid, paths = ?granted, "granted access");
     Ok(())
+}
+
+/// Take an access grant back from a list of paths, best effort.
+fn revoke_paths(sid: &str, paths: &[PathBuf]) {
+    for path in paths {
+        if let Err(e) = super::acl::revoke(sid, path) {
+            tracing::warn!(path = %path.display(), "could not take the grant back: {e:#}");
+        }
+    }
 }
 
 /// Stop and remove the service. Removing a service that is not there is a
@@ -678,14 +697,13 @@ fn revoke_access(account: Option<&str>, input: &super::preflight::Input) {
         );
         return;
     };
-    for (path, _) in input.grant_targets() {
-        if !path.exists() {
-            continue;
-        }
-        if let Err(e) = super::acl::revoke(&sid, &path) {
-            tracing::warn!(path = %path.display(), "could not remove the service account's access: {e:#}");
-        }
-    }
+    let paths: Vec<PathBuf> = input
+        .grant_targets()
+        .into_iter()
+        .map(|(path, _)| path)
+        .filter(|path| path.exists())
+        .collect();
+    revoke_paths(&sid, &paths);
 }
 
 /// Stop the running service and wait for it to report `STOPPED`.
