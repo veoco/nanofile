@@ -107,6 +107,41 @@ impl ServiceKey {
     }
 }
 
+/// Why a job the catalog declares is not registered on this server.
+///
+/// Jobs whose subsystem is switched off are simply not registered, which is the
+/// right behaviour and also invisible: an administrator looking for garbage
+/// collection cannot tell "this server does not run it" from "this page forgot
+/// it". Recording the reason is what makes the two different.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SkipReason {
+    /// No notification manager, so nothing to expire tokens against.
+    NotificationsOff,
+    /// `[gc] enabled = false`.
+    GcDisabled,
+    /// Block encryption is not in lazy mode, so no plaintext blocks can exist.
+    EncryptionNotLazy,
+    /// No full-text indexer, so there is no index to commit.
+    IndexOff,
+    /// No mailer, so there is no outbox to drain.
+    MailOff,
+    /// Temporary uploads never expire, so there is nothing to clean up.
+    TempUploadTtlZero,
+}
+
+impl SkipReason {
+    /// Every reason, so the admin page's translation coverage is a test rather
+    /// than a hope.
+    pub const ALL: &'static [SkipReason] = &[
+        Self::NotificationsOff,
+        Self::GcDisabled,
+        Self::EncryptionNotLazy,
+        Self::IndexOff,
+        Self::MailOff,
+        Self::TempUploadTtlZero,
+    ];
+}
+
 /// How a job comes to run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Trigger {

@@ -23,7 +23,7 @@ use crate::tasks::registry::RegisteredJob;
 use crate::tasks::run::{JobRun, JobState};
 use crate::tasks::spec::{
     Durability, JobKey, JobSpec, OverlapPolicy, Priority, Resource, RetryPolicy, ServiceKey,
-    Trigger,
+    SkipReason, Trigger,
 };
 use crate::tasks::store::RunFilter;
 use base::error::AppError;
@@ -60,6 +60,9 @@ pub struct RegisteredTasksTemplate {
     pub csrf_token: Option<String>,
     pub active_page: &'static str,
     pub groups: Vec<TaskGroup>,
+    /// Jobs the catalog declares that this server did not register, with the
+    /// reason, so a missing job reads as switched off rather than forgotten.
+    pub skipped: Vec<SkippedRow>,
     pub error: Option<String>,
     pub success: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
@@ -217,6 +220,14 @@ pub struct RegisteredRow {
     /// Whether a manual trigger has a meaning. An on-demand job needs
     /// parameters a bare button cannot supply, and a service never finishes.
     pub triggerable: bool,
+}
+
+/// A job the catalog declares that this server did not register.
+pub struct SkippedRow {
+    /// The job's stable slug, so the row has a handle that is not its label.
+    pub slug: &'static str,
+    pub name: String,
+    pub reason: String,
 }
 
 /// A page of the registry: the heading, and the rows under it.
@@ -707,6 +718,22 @@ pub async fn registered_page(
     }
 }
 
+/// The reason a declared job is not registered here.
+///
+/// A match rather than a derived key, because a reason is a sentence rather
+/// than the name of a thing: it reads "notifications are switched off", which
+/// is not a form of words any naming rule would produce.
+fn skip_reason_key(reason: SkipReason) -> &'static str {
+    match reason {
+        SkipReason::NotificationsOff => "admin.skip_no_notifications",
+        SkipReason::GcDisabled => "admin.skip_gc_disabled",
+        SkipReason::EncryptionNotLazy => "admin.skip_encryption_not_lazy",
+        SkipReason::IndexOff => "admin.skip_index_off",
+        SkipReason::MailOff => "admin.skip_mail_off",
+        SkipReason::TempUploadTtlZero => "admin.skip_temp_upload_ttl_zero",
+    }
+}
+
 /// The name of the job a run belongs to.
 ///
 /// A run outlives the job that wrote it: the journal is kept across upgrades
@@ -942,6 +969,19 @@ async fn render_registered(
     );
     let groups = build_groups(rows);
 
+    // A job this server does not run is the absence an operator notices first,
+    // so say which ones and why rather than leaving them out silently.
+    let skipped = state
+        .tasks
+        .skipped()
+        .into_iter()
+        .map(|(key, reason)| SkippedRow {
+            slug: key.as_str(),
+            name: t.tr(&job_name_key(key)).to_string(),
+            reason: t.tr(skip_reason_key(reason)).to_string(),
+        })
+        .collect();
+
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
     let tpl = RegisteredTasksTemplate {
@@ -952,6 +992,7 @@ async fn render_registered(
         csrf_token: Some(ctx.csrf_token),
         active_page: "admintasks",
         groups,
+        skipped,
         error,
         success,
         left_panel_repos: ctx.left_panel_repos,
@@ -1366,6 +1407,19 @@ mod tests {
         run.progress.done = 128;
         run.progress.total = Some(512);
         assert_eq!(progress_value(&run), "128 / 512");
+    }
+
+    /// Every reason a declared job is missing has to be spelled out, or the
+    /// panel would print the key it looked the reason up by.
+    #[test]
+    fn every_skip_reason_is_written_in_every_language() {
+        for reason in SkipReason::ALL {
+            let key = skip_reason_key(*reason);
+            assert_ne!(key, "", "{reason:?} has no reason key");
+            for t in languages() {
+                assert_ne!(t.tr(key), key, "{key} is missing for {}", t.lang);
+            }
+        }
     }
 
     /// A job's policies are written in the reader's language, never left as

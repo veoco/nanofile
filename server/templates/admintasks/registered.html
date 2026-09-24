@@ -136,5 +136,29 @@
     </section>
     {% endfor %}
 </div>
+
+{# A job the catalog declares that this server did not register is the absence
+   an operator notices first, so it is named rather than left out. #}
+{% if !skipped.is_empty() %}
+<div class="nf-list mt-5">
+    <div class="nf-sec">
+        <h2>{{ t.tr("admin.not_registered_title") }}</h2>
+        <span class="n num">{{ skipped.len() }}</span>
+        <span class="rule" aria-hidden="true"></span>
+    </div>
+    <p class="px-3.5 pb-2 text-[11px] text-ink-3">{{ t.tr("admin.not_registered_desc") }}</p>
+    {% for row in skipped %}
+    <div class="nf-prow" data-task-skipped="{{ row.slug }}">
+        <span class="nf-prow-ic">{{ icons::icon_close("w-[15px] h-[15px]") }}</span>
+        <div class="nf-prow-main">
+            <div class="nf-prow-name">
+                <span class="base">{{ row.name }}</span>
+            </div>
+            <p class="nf-prow-hi text-ink-3">{{ row.reason }}</p>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
 {% endif %}
 {% endblock %}

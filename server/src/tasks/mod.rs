@@ -38,7 +38,7 @@ use self::admission::{LoadGauge, LoadSnapshot};
 use self::context::JobContext;
 use self::registry::{JobRegistry, RegisteredJob, RegistryError};
 use self::run::{JobRun, JobState, Params, RunId, Viewer};
-use self::spec::{Dedup, JobKey, OverlapPolicy, Priority};
+use self::spec::{Dedup, JobKey, OverlapPolicy, Priority, SkipReason};
 use self::store::{RunFilter, RunLimits, RunStore};
 
 pub use self::run::{JobFailure, Outcome, Progress};
@@ -123,6 +123,9 @@ struct Inner {
     shutdown: RwLock<CancellationToken>,
     /// Long-lived services of the current generation, for the admin listing.
     services: RwLock<Vec<ServiceKey>>,
+    /// Jobs the catalog declares that this server did not register, with the
+    /// reason, so the admin listing can say why rather than showing nothing.
+    skipped: RwLock<Vec<(JobKey, SkipReason)>>,
     /// Lifetime counters per job.
     stats: RwLock<HashMap<JobKey, JobStats>>,
     /// How busy the server is, for the administrator's view and — once load
@@ -180,6 +183,7 @@ impl TaskSystem {
                 started_at: std::time::Instant::now(),
                 shutdown: RwLock::new(shutdown),
                 services: RwLock::new(Vec::new()),
+                skipped: RwLock::new(Vec::new()),
                 stats: RwLock::new(HashMap::new()),
                 load,
                 gate,
@@ -239,9 +243,15 @@ impl TaskSystem {
             .write()
             .unwrap_or_else(PoisonError::into_inner) = shutdown;
         // Services are spawned per generation, so the listing is rebuilt with
-        // it rather than accumulating stale names.
+        // it rather than accumulating stale names. The skip record is written
+        // after this call, by whoever decided not to register what.
         self.inner
             .services
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.inner
+            .skipped
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
@@ -1195,6 +1205,27 @@ impl TaskSystem {
             task(token).await;
             tracing::info!(service = key.as_str(), "service stopped");
         });
+    }
+
+    /// Record that a job the catalog declares was not registered, and why.
+    ///
+    /// Called by the setup pass after [`TaskSystem::install`], which clears the
+    /// record along with the service listing.
+    pub fn record_skipped(&self, key: JobKey, reason: SkipReason) {
+        self.inner
+            .skipped
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((key, reason));
+    }
+
+    /// Jobs this generation did not register, oldest decision first.
+    pub fn skipped(&self) -> Vec<(JobKey, SkipReason)> {
+        self.inner
+            .skipped
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Long-lived services of the current generation.

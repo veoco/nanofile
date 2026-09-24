@@ -19,7 +19,7 @@ use crate::service::mail::Mailer;
 use crate::tasks::TaskSystem;
 use crate::tasks::registry::RegisteredJob;
 use crate::tasks::run::{JobFailure, Outcome};
-use crate::tasks::spec::{JobKey, JobSpec, ServiceKey, Trigger};
+use crate::tasks::spec::{JobKey, JobSpec, ServiceKey, SkipReason, Trigger};
 use infra::config::GcConfig;
 use infra::crypto::password_manager::PasswordManager;
 use infra::storage::DynBlockStorage;
@@ -66,6 +66,10 @@ pub fn install_default_jobs(
     tasks.set_journal(repos.job_run.clone());
 
     let mut jobs: Vec<RegisteredJob> = Vec::new();
+    // The jobs the catalog declares that this generation does not register, with
+    // the reason. Recorded on the task system *after* installing, because
+    // installing is what clears the record.
+    let mut skipped: Vec<(JobKey, SkipReason)> = Vec::new();
 
     // ── Jobs a request submits ───────────────────────────────────────────
     //
@@ -476,9 +480,39 @@ pub fn install_default_jobs(
         }));
     }
 
+    // The other half of the conditions above: a job whose subsystem is switched
+    // off is not registered, which is right and also invisible. Recording why
+    // lets the admin listing say "this server does not run it" instead of
+    // showing nothing at all.
+    if notification_manager.is_none() {
+        skipped.push((JobKey::TokenExpiryCheck, SkipReason::NotificationsOff));
+    }
+    if !gc_config.enabled {
+        skipped.push((JobKey::GarbageCollection, SkipReason::GcDisabled));
+    }
+    if enc_mode != BlockEncryptionMode::Lazy {
+        skipped.push((
+            JobKey::BlockEncryptionConvert,
+            SkipReason::EncryptionNotLazy,
+        ));
+    }
+    if indexer.is_none() {
+        skipped.push((JobKey::IndexCommit, SkipReason::IndexOff));
+    }
+    if mail.is_none() {
+        skipped.push((JobKey::MailDelivery, SkipReason::MailOff));
+    }
+    if temp_upload_ttl_hours == 0 {
+        skipped.push((JobKey::TempUploadCleanup, SkipReason::TempUploadTtlZero));
+    }
+
     // Install first: it replaces the generation's job set *and* clears the
     // service listing, so anything registered before it would be forgotten.
     tasks.install(jobs, shutdown)?;
+
+    for (key, reason) in skipped {
+        tasks.record_skipped(key, reason);
+    }
 
     // Then resume whatever the previous process left unfinished. Spawned
     // rather than awaited because this runs from a synchronous constructor, and

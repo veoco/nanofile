@@ -102,6 +102,21 @@ test("the run list is not the registry", async ({ page }) => {
   await expect(page.locator("main [data-task]")).toHaveCount(0);
 });
 
+// A job whose subsystem is switched off is not registered at all, which is
+// right and also invisible: without this panel it reads as a job the page
+// forgot. The default configuration runs no garbage collection.
+test("a declared job this server does not run says why", async ({ page }) => {
+  await page.goto(REGISTRY);
+  await expect(
+    page.locator("main .nf-sec h2", { hasText: "Not registered on this server" }),
+  ).toBeVisible();
+  const gc = page.locator('main [data-task-skipped="gc"]');
+  await expect(gc).toContainText("Garbage collection");
+  await expect(gc.locator(".nf-prow-hi")).not.toBeEmpty();
+  // A reason is a sentence, never the key it was looked up by.
+  await expect(page.locator("main [data-task-skipped]").first()).not.toContainText("admin.");
+});
+
 // The journal is the durable record, so a run that finished shows up on the run
 // list named and labelled rather than as the slug and wire phase the database
 // holds.
