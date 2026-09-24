@@ -630,6 +630,30 @@ async fn a_numeric_row_shows_its_unit_outside_the_label() {
     assert!(!row.contains(">MB<"), "{row}");
 }
 
+/// An enum's choices are named in the reader's language; the value the server
+/// stores is not what an operator is shown.
+#[tokio::test]
+async fn an_enum_lists_translated_choices() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/server/").await;
+    let row = row_of(&html, "ui.tray_language");
+    assert!(
+        row.contains("Follow the operating system"),
+        "the choice must be named: {row}"
+    );
+    assert!(
+        row.contains(r#"value="auto""#),
+        "the submitted value stays the wire value: {row}"
+    );
+    assert!(
+        !row.contains(">auto<"),
+        "the wire value must not double as a label: {row}"
+    );
+}
+
 #[tokio::test]
 async fn saving_from_the_page_applies_and_reports_the_source() {
     let server = TestServer::start().await;

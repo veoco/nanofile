@@ -312,6 +312,19 @@ mod tests {
                 }
             }
         }
+        for def in infra::settings::CATALOG {
+            let infra::settings::Kind::Enum(values) = def.kind else {
+                continue;
+            };
+            for value in values {
+                let key = def.option_label_key(value);
+                for (lang, table) in [("en", &*EN), ("zh", &*ZH)] {
+                    if !table.contains_key(&key) {
+                        missing.push(format!("{lang}: {key}"));
+                    }
+                }
+            }
+        }
         for key in ["setting.list_placeholder", "setting.list_hint"] {
             for (lang, table) in [("en", &*EN), ("zh", &*ZH)] {
                 if !table.contains_key(key) {

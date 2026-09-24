@@ -383,16 +383,15 @@ fn build_row(
         && (def.get)(service.base()) != stored_value;
     let config_value = saved_supersedes.then(|| (def.get)(service.base()));
 
+    // An enum's choices are named in the locale rather than shown as the wire
+    // value: `starttls` and `lazy` are the server's vocabulary, not the
+    // operator's.
     let options = match def.kind {
         Kind::Enum(options) => options
             .iter()
             .map(|option| SelectOption {
                 value: (*option).to_string(),
-                label: if option.is_empty() {
-                    t.tr("setting.value_unset").to_string()
-                } else {
-                    (*option).to_string()
-                },
+                label: t.tr(&def.option_label_key(option)).to_string(),
                 selected: value == *option,
             })
             .collect(),

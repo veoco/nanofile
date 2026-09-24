@@ -378,6 +378,20 @@ impl SettingDef {
     pub fn unit_key(&self) -> Option<String> {
         self.unit().map(|unit| format!("setting.unit_{unit}"))
     }
+
+    /// The locale key of one enum option's label.
+    ///
+    /// One key per setting rather than one per value: `off` means "no
+    /// encryption" on `storage.block_encryption_mode` and "do not verify" on
+    /// `sync.verify_fs_objects`, and a single shared string could not say both.
+    /// An empty value is the "unset" choice, which every enum shares.
+    pub fn option_label_key(&self, value: &str) -> String {
+        if value.is_empty() {
+            "setting.value_unset".to_string()
+        } else {
+            format!("setting.{}_option_{value}", self.key.replace('.', "_"))
+        }
+    }
 }
 
 /// `"auth.max_login_attempts"` → `"setting.auth_max_login_attempts"`.
@@ -1196,6 +1210,35 @@ mod tests {
             config.server.max_json_body_mb, 64,
             "restart key keeps its startup value"
         );
+    }
+
+    /// An enum's choices are named through locale keys, one setting at a time
+    /// (the same word means different things on different pages), and the empty
+    /// choice is the one "unset" string every enum shares.
+    #[test]
+    fn enum_options_have_their_own_label_keys() {
+        for def in CATALOG {
+            let Kind::Enum(values) = def.kind else {
+                continue;
+            };
+            let mut keys: BTreeSet<String> = BTreeSet::new();
+            for value in values {
+                let key = def.option_label_key(value);
+                assert!(
+                    keys.insert(key.clone()),
+                    "{}: {value} shares its label key with another choice",
+                    def.key
+                );
+                assert!(
+                    key.starts_with("setting.") && key.len() > "setting.".len(),
+                    "{}: bad option key {key}",
+                    def.key
+                );
+            }
+            if values.contains(&"") {
+                assert_eq!(def.option_label_key(""), "setting.value_unset");
+            }
+        }
     }
 
     /// A unit is a fact about the value's shape, so it only belongs on a number
