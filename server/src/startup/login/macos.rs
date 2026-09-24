@@ -1,55 +1,48 @@
-//! macOS auto-start via a per-user LaunchAgent
+//! macOS login entry: a per-user LaunchAgent
 //! (`~/Library/LaunchAgents/com.nanofile.nanofile.plist`). User-level, no
 //! admin rights involved.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::Autostart;
+use super::LoginEntry;
+use super::entry::{launch_agent_plist, paths_from_args, plist_strings};
 
 const LABEL: &str = "com.nanofile.nanofile";
 
 #[derive(Clone)]
-pub(crate) struct AutostartManager {
+pub(crate) struct LoginManager {
     exe: PathBuf,
     config: PathBuf,
 }
 
-impl AutostartManager {
+impl LoginManager {
     pub(crate) fn new(exe: PathBuf, config: PathBuf) -> Self {
         Self { exe, config }
     }
 }
 
-impl Autostart for AutostartManager {
-    fn is_enabled(&self) -> bool {
-        plist_path().is_file()
+impl LoginEntry for LoginManager {
+    fn exe(&self) -> &Path {
+        &self.exe
     }
 
-    /// `ProgramArguments` holds absolute paths, so a moved installation leaves
-    /// the agent starting something that is not there.
-    fn is_stale(&self) -> bool {
-        let Ok(text) = std::fs::read_to_string(plist_path()) else {
-            return false;
-        };
-        let values = super::plist_strings(&text);
+    fn recorded(&self) -> Option<(String, String)> {
+        let text = std::fs::read_to_string(plist_path()).ok()?;
+        let values = plist_strings(&text);
         // [Label, exe, "--config", config]
-        let Some((_label, args)) = values.split_first() else {
-            return false;
-        };
-        let Some((exe, config)) = super::paths_from_args(args) else {
-            return false;
-        };
-        super::stale_between(&exe, &config, &self.exe)
+        let (_, args) = values.split_first()?;
+        paths_from_args(args)
+    }
+
+    fn is_enabled(&self) -> bool {
+        plist_path().is_file()
     }
 
     fn enable(&self) -> anyhow::Result<()> {
         let path = plist_path();
         std::fs::create_dir_all(path.parent().expect("plist path has a parent"))?;
-        std::fs::write(
-            &path,
-            super::launch_agent_plist(LABEL, &self.exe, &self.config),
-        )?;
+        std::fs::write(&path, launch_agent_plist(LABEL, &self.exe, &self.config))?;
 
         // Load immediately so it also takes effect without re-login. The
         // modern `bootstrap` API is preferred; `load -w` covers older macOS.

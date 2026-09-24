@@ -29,11 +29,12 @@ mod logging;
 #[cfg(feature = "tray")]
 mod tray;
 
-/// Windows service control: `nanofile service …`, the Service Control Manager
-/// loop, and the registration the tray menu drives. Compiled on every platform
-/// (its command-line and comparison helpers have tests that run anywhere), but
-/// only *reachable* on Windows — the subcommand below is gated on the target.
-mod winservice;
+/// Auto-start registrations: the per-user login entry, and the Windows service
+/// (`nanofile service …`) the tray menu drives. Compiled on every platform (its
+/// command-line, account and comparison helpers have tests that run anywhere),
+/// but only *reachable* on Windows — the subcommand below is gated on the
+/// target.
+mod startup;
 
 /// Nanofile — a Seafile-compatible sync server
 #[derive(Parser)]
@@ -93,7 +94,7 @@ enum Command {
     #[cfg(target_os = "windows")]
     Service {
         #[command(subcommand)]
-        action: winservice::ServiceAction,
+        action: startup::service::ServiceAction,
     },
 }
 
@@ -171,7 +172,7 @@ fn main() -> anyhow::Result<()> {
     let service_run = matches!(
         command,
         Command::Service {
-            action: winservice::ServiceAction::Run
+            action: startup::service::ServiceAction::Run
         }
     );
     #[cfg(not(target_os = "windows"))]
@@ -511,7 +512,9 @@ fn main() -> anyhow::Result<()> {
         // this process from `StartServiceCtrlDispatcherW` onwards, and the
         // server itself runs inside `ServiceMain`.
         #[cfg(target_os = "windows")]
-        Command::Service { action } => winservice::run_cli(action, &config, &config_path, env_keys),
+        Command::Service { action } => {
+            startup::service::run_cli(action, &config, &config_path, env_keys)
+        }
     }
 }
 

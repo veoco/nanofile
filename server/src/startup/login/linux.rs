@@ -1,50 +1,46 @@
-//! Linux auto-start via an XDG autostart entry
+//! Linux login entry: an XDG autostart entry
 //! (`~/.config/autostart/nanofile.desktop`), honored by GNOME and KDE.
 //! User-level, no admin rights involved.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use super::Autostart;
+use super::LoginEntry;
+use super::entry::{desktop_entry, desktop_exec, paths_from_args, split_quoted_args};
 
 const FILE_NAME: &str = "nanofile.desktop";
 
 #[derive(Clone)]
-pub(crate) struct AutostartManager {
+pub(crate) struct LoginManager {
     exe: PathBuf,
     config: PathBuf,
 }
 
-impl AutostartManager {
+impl LoginManager {
     pub(crate) fn new(exe: PathBuf, config: PathBuf) -> Self {
         Self { exe, config }
     }
 }
 
-impl Autostart for AutostartManager {
-    fn is_enabled(&self) -> bool {
-        desktop_path().is_file()
+impl LoginEntry for LoginManager {
+    fn exe(&self) -> &Path {
+        &self.exe
     }
 
-    /// `Exec=` holds absolute paths, so a moved installation leaves the entry
-    /// starting something that is not there.
-    fn is_stale(&self) -> bool {
-        let Ok(text) = std::fs::read_to_string(desktop_path()) else {
-            return false;
-        };
-        let Some(exec) = super::desktop_exec(&text) else {
-            return false;
-        };
-        let args = super::split_quoted_args(&exec);
-        let Some((exe, config)) = super::paths_from_args(&args) else {
-            return false;
-        };
-        super::stale_between(&exe, &config, &self.exe)
+    /// `Exec=` holds absolute paths, so a moved installation is visible here.
+    fn recorded(&self) -> Option<(String, String)> {
+        let text = std::fs::read_to_string(desktop_path()).ok()?;
+        let exec = desktop_exec(&text)?;
+        paths_from_args(&split_quoted_args(&exec))
+    }
+
+    fn is_enabled(&self) -> bool {
+        desktop_path().is_file()
     }
 
     fn enable(&self) -> anyhow::Result<()> {
         let path = desktop_path();
         std::fs::create_dir_all(path.parent().expect("desktop path has a parent"))?;
-        std::fs::write(&path, super::desktop_entry(&self.exe, &self.config))?;
+        std::fs::write(&path, desktop_entry(&self.exe, &self.config))?;
         Ok(())
     }
 

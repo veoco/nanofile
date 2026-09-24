@@ -30,9 +30,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW, SW_HIDE,
 };
 
-use super::autostart::{Autostart as _, PlatformAutostart};
 use super::lang;
-use crate::winservice::{ServiceProbe, probe_service};
+use crate::startup::cmdline::win_cmd_quote;
+use crate::startup::login::{LoginEntry as _, PlatformLogin};
+use crate::startup::service::{ServiceProbe, probe_service};
+use crate::startup::win32::wide;
 
 /// One service toggle at a time: the confirmation and the elevation prompt both
 /// sit on this thread, and a second click while a helper is running would race
@@ -59,7 +61,7 @@ pub(super) fn quit_in_client_mode() {
     };
     let t = lang();
     match probe(&config_path) {
-        ServiceProbe::Ours { running: true } => match crate::winservice::stop_service() {
+        ServiceProbe::Ours { running: true } => match crate::startup::service::stop_service() {
             Ok(()) => {
                 tracing::info!("service stopped from the tray menu");
                 show_message(
@@ -321,7 +323,7 @@ fn sync(
     config_path: &Path,
     service_item: &CheckMenuItem,
     autostart_item: &CheckMenuItem,
-    autostart: &PlatformAutostart,
+    autostart: &PlatformLogin,
 ) {
     let ours = probe(config_path).is_ours();
     service_item.set_checked(ours);
@@ -382,7 +384,7 @@ fn snapshot() -> Option<(PathBuf, CheckMenuItem)> {
 /// The same snapshot, plus everything the completion path has to re-synchronise:
 /// the login entry's item *and* its manager, because a successful install
 /// removes that entry and a successful uninstall restores it.
-fn snapshot_all() -> Option<(PathBuf, CheckMenuItem, CheckMenuItem, PlatformAutostart)> {
+fn snapshot_all() -> Option<(PathBuf, CheckMenuItem, CheckMenuItem, PlatformLogin)> {
     super::MENU_STATE.with(|slot| {
         slot.borrow().as_ref().map(|state| {
             (
@@ -406,13 +408,4 @@ fn show_message(title: &str, text: &str, flags: u32) -> i32 {
             flags | MB_TOPMOST,
         )
     }
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-/// Quote one argument for the helper's command line.
-fn win_cmd_quote(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\\\""))
 }

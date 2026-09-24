@@ -1,53 +1,19 @@
-//! Launch-at-login registration for the compiled-in desktop platform.
+//! The text of a login entry: how it is written, and how it is read back.
 //!
-//! The registration entries always pass the config path explicitly
-//! (`--config <absolute path>`) because a login-started process runs with a
-//! working directory like `C:\Windows\System32` or `/`, where the default
-//! relative `config.toml` would not be found.
+//! Platform-independent on purpose, so the unit tests for all three formats run
+//! on every platform (and on Linux CI, which is the only place a Windows
+//! `Run`-value test can run at all). Each builder is compiled only where it is
+//! consumed — plus in test builds, so the readers always have something to read.
 
 use std::path::Path;
 
-#[cfg(target_os = "windows")]
-#[path = "autostart_windows.rs"]
-mod platform;
-#[cfg(target_os = "macos")]
-#[path = "autostart_macos.rs"]
-mod platform;
-#[cfg(target_os = "linux")]
-#[path = "autostart_linux.rs"]
-mod platform;
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-#[path = "autostart_fallback.rs"]
-mod platform;
-
-pub(crate) use platform::AutostartManager as PlatformAutostart;
-
-/// Launch-at-login management for the current platform.
-pub(super) trait Autostart {
-    fn is_enabled(&self) -> bool;
-    fn enable(&self) -> anyhow::Result<()>;
-    fn disable(&self) -> anyhow::Result<()>;
-
-    /// Whether the recorded entry points at a location that no longer exists.
-    ///
-    /// An entry records absolute paths, so moving or renaming the installation
-    /// leaves it launching something that is not there — which fails silently at
-    /// login. Reporting that here lets the tray repoint the entry at the copy the
-    /// user is actually running. The default is "unknown, leave it alone": a
-    /// backend that cannot read its entry must never rewrite it.
-    fn is_stale(&self) -> bool {
-        false
-    }
-}
-
 // ── Reading back what we wrote ───────────────────────────────────────────────
 // The entries are text this crate generates, so the readers below only have to
-// undo that generation. Platform-independent, so their tests run everywhere.
+// undo that generation.
 
-/// Split one of our command lines back into its arguments — the inverse of
-/// [`win_cmd_quote`] / [`exec_arg`]: double quotes group, `\"` and `\\` escape,
-/// bare whitespace separates.
-#[allow(dead_code)] // only read by the platform backends
+/// Split one of our command lines back into its arguments — the inverse of the
+/// quoting in `crate::startup::cmdline` and of `exec_arg`: double quotes group,
+/// `\"` and `\\` escape, bare whitespace separates.
 pub(crate) fn split_quoted_args(text: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
@@ -96,7 +62,6 @@ pub(crate) fn split_quoted_args(text: &str) -> Vec<String> {
 /// `None` when the list does not carry both — a hand-edited or foreign entry is
 /// then left alone rather than "repaired" into something the user did not ask
 /// for.
-#[allow(dead_code)] // only read by the platform backends
 pub(crate) fn paths_from_args(args: &[String]) -> Option<(String, String)> {
     let mut exe = None;
     let mut config = None;
@@ -116,7 +81,6 @@ pub(crate) fn paths_from_args(args: &[String]) -> Option<(String, String)> {
 /// The current config file does not enter into it: a process is only running if
 /// its own config exists (a named one that is missing is now refused at start),
 /// so repointing at the running pair is always the improvement.
-#[allow(dead_code)] // only read by the platform backends
 pub(crate) fn stale_between(recorded_exe: &str, recorded_config: &str, current_exe: &Path) -> bool {
     // The copy the entry launches is gone: the folder was moved, renamed or
     // deleted. The entry would fail invisibly at login.
@@ -145,14 +109,14 @@ fn normalize_path(path: &str) -> String {
 }
 
 /// The `Exec=` value of an XDG desktop entry.
-#[allow(dead_code)] // only read by the Linux backend
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn desktop_exec(text: &str) -> Option<String> {
     text.lines()
         .find_map(|line| line.trim().strip_prefix("Exec=").map(str::to_string))
 }
 
 /// Every `<string>` value of a LaunchAgent property list, in document order.
-#[allow(dead_code)] // only read by the macOS backend
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn plist_strings(text: &str) -> Vec<String> {
     let mut values = Vec::new();
     let mut rest = text;
@@ -167,6 +131,7 @@ pub(crate) fn plist_strings(text: &str) -> Vec<String> {
     values
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn xml_unescape(s: &str) -> String {
     s.replace("&lt;", "<")
         .replace("&gt;", ">")
@@ -174,15 +139,17 @@ fn xml_unescape(s: &str) -> String {
         .replace("&amp;", "&")
 }
 
-// ── Shared entry text builders ───────────────────────────────────────────────
-// Platform-independent so their unit tests run everywhere; each is consumed
-// by exactly one platform module.
+// ── Entry text builders ──────────────────────────────────────────────────────
+// Each is consumed by exactly one platform module; the tests below cover all of
+// them on every platform.
 
 /// Windows: value data stored under
 /// `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The value itself is
 /// the full command line, so login startup needs no working directory.
-#[allow(dead_code)] // only used by the Windows backend
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn run_command_line(exe: &Path, config: &Path) -> String {
+    use crate::startup::cmdline::win_cmd_quote;
+
     format!(
         "{} --config {}",
         win_cmd_quote(&exe.to_string_lossy()),
@@ -191,7 +158,7 @@ pub(crate) fn run_command_line(exe: &Path, config: &Path) -> String {
 }
 
 /// macOS: LaunchAgent property list registered under `~/Library/LaunchAgents`.
-#[allow(dead_code)] // only used by the macOS backend
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn launch_agent_plist(label: &str, exe: &Path, config: &Path) -> String {
     let workdir = exe
         .parent()
@@ -226,7 +193,7 @@ pub(crate) fn launch_agent_plist(label: &str, exe: &Path, config: &Path) -> Stri
 
 /// Linux: XDG autostart entry under `~/.config/autostart`, honored by both
 /// GNOME and KDE.
-#[allow(dead_code)] // only used by the Linux backend
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn desktop_entry(exe: &Path, config: &Path) -> String {
     let workdir = exe
         .parent()
@@ -250,17 +217,12 @@ pub(crate) fn desktop_entry(exe: &Path, config: &Path) -> String {
 
 /// Quotes one argument for a Desktop Entry `Exec` value: double quotes with
 /// backslash escaping, per the Desktop Entry Specification.
+#[cfg(any(target_os = "linux", test))]
 fn exec_arg(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// Quotes a path for a Windows command line (Run-key value data): only double
-/// quotes need escaping — backslashes are literal except before a quote, and
-/// doubling them would corrupt plain paths.
-fn win_cmd_quote(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\\\""))
-}
-
+#[cfg(any(target_os = "macos", test))]
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")

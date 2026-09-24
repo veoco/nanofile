@@ -17,7 +17,6 @@
 //!   menu comes up without one; Quit then exits this process alone. That is what
 //!   keeps the service switchable from the tray while the service is running.
 
-pub(crate) mod autostart;
 mod icon;
 pub(crate) mod icon_gen;
 mod notify;
@@ -56,7 +55,7 @@ use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuIt
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
 use crate::TrayCommand;
-use autostart::Autostart as _;
+use crate::startup::login::{LoginEntry as _, PlatformLogin};
 
 const ID_OPEN_WEB: &str = "nanofile.open-web";
 const ID_AUTOSTART: &str = "nanofile.autostart";
@@ -257,8 +256,7 @@ fn create_tray(
     quit_tx: UnboundedSender<TrayCommand>,
     client_mode: bool,
 ) -> anyhow::Result<TrayIcon> {
-    let autostart =
-        autostart::PlatformAutostart::new(ctx.exe_path.clone(), ctx.config_path.clone());
+    let autostart = PlatformLogin::new(ctx.exe_path.clone(), ctx.config_path.clone());
 
     // A login entry records absolute paths, so a folder that was moved, renamed
     // or deleted leaves it launching something that is not there — and a login
@@ -270,7 +268,9 @@ fn create_tray(
             "the start-at-login entry points at a path that no longer exists; repointing it at \
              this installation"
         );
-        if let Err(e) = autostart.enable() {
+        if !login_entry_write_confirmed() {
+            tracing::info!("repointing the start-at-login entry was not confirmed");
+        } else if let Err(e) = autostart.enable() {
             tracing::warn!("repointing the start-at-login entry failed: {e:#}");
         }
     }
@@ -365,7 +365,7 @@ fn create_tray(
 
 struct MenuState {
     ctx: TrayContext,
-    autostart: autostart::PlatformAutostart,
+    autostart: PlatformLogin,
     autostart_item: CheckMenuItem,
     /// The Windows "start as a service" item.
     #[cfg(target_os = "windows")]
@@ -390,7 +390,7 @@ thread_local! {
 /// event would panic on the live borrow.
 enum MenuAction {
     OpenWeb(String),
-    ToggleAutostart(autostart::PlatformAutostart, CheckMenuItem),
+    ToggleAutostart(PlatformLogin, CheckMenuItem),
     #[cfg(target_os = "windows")]
     ToggleService,
     OpenConfig(PathBuf),
@@ -468,7 +468,7 @@ fn quit_client() {
 }
 
 #[cfg(target_os = "windows")]
-fn toggle_autostart(_autostart: autostart::PlatformAutostart, _item: CheckMenuItem) {
+fn toggle_autostart(_autostart: PlatformLogin, _item: CheckMenuItem) {
     // muda's WM_COMMAND dispatch is still on the stack: it holds a borrow of
     // the clicked item itself, so calling `set_checked` here panics — and the
     // registry toggle below may show a modal elevation dialog, which pumps
@@ -479,7 +479,7 @@ fn toggle_autostart(_autostart: autostart::PlatformAutostart, _item: CheckMenuIt
 }
 
 #[cfg(not(target_os = "windows"))]
-fn toggle_autostart(autostart: autostart::PlatformAutostart, item: CheckMenuItem) {
+fn toggle_autostart(autostart: PlatformLogin, item: CheckMenuItem) {
     perform_autostart_toggle_with(autostart, item);
 }
 
@@ -504,10 +504,15 @@ pub(super) fn perform_autostart_toggle() {
     perform_autostart_toggle_with(autostart, item);
 }
 
-fn perform_autostart_toggle_with(autostart: autostart::PlatformAutostart, item: CheckMenuItem) {
+fn perform_autostart_toggle_with(autostart: PlatformLogin, item: CheckMenuItem) {
     let result = if autostart.is_enabled() {
         tracing::info!("Disabling launch at login");
         autostart.disable()
+    } else if !login_entry_write_confirmed() {
+        // The warning below was dismissed; leave the checkbox where the
+        // registry actually is.
+        tracing::info!("launch-at-login registration cancelled");
+        Ok(())
     } else {
         tracing::info!("Enabling launch at login");
         autostart.enable()
@@ -516,6 +521,46 @@ fn perform_autostart_toggle_with(autostart: autostart::PlatformAutostart, item: 
         tracing::error!("Failed to update launch-at-login: {e:#}");
     }
     item.set_checked(autostart.is_enabled());
+}
+
+/// Whether writing the login entry may proceed.
+///
+/// An elevated process writes to the elevated account's `HKCU` hive, which is
+/// the same hive when the user consented to elevation — but a *different*
+/// account's when a standard user typed an administrator's credentials. The
+/// consequence is made explicit instead of silently registering auto-start for
+/// (potentially) somebody else. Login startup itself always runs unelevated
+/// (the exe manifest is `asInvoker`), so no UAC prompt is involved here.
+fn login_entry_write_confirmed() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        !crate::startup::win32::is_elevated() || confirm_elevated_registration()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        true
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn confirm_elevated_registration() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OKCANCEL, MessageBoxW};
+
+    let t = lang();
+    let user = std::env::var("USERNAME")
+        .unwrap_or_else(|_| t.tr("tray.elevated_user_fallback").to_string());
+    let text = t.trf("tray.elevated_body", &[("user", user.as_str())]);
+    let text = crate::startup::win32::wide(&text);
+    let caption = crate::startup::win32::wide(t.tr("tray.notify_title"));
+    let result = unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_ICONWARNING | MB_OKCANCEL,
+        )
+    };
+    result == 1 // IDOK
 }
 
 fn open_config_file(config_path: &Path) {
