@@ -392,8 +392,17 @@ impl TaskSystem {
             run.set_detail(name, value);
         }
         let id = run.id.clone();
+        // Every run whose job keeps a record is written down before it starts,
+        // so a crash leaves a row rather than nothing at all. `Audit` is
+        // recorded and, if the process dies, closed by recovery rather than
+        // replayed; `Durable` is resumed. A `Memory` run — the request-scoped
+        // copies and moves — is not recorded anywhere.
+        //
+        // The condition has to match the one that writes the terminal state
+        // below, or an `Audit` job's finish updates a row that was never
+        // inserted and the journal stays empty.
         if let Some(journal) = self.journal()
-            && job.spec.durability == Durability::Durable
+            && job.spec.durability >= Durability::Audit
         {
             let now = chrono::Utc::now().timestamp();
             journal
@@ -464,8 +473,12 @@ impl TaskSystem {
         // a running pass cannot defer itself.
         let _background = self.inner.load.background_guard();
         let journal = self.journal();
+        // The same set of jobs the submit path recorded a row for: an audited
+        // run is written down when it starts as well as when it ends, so its
+        // row says when it began and does not read as pending work for longer
+        // than the run lasts.
         if let Some(journal) = &journal
-            && job.spec.durability == Durability::Durable
+            && job.spec.durability >= Durability::Audit
         {
             let now = chrono::Utc::now().timestamp();
             let lease = crate::tasks::queue::QueuePolicy::DEFAULT.lease_until(now);
@@ -1905,15 +1918,25 @@ mod tests {
 
     /// A finished audited run leaves a row, so a crash is visible rather than
     /// silent.
+    ///
+    /// The job is a housekeeping pass — `Audit`, not `Durable` — because that
+    /// is the case the terminal write used to update a row nobody had
+    /// inserted, leaving the journal empty for every job but a reindex.
     #[tokio::test]
     async fn an_audited_run_is_recorded_in_the_journal() {
         let (system, repos) = journal_system().await;
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::ShareLinkCleanup),
+                Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+            ))
+            .unwrap();
         let id = system
             .submit(
-                JobKey::Reindex,
+                JobKey::ShareLinkCleanup,
                 Some(1),
-                copy_params(&["a"]),
-                "reindex",
+                Params::Null,
+                "share link cleanup",
                 None,
             )
             .await
@@ -1935,7 +1958,7 @@ mod tests {
         }
         assert_eq!(rows.len(), 1, "one finished run is recorded");
         let row = &rows[0];
-        assert_eq!(row.kind, "reindex");
+        assert_eq!(row.kind, "share-link-cleanup");
         assert_eq!(row.phase, "succeeded");
         assert_eq!(row.owner, Some(1));
         assert!(row.finished_at.is_some());
@@ -1976,6 +1999,44 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "and never recovered"
+        );
+    }
+
+    /// An audited run the process never finished is closed, never replayed:
+    /// the job was not declared safe to run twice.
+    #[tokio::test]
+    async fn an_unfinished_audited_run_is_closed_rather_than_replayed() {
+        let (system, repos) = journal_system().await;
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::ShareLinkCleanup),
+                Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+            ))
+            .unwrap();
+        repos
+            .job_run
+            .enqueue(
+                crate::repository::job_run::NewJobRun {
+                    id: "crashed-audit".to_string(),
+                    kind: "share-link-cleanup".to_string(),
+                    owner: Some(7),
+                    summary: String::new(),
+                    params: Some(Params::Null.to_string()),
+                    created_at: 0,
+                },
+                -1,
+            )
+            .await
+            .unwrap();
+
+        system.recover().await;
+
+        let rows = repos.job_run.recent(10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].phase, "interrupted");
+        assert_eq!(
+            rows[0].error.as_deref(),
+            Some("this job is not safe to replay")
         );
     }
 
