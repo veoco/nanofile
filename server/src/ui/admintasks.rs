@@ -18,7 +18,11 @@ use crate::AppState;
 use crate::i18n::I18n;
 use crate::tasks::JobStats;
 use crate::tasks::registry::RegisteredJob;
-use crate::tasks::spec::{JobKey, ServiceKey, Trigger};
+use crate::tasks::run::JobState;
+use crate::tasks::spec::{
+    Durability, JobKey, JobSpec, OverlapPolicy, Priority, Resource, RetryPolicy, ServiceKey,
+    Trigger,
+};
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -129,6 +133,27 @@ pub struct FactRow {
     pub ts: Option<i64>,
 }
 
+/// One labelled policy of a job, shown in the row's disclosure.
+///
+/// These are the decisions an operator otherwise has to read the catalog to
+/// learn — how hard a job may push, and what happens when it stalls — and they
+/// are behind a disclosure because none of them changes what the list is for.
+pub struct DetailRow {
+    pub label: String,
+    pub value: String,
+}
+
+/// The job's own most recent report.
+///
+/// The prose is the job's rather than the page's, so it is shown as written:
+/// it is a diagnostic an operator greps the log for, and translating it would
+/// only make it harder to find there.
+pub struct MessageRow {
+    /// Whether the last run failed, which is what decides the colour.
+    pub failed: bool,
+    pub text: String,
+}
+
 /// One row of the registry: a job, or a long-lived service.
 pub struct RegisteredRow {
     /// Stable slug, used in the trigger URL and as the row's DOM handle.
@@ -151,6 +176,10 @@ pub struct RegisteredRow {
     pub facts: Vec<FactRow>,
     /// Whether the row has no counters because it has never run.
     pub never_run: bool,
+    /// The policies the job runs under, shown when the row is opened.
+    pub details: Vec<DetailRow>,
+    /// What the job reported last, if it has ever run.
+    pub last_message: Option<MessageRow>,
     /// Which group of the registry the row belongs to, as an index into
     /// [`GROUP_ORDER`].
     pub group_index: usize,
@@ -263,6 +292,15 @@ fn schedule_label(t: &I18n, trigger: Trigger) -> String {
     }
 }
 
+/// The priority a job competes at, as a label key.
+fn priority_label_key(priority: Priority) -> &'static str {
+    match priority {
+        Priority::Interactive => "admin.task_priority_interactive",
+        Priority::Normal => "admin.task_priority_normal",
+        Priority::Background => "admin.task_priority_background",
+    }
+}
+
 /// The icon a row carries, from how it comes to run.
 fn trigger_icon(trigger: Trigger) -> &'static str {
     match trigger {
@@ -294,6 +332,190 @@ fn state_badge(t: &I18n, phase: &str) -> StateBadge {
         class,
         label: label.to_string(),
     }
+}
+
+/// The resource a job mostly contends for, as a label key.
+fn resource_label_key(resource: Resource) -> &'static str {
+    match resource {
+        Resource::BlockIo => "admin.resource_block_io",
+        Resource::Cpu => "admin.resource_cpu",
+        Resource::DbWrite => "admin.resource_db_write",
+    }
+}
+
+/// What a periodic job does when a tick arrives mid-run.
+fn overlap_label_key(overlap: OverlapPolicy) -> &'static str {
+    match overlap {
+        OverlapPolicy::Skip => "admin.detail_overlap_skip",
+        OverlapPolicy::Queue => "admin.detail_overlap_queue",
+        OverlapPolicy::Allow => "admin.detail_overlap_allow",
+    }
+}
+
+/// What a crash leaves behind for this job.
+fn durability_label_key(durability: Durability) -> &'static str {
+    match durability {
+        Durability::Memory => "admin.detail_durability_memory",
+        Durability::Audit => "admin.detail_durability_audit",
+        Durability::Durable => "admin.detail_durability_durable",
+    }
+}
+
+/// How long a run may take, and how long it may stall.
+fn timeout_label(t: &I18n, spec: &JobSpec) -> String {
+    let mut parts = Vec::new();
+    if let Some(secs) = spec.timeout.no_progress_for_secs {
+        parts.push(t.trf("admin.detail_no_progress", &[("secs", secs.to_string())]));
+    }
+    if let Some(secs) = spec.timeout.max_total_secs {
+        parts.push(t.trf("admin.detail_max_total", &[("secs", secs.to_string())]));
+    }
+    if parts.is_empty() {
+        t.tr("admin.detail_timeout_none").to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// How a failed run is retried, in the reader's words.
+fn retry_label(t: &I18n, spec: &JobSpec) -> String {
+    match spec.retry {
+        RetryPolicy::Never => t.tr("admin.detail_retry_never").to_string(),
+        RetryPolicy::Fixed {
+            attempts,
+            delay_secs,
+        } => t.trf(
+            "admin.detail_retry_fixed",
+            &[
+                ("attempts", attempts.to_string()),
+                ("delay", delay_secs.to_string()),
+            ],
+        ),
+        RetryPolicy::Backoff {
+            attempts,
+            base_secs,
+            max_secs,
+        } => t.trf(
+            "admin.detail_retry_backoff",
+            &[
+                ("attempts", attempts.to_string()),
+                ("base", base_secs.to_string()),
+                ("max", max_secs.to_string()),
+            ],
+        ),
+    }
+}
+
+/// Whether a job steps aside for a busy server, and for how long it may wait.
+fn deferral_label(t: &I18n, spec: &JobSpec) -> String {
+    let Some(quiet) = spec.quiet else {
+        return t.tr("admin.detail_deferrable_no").to_string();
+    };
+    if quiet.max_deferral_hours == 0 {
+        return t.tr("admin.detail_deferrable_never_forced").to_string();
+    }
+    t.trf(
+        "admin.detail_deferrable_yes",
+        &[
+            ("idle", quiet.min_idle_for_secs.to_string()),
+            ("hours", quiet.max_deferral_hours.to_string()),
+        ],
+    )
+}
+
+/// How finely a job can be interrupted, which is what load awareness acts on.
+fn interrupt_label(t: &I18n, spec: &JobSpec) -> String {
+    let Some(chunk) = spec.chunkable else {
+        return t.tr("admin.detail_not_interruptible").to_string();
+    };
+    t.trf(
+        "admin.detail_chunk",
+        &[
+            ("ms", chunk.max_chunk_ms.to_string()),
+            ("unit", chunk.unit.to_string()),
+        ],
+    )
+}
+
+/// The most recent report the job left behind.
+///
+/// Derived from the last state rather than from whichever message is non-empty:
+/// the counters keep the last success and the last failure separately, so after
+/// a failure followed by a success both are set and only one is current.
+fn job_message(stats: &JobStats) -> Option<MessageRow> {
+    let text = match stats.last_state.as_ref() {
+        Some(JobState::Succeeded) => stats.last_success_message.clone(),
+        Some(_) => stats.last_error_message.clone(),
+        None => String::new(),
+    };
+    if text.is_empty() {
+        return None;
+    }
+    Some(MessageRow {
+        failed: !matches!(stats.last_state, Some(JobState::Succeeded)),
+        text,
+    })
+}
+
+/// The policies a job runs under.
+///
+/// Deliberately not every field of the spec: the visibility, dedup and
+/// idempotency rules are API and design contracts rather than things an
+/// operator decides anything from, and they stay in the catalog where the
+/// reasoning for them lives.
+fn job_details(spec: &JobSpec, t: &I18n) -> Vec<DetailRow> {
+    let detail = |label_key: &str, value: String| DetailRow {
+        label: t.tr(label_key).to_string(),
+        value,
+    };
+    let mut rows = vec![
+        detail(
+            "admin.task_priority",
+            t.tr(priority_label_key(spec.priority)).to_string(),
+        ),
+        detail(
+            "admin.detail_resource",
+            t.tr(resource_label_key(spec.resource)).to_string(),
+        ),
+        detail("admin.task_concurrency", spec.max_concurrent.to_string()),
+    ];
+    if let Trigger::Periodic { overlap, .. } = spec.trigger {
+        rows.push(detail(
+            "admin.detail_overlap",
+            t.tr(overlap_label_key(overlap)).to_string(),
+        ));
+    }
+    rows.push(detail("admin.detail_timeout", timeout_label(t, spec)));
+    rows.push(detail("admin.detail_retry", retry_label(t, spec)));
+    rows.push(detail("admin.detail_deferrable", deferral_label(t, spec)));
+    rows.push(detail("admin.detail_interrupt", interrupt_label(t, spec)));
+    rows.push(detail(
+        "admin.detail_cancel",
+        t.tr(if spec.cancellable || spec.resumable {
+            "admin.detail_cancel_yes"
+        } else {
+            "admin.detail_cancel_no"
+        })
+        .to_string(),
+    ));
+    rows.push(detail(
+        "admin.detail_retention",
+        t.trf(
+            "admin.detail_retention_value",
+            &[
+                ("count", spec.retention.max_retained.to_string()),
+                (
+                    "hours",
+                    (spec.retention.terminal_ttl_secs / 3600).to_string(),
+                ),
+            ],
+        ),
+    ));
+    rows.push(detail(
+        "admin.detail_durability",
+        t.tr(durability_label_key(spec.durability)).to_string(),
+    ));
+    rows
 }
 
 /// The lifetime counters of a job that has run at least once.
@@ -354,6 +576,8 @@ fn job_row(job: &RegisteredJob, stats: &JobStats, t: &I18n) -> RegisteredRow {
             .map(|state| state_badge(t, state.as_str())),
         facts: job_facts(stats, t),
         never_run: stats.run_count == 0,
+        details: job_details(spec, t),
+        last_message: job_message(stats),
         group_index: trigger_group_index(spec.trigger),
         interval_secs: match spec.trigger {
             Trigger::Periodic { interval_secs, .. } => Some(interval_secs),
@@ -381,6 +605,8 @@ fn service_row(key: ServiceKey, t: &I18n) -> RegisteredRow {
         state: None,
         facts: Vec::new(),
         never_run: false,
+        details: Vec::new(),
+        last_message: None,
         group_index: SERVICE_GROUP_INDEX,
         interval_secs: None,
         confirm_args: String::new(),
@@ -903,6 +1129,79 @@ mod tests {
             // disappearing: the journal can outlive the phase that wrote it.
             assert_eq!(state_badge(t, "future_phase").label, "future_phase");
         }
+    }
+
+    /// A job's policies are written in the reader's language, never left as
+    /// the locale keys they were looked up by — `tr` falls back to the key, so
+    /// a missing string would otherwise be printed verbatim.
+    #[test]
+    fn every_detail_is_written_in_the_reader_language() {
+        for t in languages() {
+            for key in JobKey::ALL {
+                let spec = crate::tasks::catalog::policy(*key);
+                for detail in job_details(&spec, t) {
+                    assert!(
+                        !detail.label.starts_with("admin."),
+                        "{key:?} leaked a label key: {}",
+                        detail.label
+                    );
+                    assert!(
+                        !detail.value.starts_with("admin."),
+                        "{key:?} leaked a value key: {}",
+                        detail.value
+                    );
+                    assert!(
+                        !detail.value.contains('{') && !detail.value.is_empty(),
+                        "{key:?} has an unsubstituted or empty value: {}",
+                        detail.value
+                    );
+                }
+            }
+        }
+    }
+
+    /// A job's policies are behind a disclosure, and a service has none to
+    /// disclose: it never finishes, so it has no timeout, retry or retention.
+    #[test]
+    fn a_service_has_no_policies_to_disclose() {
+        let t = I18n::get(None);
+        let service = service_row(ServiceKey::EventListener, t);
+        assert!(service.details.is_empty());
+        assert!(service.last_message.is_none());
+
+        let job = job_row(
+            &registered(JobKey::GarbageCollection),
+            &JobStats::default(),
+            t,
+        );
+        let labels: Vec<&str> = job.details.iter().map(|row| row.label.as_str()).collect();
+        assert!(labels.contains(&"Priority"), "{labels:?}");
+        assert!(labels.contains(&"Waits for a quiet server"), "{labels:?}");
+        assert!(labels.contains(&"After a crash"), "{labels:?}");
+        assert!(job.last_message.is_none(), "it has never run");
+    }
+
+    /// The counters keep the last success and the last failure separately, so
+    /// only the one that matches the current state is the current report.
+    #[test]
+    fn the_last_message_follows_the_last_state() {
+        let mut stats = JobStats {
+            run_count: 2,
+            success_count: 1,
+            error_count: 1,
+            last_success_message: "no expired entries".to_string(),
+            last_error_message: "database is locked".to_string(),
+            last_state: Some(JobState::Failed("database is locked".to_string())),
+            ..JobStats::default()
+        };
+        let message = job_message(&stats).expect("a run failed");
+        assert!(message.failed);
+        assert_eq!(message.text, "database is locked");
+
+        stats.last_state = Some(JobState::Succeeded);
+        let message = job_message(&stats).expect("a run succeeded");
+        assert!(!message.failed, "the earlier failure is stale");
+        assert_eq!(message.text, "no expired entries");
     }
 
     /// The confirmation dialog names the job it will run, and the JSON is built

@@ -63,6 +63,37 @@ test("a job that has never run shows no counters", async ({ page }) => {
   await expect(never.first().locator("[data-fact]")).toHaveCount(0);
 });
 
+// The policies are a disclosure rather than another line on every row: none of
+// them changes what the list is for, and a service has none of them at all.
+test("a job's scheduling policy is one disclosure away", async ({ page }) => {
+  await page.goto(REGISTRY);
+  const row = taskRow(page, "share-link-cleanup");
+  const detail = row.locator("details.nf-xrow-more");
+  await expect(detail.locator("summary")).toContainText("Scheduling and policy");
+  await expect(detail.locator(".nf-kv").first()).toBeHidden();
+
+  await detail.locator("summary").click();
+  for (const label of [
+    "Priority",
+    "Contends for",
+    "Concurrent runs",
+    "Timeout",
+    "Retry",
+    "Waits for a quiet server",
+    "Interruptible",
+    "Can be stopped",
+    "History kept",
+    "After a crash",
+  ]) {
+    await expect(detail).toContainText(label);
+  }
+
+  const services = page.locator('main [data-task-kind="service"]');
+  if ((await services.count()) > 0) {
+    await expect(services.first().locator("details")).toHaveCount(0);
+  }
+});
+
 // The two pages hold different things, so neither should be showing the other's
 // rows.
 test("the run list is not the registry", async ({ page }) => {

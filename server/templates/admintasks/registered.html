@@ -50,58 +50,87 @@
             <span class="rule" aria-hidden="true"></span>
         </div>
         {% for row in group.rows %}
-        <div class="nf-prow" data-task="{{ row.slug }}" data-task-kind="{{ row.kind }}">
-            <span class="nf-prow-ic">
-                {% if row.icon == "clock" %}{{ icons::icon_clock("w-[15px] h-[15px]") }}
-                {% else if row.icon == "refresh" %}{{ icons::icon_refresh("w-[15px] h-[15px]") }}
-                {% else if row.icon == "cog" %}{{ icons::icon_cog("w-[15px] h-[15px]") }}
-                {% else if row.icon == "play" %}{{ icons::icon_play("w-[15px] h-[15px]") }}
-                {% else %}{{ icons::icon_inbox("w-[15px] h-[15px]") }}{% endif %}
-            </span>
-            <div class="nf-prow-main">
-                <div class="nf-prow-name">
-                    <span class="base">{{ row.name }}</span>
-                    {% if let Some(state) = row.state %}
-                    <span class="badge {{ state.class }} shrink-0">{{ state.label }}</span>
+        <div class="nf-xrow" data-task="{{ row.slug }}" data-task-kind="{{ row.kind }}">
+            <div class="nf-prow">
+                <span class="nf-prow-ic">
+                    {% if row.icon == "clock" %}{{ icons::icon_clock("w-[15px] h-[15px]") }}
+                    {% else if row.icon == "refresh" %}{{ icons::icon_refresh("w-[15px] h-[15px]") }}
+                    {% else if row.icon == "cog" %}{{ icons::icon_cog("w-[15px] h-[15px]") }}
+                    {% else if row.icon == "play" %}{{ icons::icon_play("w-[15px] h-[15px]") }}
+                    {% else %}{{ icons::icon_inbox("w-[15px] h-[15px]") }}{% endif %}
+                </span>
+                <div class="nf-prow-main">
+                    <div class="nf-prow-name">
+                        <span class="base">{{ row.name }}</span>
+                        {% if let Some(state) = row.state %}
+                        <span class="badge {{ state.class }} shrink-0">{{ state.label }}</span>
+                        {% endif %}
+                    </div>
+                    {# What the row does, in words: a name like "gc" says nothing
+                       on its own, and the job's own slug is not the operator's
+                       vocabulary. #}
+                    <p class="nf-prow-hi text-ink-3">{{ row.desc }}</p>
+                    <div class="nf-prow-sub flex-wrap">
+                        <span class="t">{{ row.schedule }}</span>
+                        {% if row.never_run %}
+                        <span class="sep">&middot;</span>
+                        <span class="t">{{ t.tr("admin.task_never_run") }}</span>
+                        {% endif %}
+                        {% for fact in row.facts %}
+                        <span class="sep">&middot;</span>
+                        {# A time is a raw stamp the browser renders in the
+                           reader's timezone; the server never formats one. #}
+                        <span class="t" data-fact="{{ fact.key }}">
+                            <span class="text-ink-3">{{ fact.label }}</span>
+                            {% match fact.ts %}
+                            {% when Some with (ts) %}{{ time::ts_class(ts, "text-ink-2 tabular-nums", "relative") }}
+                            {% when None %}<span class="text-ink-2 tabular-nums">{{ fact.value }}</span>
+                            {% endmatch %}
+                        </span>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="nf-prow-act">
+                    {% if row.triggerable %}
+                    <form action="/sysadmin/tasks/{{ row.slug }}/trigger/" method="POST" class="trigger-form"
+                          data-confirm="admin.task_run_confirm" data-confirm-variant="solid"
+                          data-confirm-args='{{ row.confirm_args }}'>
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                        <button type="submit" class="btn btn-line btn-sm" title="{{ t.tr("admin.task_run_now") }}">
+                            {{ icons::icon_play("w-3.5 h-3.5") }}
+                            <span class="hidden sm:inline">{{ t.tr("admin.task_run_now") }}</span>
+                        </button>
+                    </form>
                     {% endif %}
                 </div>
-                {# What the row does, in words: a name like "gc" says nothing on
-                   its own, and the job's own slug is not the operator's
-                   vocabulary. #}
-                <p class="nf-prow-hi text-ink-3">{{ row.desc }}</p>
-                <div class="nf-prow-sub flex-wrap">
-                    <span class="t">{{ row.schedule }}</span>
-                    {% if row.never_run %}
-                    <span class="sep">&middot;</span>
-                    <span class="t">{{ t.tr("admin.task_never_run") }}</span>
-                    {% endif %}
-                    {% for fact in row.facts %}
-                    <span class="sep">&middot;</span>
-                    {# A time is a raw stamp the browser renders in the reader's
-                       timezone; the server never formats one. #}
-                    <span class="t" data-fact="{{ fact.key }}">
-                        <span class="text-ink-3">{{ fact.label }}</span>
-                        {% match fact.ts %}
-                        {% when Some with (ts) %}{{ time::ts_class(ts, "text-ink-2 tabular-nums", "relative") }}
-                        {% when None %}<span class="text-ink-2 tabular-nums">{{ fact.value }}</span>
-                        {% endmatch %}
-                    </span>
+            </div>
+            {# The policies, and what the job reported last. Behind a disclosure
+               because none of it changes what the list is for, and because a
+               job's own report is diagnostic prose rather than a row anyone
+               scans. A service has neither. #}
+            {% if row.kind == "job" %}
+            <details class="nf-xrow-more">
+                <summary class="nf-toggle">
+                    {{ icons::icon_arrow_right("w-3 h-3") }}
+                    {{ t.tr("admin.detail_title") }}
+                </summary>
+                <div class="nf-expand flex flex-col gap-2">
+                    {% for detail in row.details %}
+                    <div class="nf-kv">
+                        <span class="k">{{ detail.label }}</span>
+                        <span class="v">{{ detail.value }}</span>
+                    </div>
                     {% endfor %}
+                    {% if let Some(message) = row.last_message %}
+                    <div class="nf-kv">
+                        <span class="k">{{ t.tr("admin.detail_last_message") }}</span>
+                        <span class="v {% if message.failed %}text-err-text{% endif %}"
+                              title="{{ message.text }}">{{ message.text }}</span>
+                    </div>
+                    {% endif %}
                 </div>
-            </div>
-            <div class="nf-prow-act">
-                {% if row.triggerable %}
-                <form action="/sysadmin/tasks/{{ row.slug }}/trigger/" method="POST" class="trigger-form"
-                      data-confirm="admin.task_run_confirm" data-confirm-variant="solid"
-                      data-confirm-args='{{ row.confirm_args }}'>
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                    <button type="submit" class="btn btn-line btn-sm" title="{{ t.tr("admin.task_run_now") }}">
-                        {{ icons::icon_play("w-3.5 h-3.5") }}
-                        <span class="hidden sm:inline">{{ t.tr("admin.task_run_now") }}</span>
-                    </button>
-                </form>
-                {% endif %}
-            </div>
+            </details>
+            {% endif %}
         </div>
         {% endfor %}
     </section>
