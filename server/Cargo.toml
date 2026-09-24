@@ -162,6 +162,10 @@ windows-sys = { version = "0.59", features = [
     # it compares against (the SDK keeps those in WindowsProgramming).
     "Win32_Storage_FileSystem",
     "Win32_System_WindowsProgramming",
+    # SID resolution for the access the service account needs, and the LSA call
+    # that grants a named account "Log on as a service".
+    "Win32_Security_Authorization",
+    "Win32_Security_Authentication_Identity",
 ] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

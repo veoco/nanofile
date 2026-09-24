@@ -10,7 +10,10 @@ use std::path::Path;
 
 use infra::config::{Config, EnvKeys};
 
-use super::windows::{install, probe, report_failure, run_as_service, uninstall};
+use super::account::{PasswordSource, ServiceAccount};
+use super::windows::{
+    install, probe, registered_account, report_failure, run_as_service, uninstall,
+};
 use super::{ServiceAction, ServiceProbe};
 use crate::startup::login::{LoginEntry as _, PlatformLogin};
 
@@ -23,14 +26,35 @@ pub(crate) fn run_cli(
 ) -> anyhow::Result<()> {
     match action {
         ServiceAction::Run => run_as_service(config.clone(), env_keys, config_path.to_path_buf()),
-        ServiceAction::Install => {
+        ServiceAction::Install {
+            account,
+            password,
+            password_stdin,
+        } => {
+            let source = if password_stdin {
+                PasswordSource::Stdin
+            } else if password.is_some() {
+                PasswordSource::Inline
+            } else {
+                // Only a named account reaches the prompt, so the default
+                // (virtual) account never blocks `service install` on input.
+                PasswordSource::Prompt
+            };
+            let account = match super::account::resolve(&account, password, source) {
+                Ok(account) => account,
+                Err(e) => {
+                    report_failure("The service account could not be determined", &e);
+                    return Err(e);
+                }
+            };
+
             // The checks the tray runs before it asks for elevation, repeated
             // here as the installing administrator and *before* the SCM is
             // touched: a directory this process cannot write is a service that
             // cannot start, and a registration nobody can use is worse than a
             // refusal that names the path.
-            let preflight =
-                super::preflight::run(&super::preflight::Input::from_config(config, config_path));
+            let input = super::preflight::Input::from_config(config, config_path);
+            let preflight = super::preflight::run(&input);
             preflight.log();
             for line in preflight.lines_at_least(super::checks::Severity::Warn) {
                 println!("note: {line}");
@@ -46,12 +70,13 @@ pub(crate) fn run_cli(
                 return Err(e);
             }
 
-            match install(config_path) {
+            match install(config_path, &account, &input) {
                 Ok(()) => {
                     retire_login_entry(config_path);
                     println!(
-                        "Nanofile registered as a Windows service; it starts at the next system \
-                         start, without a login."
+                        "Nanofile registered as a Windows service (account: {}); it starts at \
+                         the next system start, without a login.",
+                        account.label()
                     );
                     Ok(())
                 }
@@ -61,34 +86,40 @@ pub(crate) fn run_cli(
                 }
             }
         }
-        ServiceAction::Uninstall => match uninstall() {
-            Ok(()) => {
-                // Deliberately *not* re-creating the login entry: "remove the
-                // service" means Nanofile no longer starts automatically, and
-                // writing a startup registration the user did not ask for in
-                // that command would be worse than starting from an honest
-                // blank.
-                println!(
-                    "Nanofile is no longer registered as a Windows service, and no longer \
-                     starts automatically: install it again, or enable \"Start at login\" \
-                     from the tray."
-                );
-                Ok(())
+        ServiceAction::Uninstall => {
+            let input = super::preflight::Input::from_config(config, config_path);
+            match uninstall(&input) {
+                Ok(()) => {
+                    // Deliberately *not* re-creating the login entry: "remove the
+                    // service" means Nanofile no longer starts automatically, and
+                    // writing a startup registration the user did not ask for in
+                    // that command would be worse than starting from an honest
+                    // blank.
+                    println!(
+                        "Nanofile is no longer registered as a Windows service, and no longer \
+                         starts automatically: install it again, or enable \"Start at login\" \
+                         from the tray."
+                    );
+                    Ok(())
+                }
+                Err(e) => {
+                    report_failure("The Nanofile service could not be removed", &e);
+                    Err(e)
+                }
             }
-            Err(e) => {
-                report_failure("The Nanofile service could not be removed", &e);
-                Err(e)
-            }
-        },
+        }
         ServiceAction::Status => {
             let state = probe(config_path);
+            // Who it runs as is part of "is it registered the way I want":
+            // `LocalSystem` is how the SCM records an absent account name.
+            let account = registered_account().unwrap_or_else(|| ServiceAccount::System.label());
             match &state {
                 ServiceProbe::NotInstalled => {
                     println!("not installed");
                     std::process::exit(1);
                 }
                 ServiceProbe::Ours { running } => println!(
-                    "installed for this installation ({})",
+                    "installed for this installation ({}, account: {account})",
                     if *running { "running" } else { "stopped" }
                 ),
                 ServiceProbe::OtherInstall {
@@ -96,7 +127,7 @@ pub(crate) fn run_cli(
                     running,
                     missing,
                 } => println!(
-                    "installed for another installation: {image_path} ({}{})",
+                    "installed for another installation: {image_path} ({}, account: {account}{})",
                     if *running { "running" } else { "stopped" },
                     if *missing {
                         "; the registered executable no longer exists"

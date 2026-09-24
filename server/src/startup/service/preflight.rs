@@ -60,6 +60,30 @@ impl Input {
             port: config.server.port,
         }
     }
+
+    /// The paths the service account has to be granted access to, in the order
+    /// they are granted: every state directory, the log directory, and the
+    /// configuration file (which the server writes back to when a new setting
+    /// appears). The flag says whether the grant is inheritable — a directory
+    /// gets `(OI)(CI)`, a file does not.
+    ///
+    /// A directory the checks already refused (a system directory, or one on a
+    /// drive the service cannot reach) is not granted: the install stops before
+    /// this point.
+    pub(crate) fn grant_targets(&self) -> Vec<(PathBuf, bool)> {
+        let mut targets: Vec<(PathBuf, bool)> = self
+            .dirs
+            .iter()
+            .map(|(_, dir)| (dir.clone(), true))
+            .collect();
+        if let Some(dir) = &self.log_dir {
+            targets.push((dir.clone(), true));
+        }
+        if let Some(file) = &self.config_path {
+            targets.push((file.clone(), false));
+        }
+        targets
+    }
 }
 
 /// Run every check against the configuration as it was loaded.

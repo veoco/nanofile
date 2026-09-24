@@ -20,6 +20,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
 };
 
+use super::account::ServiceAccount;
 use super::{
     DISPLAY_NAME, EXIT_FAILED, EXIT_REFUSED, SERVICE_NAME, ServiceProbe, image_path_matches,
     service_command_line, service_description,
@@ -309,6 +310,13 @@ fn read_image_path() -> Option<String> {
     read_service_string("ImagePath")
 }
 
+/// The account the service is registered to run under, as `services.msc` shows
+/// it. `None` when there is no `ObjectName` value, which is how the SCM records
+/// the default `LocalSystem` account.
+pub(crate) fn registered_account() -> Option<String> {
+    read_service_string("ObjectName")
+}
+
 /// What is registered under our service name, and whether it belongs to this
 /// installation.
 pub(crate) fn probe(config_path: &Path) -> ServiceProbe {
@@ -367,8 +375,17 @@ pub(crate) fn probe(config_path: &Path) -> ServiceProbe {
     }
 }
 
-/// Create the service, or update an existing one's command line.
-pub(crate) fn install(config_path: &Path) -> anyhow::Result<()> {
+/// Create the service, or update an existing one's command line and account.
+///
+/// The account is chosen here, so the access control that account needs is
+/// granted here too, and the install refuses to report success when it cannot:
+/// a `NT SERVICE\Nanofile` service that may not write its own database is a
+/// registration that fails invisibly at the next boot.
+pub(crate) fn install(
+    config_path: &Path,
+    account: &ServiceAccount,
+    input: &super::preflight::Input,
+) -> anyhow::Result<()> {
     let exe = std::env::current_exe()
         .map_err(|e| anyhow::anyhow!("failed to locate the running executable: {e}"))?;
     let bin_path = service_command_line(&exe, config_path);
@@ -377,8 +394,20 @@ pub(crate) fn install(config_path: &Path) -> anyhow::Result<()> {
     let display = wide(DISPLAY_NAME);
     let bin = wide(&bin_path);
 
+    // `LocalSystem` is registered as *no* account name; the other choices name
+    // their account explicitly, and only a named account has a password.
+    let start_name = account.name().map(wide);
+    let password = account.password().map(wide);
+    let start_ptr = start_name
+        .as_ref()
+        .map_or(std::ptr::null(), |value| value.as_ptr());
+    let password_ptr = password
+        .as_ref()
+        .map_or(std::ptr::null(), |value| value.as_ptr());
+
     let existing = unsafe { OpenServiceW(manager, name.as_ptr(), SERVICE_CHANGE_CONFIG) };
-    let service = if existing.is_null() {
+    let created = existing.is_null();
+    let service = if created {
         unsafe {
             CreateServiceW(
                 manager,
@@ -392,8 +421,8 @@ pub(crate) fn install(config_path: &Path) -> anyhow::Result<()> {
                 std::ptr::null(),
                 std::ptr::null_mut(),
                 std::ptr::null(),
-                std::ptr::null(),
-                std::ptr::null(),
+                start_ptr,
+                password_ptr,
             )
         }
     } else {
@@ -409,8 +438,8 @@ pub(crate) fn install(config_path: &Path) -> anyhow::Result<()> {
                 std::ptr::null(),
                 std::ptr::null_mut(),
                 std::ptr::null(),
-                std::ptr::null(),
-                std::ptr::null(),
+                start_ptr,
+                password_ptr,
                 display.as_ptr(),
             )
         };
@@ -504,17 +533,78 @@ pub(crate) fn install(config_path: &Path) -> anyhow::Result<()> {
         tracing::warn!("could not set the non-crash failure flag");
     }
 
+    // The account's SID exists only now (a virtual account is materialised by
+    // `CreateServiceW`), which is why the grants happen here — and a failure is
+    // fatal: a registered service that may not write its own database fails
+    // invisibly at the next boot.
+    if let Err(e) = prepare_account(account, input) {
+        if created {
+            // Roll the registration back. A service that cannot start is worse
+            // than no service, and the operator asked for a working one.
+            unsafe { DeleteService(service) };
+        }
+        unsafe {
+            CloseServiceHandle(service);
+            CloseServiceHandle(manager);
+        }
+        return Err(e);
+    }
+
     unsafe {
         CloseServiceHandle(service);
         CloseServiceHandle(manager);
     }
-    tracing::info!(bin_path = %bin_path, "service registered");
+    tracing::info!(
+        bin_path = %bin_path,
+        account = %account.label(),
+        "service registered"
+    );
+    Ok(())
+}
+
+/// Give the chosen account the rights and access the service needs.
+///
+/// The "Log on as a service" right first (without it the service starts and
+/// dies with error 1069), then modify access to every path the server writes.
+fn prepare_account(
+    account: &ServiceAccount,
+    input: &super::preflight::Input,
+) -> anyhow::Result<()> {
+    if account.needs_service_logon_right() {
+        let name = account.label();
+        super::account::grant_service_logon_right(&name)?;
+        tracing::info!(account = %name, "granted \"log on as a service\"");
+    }
+    let Some(target) = account.grant_target() else {
+        // LocalSystem already has access to everything, and changing a system
+        // directory's access control for it would be a change for no reason.
+        return Ok(());
+    };
+    let sid = super::acl::resolve_sid(&target)?;
+    let mut granted = Vec::new();
+    for (path, inheritable) in input.grant_targets() {
+        if !path.exists() {
+            // The preflight creates every directory; a path that is still
+            // missing is a file the operator has not created yet.
+            tracing::debug!(path = %path.display(), "nothing to grant access to");
+            continue;
+        }
+        super::acl::grant(&sid, &path, inheritable)?;
+        granted.push(path);
+    }
+    tracing::info!(account = %target, sid = %sid, paths = ?granted, "granted access");
     Ok(())
 }
 
 /// Stop and remove the service. Removing a service that is not there is a
 /// success: the caller's intent ("it must not be registered") already holds.
-pub(crate) fn uninstall() -> anyhow::Result<()> {
+///
+/// The access control the install granted is taken back, best effort: leaving a
+/// service account with write access to a directory that is no longer its own is
+/// exactly the kind of residue a removal should not leave behind.
+pub(crate) fn uninstall(input: &super::preflight::Input) -> anyhow::Result<()> {
+    // Who it ran as has to be read before the registration disappears.
+    let account = registered_account();
     let manager = open_manager(SC_MANAGER_CONNECT)?;
     let name = wide(SERVICE_NAME);
     let service = unsafe { OpenServiceW(manager, name.as_ptr(), SERVICE_ALL_ACCESS) };
@@ -568,8 +658,34 @@ pub(crate) fn uninstall() -> anyhow::Result<()> {
     if deleted == 0 && error != ERROR_SERVICE_DOES_NOT_EXIST {
         anyhow::bail!("deleting the service failed (error {error})");
     }
+    revoke_access(account.as_deref(), input);
     tracing::info!("service removed");
     Ok(())
+}
+
+/// Take back the grants [`prepare_account`] made, ignoring what cannot be
+/// undone: the service is gone either way, and a stale access control entry on
+/// a directory the operator still owns is not worth failing a removal over.
+fn revoke_access(account: Option<&str>, input: &super::preflight::Input) {
+    let Some(account) = account else {
+        // No `ObjectName`: LocalSystem, for which nothing was granted.
+        return;
+    };
+    let Ok(sid) = super::acl::resolve_sid(account) else {
+        tracing::warn!(
+            account,
+            "could not resolve the service account to take its access back"
+        );
+        return;
+    };
+    for (path, _) in input.grant_targets() {
+        if !path.exists() {
+            continue;
+        }
+        if let Err(e) = super::acl::revoke(&sid, &path) {
+            tracing::warn!(path = %path.display(), "could not remove the service account's access: {e:#}");
+        }
+    }
 }
 
 /// Stop the running service and wait for it to report `STOPPED`.

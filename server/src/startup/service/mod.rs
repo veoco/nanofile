@@ -57,9 +57,24 @@ pub(crate) enum ServiceAction {
     /// Run as a service. Called by the Service Control Manager (the registered
     /// binary path), never by hand: without the SCM this exits immediately.
     Run,
-    /// Register the auto-start service (or update its command line). Needs
-    /// administrator rights.
-    Install,
+    /// Register the auto-start service (or update its command line, account and
+    /// access control). Needs administrator rights.
+    Install {
+        /// Account the service runs under: `virtual` (the default,
+        /// `NT SERVICE\Nanofile`), `system` (`LocalSystem`), `network`
+        /// (`NT AUTHORITY\NetworkService`), or any other value as a local or
+        /// domain account name, which needs a password.
+        #[arg(long, value_name = "ACCOUNT", default_value = "virtual")]
+        account: String,
+        /// Password for a named account. Visible in the shell history and in
+        /// `ps` output, so prefer --password-stdin or the interactive prompt.
+        #[arg(long)]
+        password: Option<String>,
+        /// Read the named account's password from the first line of standard
+        /// input.
+        #[arg(long, default_value_t = false, conflicts_with = "password")]
+        password_stdin: bool,
+    },
     /// Stop and remove the service. Needs administrator rights.
     Uninstall,
     /// Report whether the service is registered. Exit code 0 when it is.
@@ -175,6 +190,10 @@ pub(crate) fn image_path_matches(registered: &str, expected: &str) -> bool {
 }
 
 #[cfg(any(target_os = "windows", test))]
+mod account;
+#[cfg(target_os = "windows")]
+mod acl;
+#[cfg(any(target_os = "windows", test))]
 mod checks;
 #[cfg(target_os = "windows")]
 mod cli;
@@ -183,6 +202,8 @@ mod preflight;
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(all(target_os = "windows", feature = "tray"))]
+pub(crate) use account::ServiceAccount;
 #[cfg(all(target_os = "windows", feature = "tray"))]
 pub(crate) use checks::Severity;
 #[cfg(target_os = "windows")]

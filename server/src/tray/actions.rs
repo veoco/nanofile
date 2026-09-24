@@ -357,6 +357,10 @@ fn toggle_service() {
 
     let enable = !service.is_ours();
     let t = lang();
+    // The tray always registers the default account; naming it in the dialogs is
+    // what makes "which account does it run as?" answerable without
+    // `service status` or services.msc.
+    let account = crate::startup::service::ServiceAccount::default().label();
 
     // Before elevation, and while a person is watching: a directory the service
     // account cannot write is a registration that can never serve, and the UAC
@@ -382,6 +386,7 @@ fn toggle_service() {
             } => t.trf(
                 "tray.service_confirm_replace_missing",
                 &[
+                    ("account", account.as_str()),
                     ("config", config_display.as_str()),
                     ("existing", image_path.as_str()),
                 ],
@@ -389,13 +394,17 @@ fn toggle_service() {
             ServiceProbe::OtherInstall { image_path, .. } => t.trf(
                 "tray.service_confirm_replace",
                 &[
+                    ("account", account.as_str()),
                     ("config", config_display.as_str()),
                     ("existing", image_path.as_str()),
                 ],
             ),
             _ => t.trf(
                 "tray.service_confirm_enable",
-                &[("config", config_display.as_str())],
+                &[
+                    ("account", account.as_str()),
+                    ("config", config_display.as_str()),
+                ],
             ),
         }
     } else if service.is_running() {
@@ -551,9 +560,11 @@ pub(super) fn service_finished(enable: bool, exit_code: u32) {
                 tracing::warn!("could not remove the start-at-login entry: {e:#}");
             }
             tracing::info!("registered as a Windows service");
+            let account = crate::startup::service::ServiceAccount::default().label();
+            let text = t.trf("tray.service_installed", &[("account", account.as_str())]);
             show_message(
                 t.tr("tray.notify_title"),
-                t.tr("tray.service_installed"),
+                &text,
                 MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
             );
         } else {
