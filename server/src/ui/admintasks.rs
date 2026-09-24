@@ -1,4 +1,10 @@
-/// Admin Web UI — job management (view/trigger every background job).
+/// Admin Web UI — the task pages: what is running, and what is registered.
+///
+/// Two pages rather than one. The run list is about this moment — what is
+/// running, what finished, how busy the server is — while the registry is about
+/// the jobs themselves, which only change when the server does. They were one
+/// page, and the result mixed a flat list of jobs and services with the history
+/// of their runs and a load panel in between.
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},
@@ -15,9 +21,28 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
+/// `/sysadmin/tasks/` — the runs, and how busy the server is.
 #[derive(Template)]
-#[template(path = "admintasks/list.html")]
-pub struct AdmintasksTemplate {
+#[template(path = "admintasks/runs.html")]
+pub struct RunsTemplate {
+    pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
+    pub user_email: String,
+    pub is_admin: bool,
+    pub csrf_token: Option<String>,
+    pub active_page: &'static str,
+    pub runs: Vec<RunRow>,
+    pub load: LoadRow,
+    pub error: Option<String>,
+    pub success: Option<String>,
+    pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub current_repo_id: Option<String>,
+}
+
+/// `/sysadmin/tasks/registered/` — every job and service this server runs.
+#[derive(Template)]
+#[template(path = "admintasks/registered.html")]
+pub struct RegisteredTasksTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub t: &'static I18n,
     pub user_email: String,
@@ -25,8 +50,6 @@ pub struct AdmintasksTemplate {
     pub csrf_token: Option<String>,
     pub active_page: &'static str,
     pub tasks: Vec<TaskRow>,
-    pub load: LoadRow,
-    pub runs: Vec<RunRow>,
     pub error: Option<String>,
     pub success: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
@@ -201,8 +224,19 @@ pub struct TasksQuery {
     pub action: Option<String>,
 }
 
-/// GET /sysadmin/tasks/ — list every background job (admin only).
-pub async fn task_list_page(
+/// GET /sysadmin/tasks/ — what has been running (admin only).
+pub async fn runs_page(user: WebUser, State(state): State<Arc<AppState>>) -> Response {
+    if !user.is_admin {
+        return Redirect::to("/libraries/").into_response();
+    }
+    match render_runs(&state, &user).await {
+        Ok(resp) => resp,
+        Err(e) => e.into_response(),
+    }
+}
+
+/// GET /sysadmin/tasks/registered/ — every job and service (admin only).
+pub async fn registered_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Query(query): Query<TasksQuery>,
@@ -220,14 +254,61 @@ pub async fn task_list_page(
         _ => None,
     };
 
-    match render_page(&state, &user, None, success).await {
+    match render_registered(&state, &user, None, success).await {
         Ok(resp) => resp,
         Err(e) => e.into_response(),
     }
 }
 
-/// Build and render the listing, carrying at most one banner.
-async fn render_page(
+/// Build and render the run list.
+async fn render_runs(state: &Arc<AppState>, user: &WebUser) -> Result<Response, AppError> {
+    // Durable history, so a run that crashed is visible and not only the most
+    // recent in-memory state.
+    let runs = state
+        .repos
+        .job_run
+        .recent(20)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| RunRow {
+            kind: row.kind,
+            state: row.phase,
+            owner: row
+                .owner
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "—".to_string()),
+            finished_at_ts: row.finished_at,
+            processed: row.processed,
+            error: row.error.unwrap_or_default(),
+        })
+        .collect();
+
+    let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
+
+    let tpl = RunsTemplate {
+        urls: ctx.urls,
+        t: ctx.t,
+        user_email: ctx.user_email,
+        is_admin: ctx.is_admin,
+        csrf_token: Some(ctx.csrf_token),
+        active_page: "admintasks",
+        runs,
+        load: LoadRow::from_state(state),
+        error: None,
+        success: None,
+        left_panel_repos: ctx.left_panel_repos,
+        current_repo_id: None,
+    };
+
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Html(html).into_response())
+}
+
+/// Build and render the registry, carrying at most one banner.
+async fn render_registered(
     state: &Arc<AppState>,
     user: &WebUser,
     error: Option<String>,
@@ -273,31 +354,9 @@ async fn render_page(
             .map(|key| service_row(*key, t)),
     );
 
-    // Durable history, so a run that crashed is visible and not only the most
-    // recent in-memory state.
-    let runs = state
-        .repos
-        .job_run
-        .recent(20)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|row| RunRow {
-            kind: row.kind,
-            state: row.phase,
-            owner: row
-                .owner
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "—".to_string()),
-            finished_at_ts: row.finished_at,
-            processed: row.processed,
-            error: row.error.unwrap_or_default(),
-        })
-        .collect();
-
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
-    let tpl = AdmintasksTemplate {
+    let tpl = RegisteredTasksTemplate {
         urls: ctx.urls,
         t: ctx.t,
         user_email: ctx.user_email,
@@ -305,8 +364,6 @@ async fn render_page(
         csrf_token: Some(ctx.csrf_token),
         active_page: "admintasks",
         tasks,
-        load: LoadRow::from_state(state),
-        runs,
         error,
         success,
         left_panel_repos: ctx.left_panel_repos,
@@ -340,8 +397,8 @@ pub async fn trigger_task(
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
-    // `false` means no job by that slug is registered: re-render the list with
-    // the reason rather than answering a browser form with the API's JSON error.
+    // No job by that slug is registered: re-render the registry with the
+    // reason rather than answering a browser form with the API's JSON error.
     let Some(key) = JobKey::ALL
         .iter()
         .copied()
@@ -350,7 +407,7 @@ pub async fn trigger_task(
     else {
         let msg =
             I18n::get(user.language.as_deref()).trf("admin.task_not_found", &[("name", &name)]);
-        return render_page(&state, &user, Some(msg), None).await;
+        return render_registered(&state, &user, Some(msg), None).await;
     };
 
     if !matches!(
@@ -359,7 +416,7 @@ pub async fn trigger_task(
     ) {
         let msg = I18n::get(user.language.as_deref())
             .trf("admin.task_not_triggerable", &[("name", &name)]);
-        return render_page(&state, &user, Some(msg), None).await;
+        return render_registered(&state, &user, Some(msg), None).await;
     }
 
     if let Err(e) = state
@@ -381,12 +438,12 @@ pub async fn trigger_task(
             "admin.task_trigger_failed",
             &[("name", &name), ("reason", &e.to_string())],
         );
-        return render_page(&state, &user, Some(msg), None).await;
+        return render_registered(&state, &user, Some(msg), None).await;
     }
 
     Ok((
         StatusCode::FOUND,
-        [("Location", "/sysadmin/tasks/?action=triggered")],
+        [("Location", "/sysadmin/tasks/registered/?action=triggered")],
     )
         .into_response())
 }

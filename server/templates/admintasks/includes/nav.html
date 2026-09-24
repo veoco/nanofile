@@ -1,0 +1,18 @@
+{# The two task pages.
+
+   Links, not tabs over one panel: each page is its own URL, so a bookmark and
+   the browser's Back button both mean something, and `aria-current` marks the
+   page you are on rather than a tab selection. #}
+
+{% macro nav(page, t) %}
+<nav class="nf-tabs" aria-label="{{ t.tr("admin.tasks_nav_label") }}">
+    <a href="/sysadmin/tasks/" class="nf-tab"
+       {% if page == "runs" %}aria-current="page"{% endif %}>
+        {{ t.tr("admin.tab_runs") }}
+    </a>
+    <a href="/sysadmin/tasks/registered/" class="nf-tab"
+       {% if page == "registered" %}aria-current="page"{% endif %}>
+        {{ t.tr("admin.tab_registered") }}
+    </a>
+</nav>
+{% endmacro %}

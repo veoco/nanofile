@@ -1,12 +1,22 @@
 {% extends "base.html" %}
 {% import "includes/icons.html" as icons %}
 {% import "includes/time.html" as time %}
+{% import "admintasks/includes/nav.html" as tasks_nav %}
 
-{% block title %}{{ t.tr("admin.tasks_title") }} | Nanofile{% endblock %}
+{# The registry: every job and long-lived service this server runs.
+
+   Rendered from the task system's own registry rather than written out field by
+   field, so a job cannot be added to the server without appearing here — and
+   named from its stable slug, so the page never shows `JobSpec::name`, which is
+   the code's vocabulary rather than the reader's. #}
+
+{% block title %}{{ t.tr("admin.registered_title") }} | Nanofile{% endblock %}
 
 {% block content %}
-<h1 class="page-title">{{ t.tr("admin.tasks_title") }}</h1>
-<p class="page-subtitle">{{ t.tr("admin.tasks_desc") }}</p>
+<h1 class="page-title">{{ t.tr("admin.registered_title") }}</h1>
+<p class="page-subtitle">{{ t.tr("admin.registered_desc") }}</p>
+
+{% call tasks_nav::nav("registered", t) %}{% endcall %}
 
 {% if let Some(error) = error %}
 <div class="mt-5">{% include "includes/alert_error.html" %}</div>
@@ -30,7 +40,7 @@
    third line — the label for each number rides in its `title`. #}
 <div class="nf-list mt-5">
     {% for task in tasks %}
-    <div class="nf-prow" data-name="{{ task.name }}">
+    <div class="nf-prow" data-task="{{ task.name }}">
         <span class="nf-prow-ic">{{ icons::icon_clock("w-[15px] h-[15px]") }}</span>
         <div class="nf-prow-main">
             <div class="nf-prow-name">
@@ -91,51 +101,4 @@
     {% endfor %}
 </div>
 {% endif %}
-
-{# The load panel sits below the list on purpose: the list is what the page is
-   for, and the measurements are context for why a job may be waiting. #}
-<div class="mt-8">
-    <h2 class="text-sm font-semibold text-ink-2">{{ t.tr("admin.load_title") }}</h2>
-    <p class="text-xs text-ink-3 mt-1">
-        {% if load.load_aware %}{{ t.tr("admin.load_aware_on") }}{% else %}{{ t.tr("admin.load_aware_off") }}{% endif %}
-        {% if !load.fresh %}&middot; {{ t.tr("admin.load_stale") }}{% endif %}
-    </p>
-    <div class="flex flex-wrap items-center gap-x-6 gap-y-2 mt-3 text-sm">
-        <span title="{{ t.tr("admin.load_requests") }}">{{ t.tr("admin.load_requests") }}: <span class="text-ink">{{ load.inflight_requests }}</span></span>
-        <span title="{{ t.tr("admin.load_background") }}">{{ t.tr("admin.load_background") }}: <span class="text-ink">{{ load.background_active }}</span></span>
-        <span title="{{ t.tr("admin.load_db") }}">{{ t.tr("admin.load_db") }}: <span class="text-ink">{{ load.db_in_use }}/{{ load.db_max }}</span></span>
-        <span title="{{ t.tr("admin.load_workers") }}">{{ t.tr("admin.load_workers") }}: <span class="text-ink">{{ load.worker_busy_pct }}%</span></span>
-        <span title="{{ t.tr("admin.load_queue") }}">{{ t.tr("admin.load_queue") }}: <span class="text-ink">{{ load.queue_depth }}</span></span>
-        <span title="{{ t.tr("admin.load_tasks") }}">{{ t.tr("admin.load_tasks") }}: <span class="text-ink">{{ load.alive_tasks }}</span></span>
-    </div>
-</div>
-
-{# Durable history: what actually happened, including runs a crash cut short.
-   Kept below the jobs because the jobs are what the page is for. #}
-<div class="mt-8">
-    <h2 class="text-sm font-semibold text-ink-2">{{ t.tr("admin.runs_title") }}</h2>
-    {% if runs.is_empty() %}
-    <p class="text-xs text-ink-3 mt-2">{{ t.tr("admin.runs_none") }}</p>
-    {% else %}
-    <div class="mt-3 text-sm">
-        {% for run in runs %}
-        <div class="flex flex-wrap items-baseline gap-x-4 py-1 border-b border-line">
-            <span class="text-ink w-40">{{ run.kind }}</span>
-            <span class="text-ink-2 w-24">{{ run.state }}</span>
-            <span class="text-ink-3 w-16" title="{{ t.tr("admin.runs_owner") }}">{{ run.owner }}</span>
-            <span class="text-ink-3 w-20" title="{{ t.tr("admin.runs_processed") }}">{% if let Some(n) = run.processed %}{{ n }}{% else %}&mdash;{% endif %}</span>
-            <span class="text-ink-3">
-                {% match run.finished_at_ts %}
-                {% when Some with (ts) %}{{ time::ts(ts) }}
-                {% when None %}{{ t.tr("common.never") }}
-                {% endmatch %}
-            </span>
-            {% if !run.error.is_empty() %}
-            <span class="text-err-text" title="{{ run.error }}">{{ run.error }}</span>
-            {% endif %}
-        </div>
-        {% endfor %}
-    </div>
-    {% endif %}
-</div>
 {% endblock %}

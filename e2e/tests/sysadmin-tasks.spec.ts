@@ -2,40 +2,65 @@ import { test, expect } from "@playwright/test";
 import { bannerGap, subtitleGap } from "../helpers/layout";
 
 // Asserts the default English UI (default_language=en; the admin has no
-// language override), which renders the Periodic/Service/Never labels.
+// language override), which renders the Periodic/Service labels and the job
+// names from the en locale.
 
+const REGISTRY = "/sysadmin/tasks/registered/";
+
+/** One row of the registry, found by its stable slug rather than its markup. */
 const taskRow = (page: import("@playwright/test").Page, name: string) =>
-  page.locator(`main .nf-prow[data-name="${name}"]`);
+  page.locator(`main [data-task="${name}"]`);
 
 /** The row's last-run cell, filled from `data-ts` by core/local-time.js. */
 const lastRun = (page: import("@playwright/test").Page, name: string) =>
   taskRow(page, name).locator("[data-last-run]");
 
-test("tasks page lists scheduled periodic and continuous tasks", async ({ page }) => {
+// The two views of the task system are sibling pages, not one page: a bookmark
+// to either has to mean something, so the tab bar marks the current one.
+test("the two task pages are a tab apart", async ({ page }) => {
   await page.goto("/sysadmin/tasks/");
+  const tabs = page.locator("main .nf-tabs a");
+  await expect(tabs).toHaveCount(2);
+  await expect(page.locator('main .nf-tabs a[aria-current="page"]')).toHaveText(
+    "Task list",
+  );
+
+  await tabs.filter({ hasText: "Registered tasks" }).click();
+  await expect(page).toHaveURL(/\/sysadmin\/tasks\/registered\/$/);
+  await expect(page.locator('main .nf-tabs a[aria-current="page"]')).toHaveText(
+    "Registered tasks",
+  );
+});
+
+test("the registry lists scheduled and continuous tasks", async ({ page }) => {
+  await page.goto(REGISTRY);
   await expect(taskRow(page, "share-link-cleanup")).toBeVisible();
   await expect(page.getByText("Periodic").first()).toBeVisible();
   await expect(page.getByText("Service").first()).toBeVisible();
 });
 
-// The subtitle has no bottom margin of its own, so the task list must keep its
+// The subtitle has no bottom margin of its own, so the run panel must keep its
 // own top margin or the two touch.
-test("the description sits clear of the task table", async ({ page }) => {
+test("the description sits clear of the run panel", async ({ page }) => {
   await page.goto("/sysadmin/tasks/");
   expect(await subtitleGap(page)).toBeGreaterThanOrEqual(16);
 });
 
 test("trigger a periodic task manually", async ({ page }) => {
-  await page.goto("/sysadmin/tasks/");
+  await page.goto(REGISTRY);
   const row = taskRow(page, "share-link-cleanup");
   await expect(row).toBeVisible();
   // A periodic job exposes a trigger button; a service has nothing to run.
   await expect(row.locator("form.trigger-form")).toBeVisible();
-  const lastRunBefore = (await lastRun(page, "share-link-cleanup").innerText()).trim();
+  const lastRunBefore = (
+    await lastRun(page, "share-link-cleanup").innerText()
+  ).trim();
 
   await row.locator('form.trigger-form button[type="submit"]').click();
   await page.locator(".js-confirm-ok").click();
-  await page.waitForURL(/\/sysadmin\/tasks\/\?action=triggered$/);
+  // The button lives on the registry, so the confirmation lands here rather
+  // than on the run list.
+  await page.waitForURL(/\/sysadmin\/tasks\/registered\/\?action=triggered$/);
   await expect(page.locator("main .nf-banner.is-ok")).toContainText("Task triggered");
   // The banner is a block in its own right: the description has no bottom
   // margin, so the banner has to keep its distance.
@@ -50,9 +75,9 @@ test("trigger a periodic task manually", async ({ page }) => {
 });
 
 // A browser form must get a page back whatever happens: an unknown task slug
-// re-renders the list with the reason, not the API's JSON `error_msg` body.
+// re-renders the registry with the reason, not the API's JSON `error_msg` body.
 test("an unknown task reports instead of answering with JSON", async ({ page }) => {
-  await page.goto("/sysadmin/tasks/");
+  await page.goto(REGISTRY);
   const csrf = await page
     .locator('main form.trigger-form input[name="csrf_token"]')
     .first()

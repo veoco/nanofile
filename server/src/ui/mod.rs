@@ -245,8 +245,12 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/sysadmin/shares/upload/{token}/delete/",
             axum::routing::post(adminshares::delete_upload),
         )
-        // Admin — task management
-        .route("/sysadmin/tasks/", get(admintasks::task_list_page))
+        // Admin — task pages: what is running, and what is registered.
+        .route("/sysadmin/tasks/", get(admintasks::runs_page))
+        .route(
+            "/sysadmin/tasks/registered/",
+            get(admintasks::registered_page),
+        )
         .route(
             "/sysadmin/tasks/{name}/trigger/",
             axum::routing::post(admintasks::trigger_task),
