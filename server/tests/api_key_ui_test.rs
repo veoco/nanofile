@@ -120,6 +120,13 @@ async fn a_key_can_be_created_edited_and_revoked_from_the_page() {
         .text()
         .await
         .unwrap();
+    // The edit form shows the lifetime the key actually has. Falling back to
+    // `custom` plus the remaining days would recompute the expiry from now on
+    // every save, walking it out further each time.
+    assert!(
+        reloaded.contains(r#"<option value="30" selected>"#),
+        "the edit form should select the 30-day lifetime the key was given"
+    );
     let key_id = reloaded
         .split(r#"/settings/api-keys/"#)
         .find_map(|chunk| {
@@ -203,6 +210,33 @@ async fn validation_errors_are_shown_instead_of_creating_a_key() {
     assert!(
         body.contains("capability"),
         "the reason must be shown: {body}"
+    );
+    assert!(
+        !body.contains(r#"id="new-key-value""#),
+        "no key was created"
+    );
+
+    // A custom lifetime with no number is the page's own rejection, so it is
+    // phrased for the reader instead of echoing the headless API's wording.
+    let csrf = csrf_token(&client, &page).await;
+    let resp = client
+        .post(format!("{}/settings/api-keys/create/", f.server.base_url))
+        .form(&[
+            ("csrf_token", csrf.as_str()),
+            ("name", "no-days"),
+            ("expiry", "custom"),
+            ("expiry_days", ""),
+            ("cap__file.read", "1"),
+            ("all_repos", "1"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("Enter a number of days."),
+        "the page must say what is missing: {body}"
     );
     assert!(
         !body.contains(r#"id="new-key-value""#),

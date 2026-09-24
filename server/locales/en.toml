@@ -989,6 +989,12 @@ apikey.read_only = "read only"
 apikey.no_keys = "No API keys yet."
 apikey.not_allowed = "That capability cannot be granted to a key."
 apikey.create_failed = "Could not create the key."
+# Rejections the key page makes itself, so the reader sees them in their own
+# language rather than the headless API's wording.
+apikey.err_expiry_never = "This server requires an expiry; the longest is {days} days."
+apikey.err_expiry_days = "Enter a number of days."
+apikey.err_expiry_days_max = "Use at most {days} days."
+apikey.err_expiry_invalid = "That lifetime is not accepted."
 apikey.domain.account = "Account"
 apikey.domain.device = "Devices"
 apikey.domain.invitation = "Invitations"

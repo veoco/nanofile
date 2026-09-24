@@ -132,8 +132,8 @@ pub struct ApiKeyCard {
     pub expires_at_ts: Option<i64>,
     pub last_used_at_ts: Option<i64>,
     pub read_only: bool,
-    /// Whether the key expires at all (drives the edit form's default).
-    pub has_expiry: bool,
+    /// Which `<option>` value the edit form marks selected.
+    pub expiry_option: String,
     /// Whole days left, used to prefill the custom lifetime input.
     pub expiry_days: u64,
 }
@@ -236,9 +236,11 @@ async fn render(
         .collect();
 
     let keys = ApiKeyService::list(&state.repos, user.user_id).await?;
+    let max_ttl_days = state.config().auth.api_key_max_ttl_days;
+    let ttl_presets_days = state.config().auth.api_key_ttl_presets_days.clone();
     let cards = keys
         .into_iter()
-        .map(|key| card_of(key, &repo_names))
+        .map(|key| card_of(key, &repo_names, &ttl_presets_days, max_ttl_days))
         .collect();
 
     let left_panel_repos = state
@@ -295,7 +297,34 @@ async fn render(
     Ok(Html(html))
 }
 
-fn card_of(key: ApiKeyView, repo_names: &HashMap<String, String>) -> ApiKeyCard {
+/// Which `<option>` value the edit form should mark selected.
+///
+/// The edit form has to offer the same lifetimes as the create form, so `never`
+/// is a choice only while the server allows keys without an expiry. A key that
+/// has no expiry while the server forbids one falls back to `custom` with no
+/// days prefilled, so saving it asks for a lifetime rather than quietly
+/// granting one.
+fn expiry_option(has_expiry: bool, expiry_days: u64, presets: &[u64], max_ttl_days: u64) -> String {
+    if !has_expiry {
+        return if max_ttl_days == 0 {
+            "never".to_string()
+        } else {
+            "custom".to_string()
+        };
+    }
+    if presets.contains(&expiry_days) {
+        expiry_days.to_string()
+    } else {
+        "custom".to_string()
+    }
+}
+
+fn card_of(
+    key: ApiKeyView,
+    repo_names: &HashMap<String, String>,
+    ttl_presets_days: &[u64],
+    max_ttl_days: u64,
+) -> ApiKeyCard {
     let repos = key
         .repos
         .iter()
@@ -329,7 +358,7 @@ fn card_of(key: ApiKeyView, repo_names: &HashMap<String, String>) -> ApiKeyCard 
         expires_at_ts: key.expires_at,
         last_used_at_ts: key.last_used_at,
         read_only,
-        has_expiry,
+        expiry_option: expiry_option(has_expiry, expiry_days, ttl_presets_days, max_ttl_days),
         expiry_days,
     }
 }
@@ -359,24 +388,46 @@ fn all_repos_from(form: &HashMap<String, String>) -> bool {
         .is_some_and(|value| value == "1" || value == "on" || value == "true")
 }
 
-fn expiry_from(form: &HashMap<String, String>) -> Result<KeyExpiry, AppError> {
-    match form.get("expiry").map(String::as_str).unwrap_or("never") {
-        "never" => Ok(KeyExpiry::Never),
-        "custom" => {
-            let days: u64 = form
-                .get("expiry_days")
-                .map(|value| value.trim())
-                .and_then(|value| value.parse().ok())
-                .ok_or_else(|| {
-                    AppError::BadRequest("a custom lifetime needs a number of days".into())
-                })?;
-            Ok(KeyExpiry::InDays(days))
+/// Read the requested lifetime, in the reader's language.
+///
+/// The service enforces the same rules for the JSON API, where the message has
+/// to stay English; this page is the one that shows them to a person, so it
+/// rejects first and says why in their language.
+fn expiry_from(
+    form: &HashMap<String, String>,
+    t: &I18n,
+    max_ttl_days: u64,
+) -> Result<KeyExpiry, AppError> {
+    let requested = form.get("expiry").map(String::as_str).unwrap_or("never");
+    if requested == "never" {
+        if max_ttl_days > 0 {
+            return Err(AppError::BadRequest(t.trf(
+                "apikey.err_expiry_never",
+                &[("days", max_ttl_days.to_string())],
+            )));
         }
-        preset => preset
-            .parse::<u64>()
-            .map(KeyExpiry::InDays)
-            .map_err(|_| AppError::BadRequest("invalid lifetime".into())),
+        return Ok(KeyExpiry::Never);
     }
+    let days = if requested == "custom" {
+        form.get("expiry_days")
+            .map(|value| value.trim())
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|days| *days > 0)
+            .ok_or_else(|| AppError::BadRequest(t.tr("apikey.err_expiry_days").to_string()))?
+    } else {
+        requested
+            .parse::<u64>()
+            .ok()
+            .filter(|days| *days > 0)
+            .ok_or_else(|| AppError::BadRequest(t.tr("apikey.err_expiry_invalid").to_string()))?
+    };
+    if max_ttl_days > 0 && days > max_ttl_days {
+        return Err(AppError::BadRequest(t.trf(
+            "apikey.err_expiry_days_max",
+            &[("days", max_ttl_days.to_string())],
+        )));
+    }
+    Ok(KeyExpiry::InDays(days))
 }
 
 fn message_of(error: &AppError, t: &I18n) -> String {
@@ -430,7 +481,8 @@ pub async fn create(
         form.get("csrf_token").map(String::as_str),
     )?;
 
-    let expires = match expiry_from(&form) {
+    let t = I18n::get(user.language.as_deref());
+    let expires = match expiry_from(&form, t, state.config().auth.api_key_max_ttl_days) {
         Ok(expires) => expires,
         Err(error) => return render_error(&state, &user, error).await,
     };
@@ -479,7 +531,8 @@ pub async fn update(
         form.get("csrf_token").map(String::as_str),
     )?;
 
-    let expires = match expiry_from(&form) {
+    let t = I18n::get(user.language.as_deref());
+    let expires = match expiry_from(&form, t, state.config().auth.api_key_max_ttl_days) {
         Ok(expires) => expires,
         Err(error) => return render_error(&state, &user, error).await,
     };
@@ -521,5 +574,74 @@ pub async fn revoke(
     match ApiKeyService::revoke(&state.repos, user.user_id, key_id).await {
         Ok(()) => Ok((StatusCode::FOUND, [("Location", "/settings/api-keys/")]).into_response()),
         Err(error) => render_error(&state, &user, error).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The lifetimes the page offers, in the shipped default configuration.
+    const PRESETS: &[u64] = &[7, 30, 90, 180, 365];
+
+    fn form(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn an_unlimited_server_selects_never_for_a_key_without_an_expiry() {
+        assert_eq!(expiry_option(false, 0, PRESETS, 0), "never");
+    }
+
+    /// The create form hides `never` on a bounded server, so the edit form must
+    /// hide it too rather than offer a lifetime the service will reject.
+    #[test]
+    fn a_bounded_server_offers_neither_never_nor_a_silent_lifetime() {
+        assert_eq!(expiry_option(false, 0, PRESETS, 30), "custom");
+    }
+
+    #[test]
+    fn a_remaining_lifetime_selects_its_own_preset() {
+        assert_eq!(expiry_option(true, 30, PRESETS, 0), "30");
+        assert_eq!(expiry_option(true, 15, PRESETS, 0), "custom");
+    }
+
+    #[test]
+    fn a_key_page_rejection_reads_in_the_readers_language() {
+        let zh = I18n::get(Some("zh"));
+        let en = I18n::get(None);
+
+        let error = expiry_from(&form(&[("expiry", "never")]), zh, 30).unwrap_err();
+        assert_eq!(
+            message_of(&error, zh),
+            "本服务器要求密钥必须有有效期，最长 30 天。"
+        );
+        let error = expiry_from(&form(&[("expiry", "never")]), en, 30).unwrap_err();
+        assert_eq!(
+            message_of(&error, en),
+            "This server requires an expiry; the longest is 30 days."
+        );
+
+        let error =
+            expiry_from(&form(&[("expiry", "custom"), ("expiry_days", "")]), zh, 0).unwrap_err();
+        assert_eq!(message_of(&error, zh), "请填写天数。");
+
+        let error = expiry_from(&form(&[("expiry", "365")]), zh, 30).unwrap_err();
+        assert_eq!(message_of(&error, zh), "最多 30 天。");
+    }
+
+    #[test]
+    fn a_lifetime_the_server_allows_is_accepted() {
+        assert_eq!(
+            expiry_from(&form(&[("expiry", "30")]), I18n::get(None), 30).unwrap(),
+            KeyExpiry::InDays(30)
+        );
+        assert_eq!(
+            expiry_from(&form(&[("expiry", "never")]), I18n::get(None), 0).unwrap(),
+            KeyExpiry::Never
+        );
     }
 }

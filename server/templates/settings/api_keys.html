@@ -152,10 +152,14 @@
                             <label for="key-expiry-{{ key.id }}" class="form-label">{{ t.tr("apikey.expiry") }}</label>
                             <select id="key-expiry-{{ key.id }}" name="expiry" class="mt-1 select">
                                 {% for option in ttl_options %}
-                                <option value="{{ option.days }}">{{ option.label }}</option>
+                                <option value="{{ option.days }}" {% if key.expiry_option == option.days.to_string() %}selected{% endif %}>{{ option.label }}</option>
                                 {% endfor %}
-                                <option value="custom" {% if key.has_expiry %}selected{% endif %}>{{ t.tr("apikey.expiry_custom") }}</option>
-                                <option value="never" {% if !key.has_expiry %}selected{% endif %}>{{ t.tr("common.no_expiry") }}</option>
+                                <option value="custom" {% if key.expiry_option == "custom" %}selected{% endif %}>{{ t.tr("apikey.expiry_custom") }}</option>
+                                {# The same lifetimes the create form offers: a server that
+                                   forbids keys without an expiry must not offer one here. #}
+                                {% if max_ttl_days == 0 %}
+                                <option value="never" {% if key.expiry_option == "never" %}selected{% endif %}>{{ t.tr("common.no_expiry") }}</option>
+                                {% endif %}
                             </select>
                         </div>
                         <div>
