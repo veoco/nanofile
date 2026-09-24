@@ -42,7 +42,9 @@ use self::spec::{Dedup, JobKey, OverlapPolicy, Priority};
 use self::store::{RunFilter, RunLimits, RunStore};
 
 pub use self::run::{JobFailure, Outcome, Progress};
-pub use self::spec::{ChunkPolicy, Durability, Resource, TimeoutPolicy, Trigger, Visibility};
+pub use self::spec::{
+    ChunkPolicy, Durability, Resource, ServiceKey, TimeoutPolicy, Trigger, Visibility,
+};
 
 /// Lifetime counters for one job, for the administrator's view.
 ///
@@ -120,7 +122,7 @@ struct Inner {
     /// while the token does not.
     shutdown: RwLock<CancellationToken>,
     /// Long-lived services of the current generation, for the admin listing.
-    services: RwLock<Vec<&'static str>>,
+    services: RwLock<Vec<ServiceKey>>,
     /// Lifetime counters per job.
     stats: RwLock<HashMap<JobKey, JobStats>>,
     /// How busy the server is, for the administrator's view and — once load
@@ -1164,7 +1166,7 @@ impl TaskSystem {
     /// Deliberately not a job. An event listener has nothing to poll and nothing
     /// to retry, so a run record would only add noise to the table; what it
     /// needs is a lifecycle and a cancellation token.
-    pub fn spawn_service<F, Fut>(&self, name: &'static str, task: F)
+    pub fn spawn_service<F, Fut>(&self, key: ServiceKey, task: F)
     where
         F: FnOnce(CancellationToken) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send,
@@ -1173,17 +1175,17 @@ impl TaskSystem {
             .services
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(name);
+            .push(key);
         let token = self.shutdown_token().child_token();
         tokio::spawn(async move {
-            tracing::info!(service = name, "service started");
+            tracing::info!(service = key.as_str(), "service started");
             task(token).await;
-            tracing::info!(service = name, "service stopped");
+            tracing::info!(service = key.as_str(), "service stopped");
         });
     }
 
     /// Long-lived services of the current generation.
-    pub fn services(&self) -> Vec<&'static str> {
+    pub fn services(&self) -> Vec<ServiceKey> {
         self.inner
             .services
             .read()

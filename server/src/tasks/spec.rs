@@ -81,6 +81,32 @@ impl JobKey {
     }
 }
 
+/// Stable identity of a long-lived service.
+///
+/// A service is deliberately not a job: it has no owner, no progress and no
+/// terminal state, so it is registered with a lifecycle rather than a run
+/// record. It still needs an identity of its own, so the admin listing can name
+/// it in the reader's language instead of printing the name it was spawned
+/// with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ServiceKey {
+    /// Watches for the events that send mail.
+    EventListener,
+}
+
+impl ServiceKey {
+    /// Every key, so the admin listing's translation coverage is a test rather
+    /// than a hope.
+    pub const ALL: &'static [ServiceKey] = &[Self::EventListener];
+
+    /// Stable slug, used in logs and the listing's DOM handle.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::EventListener => "event-listener",
+        }
+    }
+}
+
 /// How a job comes to run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Trigger {

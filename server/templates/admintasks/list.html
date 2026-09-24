@@ -40,6 +40,9 @@
                 <span class="badge badge-gray shrink-0" title="{{ t.tr("admin.task_priority") }}">{{ task.priority_label }}</span>
                 {% endif %}
             </div>
+            {# What the row does, in words: a name like "gc" says nothing on its
+               own, and the job's own slug is not the operator's vocabulary. #}
+            <p class="nf-prow-hi text-ink-3">{{ task.desc }}</p>
             <div class="nf-prow-sub">
                 {# Only a periodic job has an interval; the server renders an em
                    dash for the rest, so drop the whole segment. #}

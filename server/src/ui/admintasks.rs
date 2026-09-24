@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
-use crate::tasks::spec::{JobKey, Priority, Trigger};
+use crate::tasks::spec::{JobKey, Priority, ServiceKey, Trigger};
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -86,6 +86,8 @@ pub struct TaskRow {
     pub name: String,
     /// Human-readable label shown in the listing.
     pub display_name: String,
+    /// One sentence on what the row actually does, in the reader's language.
+    pub desc: String,
     /// Whether a manual trigger has a meaning. An on-demand job needs
     /// parameters a bare button cannot supply, and a service never finishes.
     pub triggerable: bool,
@@ -103,6 +105,37 @@ pub struct TaskRow {
     pub total_processed: u64,
 }
 
+/// A locale key of the form `admin.job_<slug>[_desc]` or
+/// `admin.service_<slug>[_desc]`.
+///
+/// Derived from the stable slug rather than tabulated here, exactly as the
+/// settings catalog derives `setting.<key>`: one place decides how a name is
+/// spelled, and the coverage test walks the declared keys, so a job cannot be
+/// added without a name in every language.
+fn job_key(key: JobKey, suffix: &str) -> String {
+    format!("admin.job_{}{suffix}", key.as_str().replace('-', "_"))
+}
+
+fn service_key(key: ServiceKey, suffix: &str) -> String {
+    format!("admin.service_{}{suffix}", key.as_str().replace('-', "_"))
+}
+
+fn job_name_key(key: JobKey) -> String {
+    job_key(key, "")
+}
+
+fn job_desc_key(key: JobKey) -> String {
+    job_key(key, "_desc")
+}
+
+fn service_name_key(key: ServiceKey) -> String {
+    service_key(key, "")
+}
+
+fn service_desc_key(key: ServiceKey) -> String {
+    service_key(key, "_desc")
+}
+
 /// Build a display label for the interval.
 fn interval_display(trigger: Trigger) -> String {
     match trigger {
@@ -117,29 +150,35 @@ fn interval_display(trigger: Trigger) -> String {
     }
 }
 
-fn kind_label(trigger: Trigger) -> &'static str {
+/// The label naming how a job comes to run.
+///
+/// `StartupOnly` needs a label of its own: folding it into "manual" told the
+/// reader a job never runs on its own while it in fact runs at every start.
+fn trigger_label_key(trigger: Trigger) -> &'static str {
     match trigger {
-        Trigger::Periodic { .. } => "periodic",
-        Trigger::Manual | Trigger::StartupOnly => "manual",
-        Trigger::OnDemand => "on_demand",
+        Trigger::Periodic { .. } => "admin.task_periodic",
+        Trigger::Manual => "admin.task_manual",
+        Trigger::StartupOnly => "admin.task_startup",
+        Trigger::OnDemand => "admin.task_on_demand",
     }
 }
 
-fn priority_label(priority: Priority) -> &'static str {
+fn priority_label_key(priority: Priority) -> &'static str {
     match priority {
-        Priority::Interactive => "interactive",
-        Priority::Normal => "normal",
-        Priority::Background => "background",
+        Priority::Interactive => "admin.task_priority_interactive",
+        Priority::Normal => "admin.task_priority_normal",
+        Priority::Background => "admin.task_priority_background",
     }
 }
 
 /// Row for a long-lived service, which has counters of no kind.
-fn service_row(name: &str) -> TaskRow {
+fn service_row(key: ServiceKey, t: &I18n) -> TaskRow {
     TaskRow {
-        name: name.to_string(),
-        display_name: name.to_string(),
+        name: key.as_str().to_string(),
+        display_name: t.tr(&service_name_key(key)).to_string(),
+        desc: t.tr(&service_desc_key(key)).to_string(),
         triggerable: false,
-        kind_label: "service".to_string(),
+        kind_label: t.tr("admin.task_service").to_string(),
         priority_label: String::new(),
         interval_secs_display: "—".to_string(),
         concurrency: 1,
@@ -194,6 +233,7 @@ async fn render_page(
     error: Option<String>,
     success: Option<String>,
 ) -> Result<Response, AppError> {
+    let t = I18n::get(user.language.as_deref());
     let mut tasks: Vec<TaskRow> = state
         .tasks
         .jobs()
@@ -203,12 +243,13 @@ async fn render_page(
             let stats = state.tasks.stats(spec.key);
             TaskRow {
                 name: spec.key.as_str().to_string(),
-                display_name: spec.name.to_string(),
+                display_name: t.tr(&job_name_key(spec.key)).to_string(),
+                desc: t.tr(&job_desc_key(spec.key)).to_string(),
                 // A manual or periodic job can be started with no input; an
                 // on-demand job needs parameters a bare button cannot supply.
                 triggerable: matches!(spec.trigger, Trigger::Periodic { .. } | Trigger::Manual),
-                kind_label: kind_label(spec.trigger).to_string(),
-                priority_label: priority_label(spec.priority).to_string(),
+                kind_label: t.tr(trigger_label_key(spec.trigger)).to_string(),
+                priority_label: t.tr(priority_label_key(spec.priority)).to_string(),
                 interval_secs_display: interval_display(spec.trigger),
                 concurrency: spec.max_concurrent,
                 run_count: stats.run_count,
@@ -224,7 +265,13 @@ async fn render_page(
         .collect();
     // Services are listed too: they run in the same system and an administrator
     // looking at this page wants to know they exist.
-    tasks.extend(state.tasks.services().iter().map(|name| service_row(name)));
+    tasks.extend(
+        state
+            .tasks
+            .services()
+            .iter()
+            .map(|key| service_row(*key, t)),
+    );
 
     // Durable history, so a run that crashed is visible and not only the most
     // recent in-memory state.
@@ -342,4 +389,87 @@ pub async fn trigger_task(
         [("Location", "/sysadmin/tasks/?action=triggered")],
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The languages the server can render, as `I18n::get` resolves them.
+    fn languages() -> [&'static I18n; 2] {
+        [I18n::get(None), I18n::get(Some("zh"))]
+    }
+
+    /// Every job the catalog declares must have a name and a description in
+    /// every language. Derived keys mean a new job silently gets no label, and
+    /// `tr` falls back to the key, so the page would put "admin.job_foo" in
+    /// front of an operator.
+    #[test]
+    fn every_job_is_named_and_described_in_every_language() {
+        for key in JobKey::ALL {
+            for locale_key in [
+                job_name_key(*key),
+                job_desc_key(*key),
+                trigger_label_key(crate::tasks::catalog::policy(*key).trigger).to_string(),
+            ] {
+                for t in languages() {
+                    assert_ne!(
+                        t.tr(&locale_key),
+                        locale_key,
+                        "{} is missing for {}",
+                        locale_key,
+                        t.lang
+                    );
+                }
+            }
+        }
+    }
+
+    /// The same for the long-lived services, which are not jobs and so are not
+    /// covered by the catalog walk above.
+    #[test]
+    fn every_service_is_named_and_described_in_every_language() {
+        for key in ServiceKey::ALL {
+            for locale_key in [service_name_key(*key), service_desc_key(*key)] {
+                for t in languages() {
+                    assert_ne!(
+                        t.tr(&locale_key),
+                        locale_key,
+                        "{} is missing for {}",
+                        locale_key,
+                        t.lang
+                    );
+                }
+            }
+        }
+    }
+
+    /// The derived key is the contract between a slug and its label, so pin the
+    /// shape rather than trusting the format string.
+    #[test]
+    fn a_slug_becomes_a_flat_locale_key() {
+        assert_eq!(job_name_key(JobKey::GarbageCollection), "admin.job_gc");
+        assert_eq!(
+            job_desc_key(JobKey::TokenExpiryCheck),
+            "admin.job_token_expiry_check_desc"
+        );
+        assert_eq!(
+            service_name_key(ServiceKey::EventListener),
+            "admin.service_event_listener"
+        );
+    }
+
+    /// A startup job used to be labelled "manual", which told the reader it
+    /// never runs on its own while it in fact runs at every start.
+    #[test]
+    fn a_startup_job_is_not_labelled_manual() {
+        assert_ne!(
+            trigger_label_key(Trigger::StartupOnly),
+            trigger_label_key(Trigger::Manual)
+        );
+        assert_eq!(
+            I18n::get(None).tr(trigger_label_key(Trigger::StartupOnly)),
+            "Startup"
+        );
+    }
 }

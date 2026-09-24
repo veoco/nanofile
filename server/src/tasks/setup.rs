@@ -19,7 +19,7 @@ use crate::service::mail::Mailer;
 use crate::tasks::TaskSystem;
 use crate::tasks::registry::RegisteredJob;
 use crate::tasks::run::{JobFailure, Outcome};
-use crate::tasks::spec::{JobKey, JobSpec, Trigger};
+use crate::tasks::spec::{JobKey, JobSpec, ServiceKey, Trigger};
 use infra::config::GcConfig;
 use infra::crypto::password_manager::PasswordManager;
 use infra::storage::DynBlockStorage;
@@ -492,7 +492,7 @@ pub fn install_default_jobs(
     // and no terminal state, so it gets a lifecycle rather than a run record.
     if let Some(manager) = notification_manager {
         let manager = manager.clone();
-        tasks.spawn_service("event listener", move |token| async move {
+        tasks.spawn_service(ServiceKey::EventListener, move |token| async move {
             manager.run_event_listener(token).await;
         });
     }
